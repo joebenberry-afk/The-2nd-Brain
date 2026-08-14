@@ -97,3 +97,23 @@ def test_report_no_dir(brain_home):
 def test_format_report(brain_home):
     text = telemetry.format_report(telemetry.report(brain_home))
     assert "Sessions:" in text
+
+
+def test_validate_accepts_rtd_shadow(brain_home):
+    _write_session(
+        brain_home,
+        "rtd.jsonl",
+        [
+            _rec(
+                "rtd_shadow",
+                tool="bash",
+                id="tc1",
+                size=12000,
+                threshold=8000,
+                would_trigger=True,
+                reason="size",
+            )
+        ],
+    )
+    r = telemetry.validate(brain_home)
+    assert r["issues"] == []

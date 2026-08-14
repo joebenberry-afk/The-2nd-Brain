@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -125,9 +126,16 @@ def distill(text: str, kind: str, max_chars: int = MAX_DISTILL_CHARS) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _tmp_sibling(path: Path) -> Path:
+    """Unique temp file in the target directory (no fixed .tmp collisions)."""
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    return Path(tmp_name)
+
+
 def _write_bytes_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = _tmp_sibling(path)
     try:
         with tmp.open("wb") as fh:
             fh.write(data)
@@ -140,7 +148,7 @@ def _write_bytes_atomic(path: Path, data: bytes) -> None:
 
 def _write_text_atomic(path: Path, data: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = _tmp_sibling(path)
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as fh:
             fh.write(data)

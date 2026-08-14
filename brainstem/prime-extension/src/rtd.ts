@@ -75,8 +75,11 @@ export function shouldDistill(event: DistillEvent, threshold: number): DistillDe
   }
   const command = commandFromInput(event.input);
   if (!command) return { trigger: false, reason: "command" };
-  const lower = command.toLowerCase();
-  if (!RTD_COMMAND_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+  // First whitespace-separated token only: `git status` matches, `gitx`
+  // must not, and leading whitespace must not defeat the match.
+  const firstToken = command.trim().split(/\s+/)[0] ?? "";
+  const lower = firstToken.toLowerCase();
+  if (!RTD_COMMAND_PREFIXES.some((prefix) => prefix === lower)) {
     return { trigger: false, reason: "command" };
   }
   return { trigger: true, reason: "ok" };

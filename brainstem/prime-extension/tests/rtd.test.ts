@@ -161,3 +161,14 @@ describe("rtdShadowRecord", () => {
     });
   });
 });
+
+
+describe("shouldDistill command-token semantics", () => {
+  const big = { content: [{ type: "text", text: "x".repeat(100) }] };
+  it("matches first token exactly", () => {
+    expect(shouldDistill({ ...big, toolName: "bash", input: { command: "git status --short" } }, 50)).toEqual({ trigger: true, reason: "ok" });
+    expect(shouldDistill({ ...big, toolName: "bash", input: { command: "gitx status" } }, 50)).toEqual({ trigger: false, reason: "command" });
+    expect(shouldDistill({ ...big, toolName: "bash", input: { command: "  rg -n foo ." } }, 50)).toEqual({ trigger: true, reason: "ok" });
+    expect(shouldDistill({ ...big, toolName: "bash", input: { command: "pytestx -q" } }, 50)).toEqual({ trigger: false, reason: "command" });
+  });
+});

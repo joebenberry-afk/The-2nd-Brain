@@ -24,6 +24,7 @@ KNOWN_KINDS = {
     "session_before_compact",
     "session_compact",
     "session_shutdown",
+    "rtd_shadow",
     "extension_error",
 }
 REQUIRED_FIELDS = ("v", "kind", "session")
