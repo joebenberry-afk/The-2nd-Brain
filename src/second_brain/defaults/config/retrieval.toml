@@ -1,0 +1,25 @@
+# retrieval.toml — memory retrieval scoring defaults (Phase 10+ consumes)
+schema_version = 1
+
+[scoring]
+# score = relevance * trust * freshness * scope_match * historical_utility
+#         * predicted_decision_value * diversity_factor / token_cost
+#         - negative_transfer_risk   (plan §26; categories first, not overfit)
+components = ["relevance", "trust", "freshness", "scope_match",
+              "historical_utility", "predicted_decision_value",
+              "diversity_factor", "token_cost", "negative_transfer_risk"]
+max_results = 5
+log_all_components = true
+
+[lateral_inhibition]
+# prefer 1 current fact + 1 supporting failure + 1 conflicting historical note
+# over 10 paraphrases of the same fact (plan §29)
+deduplicate = true
+surface_contradictions = true
+
+[decay]
+# strategic forgetting (plan §52): states, not deletion
+states = ["HOT", "WARM", "COLD", "ARCHIVED"]
+protected = ["constitution", "security", "accepted_decisions",
+             "critical_failure_immunizations", "user_preferences",
+             "current_invariants"]
