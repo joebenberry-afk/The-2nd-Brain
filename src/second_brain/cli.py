@@ -42,14 +42,23 @@ def _parser() -> argparse.ArgumentParser:
 
     pa = sub.add_parser("project", parents=[home_parent], help="project registry")
     ps = pa.add_subparsers(dest="project_command", required=True)
-    padd = ps.add_parser("add", help="register a repository")
+    padd = ps.add_parser("add", help="attach a repository (registry + manifest + marker)")
     padd.add_argument("repo", type=Path)
     padd.add_argument("--name", default=None)
     padd.add_argument("--id", dest="project_id", default=None)
+    padd.add_argument("--no-marker", action="store_true", help="skip the AGENTS.md marker block")
+    padd.add_argument("--no-manifest", action="store_true", help="skip .brain/project.toml")
     plist = ps.add_parser("list", help="list registered projects")
     plist.add_argument("--inactive", action="store_true")
     pstat = ps.add_parser("status", help="status of one registered project")
     pstat.add_argument("key")
+    pdet = ps.add_parser(
+        "detach", help="remove repo-side integration (marker/manifest) and deactivate"
+    )
+    pdet.add_argument("key")
+    prem = ps.add_parser("remove", help="delete a registry row (keep brain dir unless --purge)")
+    prem.add_argument("key")
+    prem.add_argument("--purge", action="store_true", help="also delete projects/<id>/")
 
     b = sub.add_parser("backup", parents=[home_parent], help="create a Brain backup")
     b.add_argument("--note", default=None)
@@ -156,12 +165,21 @@ def cmd_status(args) -> int:
 def cmd_project(args) -> int:
     home = _home(args)
     if args.project_command == "add":
-        proj, created = registry.add_project(
-            home, args.repo, name=args.name, project_id=args.project_id
+        proj, created, changes = registry.attach_project(
+            home,
+            args.repo,
+            name=args.name,
+            project_id=args.project_id,
+            with_marker=not args.no_marker,
+            with_manifest=not args.no_manifest,
         )
-        verb = "Registered" if created else "Already registered (refreshed)"
+        verb = "Attached" if created else "Already attached (refreshed)"
         print(f"{verb} project {proj.name!r} (id {proj.id})")
         print(f"Brain project dir: {proj.brain_project_path}")
+        if changes.get("manifest_created"):
+            print(f"Wrote manifest: {Path(args.repo) / '.brain' / 'project.toml'}")
+        if changes.get("marker_added"):
+            print(f"Added AGENTS.md marker: {Path(args.repo) / 'AGENTS.md'}")
         return 0
     if args.project_command == "list":
         projects = registry.list_projects(home, include_inactive=args.inactive)
@@ -175,6 +193,17 @@ def cmd_project(args) -> int:
         st = registry.project_status(home, args.key)
         for k, v in st.items():
             print(f"{k:16s} {v}")
+        return 0
+    if args.project_command == "remove":
+        out = registry.remove_project(home, args.key, purge=args.purge)
+        print(f"Removed project {out['name']!r} (id {out['id']}); purged={out['purged']}")
+        return 0
+    if args.project_command == "detach":
+        changes = registry.detach_project(home, args.key)
+        print(f"Detached {changes['name']!r} (id {changes['id']})")
+        for k in ("marker_removed", "agents_file_deleted", "manifest_removed", "deactivated"):
+            if k in changes:
+                print(f"{k:20s} {changes[k]}")
         return 0
     return 2
 
