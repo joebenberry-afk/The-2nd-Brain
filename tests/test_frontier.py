@@ -10,7 +10,7 @@ from second_brain import frontier
 from second_brain.errors import BrainError
 
 
-def _review(brain_home, cid="change-1", risk="high", verdict="approve", reviewer="r"):
+def _review(brain_home, cid="change-one", risk="high", verdict="approve", reviewer="r"):
     return frontier.frontier_review(brain_home, cid, "summary", risk, reviewer, verdict)
 
 
@@ -56,32 +56,32 @@ def test_review_file_content(brain_home):
 
 def test_review_sequence_latest_wins(brain_home):
     first = _review(brain_home, verdict="approve")
-    assert first.name == "change-1.md"
+    assert first.name == "change-one.md"
     second = _review(brain_home, verdict="request_changes")
-    assert second.name == "change-1-2.md"
+    assert second.name == "change-one-2.md"
     third = _review(brain_home, verdict="approve")
-    assert third.name == "change-1-3.md"
-    assert frontier.gate_check(brain_home, "change-1")["ok"] is True
-    assert frontier.frontier_status(brain_home, "change-1")["latest_verdict"] == "approve"
+    assert third.name == "change-one-3.md"
+    assert frontier.gate_check(brain_home, "change-one")["ok"] is True
+    assert frontier.frontier_status(brain_home, "change-one")["latest_verdict"] == "approve"
 
 
 def test_reject_is_final(brain_home):
     _review(brain_home, verdict="approve")
     rejected = _review(brain_home, verdict="reject")
-    assert rejected.name == "change-1-2.md"
-    assert frontier.gate_check(brain_home, "change-1")["ok"] is False
-    assert "rejected" in frontier.gate_check(brain_home, "change-1")["missing"][0]
+    assert rejected.name == "change-one-2.md"
+    assert frontier.gate_check(brain_home, "change-one")["ok"] is False
+    assert "rejected" in frontier.gate_check(brain_home, "change-one")["missing"][0]
     with pytest.raises(BrainError, match="rejected and cannot be re-reviewed"):
         _review(brain_home, verdict="approve")  # final: even approve cannot follow reject
-    assert frontier.gate_check(brain_home, "change-1")["ok"] is False  # permanently blocked
+    assert frontier.gate_check(brain_home, "change-one")["ok"] is False  # permanently blocked
 
 
 def test_first_review_file_exclusive(brain_home):
     _review(brain_home)
     # Re-review after approve uses the -2 sequence, never overwrites c1.md.
     path = _review(brain_home, verdict="request_changes")
-    assert path.name == "change-1-2.md"
-    first = (brain_home / "frontier" / "change-1.md").read_text(encoding="utf-8")
+    assert path.name == "change-one-2.md"
+    first = (brain_home / "frontier" / "change-one.md").read_text(encoding="utf-8")
     assert '"verdict": "approve"' in first  # untouched
 
 
@@ -195,3 +195,15 @@ def test_verdict_sequences_match_reference(brain_home, verdicts):
     assert frontier.gate_check(home, "change")["ok"] is expected_ok
     # Determinism.
     assert frontier.gate_check(home, "change") == frontier.gate_check(home, "change")
+
+
+def test_change_id_digit_suffix_rejected(brain_home):
+    from second_brain import frontier
+
+    for fn in (
+        lambda cid: frontier.frontier_review(brain_home, cid, "s", "high", "r", "approve"),
+        lambda cid: frontier.require_review(brain_home, cid, "s"),
+        lambda cid: frontier.gate_check(brain_home, cid),
+    ):
+        with pytest.raises(BrainError):
+            fn("policy-2")
