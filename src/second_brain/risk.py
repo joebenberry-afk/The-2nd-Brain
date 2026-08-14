@@ -171,7 +171,6 @@ def _mentions(path: str, needles: tuple[str, ...]) -> bool:
 def assess_risk(
     repo: Path,
     files_touched: list[str],
-    task_text: str = "",
     user_criticality: str | None = None,
 ) -> dict:
     """Score the risk of touching `files_touched` in `repo`.
