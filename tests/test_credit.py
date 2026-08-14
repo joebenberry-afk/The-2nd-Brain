@@ -156,7 +156,7 @@ def test_counterfactual_deterministic_and_report(brain_home):
     assert first["tasks_unaffected"] == 1
     for task in first["tasks"]:
         assert task["delta_tools"] == 0
-    report = brain_home / "outputs" / "reports" / f"counterfactual-{SKILL}.md"
+    report = brain_home / "outputs" / "audits" / f"counterfactual-{SKILL}.md"
     assert report.exists()
     text = report.read_text(encoding="utf-8")
     assert "skill: sqlite-migration-verifier" in text
@@ -219,7 +219,7 @@ def test_eval_skill_credit_recommendations_only(brain_home):
     assert result["recommendations"]["correlated"] == 0
     assert "nothing was written" in result["note"]
     # The counterfactual report file exists, but no credit rows were created.
-    assert list((brain_home / "outputs" / "reports").glob(f"counterfactual-{SKILL}.md"))
+    assert list((brain_home / "outputs" / "audits").glob(f"counterfactual-{SKILL}.md"))
     assert len(_credit_rows(brain_home)) == before
 
 
