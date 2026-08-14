@@ -109,3 +109,16 @@ def test_home_flag_after_subcommand(tmp_path):
     r = run_cli(home, "init", "--home", str(home))
     assert r.returncode == 0, r.stderr
     assert (home / "db" / "brain.sqlite").exists()
+
+
+def test_home_after_leaf_subcommands(tmp_path):
+    """--home must work after leaf subcommands (verifier finding)."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+    r = run_cli(home, "project", "add", "--home", str(home), str(repo), "--name", "LeafRepo")
+    assert r.returncode == 0, r.stderr
+    r = run_cli(home, "project", "list", "--home", str(home))
+    assert "LeafRepo" in r.stdout
