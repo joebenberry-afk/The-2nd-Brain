@@ -2,20 +2,23 @@
 
 ## Status
 
-- Phases 0-4: COMPLETE (milestones 01-04; every phase independently verified
-  by the retained reviewer and findings reconciled).
-- Phase 5 Sensory Gateway / RTD: IN PROGRESS — shadow-only. Python artifact
-  store (worker repowise-recon) + TS rtd_shadow trigger (worker
-  phase2-ts-worker), parent owns config/SCHEMA/CLI/gate.
+- Phases 0-6: COMPLETE and independently verified (milestones 01-06;
+  Phase 6 verification in flight). Scout promoted to ADVISORY on experiment
+  evidence.
+- v4.2 self-hosting doctrine: Project #1 registered with stable id
+  `second-brain`; Stage-0 component docs live under docs/components/;
+  completion-reserve config in context.toml.
+- Phase 7 Accuracy: IN PROGRESS — risk.py + verify.py delegated to reused
+  worker; parent runs the planted-mismatch eval at gate.
 
 ## Active work
 
-Phase 5 implementations (parallel, disjoint ownership) + Phase 4 verification.
+Phase 7 implementation + Phase 6 verification (parallel, disjoint ownership).
 
-## Dogfooding
+## Dogfooding log
 
-- Working set `build-phase5-rtd` manages the Phase 5 build: 3 material
-  requirements gated unverified, read ledger recording real reads, JIT capsule
-  compiled for resume.
-- Next dogfooding step: once Phase 5 lands, distilling real oversized tool
-  output during later phases and measuring capsule/resume savings.
+- Working set `build-phase5-rtd` closed 3/3 requirements with evidence.
+- Scout (ADVISORY) found a real config-wiring gap in the requirement gate —
+  fixed in 8a3b22f and regression-tested.
+- Experiment data: state/recon/phase6-experiment.json; maps in
+  outputs/evidence-maps/.
