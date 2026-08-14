@@ -229,7 +229,7 @@ def hindsight_relabel(
     actual_bottleneck: str,
 ) -> dict:
     """Plan §45: compare predicted vs actual bottleneck. Records a
-    'bottleneck' prediction (error=1 when they differ) plus a prediction_error
+    'bottleneck' prediction (a prediction_errors row when they differ (the prediction row itself always has expected==actual by construction, so its prediction_error is 0)) plus a prediction_error
     training example in the mismatch case."""
     for name, value in (
         ("predicted_bottleneck", predicted_bottleneck),
