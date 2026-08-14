@@ -17,6 +17,7 @@ from . import (
     db,
     envsteward,
     episodes,
+    monitor,
     paths,
     registry,
     risk,
@@ -298,6 +299,21 @@ def _parser() -> argparse.ArgumentParser:
         "contradictions", parents=[home_parent], help="list contradiction candidates"
     )
     mcon.add_argument("--scope", default="project")
+
+    mc = sub.add_parser(
+        "metacog", parents=[home_parent], help="metacognitive monitor (Phase 11, shadow)"
+    )
+    mcs = mc.add_subparsers(dest="metacog_command", required=True)
+    mca = mcs.add_parser("assess", parents=[home_parent], help="assess trajectory confidence")
+    mca.add_argument("session_id", help="working-set session id to read")
+    mca.add_argument("--telemetry", default=None, help="path to a telemetry JSONL file")
+    mca.add_argument("--repo", default=None, help="repo path for git info")
+    mce = mcs.add_parser("eval", parents=[home_parent], help="run the labeled-trajectory eval")
+    mce.add_argument(
+        "--fixture",
+        default=None,
+        help="trajectories.json path (default: tests/fixtures/trajectories.json)",
+    )
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -674,6 +690,56 @@ def cmd_memory(args) -> int:
     return 2
 
 
+def cmd_metacog(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.metacog_command == "assess":
+        capsule = working_set.show_capsule(home, args.session_id)
+        requirements = working_set.show_requirements(home, args.session_id)
+        reads = working_set.show_reads(home, args.session_id)
+        telemetry_records = []
+        if args.telemetry:
+            telemetry_records = [
+                json.loads(line)
+                for line in Path(args.telemetry).read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        git_info = {}
+        if args.repo:
+            from second_brain import scout as _scout
+
+            prepass = _scout.deterministic_prepass(Path(args.repo), "")
+            git_info = prepass.get("git") or {}
+        result = monitor.assess_confidence(
+            capsule, requirements, reads, telemetry_records, git_info
+        )
+        print(
+            f"epistemic={result['epistemic']} execution={result['execution']} "
+            f"verification={result['verification']}"
+        )
+        for s in result["signals"]:
+            if s["strength"]:
+                print(f"  {s['name']:24s} {s['strength']} ({s['effect']}) {s['detail']}")
+        return 0
+    if args.metacog_command == "eval":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        fixture = (
+            Path(args.fixture)
+            if args.fixture
+            else repo_root / "tests" / "fixtures" / "trajectories.json"
+        )
+        data = json.loads(fixture.read_text(encoding="utf-8"))
+        trajectories = data["trajectories"] if isinstance(data, dict) else data
+        result = monitor.eval_monitor(trajectories)
+        print(
+            f"monitor={result['monitor_agreement']:.3f} "
+            f"basic={result['basic_agreement']:.3f} random=0.5 n={result['n']}"
+        )
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -882,6 +948,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "metacog": cmd_metacog,
         "memory": cmd_memory,
         "episodes": cmd_episodes,
         "env": cmd_env,
