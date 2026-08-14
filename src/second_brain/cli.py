@@ -21,6 +21,7 @@ from . import (
     registry,
     risk,
     scout,
+    semantic,
     verify,
     working_set,
 )
@@ -258,6 +259,45 @@ def _parser() -> argparse.ArgumentParser:
     ea = eps9.add_parser("annotate", parents=[home_parent], help="append an addendum")
     ea.add_argument("episode_id")
     ea.add_argument("note")
+
+    mm = sub.add_parser("memory", parents=[home_parent], help="semantic memory (Phase 10)")
+    mms = mm.add_subparsers(dest="memory_command", required=True)
+    madd = mms.add_parser("add", parents=[home_parent], help="add a semantic memory (candidate)")
+    madd.add_argument("title")
+    madd.add_argument("body")
+    madd.add_argument("--scope", default="project", choices=semantic.SCOPES)
+    madd.add_argument("--project", dest="project_id", default="second-brain")
+    madd.add_argument("--grade", default="OBSERVED", choices=semantic.GRADES)
+    madd.add_argument("--source", dest="sources", action="append", default=None)
+    mcur = mms.add_parser(
+        "curate", parents=[home_parent], help="curate: set grade/status with rules"
+    )
+    mcur.add_argument("memory_id")
+    mcur.add_argument("--grade", default=None, choices=semantic.GRADES)
+    mcur.add_argument("--status", default=None, choices=semantic.STATUSES)
+    mcur.add_argument("--source", dest="sources", action="append", default=None)
+    mcur.add_argument("--no-verify", action="store_true")
+    mlist = mms.add_parser("list", parents=[home_parent], help="list memories")
+    mlist.add_argument("--scope", default=None)
+    mlist.add_argument("--project", dest="project_id", default=None)
+    mlist.add_argument("--status", default=None)
+    mlist.add_argument("--grade", default=None)
+    mshow = mms.add_parser("show", parents=[home_parent], help="show one memory")
+    mshow.add_argument("memory_id")
+    msup = mms.add_parser(
+        "supersede", parents=[home_parent], help="supersede with a new version (history preserved)"
+    )
+    msup.add_argument("memory_id")
+    msup.add_argument("new_body")
+    msup.add_argument("--title", dest="new_title", default=None)
+    msup.add_argument("--note", dest="change_note", default="superseded")
+    msup.add_argument("--source", dest="new_sources", action="append", default=None)
+    mhis = mms.add_parser("history", parents=[home_parent], help="version history of a memory")
+    mhis.add_argument("memory_id")
+    mcon = mms.add_parser(
+        "contradictions", parents=[home_parent], help="list contradiction candidates"
+    )
+    mcon.add_argument("--scope", default="project")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -541,6 +581,99 @@ def cmd_episodes(args) -> int:
     return 2
 
 
+def _parse_sources(raw: list[str] | None) -> list[dict] | None:
+    """--source kind:ref -> {ref, kind} dicts.
+
+    Kinds episode/test/decision/import are stored as-is; everything else
+    (doc:, git:, bare refs) is evidence.
+    """
+    if not raw:
+        return None
+    out = []
+    for item in raw:
+        kind, _, ref = item.partition(":")
+        if not ref:
+            kind, ref = "evidence", item
+        kind = kind.strip() or "evidence"
+        if kind not in ("episode", "test", "decision", "import"):
+            kind = "evidence"
+        out.append({"ref": ref.strip(), "kind": kind})
+    return out
+
+
+def cmd_memory(args) -> int:
+    home = _home(args)
+    if args.memory_command == "add":
+        mid = semantic.add_memory(
+            home,
+            args.title,
+            args.body,
+            scope=args.scope,
+            project_id=args.project_id,
+            grade=args.grade,
+            sources=_parse_sources(args.sources),
+        )
+        print(f"Memory added: {mid} [{args.grade}/candidate]")
+        return 0
+    if args.memory_command == "curate":
+        row = semantic.curate(
+            home,
+            args.memory_id,
+            grade=args.grade,
+            status=args.status,
+            sources=_parse_sources(args.sources),
+            verify=not args.no_verify,
+        )
+        print(f"{row['memory_id']} -> grade={row['evidence_grade']} status={row['status']}")
+        return 0
+    if args.memory_command == "list":
+        rows = semantic.list_memories(
+            home,
+            scope=args.scope,
+            project_id=args.project_id,
+            status=args.status,
+            grade=args.grade,
+        )
+        for r in rows:
+            print(
+                f"{r['memory_id']:20s} {r['evidence_grade']:10s} {r['status']:10s} "
+                f"v{r['current_version']} {r['title'][:60]}"
+            )
+        return 0
+    if args.memory_command == "show":
+        m = semantic.show_memory(home, args.memory_id)
+        print(
+            f"id: {m['row']['memory_id']}  grade: {m['row']['evidence_grade']}  "
+            f"status: {m['row']['status']}  v{m['row']['current_version']}"
+        )
+        print(m["body"])
+        return 0
+    if args.memory_command == "supersede":
+        v = semantic.supersede(
+            home,
+            args.memory_id,
+            new_title=args.new_title,
+            new_body=args.new_body,
+            change_note=args.change_note,
+            new_sources=_parse_sources(args.new_sources),
+        )
+        print(f"{args.memory_id} -> v{v}")
+        return 0
+    if args.memory_command == "history":
+        for v in semantic.history(home, args.memory_id):
+            note = v.get("change_note") or "(current)"
+            print(f"v{v['version']} {v['created_at']} {note}  path={v['body_path']}")
+        return 0
+    if args.memory_command == "contradictions":
+        pairs = semantic.contradictions(home, scope=args.scope)
+        if not pairs:
+            print("No contradiction candidates.")
+        for a, b in pairs:
+            print(f"{a['memory_id']} <-> {b['memory_id']}  (title {a['title']!r})")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -749,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "memory": cmd_memory,
         "episodes": cmd_episodes,
         "env": cmd_env,
         "processes": cmd_processes,
