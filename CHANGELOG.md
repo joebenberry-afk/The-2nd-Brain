@@ -3,6 +3,15 @@
 Format: Keep a Changelog-ish. Entries reference milestone reports under
 `outputs/reports/`.
 
+## [0.4.0] — Working Set / JIT Context (Phase 4)
+
+- Active State Capsule, Requirement-to-Evidence Ledger (material-unverified
+  completion gate), Read Ledger.
+- Deterministic JIT Context Compiler -> Task Context Capsules.
+- First dogfooding: the build manages its own Phase 5 task via capsule +
+  requirements + read ledger + compiled capsule.
+- See `outputs/reports/milestone-04-working-set-jit.md`.
+
 ## [0.3.0] — Project Integration (Phase 3)
 
 - `brainctl project add` = full attach: `.brain/project.toml` (never overwrites
