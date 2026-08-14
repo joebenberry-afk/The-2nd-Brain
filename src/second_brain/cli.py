@@ -700,11 +700,18 @@ def cmd_metacog(args) -> int:
         reads = working_set.show_reads(home, args.session_id)
         telemetry_records = []
         if args.telemetry:
-            telemetry_records = [
-                json.loads(line)
-                for line in Path(args.telemetry).read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+            try:
+                telemetry_records = [
+                    json.loads(line)
+                    for line in Path(args.telemetry).read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except (OSError, json.JSONDecodeError) as exc:
+                print(
+                    f"brainctl: error: cannot read telemetry {args.telemetry}: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
         git_info = {}
         if args.repo:
             from second_brain import scout as _scout

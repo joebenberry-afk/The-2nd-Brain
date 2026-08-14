@@ -30,7 +30,7 @@ a basic heuristic and the honest random baseline.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (262 tests)
+ruff/format/pyright/pytest -> green (264 tests)
 live: metacog eval -> monitor=1.000 basic=0.583 random=0.5 n=12
 live: metacog assess build-phase7-accuracy -> HIGH/HIGH/HIGH with signal trace
 ```
@@ -72,3 +72,14 @@ templates (Scout shrinks candidates; test discriminates hypothesis;
 verification closes requirements), nonprogress detection, advisory only.
 Acceptance: detects planted looping exploration earlier than fixed
 thresholds alone.
+
+
+## Phase 11 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase11-independent-verification.md):
+1. NIT — test count corrected to 264.
+2. NIT — metacog assess --telemetry read is now guarded (corrupt file ->
+   clean error, exit 2).
+3. NIT — 1.000 agreement on the hand-crafted fixture: acknowledged as
+   signal-fixture alignment; generalization stays unproven until real
+   trajectories accumulate (shadow-only; milestone deviation #1).
