@@ -433,10 +433,14 @@ def _parser() -> argparse.ArgumentParser:
     sks.add_parser("list", parents=[home_parent], help="list candidates and shadow skills")
 
     rt = sub.add_parser(
-        "router", parents=[home_parent], help="sparse skill router (Phase 17/23; active+candidate+shadow pool)"
+        "router",
+        parents=[home_parent],
+        help="sparse skill router (Phase 17/23; active+candidate+shadow pool)",
     )
     rts = rt.add_subparsers(dest="router_command", required=True)
-    rr2 = rts.add_parser("route", parents=[home_parent], help="route a task to skills (report only)")
+    rr2 = rts.add_parser(
+        "route", parents=[home_parent], help="route a task to skills (report only)"
+    )
     rr2.add_argument("task")
     rr2.add_argument("--max-active", type=int, default=3)
     rts.add_parser("eval", parents=[home_parent], help="run the router fixture eval")
