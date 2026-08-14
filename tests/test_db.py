@@ -11,7 +11,8 @@ def test_migrate_creates_schema(brain_home):
     conn = db.connect(dbf)
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 1
+        expected = max(int(p.name[:4]) for p in db.migration_files())
+        assert v == expected
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"schema_version", "projects"} <= tables
     finally:

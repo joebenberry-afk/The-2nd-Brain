@@ -16,6 +16,7 @@ from . import (
     artifacts,
     db,
     envsteward,
+    episodes,
     paths,
     registry,
     risk,
@@ -225,6 +226,38 @@ def _parser() -> argparse.ArgumentParser:
     pver.add_argument("exe")
     pcl = prs.add_parser("cleanup", parents=[home_parent], help="clean up owned processes")
     pcl.add_argument("--kill", action="store_true", help="actually kill (default: dry run)")
+
+    ep = sub.add_parser("episodes", parents=[home_parent], help="episodic memory (Phase 9)")
+    eps9 = ep.add_subparsers(dest="episodes_command", required=True)
+    ec = eps9.add_parser("create", parents=[home_parent], help="capture an episode")
+    ec.add_argument("episode_type", choices=episodes.EPISODE_TYPES)
+    ec.add_argument("summary")
+    ec.add_argument("--project", dest="project_id", default="second-brain")
+    ec.add_argument("--session", dest="session_id", default=None)
+    ec.add_argument("--task", dest="task_id", default=None)
+    ec.add_argument("--evidence", dest="evidence_refs", action="append", default=None)
+    ec.add_argument("--prediction-error", type=float, default=None)
+    ec.add_argument("--salience", type=float, default=None)
+    ec.add_argument("--confidence", default=None)
+    ec.add_argument(
+        "--section",
+        dest="sections",
+        action="append",
+        default=None,
+        help="k=v section content (repeatable)",
+    )
+    el = eps9.add_parser("list", parents=[home_parent], help="list episodes")
+    el.add_argument("--type", dest="episode_type", default=None)
+    el.add_argument("--project", dest="project_id", default=None)
+    el.add_argument("--since", default=None)
+    es = eps9.add_parser("show", parents=[home_parent], help="show one episode")
+    es.add_argument("episode_id")
+    eq = eps9.add_parser("search", parents=[home_parent], help="search episodes")
+    eq.add_argument("term")
+    eq.add_argument("--limit", type=int, default=20)
+    ea = eps9.add_parser("annotate", parents=[home_parent], help="append an addendum")
+    ea.add_argument("episode_id")
+    ea.add_argument("note")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -458,6 +491,56 @@ def cmd_processes(args) -> int:
     return 2
 
 
+def cmd_episodes(args) -> int:
+    home = _home(args)
+    if args.episodes_command == "create":
+        sections = {}
+        for kv in args.sections or []:
+            key, _, value = kv.partition("=")
+            sections[key] = value
+        eid = episodes.create_episode(
+            home,
+            args.episode_type,
+            args.summary,
+            project_id=args.project_id,
+            session_id=args.session_id,
+            task_id=args.task_id,
+            evidence_refs=args.evidence_refs,
+            prediction_error=args.prediction_error,
+            salience=args.salience,
+            confidence=args.confidence,
+            sections=sections or None,
+        )
+        print(f"Episode created: {eid}")
+        return 0
+    if args.episodes_command == "list":
+        rows = episodes.list_episodes(
+            home, episode_type=args.episode_type, project_id=args.project_id, since=args.since
+        )
+        for r in rows:
+            print(
+                f"{r['episode_id']:40s} {r['episode_type']:20s} sal={r['salience']} "
+                f"pe={r['prediction_error']} {r['summary'][:70]}"
+            )
+        return 0
+    if args.episodes_command == "show":
+        e = episodes.show_episode(home, args.episode_id)
+        print(f"id: {e['row']['episode_id']}  type: {e['row']['episode_type']}")
+        print(f"path: {e['path']}")
+        print()
+        print(e["body"])
+        return 0
+    if args.episodes_command == "search":
+        for r in episodes.search_episodes(home, args.term, limit=args.limit):
+            print(f"{r['episode_id']:40s} {r['summary'][:80]}")
+        return 0
+    if args.episodes_command == "annotate":
+        episodes.annotate_episode(home, args.episode_id, args.note)
+        print(f"Annotated {args.episode_id}")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -666,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "episodes": cmd_episodes,
         "env": cmd_env,
         "processes": cmd_processes,
         "risk": cmd_risk,
