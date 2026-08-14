@@ -77,3 +77,11 @@ live: process register/verify/dry-run/kill cycle on a real owned sleep process
 **Phase 9 — Episodic Memory** (plan §105): capture, episode files, episode DB
 rows, salience, prediction-error, provenance; multi-agent-safe unique writes.
 Design + 9 real dogfood episodes in outputs/plans/phase9-episodic-design.md.
+
+
+## Phase 8 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase8-independent-verification.md):
+1. NIT — task_text parameter finally dropped from risk.assess_risk (the
+   earlier fix had missed the multi-line signature; now removed for real,
+   21 risk tests green).
