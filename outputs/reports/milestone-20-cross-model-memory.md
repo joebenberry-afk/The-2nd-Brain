@@ -30,7 +30,7 @@ aggregator that structurally excludes unreliable model profiles.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (400 tests)
+ruff/format/pyright/pytest -> green (397 tests)
 live: models add (2 profiles) -> record 4 outcomes -> transfer verdict +
 policy guard exclusion (flash excluded at 0.333, pro included at 1.0)
 ```
@@ -79,3 +79,12 @@ policy guard exclusion (flash excluded at 0.333, pro included at 1.0)
 **Phase 21 — Frontier Memory** (plan §117): manual review gate for policy
 changes that feel risky. Acceptance: risky policy changes require a review
 entry before activation.
+
+
+## Phase 20 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase20-independent-verification.md):
+1. NIT — test count corrected to 397 (verifier collect is ground truth).
+   Verifier additionally confirmed: v5->v6 migration preserves all 13 prior
+   tables, transfer verdicts all three branches live, guard boundary
+   inclusive (rate exactly 0.5 is included).
