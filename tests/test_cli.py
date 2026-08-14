@@ -63,7 +63,9 @@ def test_project_add_list_status(tmp_path):
 
     r = run_cli(home, "project", "add", str(repo), "--name", "DemoRepo")
     assert r.returncode == 0, r.stderr
-    assert "Registered project 'DemoRepo'" in r.stdout
+    assert "Attached project 'DemoRepo'" in r.stdout
+    assert (repo / ".brain" / "project.toml").exists()
+    assert (repo / "AGENTS.md").exists()
 
     r = run_cli(home, "project", "list")
     assert "DemoRepo" in r.stdout
