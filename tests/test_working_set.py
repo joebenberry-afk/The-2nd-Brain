@@ -421,3 +421,21 @@ def test_session_id_accept_or_raise_property(brain_home, sid):
     # Accepted ids must round-trip and live under state/sessions/.
     assert path.parent == home / "state" / "sessions" / sid
     assert ws.show_capsule(home, sid)["objective"] == "Objective"
+
+
+def test_material_gate_config_wiring(brain_home):
+    """Scout finding: verification.toml gate knob must be honored."""
+    ws.add_requirement(brain_home, "s1", "critical thing", importance="critical")
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["blocks"] is True  # default config has the gate on
+
+    (brain_home / "config" / "verification.toml").write_text(
+        "[requirement_ledger]\nmaterial_unverified_blocks_completion = false\n",
+        encoding="utf-8",
+    )
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["blocks"] is False and result["material_unverified"] == 1
+
+    (brain_home / "config" / "verification.toml").unlink()
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["blocks"] is True  # fail-safe default

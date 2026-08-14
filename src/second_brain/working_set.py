@@ -21,6 +21,7 @@ import json
 import os
 import re
 import tempfile
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -341,6 +342,21 @@ def set_requirement_status(home: Path, session_id: str, req_id: str, status: str
     return entry
 
 
+def _material_gate_blocks(home: Path) -> bool:
+    """Honor verification.toml's material_unverified_blocks_completion.
+
+    Defaults to True when the config file or key is missing/unparseable
+    (fail-safe direction: the gate stays closed).
+    """
+    try:
+        cfg = tomllib.loads((home / "config" / "verification.toml").read_text(encoding="utf-8"))
+        ledger = cfg.get("requirement_ledger") or {}
+        value = ledger.get("material_unverified_blocks_completion", True)
+        return bool(value)
+    except (OSError, tomllib.TOMLDecodeError):
+        return True
+
+
 def check_requirements(home: Path, session_id: str) -> dict:
     """Material-requirement completion check (plan §18).
 
@@ -353,9 +369,11 @@ def check_requirements(home: Path, session_id: str) -> dict:
     entries = _load_requirements(path)
     material = [e for e in entries if e["importance"] in MATERIAL_IMPORTANCES]
     unverified = [e for e in material if e["status"] not in ("verified", "not_applicable")]
+    blocks = _material_gate_blocks(home)
     return {
         "material_total": len(material),
         "material_unverified": len(unverified),
+        "blocks": blocks and len(unverified) > 0,
         "entries": unverified,
     }
 
