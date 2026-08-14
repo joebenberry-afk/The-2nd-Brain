@@ -25,6 +25,7 @@ from typing import cast
 
 from . import episodes, paths
 from .errors import BrainError
+from .security.identifiers import validate_skill_name
 
 REQUIRED_SECTIONS: tuple[str, ...] = (
     "purpose",
@@ -70,6 +71,8 @@ def _shadow_dir(home: Path) -> Path:
 
 
 def _skill_path(home: Path, name: str) -> Path:
+    # SEC-03: names reach filesystem paths; only validated identifiers pass.
+    name = validate_skill_name(name)
     return _candidates_dir(home) / name / "SKILL.md"
 
 
@@ -154,6 +157,7 @@ def set_status(path: Path, status: str) -> None:
 
 
 def skill_path(home: Path, name: str) -> Path | None:
+    name = validate_skill_name(name)
     for level in ("active", "candidate", "shadow"):
         path = Path(home) / paths.SKILL_LEVEL_DIRS[level] / name / "SKILL.md"
         if path.exists():
@@ -238,7 +242,13 @@ def audit_lifecycle(home: Path) -> dict[str, object]:
                 )
                 local_issues.extend(str(item) for item in cast(list[str], ready["issues"]))
                 records = (
-                    sorted(p for p in promotion_dir.glob(f"{skill_dir.name}-*.json"))
+                    sorted(
+                        p
+                        for p in promotion_dir.iterdir()
+                        if p.is_file()
+                        and p.name.startswith(skill_dir.name + "-")
+                        and p.name.endswith(".json")
+                    )
                     if promotion_dir.is_dir()
                     else []
                 )
@@ -369,6 +379,7 @@ def forge_candidate(home: Path, name: str, episode_ids: list[str]) -> Path:
 
 
 def _allocate_dir(parent: Path, name: str) -> Path:
+    name = validate_skill_name(name)
     parent.mkdir(parents=True, exist_ok=True)
     candidate = parent / name
     counter = 1
@@ -586,6 +597,7 @@ def shadow_candidate(
     """Move skills/candidates/<name> -> skills/shadow/<name> only when
     validate, security review, trigger and regression evals all pass. Refuses
     otherwise; never installs anywhere else."""
+    name = validate_skill_name(name)
     reasons: list[str] = []
     validation = validate_candidate(home, name)
     if not validation["ok"]:

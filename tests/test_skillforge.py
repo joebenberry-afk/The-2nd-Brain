@@ -335,3 +335,57 @@ def test_security_review_disk_format_flagged(brain_home):
     result = skillforge.security_review(brain_home, "restore-safety")
     assert result["passed"] is False
     assert any(f["category"] == "destructive" for f in result["findings"])
+
+
+# ---------------------------------------------------------------------------
+# SEC-03: skill lifecycle path escape
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../escape",
+        "..\\escape",
+        "a/b",
+        "a\\b",
+        "/abs",
+        "C:\\abs",
+        "\\srv\\share",
+        "a\nb",
+        "a*b",
+        ".",
+        "..",
+        "",
+    ],
+)
+def test_forge_rejects_hostile_skill_names(brain_home, bad):
+    """SEC-T038: traversal/hostile skill names cannot reach the filesystem."""
+    with pytest.raises(BrainError):
+        skillforge.forge_candidate(brain_home, bad, ["ep-1"])
+    # nothing escaped the candidates root
+    candidates = brain_home / "skills" / "candidates"
+    assert list(candidates.iterdir()) == [] if candidates.exists() else True
+    with pytest.raises(BrainError):
+        skillforge.validate_candidate(brain_home, bad)
+    with pytest.raises(BrainError):
+        skillforge.security_review(brain_home, bad)
+    with pytest.raises(BrainError):
+        skillforge.skill_path(brain_home, bad)
+
+
+def test_skill_lifecycle_files_never_leave_intended_root(brain_home):
+    """SEC-T041 helper: lifecycle ops stay inside skills/ roots."""
+    eids = [
+        episodes.create_episode(
+            brain_home,
+            "correction",
+            "summary",
+            sections={"Trigger signals": "t", "Reusable lesson": "l"},
+        )
+    ]
+    path = skillforge.forge_candidate(brain_home, "safe-skill-1", eids)
+    assert path.parent == brain_home / "skills" / "candidates" / "safe-skill-1"
+    shadow = skillforge.shadow_candidate(brain_home, "safe-skill-1", [], [])
+    assert shadow == brain_home / "skills" / "shadow" / "safe-skill-1"
+    assert (brain_home / "skills" / "candidates" / "safe-skill-1").exists() is False
