@@ -5,6 +5,8 @@ source_episodes:
 - success-20260814-fdf27e46
 - success-20260814-95e17baf
 - success-20260814-8c6aad35
+transfer_evidence: experiment-5 (2026-08-14): deepseek-v4-pro -> deepseek-v4-flash
+  verdict=transfers (same task, both succeeded) => global scope (no model restriction)
 created_at: 2026-08-14T10:40:19.271706+00:00
 ---
 
