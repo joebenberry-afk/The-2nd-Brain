@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from second_brain import episodes, semantic, sleep
+from second_brain import db, episodes, semantic, sleep
 from second_brain.errors import BrainError  # noqa: F401
 
 
@@ -366,3 +366,39 @@ def test_no_dream_pass_exists():
     }
     assert public <= expected, public - expected
     assert not hasattr(sleep, "dream_pass")
+
+
+def test_apply_twice_does_not_duplicate_sources(brain_home):
+    """Verifier finding: re-apply must not grow provenance rows unboundedly."""
+    _episode(
+        brain_home,
+        "correction",
+        "sidecar cleanup",
+        pe=0.5,
+        salience=0.5,
+        lesson="restore sidecar cleanup pattern",
+    )
+    mid = semantic.add_memory(
+        brain_home,
+        "Sidecar cleanup rule",
+        "restore sidecar pattern",
+        scope="project",
+        grade="TESTED",
+    )
+    semantic.curate(brain_home, mid, status="current")
+
+    q = sleep.replay_queue(brain_home)
+    for c in sleep.cluster(q):
+        sleep.strengthen_memories(brain_home, c, dry_run=False)
+    sleep.consolidate(brain_home, dry_run=False)
+
+    conn = db.connect(db.db_path(brain_home))
+    try:
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM memory_sources WHERE memory_id = ? AND source_kind='episode'",
+            (mid,),
+        ).fetchone()[0]
+        # one source per episode even after consolidate re-applies clusters
+        assert rows == 1
+    finally:
+        conn.close()

@@ -167,11 +167,17 @@ def strengthen_memories(home: Path, cluster: dict, dry_run: bool = True) -> list
                 (after, memory["memory_id"]),
             )
             for episode_id in cluster["episode_ids"]:
-                conn.execute(
-                    "INSERT INTO memory_sources (memory_id, source_ref, source_kind, added_at) "
-                    "VALUES (?, ?, 'episode', ?)",
-                    (memory["memory_id"], episode_id, _utcnow()),
-                )
+                exists = conn.execute(
+                    "SELECT 1 FROM memory_sources WHERE memory_id = ? AND source_ref = ? "
+                    "AND source_kind = 'episode'",
+                    (memory["memory_id"], episode_id),
+                ).fetchone()
+                if exists is None:  # provenance rows must not duplicate on re-apply
+                    conn.execute(
+                        "INSERT INTO memory_sources (memory_id, source_ref, source_kind, added_at) "
+                        "VALUES (?, ?, 'episode', ?)",
+                        (memory["memory_id"], episode_id, _utcnow()),
+                    )
             conn.commit()
         except Exception as exc:
             conn.rollback()
