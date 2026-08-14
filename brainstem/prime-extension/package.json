@@ -1,0 +1,20 @@
+{
+  "name": "second-brain-observability",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Measurement-only Prime Agent extension for The Second Brain OS Phase 2 observability. Observes lifecycle events and appends JSONL telemetry; never mutates agent behavior.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0"
+  }
+}
