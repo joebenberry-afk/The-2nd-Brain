@@ -206,6 +206,10 @@ def frontier_status(home: Path, change_id: str | None = None) -> dict:
     Change_id given: the full review sequence for that change."""
     directory = _frontier_dir(home)
     if change_id is not None:
+        # SEC-04: change_id reaches filesystem paths here; validate before
+        # use (mirrors latest_review). A hostile id must never influence
+        # which file outside frontier/ is read.
+        change_id = _valid_change_id(change_id)
         files = _review_files(home, change_id)
         latest = _latest_verdict(home, change_id)
         return {
