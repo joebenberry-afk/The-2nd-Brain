@@ -41,7 +41,7 @@ deactivates row, restores AGENTS.md exactly) and `project remove [--purge]`.
 ruff check src tests            -> clean
 ruff format --check             -> clean
 pyright src tests               -> 0 errors
-pytest -q                       -> 69 passed
+pytest -q                       -> 68 passed
 live demo: attach / status / detach / remove on a scratch git repo -> all green
 ```
 
