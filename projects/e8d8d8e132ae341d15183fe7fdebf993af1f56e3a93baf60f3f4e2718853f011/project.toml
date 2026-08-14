@@ -1,0 +1,5 @@
+# Brain project manifest for projects/<id>/ (canonical copy of registration facts).
+schema_version = 1
+id = "e8d8d8e132ae341d15183fe7fdebf993af1f56e3a93baf60f3f4e2718853f011"
+name = "The Second Brain"
+repo_path = "C:/Users/assas/Documents/The-Second-Brain"
