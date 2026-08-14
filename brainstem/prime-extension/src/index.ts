@@ -33,6 +33,7 @@ import type {
   TurnStartEvent,
 } from "../types/prime";
 import { loadConfig } from "./config";
+import { parseThreshold, rtdShadowRecord } from "./rtd";
 import * as sensors from "./sensors";
 import { sanitizeSessionStem, TelemetryStore } from "./storage";
 
@@ -157,9 +158,27 @@ export default function (pi: ExtensionAPI): void {
     sensors.toolCall(session, event.toolName, event.toolCallId, event.input),
   );
 
-  wire<ToolResultEvent>("tool_result", (event, _ctx, session) =>
-    sensors.toolResult(session, event.toolName, event.toolCallId, event.isError, event.content),
-  );
+  // Phase 5 RTD (shadow only): after the normal tool_result record, decide
+  // whether the result would be distilled and log rtd_shadow. Never
+  // substitutes content in this phase. RTD failures must not disturb the
+  // normal telemetry record, hence the inner try/catch.
+  wire<ToolResultEvent>("tool_result", (event, _ctx, session) => {
+    try {
+      const shadow = rtdShadowRecord({
+        session,
+        tool: event.toolName,
+        id: event.toolCallId,
+        content: event.content,
+        input: event.input,
+        threshold: parseThreshold(process.env.SECOND_BRAIN_RTD_THRESHOLD),
+        active: process.env.SECOND_BRAIN_RTD === "active",
+      });
+      if (shadow) getStore(session)?.append(shadow);
+    } catch {
+      // measurement must not disturb measurement
+    }
+    return sensors.toolResult(session, event.toolName, event.toolCallId, event.isError, event.content);
+  });
 
   wire<TurnEndEvent>("turn_end", (event, ctx, session) => {
     let usage: Parameters<typeof sensors.turnEnd>[2] = undefined;
