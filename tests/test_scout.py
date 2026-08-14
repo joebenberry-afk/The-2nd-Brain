@@ -217,7 +217,7 @@ def test_scout_command_unique_daemon_socket(tmp_path):
     b = scout.scout_command(repo, "t", map_path)
     socket_a = a[a.index("--daemon-socket") + 1]
     socket_b = b[b.index("--daemon-socket") + 1]
-    assert socket_a.startswith("scout-")
+    assert socket_a.startswith("\\\\.\\pipe\\scout-")
     assert socket_a != socket_b
 
 
