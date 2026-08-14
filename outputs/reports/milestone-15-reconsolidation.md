@@ -35,7 +35,7 @@ Forgetting is advisory: heat changes only, never destroys history.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (333 tests)
+ruff/format/pyright/pytest -> green (340 tests)
 live: retrieval + correct activation on mem-29557f93448f; decay dry-run (0 decays)
 ```
 
@@ -45,6 +45,9 @@ live: retrieval + correct activation on mem-29557f93448f; decay dry-run (0 decay
    start being recorded now — recorded, not hidden).
 2. TTLs are config defaults (hot 7d, warm 30d), not yet wired to
    retrieval.toml.
+3. WARM->COLD requires retrieval_count==0: a once-retrieved memory never
+   cools however stale. Recorded as a conservative bias (retrieval proves
+   past relevance); revisit when retrieval volume gives signal.
 
 ## Dogfooding / Self-Hosting (v4.2 §95.1 template)
 
@@ -75,3 +78,10 @@ live: retrieval + correct activation on mem-29557f93448f; decay dry-run (0 decay
 **Phase 16 — Skill Forge** (plan §112): episode -> pattern -> candidate
 skill -> eval -> shadow; no auto-install. Acceptance: candidate has trigger
 boundaries, workflow eval, regression eval, security review.
+
+
+## Phase 15 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase15-independent-verification.md):
+1. NIT — test count corrected to 340.
+2. NIT — WARM->COLD retrieval_count==0 bias documented as deviation #3.
