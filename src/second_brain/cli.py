@@ -493,7 +493,7 @@ def cmd_requirements(args) -> int:
         result = working_set.check_requirements(home, args.session_id)
         print(
             f"{result['material_unverified']}/{result['material_total']} material "
-            f"requirements unverified (gate {'on' if result['blocks'] else 'off'})"
+            f"requirements unverified (gate {'on' if result['gate'] else 'off'})"
         )
         for entry in result["entries"]:
             print(

@@ -369,11 +369,12 @@ def check_requirements(home: Path, session_id: str) -> dict:
     entries = _load_requirements(path)
     material = [e for e in entries if e["importance"] in MATERIAL_IMPORTANCES]
     unverified = [e for e in material if e["status"] not in ("verified", "not_applicable")]
-    blocks = _material_gate_blocks(home)
+    gate = _material_gate_blocks(home)
     return {
         "material_total": len(material),
         "material_unverified": len(unverified),
-        "blocks": blocks and len(unverified) > 0,
+        "gate": gate,
+        "blocks": gate and len(unverified) > 0,
         "entries": unverified,
     }
 
