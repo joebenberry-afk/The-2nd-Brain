@@ -6,9 +6,11 @@
 > experience across projects, and improves future agent performance without
 > retraining the underlying LLM.
 
-**Specification:** `The_Second_Brain_OS_V4_Definitive_Implementation_Plan.md`
-is the authoritative implementation plan. This README is a summary; where they
-conflict, the plan (plus verified repository reality) wins.
+**Specification:** `The_Second_Brain_OS_V4_1_OneShot_Implementation_Plan.md`
+is the authoritative implementation plan
+(`The_Second_Brain_OS_V4_Definitive_Implementation_Plan.md` is kept as research
+history). This README is a summary; where they conflict, the v4.1 plan (plus
+verified repository reality) wins.
 
 **Canonical location:** `%USERPROFILE%\Documents\The-Second-Brain`
 (resolvable via the `SECOND_BRAIN_HOME` environment variable).
@@ -18,8 +20,9 @@ conflict, the plan (plus verified repository reality) wins.
 | Phase | Name | Status |
 |-------|------|--------|
 | 0 | Project creation | done |
-| 1 | Foundation | in progress |
-| 2..23 | (gated) | see `outputs/reports/` |
+| 1 | Foundation | done |
+| 2 | Observability | in progress |
+| 3..23 | (gated) | see `outputs/reports/` |
 
 Each phase is gated by its acceptance criteria in the plan. Milestone reports
 live in `outputs/reports/<milestone>.md`.
@@ -54,7 +57,7 @@ brainctl doctor
 ```
 
 `brainctl` commands implemented so far: `init`, `doctor`, `status`,
-`project add|list|status`, `backup`, `restore`.
+`project add|list|status`, `backup`, `restore`, `telemetry report|validate`.
 
 ## Tooling policy
 

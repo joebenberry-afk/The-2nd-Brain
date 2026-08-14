@@ -99,3 +99,11 @@ def test_unknown_project_status_errors(tmp_path):
     r = run_cli(home, "project", "status", "zzz")
     assert r.returncode == 2
     assert "error" in r.stderr
+
+
+def test_home_flag_after_subcommand(tmp_path):
+    """`brainctl init --home X` must work like `brainctl --home X init`."""
+    home = tmp_path / "brain"
+    r = run_cli(home, "init", "--home", str(home))
+    assert r.returncode == 0, r.stderr
+    assert (home / "db" / "brain.sqlite").exists()

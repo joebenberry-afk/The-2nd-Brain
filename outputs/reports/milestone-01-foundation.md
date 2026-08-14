@@ -60,7 +60,8 @@ uv pip install -e . ; uv pip install pytest pytest-cov hypothesis ruff pyright
 .venv python -m ruff check src tests              -> 0 errors
 .venv python -m ruff format --check src tests scripts -> formatted
 .venv python -m pyright src tests                 -> 0 errors, 0 warnings
-.venv python -m pytest -q                         -> 49 passed (incl. 13 property examples)
+.venv python -m pytest -q                         -> 43 passed (incl. 2 Hypothesis
+                                                    property tests executing 13 generated examples)
 .venv python -m pytest --cov=second_brain         -> 72% line coverage (cli.py exercised
                                                     via subprocess tests, hence 0% in-proc)
 brainctl init (live)                              -> rc 0, applied migration 0001
@@ -77,7 +78,8 @@ git status / git diff --check                     -> clean, only canonical files
 
 - Python package: 9 modules, 635 statements, stdlib-only runtime dependencies
   (dev-only: pytest, pytest-cov, hypothesis, ruff, pyright).
-- Tests: 49 passing. Coverage (in-process): paths 100%, registry 95%,
+- Tests: 43 passing at the gate commit (2 are Hypothesis property tests
+  running 13 generated examples). Coverage (in-process): paths 100%, registry 95%,
   backup 92%, db 92%, doctor 88%.
 - DB: schema version 1, WAL, FK enforced, synchronous=NORMAL, busy_timeout 5s.
 - Live doctor: 16 checks, 0 failed, 0 warnings.

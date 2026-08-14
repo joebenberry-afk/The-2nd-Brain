@@ -18,20 +18,29 @@ from .errors import BrainError
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="brainctl", description="The Second Brain control CLI")
-    p.add_argument(
-        "--home", type=Path, default=None, help="Brain root (default: $SECOND_BRAIN_HOME)"
+    # --home is accepted both before and after the subcommand. SUPPRESS keeps
+    # the subparser default from clobbering a value given at the root level.
+    home_parent = argparse.ArgumentParser(add_help=False)
+    home_parent.add_argument(
+        "--home",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help="Brain root (default: $SECOND_BRAIN_HOME)",
+    )
+    p = argparse.ArgumentParser(
+        prog="brainctl", description="The Second Brain control CLI", parents=[home_parent]
     )
     p.add_argument("--version", action="version", version=f"brainctl {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init", help="initialize a Brain at the root").add_argument(
+    init = sub.add_parser("init", parents=[home_parent], help="initialize a Brain at the root")
+    init.add_argument(
         "--force", action="store_true", help="initialize even if the directory is non-empty"
     )
-    sub.add_parser("doctor", help="run health checks")
-    sub.add_parser("status", help="show Brain status summary")
+    sub.add_parser("doctor", parents=[home_parent], help="run health checks")
+    sub.add_parser("status", parents=[home_parent], help="show Brain status summary")
 
-    pa = sub.add_parser("project", help="project registry")
+    pa = sub.add_parser("project", parents=[home_parent], help="project registry")
     ps = pa.add_subparsers(dest="project_command", required=True)
     padd = ps.add_parser("add", help="register a repository")
     padd.add_argument("repo", type=Path)
@@ -42,17 +51,24 @@ def _parser() -> argparse.ArgumentParser:
     pstat = ps.add_parser("status", help="status of one registered project")
     pstat.add_argument("key")
 
-    b = sub.add_parser("backup", help="create a Brain backup")
+    b = sub.add_parser("backup", parents=[home_parent], help="create a Brain backup")
     b.add_argument("--note", default=None)
-    r = sub.add_parser("restore", help="restore a Brain backup")
+    r = sub.add_parser("restore", parents=[home_parent], help="restore a Brain backup")
     r.add_argument("backup_dir", type=Path)
     r.add_argument("--force", action="store_true")
+
+    tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
+    ts = tel.add_subparsers(dest="telemetry_command", required=True)
+    trep = ts.add_parser("report", help="aggregate telemetry records")
+    trep.add_argument("--since", default=None, help="only records with ts >= value")
+    trep.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
+    ts.add_parser("validate", help="validate telemetry records")
 
     return p
 
 
 def _home(args) -> Path:
-    return args.home.resolve() if args.home else paths.resolve_home()
+    return args.home.resolve() if getattr(args, "home", None) else paths.resolve_home()
 
 
 def _seed_defaults(home: Path) -> int:
@@ -163,6 +179,30 @@ def cmd_project(args) -> int:
     return 2
 
 
+def cmd_telemetry(args) -> int:
+    import json
+
+    from . import telemetry
+
+    home = _home(args)
+    if args.telemetry_command == "report":
+        rep = telemetry.report(home, since=args.since)
+        if args.as_json:
+            print(json.dumps(rep, indent=2, default=str))
+        else:
+            print(telemetry.format_report(rep))
+        return 0
+    if args.telemetry_command == "validate":
+        result = telemetry.validate(home)
+        print(
+            f"{result['files']} files, {result['records']} records, {len(result['issues'])} issues"
+        )
+        for issue in result["issues"]:
+            print(f"  {issue}")
+        return 1 if result["issues"] else 0
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -186,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         "project": cmd_project,
         "backup": cmd_backup,
         "restore": cmd_restore,
+        "telemetry": cmd_telemetry,
     }
     try:
         return handlers[args.command](args)
