@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -276,3 +277,149 @@ def test_check_triggers_matches_reference(brain_home, samples):
     assert results["t1"]["matched"] == reference("tests_failed", ">", 0.5, 3)
     assert results["t2"]["matched"] == reference("f1_delta", "<=", -0.1, 2)
     assert immune.check_triggers(home) == immune.check_triggers(home)
+
+
+# ---------------------------------------------------------------------------
+# SEC-05: arbitrary immune rollback filesystem target
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../outside",
+        "..\\outside",
+        "/etc/passwd",
+        "C:\\windows\\system32\\config",
+        "\\server\\share\\x",
+        "a:b",
+        ".",
+        "..",
+        "",
+    ],
+)
+def test_register_policy_rejects_hostile_targets(brain_home, bad):
+    """SEC-T048/T049: rollback targets must be Brain-managed, not arbitrary."""
+    with pytest.raises(BrainError, match="rollback_target"):
+        immune.register_policy(
+            brain_home,
+            "policy-safe",
+            {"rollback_trigger": "t", "rollback_target": bad, "backup_of": "a" * 64},
+        )
+
+
+def test_register_policy_rejects_absolute_target_outside_home(brain_home):
+    outside = brain_home.parent / "not-a-brain-file.toml"
+    outside.write_text("x", encoding="utf-8")
+    try:
+        with pytest.raises(BrainError, match="outside"):
+            immune.register_policy(
+                brain_home,
+                "policy-outside",
+                {
+                    "rollback_trigger": "t",
+                    "rollback_target": str(outside),
+                    "backup_of": "a" * 64,
+                },
+            )
+    finally:
+        outside.unlink()
+
+
+def test_policy_target_stored_relative_and_revalidated(brain_home):
+    """The stored target is home-relative; rollback re-proves containment."""
+    target = _policy_file(brain_home, "policy-rel", "good state")
+    immune.register_policy(
+        brain_home,
+        "policy-rel",
+        {
+            "rollback_trigger": "t1",
+            "rollback_target": str(target),
+            "backup_of": _sha256_text("good state"),
+        },
+    )
+    record = immune._read_json(brain_home / "immune" / "policies" / "policy-rel.json")
+    stored = record["guard"]["rollback_target"]
+    assert "\\" not in stored  # stored as posix relative
+    assert not Path(stored).is_absolute()
+    assert (brain_home / stored).resolve() == target.resolve()
+
+
+def _register_trigger_t1(home):
+    immune.register_trigger(
+        home, "t1", {"metric": "tests_failed", "operator": ">", "value": 0, "window": 3}
+    )
+
+
+def test_rollback_refuses_tampered_absolute_target(brain_home):
+    """A policy file edited to an absolute external target fails closed."""
+    target = _policy_file(brain_home, "policy-tamper", "bad state")
+    _register_trigger_t1(brain_home)
+    immune.register_policy(
+        brain_home,
+        "policy-tamper",
+        {
+            "rollback_trigger": "t1",
+            "rollback_target": str(target),
+            "backup_of": _sha256_text("good state"),
+        },
+    )
+    immune.ingest_metric(brain_home, "tests_failed", 3.0, "run-3")
+    # Tamper: rewrite the stored target to an absolute path outside the home.
+    policy_path = brain_home / "immune" / "policies" / "policy-tamper.json"
+    data = immune._read_json(policy_path)
+    outside = brain_home.parent / "external-target.toml"
+    outside.write_text("external", encoding="utf-8")
+    try:
+        data["guard"]["rollback_target"] = str(outside)
+        import json as _json
+
+        policy_path.write_text(_json.dumps(data), encoding="utf-8")
+        with pytest.raises(BrainError, match="Unsafe rollback target"):
+            immune.rollback(brain_home, "policy-tamper", "t1", "regressed")
+        assert outside.exists()  # never moved
+        assert target.exists()  # policy file untouched
+    finally:
+        outside.unlink()
+
+
+def test_rollback_target_symlink_escape_rejected(brain_home):
+    """SEC-T050: a target that is a symlink to outside is refused."""
+    target = _policy_file(brain_home, "policy-sym", "bad state")
+    _register_trigger_t1(brain_home)
+    immune.register_policy(
+        brain_home,
+        "policy-sym",
+        {
+            "rollback_trigger": "t1",
+            "rollback_target": str(target),
+            "backup_of": _sha256_text("good state"),
+        },
+    )
+    immune.ingest_metric(brain_home, "tests_failed", 3.0, "run-3")
+    outside = brain_home.parent / "symlink-victim.toml"
+    outside.write_text("victim", encoding="utf-8")
+    import os as _os
+
+    target.unlink()
+    try:
+        _os.symlink(outside, target)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform
+        pytest.skip(f"symlinks unavailable: {exc}")
+    try:
+        with pytest.raises(BrainError, match="Unsafe rollback target"):
+            immune.rollback(brain_home, "policy-sym", "t1", "regressed")
+        assert outside.read_text(encoding="utf-8") == "victim"
+    finally:
+        outside.unlink()
+
+
+def test_rollback_stays_in_authorized_domain(brain_home):
+    """SEC-T051: a successful rollback moves the target into immune/rollbacks/."""
+    target = _setup(brain_home, target_content="bad state now")
+    immune.ingest_metric(brain_home, "tests_failed", 3.0, "run-3")
+    result = immune.rollback(brain_home, "policy-one", "t1", "tests regressed")
+    assert result["rolled_back"] is True
+    backup = Path(result["backup"])
+    assert backup.parent == brain_home / "immune" / "rollbacks"
+    assert not target.exists()
