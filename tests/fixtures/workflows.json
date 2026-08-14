@@ -1,0 +1,437 @@
+{
+ "description": "Phase 12 eval fixture: 12 labeled workflows (6 looping, 6 healthy). Looping cases plant early stall patterns (pure repeats) so the Cerebellum must flag at read 2, before the fixed 3-read threshold.",
+ "workflows": [
+  {
+   "label": "loop-2read",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "a.py",
+      "hash": "a.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "a.py",
+      "hash": "a.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": [
+     "a.py"
+    ]
+   }
+  },
+  {
+   "label": "loop-3read",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "b.py",
+      "hash": "b.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "b.py",
+      "hash": "b.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "b.py",
+      "hash": "b.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "loop-5read",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "c.py",
+      "hash": "c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "c.py",
+      "hash": "c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "c.py",
+      "hash": "c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "c.py",
+      "hash": "c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "c.py",
+      "hash": "c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "loop-twofiles",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "d.py",
+      "hash": "d.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "d.py",
+      "hash": "d.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "e.py",
+      "hash": "e.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "e.py",
+      "hash": "e.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "loop-explore-stall",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "f.py",
+      "hash": "f.py",
+      "purpose": "scout candidates",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "f.py",
+      "hash": "f.py",
+      "purpose": "scout candidates",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "f.py",
+      "hash": "f.py",
+      "purpose": "scout candidates",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "loop-4read",
+   "outcome": "looping",
+   "session_state": {
+    "reads": [
+     {
+      "path": "g.py",
+      "hash": "g.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "g.py",
+      "hash": "g.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "g.py",
+      "hash": "g.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "g.py",
+      "hash": "g.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "unverified",
+      "evidence": []
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "heal-linear",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [
+     {
+      "path": "src/a.py",
+      "hash": "src/a.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "src/b.py",
+      "hash": "src/b.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "src/c.py",
+      "hash": "src/c.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "verified",
+      "evidence": [
+       "tests pass"
+      ]
+     }
+    ],
+    "files_touched": [
+     "src/a.py"
+    ]
+   }
+  },
+  {
+   "label": "heal-backtrack",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [
+     {
+      "path": "a.py",
+      "hash": "a.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "b.py",
+      "hash": "b.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "a.py",
+      "hash": "a.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "verified",
+      "evidence": [
+       "tests pass"
+      ]
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "heal-empty",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [],
+    "requirements": [],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "heal-status-closed",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [
+     {
+      "path": "x.py",
+      "hash": "x.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "x.py",
+      "hash": "x.py",
+      "purpose": "understand",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "verified",
+      "evidence": [
+       "tests pass"
+      ]
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "heal-scatter",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [
+     {
+      "path": "m0.py",
+      "hash": "m0.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "m1.py",
+      "hash": "m1.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "m2.py",
+      "hash": "m2.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "m3.py",
+      "hash": "m3.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "m4.py",
+      "hash": "m4.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "m5.py",
+      "hash": "m5.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "verified",
+      "evidence": [
+       "tests pass"
+      ]
+     }
+    ],
+    "files_touched": []
+   }
+  },
+  {
+   "label": "heal-verified-evidence",
+   "outcome": "healthy",
+   "session_state": {
+    "reads": [
+     {
+      "path": "t.py",
+      "hash": "t.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     },
+     {
+      "path": "u.py",
+      "hash": "u.py",
+      "purpose": "verify",
+      "ts": "2026-08-14T00:00:00+00:00"
+     }
+    ],
+    "requirements": [
+     {
+      "id": "REQ-001",
+      "importance": "critical",
+      "status": "verified",
+      "evidence": [
+       "test passed"
+      ]
+     }
+    ],
+    "files_touched": []
+   }
+  }
+ ]
+}

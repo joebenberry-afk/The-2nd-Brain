@@ -14,6 +14,7 @@ from pathlib import Path
 from . import (
     __version__,
     artifacts,
+    cerebellum,
     db,
     envsteward,
     episodes,
@@ -314,6 +315,14 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="trajectories.json path (default: tests/fixtures/trajectories.json)",
     )
+
+    cb = sub.add_parser(
+        "cerebellum", parents=[home_parent], help="predictive workflow (Phase 12, advisory)"
+    )
+    cbs = cb.add_subparsers(dest="cerebellum_command", required=True)
+    cba = cbs.add_parser("assess", parents=[home_parent], help="assess workflow progress")
+    cba.add_argument("session_id")
+    cbs.add_parser("eval", parents=[home_parent], help="run the labeled-workflow eval")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -747,6 +756,35 @@ def cmd_metacog(args) -> int:
     return 2
 
 
+def cmd_cerebellum(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.cerebellum_command == "assess":
+        result = cerebellum.assess_workflow(home, args.session_id)
+        print(f"progress: {result['progress']}")
+        for s in result["signals"]:
+            print(f"  {s['name']}: {s['detail']}")
+        for e in result["events"]:
+            print(f"  event: {e['rule']} expected={e['expected']} actual={e['actual']}")
+        return 0
+    if args.cerebellum_command == "eval":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        data = json.loads(
+            (repo_root / "tests" / "fixtures" / "workflows.json").read_text(encoding="utf-8")
+        )
+        workflows = data["workflows"] if isinstance(data, dict) else data
+        result = cerebellum.eval_cerebellum(workflows)
+        print(
+            f"cerebellum={result['cerebellum_agreement']:.3f} "
+            f"fixed={result['fixed_agreement']:.3f} n={result['n']}"
+        )
+        for ed in result["early_detection"]:
+            print(f"  {ed['label']}: cerebellum@{ed['cerebellum_read']} fixed@{ed['fixed_read']}")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -955,6 +993,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "cerebellum": cmd_cerebellum,
         "metacog": cmd_metacog,
         "memory": cmd_memory,
         "episodes": cmd_episodes,
