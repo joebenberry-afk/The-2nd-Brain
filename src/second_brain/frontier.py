@@ -98,6 +98,11 @@ def _next_review_target(home: Path, change_id: str) -> Path:
         counter += 1
 
 
+def latest_review(home: Path, change_id: str) -> dict | None:
+    """Return the latest review record for callers that need its binding."""
+    return _latest_verdict(home, _valid_change_id(change_id))
+
+
 def frontier_review(
     home: Path,
     change_id: str,
@@ -106,6 +111,11 @@ def frontier_review(
     reviewer: str,
     verdict: str,
     notes: str = "",
+    *,
+    artifact_path: str | None = None,
+    artifact_sha256: str | None = None,
+    artifact_version: str | None = None,
+    eval_manifest_sha256: str | None = None,
 ) -> Path:
     """Record one review. 'reject' is final: re-reviewing a rejected change
     raises BrainError. All other verdicts may be superseded by a later review
@@ -120,6 +130,16 @@ def frontier_review(
         raise BrainError(f"verdict must be one of {', '.join(VERDICTS)}")
     if not isinstance(notes, str):
         raise BrainError("notes must be a string")
+
+    if change_id.startswith("skill-") and change_id.endswith("-promotion"):
+        from . import skillforge
+
+        name = change_id[len("skill-") : -len("-promotion")]
+        binding = skillforge.artifact_binding(home, name)
+        artifact_path = artifact_path or binding["artifact_path"]
+        artifact_sha256 = artifact_sha256 or binding["artifact_sha256"]
+        artifact_version = artifact_version or binding["artifact_version"]
+        eval_manifest_sha256 = eval_manifest_sha256 or binding["eval_manifest_sha256"]
 
     existing = _review_files(home, change_id)
     if existing:
@@ -138,6 +158,10 @@ def frontier_review(
         "verdict": verdict,
         "notes": notes,
         "reviewed_at": _utcnow(),
+        "artifact_path": artifact_path,
+        "artifact_sha256": artifact_sha256,
+        "artifact_version": artifact_version,
+        "eval_manifest_sha256": eval_manifest_sha256,
     }
     fd = _reserve_exclusive(target)
     if fd is None:  # race: someone else created it; retry on the next name

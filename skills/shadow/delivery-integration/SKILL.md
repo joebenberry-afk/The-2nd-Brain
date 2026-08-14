@@ -1,6 +1,7 @@
 ---
 name: delivery-integration
-status: candidate
+status: shadow
+version: 1
 source_episodes:
 - success-20260814-fdf27e46
 - success-20260814-95e17baf

@@ -6,11 +6,11 @@
 > experience across projects, and improves future agent performance without
 > retraining the underlying LLM.
 
-**Specification:** `The_Second_Brain_OS_V4_1_OneShot_Implementation_Plan.md`
-is the authoritative implementation plan
-(`The_Second_Brain_OS_V4_Definitive_Implementation_Plan.md` is kept as research
-history). This README is a summary; where they conflict, the v4.1 plan (plus
-verified repository reality) wins.
+**Specification:** `The_Second_Brain_OS_V4_2_Self_Hosting_OneShot_Implementation_Plan.md`
+is the authoritative implementation plan. The v4.3 proof plan supplied for
+this campaign governs validation; v4.1 and the Definitive plan are retained
+as research history. Verified repository reality wins over stale narrative
+text.
 
 **Canonical location:** `%USERPROFILE%\Documents\The-Second-Brain`
 (resolvable via the `SECOND_BRAIN_HOME` environment variable).
@@ -21,11 +21,11 @@ verified repository reality) wins.
 |-------|------|--------|
 | 0 | Project creation | done |
 | 1 | Foundation | done |
-| 2 | Observability | done (verification in flight) |
+| 2 | Observability | done |
 | 3 | Project integration | done |
 | 4 | Working set / JIT context | done |
-| 5 | Sensory gateway / RTD | in progress |
-| 3..23 | (gated) | see `outputs/reports/` |
+| 5 | Sensory gateway / RTD | done (shadow-only) |
+| 6..23 | (gated) | done; see `outputs/reports/` |
 
 Each phase is gated by its acceptance criteria in the plan. Milestone reports
 live in `outputs/reports/<milestone>.md`.
@@ -46,7 +46,7 @@ live in `outputs/reports/<milestone>.md`.
 
 ```powershell
 cd $env:USERPROFILE\Documents\The-Second-Brain
-powershell -ExecutionPolicy Bypass -File scriptsootstrap.ps1
+powershell -ExecutionPolicy Bypass -File scripts\\bootstrap.ps1
 .venv\Scripts\python -m second_brain doctor
 ```
 

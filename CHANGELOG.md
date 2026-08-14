@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-14 — v4.2 complete, v4.3 proof campaign begins
+
+- v4.2 implementation and self-hosting milestones are complete.
+- v4.3 validation is a separate falsifiable campaign; shadow-only RTD and
+  report-only Prime routing remain explicit limitations until proven otherwise.
+
 Format: Keep a Changelog-ish. Entries reference milestone reports under
 `outputs/reports/`.
 

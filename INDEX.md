@@ -2,8 +2,9 @@
 
 Map of the Brain. Keep this file current when structure changes.
 
-- **Authority:** `The_Second_Brain_OS_V4_1_OneShot_Implementation_Plan.md`
-  (older V4 Definitive plan kept as research history)
+- **Implementation authority:** `The_Second_Brain_OS_V4_2_Self_Hosting_OneShot_Implementation_Plan.md`
+- **Validation authority:** the v4.3 proof plan supplied for the current
+  campaign (v4.1 and V4 Definitive plans are research history)
 - **State of the build:** `outputs/reports/` (milestone reports)
 - **Protected rules:** `constitution/`
 - **Policy defaults:** `config/*.toml`

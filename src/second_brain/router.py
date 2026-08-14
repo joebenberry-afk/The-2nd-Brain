@@ -16,6 +16,7 @@ import itertools
 import re
 from pathlib import Path
 
+from . import paths
 from .errors import BrainError
 
 POSITIVE_POINTS = 1.0
@@ -74,13 +75,13 @@ LEVEL_PRIORITY = ("active", "candidate", "shadow")
 
 
 def _level_dirs(home: Path) -> list[Path]:
-    return [Path(home) / "skills" / level for level in LEVEL_PRIORITY]
+    return [Path(home) / paths.SKILL_LEVEL_DIRS[level] for level in LEVEL_PRIORITY]
 
 
 def _skill_level(home: Path, name: str) -> str | None:
-    for directory in _level_dirs(home):
+    for level, directory in zip(LEVEL_PRIORITY, _level_dirs(home), strict=True):
         if (directory / name / "SKILL.md").exists():
-            return directory.name
+            return level
     return None
 
 
@@ -93,7 +94,7 @@ def _all_skill_names(home: Path) -> list[str]:
 
 
 def _shadow_dir(home: Path) -> Path:
-    return Path(home) / "skills" / "shadow"
+    return Path(home) / paths.SKILL_LEVEL_DIRS["shadow"]
 
 
 def _tokens(text: str) -> set[str]:

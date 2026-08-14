@@ -1,6 +1,7 @@
 ---
 name: sqlite-migration-verifier
-status: candidate
+status: active
+version: 1
 source_episodes:
 - success-20260814-025897e6
 - success-20260814-7e49e733
@@ -28,7 +29,9 @@ created_at: 2026-08-14T08:27:59.248862+00:00
 
 # Inputs
 
-(fill me)
+- migration SQL files changed by the task
+- the isolated SQLite database or fresh Brain home under test
+- the affected migration and backup/restore tests
 
 # Procedure
 
@@ -37,19 +40,28 @@ created_at: 2026-08-14T08:27:59.248862+00:00
 
 # Tools
 
-(fill me)
+- `.venv\Scripts\python -m pytest`
+- `brainctl`
+- `git diff --check`
 
 # Safety
 
-(review required)
+- never test against the canonical live database when an isolated copy is available
+- preserve and inspect the complete SQLite file set; never restore beside stale `-wal` or `-shm`
+- do not modify original game, user, or repository data outside the requested scope
 
 # Verification
 
-(eval required)
+- fresh-create migrations succeed
+- a second migrate is idempotent
+- the database reopens with `PRAGMA integrity_check = ok` and an empty foreign-key check
+- backup/restore preserves schema and known rows without stale WAL/SHM resurrection
 
 # Output
 
-(fill me)
+- exact commands and exit codes
+- schema version, integrity checks, backup manifest hash, and restored-row evidence
+- unresolved failures with the isolated path and rollback state
 
 # References
 

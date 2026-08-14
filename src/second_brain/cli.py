@@ -10,6 +10,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 from . import (
     __version__,
@@ -430,6 +431,7 @@ def _parser() -> argparse.ArgumentParser:
     ssh.add_argument(
         "--cases", default=None, help="eval cases JSON (REQUIRED; default: repo fixture)"
     )
+    sks.add_parser("audit", parents=[home_parent], help="audit skill lifecycle consistency")
     sks.add_parser("list", parents=[home_parent], help="list candidates and shadow skills")
 
     rt = sub.add_parser(
@@ -1177,6 +1179,12 @@ def cmd_skills(args) -> int:
         )
         print(f"Shadowed: {path}")
         return 0
+    if args.skills_command == "audit":
+        result = skillforge.audit_lifecycle(home)
+        print(f"ok={result['ok']}")
+        for issue in cast(list[str], result["issues"]):
+            print(f"  - {issue}")
+        return 0 if result["ok"] else 1
     if args.skills_command == "list":
         for c in skillforge.list_candidates(home):
             print(f"candidate {c}")
