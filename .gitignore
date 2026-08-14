@@ -1,0 +1,57 @@
+# The Second Brain — .gitignore
+# Doctrine: canonical human-readable knowledge is Git-versioned.
+# Derived/rebuildable/runtime data is ignored.
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Node (Prime extension)
+node_modules/
+brainstem/prime-extension/dist/
+
+# Runtime database + WAL artifacts (derived index; rebuilt from canonical knowledge)
+db/
+!db/.gitkeep
+
+# Runtime state (sessions, artifacts, locks, cache, projections)
+state/
+backups/
+outputs/context-capsules/
+outputs/evidence-maps/
+outputs/cache/
+
+# Raw telemetry
+telemetry/
+
+# Plasticity raw records (derived statistics)
+plasticity/
+sleep/replay-queue/
+sleep/consolidation/
+sleep/dreaming/
+sleep/reconsolidation/
+
+# Immune derived artifacts (scans, fingerprints of external content)
+immune/quarantine/
+immune/fingerprints/
+immune/baselines/
+immune/reports/
+
+# Raw episodic vault (high-volume; high-value episodes are promoted to experiences/)
+memory/episodic/
+memory/archive/
+
+# OS noise
+Thumbs.db
+Desktop.ini
+
+# RepoWise local index (derived)
+.repowise/
+
+.coverage
