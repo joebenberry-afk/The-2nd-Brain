@@ -20,6 +20,8 @@ from pathlib import Path
 
 from . import db
 from .errors import BrainError
+from .security.identifiers import validate_project_id
+from .security.paths import assert_safe_recursive_delete, resolve_under, validated_project_dir
 
 PROJECT_FILES = (
     "project.toml",
@@ -159,8 +161,13 @@ def add_project(
         pid = path_hash(rp)
     if not pid or not pid.strip():
         raise BrainError("Could not determine a project id")
+    # SEC-02/SEC-06: every identity source (manifest id, manual --id, git
+    # remote hash, path hash) passes the identifier boundary before it can
+    # influence a filesystem path or generated marker. Hostile ids are
+    # rejected, never sanitized.
+    pid = validate_project_id(pid)
     pname = (name or Path(rp).name or pid).strip() or pid
-    brain_dir = Path(home) / "projects" / pid
+    brain_dir = validated_project_dir(home, pid)
     now = utcnow()
 
     conn = db.connect(db.db_path(home))
@@ -192,7 +199,7 @@ def add_project(
 def _make_project_dir(home: Path, pid: str, name: str, repo_path: str) -> Project:
     """Create the canonical projects/<id>/ directory from templates (idempotent)."""
     templates = Path(home) / "templates" / "project"
-    target = Path(home) / "projects" / pid
+    target = validated_project_dir(home, pid)
     target.mkdir(parents=True, exist_ok=True)
     for fname in PROJECT_FILES:
         dst = target / fname
@@ -475,6 +482,23 @@ def remove_project(home: Path, key: str, *, purge: bool = False) -> dict[str, st
     import shutil
 
     proj = get_project(home, key)
+    # SEC-02: purge is a privileged recursive delete. Validate the target
+    # BEFORE the row is deleted and immediately before the rmtree. Never
+    # trust the stored path; prove it is the exact registered project
+    # directory beneath projects/.
+    brain_dir: Path | None = None
+    if purge and proj.brain_project_path:
+        candidate = Path(proj.brain_project_path)
+        if candidate.exists():
+            try:
+                brain_dir = assert_safe_recursive_delete(
+                    candidate,
+                    required_parent=Path(home) / "projects",
+                    forbidden_roots=(home, Path(home) / "projects"),
+                    expected_name=proj.id,
+                )
+            except ValueError as exc:
+                raise BrainError(f"Unsafe purge target refused: {exc}") from exc
     conn = db.connect(db.db_path(home))
     try:
         conn.execute("DELETE FROM projects WHERE id = ?", (proj.id,))
@@ -482,9 +506,7 @@ def remove_project(home: Path, key: str, *, purge: bool = False) -> dict[str, st
     finally:
         conn.close()
     out = {"id": proj.id, "name": proj.name, "purged": "False"}
-    if purge and proj.brain_project_path:
-        brain_dir = Path(proj.brain_project_path)
-        if brain_dir.exists():
-            shutil.rmtree(brain_dir)
-            out["purged"] = "True"
+    if brain_dir is not None:
+        shutil.rmtree(brain_dir)
+        out["purged"] = "True"
     return out
