@@ -37,7 +37,7 @@ def test_init_doctor_status_flow(tmp_path):
 
     r = run_cli(home, "status")
     assert r.returncode == 0
-    assert "schema v1" in r.stdout
+    assert "schema v2" in r.stdout
 
 
 def test_init_refuses_non_empty_non_brain(tmp_path):
