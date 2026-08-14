@@ -83,7 +83,7 @@ def _read_json(path: Path) -> dict:
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{_utcnow().replace(':', '-')}")
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")

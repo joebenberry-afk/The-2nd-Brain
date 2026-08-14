@@ -28,7 +28,7 @@ aside only under four simultaneous conditions.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (410 tests, collector line)
+ruff/format/pyright/pytest -> green (424 tests, verifier collect)
 live: trigger+policy registered -> ingests -> check matched -> refusal on
 unchanged target -> rollback on mutated target -> log record
 (demo artifacts removed afterwards; the demo is documented here, not kept)
@@ -73,3 +73,12 @@ unchanged target -> rollback on mutated target -> log record
 promotion with all guards (router evidence + frontier approve + immune
 guard + credit history). Acceptance: a policy activates ONLY when all
 guards pass.
+
+
+## Phase 22 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase22-independent-verification.md):
+1. NIT — test count corrected to 424 (15 immune tests; verifier collect is
+   ground truth).
+2. NIT — _write_json used a fixed .tmp name (same-file writer race); now
+   uses a pid+timestamp-unique tmp name before os.replace.
