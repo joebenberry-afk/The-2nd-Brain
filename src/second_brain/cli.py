@@ -17,6 +17,7 @@ from . import (
     cerebellum,
     credit,
     db,
+    engram,
     envsteward,
     episodes,
     monitor,
@@ -450,6 +451,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     cf.add_argument("skill_name")
     cf.add_argument("tasks_file")
+
+    eg = sub.add_parser(
+        "engrams", parents=[home_parent], help="workflow engrams (Phase 19, candidates only)"
+    )
+    egs = eg.add_subparsers(dest="engrams_command", required=True)
+    ed = egs.add_parser("detect", parents=[home_parent], help="detect repeated skill sequences")
+    ed.add_argument("sequences_file")
+    ed.add_argument("--min-support", type=int, default=2)
+    ew = egs.add_parser("write", parents=[home_parent], help="write a candidate engram")
+    ew.add_argument("name")
+    ew.add_argument("--skill", dest="skills", action="append", required=True)
+    ew.add_argument("--trigger", dest="trigger_note", default="")
+    ev = egs.add_parser("validate", parents=[home_parent], help="validate an engram")
+    ev.add_argument("name")
+    egs.add_parser("list", parents=[home_parent], help="list candidate engrams")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -1132,6 +1148,35 @@ def cmd_credit(args) -> int:
     return 2
 
 
+def cmd_engrams(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.engrams_command == "detect":
+        data = json.loads(Path(args.sequences_file).read_text(encoding="utf-8"))
+        sequences = data["sequences"] if isinstance(data, dict) else data
+        for e in engram.detect_engrams(sequences, min_support=args.min_support):
+            print(f"support={e['support']} len={len(e['sequence'])} {' -> '.join(e['sequence'])}")
+        return 0
+    if args.engrams_command == "write":
+        path = engram.write_engram(
+            home, args.name, args.skills, [[]], trigger_note=args.trigger_note
+        )
+        print(f"Engram candidate: {path}")
+        return 0
+    if args.engrams_command == "validate":
+        result = engram.validate_engram(home, args.name)
+        print(f"ok={result['ok']}")
+        for i in result["issues"]:
+            print(f"  - {i}")
+        return 0 if result["ok"] else 1
+    if args.engrams_command == "list":
+        for e in engram.list_engrams(home):
+            print(e)
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1340,6 +1385,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "engrams": cmd_engrams,
         "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
