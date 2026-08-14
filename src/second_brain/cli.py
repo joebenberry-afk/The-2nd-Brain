@@ -26,6 +26,7 @@ from . import (
     monitor,
     paths,
     plasticity,
+    promotion,
     reconsolidation,
     registry,
     risk,
@@ -432,10 +433,10 @@ def _parser() -> argparse.ArgumentParser:
     sks.add_parser("list", parents=[home_parent], help="list candidates and shadow skills")
 
     rt = sub.add_parser(
-        "router", parents=[home_parent], help="sparse skill router (Phase 17, shadow)"
+        "router", parents=[home_parent], help="sparse skill router (Phase 17/23; active+candidate+shadow pool)"
     )
     rts = rt.add_subparsers(dest="router_command", required=True)
-    rr2 = rts.add_parser("route", parents=[home_parent], help="shadow-route a task to skills")
+    rr2 = rts.add_parser("route", parents=[home_parent], help="route a task to skills (report only)")
     rr2.add_argument("task")
     rr2.add_argument("--max-active", type=int, default=3)
     rts.add_parser("eval", parents=[home_parent], help="run the router fixture eval")
@@ -464,6 +465,19 @@ def _parser() -> argparse.ArgumentParser:
     im = sub.add_parser(
         "immune", parents=[home_parent], help="immune system rollback triggers (Phase 22)"
     )
+    pm = sub.add_parser(
+        "promote", parents=[home_parent], help="promote a skill with all guards (Phase 23)"
+    )
+    pm.add_argument("skill_name")
+    pm.add_argument("from_level", choices=["shadow", "candidate", "active"])
+    pm.add_argument("to_level", choices=["shadow", "candidate", "active"])
+    pm.add_argument("--session", dest="session_id", default="")
+    pd = sub.add_parser("demote", parents=[home_parent], help="demote a skill (records reason)")
+    pd.add_argument("skill_name")
+    pd.add_argument("to_level", choices=["shadow", "candidate"])
+    pd.add_argument("--reason", required=True)
+    sub.add_parser("promotions", parents=[home_parent], help="promotion status + history")
+
     ims = im.add_subparsers(dest="immune_command", required=True)
     imp = ims.add_parser("policy", parents=[home_parent], help="register a guarded policy")
     imp.add_argument("policy_id")
@@ -1238,6 +1252,32 @@ def cmd_credit(args) -> int:
     return 2
 
 
+def cmd_promote(args) -> int:
+    home = _home(args)
+    result = promotion.promote(
+        home, args.skill_name, args.from_level, args.to_level, session_id=args.session_id
+    )
+    print(f"promoted={result['promoted']} reason={result.get('reason', '')}")
+    return 0 if result["promoted"] else 1
+
+
+def cmd_demote(args) -> int:
+    home = _home(args)
+    result = promotion.demote(home, args.skill_name, args.to_level, args.reason)
+    print(
+        f"demoted={result.get('demoted', result.get('promoted', False))} "
+        f"reason={result.get('reason', '')}"
+    )
+    return 0
+
+
+def cmd_promotions(args) -> int:
+    home = _home(args)
+    status = promotion.promotion_status(home)
+    print(status)
+    return 0
+
+
 def cmd_immune(args) -> int:
     home = _home(args)
     if args.immune_command == "policy":
@@ -1610,6 +1650,9 @@ def main(argv: list[str] | None = None) -> int:
         "models": cmd_models,
         "frontier": cmd_frontier,
         "immune": cmd_immune,
+        "promote": cmd_promote,
+        "demote": cmd_demote,
+        "promotions": cmd_promotions,
         "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
