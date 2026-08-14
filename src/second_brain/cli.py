@@ -16,6 +16,7 @@ from . import (
     artifacts,
     cerebellum,
     credit,
+    crossmodel,
     db,
     engram,
     envsteward,
@@ -455,6 +456,35 @@ def _parser() -> argparse.ArgumentParser:
     eg = sub.add_parser(
         "engrams", parents=[home_parent], help="workflow engrams (Phase 19, candidates only)"
     )
+    xm = sub.add_parser("models", parents=[home_parent], help="cross-model memory (Phase 20)")
+    xms = xm.add_subparsers(dest="models_command", required=True)
+    xmr = xms.add_parser("record", parents=[home_parent], help="record a model skill outcome")
+    xmr.add_argument("model_id")
+    xmr.add_argument("skill_name")
+    xmr.add_argument("task")
+    xmr.add_argument(
+        "--success",
+        dest="success",
+        type=lambda v: v.lower() in ("1", "true", "yes"),
+        default=False,
+    )
+    xmr.add_argument("--noise", type=int, default=0)
+    xmr.add_argument("--f1", type=float, default=0.0)
+    xmr.add_argument("--session", dest="session_id", default="")
+    xmt = xms.add_parser("transfer", parents=[home_parent], help="transfer test between two models")
+    xmt.add_argument("skill_name")
+    xmt.add_argument("model_a")
+    xmt.add_argument("model_b")
+    xmg = xms.add_parser(
+        "policy", parents=[home_parent], help="global policy stats (contamination guard)"
+    )
+    xmg.add_argument("skill_name")
+    xma = xms.add_parser("add", parents=[home_parent], help="record a model profile")
+    xma.add_argument("model_id")
+    xma.add_argument("--family", default="")
+    xma.add_argument("--capabilities", default="")
+    xms.add_parser("report", parents=[home_parent], help="model skill report")
+
     egs = eg.add_subparsers(dest="engrams_command", required=True)
     ed = egs.add_parser("detect", parents=[home_parent], help="detect repeated skill sequences")
     ed.add_argument("sequences_file")
@@ -1148,6 +1178,51 @@ def cmd_credit(args) -> int:
     return 2
 
 
+def cmd_models(args) -> int:
+    home = _home(args)
+    if args.models_command == "add":
+        crossmodel.record_model(
+            home, args.model_id, family=args.family, capabilities=args.capabilities
+        )
+        print(f"profile recorded: {args.model_id}")
+        return 0
+    if args.models_command == "record":
+        oid = crossmodel.record_skill_outcome(
+            home,
+            args.model_id,
+            args.skill_name,
+            args.task,
+            success=args.success,
+            noise=args.noise,
+            f1=args.f1,
+            session_id=args.session_id,
+        )
+        print(f"outcome recorded: {oid}")
+        return 0
+    if args.models_command == "transfer":
+        result = crossmodel.transfer_test(home, args.skill_name, args.model_a, args.model_b)
+        print(f"verdict={result['verdict']} overlap={result['overlap_count']}")
+        for d in result["tasks"]:
+            print(f"  {d['task_hash']}: a={d['success_a']} b={d['success_b']}")
+        return 0
+    if args.models_command == "policy":
+        stats = crossmodel.global_policy_stats(home, args.skill_name)
+        print(
+            f"included={stats['models_included']} excluded={stats['models_excluded']} "
+            f"success_rate={stats['success_rate']:.3f}"
+        )
+        return 0
+    if args.models_command == "report":
+        rep = crossmodel.model_skill_report(home)
+        for m in rep["models"]:
+            print(
+                f"  {m['model_id']:20s} outcomes={m['outcomes']} successes={m['successes']} "
+                f"f1={m['f1_mean']:.3f} noise={m['noise_mean']:.2f}"
+            )
+        return 0
+    return 2
+
+
 def cmd_engrams(args) -> int:
     import json
 
@@ -1386,6 +1461,7 @@ def main(argv: list[str] | None = None) -> int:
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
+        "models": cmd_models,
         "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
