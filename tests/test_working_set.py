@@ -3,9 +3,11 @@
 import hashlib
 import json
 import string
+import uuid
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from second_brain import working_set as ws
 from second_brain.errors import BrainError
@@ -107,7 +109,7 @@ def test_init_validates_arguments(brain_home):
     with pytest.raises(BrainError, match="risk"):
         ws.init_capsule(brain_home, "s1", "Objective", risk="LOWISH")
     with pytest.raises(BrainError, match="constraints"):
-        ws.init_capsule(brain_home, "s1", "Objective", constraints=["ok", 1])
+        ws.init_capsule(brain_home, "s1", "Objective", constraints=["ok", 1])  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -261,9 +263,9 @@ def test_record_read_validates(brain_home):
     with pytest.raises(BrainError, match="purpose"):
         ws.record_read(brain_home, "s1", "some/path", "   ")
     with pytest.raises(BrainError, match="turn"):
-        ws.record_read(brain_home, "s1", "some/path", "purpose", turn="3")
+        ws.record_read(brain_home, "s1", "some/path", "purpose", turn="3")  # type: ignore[arg-type]
     with pytest.raises(BrainError, match="artifact"):
-        ws.record_read(brain_home, "s1", "some/path", "purpose", artifact=5)
+        ws.record_read(brain_home, "s1", "some/path", "purpose", artifact=5)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -349,21 +351,26 @@ def _clean_update(update):
     return {key: value for key, value in update.items() if value is not None}
 
 
-@settings(max_examples=60, deadline=None)
+@settings(
+    max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(st.lists(_PARTIAL_UPDATE, max_size=8))
 def test_random_update_sequences_roundtrip(brain_home, updates):
-    ws.init_capsule(brain_home, "sid", "Initial objective")
-    expected = ws.show_capsule(brain_home, "sid")
+    home = brain_home / uuid.uuid4().hex  # one fresh Brain per generated input
+    ws.init_capsule(home, "sid", "Initial objective")
+    expected = ws.show_capsule(home, "sid")
     for update in updates:
-        ws.update_capsule(brain_home, "sid", **_clean_update(update))
+        ws.update_capsule(home, "sid", **_clean_update(update))
         expected.update(_clean_update(update))
-        actual = ws.show_capsule(brain_home, "sid")
+        actual = ws.show_capsule(home, "sid")
         assert {k: v for k, v in actual.items() if k != "updated_at"} == {
             k: v for k, v in expected.items() if k != "updated_at"
         }
 
 
-@settings(max_examples=60, deadline=None)
+@settings(
+    max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(
     st.lists(st.sampled_from(("add", "evidence", "status")), min_size=1, max_size=40),
     st.lists(
@@ -373,6 +380,7 @@ def test_random_update_sequences_roundtrip(brain_home, updates):
     ),
 )
 def test_random_requirement_sequences_keep_invariants(brain_home, ops, texts):
+    home = brain_home / uuid.uuid4().hex  # one fresh Brain per generated input
     expected = []
     used_texts = set()
     for op in ops:
@@ -380,34 +388,36 @@ def test_random_requirement_sequences_keep_invariants(brain_home, ops, texts):
             text = texts[len(used_texts) % len(texts)]
             if text in used_texts:
                 with pytest.raises(BrainError, match="Duplicate requirement"):
-                    ws.add_requirement(brain_home, "sid", text)
+                    ws.add_requirement(home, "sid", text)
                 continue
             used_texts.add(text)
-            entry = ws.add_requirement(brain_home, "sid", text)
+            entry = ws.add_requirement(home, "sid", text)
             expected.append(entry)
         else:
             if not expected:
                 continue
             entry = expected[0]
             if op == "evidence":
-                ws.add_evidence(brain_home, "sid", entry["id"], f"evidence-{len(entry['evidence'])}")
-                expected[0] = ws.show_requirements(brain_home, "sid")[0]
+                ws.add_evidence(home, "sid", entry["id"], f"evidence-{len(entry['evidence'])}")
+                expected[0] = ws.show_requirements(home, "sid")[0]
             else:
                 status = ws.REQUIREMENT_STATUSES[len(expected) % len(ws.REQUIREMENT_STATUSES)]
-                ws.set_requirement_status(brain_home, "sid", entry["id"], status)
-                expected[0] = ws.show_requirements(brain_home, "sid")[0]
-    entries = ws.show_requirements(brain_home, "sid")
+                ws.set_requirement_status(home, "sid", entry["id"], status)
+                expected[0] = ws.show_requirements(home, "sid")[0]
+    entries = ws.show_requirements(home, "sid")
     assert len({e["id"] for e in entries}) == len(entries)  # ids unique
     assert [e["id"] for e in entries] == [e["id"] for e in expected]  # order stable
     assert [e["evidence"] for e in entries] == [e["evidence"] for e in expected]
 
 
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(st.text(max_size=80))
 def test_session_id_accept_or_raise_property(brain_home, sid):
+    home = brain_home / uuid.uuid4().hex  # one fresh Brain per generated input
     try:
-        path = ws.init_capsule(brain_home, sid, "Objective")
+        path = ws.init_capsule(home, sid, "Objective")
     except BrainError:
         return
     # Accepted ids must round-trip and live under state/sessions/.
-    assert path.parent == brain_home / "state" / "sessions" / sid
-    assert ws.show_capsule(brain_home, sid)["objective"] == "Objective"
+    assert path.parent == home / "state" / "sessions" / sid
+    assert ws.show_capsule(home, sid)["objective"] == "Objective"
