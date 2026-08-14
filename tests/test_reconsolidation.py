@@ -205,6 +205,8 @@ def test_lazy_migration_0005(brain_home):
     dbfile = db.db_path(brain_home)
     conn = db.connect(dbfile)
     try:
+        conn.execute("DROP TABLE IF EXISTS model_skill_outcomes")
+        conn.execute("DROP TABLE IF EXISTS model_profiles")
         conn.execute("DROP TABLE IF EXISTS memory_activations")
         conn.execute("DROP TABLE IF EXISTS memory_retrievals")
         # Rebuild memories without the 0005 columns (v4 shape). memory_sources /
@@ -216,11 +218,11 @@ def test_lazy_migration_0005(brain_home):
         )
         conn.execute("DROP TABLE memories")
         conn.execute("ALTER TABLE memories_v1 RENAME TO memories")
-        conn.execute("DELETE FROM schema_version WHERE version = 5")
+        conn.execute("DELETE FROM schema_version WHERE version >= 5")
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [5]
+    assert db.pending_migrations(dbfile) == [5, 6]
     mid = semantic.add_memory(brain_home, "new memory", "body")
     assert db.pending_migrations(dbfile) == []
     assert _row(brain_home, mid)["heat"] == "WARM"

@@ -148,6 +148,7 @@ def _outcome_rows(
         query += " AND skill_name = ?"
         params.append(skill_name)
     query += " ORDER BY outcome_id"
+    _ensure_migrated(home)
     conn = db.connect(_dbfile(home))
     try:
         return [dict(row) for row in conn.execute(query, params).fetchall()]
