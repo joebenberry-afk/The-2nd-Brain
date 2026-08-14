@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, artifacts, db, paths, registry, scout, working_set
+from . import __version__, artifacts, db, paths, registry, risk, scout, verify, working_set
 from . import backup as backup_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
@@ -176,6 +176,22 @@ def _parser() -> argparse.ArgumentParser:
     srun.add_argument(
         "--output", default=None, help="evidence maps dir (default outputs/evidence-maps)"
     )
+
+    rk = sub.add_parser("risk", parents=[home_parent], help="risk controller (Phase 7)")
+    rks = rk.add_subparsers(dest="risk_command", required=True)
+    rassess = rks.add_parser("assess", parents=[home_parent], help="assess task risk")
+    rassess.add_argument("repo", type=Path)
+    rassess.add_argument("--file", dest="files", action="append", default=[])
+    rassess.add_argument("--task", default="")
+    rassess.add_argument("--criticality", default=None, choices=risk.RISK_LEVELS)
+
+    vf = sub.add_parser("verify", parents=[home_parent], help="intent verifier brief (Phase 7)")
+    vfs = vf.add_subparsers(dest="verify_command", required=True)
+    vbuild = vfs.add_parser(
+        "build-brief", parents=[home_parent], help="build a fresh-context verifier brief"
+    )
+    vbuild.add_argument("session_id")
+    vbuild.add_argument("repo", type=Path)
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -346,6 +362,24 @@ def cmd_artifact(args) -> int:
             )
         return 0
     return 2
+
+
+def cmd_risk(args) -> int:
+    result = risk.assess_risk(
+        args.repo, args.files, task_text=args.task, user_criticality=args.criticality
+    )
+    print(f"Risk: {result['level']} (score {result['score']})")
+    for s in result["signals"]:
+        if s["points"]:
+            print(f"  {s['name']:20s} {s['points']}  {s['detail']}")
+    return 0
+
+
+def cmd_verify(args) -> int:
+    home = _home(args)
+    path = verify.build_verifier_brief(home, args.session_id, args.repo)
+    print(f"Verifier brief: {path}")
+    return 0
 
 
 def cmd_scout(args) -> int:
@@ -556,6 +590,8 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "risk": cmd_risk,
+        "verify": cmd_verify,
         "artifact": cmd_artifact,
         "requirements": cmd_requirements,
         "read-ledger": cmd_read_ledger,
