@@ -27,7 +27,7 @@ existing skills and structurally cannot duplicate skill logic.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (396 tests)
+ruff/format/pyright/pytest -> green (374 tests)
 live: engrams detect over a fixture sequence file; write + validate a candidate
 ```
 
@@ -68,3 +68,10 @@ live: engrams detect over a fixture sequence file; write + validate a candidate
 **Phase 20 — Cross-Model Memory** (plan §116): model-specific outcome
 tracking; test skill transfer across models. Acceptance: model-specific
 failures do not contaminate global policy.
+
+
+## Phase 19 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase19-independent-verification.md):
+1. NIT — test count corrected to 374 (verifier collect is ground truth;
+   milestone counts were overestimated).
