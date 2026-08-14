@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, artifacts, db, paths, registry, working_set
+from . import __version__, artifacts, db, paths, registry, scout, working_set
 from . import backup as backup_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
@@ -162,6 +162,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     aexp.add_argument("hash_prefix")
     ars.add_parser("list", parents=[home_parent], help="list stored artifacts")
+
+    sc = sub.add_parser("scout", parents=[home_parent], help="isolated repo explorer (Phase 6)")
+    scs = sc.add_subparsers(dest="scout_command", required=True)
+    srun = scs.add_parser(
+        "run", parents=[home_parent], help="run an isolated exploration -> Evidence Map"
+    )
+    srun.add_argument("target", help="repo path or registered project key")
+    srun.add_argument("--task", required=True, help="exploration objective")
+    srun.add_argument("--model", default="deepseek/deepseek-v4-flash")
+    srun.add_argument("--no-agent", action="store_true", help="pre-pass only (no agent run)")
+    srun.add_argument("--ext", default=None, help="prime extension path to load (-e)")
+    srun.add_argument(
+        "--output", default=None, help="evidence maps dir (default outputs/evidence-maps)"
+    )
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -332,6 +346,36 @@ def cmd_artifact(args) -> int:
             )
         return 0
     return 2
+
+
+def cmd_scout(args) -> int:
+    import json
+
+    home = _home(args)
+    out_dir = Path(args.output) if args.output else None
+    if args.no_agent:
+        repo = scout.resolve_repo(home, args.target)
+        prepass = scout.deterministic_prepass(repo, args.task)
+        output_dir = out_dir or (home / "outputs" / "evidence-maps")
+        map_path = scout.write_evidence_map(repo, args.task, prepass, output_dir)
+        result = {"map_path": str(map_path), "prepass": prepass}
+    else:
+        result = scout.run_scout(
+            home,
+            args.target,
+            args.task,
+            model=args.model,
+            out_dir=out_dir,
+            ext=args.ext,
+        )
+    print(f"Evidence map: {result['map_path']}")
+    if "rc" in result:
+        print(f"agent rc: {result['rc']}")
+        print((result.get("stdout_tail") or "").strip()[-400:])
+    else:
+        print("pre-pass only (no agent run)")
+    print(json.dumps(result["prepass"], indent=1, default=str))
+    return 0 if result.get("rc", 0) == 0 else 1
 
 
 def cmd_capsule(args) -> int:
@@ -511,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
+        "scout": cmd_scout,
         "artifact": cmd_artifact,
         "requirements": cmd_requirements,
         "read-ledger": cmd_read_ledger,
