@@ -1,0 +1,22 @@
+# verification.toml — verification ladder defaults (Phase 7 consumes)
+schema_version = 1
+
+[ladder]
+LOW = ["targeted_test", "typecheck_or_compile", "diff_sanity"]
+MEDIUM = ["targeted_plus_relevant_tests", "requirement_ledger",
+          "affected_file_review", "simplification_check"]
+HIGH = ["all_medium", "repowise_impact_context", "independent_intent_verifier",
+        "negative_adversarial_tests", "rollback_check"]
+CRITICAL = ["all_high", "human_approval_for_irreversible",
+            "optional_second_independent_verification"]
+
+[intent_verifier]
+fresh_context = true
+# inputs: requirement, constraints, diff, relevant source, validation output.
+# NEVER the solver's reasoning (plan §37).
+backward_reconstruction_first = true   # infer intent from patch before task (plan §38)
+
+[requirement_ledger]
+statuses = ["unverified", "partially_verified", "verified",
+            "not_applicable", "blocked"]
+material_unverified_blocks_completion = true
