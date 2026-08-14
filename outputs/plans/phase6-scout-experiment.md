@@ -20,7 +20,7 @@ stays tool-only (never auto-triggered) in this phase.
    with ONLY the task text. The session solves it; the lead records: wall
    time, tool calls, tool-result bytes, context peak, answer vs ground truth
    (correct/partial/wrong).
-2. SCOUT arm: `brainctl scout <repo> --task <text>` fills an Evidence Map in an
+2. SCOUT arm: `brainctl scout run <repo> --task <text>` fills an Evidence Map in an
    isolated session (its trajectory never enters the lead context); then a
    fresh session receives the SAME task + the map file path (Tier-2 style).
    Same measurements.

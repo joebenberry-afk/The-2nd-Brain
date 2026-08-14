@@ -33,16 +33,24 @@ Project #1 rekey and Stage-0 documentation kickoff.
 | 2 | RepoWise → rg → ast-grep → direct read priority | SCOUT_PROMPT_TEMPLATE mandates the priority; pre-pass uses RepoWise probe + rg |
 | 3 | Return only Evidence Map | all 9 §23 fields rendered; agent fills in place, final reply constrained to `<map>|<summary>` |
 | 4 | Baseline vs Scout comparison | live experiment: 2 localization tasks x 2 arms (below) |
-| 5 | Promote to advisory only if beneficial | T2: 3 vs 7 tool calls, -7.9s, equal correctness + one extra actionable finding; T1: -5.2s, equal correctness/tools. PROMOTED to advisory (manual, suggested for unfamiliar-localization work) |
+| 5 | Promote to advisory only if beneficial | Criterion (b) met on 1 of 2 tasks (T2 solve session: 3 vs 7 calls); T1 neutral; criterion (c) met (lead context received only maps, never trajectories). PROMOTED to advisory (conservative; see corrected table) |
 
 ### Experiment (model deepseek-v4-flash, telemetry-measured)
 
 | Arm | wall | tools | bytes | peak ctx | correctness |
 |---|---|---|---|---|---|
-| T1 baseline | 34.3s | 3 | 14942 | 1.62% | correct |
-| T1 scout | 29.1s | 3 | 23870 | 1.86% | correct |
-| T2 baseline | 33.9s | 7 | 10372 | 1.50% | correct |
-| T2 scout | 26.0s | 3 | 10206 | 1.46% | correct + found real config-wiring gap |
+| T1 baseline solve | 34.3s | 3 | 14942 | 1.62% | correct |
+| T1 scout solve | 29.1s | 3 | 23870 | 1.86% | correct |
+| T1 scout exploration (isolated) | ~49s | 15 | 27060 | n/a | — |
+| T2 baseline solve | 33.9s | 7 | 10372 | 1.50% | correct |
+| T2 scout solve | 26.0s | 3 | 10206 | 1.46% | correct + found real config-wiring gap |
+| T2 scout exploration (isolated) | ~45s | 12 | 20789 | n/a | — |
+
+Honest reading: exploration costs stay OUT of the solving session (that is the
+isolation benefit), but the pipeline's total tool calls/tokens are HIGHER than
+baseline. Criterion (b) holds for T2's solve session only; T1 is neutral;
+criterion (c) (pollution) holds for both. Promotion to advisory is therefore
+conservative and recorded as such.
 
 The T2 scout bonus finding (verification.toml
 `material_unverified_blocks_completion` documented but not read by code —
@@ -51,7 +59,7 @@ hardcoded) is logged as Phase 7 scope.
 ## Commands / checks actually run
 
 ```text
-ruff check / ruff format --check / pyright / pytest -q -> all green (164 tests)
+ruff check / ruff format --check / pyright / pytest -q -> all green (165 tests)
 2 scout agent runs + 4 experiment sessions (real prime-agent, flash)
 brainctl doctor -> 16/16 after rekey
 backup before rekey: backups/backup-20260814-060833-738077
@@ -108,3 +116,13 @@ backup before rekey: backups/backup-20260814-060833-738077
 **Phase 7 — Accuracy** (plan §103): risk controller, Requirement Ledger
 enforcement thresholds, Intent Verifier workflow; HIGH-risk only; planted
 requirement/test mismatch eval.
+
+
+## Phase 6 verifier reconciliation (post-gate)
+
+Verdict PASS-WITH-FINDINGS (report: state/recon/phase6-independent-verification.md):
+1. MINOR — promotion honesty: corrected above (criterion (b) met on 1 of 2 tasks;
+   exploration metrics tabulated; promotion stays conservative-advisory).
+2. MINOR — exploration session metrics added to phase6-experiment.json.
+3. NIT — test count corrected (165).
+4. NIT — protocol doc command form corrected below (scout run).
