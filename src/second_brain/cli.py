@@ -26,6 +26,7 @@ from . import (
     risk,
     scout,
     semantic,
+    skillforge,
     sleep,
     verify,
     working_set,
@@ -400,6 +401,29 @@ def _parser() -> argparse.ArgumentParser:
     rcs.add_parser(
         "decay", parents=[home_parent], help="decay pass (dry run unless --apply)"
     ).add_argument("--apply", action="store_true")
+
+    sk = sub.add_parser(
+        "skills", parents=[home_parent], help="skill forge (Phase 16, candidates only)"
+    )
+    sks = sk.add_subparsers(dest="skills_command", required=True)
+    sf = sks.add_parser("forge", parents=[home_parent], help="forge a candidate from episodes")
+    sf.add_argument("name")
+    sf.add_argument("episode_ids", nargs="+")
+    sv = sks.add_parser("validate", parents=[home_parent], help="validate candidate structure")
+    sv.add_argument("name")
+    st = sks.add_parser(
+        "eval", parents=[home_parent], help="run trigger/workflow/regression/security evals"
+    )
+    st.add_argument("name")
+    st.add_argument("--cases", default=None, help="eval cases JSON (default: repo fixture)")
+    ssh = sks.add_parser(
+        "shadow", parents=[home_parent], help="move a fully-evaluated candidate to shadow"
+    )
+    ssh.add_argument("name")
+    ssh.add_argument(
+        "--cases", default=None, help="eval cases JSON (REQUIRED; default: repo fixture)"
+    )
+    sks.add_parser("list", parents=[home_parent], help="list candidates and shadow skills")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -953,6 +977,65 @@ def cmd_reconsolidation(args) -> int:
     return 2
 
 
+def cmd_skills(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.skills_command == "forge":
+        path = skillforge.forge_candidate(home, args.name, args.episode_ids)
+        print(f"Candidate forged: {path}")
+        return 0
+    if args.skills_command == "validate":
+        result = skillforge.validate_candidate(home, args.name)
+        print(f"ok={result['ok']}")
+        for issue in result["issues"]:
+            print(f"  - {issue}")
+        return 0 if result["ok"] else 1
+    if args.skills_command == "eval":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        cases_path = (
+            Path(args.cases)
+            if args.cases
+            else repo_root / "tests" / "fixtures" / "skill-eval-cases.json"
+        )
+        data = json.loads(cases_path.read_text(encoding="utf-8"))
+        trig = skillforge.trigger_eval(home, args.name, data["trigger_cases"])
+        wf = skillforge.workflow_eval(home, args.name, data["workflow_scenarios"])
+        reg = skillforge.regression_eval(home, args.name, data["regression_baselines"])
+        sec = skillforge.security_review(home, args.name)
+        print(
+            f"trigger={trig['passed']}/{trig['total']} workflow={wf['structural']} "
+            f"regression={'pass' if not reg['regression'] else 'fail'} "
+            f"security={'pass' if sec['passed'] else 'fail'}"
+        )
+        for f in sec["findings"]:
+            print(f"  security: {f}")
+        return 0
+    if args.skills_command == "shadow":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        cases_path = (
+            Path(args.cases)
+            if args.cases
+            else repo_root / "tests" / "fixtures" / "skill-eval-cases.json"
+        )
+        data = json.loads(cases_path.read_text(encoding="utf-8"))
+        path = skillforge.shadow_candidate(
+            home,
+            args.name,
+            trigger_cases=data["trigger_cases"],
+            baseline_cases=data["regression_baselines"],
+        )
+        print(f"Shadowed: {path}")
+        return 0
+    if args.skills_command == "list":
+        for c in skillforge.list_candidates(home):
+            print(f"candidate {c}")
+        for s in skillforge.list_shadow(home):
+            print(f"shadow    {s}")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1161,6 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "skills": cmd_skills,
         "reconsolidation": cmd_reconsolidation,
         "sleep": cmd_sleep,
         "plasticity": cmd_plasticity,
