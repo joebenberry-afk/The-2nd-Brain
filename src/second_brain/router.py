@@ -2,10 +2,11 @@
 
 Ranks shadow skills (``skills/shadow/<name>/SKILL.md``) by a deterministic
 score: +1 per positive trigger phrase matched in the task (case-insensitive
-substring), -2 per negative trigger phrase, +0.5 for procedure-token overlap,
-+1 if any skill-name token appears. Only skills with score > 0 are selected,
-capped at ``max_active`` (sparse routing, plan §56). The natural baseline is
-the naive name-token match the plan says Brainstem must beat on trigger noise.
+substring), -2 per negative trigger phrase, +1.5 when an adjacent name bigram
+appears in the task, +0.25 per procedure-token overlap (capped 0.5, generic
+stopwords excluded). Only skills with score >= 1.0 are selected, capped at
+``max_active`` (sparse routing, plan §56). The natural baseline is the naive
+name-token match the plan says Brainstem must beat on trigger noise.
 """
 
 from __future__ import annotations
@@ -161,20 +162,39 @@ def _score_skill(home: Path, name: str, task_lower: str, task_tokens: set[str]) 
     return round(score, 2)
 
 
-def route(home: Path, task: str, *, max_active: int = 3) -> dict:
+def route(
+    home: Path,
+    task: str,
+    *,
+    max_active: int = 3,
+    skills: list[str] | None = None,
+) -> dict:
     """Rank shadow skills for `task`. Deterministic; shadow-only.
 
     Degenerate input never raises: a blank/whitespace-only task (including
     exotic whitespace like U+0085) routes to nothing rather than blocking.
+
+    ``skills`` (Phase 18): an explicit skill-name list override so callers can
+    route over a filtered set (e.g. counterfactuals) without touching the
+    filesystem. Defaults to all shadow skills.
     """
     if not isinstance(task, str):
         raise BrainError("task must be a string")
     if not isinstance(max_active, int) or isinstance(max_active, bool) or max_active <= 0:
         raise BrainError("max_active must be a positive integer")
+    if skills is not None and (
+        not isinstance(skills, list) or any(not isinstance(s, str) or not s for s in skills)
+    ):
+        raise BrainError("skills must be a list of non-empty strings or None")
     if not task.strip():
         return {"selected": [], "scores": {}, "shadow": True}
     directory = _shadow_dir(home)
-    names = sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
+    if skills is not None:
+        names = sorted(skills)
+    else:
+        names = (
+            sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
+        )
     task_lower = task.lower()
     task_tokens = _tokens(task)
     scores = {name: _score_skill(home, name, task_lower, task_tokens) for name in names}

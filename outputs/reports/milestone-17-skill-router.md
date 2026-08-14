@@ -26,12 +26,12 @@ stopword-filtered, and selection requires score >= 1.0. Shadow-only.
 | 2 | Shadow route first | router reads ONLY skills/shadow/; no active routing exists |
 | 3 | Compare vs model-natural routing | natural baseline = name-token matching (naive proxy) |
 | 4 | Lower trigger noise | real-grounded tasks (state/recon/router-tasks-real.json): router noise 1 vs natural noise 3 |
-| 5 | No success regression | recall 5/5 vs natural 4/5; f1 0.417 vs 0.250 |
+| 5 | No success regression | recall 5/5 vs natural 3/5; f1 0.417 vs 0.250 |
 
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (360 tests)
+ruff/format/pyright/pytest -> green (359 tests)
 live: router route on trigger + distractor tasks; router eval on real-grounded tasks
 ```
 
@@ -83,3 +83,13 @@ live: router route on trigger + distractor tasks; router eval on real-grounded t
 levels (already recorded in Phase 13), counterfactual replay for major
 policy candidates. Acceptance: task success does not automatically reward
 every active skill.
+
+
+## Phase 17 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase17-independent-verification.md):
+1. NIT — test count corrected to 359.
+2. NIT — natural recall corrected to 3/5 (both schema-version tasks are
+   missed by the naive name-token baseline; the inequality still holds).
+3. NIT — router module docstring updated to the shipped scoring model
+   (+1.5 bigram, >= 1.0 threshold, stopwords).
