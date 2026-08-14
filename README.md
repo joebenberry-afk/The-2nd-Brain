@@ -21,7 +21,8 @@ verified repository reality) wins.
 |-------|------|--------|
 | 0 | Project creation | done |
 | 1 | Foundation | done |
-| 2 | Observability | in progress |
+| 2 | Observability | done (verification in flight) |
+| 3 | Project integration | in progress |
 | 3..23 | (gated) | see `outputs/reports/` |
 
 Each phase is gated by its acceptance criteria in the plan. Milestone reports
@@ -57,7 +58,8 @@ brainctl doctor
 ```
 
 `brainctl` commands implemented so far: `init`, `doctor`, `status`,
-`project add|list|status`, `backup`, `restore`, `telemetry report|validate`.
+`project add|list|status|detach|remove`, `backup`, `restore`,
+`telemetry report|validate`.
 
 ## Tooling policy
 

@@ -229,6 +229,9 @@ def get_project(home: Path, key: str) -> Project:
 
 def project_status(home: Path, key: str) -> dict[str, str]:
     p = get_project(home, key)
+    rw: dict[str, bool] = {}
+    if p.repo_path and Path(p.repo_path).exists():
+        rw = detect_repowise(p.repo_path)
     return {
         "id": p.id,
         "name": p.name,
@@ -241,4 +244,221 @@ def project_status(home: Path, key: str) -> dict[str, str]:
         "created_at": p.created_at,
         "last_seen_at": p.last_seen_at or "-",
         "active": str(p.active),
+        "repowise_cli": str(rw.get("cli_available", False)),
+        "repowise_index": str(rw.get("index_present", False)),
+        "repowise_policy": p.repo_intelligence,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — project integration (plan §99): .brain/project.toml write-back and
+# a minimal, fenced AGENTS.md marker block. Idempotent attach; safe detach.
+# ---------------------------------------------------------------------------
+
+MARKER_BEGIN = "<!-- The-Second-Brain:begin id={pid} -->"
+MARKER_END = "<!-- The-Second-Brain:end -->"
+
+MARKER_BODY = """## The Second Brain
+
+Canonical Brain: `%SECOND_BRAIN_HOME%`.
+
+For substantive work:
+- current repo/tests outrank memory;
+- use targeted Brain recall;
+- do not preload the Brain;
+- use Brainstem signals where available;
+- preserve durable validated learning.
+"""
+
+MANIFEST_TEMPLATE = """# Managed by The Second Brain (brainctl project attach). Safe to edit.
+schema_version = 1
+id = "{id}"
+name = "{name}"
+brain_enabled = true
+repository_is_authoritative = true
+
+[meta]
+managed_by = "second-brain"
+
+[performance]
+default_mode = "standard"
+context_policy = "adaptive"
+repo_intelligence = "repowise-preferred"
+verification_policy = "risk-adaptive"
+
+[automation]
+brainstem = true
+improvement_radar = true
+experience_observer = true
+
+[tools]
+repowise = "auto"
+ast_grep = "auto"
+"""
+
+
+def _agents_marker_block(pid: str) -> str:
+    return f"{MARKER_BEGIN.format(pid=pid)}\n{MARKER_BODY}{MARKER_END}\n"
+
+
+def _append_marker(agents_path: Path, pid: str) -> bool:
+    """Append (or skip, when already present) the marker block. Returns changed.
+
+    The block is always appended as ``"\n" + block``. ``_remove_marker``
+    removes exactly that span, so detach restores the file byte-for-byte.
+    """
+    if agents_path.exists():
+        text = agents_path.read_text(encoding="utf-8")
+        if "The-Second-Brain:begin id=" in text:
+            return False  # idempotent: a marker already exists
+        text += "\n" + _agents_marker_block(pid)
+    else:
+        agents_path.parent.mkdir(parents=True, exist_ok=True)
+        text = "\n" + _agents_marker_block(pid)
+    agents_path.write_text(text, encoding="utf-8", newline="")
+    return True
+
+
+def _remove_marker(agents_path: Path) -> tuple[bool, str]:
+    """Remove the Second Brain marker block. Returns (changed, remaining_text).
+
+    Removes exactly the span attach appended (including the one preceding
+    newline), leaving the original file bytes untouched. A malformed marker
+    (missing end fence) is left alone rather than risk deleting user content.
+    """
+    if not agents_path.exists():
+        return False, ""
+    text = agents_path.read_text(encoding="utf-8")
+    begin = "<!-- The-Second-Brain:begin"
+    idx = text.find(begin)
+    if idx == -1:
+        return False, text
+    end_idx = text.find(MARKER_END, idx)
+    if end_idx == -1:
+        return False, text
+    block_end = end_idx + len(MARKER_END)
+    if text[block_end : block_end + 1] == "\n":
+        block_end += 1  # the block's own trailing newline belongs to the block
+    start = idx - 1 if idx > 0 and text[idx - 1] == "\n" else idx
+    remaining = text[:start] + text[block_end:]
+    return True, remaining
+
+
+def write_project_manifest(repo_path: str, pid: str, name: str) -> bool:
+    """Write .brain/project.toml unless one already exists. Returns created."""
+    manifest = Path(repo_path) / ".brain" / "project.toml"
+    if manifest.exists():
+        return False
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    content = MANIFEST_TEMPLATE.replace("{id}", pid).replace("{name}", name)
+    manifest.write_text(content, encoding="utf-8", newline="\n")
+    return True
+
+
+def detect_repowise(repo_path: str) -> dict[str, bool]:
+    import shutil
+
+    return {
+        "cli_available": shutil.which("repowise") is not None,
+        "index_present": (Path(repo_path) / ".repowise").exists(),
+    }
+
+
+def attach_project(
+    home: Path,
+    repo_path: str | Path,
+    *,
+    name: str | None = None,
+    project_id: str | None = None,
+    with_marker: bool = True,
+    with_manifest: bool = True,
+) -> tuple[Project, bool, dict[str, bool]]:
+    """Full project attach (plan §99): registry + manifest + AGENTS marker.
+
+    Returns (project, created, changes). Safe: never overwrites an existing
+    .brain/project.toml; never touches AGENTS.md content outside our fenced
+    block; re-attach is a no-op for already-applied steps.
+    """
+    rp = normalize_repo_path(repo_path)
+    proj, created = add_project(home, rp, name=name, project_id=project_id)
+    changes: dict[str, bool] = {"registered_created": created}
+    if with_manifest:
+        changes["manifest_created"] = write_project_manifest(rp, proj.id, proj.name)
+    if with_marker:
+        changes["marker_added"] = _append_marker(Path(rp) / "AGENTS.md", proj.id)
+    return proj, created, changes
+
+
+def detach_project(home: Path, key: str) -> dict[str, bool | str]:
+    """Reverse repo-side integration. Returns a change report.
+
+    Removes our fenced AGENTS.md marker block, removes .brain/project.toml only
+    when it is Brain-managed, and deactivates the registry row. User content is
+    preserved; user-owned manifests are left untouched.
+    """
+    proj = get_project(home, key)
+    if not proj.repo_path:
+        raise BrainError(f"Project {proj.name!r} has no repo_path to detach")
+    rp = Path(proj.repo_path)
+    if not rp.exists():
+        raise BrainError(f"Repository path no longer exists: {rp}")
+    changes: dict[str, bool | str] = {"id": proj.id, "name": proj.name}
+
+    agents = rp / "AGENTS.md"
+    removed, remaining = _remove_marker(agents)
+    changes["marker_removed"] = removed
+    if removed:
+        if remaining.strip():
+            agents.write_text(remaining, encoding="utf-8", newline="")
+        else:
+            # The file consisted solely of our marker: remove it entirely.
+            agents.unlink()
+            changes["agents_file_deleted"] = True
+
+    manifest = rp / ".brain" / "project.toml"
+    if manifest.exists():
+        import tomllib
+
+        try:
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            managed = (
+                isinstance(data.get("meta"), dict)
+                and data["meta"].get("managed_by") == "second-brain"
+            )
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise BrainError(f"Invalid project manifest {manifest}: {exc}") from exc
+        if managed:
+            manifest.unlink()
+            changes["manifest_removed"] = True
+        else:
+            changes["manifest_removed"] = False
+
+    conn = db.connect(db.db_path(home))
+    try:
+        conn.execute("UPDATE projects SET active = 0 WHERE id = ?", (proj.id,))
+        conn.commit()
+    finally:
+        conn.close()
+    changes["deactivated"] = True
+    return changes
+
+
+def remove_project(home: Path, key: str, *, purge: bool = False) -> dict[str, str]:
+    """Delete a registry row (rollback completeness). The canonical
+    projects/<id>/ directory is kept unless --purge is given."""
+    import shutil
+
+    proj = get_project(home, key)
+    conn = db.connect(db.db_path(home))
+    try:
+        conn.execute("DELETE FROM projects WHERE id = ?", (proj.id,))
+        conn.commit()
+    finally:
+        conn.close()
+    out = {"id": proj.id, "name": proj.name, "purged": "False"}
+    if purge and proj.brain_project_path:
+        brain_dir = Path(proj.brain_project_path)
+        if brain_dir.exists():
+            shutil.rmtree(brain_dir)
+            out["purged"] = "True"
+    return out
