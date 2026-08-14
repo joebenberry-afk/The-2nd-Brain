@@ -37,11 +37,21 @@ no message text, prompts, tool I/O payloads, or chain-of-thought. Only:
 
 ## Install
 
-Copy this directory to `~/.prime/agent/extensions/second-brain/` (global) or
-`.prime/agent/extensions/second-brain/` (project-local), then run `npm install`
-there (dev deps are only needed for tests/lint — the extension itself has zero
-runtime dependencies beyond Node built-ins), and restart Prime Agent
-(`/reload` works for auto-discovered extensions). For a quick test:
+Canonical installer (backups the previous state first):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-prime-extension.ps1
+```
+
+It copies `src/*.ts` and `types/*.d.ts` to
+`~/.prime/agent/extensions/second-brain/` (global auto-discovery), never edits
+settings.json, and is reversible via
+`scripts\uninstall-prime-extension.ps1`. Restart Prime Agent (`/reload` works
+for auto-discovered extensions).
+
+`npm install` inside this directory is for DEVELOPMENT only (tests/lint/type
+check; the extension itself has zero runtime dependencies beyond Node
+built-ins). For a quick uninstalled test:
 
 ```bash
 prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
