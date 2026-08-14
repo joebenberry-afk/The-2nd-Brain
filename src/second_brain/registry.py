@@ -68,6 +68,19 @@ def path_hash(repo_path: str) -> str:
     return hashlib.sha256(normalize_repo_path(repo_path).lower().encode("utf-8")).hexdigest()
 
 
+def remote_identity(git_remote: str) -> str:
+    """Stable id derived from the normalized Git remote (plan §10 priority 2).
+
+    Strips trailing '.git' and lowercases so the same remote on a different
+    machine/path resolves to the same project id.
+    """
+    norm = git_remote.strip().lower()
+    if norm.endswith(".git"):
+        norm = norm[:-4]
+    norm = norm.rstrip("/")
+    return hashlib.sha256(f"remote:{norm}".encode()).hexdigest()
+
+
 def detect_git_remote(repo_path: str) -> str | None:
     try:
         r = subprocess.run(
@@ -132,11 +145,21 @@ def add_project(
     otherwise (idempotent).
     """
     rp = normalize_repo_path(repo_path)
-    pid = detect_explicit_id(rp) or project_id or path_hash(rp)
+    # Identity priority (plan §10): explicit manifest -> manual --id -> git
+    # remote normalized -> repo root path hash. Never the directory name.
+    remote = detect_git_remote(rp)
+    explicit = detect_explicit_id(rp)
+    if explicit:
+        pid = explicit
+    elif project_id:
+        pid = project_id
+    elif remote:
+        pid = remote_identity(remote)
+    else:
+        pid = path_hash(rp)
     if not pid or not pid.strip():
         raise BrainError("Could not determine a project id")
     pname = (name or Path(rp).name or pid).strip() or pid
-    remote = detect_git_remote(rp)
     brain_dir = Path(home) / "projects" / pid
     now = utcnow()
 
@@ -294,6 +317,7 @@ experience_observer = true
 [tools]
 repowise = "auto"
 ast_grep = "auto"
+sz_tool = "auto"
 """
 
 
@@ -308,7 +332,10 @@ def _append_marker(agents_path: Path, pid: str) -> bool:
     removes exactly that span, so detach restores the file byte-for-byte.
     """
     if agents_path.exists():
-        text = agents_path.read_text(encoding="utf-8")
+        # newline="" reads raw bytes (no CRLF->LF translation) so detach can
+        # restore the file byte-for-byte on Windows.
+        with agents_path.open(encoding="utf-8", newline="") as f:
+            text = f.read()
         if "The-Second-Brain:begin id=" in text:
             return False  # idempotent: a marker already exists
         text += "\n" + _agents_marker_block(pid)
@@ -328,7 +355,8 @@ def _remove_marker(agents_path: Path) -> tuple[bool, str]:
     """
     if not agents_path.exists():
         return False, ""
-    text = agents_path.read_text(encoding="utf-8")
+    with agents_path.open(encoding="utf-8", newline="") as f:
+        text = f.read()
     begin = "<!-- The-Second-Brain:begin"
     idx = text.find(begin)
     if idx == -1:
@@ -392,9 +420,10 @@ def attach_project(
 def detach_project(home: Path, key: str) -> dict[str, bool | str]:
     """Reverse repo-side integration. Returns a change report.
 
-    Removes our fenced AGENTS.md marker block, removes .brain/project.toml only
-    when it is Brain-managed, and deactivates the registry row. User content is
-    preserved; user-owned manifests are left untouched.
+    Removes our fenced AGENTS.md marker block (byte-exact restoration,
+    including CRLF line endings), removes .brain/project.toml only when it is
+    Brain-managed, and deactivates the registry row. User content is preserved;
+    user-owned manifests are left untouched.
     """
     proj = get_project(home, key)
     if not proj.repo_path:
@@ -408,12 +437,9 @@ def detach_project(home: Path, key: str) -> dict[str, bool | str]:
     removed, remaining = _remove_marker(agents)
     changes["marker_removed"] = removed
     if removed:
-        if remaining.strip():
-            agents.write_text(remaining, encoding="utf-8", newline="")
-        else:
-            # The file consisted solely of our marker: remove it entirely.
-            agents.unlink()
-            changes["agents_file_deleted"] = True
+        # Write the remaining content back even when whitespace-only: we never
+        # delete a file the user may still care about.
+        agents.write_text(remaining, encoding="utf-8", newline="")
 
     manifest = rp / ".brain" / "project.toml"
     if manifest.exists():
