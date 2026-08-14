@@ -353,7 +353,7 @@ def scout_command(
         str(repo),
         "--offline",
         "--daemon-socket",
-        f"scout-{uuid.uuid4().hex}",
+        rf"\\.\pipe\scout-{uuid.uuid4().hex}",
     ]
     if ext is not None:
         command += ["-e", ext]
