@@ -15,8 +15,10 @@ Describe "prime extension install/uninstall scripts" {
         New-Item -ItemType Directory -Force -Path $src | Out-Null
         Set-Content -Path (Join-Path $src "index.ts") -Value "export default function (pi) {}"
         Set-Content -Path (Join-Path $src "storage.ts") -Value "export const x = 1"
-        New-Item -ItemType Directory -Force -Path (Join-Path $src "types") | Out-Null
-        Set-Content -Path (Join-Path $src "types\prime.d.ts") -Value "declare const pi: unknown"
+        # types/ is a SIBLING of src/ in the real layout (types/prime.d.ts)
+        $typesSrc = Join-Path $brain "brainstem\prime-extension\types"
+        New-Item -ItemType Directory -Force -Path $typesSrc | Out-Null
+        Set-Content -Path (Join-Path $typesSrc "prime.d.ts") -Value "declare const pi: unknown"
         New-Item -ItemType Directory -Force -Path (Join-Path $brain "backups") | Out-Null
         $env:SECOND_BRAIN_HOME = $brain
         $script:repo = $repo

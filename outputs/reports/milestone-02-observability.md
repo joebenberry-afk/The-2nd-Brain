@@ -61,7 +61,7 @@ report|validate`) and PowerShell install/uninstall complete the loop.
 (TS) bash tests/integration/run-integration.sh       -> ALL CHECKS PASSED (worker + parent re-run)
 (Py) ruff check / format --check  -> clean
 (Py) pyright src tests            -> 0 errors
-(Py) pytest -q                    -> 56 passed
+(Py) pytest -q                    -> 54 passed
 (PS) Invoke-Pester install-prime-extension.Tests.ps1 -> 5/5
 brainctl telemetry validate       -> 6 files, 67 records, 0 issues (live data)
 brainctl telemetry report         -> 6 sessions aggregated (live data)
@@ -74,7 +74,7 @@ brainctl telemetry report         -> 6 sessions aggregated (live data)
 - Live telemetry: 6 real sessions, 67 records, 0 validation issues, 0 extension
   errors, 0 failed tool results; max context 1.1%; kinds distribution in report.
 - Baseline task times: 24.6s / 15.3s / 15.4s (flash model, print mode).
-- Python suite: 56 tests. Pester: 5. TS: 38 + 2-run integration.
+- Python suite: 54 tests. Pester: 5. TS: 38 + 2-run integration.
 
 ## Deviations from the specification
 
@@ -123,3 +123,30 @@ brainctl telemetry report         -> 6 sessions aggregated (live data)
 integration (`.brain/project.toml` write-back, minimal AGENTS marker block with
 content preservation + rollback), project Brain directory + current-state +
 lexicon seed, RepoWise detection and (first) index init. Blocked on nothing.
+
+
+## Independent verification reconciliation (post-gate)
+
+Retained independent reviewer verdict: **PASS-WITH-FINDINGS** (report:
+`state/recon/phase2-independent-verification.md`). All findings reconciled:
+
+1. **MAJOR — collect-list gap vs §98 (accepted deferral, explicit).** The three
+   formal acceptance bullets (accurate / low overhead / no behavior change)
+   pass. Schema v2 covers: session, model, cwd, tool events (names/ids/sizes/
+   bash commands), tokens/context usage, compactions, extension errors, and
+   sessions (children appear as separate sessions). The following §98 items are
+   **explicitly deferred with owner phases**: per-file read ledger -> Phase 4;
+   environment snapshot (branch/HEAD/dirty/worktrees) -> Phase 8; RepoWise
+   freshness -> Phase 3/6 (no index exists on this machine yet); test-command
+   classification -> derived later from bash records when tools use bash;
+   parent/child session linkage -> Phase 8 (harness API research needed).
+2. **MINOR — installer missed `types/`** (sibling of `src/`): fixed in
+   `scripts/install-prime-extension.ps1` (copies `types/*.d.ts`); Pester
+   fixture now mirrors the real layout. Harmless at runtime (type-only imports
+   are erased), but installs are now faithful mirrors.
+3. **MINOR — no wiring-level unit tests for `safeHandler`**: follow-up Vitest
+   tests added by the retained TS worker covering void-return, input
+   non-mutation, and throw-swallowing invariants.
+4. **NIT — test count corrected** to 54 (reviewer's independent collect).
+5. **NIT — extension README install steps aligned** with the canonical PS
+   installer (dev-only npm usage now clearly separated).

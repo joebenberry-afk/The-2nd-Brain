@@ -21,6 +21,7 @@ if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".prime\a
 if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".prime\agent\settings.json" }
 
 $Src = Join-Path $Brain "brainstem\prime-extension\src"
+$TypesSrc = Join-Path $Brain "brainstem\prime-extension\types"
 $Target = Join-Path $ExtensionsDir "second-brain"
 
 # 1. Source must exist (don't install an empty extension).
@@ -47,7 +48,6 @@ Write-Host "Pre-install backup: $BackupDir"
 if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
 New-Item -ItemType Directory -Force -Path $Target | Out-Null
 Copy-Item -Force (Join-Path $Src "*.ts") $Target
-$TypesSrc = Join-Path $Src "types"
 if (Test-Path $TypesSrc) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Target "types") | Out-Null
     Copy-Item -Force (Join-Path $TypesSrc "*.d.ts") (Join-Path $Target "types")
