@@ -1,0 +1,25 @@
+# Managed by The Second Brain (brainctl project attach). Safe to edit.
+schema_version = 1
+id = "second-brain"
+name = "The Second Brain"
+brain_enabled = true
+repository_is_authoritative = true
+
+[meta]
+managed_by = "second-brain"
+
+[performance]
+default_mode = "standard"
+context_policy = "adaptive"
+repo_intelligence = "repowise-preferred"
+verification_policy = "risk-adaptive"
+
+[automation]
+brainstem = true
+improvement_radar = true
+experience_observer = true
+
+[tools]
+repowise = "auto"
+ast_grep = "auto"
+sz_tool = "auto"

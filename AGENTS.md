@@ -57,3 +57,16 @@ projects (that is Phase 3+ and lives elsewhere).
 .venv\Scripts\python -m ruff check src tests
 .venv\Scripts\python -m pyright
 ```
+
+<!-- The-Second-Brain:begin id=second-brain -->
+## The Second Brain
+
+Canonical Brain: `%SECOND_BRAIN_HOME%`.
+
+For substantive work:
+- current repo/tests outrank memory;
+- use targeted Brain recall;
+- do not preload the Brain;
+- use Brainstem signals where available;
+- preserve durable validated learning.
+<!-- The-Second-Brain:end -->

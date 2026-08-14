@@ -33,3 +33,14 @@ threshold_chars = 8000
 max_distill_chars = 2000
 whitelist_tools = ["bash"]
 whitelist_commands = ["pytest", "git", "rg", "grep"]
+
+[reserve]
+# Completion Reserve / Memory Budget Ceiling (v4.2 §95.1). Starting heuristics,
+# NOT permanent constants - calibrate from Prime telemetry.
+task_execution_pct_min = 70      # current task/source/test execution
+verification_reserve_pct = 5     # verification/recovery/handoff reserve
+retrieved_memory_pct_max = 20    # max optional retrieved Brain context
+degrade_order = ["tier4_memories", "tier3_memories", "dedupe_memories",
+                 "shrink_scout_summaries", "offload_tool_history",
+                 "keep_requirements", "keep_exact_source", "keep_tests_errors",
+                 "keep_rollback_state"]
