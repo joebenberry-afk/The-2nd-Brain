@@ -37,7 +37,7 @@ auto-installs or auto-promotes.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (368 tests)
+ruff/format/pyright/pytest -> green (350 tests)
 live: forge sqlite-migration-verifier -> validate ok -> eval 4/4/True/pass/pass -> shadow
 ```
 
@@ -85,3 +85,14 @@ live: forge sqlite-migration-verifier -> validate ok -> eval 4/4/True/pass/pass 
 **Phase 17 — Skill Router** (plan §113): sparse top-K routing, shadow route
 first; compare model-natural routing vs Brainstem route. Acceptance: lower
 trigger noise; no success regression.
+
+
+## Phase 16 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase16-independent-verification.md):
+1. NIT — test count corrected to 350.
+2. NIT — CLI eval/shadow default to the shipped fixture, which fits only
+   the first real candidate; other candidates fail CLOSED against it unless
+   --cases is given. That is intentional (safe) behavior: evals without
+   matching cases must refuse shadow. Documented here; candidates should
+   ship their own case files.
