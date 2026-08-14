@@ -1,4 +1,5 @@
-"""Skill router — sparse top-K, SHADOW route only (plan §56/§113, Phase 17).
+"""Skill router — sparse top-K, report-only route (plan §56/§113, Phase 17;
+Phase 23: pool = active + candidate + shadow).
 
 Ranks shadow skills (``skills/shadow/<name>/SKILL.md``) by a deterministic
 score: +1 per positive trigger phrase matched in the task (case-insensitive
@@ -69,6 +70,28 @@ _SECTION_TITLES = {
 }
 
 
+LEVEL_PRIORITY = ("active", "candidate", "shadow")
+
+
+def _level_dirs(home: Path) -> list[Path]:
+    return [Path(home) / "skills" / level for level in LEVEL_PRIORITY]
+
+
+def _skill_level(home: Path, name: str) -> str | None:
+    for directory in _level_dirs(home):
+        if (directory / name / "SKILL.md").exists():
+            return directory.name
+    return None
+
+
+def _all_skill_names(home: Path) -> list[str]:
+    names: set[str] = set()
+    for directory in _level_dirs(home):
+        if directory.is_dir():
+            names.update(p.name for p in directory.iterdir() if p.is_dir())
+    return sorted(names)
+
+
 def _shadow_dir(home: Path) -> Path:
     return Path(home) / "skills" / "shadow"
 
@@ -109,10 +132,11 @@ def _phrases(section_text: str) -> list[str]:
 
 
 def _skill_sections(home: Path, name: str) -> dict[str, str]:
-    path = _shadow_dir(home) / name / "SKILL.md"
-    if not path.exists():
-        raise BrainError(f"No shadow skill {name!r} at {path}")
-    return _parse_sections(path.read_text(encoding="utf-8"))
+    for directory in _level_dirs(home):
+        path = directory / name / "SKILL.md"
+        if path.exists():
+            return _parse_sections(path.read_text(encoding="utf-8"))
+    raise BrainError(f"No skill {name!r} under skills/active|candidate|shadow")
 
 
 def _name_tokens(name: str) -> set[str]:
@@ -169,14 +193,15 @@ def route(
     max_active: int = 3,
     skills: list[str] | None = None,
 ) -> dict:
-    """Rank shadow skills for `task`. Deterministic; shadow-only.
+    """Rank skills for `task` (Phase 23: active > candidate > shadow pool).
+    Deterministic; report-only — routing never substitutes content.
 
     Degenerate input never raises: a blank/whitespace-only task (including
     exotic whitespace like U+0085) routes to nothing rather than blocking.
 
     ``skills`` (Phase 18): an explicit skill-name list override so callers can
     route over a filtered set (e.g. counterfactuals) without touching the
-    filesystem. Defaults to all shadow skills.
+    filesystem. Defaults to all skills across active/candidate/shadow.
     """
     if not isinstance(task, str):
         raise BrainError("task must be a string")
@@ -188,13 +213,7 @@ def route(
         raise BrainError("skills must be a list of non-empty strings or None")
     if not task.strip():
         return {"selected": [], "scores": {}, "shadow": True}
-    directory = _shadow_dir(home)
-    if skills is not None:
-        names = sorted(skills)
-    else:
-        names = (
-            sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
-        )
+    names = sorted(skills) if skills is not None else _all_skill_names(home)
     task_lower = task.lower()
     task_tokens = _tokens(task)
     scores = {name: _score_skill(home, name, task_lower, task_tokens) for name in names}
@@ -209,8 +228,7 @@ def natural_baseline(home: Path, task: str) -> list[str]:
     """Model-natural routing proxy: skills whose NAME tokens (len >= 4) appear
     in the task. Naive — it is the baseline Brainstem must beat on trigger
     noise (plan §113)."""
-    directory = _shadow_dir(home)
-    names = sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
+    names = _all_skill_names(home)
     task_tokens = _tokens(task)
     return [name for name in names if _name_tokens(name) & task_tokens]
 
