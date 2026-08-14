@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import BrainError
+from .security.identifiers import validate_frontier_id
 
 RISKS: tuple[str, ...] = ("low", "medium", "high")
 VERDICTS: tuple[str, ...] = ("approve", "reject", "request_changes")
@@ -24,10 +25,9 @@ FINAL_VERDICT = "reject"
 
 
 def _valid_change_id(change_id: str) -> str:
-    """Change ids must be non-empty and must NOT end in '-<digits>'
-    (that suffix is reserved for review sequence files)."""
-    if not isinstance(change_id, str) or not change_id.strip():
-        raise BrainError("change_id must be a non-empty string")
+    """Change ids are simple identifiers (SEC-04) and must NOT end in
+    '-<digits>' (that suffix is reserved for review sequence files)."""
+    change_id = validate_frontier_id(change_id)
     if re.fullmatch(r".*-\d+", change_id):
         raise BrainError(
             f"change_id {change_id!r} ends in '-<digits>' which is reserved "
@@ -57,10 +57,27 @@ def _review_sort_key(path: Path) -> tuple[int, int]:
 
 
 def _review_files(home: Path, change_id: str) -> list[Path]:
+    """Review files for one change id: ``<id>.md`` plus ``<id>-<n>.md``.
+
+    Never interpolates the id into a glob pattern (SEC-04): candidate names
+    are matched exactly against the validated identifier.
+    """
     directory = _frontier_dir(home)
     if not directory.is_dir():
         return []
-    names = [p for p in directory.glob(f"{change_id}*.md")]
+    names: list[Path] = []
+    base = directory / f"{change_id}.md"
+    if base.is_file():
+        names.append(base)
+    prefix = change_id + "-"
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.startswith(prefix) and name.endswith(".md"):
+            sequence = name[len(prefix) : -len(".md")]
+            if sequence.isdigit():
+                names.append(path)
     return sorted(names, key=_review_sort_key)
 
 
@@ -196,11 +213,16 @@ def frontier_status(home: Path, change_id: str | None = None) -> dict:
             "reviews": [_read_review(path) for path in files],
             "latest_verdict": latest.get("verdict") if latest is not None else None,
         }
-    change_ids = (
-        sorted({_change_id_from_name(path.name) for path in directory.glob("*.md")})
-        if directory.is_dir()
-        else []
-    )
+    change_ids = []
+    if directory.is_dir():
+        for path in directory.glob("*.md"):
+            cid = _change_id_from_name(path.name)
+            try:
+                _valid_change_id(cid)
+            except BrainError:
+                continue  # legacy/hostile file name is not treated as a change
+            change_ids.append(cid)
+        change_ids = sorted(set(change_ids))
     counts = {"total": 0, "approved": 0, "rejected": 0, "request_changes": 0}
     by_risk: dict[str, int] = {risk: 0 for risk in RISKS}
     count_key = {"approve": "approved", "reject": "rejected", "request_changes": "request_changes"}
@@ -282,4 +304,12 @@ def list_pending(home: Path) -> list[str]:
     pending = _pending_dir(home)
     if not pending.is_dir():
         return []
-    return sorted(p.stem for p in pending.glob("*.hold") if _latest_verdict(home, p.stem) is None)
+    held = []
+    for path in pending.glob("*.hold"):
+        try:
+            cid = validate_frontier_id(path.stem)
+        except BrainError:
+            continue  # legacy/hostile hold names are ignored for the gate
+        if _latest_verdict(home, cid) is None:
+            held.append(cid)
+    return sorted(held)

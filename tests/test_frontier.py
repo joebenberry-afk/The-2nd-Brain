@@ -207,3 +207,70 @@ def test_change_id_digit_suffix_rejected(brain_home):
     ):
         with pytest.raises(BrainError):
             fn("policy-2")
+
+
+# ---------------------------------------------------------------------------
+# SEC-04: frontier ID traversal / glob injection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../escape",
+        "..\\escape",
+        "a/b",
+        "a\\b",
+        "/abs",
+        "C:\\abs",
+        "\\srv\\share",
+        "a\nb",
+        "*",
+        "?",
+        "[x]",
+        "a*b",
+        ".",
+        "..",
+        "",
+        "  ",
+    ],
+)
+def test_frontier_rejects_hostile_change_ids(brain_home, bad):
+    """SEC-T043/T044: traversal and glob metacharacters are rejected."""
+    with pytest.raises(BrainError):
+        frontier.frontier_review(brain_home, bad, "s", "high", "r", "approve")
+    with pytest.raises(BrainError):
+        frontier.require_review(brain_home, bad, "s", risk="high")
+    with pytest.raises(BrainError):
+        frontier.gate_check(brain_home, bad)
+    with pytest.raises(BrainError):
+        frontier.latest_review(brain_home, bad)
+    assert not (brain_home.parent / "escape").exists()
+
+
+def test_frontier_review_artifacts_remain_inside_root(brain_home):
+    """SEC-T045: review and hold artifacts stay beneath frontier/."""
+    path = _review(brain_home, cid="contained-change")
+    assert path.parent == brain_home / "frontier"
+    hold = frontier.require_review(brain_home, "hold-change", "s", risk="low")
+    assert hold.parent == brain_home / "frontier" / "pending"
+    # sequence files also stay inside
+    frontier.frontier_review(brain_home, "contained-change", "s2", "high", "r", "approve")
+    files = sorted(brain_home.rglob("contained-change*.md"))
+    assert all(brain_home / "frontier" in f.parents for f in files)
+    # reading a similar-named id cannot reach another id's files
+    assert frontier.latest_review(brain_home, "contained") is None
+
+
+def test_frontier_review_files_exact_name_matching(brain_home):
+    """A change id must not match sibling ids via glob-like prefix expansion."""
+    _review(brain_home, cid="alpha")
+    _review(brain_home, cid="alphabet")
+    assert frontier.frontier_status(brain_home, "alpha")["latest_verdict"] == "approve"
+    assert frontier.frontier_status(brain_home, "alphabet")["latest_verdict"] == "approve"
+    files = [p.name for p in (brain_home / "frontier").iterdir() if p.suffix == ".md"]
+    assert "alphabet.md" in files and "alpha.md" in files
+    # alpha's file set does not include alphabet.md
+    from second_brain.frontier import _review_files
+
+    assert [p.name for p in _review_files(brain_home, "alpha")] == ["alpha.md"]
