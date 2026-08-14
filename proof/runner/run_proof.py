@@ -10,6 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from second_brain.errors import BrainError
+from second_brain.security.identifiers import validate_proof_task_id
+from second_brain.security.paths import resolve_under
+
 from .condition import Condition, pair_order, parse_condition
 from .integrity import hash_tree
 from .metrics import summarize
@@ -28,6 +32,13 @@ def _load_tasks(path: Path) -> list[dict[str, Any]]:
     tasks = data.get("tasks", data) if isinstance(data, (dict, list)) else None
     if not isinstance(tasks, list) or not all(isinstance(item, dict) for item in tasks):
         raise ValueError(f"task file must contain a list or {{'tasks': [...]}}: {path}")
+    # SEC-07: task ids are untrusted identifiers; reject hostile values before
+    # they can influence any workspace path, copy, launch, or cleanup.
+    for task in tasks:
+        try:
+            validate_proof_task_id(task.get("task_id"))
+        except BrainError as exc:
+            raise ValueError(f"task file {path} contains an unsafe task_id: {exc}") from exc
     return tasks
 
 
@@ -104,17 +115,33 @@ def run_stage(
     with tempfile.TemporaryDirectory(prefix="second-brain-proof-") as temporary:
         temporary_root = Path(temporary)
         for task in tasks:
-            task_id = str(task["task_id"])
+            task_id = validate_proof_task_id(task.get("task_id"))
             order = (
                 conditions
                 if len(conditions) < 2
                 else pair_order(conditions[0], conditions[1], task_id, seed)
             )
             for order_index, condition in enumerate(order, start=1):
-                workspace = copy_workspace(repo, temporary_root / f"{task_id}-{condition.value}")
-                run_home = temporary_root / f"brain-{task_id}-{condition.value}"
-                copy_workspace(brain_home, run_home)
-                sessions = temporary_root / f"sessions-{task_id}-{condition.value}"
+                # SEC-07 (INV-08): the runner owns every workspace path under
+                # the trusted temporary root; task input never supplies a
+                # location. Each path is proven contained before use.
+                workspace = resolve_under(
+                    temporary_root,
+                    f"{task_id}-{condition.value}",
+                    allow_missing=True,
+                )
+                copy_workspace(repo, workspace, root=temporary_root)
+                run_home = resolve_under(
+                    temporary_root,
+                    f"brain-{task_id}-{condition.value}",
+                    allow_missing=True,
+                )
+                copy_workspace(brain_home, run_home, root=temporary_root)
+                sessions = resolve_under(
+                    temporary_root,
+                    f"sessions-{task_id}-{condition.value}",
+                    allow_missing=True,
+                )
                 start = _utc()
                 result = run_prime(
                     condition=condition,
