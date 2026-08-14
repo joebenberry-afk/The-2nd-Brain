@@ -192,6 +192,8 @@ def test_lazy_migration_0002_on_v1_brain(brain_home):
     conn = db.connect(dbfile)
     try:
         for table in (
+            "memory_activations",
+            "memory_retrievals",
             "credit_events",
             "prediction_errors",
             "outcomes",
@@ -206,7 +208,7 @@ def test_lazy_migration_0002_on_v1_brain(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2, 3, 4]
+    assert db.pending_migrations(dbfile) == [2, 3, 4, 5]
     eid = _create(brain_home)
     assert db.pending_migrations(dbfile) == []
     assert episodes.show_episode(brain_home, eid)["row"]["episode_id"] == eid
