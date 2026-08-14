@@ -138,3 +138,71 @@ def test_list_backups_sorted(brain_home):
     backups = backup_mod.list_backups(brain_home)
     assert backups[0] == b2
     assert backups[1] == b1
+
+
+def test_restore_drops_stale_wal_shm(brain_home, tmp_path, monkeypatch):
+    """A stale -wal/-shm must never survive a restore (WAL replay would
+    resurrect moved-aside data when salts match)."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    paths.ensure_layout(home2)
+    db.migrate(db.db_path(home2))
+    _seed(home2, "current")
+    # simulate uncheckpointed WAL state next to the target DB
+    (db.db_path(home2).parent / "brain.sqlite-wal").write_bytes(b"stale-wal-frames")
+    (db.db_path(home2).parent / "brain.sqlite-shm").write_bytes(b"stale-shm")
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+
+    backup_mod.restore_backup(home2, bdir, force=True)
+
+    assert not (db.db_path(home2).parent / "brain.sqlite-wal").exists()
+    assert not (db.db_path(home2).parent / "brain.sqlite-shm").exists()
+    conn = db.connect(db.db_path(home2))
+    try:
+        assert conn.execute("SELECT name FROM projects").fetchone()[0] == "orig"
+    finally:
+        conn.close()
+    # the stale files were moved aside, not destroyed
+    asides = list((home2 / "backups").glob("pre-restore-*"))
+    assert len(asides) == 1
+    assert (asides[0] / "db" / "brain.sqlite-wal").exists()
+    assert (asides[0] / "db" / "brain.sqlite-shm").exists()
+
+
+def test_restore_failure_rolls_back_aside(brain_home, tmp_path, monkeypatch):
+    """If restore fails mid-way, the target must be preserved in place."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    paths.ensure_layout(home2)
+    db.migrate(db.db_path(home2))
+    _seed(home2, "current")
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+
+    def boom(*a, **kw):
+        raise RuntimeError("simulated failure during upgrade")
+
+    monkeypatch.setattr(db, "migrate", boom)
+    with pytest.raises(BackupError, match="preserved in place"):
+        backup_mod.restore_backup(home2, bdir, force=True)
+
+    conn = db.connect(db.db_path(home2))
+    try:
+        assert conn.execute("SELECT name FROM projects").fetchone()[0] == "current"
+    finally:
+        conn.close()
+    # rollback removed the empty aside dir
+    assert list((home2 / "backups").glob("pre-restore-*")) == []
+
+
+def test_restore_git_inits_target(brain_home, tmp_path, monkeypatch):
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    backup_mod.restore_backup(home2, bdir)
+    assert (home2 / ".git").exists()

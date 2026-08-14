@@ -21,6 +21,7 @@ import hashlib
 import json
 import shutil
 import sqlite3
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +31,9 @@ from .errors import BackupError
 MANIFEST_FORMAT = 1
 SNAPSHOT_DIRS = ("config", "constitution", "projects")
 SNAPSHOT_FILES = ("VERSION",)
+# The full SQLite file set: restoring must never leave a stale -wal/-shm next
+# to the restored DB (SQLite would replay frames whose salts match).
+DB_FILES = ("brain.sqlite", "brain.sqlite-wal", "brain.sqlite-shm")
 
 
 def utcnow() -> str:
@@ -136,9 +140,10 @@ def _targets_exist(home: Path) -> list[str]:
     safe to overlay and are not reported.
     """
     present = []
-    dbf = db.db_path(home)
-    if dbf.exists() and dbf.stat().st_size > 0:
-        present.append("db/brain.sqlite")
+    for name in DB_FILES:
+        f = db.db_path(home).parent / name
+        if f.exists() and f.stat().st_size > 0:
+            present.append(f"db/{name}")
     for rel in (*SNAPSHOT_DIRS, *SNAPSHOT_FILES):
         target = home / rel
         if not target.exists():
@@ -162,11 +167,42 @@ def _move_aside(home: Path, items: list[str]) -> Path:
     return aside
 
 
+def _rollback_aside(home: Path, aside: Path, items: list[str]) -> None:
+    """Move the moved-aside state back to its original locations."""
+    for rel in items:
+        src = aside / rel
+        if src.exists():
+            dst = home / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst)
+                else:
+                    dst.unlink()
+            shutil.move(str(src), str(dst))
+    shutil.rmtree(aside, ignore_errors=True)
+
+
+def _drop_stale_db_sidecars(home: Path) -> None:
+    """Delete any -wal/-shm next to the freshly restored DB.
+
+    Without this, SQLite would replay leftover WAL frames whose salts match
+    the restored file (same lineage), silently resurrecting data that the
+    restore was meant to remove.
+    """
+    for name in ("brain.sqlite-wal", "brain.sqlite-shm"):
+        stale = db.db_path(home).parent / name
+        if stale.exists():
+            stale.unlink()
+
+
 def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path:
     """Restore a backup into `home`. Returns the backup dir on success.
 
     Refuses (without --force) when the target Brain has existing data that
-    would be overwritten. With --force, existing data is moved aside first.
+    would be overwritten. With --force, existing data is moved aside first;
+    if the restore then fails, the moved-aside state is rolled back so the
+    target is preserved exactly as it was.
     """
     backup_dir = Path(backup_dir)
     if not backup_dir.is_dir():
@@ -182,13 +218,14 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
             + ", ".join(existing)
             + ". Re-run with --force to move the current state aside first."
         )
-    moved = _move_aside(home, existing) if existing else None
-
+    moved = None
     try:
+        moved = _move_aside(home, existing) if existing else None
         src_db = backup_dir / manifest.get("db", {}).get("file", "brain.sqlite")
         dst_db = db.db_path(home)
         dst_db.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_db, dst_db)
+        _drop_stale_db_sidecars(home)
         for rel in manifest.get("copied", []):
             src = backup_dir / rel
             if not src.exists():
@@ -205,8 +242,13 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
             raise BackupError("Restored database failed byte-identity verification")
         # Bring restored DB to the current schema (upgrade path is idempotent).
         db.migrate(dst_db)
+        # The Brain root must be a Git repository (doctor requires it).
+        if not (home / ".git").exists():
+            subprocess.run(["git", "init", "-q"], cwd=home, check=False)
     except Exception as exc:
+        if moved is not None:
+            _rollback_aside(home, moved, existing)
         raise BackupError(
-            f"Restore failed ({exc}); current state was moved aside to {moved}."
+            f"Restore failed ({exc}); the previous state was preserved in place."
         ) from exc
     return backup_dir
