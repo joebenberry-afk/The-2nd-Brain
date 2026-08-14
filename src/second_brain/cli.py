@@ -25,6 +25,7 @@ from . import (
     risk,
     scout,
     semantic,
+    sleep,
     verify,
     working_set,
 )
@@ -369,6 +370,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     pu.add_argument("--delta", type=float, required=True)
     pu.add_argument("--evidence", default="")
+
+    sl = sub.add_parser("sleep", parents=[home_parent], help="replay / sleep (Phase 14, manual)")
+    sls = sl.add_subparsers(dest="sleep_command", required=True)
+    sc = sls.add_parser(
+        "consolidate", parents=[home_parent], help="conservative consolidation pass"
+    )
+    sc.add_argument("--limit", type=int, default=20)
+    sc.add_argument("--apply", action="store_true", help="actually write (default: dry run)")
+    sls.add_parser("queue", parents=[home_parent], help="show the replay queue")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -874,6 +884,29 @@ def cmd_plasticity(args) -> int:
     return 2
 
 
+def cmd_sleep(args) -> int:
+    home = _home(args)
+    if args.sleep_command == "queue":
+        for e in sleep.replay_queue(home):
+            print(f"{e['priority']:5.2f} {e['episode_id']:40s} {e['episode_type']}")
+        return 0
+    if args.sleep_command == "consolidate":
+        result = sleep.consolidate(home, limit=args.limit, dry_run=not args.apply)
+        print(f"queue={len(result['queue'])} clusters={len(result['clusters'])}")
+        for c in result["clusters"]:
+            print(f"  cluster: {', '.join(c['episode_ids'])}")
+        for m in result["strengthened"]:
+            print(
+                f"  strengthened: {m['memory_id']} {m['strength_before']:.2f}->"
+                f"{m['strength_after']:.2f} (+{len(m['sources_added'])} sources)"
+                + (" (dry run)" if result.get("dry_run") else "")
+            )
+        print("  contradictions:", len(result["contradictions"]))
+        print(f"report: {result['report_path']}")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1082,6 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "sleep": cmd_sleep,
         "plasticity": cmd_plasticity,
         "cerebellum": cmd_cerebellum,
         "metacog": cmd_metacog,
