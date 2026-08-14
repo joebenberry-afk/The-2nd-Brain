@@ -50,7 +50,7 @@ noise 3 — the acceptance inequality still holds with the skill active.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (444 tests, verifier collect pending)
+ruff/format/pyright/pytest -> green (424 tests, verifier collect)
 live: refusal -> approve -> two guarded promotions -> status -> re-eval
 ```
 
@@ -92,3 +92,15 @@ live: refusal -> approve -> two guarded promotions -> status -> re-eval
 
 **Post-implementation: v4.2 §141-145 real experiments + the v4.2
 self-hosting success-criteria checklist (all 24 phases implemented).**
+
+
+## Phase 23 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase23-independent-verification.md):
+1. MINOR — Phase-23 help-text edits landed after the validation loop
+   (2x E501 + unformatted cli.py): ruff check/format re-run, now clean.
+2. NIT — test count corrected to 424.
+   Verifier also independently confirmed the post-promotion live eval
+   reproduces the Phase-17 gate exactly (router f1 0.4167 / noise 1 vs
+   natural 0.25 / 3) and the real repo state (skills/active/, 2 promotion
+   records, frontier approve, 4 model outcomes).
