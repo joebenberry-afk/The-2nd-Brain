@@ -29,7 +29,7 @@ are hard-gated (no review -> not activatable). Canonical files only.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (397 tests, collector count)
+ruff/format/pyright/pytest -> green (409 tests, verifier collect)
 live: require (hard gate) -> gate blocked -> request_changes (blocked) ->
 approve (cleared) -> status aggregation (approved=1)
 ```
@@ -71,3 +71,13 @@ approve (cleared) -> status aggregation (approved=1)
 **Phase 22 — Immune System** (plan §118): rollback trigger detectors,
 auto-rollback only in canonical, guarded situations. Acceptance: detected
 regressions get rolled back when the rollback trigger matches.
+
+
+## Phase 21 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase21-independent-verification.md):
+1. MINOR — digit-suffixed change_ids misparsed as review sequences (status
+   aggregation phantom ids). Fixed: change_ids ending in `-<digits>` are
+   rejected in all three entry points + regression test; worker tests
+   migrated to a non-suffixed fixture id.
+2. NIT — test count corrected to 409 (verifier collect is ground truth).

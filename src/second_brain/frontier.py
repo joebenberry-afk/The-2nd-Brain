@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +21,19 @@ from .errors import BrainError
 RISKS: tuple[str, ...] = ("low", "medium", "high")
 VERDICTS: tuple[str, ...] = ("approve", "reject", "request_changes")
 FINAL_VERDICT = "reject"
+
+
+def _valid_change_id(change_id: str) -> str:
+    """Change ids must be non-empty and must NOT end in '-<digits>'
+    (that suffix is reserved for review sequence files)."""
+    if not isinstance(change_id, str) or not change_id.strip():
+        raise BrainError("change_id must be a non-empty string")
+    if re.fullmatch(r".*-\d+", change_id):
+        raise BrainError(
+            f"change_id {change_id!r} ends in '-<digits>' which is reserved "
+            "for review sequence files"
+        )
+    return change_id
 
 
 def _utcnow() -> str:
@@ -96,7 +110,8 @@ def frontier_review(
     """Record one review. 'reject' is final: re-reviewing a rejected change
     raises BrainError. All other verdicts may be superseded by a later review
     (``<change_id>-<n>.md`` sequence); the latest verdict wins."""
-    for name, value in (("change_id", change_id), ("summary", summary), ("reviewer", reviewer)):
+    change_id = _valid_change_id(change_id)
+    for name, value in (("summary", summary), ("reviewer", reviewer)):
         if not isinstance(value, str) or not value.strip():
             raise BrainError(f"{name} must be a non-empty string")
     if risk not in RISKS:
@@ -197,8 +212,7 @@ def require_review(
     """No-op (returns the latest review path) when a review exists. Otherwise
     records a pending hold; high-risk returns None (hard gate), other risks
     return the hold path as a draft-only marker."""
-    if not isinstance(change_id, str) or not change_id.strip():
-        raise BrainError("change_id must be a non-empty string")
+    change_id = _valid_change_id(change_id)
     if not isinstance(summary, str) or not summary.strip():
         raise BrainError("summary must be a non-empty string")
     if risk not in RISKS:
@@ -226,6 +240,7 @@ def require_review(
 def gate_check(home: Path, change_id: str) -> dict:
     """{ok, missing}: cleared only by a latest verdict of 'approve'. A reject
     is permanently blocked; request_changes and no-review are blocked."""
+    change_id = _valid_change_id(change_id)
     latest = _latest_verdict(home, change_id)
     if latest is None:
         return {"ok": False, "missing": ["no review"]}
