@@ -36,7 +36,7 @@ the requirements and solver reasoning is structurally excluded.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (198 tests)
+ruff/format/pyright/pytest -> green (212 tests)
 live: risk assess on real Phase 8 touch-set -> MEDIUM (explainable)
 live: two eval briefs built; ordering + exclusion asserted in-process
 fresh-context eval by retained reviewer: A REJECT, B APPROVE
@@ -85,3 +85,12 @@ fresh-context eval by retained reviewer: A REJECT, B APPROVE
 **Phase 8 — Environment Steward** (plan §104): environment snapshots, PID
 reuse-safe process registry, safe owned cleanup; measurement -> advisory ->
 safe cleanup; acceptance: no unrelated process killed.
+
+
+## Phase 7 code verification reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase7-independent-verification.md):
+1. NIT — test count corrected to 212.
+2. NIT — EXCLUDED_CAPSULE_FIELDS now load-bearing: the builder reads only a
+   whitelist view filtered by the constant (enforced, not incidental).
+3. NIT — unused task_text parameter removed from assess_risk + CLI.

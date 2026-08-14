@@ -87,13 +87,16 @@ def build_verifier_brief(home: Path, session_id: str, repo: Path) -> Path:
     git problems -> ``(diff unavailable: ...)``.
     """
     capsule = show_capsule(home, session_id)
+    # Solver-reasoning fields are excluded BY the constant: the builder reads
+    # only a whitelist view, so the invariant is enforced, not incidental.
+    safe_capsule = {k: v for k, v in capsule.items() if k not in EXCLUDED_CAPSULE_FIELDS}
     requirements = _load_or_none(show_requirements, home, session_id) or []
 
     out_dir = Path(home) / "outputs" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{session_id}.md"
 
-    files = capsule.get("files_touched") or []
+    files = safe_capsule.get("files_touched") or []
     lines = [
         "# Intent Verifier Brief",
         "",
@@ -129,7 +132,7 @@ def build_verifier_brief(home: Path, session_id: str, repo: Path) -> Path:
     lines.append("")
     lines.append("# Constraints")
     lines.append("")
-    constraints = capsule.get("constraints") or []
+    constraints = safe_capsule.get("constraints") or []
     if constraints:
         lines.extend(f"- {constraint}" for constraint in constraints)
     else:

@@ -9,7 +9,8 @@ import subprocess
 import uuid
 
 import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from second_brain import envsteward
 from second_brain.errors import BrainError
@@ -21,7 +22,9 @@ def _read_json(path):
 
 
 def _commit_repo(repo):
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"], cwd=repo, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, capture_output=True)
@@ -212,7 +215,9 @@ def _seed_registry(brain_home, monkeypatch):
     monkeypatch.setattr(envsteward, "_probe_start_time", lambda pid: "T4")
     envsteward.register_process(brain_home, 444, "reused.exe", "second-brain")  # stored T4
     # Simulate PID reuse: live start time now differs from the stored one.
-    monkeypatch.setattr(envsteward, "_probe_start_time", lambda pid: "T5" if pid == 444 else times.get(pid))
+    monkeypatch.setattr(
+        envsteward, "_probe_start_time", lambda pid: "T5" if pid == 444 else times.get(pid)
+    )
     return times
 
 
@@ -263,7 +268,9 @@ def test_cleanup_unknown_live_identity(brain_home, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(
     pids=st.lists(st.integers(min_value=1, max_value=10**6), min_size=1, max_size=10),
     exes=st.lists(st.text(alphabet="abcXYZ0123", min_size=1, max_size=12), min_size=1, max_size=5),

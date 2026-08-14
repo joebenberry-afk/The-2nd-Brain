@@ -11,7 +11,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, artifacts, db, paths, registry, risk, scout, verify, working_set
+from . import (
+    __version__,
+    artifacts,
+    db,
+    envsteward,
+    paths,
+    registry,
+    risk,
+    scout,
+    verify,
+    working_set,
+)
 from . import backup as backup_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
@@ -182,7 +193,6 @@ def _parser() -> argparse.ArgumentParser:
     rassess = rks.add_parser("assess", parents=[home_parent], help="assess task risk")
     rassess.add_argument("repo", type=Path)
     rassess.add_argument("--file", dest="files", action="append", default=[])
-    rassess.add_argument("--task", default="")
     rassess.add_argument("--criticality", default=None, choices=risk.RISK_LEVELS)
 
     vf = sub.add_parser("verify", parents=[home_parent], help="intent verifier brief (Phase 7)")
@@ -192,6 +202,29 @@ def _parser() -> argparse.ArgumentParser:
     )
     vbuild.add_argument("session_id")
     vbuild.add_argument("repo", type=Path)
+
+    envp = sub.add_parser("env", parents=[home_parent], help="environment steward (Phase 8)")
+    eps = envp.add_subparsers(dest="env_command", required=True)
+    esnap = eps.add_parser(
+        "snapshot", parents=[home_parent], help="capture an environment snapshot"
+    )
+    esnap.add_argument("repo", type=Path)
+    esnap.add_argument("--session", dest="session_id", default=None)
+    esnap.add_argument("--json", action="store_true", dest="as_json")
+
+    pr = sub.add_parser("processes", parents=[home_parent], help="process ownership (Phase 8)")
+    prs = pr.add_subparsers(dest="processes_command", required=True)
+    preg = prs.add_parser("register", parents=[home_parent], help="register an owned process")
+    preg.add_argument("pid", type=int)
+    preg.add_argument("exe")
+    preg.add_argument("--token", default="second-brain")
+    preg.add_argument("--session", dest="session_id", default=None)
+    prs.add_parser("list", parents=[home_parent], help="list registered processes")
+    pver = prs.add_parser("verify", parents=[home_parent], help="verify a live process identity")
+    pver.add_argument("pid", type=int)
+    pver.add_argument("exe")
+    pcl = prs.add_parser("cleanup", parents=[home_parent], help="clean up owned processes")
+    pcl.add_argument("--kill", action="store_true", help="actually kill (default: dry run)")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -365,9 +398,7 @@ def cmd_artifact(args) -> int:
 
 
 def cmd_risk(args) -> int:
-    result = risk.assess_risk(
-        args.repo, args.files, task_text=args.task, user_criticality=args.criticality
-    )
+    result = risk.assess_risk(args.repo, args.files, user_criticality=args.criticality)
     print(f"Risk: {result['level']} (score {result['score']})")
     for s in result["signals"]:
         if s["points"]:
@@ -380,6 +411,51 @@ def cmd_verify(args) -> int:
     path = verify.build_verifier_brief(home, args.session_id, args.repo)
     print(f"Verifier brief: {path}")
     return 0
+
+
+def cmd_env(args) -> int:
+    import json
+
+    home = _home(args)
+    snap = envsteward.snapshot(home, args.repo, session_id=args.session_id)
+    if args.as_json:
+        print(json.dumps(snap, indent=1, default=str))
+    else:
+        for k, v in snap.items():
+            print(f"{k:18s} {v}")
+    return 0
+
+
+def cmd_processes(args) -> int:
+
+    home = _home(args)
+    if args.processes_command == "register":
+        rec = envsteward.register_process(
+            home, args.pid, args.exe, token=args.token, session_id=args.session_id
+        )
+        print(f"Registered pid {rec['pid']} (verified={rec['identity_verified']})")
+        return 0
+    if args.processes_command == "list":
+        for rec in envsteward.list_processes(home):
+            print(
+                f"{rec['ts']} pid={rec['pid']} exe={rec['exe']} token={rec['token']} "
+                f"verified={rec['identity_verified']}"
+            )
+        return 0
+    if args.processes_command == "verify":
+        ok = envsteward.verify_process(home, args.pid, args.exe)
+        print(f"identity_verified={ok}")
+        return 0 if ok else 1
+    if args.processes_command == "cleanup":
+        result = envsteward.cleanup_owned(home, dry_run=not args.kill)
+        print(
+            f"killed={result['killed']} skipped={len(result['skipped'])} "
+            f"unknown={result['unknown']}"
+        )
+        for s in result["skipped"]:
+            print(f"  skipped: {s}")
+        return 0
+    return 2
 
 
 def cmd_scout(args) -> int:
@@ -590,6 +666,8 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "env": cmd_env,
+        "processes": cmd_processes,
         "risk": cmd_risk,
         "verify": cmd_verify,
         "artifact": cmd_artifact,
