@@ -24,6 +24,7 @@ from . import (
     reconsolidation,
     registry,
     risk,
+    router,
     scout,
     semantic,
     skillforge,
@@ -424,6 +425,15 @@ def _parser() -> argparse.ArgumentParser:
         "--cases", default=None, help="eval cases JSON (REQUIRED; default: repo fixture)"
     )
     sks.add_parser("list", parents=[home_parent], help="list candidates and shadow skills")
+
+    rt = sub.add_parser(
+        "router", parents=[home_parent], help="sparse skill router (Phase 17, shadow)"
+    )
+    rts = rt.add_subparsers(dest="router_command", required=True)
+    rr2 = rts.add_parser("route", parents=[home_parent], help="shadow-route a task to skills")
+    rr2.add_argument("task")
+    rr2.add_argument("--max-active", type=int, default=3)
+    rts.add_parser("eval", parents=[home_parent], help="run the router fixture eval")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -1036,6 +1046,36 @@ def cmd_skills(args) -> int:
     return 2
 
 
+def cmd_router(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.router_command == "route":
+        result = router.route(home, args.task, max_active=args.max_active)
+        print(f"shadow route -> {result['selected'] or '(none)'}")
+        for name, score in sorted(result["scores"].items(), key=lambda kv: -kv[1]):
+            print(f"  {score:6.2f} {name}")
+        return 0
+    if args.router_command == "eval":
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        data = json.loads(
+            (repo_root / "tests" / "fixtures" / "router-tasks.json").read_text(encoding="utf-8")
+        )
+        tasks = data["tasks"] if isinstance(data, dict) else data
+        result = router.eval_router(home, tasks)
+        r_, n_ = result["router"], result["natural"]
+        print(
+            f"router: precision={r_['precision']:.3f} recall={r_['recall']:.3f} "
+            f"f1={r_['f1']:.3f} noise={r_['noise']}"
+        )
+        print(
+            f"natural: precision={n_['precision']:.3f} recall={n_['recall']:.3f} "
+            f"f1={n_['f1']:.3f} noise={n_['noise']}"
+        )
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1244,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "router": cmd_router,
         "skills": cmd_skills,
         "reconsolidation": cmd_reconsolidation,
         "sleep": cmd_sleep,

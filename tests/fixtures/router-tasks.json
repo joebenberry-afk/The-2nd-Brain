@@ -1,0 +1,68 @@
+{
+ "description": "Phase 17 router fixture. Expectations are grounded in the shadow skill 'sqlite-migration-verifier' built by tests/test_router.py (positive triggers: 'sqlite migration fail', 'schema version mismatch', 'pending migration', 'migration idempoten'; negatives: 'fresh database', 'no pending migration', 'clean shutdown verified'; procedure lessons mention verify/check/schema/version).",
+ "tasks": [
+  {
+   "text": "sqlite migration failed with a schema version mismatch",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  },
+  {
+   "text": "pending migrations are blocking the upgrade",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  },
+  {
+   "text": "check migration idempotency before applying",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  },
+  {
+   "text": "fresh database with no pending migrations, all good",
+   "expect": []
+  },
+  {
+   "text": "migration of the marketing site to a new CMS",
+   "expect": [],
+   "note": "name-token distractor"
+  },
+  {
+   "text": "migration of the analytics dashboard to a fresh database",
+   "expect": [],
+   "note": "name token + negative trigger distractor"
+  },
+  {
+   "text": "deploy the frontend build",
+   "expect": []
+  },
+  {
+   "text": "restore the backup after a failed migration",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  },
+  {
+   "text": "the schema version mismatch caused the outage",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  },
+  {
+   "text": "clean shutdown verified, nothing to check",
+   "expect": []
+  },
+  {
+   "text": "sqlite corruption during migration, and fresh database afterward",
+   "expect": [],
+   "note": "no positive, negative + name tokens distractor"
+  },
+  {
+   "text": "write a schema version migration for the new table",
+   "expect": [
+    "sqlite-migration-verifier"
+   ]
+  }
+ ]
+}
