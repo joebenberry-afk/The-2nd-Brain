@@ -30,6 +30,7 @@ outputs/cache/
 # Proof campaign results are derived; manifests, fixtures, hashes, and reports are canonical.
 proof/results/
 proof/snapshots/
+proof/graphify-out/
 
 # Raw telemetry (runtime data; canonical schema docs under brainstem/telemetry are tracked)
 /telemetry/
