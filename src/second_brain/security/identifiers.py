@@ -82,7 +82,8 @@ def validate_engram_name(value: object) -> str:
 
 
 def validate_frontier_id(value: object) -> str:
-    return validate_identifier(value, kind="frontier change ID")
+    # kind matches the codebase's existing "change_id" error vocabulary.
+    return validate_identifier(value, kind="change_id")
 
 
 def validate_proof_task_id(value: object) -> str:
