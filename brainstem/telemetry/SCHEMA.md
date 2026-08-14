@@ -33,3 +33,17 @@ Kinds:
 
 Field names are snake_case and stable across schema versions; new fields are
 additive.
+
+## Clarifications (decided at Phase 2 gate, 2026-08-14)
+
+- `turn_end.tool_results` = COUNT of tool results in that turn (integers only).
+- `context_usage.used` maps the runtime token count and may be `null` when the
+  runtime does not report tokens; `total` and `percent` are best-effort.
+- Sessions without a persisted session file (`--no-session`) still write
+  telemetry under a stable-in-process `anon-<epochms>-<4hex>` id; they carry
+  no sensitive identity.
+- No duration fields: durations derive from `ts` deltas (one clock, ms).
+- Production note: Prime Agent routes sessions through a daemon that pins its
+  startup environment. Set `SECOND_BRAIN_HOME` (and any gate vars) BEFORE
+  starting prime-agent so the daemon inherits them; otherwise the extension
+  silently disables itself (missing home) or writes elsewhere.
