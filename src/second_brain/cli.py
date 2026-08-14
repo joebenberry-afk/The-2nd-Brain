@@ -20,6 +20,7 @@ from . import (
     episodes,
     monitor,
     paths,
+    plasticity,
     registry,
     risk,
     scout,
@@ -323,6 +324,51 @@ def _parser() -> argparse.ArgumentParser:
     cba = cbs.add_parser("assess", parents=[home_parent], help="assess workflow progress")
     cba.add_argument("session_id")
     cbs.add_parser("eval", parents=[home_parent], help="run the labeled-workflow eval")
+
+    pl = sub.add_parser(
+        "plasticity", parents=[home_parent], help="plasticity records (Phase 13, shadow)"
+    )
+    pls = pl.add_subparsers(dest="plasticity_command", required=True)
+    pp = pls.add_parser("predict", parents=[home_parent], help="record a prediction event")
+    pp.add_argument("session_id")
+    pp.add_argument("state")
+    pp.add_argument("expected")
+    pp.add_argument("actual")
+    pp.add_argument("kind")
+    po = pls.add_parser("outcome", parents=[home_parent], help="record an outcome vector")
+    po.add_argument("session_id")
+    po.add_argument("--key", dest="kv", action="append", default=[], help="k=v (repeatable)")
+    pc = pls.add_parser(
+        "credit", parents=[home_parent], help="record a credit event (explicit level)"
+    )
+    pc.add_argument("session_id")
+    pc.add_argument("subject_id")
+    pc.add_argument(
+        "--kind",
+        dest="subject_kind",
+        required=True,
+        choices=("skill", "memory", "policy", "tool", "scout", "verification"),
+    )
+    pc.add_argument(
+        "--level",
+        dest="credit_level",
+        required=True,
+        choices=("direct", "contributory", "correlated", "unknown"),
+    )
+    ph = pls.add_parser("hindsight", parents=[home_parent], help="record a bottleneck relabel")
+    ph.add_argument("session_id")
+    ph.add_argument("predicted")
+    ph.add_argument("actual")
+    pu = pls.add_parser("utility", parents=[home_parent], help="append a utility delta (shadow)")
+    pu.add_argument("subject_id")
+    pu.add_argument(
+        "--kind",
+        dest="subject_kind",
+        required=True,
+        choices=("skill", "memory", "policy", "tool", "scout", "verification"),
+    )
+    pu.add_argument("--delta", type=float, required=True)
+    pu.add_argument("--evidence", default="")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -785,6 +831,49 @@ def cmd_cerebellum(args) -> int:
     return 2
 
 
+def cmd_plasticity(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.plasticity_command == "predict":
+        pid = plasticity.record_prediction(
+            home, args.session_id, args.state, args.expected, args.actual, args.kind
+        )
+        print(f"Prediction {pid} recorded")
+        return 0
+    if args.plasticity_command == "outcome":
+        vector: dict = {}
+        for kv in args.kv:
+            k, _, v = kv.partition("=")
+            vector[k] = (
+                json.loads(v)
+                if v.startswith(("[", "{"))
+                else (v if v not in ("true", "false", "null") else json.loads(v))
+            )
+        oid = plasticity.record_outcome(home, args.session_id, vector)
+        print(f"Outcome {oid} recorded")
+        return 0
+    if args.plasticity_command == "credit":
+        cid = plasticity.record_credit(
+            home, args.session_id, args.subject_id, args.subject_kind, args.credit_level
+        )
+        print(f"Credit {cid} recorded ({args.credit_level})")
+        return 0
+    if args.plasticity_command == "hindsight":
+        out = plasticity.hindsight_relabel(home, args.session_id, args.predicted, args.actual)
+        print(
+            f"hindsight: error={'yes' if out['error'] else 'no'} prediction={out['prediction_id']}"
+        )
+        return 0
+    if args.plasticity_command == "utility":
+        rec = plasticity.utility_update(
+            home, args.subject_id, args.subject_kind, args.delta, args.evidence
+        )
+        print(f"utility delta appended ({rec['delta']:+g})")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -993,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "plasticity": cmd_plasticity,
         "cerebellum": cmd_cerebellum,
         "metacog": cmd_metacog,
         "memory": cmd_memory,
