@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from proof.runner.integrity import IntegrityError, freeze_hash, sha256_path
 
 

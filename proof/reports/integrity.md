@@ -1,12 +1,13 @@
 # Phase 1 integrity gate
 
 Candidate repair commit: `06bf24642aad61a4bf527fc97ddb8d5d08a07f1d`.
+Campaign runner commit: `1bccbe6`.
 
 - Python Ruff check: passed.
 - Python Ruff format check: passed.
 - Pyright: `0 errors, 0 warnings, 0 informations`.
-- Python suite: `420 passed`.
-- Proof deterministic checks: `8 passed` (including the 10,000-file hash-scale check).
+- Python suite: `431 passed`.
+- Proof deterministic checks: `9 passed` (including the 10,000-file hash-scale check).
 - Prime extension lint: passed.
 - Prime extension typecheck: passed.
 - Prime extension tests: `66 passed`.
