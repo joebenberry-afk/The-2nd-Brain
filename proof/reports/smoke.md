@@ -1,6 +1,6 @@
 # C0/C1 smoke and observability overhead
 
-Date: 2026-08-14. Candidate base: `06bf24642aad61a4bf527fc97ddb8d5d08a07f1d`.
+Date: 2026-08-14. Candidate runner commit: `1bccbe6`.
 
 The paired run used the same Prime selector (`deepseek/deepseek-v4-flash`),
 thinking level (`minimal`), offline mode, repo snapshot, task text, verifier,
@@ -15,21 +15,22 @@ effectiveness evidence.
 | Successful | 30 | 30 |
 | Success rate | 100% | 100% |
 | Paired success delta, ACTIVE-OFF | 0.0 pp | 95% bootstrap [0.0, 0.0] pp |
-| Median wall seconds | 12.5760 | 12.7958 |
-| p95 wall seconds | 13.3306 | 13.6967 |
-| Median latency overhead | — | 1.75% |
-| p95 latency overhead | — | 2.75% |
+| Median wall seconds | 12.6799 | 12.8077 |
+| p95 wall seconds | 13.0335 | 13.2791 |
+| Median latency overhead | — | 1.01% |
+| p95 latency overhead | — | 1.88% |
 | Input/output token measurements | unavailable | unavailable |
-| Telemetry shutdown-loss check | passed | passed |
+| Telemetry shutdown-loss check | n/a | 30/30 passed |
 
 The latency result is within the plan’s provisional `<=3%` median and `<=8%`
-p95 targets. Token overhead remains unmeasured, so this does not close the
-full instrumentation gate. The 10-task smoke file also passed 10/10 in each
+p95 targets. C1 had zero failed tool calls and mean peak context usage of
+1.0632%. Token overhead remains unmeasured, so this does not close the full
+instrumentation gate. The earlier 10-task smoke file also passed 10/10 in each
 condition; its raw JSONL hash is
 `E749CA465D0EF4641D574940B784E5AFC1177F2BF10E3887B14199C795FF3CAA`.
 
 Raw 30-task JSONL (ignored derived output):
-`proof/results/raw/overhead-paired.jsonl`
+`proof/results/raw/overhead-paired-v2.jsonl`
 
 Hash captured at run completion:
-`4F0A3E09266BBD7308D92AB1AD79D26B3424ACD01ED79FF3B0F29BB804F0B8B1`.
+`443F9EACD4F4A6B5D8E5A8BCA29891A095380C32028C1D5CE27053C5A71CE9A0`.

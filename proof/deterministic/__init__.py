@@ -1,0 +1,1 @@
+"""Deterministic proof-stage checks."""
