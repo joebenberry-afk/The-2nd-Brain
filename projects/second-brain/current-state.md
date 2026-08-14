@@ -1,11 +1,20 @@
 # Current State
 
-## Status (2026-08-14, milestone-19 committed)
+## Status (2026-08-14, milestone-24 committed - BUILD COMPLETE)
 
-- Phases 0-19: COMPLETE, each gated by the retained independent reviewer
+- Phases 0-23: COMPLETE, each gated by the retained independent reviewer
   (phase1-verifier, REUSED per user policy) with all findings reconciled.
-  Milestone reports: outputs/reports/milestone-01..19-*.md.
-- Phase 19 verification in flight; Phase 20 (Cross-Model Memory) next.
+  Milestone reports: outputs/reports/milestone-01..24-*.md.
+- Experiments §141-145: COMPLETE with honest reports
+  (outputs/reports/experiment-14*.md). E1/E2 neutral (recorded as such),
+  E3 forged delivery-integration (now shadow), E4 stale-memory
+  reconsolidation (repo wins, history kept), E5 cross-model transfer
+  (transfers -> skill global).
+- First ACTIVE skill: sqlite-migration-verifier (promoted under its own
+  gates); second shadow skill: delivery-integration.
+- Final experiments/checklist verification in flight (phase1-verifier).
+- Live DB v6; 14 episodes; 6 semantic memories (2 superseded with
+  history); frontier reviews + promotion records + immune records live.
 
 ## Live subsystems (dogfooded on the build itself)
 
