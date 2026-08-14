@@ -1,0 +1,29 @@
+# learning.toml — plasticity thresholds (Phase 11+ consumes)
+schema_version = 1
+
+[modes]
+shadow = true       # shadow learning records would-trigger, changes nothing
+advisory = false    # promoted only with evidence (Phase 23 rules)
+active = false
+
+[prediction_error]
+# events that raise episode salience / replay priority
+signals = ["confident_but_wrong", "unexpected_failure", "unexpected_success",
+           "user_correction", "verifier_rejection", "environment_surprise",
+           "skill_false_trigger", "skill_missed_trigger"]
+
+[hindsight]
+# relabel bottleneck predictions with actual bottlenecks; examples only.
+enabled = true
+
+[credit]
+# never reward every active skill on task success (plan §43)
+levels = ["direct", "contributory", "correlated", "unknown"]
+only_strong_evidence_updates_utility = true
+
+[promotion]
+# required diversity before global promotion (plan §61)
+min_sessions = 2
+min_projects = 1
+prefer_multiple_models = true
+require_no_unacceptable_regressions = true

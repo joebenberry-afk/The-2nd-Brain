@@ -1,0 +1,22 @@
+# skills.toml — skill lifecycle defaults (Phase 16+ consumes)
+schema_version = 1
+
+[lifecycle]
+stages = ["candidate", "shadow", "staged", "approved", "retired"]
+adoption = ["shadow", "advisory", "active"]   # plan §57
+scopes = ["global", "domain", "project", "model"]
+
+[quality]
+# every skill must carry these sections (plan §60)
+required_sections = ["purpose", "positive_triggers", "negative_triggers",
+                     "inputs", "procedure", "tools", "safety",
+                     "verification", "output", "references"]
+
+[gardener]
+# periodic sweep targets (plan §62); bounded skill bank
+sweep = ["dead_skills", "overlap", "false_triggers", "never_used",
+         "negative_roi", "duplicates", "too_broad", "too_narrow",
+         "model_specific_quirks"]
+
+[router]
+max_active = 3      # sparse top-K (plan §56)
