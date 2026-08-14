@@ -271,7 +271,7 @@ def test_restore_rejects_hostile_db_file_name(brain_home, tmp_path, monkeypatch)
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
     paths.ensure_layout(home2)
     db.migrate(db.db_path(home2))
-    with pytest.raises(BackupError, match="db.file"):
+    with pytest.raises(BackupError, match=r"db\.file"):
         backup_mod.restore_backup(home2, bdir)
 
 

@@ -91,8 +91,10 @@ def validate_proof_task_id(value: object) -> str:
 
 
 def validate_policy_id(value: object) -> str:
-    return validate_identifier(value, kind="policy ID")
+    # kind matches the codebase's existing "policy_id" error vocabulary.
+    return validate_identifier(value, kind="policy_id")
 
 
 def validate_trigger_id(value: object) -> str:
-    return validate_identifier(value, kind="trigger ID")
+    # kind matches the codebase's existing "trigger_id" error vocabulary.
+    return validate_identifier(value, kind="trigger_id")

@@ -8,7 +8,6 @@ it.
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -58,7 +57,9 @@ def test_load_tasks_rejects_hostile_task_ids(tmp_path: Path, bad: str) -> None:
 def test_valid_task_ids_load() -> None:
     import proof.runner.run_proof as rp
 
-    data = rp._load_tasks(Path(__file__).resolve().parents[2] / "proof" / "tasks" / "training" / "smoke.json")
+    data = rp._load_tasks(
+        Path(__file__).resolve().parents[2] / "proof" / "tasks" / "training" / "smoke.json"
+    )
     assert len(data) == 10
 
 
@@ -154,8 +155,7 @@ def test_run_stage_workspaces_derived_from_validated_ids(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(rp.tempfile, "TemporaryDirectory", recording_temporary_directory)
 
-    with tempfile.TemporaryDirectory(prefix="second-brain-proof-") as temporary:
-        temp_root = Path(temporary)
+    with tempfile.TemporaryDirectory(prefix="second-brain-proof-"):
         result = run_stage(
             task_file=task_file,
             dataset="training",

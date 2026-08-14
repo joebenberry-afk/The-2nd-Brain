@@ -2,6 +2,7 @@ import tomllib
 
 import pytest
 
+from second_brain import db as db_mod
 from second_brain import registry
 from second_brain.errors import BrainError
 
@@ -76,12 +77,6 @@ def test_project_status(brain_home, repo):
 # SEC-02: project ID escape + unsafe recursive purge
 # ---------------------------------------------------------------------------
 
-import json as _json
-
-import pytest
-
-from second_brain import db as db_mod
-
 
 @pytest.mark.parametrize(
     "bad_id",
@@ -125,7 +120,7 @@ def _set_brain_project_path(home, project_id, value):
 
 
 def test_purge_valid_project_works(brain_home, repo):
-    proj, _ = registry.add_project(brain_home, repo, project_id="purge-me-1")
+    _, _ = registry.add_project(brain_home, repo, project_id="purge-me-1")
     brain_dir = brain_home / "projects" / "purge-me-1"
     assert brain_dir.is_dir()
     out = registry.remove_project(brain_home, "purge-me-1", purge=True)
@@ -187,7 +182,7 @@ def test_purge_rejects_symlink_escape(brain_home, repo):
 
 
 def test_agents_marker_valid_and_idempotent(brain_home, repo):
-    proj, _, changes = registry.attach_project(
+    _, _, changes = registry.attach_project(
         brain_home, repo, project_id="marker-ok-1", with_manifest=False
     )
     assert changes["marker_added"] is True

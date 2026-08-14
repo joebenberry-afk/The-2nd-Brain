@@ -19,7 +19,6 @@ from .paths import (
 __all__ = [
     "assert_safe_recursive_delete",
     "resolve_under",
-    "validated_project_dir",
     "validate_engram_name",
     "validate_frontier_id",
     "validate_identifier",
@@ -28,4 +27,5 @@ __all__ = [
     "validate_proof_task_id",
     "validate_skill_name",
     "validate_trigger_id",
+    "validated_project_dir",
 ]

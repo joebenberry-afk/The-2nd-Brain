@@ -253,6 +253,7 @@ def test_frontier_review_artifacts_remain_inside_root(brain_home):
     path = _review(brain_home, cid="contained-change")
     assert path.parent == brain_home / "frontier"
     hold = frontier.require_review(brain_home, "hold-change", "s", risk="low")
+    assert hold is not None
     assert hold.parent == brain_home / "frontier" / "pending"
     # sequence files also stay inside
     frontier.frontier_review(brain_home, "contained-change", "s2", "high", "r", "approve")
