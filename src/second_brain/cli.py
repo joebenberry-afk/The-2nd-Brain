@@ -12,8 +12,6 @@ import sys
 from pathlib import Path
 
 from . import __version__, db, paths, registry
-from . import jit as jit_mod
-from . import working_set
 from . import backup as backup_mod
 from . import doctor as doctor_mod
 from .errors import BrainError
@@ -67,72 +65,6 @@ def _parser() -> argparse.ArgumentParser:
     r = sub.add_parser("restore", parents=[home_parent], help="restore a Brain backup")
     r.add_argument("backup_dir", type=Path)
     r.add_argument("--force", action="store_true")
-
-    cap = sub.add_parser("capsule", parents=[home_parent], help="Active State Capsule (Phase 4)")
-    cps = cap.add_subparsers(dest="capsule_command", required=True)
-    cinit = cps.add_parser("init", help="create a capsule")
-    cinit.add_argument("session_id")
-    cinit.add_argument("objective")
-    cinit.add_argument("--task-mode", default="STANDARD")
-    cinit.add_argument("--risk", default="MEDIUM")
-    cinit.add_argument("--constraint", action="append", default=None)
-    cupd = cps.add_parser("update", help="update a capsule")
-    cupd.add_argument("session_id")
-    cupd.add_argument("--objective", default=None)
-    cupd.add_argument("--next-action", default=None)
-    cupd.add_argument("--task-mode", default=None)
-    cupd.add_argument("--risk", default=None)
-    for name, dest in (
-        ("--add-constraint", "constraints"),
-        ("--add-fact", "confirmed_facts"),
-        ("--add-hypothesis", "current_hypotheses"),
-        ("--add-decision", "decisions_this_session"),
-        ("--add-file", "files_touched"),
-        ("--add-question", "open_questions"),
-        ("--add-brain-ref", "brain_refs"),
-        ("--add-artifact-ref", "artifact_refs"),
-    ):
-        cupd.add_argument(name, dest=dest, action="append", default=None)
-    cshow = cps.add_parser("show", help="show a capsule")
-    cshow.add_argument("session_id")
-
-    req = sub.add_parser("requirements", parents=[home_parent], help="Requirement Ledger (Phase 4)")
-    rs = req.add_subparsers(dest="requirements_command", required=True)
-    radd = rs.add_parser("add", help="add a requirement")
-    radd.add_argument("session_id")
-    radd.add_argument("requirement")
-    radd.add_argument("--id", dest="req_id", default=None)
-    radd.add_argument("--importance", default="normal")
-    rev = rs.add_parser("evidence", help="attach evidence to a requirement")
-    rev.add_argument("session_id")
-    rev.add_argument("req_id")
-    rev.add_argument("evidence")
-    rst = rs.add_parser("status", help="set a requirement status")
-    rst.add_argument("session_id")
-    rst.add_argument("req_id")
-    rst.add_argument("status")
-    rsh = rs.add_parser("show", help="list requirements")
-    rsh.add_argument("session_id")
-    rs.add_parser("check", help="fail if material requirements are unverified").add_argument("session_id")
-
-    rl = sub.add_parser("read-ledger", parents=[home_parent], help="Read Ledger (Phase 4)")
-    rls = rl.add_subparsers(dest="read_ledger_command", required=True)
-    rrec = rls.add_parser("record", help="record a file read")
-    rrec.add_argument("session_id")
-    rrec.add_argument("path")
-    rrec.add_argument("--purpose", default="")
-    rrec.add_argument("--turn", type=int, default=None)
-    rrec.add_argument("--range", dest="range_text", default=None)
-    rrec.add_argument("--artifact", default=None)
-    rlshow = rls.add_parser("show", help="show the read ledger")
-    rlshow.add_argument("session_id")
-
-    cc = sub.add_parser("context", parents=[home_parent], help="JIT Context Compiler (Phase 4)")
-    ccs = cc.add_subparsers(dest="context_command", required=True)
-    ccomp = ccs.add_parser("compile", help="compile a Task Context Capsule")
-    ccomp.add_argument("session_id")
-    ccomp.add_argument("task")
-    ccomp.add_argument("--project", dest="project_key", default=None)
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -276,128 +208,6 @@ def cmd_project(args) -> int:
     return 2
 
 
-def cmd_capsule(args) -> int:
-    import json
-
-    home = _home(args)
-    if args.capsule_command == "init":
-        path = working_set.init_capsule(
-            home,
-            args.session_id,
-            args.objective,
-            task_mode=args.task_mode,
-            risk=args.risk,
-            constraints=args.constraint or [],
-        )
-        print(f"Capsule created: {path}")
-        return 0
-    if args.capsule_command == "update":
-        fields: dict = {}
-        for name, dest in (
-            ("objective", "objective"),
-            ("next_action", "next_action"),
-            ("task_mode", "task_mode"),
-            ("risk", "risk"),
-            ("constraints", "constraints"),
-            ("confirmed_facts", "confirmed_facts"),
-            ("current_hypotheses", "current_hypotheses"),
-            ("decisions_this_session", "decisions_this_session"),
-            ("files_touched", "files_touched"),
-            ("open_questions", "open_questions"),
-            ("brain_refs", "brain_refs"),
-            ("artifact_refs", "artifact_refs"),
-        ):
-            value = getattr(args, dest, None)
-            if value is not None:
-                fields[name] = value
-        if not fields:
-            print("brainctl: error: no update fields given", file=sys.stderr)
-            return 2
-        working_set.update_capsule(home, args.session_id, **fields)
-        print("Capsule updated.")
-        return 0
-    if args.capsule_command == "show":
-        print(json.dumps(working_set.show_capsule(home, args.session_id), indent=2))
-        return 0
-    return 2
-
-
-def cmd_requirements(args) -> int:
-    home = _home(args)
-    if args.requirements_command == "add":
-        entry = working_set.add_requirement(
-            home,
-            args.session_id,
-            args.requirement,
-            req_id=args.req_id,
-            importance=args.importance,
-        )
-        print(f"Added {entry['id']} [{entry['importance']}/{entry['status']}]: {entry['requirement']}")
-        return 0
-    if args.requirements_command == "evidence":
-        entry = working_set.add_evidence(home, args.session_id, args.req_id, args.evidence)
-        print(f"Evidence added to {entry['id']} ({len(entry['evidence'])} items)")
-        return 0
-    if args.requirements_command == "status":
-        entry = working_set.set_requirement_status(home, args.session_id, args.req_id, args.status)
-        print(f"{entry['id']} -> {entry['status']}")
-        return 0
-    if args.requirements_command == "show":
-        for entry in working_set.show_requirements(home, args.session_id):
-            print(
-                f"{entry['id']:10s} {entry['importance']:10s} {entry['status']:20s} "
-                f"{entry['requirement']}"
-            )
-            for ev in entry["evidence"]:
-                print(f"    - evidence: {ev}")
-        return 0
-    if args.requirements_command == "check":
-        result = working_set.check_requirements(home, args.session_id)
-        print(
-            f"{result['material_unverified']}/{result['material_total']} material "
-            f"requirements unverified"
-        )
-        for entry in result["entries"]:
-            print(f"  {entry['id']} [{entry['importance']}/{entry['status']}]: {entry['requirement']}")
-        return 1 if result["material_unverified"] else 0
-    return 2
-
-
-def cmd_read_ledger(args) -> int:
-    home = _home(args)
-    if args.read_ledger_command == "record":
-        entry = working_set.record_read(
-            home,
-            args.session_id,
-            args.path,
-            purpose=args.purpose,
-            turn=args.turn,
-            range_text=args.range_text,
-            artifact=args.artifact,
-        )
-        hash_part = f" (hash {entry['hash'][:12]}...)" if entry.get("hash") else " (file missing)"
-        print(f"Recorded read: {entry['path']}{hash_part}")
-        return 0
-    if args.read_ledger_command == "show":
-        entries = working_set.show_reads(home, args.session_id)
-        for e in entries:
-            extra = f" turn={e['turn']}" if e.get("turn") is not None else ""
-            print(f"{e['ts']} {e['path']}{extra} — {e['purpose']}")
-        if not entries:
-            print("(no reads recorded)")
-        return 0
-    return 2
-
-
-def cmd_context(args) -> int:
-    home = _home(args)
-    if args.context_command == "compile":
-        path = jit_mod.compile_context(home, args.session_id, args.task, project_key=args.project_key)
-        print(f"Context capsule: {path}")
-        return 0
-    return 2
-
-
 def cmd_telemetry(args) -> int:
     import json
 
@@ -446,10 +256,6 @@ def main(argv: list[str] | None = None) -> int:
         "backup": cmd_backup,
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
-        "capsule": cmd_capsule,
-        "requirements": cmd_requirements,
-        "read-ledger": cmd_read_ledger,
-        "context": cmd_context,
     }
     try:
         return handlers[args.command](args)
