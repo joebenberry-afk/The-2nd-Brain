@@ -16,7 +16,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import frontier, immune
+from . import frontier, immune, paths, skillforge
 from .errors import BrainError
 
 LEVELS: tuple[str, ...] = ("shadow", "candidate", "active")
@@ -31,13 +31,17 @@ def _skills_dir(home: Path) -> Path:
     return Path(home) / "skills"
 
 
+def _skill_dir(home: Path, level: str) -> Path:
+    return Path(home) / paths.SKILL_LEVEL_DIRS[level]
+
+
 def _promotions_dir(home: Path) -> Path:
     return Path(home) / "state" / "promotions"
 
 
 def _level_of(home: Path, skill_name: str) -> str | None:
     for level in LEVELS:
-        if (_skills_dir(home) / level / skill_name).is_dir():
+        if (_skill_dir(home, level) / skill_name).is_dir():
             return level
     return None
 
@@ -73,6 +77,14 @@ def _frontier_verdict(home: Path, skill_name: str) -> str | None:
     return frontier.frontier_status(home, f"skill-{skill_name}-promotion").get("latest_verdict")
 
 
+def _frontier_binding_current(home: Path, skill_name: str) -> bool:
+    review = frontier.latest_review(home, f"skill-{skill_name}-promotion")
+    if review is None or review.get("verdict") != "approve":
+        return False
+    binding = skillforge.artifact_binding(home, skill_name)
+    return all(review.get(key) == value for key, value in binding.items())
+
+
 def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
     evidence = _evidence_counts(home, skill_name)
     has_evidence = evidence["credit_events"] >= 1 or evidence["model_skill_outcomes"] >= 1
@@ -85,11 +97,13 @@ def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
         "evidence": has_evidence,
         "frontier_approved": frontier_ok,
         "immune_clear": not rolled_back,
+        "frontier_binding_current": _frontier_binding_current(home, skill_name),
     }
     details = {
         "evidence_counts": evidence,
         "frontier_verdict": verdict,
         "rolled_back": rolled_back,
+        "frontier_binding_current": guards["frontier_binding_current"],
     }
     return guards, details
 
@@ -114,14 +128,23 @@ def _write_record(home: Path, record: dict) -> Path:
 
 
 def _move_skill(home: Path, skill_name: str, from_level: str, to_level: str) -> Path:
-    source = _skills_dir(home) / from_level / skill_name
-    target = _skills_dir(home) / to_level / skill_name
+    source = _skill_dir(home, from_level) / skill_name
+    target = _skill_dir(home, to_level) / skill_name
     if not source.is_dir():
         raise BrainError(f"No skill {skill_name!r} under skills/{from_level}/")
     if target.exists():
         raise BrainError(f"Destination already exists: {target}")
+    skill_file = source / "SKILL.md"
+    old_status = skillforge.read_metadata(skill_file).get("status") if skill_file.exists() else None
+    if skill_file.exists():
+        skillforge.set_status(skill_file, to_level)
     target.parent.mkdir(parents=True, exist_ok=True)
-    source.rename(target)  # atomic within the Brain home
+    try:
+        source.rename(target)  # atomic within the Brain home
+    except OSError as exc:
+        if skill_file.exists() and old_status:
+            skillforge.set_status(skill_file, old_status)
+        raise BrainError(f"Could not move skill {skill_name!r}: {exc}") from exc
     return target
 
 
@@ -168,8 +191,22 @@ def promote(
             return {"promoted": False, "reason": "no_evidence", **details}
         if not guards["frontier_approved"]:
             return {"promoted": False, "reason": "frontier_not_approved", **details}
+        if not guards["frontier_binding_current"]:
+            return {"promoted": False, "reason": "frontier_stale", **details}
         if guards["immune_clear"] is False:
             return {"promoted": False, "reason": "rolled_back", **details}
+
+        if to_level == "active":
+            ready = skillforge.validate_execution_ready(
+                _skill_dir(home, from_level) / skill_name / "SKILL.md"
+            )
+            if not ready["ok"]:
+                return {
+                    "promoted": False,
+                    "reason": "execution_not_ready",
+                    "validation": ready,
+                    **details,
+                }
 
     try:
         target = _move_skill(home, skill_name, from_level, to_level)

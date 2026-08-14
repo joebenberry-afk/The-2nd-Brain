@@ -6,9 +6,10 @@ projects (that is Phase 3+ and lives elsewhere).
 
 ## Authority
 
-- `The_Second_Brain_OS_V4_1_OneShot_Implementation_Plan.md` is the
-  authoritative specification (the older V4 Definitive plan is research
-  history only).
+- `The_Second_Brain_OS_V4_2_Self_Hosting_OneShot_Implementation_Plan.md` is
+  the authoritative implementation specification for the completed v4.2
+  build. The v4.3 proof plan supplied for this campaign governs validation;
+  older v4.1/Definitive plans are research history only.
 - Repository code, tests, and verified runtime behavior outrank assumptions.
 - The plan is implemented phase-by-phase. Do not jump ahead of the current
   phase gate. Milestone reports in `outputs/reports/` record gate evidence.

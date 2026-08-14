@@ -36,6 +36,7 @@ MAJOR_DIRS: tuple[str, ...] = (
     "experiences/experiments",
     "decisions/global",
     "decisions/projects",
+    "skills/active",
     "skills/candidates",
     "skills/shadow",
     "skills/staged",
@@ -98,6 +99,13 @@ REQUIRED_CONFIG_FILES: tuple[str, ...] = (
     "skills.toml",
     "sleep.toml",
 )
+
+# One lifecycle vocabulary across forge, router, promotion, and audits.
+SKILL_LEVEL_DIRS: dict[str, str] = {
+    "candidate": "skills/candidates",
+    "shadow": "skills/shadow",
+    "active": "skills/active",
+}
 
 
 def default_home() -> Path:

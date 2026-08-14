@@ -13,6 +13,7 @@ every gate passes.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -20,8 +21,9 @@ import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
-from . import episodes
+from . import episodes, paths
 from .errors import BrainError
 
 REQUIRED_SECTIONS: tuple[str, ...] = (
@@ -60,11 +62,11 @@ def _utcnow() -> str:
 
 
 def _candidates_dir(home: Path) -> Path:
-    return Path(home) / "skills" / "candidates"
+    return Path(home) / paths.SKILL_LEVEL_DIRS["candidate"]
 
 
 def _shadow_dir(home: Path) -> Path:
-    return Path(home) / "skills" / "shadow"
+    return Path(home) / paths.SKILL_LEVEL_DIRS["shadow"]
 
 
 def _skill_path(home: Path, name: str) -> Path:
@@ -86,6 +88,174 @@ def _parse_sections(text: str) -> dict[str, str]:
     if current is not None:
         sections[current] = "\n".join(buffer).strip()
     return sections
+
+
+def read_metadata(path: Path) -> dict[str, str]:
+    """Read the small frontmatter subset used by lifecycle checks."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BrainError(f"Could not read skill {path}: {exc}") from exc
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return {}
+    metadata: dict[str, str] = {}
+    for line in lines[1:end]:
+        key, separator, value = line.partition(":")
+        if separator and key.strip() and value.strip():
+            metadata[key.strip()] = value.strip().strip("\"'")
+    return metadata
+
+
+def set_status(path: Path, status: str) -> None:
+    """Atomically set the canonical lifecycle field in a skill file."""
+    if status not in paths.SKILL_LEVEL_DIRS:
+        raise BrainError(f"invalid skill status {status!r}")
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        try:
+            end = lines.index("---", 1)
+        except ValueError:
+            end = -1
+        if end >= 0:
+            for index in range(1, end):
+                if lines[index].startswith("status:"):
+                    lines[index] = f"status: {status}"
+                    break
+            else:
+                lines.insert(2, f"status: {status}")
+            updated = "\n".join(lines).rstrip() + "\n"
+        else:
+            updated = (
+                "\n".join(
+                    ["---", f"name: {path.parent.name}", f"status: {status}", "---", "", *lines]
+                )
+                + "\n"
+            )
+    else:
+        updated = (
+            "\n".join(["---", f"name: {path.parent.name}", f"status: {status}", "---", "", *lines])
+            + "\n"
+        )
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(updated)
+        os.replace(temporary, path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise BrainError(f"Could not update skill status {path}: {exc}") from exc
+
+
+def skill_path(home: Path, name: str) -> Path | None:
+    for level in ("active", "candidate", "shadow"):
+        path = Path(home) / paths.SKILL_LEVEL_DIRS[level] / name / "SKILL.md"
+        if path.exists():
+            return path
+    return None
+
+
+def artifact_binding(home: Path, name: str) -> dict[str, str]:
+    """Return hashes/version that a frontier approval must bind to."""
+    path = skill_path(home, name)
+    if path is None:
+        raise BrainError(f"No skill {name!r} found under lifecycle directories")
+    # Directory/status transitions are lifecycle metadata, not content edits.
+    # Normalize that one line so a single approval remains valid across the
+    # guarded shadow -> candidate -> active path.
+    content = path.read_text(encoding="utf-8")
+    normalized = re.sub(r"(?m)^status:\s*[^\r\n]+", "status: <lifecycle>", content, count=1)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    metadata = read_metadata(path)
+    eval_dir = Path(home) / "skills" / "evals" / name
+    eval_hash = hashlib.sha256()
+    if eval_dir.is_dir():
+        for item in sorted(p for p in eval_dir.rglob("*") if p.is_file()):
+            eval_hash.update(item.relative_to(eval_dir).as_posix().encode("utf-8"))
+            eval_hash.update(b"\0")
+            eval_hash.update(item.read_bytes())
+    else:
+        eval_hash.update(b"NO_EVAL_MANIFEST\n")
+    return {
+        "artifact_path": f"skills/{name}/SKILL.md",
+        "artifact_sha256": digest,
+        "artifact_version": metadata.get("version", "unversioned"),
+        "eval_manifest_sha256": eval_hash.hexdigest(),
+    }
+
+
+def validate_execution_ready(path: Path) -> dict[str, object]:
+    """ACTIVE skills must have all required sections and no placeholders."""
+    sections = _parse_sections(path.read_text(encoding="utf-8"))
+    missing = [
+        _SECTION_TITLES[name] for name in REQUIRED_SECTIONS if _SECTION_TITLES[name] not in sections
+    ]
+    issues: list[str] = []
+    for title, content in sections.items():
+        if not content.strip():
+            issues.append(f"section {title!r} is empty")
+        if any(token in content for token in ("(fill me)", "(review required)", "(eval required)")):
+            issues.append(f"section {title!r} contains an unresolved placeholder")
+        if re.search(r"\bTBD\b|\bTODO\b", content):
+            issues.append(f"section {title!r} contains TBD/TODO")
+    return {"ok": not missing and not issues, "missing_sections": missing, "issues": issues}
+
+
+def audit_lifecycle(home: Path) -> dict[str, object]:
+    """Audit directory, frontmatter, promotion, and execution readiness."""
+    skills: list[dict[str, object]] = []
+    issues: list[str] = []
+    promotion_dir = Path(home) / "state" / "promotions"
+    for level, relative in paths.SKILL_LEVEL_DIRS.items():
+        directory = Path(home) / relative
+        if not directory.is_dir():
+            continue
+        for skill_dir in sorted(p for p in directory.iterdir() if p.is_dir()):
+            path = skill_dir / "SKILL.md"
+            entry: dict[str, object] = {"name": skill_dir.name, "level": level, "path": str(path)}
+            if not path.exists():
+                entry["issues"] = ["missing SKILL.md"]
+                issues.append(f"{path}: missing SKILL.md")
+                skills.append(entry)
+                continue
+            metadata = read_metadata(path)
+            entry["status"] = metadata.get("status")
+            local_issues: list[str] = []
+            if metadata.get("status") != level:
+                local_issues.append(
+                    f"frontmatter status {metadata.get('status')!r} != directory {level!r}"
+                )
+            if level == "active":
+                ready = validate_execution_ready(path)
+                local_issues.extend(
+                    str(item) for item in cast(list[str], ready["missing_sections"])
+                )
+                local_issues.extend(str(item) for item in cast(list[str], ready["issues"]))
+                records = (
+                    sorted(p for p in promotion_dir.glob(f"{skill_dir.name}-*.json"))
+                    if promotion_dir.is_dir()
+                    else []
+                )
+                if not records:
+                    local_issues.append("missing promotion record")
+                else:
+                    try:
+                        latest = json.loads(records[-1].read_text(encoding="utf-8"))
+                        if latest.get("to_level") != "active":
+                            local_issues.append("latest promotion record is not active")
+                    except (OSError, json.JSONDecodeError):
+                        local_issues.append("corrupt promotion record")
+            entry["issues"] = local_issues
+            if local_issues:
+                issues.extend(f"{path}: {item}" for item in local_issues)
+            skills.append(entry)
+    return {"ok": not issues, "skills": skills, "issues": issues}
 
 
 def _section_lines(text: str) -> list[str]:
@@ -440,6 +610,7 @@ def shadow_candidate(
         raise BrainError(f"No candidate {name!r} at {source}")
     if target.exists():
         raise BrainError(f"Shadow target already exists: {target}")
+    set_status(source / "SKILL.md", "shadow")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
     return target

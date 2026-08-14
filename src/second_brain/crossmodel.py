@@ -188,8 +188,9 @@ def model_skill_report(
 
 def transfer_test(home: Path, skill_name: str, model_a: str, model_b: str) -> dict:
     """Plan §116 transfer check on overlapping task hashes for one skill.
-    'transfers' when model_b success >= model_a success on the overlap (and
-    model_b has >= 1 outcome); 'no_data' when there is no overlap."""
+    A strong transfer verdict needs two overlapping tasks and successful
+    outcomes from both models. One-task and zero-success cases remain visible
+    but cannot certify transfer."""
     a_rows = _outcome_rows(home, model_id=model_a, skill_name=skill_name)
     b_rows = _outcome_rows(home, model_id=model_b, skill_name=skill_name)
     a_by_hash: dict[str, list[dict]] = {}
@@ -208,18 +209,31 @@ def transfer_test(home: Path, skill_name: str, model_a: str, model_b: str) -> di
         a_success += a_ok
         b_success += b_ok
         tasks.append({"task_hash": task_hash, "success_a": a_ok, "success_b": b_ok})
+    overlap_count = len(overlap)
     if not overlap:
         verdict = "no_data"
-    elif b_success >= a_success and len(b_rows) >= 1:
+    elif b_success == 0:
+        verdict = "does_not_transfer"
+    elif overlap_count < 2 or a_success == 0:
+        verdict = "insufficient_evidence"
+    elif b_success >= a_success:
         verdict = "transfers"
     else:
         verdict = "does_not_transfer"
+    a_rate = round(a_success / overlap_count, 4) if overlap_count else None
+    b_rate = round(b_success / overlap_count, 4) if overlap_count else None
     return {
         "skill_name": skill_name,
         "model_a": model_a,
         "model_b": model_b,
         "verdict": verdict,
-        "overlap_count": len(overlap),
+        "overlap_count": overlap_count,
+        "successes_a": a_success,
+        "successes_b": b_success,
+        "success_rate_a": a_rate,
+        "success_rate_b": b_rate,
+        "insufficient_evidence": overlap_count < 2 or a_success == 0,
+        "strong_evidence": verdict == "transfers",
         "tasks": tasks,
     }
 
@@ -245,6 +259,10 @@ def global_policy_stats(home: Path, skill_name: str, min_success_per_model: floa
             excluded.append(mid)
     total_outcomes = sum(by_model[mid]["outcomes"] for mid in included)
     total_successes = sum(by_model[mid]["successes"] for mid in included)
+    all_outcomes = sum(data["outcomes"] for data in by_model.values())
+    all_successes = sum(data["successes"] for data in by_model.values())
+    rates = [data["successes"] / data["outcomes"] for data in by_model.values() if data["outcomes"]]
+    global_scope_eligible = bool(by_model) and len(by_model) >= 2 and not excluded
     return {
         "skill_name": skill_name,
         "models_included": included,
@@ -252,4 +270,11 @@ def global_policy_stats(home: Path, skill_name: str, min_success_per_model: floa
         "outcomes": total_outcomes,
         "successes": total_successes,
         "success_rate": round(total_successes / total_outcomes, 4) if total_outcomes else 0.0,
+        "all_outcomes": all_outcomes,
+        "all_successes": all_successes,
+        "all_success_rate": round(all_successes / all_outcomes, 4) if all_outcomes else 0.0,
+        "model_count": len(by_model),
+        "excluded_model_count": len(excluded),
+        "worst_model_success_rate": round(min(rates), 4) if rates else None,
+        "global_scope_eligible": global_scope_eligible,
     }

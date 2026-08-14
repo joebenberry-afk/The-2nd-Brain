@@ -144,6 +144,26 @@ def test_transfer_verdicts(brain_home):
     assert result["overlap_count"] == 0
 
 
+def test_transfer_rejects_zero_success_and_one_task_evidence(brain_home):
+    _record(brain_home, "flash", "both-fail", False)
+    _record(brain_home, "pro", "both-fail", False)
+    assert crossmodel.transfer_test(brain_home, SKILL, "flash", "pro")["verdict"] == (
+        "does_not_transfer"
+    )
+
+    _record(brain_home, "flash", "mixed", False)
+    _record(brain_home, "pro", "mixed", True)
+    result = crossmodel.transfer_test(brain_home, SKILL, "flash", "pro")
+    assert result["verdict"] == "insufficient_evidence"
+    assert result["strong_evidence"] is False
+
+    for task in ("both-fail-2", "mixed-2"):
+        _record(brain_home, "flash", task, False)
+        _record(brain_home, "pro", task, True)
+    result = crossmodel.transfer_test(brain_home, SKILL, "flash", "pro")
+    assert result["verdict"] == "insufficient_evidence"
+
+
 # ---------------------------------------------------------------------------
 # Contamination guard
 # ---------------------------------------------------------------------------
@@ -160,6 +180,8 @@ def test_contamination_guard_acceptance(brain_home):
     assert stats["successes"] == 4
     assert stats["outcomes"] == 5
     assert stats["success_rate"] == 0.8
+    assert stats["global_scope_eligible"] is False
+    assert stats["worst_model_success_rate"] == 0.0
     # The gate: stats over everything (with the failing model excluded by the
     # guard) equal stats over a world where the failing model never existed.
     home_a_only = _fresh_home(brain_home)

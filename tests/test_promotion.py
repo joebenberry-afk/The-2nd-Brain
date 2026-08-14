@@ -8,16 +8,34 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from second_brain import frontier, plasticity, promotion
+from second_brain import frontier, paths, plasticity, promotion
 from second_brain.errors import BrainError
 
 LEVELS = ("shadow", "candidate", "active")
 
 
 def _skill(home, name="scout", level="shadow", marker="content"):
-    directory = home / "skills" / level / name
+    directory = home / paths.SKILL_LEVEL_DIRS[level] / name
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "SKILL.md").write_text(marker, encoding="utf-8")
+    sections = "\n\n".join(
+        f"# {title}\n\n- {marker}"
+        for title in (
+            "Purpose",
+            "Positive Triggers",
+            "Negative Triggers",
+            "Inputs",
+            "Procedure",
+            "Tools",
+            "Safety",
+            "Verification",
+            "Output",
+            "References",
+        )
+    )
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\nstatus: {level}\nversion: 1\n---\n\n{sections}\n",
+        encoding="utf-8",
+    )
     return directory
 
 
@@ -97,11 +115,16 @@ def test_promote_all_guards_green_moves_and_records(brain_home):
     assert result["from_level"] == "shadow"
     assert result["to_level"] == "candidate"
     assert not source.exists()  # moved
-    target = brain_home / "skills" / "candidate" / "scout"
+    target = brain_home / "skills" / "candidates" / "scout"
     assert target.is_dir()
-    assert (target / "SKILL.md").read_text(encoding="utf-8") == "content"
+    assert "content" in (target / "SKILL.md").read_text(encoding="utf-8")
     record = result["record"]
-    assert record["guards"] == {"evidence": True, "frontier_approved": True, "immune_clear": True}
+    assert record["guards"] == {
+        "evidence": True,
+        "frontier_approved": True,
+        "immune_clear": True,
+        "frontier_binding_current": True,
+    }
     assert record["frontier_verdict"] == "approve"
     assert record["evidence_counts"]["credit_events"] == 1
     assert record["session_id"] == "s9"
@@ -118,6 +141,31 @@ def test_promote_to_active(brain_home):
     result = promotion.promote(brain_home, "scout", "candidate", "active")
     assert result["promoted"] is True
     assert promotion.is_active(brain_home, "scout") is True
+
+
+def test_changed_skill_invalidates_frontier_approval(brain_home):
+    skill = _skill(brain_home, name="stale") / "SKILL.md"
+    _evidence(brain_home, "stale")
+    _approve(brain_home, "stale")
+    skill.write_text(skill.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+    result = promotion.promote(brain_home, "stale", "shadow", "candidate")
+    assert result["promoted"] is False
+    assert result["reason"] == "frontier_stale"
+    assert skill.parent.is_dir()
+
+
+def test_incomplete_skill_cannot_become_active(brain_home):
+    skill = _skill(brain_home, name="incomplete") / "SKILL.md"
+    skill.write_text(
+        skill.read_text(encoding="utf-8").replace("- content", "(fill me)", 1),
+        encoding="utf-8",
+    )
+    _evidence(brain_home, "incomplete")
+    _approve(brain_home, "incomplete")
+    assert promotion.promote(brain_home, "incomplete", "shadow", "candidate")["promoted"]
+    result = promotion.promote(brain_home, "incomplete", "candidate", "active")
+    assert result["promoted"] is False
+    assert result["reason"] == "execution_not_ready"
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +239,7 @@ def test_promote_downward_allowed_without_guards(brain_home):
     result = promotion.promote(brain_home, "scout", "active", "candidate")
     assert result["promoted"] is True  # demote via promote: no guards needed
     assert result["record"]["reason"] == "demoted-via-promote"
-    assert (brain_home / "skills" / "candidate" / "scout").is_dir()
+    assert (brain_home / "skills" / "candidates" / "scout").is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +309,7 @@ def test_guard_combos_match_reference(
     expected = _reference(to, has_evidence, frontier_ok, rolled_back, dest_conflict)
     if expected == "promoted":
         assert result["promoted"] is True
-        assert (home / "skills" / "candidate" / "scout").is_dir()
+        assert (home / "skills" / "candidates" / "scout").is_dir()
     else:
         assert result["promoted"] is False
         assert result["reason"] == expected
