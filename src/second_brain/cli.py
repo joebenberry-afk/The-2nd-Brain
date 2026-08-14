@@ -668,8 +668,8 @@ def cmd_memory(args) -> int:
         pairs = semantic.contradictions(home, scope=args.scope)
         if not pairs:
             print("No contradiction candidates.")
-        for a, b in pairs:
-            print(f"{a['memory_id']} <-> {b['memory_id']}  (title {a['title']!r})")
+        for pair in pairs:
+            print(f"{pair['memory_id_a']} <-> {pair['memory_id_b']}  (title {pair['title']!r})")
         return 0
     return 2
 

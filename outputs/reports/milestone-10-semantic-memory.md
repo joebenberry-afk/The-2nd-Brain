@@ -36,7 +36,7 @@ Manual curation only, per plan §106.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (258 tests)
+ruff/format/pyright/pytest -> green (243 tests)
 live: 3 memories added + curated; supersede/history/contradictions demo
 ```
 
@@ -81,3 +81,17 @@ categories (LOW/MEDIUM/HIGH) from failed commands, hypothesis reversals,
 contradictions, untested requirements, stale source, repeated reads, verifier
 disagreement, flaky tests, speculative edits, context pressure; shadow mode
 only; compare against actual verification results/user corrections.
+
+
+## Phase 10 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase10-independent-verification.md):
+1. MAJOR — `memory contradictions` CLI crash on non-empty pairs: fixed
+   (iterate pair dicts; live-tested with a real conflicting pair).
+2. MINOR — curate now syncs grade/status into the canonical file frontmatter
+   (files are canonical per plan §7); body preserved byte-for-byte.
+3. NIT — test count corrected to 243.
+4. NIT — semantic id allocation now uses the same exclusive-create race-safe
+   claim as episodes.
+5. NIT — supersede stamps the retired version with its original created_at
+   (v1 from the row; vN from memory_versions).
