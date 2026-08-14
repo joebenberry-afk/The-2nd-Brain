@@ -80,14 +80,82 @@ export function contextUsageToRecord(
 }
 
 /**
- * Bash command text from a tool_call input, truncated to 500 chars.
- * Returns undefined for non-bash tools or missing/empty command.
+ * Redact credential-like values from a bash command (SEC-08 / INV-10).
+ *
+ * Runs BEFORE length truncation so a secret that straddles the truncation
+ * boundary can never persist a partial value. Covers quoted `-H`/`--header`
+ * payloads, Authorization/Bearer headers, `key=value` and `--flag value`
+ * credential assignments (case-insensitive), common vendor environment
+ * variables, and long credential-shaped tokens. Non-secret command
+ * arguments are preserved so telemetry stays useful.
+ */
+export function redactSensitiveCommand(command: string): string {
+  let text = command;
+
+  // 1. Quoted header payloads that look sensitive: -H "Authorization: ..."
+  text = text.replace(
+    /(\s(?:-H|--header)\s+)(["'])([^"']*)\2/gi,
+    (match: string, prefix: string, _quote: string, payload: string) =>
+      /(?:authorization|bearer|api[-_]?key|token|password|passwd|secret|auth)/i.test(payload)
+        ? `${prefix}"[REDACTED]"`
+        : match,
+  );
+
+  // 2. Authorization header assignments: Authorization: Bearer SECRET
+  text = text.replace(
+    /(\b(?:authorization|proxy-authorization)\b\s*[:=]\s*(?:bearer\s+)?)(["']?)([^\s"']+)\2/gi,
+    (_match: string, prefix: string) => `${prefix}[REDACTED]`,
+  );
+
+  // 3. Bare Bearer tokens: Bearer SECRET
+  text = text.replace(
+    /(\bBearer\s+)([A-Za-z0-9._~+\/=-]+)/g,
+    (_match: string, prefix: string) => `${prefix}[REDACTED]`,
+  );
+
+  // 4. Exact secret-key assignments (any case): token=SECRET, api_key=SECRET
+  text = text.replace(
+    /(\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?key|client[_-]?secret|password|passwd|secret|token)\b\s*=\s*)(["']?)([^\s"']+)\2/gi,
+    (_match: string, prefix: string) => `${prefix}[REDACTED]`,
+  );
+
+  // 5. Environment-style keys: OPENAI_API_KEY=SECRET, *_TOKEN=..., *_SECRET=...
+  text = text.replace(
+    /(\b[A-Za-z0-9]+_(?:API[_-]?KEY|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|TOKEN|SECRET|SECRET_ACCESS_KEY|PASSWORD|PASSWD|AUTH)\b\s*=\s*)(["']?)([^\s"']+)\2/gi,
+    (_match: string, prefix: string) => `${prefix}[REDACTED]`,
+  );
+
+  // 6. CLI flags with a separate or inline value: --token SECRET, --token=SECRET
+  text = text.replace(
+    /(\s--(?:token|password|passwd|secret|api-key|apikey|api_key|access-token|refresh-token|auth-token|client-secret)\b)(\s*=\s*|\s+)(["']?)([^\s"']+)\3/gi,
+    (_match: string, flag: string, separator: string) => `${flag}${separator}[REDACTED]`,
+  );
+
+  // 7. Credential-shaped tokens (conservative, long random-looking values).
+  text = text.replace(
+    /\b(?:sk|pk)-[A-Za-z0-9_-]{16,}\b|\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\bAKIA[0-9A-Z]{16}\b/g,
+    "[REDACTED]",
+  );
+
+  // 8. Private key blocks.
+  text = text.replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----([\s\S]*?)-----END [A-Z ]*PRIVATE KEY-----/g,
+    "[REDACTED]",
+  );
+
+  return text;
+}
+
+/**
+ * Bash command text from a tool_call input: redacted FIRST, then truncated
+ * to 500 chars (INV-10). Returns undefined for non-bash tools or
+ * missing/empty command.
  */
 export function bashCommand(input: Record<string, unknown>): string | undefined {
   if (input == null || typeof input !== "object") return undefined;
   const command = input.command;
   if (typeof command !== "string" || command.length === 0) return undefined;
-  return truncate(command, BASH_COMMAND_MAX_CHARS);
+  return truncate(redactSensitiveCommand(command), BASH_COMMAND_MAX_CHARS);
 }
 
 // ---------------------------------------------------------------------------

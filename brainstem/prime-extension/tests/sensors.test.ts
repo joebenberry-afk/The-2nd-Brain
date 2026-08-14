@@ -192,3 +192,93 @@ describe("sensors: helpers", () => {
     expect(sensors.truncate("1234567890", 4)).toBe("1234");
   });
 });
+
+
+describe("redactSensitiveCommand (SEC-08)", () => {
+  const SECRET = "sk-super-secret-value-1234567890";
+
+  it("redacts Authorization Bearer headers (case-insensitive)", () => {
+    expect(sensors.redactSensitiveCommand(`curl -H "Authorization: Bearer ${SECRET}" url`)).toBe(
+      `curl -H "[REDACTED]" url`,
+    );
+    expect(
+      sensors.redactSensitiveCommand(`curl -H 'authorization: bearer ${SECRET}' url`),
+    ).toBe(`curl -H "[REDACTED]" url`);
+  });
+
+  it("redacts unquoted Authorization headers", () => {
+    expect(sensors.redactSensitiveCommand(`curl -H Authorization: Bearer ${SECRET} url`)).not.toContain(
+      SECRET,
+    );
+    expect(sensors.redactSensitiveCommand(`curl -H Authorization: Bearer ${SECRET} url`)).toContain(
+      "[REDACTED]",
+    );
+  });
+
+  it("redacts bare Bearer tokens", () => {
+    const redacted = sensors.redactSensitiveCommand(`echo Bearer ${SECRET}`);
+    expect(redacted).toBe(`echo Bearer [REDACTED]`);
+  });
+
+  it("redacts token/password assignments", () => {
+    expect(sensors.redactSensitiveCommand(`curl --data token=${SECRET}`)).not.toContain(SECRET);
+    expect(sensors.redactSensitiveCommand(`curl --data token=${SECRET}`)).toContain("[REDACTED]");
+    expect(sensors.redactSensitiveCommand(`api_key=${SECRET} run.py`)).not.toContain(SECRET);
+    expect(sensors.redactSensitiveCommand(`api_key=${SECRET} run.py`)).toContain("[REDACTED]");
+    expect(sensors.redactSensitiveCommand(`password=${SECRET}`)).not.toContain(SECRET);
+    expect(sensors.redactSensitiveCommand(`secret = ${SECRET}`)).not.toContain(SECRET);
+  });
+
+  it("redacts CLI flags with separate and inline values", () => {
+    expect(sensors.redactSensitiveCommand(`python run.py --token ${SECRET}`)).toBe(
+      `python run.py --token [REDACTED]`,
+    );
+    expect(sensors.redactSensitiveCommand(`python run.py --token=${SECRET}`)).toBe(
+      `python run.py --token=[REDACTED]`,
+    );
+    expect(sensors.redactSensitiveCommand(`python run.py --password ${SECRET}`)).not.toContain(SECRET);
+    expect(sensors.redactSensitiveCommand(`python run.py --api-key ${SECRET}`)).not.toContain(SECRET);
+  });
+
+  it("redacts vendor environment variables", () => {
+    const cmd = `OPENAI_API_KEY=${SECRET} ANTHROPIC_API_KEY=${SECRET} GITHUB_TOKEN=${SECRET} GH_TOKEN=${SECRET} DEEPSEEK_API_KEY=${SECRET} XAI_API_KEY=${SECRET} run.py`;
+    const redacted = sensors.redactSensitiveCommand(cmd);
+    expect(redacted).not.toContain(SECRET);
+    expect(redacted.match(/\[REDACTED\]/g)).toHaveLength(6);
+  });
+
+  it("redacts AWS secret access keys", () => {
+    const redacted = sensors.redactSensitiveCommand(
+      `AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE aws s3 ls`,
+    );
+    expect(redacted).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(redacted).toContain("[REDACTED]");
+  });
+
+  it("redacts credential-shaped tokens and private keys", () => {
+    const cmd = `echo ${"sk-".concat("a".repeat(20))} ${"ghp_".concat("b".repeat(25))}`;
+    const redacted = sensors.redactSensitiveCommand(cmd);
+    expect(redacted).not.toContain("sk-aaaa");
+    expect(redacted).not.toContain("ghp_bbbb");
+    const key = "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----";
+    expect(sensors.redactSensitiveCommand(`cat <<EOF\n${key}\nEOF`)).not.toContain("BEGIN RSA");
+  });
+
+  it("preserves non-secret commands materially unchanged", () => {
+    const cmd = "python run.py --project telemetry-test --mode fast";
+    expect(sensors.redactSensitiveCommand(cmd)).toBe(cmd);
+    const header = `curl -H "Content-Type: application/json" -d '{"a":1}' url`;
+    expect(sensors.redactSensitiveCommand(header)).toBe(header);
+  });
+
+  it("redacts before truncation, including near the boundary", () => {
+    const nearBoundary = `${"x".repeat(485)} --token=${SECRET}`;
+    const record = sensors.toolCall("s", "bash", "c1", { command: nearBoundary });
+    expect((record.command as string).length).toBeLessThanOrEqual(500);
+    expect(JSON.stringify(record)).not.toContain(SECRET);
+    const secretAtStart = `--password=${SECRET} ${"y".repeat(600)}`;
+    const record2 = sensors.toolCall("s", "bash", "c2", { command: secretAtStart });
+    expect(JSON.stringify(record2)).not.toContain(SECRET);
+    expect(JSON.stringify(record2)).toContain("[REDACTED]");
+  });
+});

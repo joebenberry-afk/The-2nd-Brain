@@ -125,3 +125,25 @@ describe("sanitizeSessionStem", () => {
     expect(sanitizeSessionStem("")).toMatch(/^anon-/);
   });
 });
+
+
+describe("SEC-08: persisted telemetry contains no command secrets", () => {
+  it("tool_call bash records persist [REDACTED], never the secret", async () => {
+    const { toolCall } = await import("../src/sensors");
+    const SECRET = "sk-super-secret-value-1234567890";
+    const store = new TelemetryStore(tmp, "sess-sec");
+    store.append(
+      toolCall("sess-sec", "bash", "call-1", { command: `curl -H "Authorization: Bearer ${SECRET}" url` }),
+    );
+    store.append(toolCall("sess-sec", "bash", "call-2", { command: `--token=${SECRET}` }));
+    await store.flush();
+    const raw = await readFile(join(tmp, "sess-sec.jsonl"), "utf8");
+    expect(raw).not.toContain(SECRET);
+    expect(raw).toContain("[REDACTED]");
+    for (const line of raw.trim().split("\n")) {
+      const parsed = JSON.parse(line);
+      expect(parsed.kind).toBe("tool_call");
+      expect(parsed.command).toBeDefined();
+    }
+  });
+});
