@@ -11,8 +11,10 @@ to ``(none)`` markers instead of crashing.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 
 from . import registry
 from .errors import BrainError
@@ -45,7 +47,10 @@ def _rel(home: Path, path: Path) -> str:
         return str(path)
 
 
-def _load_or_none(loader, *args: object) -> dict | list | None:
+_T = TypeVar("_T")
+
+
+def _load_or_none(loader: Callable[..., _T], *args: object) -> _T | None:
     try:
         return loader(*args)
     except BrainError:
@@ -72,9 +77,7 @@ def _render_capsule(capsule: dict | None) -> list[str]:
     return lines
 
 
-def _project_files(
-    home: Path, project_key: str | None
-) -> tuple[Project | None, list[str]]:
+def _project_files(home: Path, project_key: str | None) -> tuple[Project | None, list[str]]:
     """Resolve the project directory. Returns (proj, source_paths)."""
     if project_key is None:
         return None, []
@@ -115,9 +118,7 @@ def _lexicon_matches(home: Path, proj: Project | None, task: str) -> list[str]:
     for index in headings:
         term = lines[index][3:].strip()
         words = re.findall(r"[a-z0-9]+", term.lower())
-        matched = any(
-            re.search(rf"\b{re.escape(word)}\b", task_lower) for word in words
-        )
+        matched = any(re.search(rf"\b{re.escape(word)}\b", task_lower) for word in words)
         if not matched:
             continue
         end = next((j for j in headings if j > index), len(lines))
@@ -172,8 +173,7 @@ def compile_context(
     if requirements:
         for entry in requirements:
             body.append(
-                f"- {entry['id']} [{entry['importance']}/{entry['status']}] "
-                f"{entry['requirement']}"
+                f"- {entry['id']} [{entry['importance']}/{entry['status']}] {entry['requirement']}"
             )
             for evidence in entry["evidence"]:
                 body.append(f"  - {evidence}")
@@ -207,7 +207,5 @@ def compile_context(
 
     output = home / "outputs" / "context-capsules" / f"{session_id}-{make_slug(task)}.md"
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        "\n".join([*header, "", *body]) + "\n", encoding="utf-8", newline="\n"
-    )
+    output.write_text("\n".join([*header, "", *body]) + "\n", encoding="utf-8", newline="\n")
     return output

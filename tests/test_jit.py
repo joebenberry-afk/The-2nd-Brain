@@ -2,14 +2,15 @@
 
 import pytest
 
-from second_brain import jit, registry, working_set as ws
+from second_brain import jit, registry
+from second_brain import working_set as ws
 from second_brain.errors import BrainError
 
 
 def _body(text: str) -> str:
-    """Everything below the header block (which contains compiled_at)."""
+    """Everything from the '# Task' section heading on (header stripped)."""
     assert "# Task" in text
-    return text.split("\n# Task", 1)[1]
+    return "# Task" + text.split("\n# Task", 1)[1]
 
 
 def _compile(brain_home, session_id, task, **kwargs):
@@ -70,7 +71,7 @@ def test_make_slug():
 
 
 def test_no_state_compiles_with_none_markers(brain_home):
-    path, text = _compile(brain_home, "fresh", "Any task")
+    _, text = _compile(brain_home, "fresh", "Any task")
     body = _body(text)
     assert "# Task\n\nAny task" in body
     assert "# Requirements\n\n(none)" in body
@@ -108,9 +109,7 @@ def test_active_state_section_compact(brain_home):
         risk="HIGH",
         constraints=["c1", "c2"],
     )
-    ws.update_capsule(
-        brain_home, "s1", verification={"tests": "passed"}, next_action="run pytest"
-    )
+    ws.update_capsule(brain_home, "s1", verification={"tests": "passed"}, next_action="run pytest")
     _, text = _compile(brain_home, "s1", "Task")
     body = _body(text)
     assert "objective: Objective text" in body
@@ -192,4 +191,4 @@ def test_corrupt_capsule_degrades_to_none(brain_home):
 
 def test_compile_rejects_non_string_task(brain_home):
     with pytest.raises(BrainError, match="task"):
-        jit.compile_context(brain_home, "s1", 42)
+        jit.compile_context(brain_home, "s1", 42)  # type: ignore[arg-type]

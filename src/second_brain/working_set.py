@@ -15,6 +15,7 @@ raises, and a corrupt file always raises
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -81,9 +82,7 @@ def _utcnow() -> str:
 def session_dir(home: Path, session_id: str) -> Path:
     """Return the per-session working-set directory (path-safe id only)."""
     if not isinstance(session_id, str) or not SESSION_ID_RE.fullmatch(session_id):
-        raise BrainError(
-            f"Invalid session id {session_id!r}: must match {SESSION_ID_RE.pattern}"
-        )
+        raise BrainError(f"Invalid session id {session_id!r}: must match {SESSION_ID_RE.pattern}")
     if session_id in (".", ".."):
         raise BrainError(f"Invalid session id {session_id!r}: path traversal")
     return Path(home) / "state" / "sessions" / session_id
@@ -114,10 +113,8 @@ def _atomic_write_json(path: Path, data: object) -> None:
             json.dump(data, fh, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
     except OSError as exc:
-        try:
+        with contextlib.suppress(OSError):
             tmp.unlink()
-        except OSError:
-            pass
         raise BrainError(f"Could not write {path}: {exc}") from exc
 
 
@@ -140,9 +137,7 @@ def _validate_capsule_fields(path: Path, capsule: dict) -> None:
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
             raise BrainError(f"{err}: {field} must be a list of strings")
     verification = capsule.get("verification")
-    if not isinstance(verification, dict) or any(
-        not isinstance(key, str) for key in verification
-    ):
+    if not isinstance(verification, dict) or any(not isinstance(key, str) for key in verification):
         raise BrainError(f"{err}: verification must be an object with string keys")
     bad_values = [
         key
@@ -186,9 +181,7 @@ def init_capsule(
         raise BrainError(f"risk must be one of {', '.join(RISK_LEVELS)}")
     if constraints is None:
         constraints = []
-    if not isinstance(constraints, list) or any(
-        not isinstance(item, str) for item in constraints
-    ):
+    if not isinstance(constraints, list) or any(not isinstance(item, str) for item in constraints):
         raise BrainError("constraints must be a list of strings")
 
     path = directory / "active-state.json"
@@ -333,9 +326,7 @@ def add_evidence(home: Path, session_id: str, req_id: str, evidence: str) -> dic
     return entry
 
 
-def set_requirement_status(
-    home: Path, session_id: str, req_id: str, status: str
-) -> dict:
+def set_requirement_status(home: Path, session_id: str, req_id: str, status: str) -> dict:
     """Set a requirement's status (enum-validated). Returns the updated entry."""
     if status not in REQUIREMENT_STATUSES:
         raise BrainError(f"status must be one of {', '.join(REQUIREMENT_STATUSES)}")
