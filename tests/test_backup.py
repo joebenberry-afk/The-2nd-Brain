@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 
 import pytest
@@ -206,3 +207,156 @@ def test_restore_git_inits_target(brain_home, tmp_path, monkeypatch):
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
     backup_mod.restore_backup(home2, bdir)
     assert (home2 / ".git").exists()
+
+
+# ---------------------------------------------------------------------------
+# SEC-01: manifest path escape / unsafe restore
+# ---------------------------------------------------------------------------
+
+
+def _hostile_manifest(bdir, entries):
+    """Rewrite the manifest's 'copied' list in place (keeps db hash valid)."""
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["copied"] = entries
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "../outside",
+        "..\\outside",
+        "config/../../outside",
+        "/absolute",
+        "C:\\outside",
+        "\\server\\share",
+        "..",
+        ".",
+    ],
+)
+def test_restore_rejects_hostile_manifest_entries(
+    brain_home, tmp_path, monkeypatch, entry
+):
+    """SEC-T022..T026: hostile manifest entries abort before any mutation."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    _hostile_manifest(bdir, [entry])
+
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    db.migrate(db.db_path(home2))
+    marker = home2 / "config" / "brain.toml"
+    marker.write_text("schema_version = 1\nnote = 'current'\n", encoding="utf-8")
+
+    with pytest.raises(BackupError, match="unsafe"):
+        backup_mod.restore_backup(home2, bdir, force=True)
+    # Nothing was moved aside or overwritten; the target is untouched.
+    assert "current" in marker.read_text(encoding="utf-8")
+    assert list((home2 / "backups").glob("pre-restore-*")) == []
+
+
+def test_restore_rejects_hostile_db_file_name(brain_home, tmp_path, monkeypatch):
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["db"]["file"] = "../../evil.sqlite"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    db.migrate(db.db_path(home2))
+    with pytest.raises(BackupError, match="db.file"):
+        backup_mod.restore_backup(home2, bdir)
+
+
+def test_restore_cannot_delete_outside_brain_root(brain_home, tmp_path, monkeypatch):
+    """SEC-T029: a manifest cannot make restore recursively delete outside."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("keep", encoding="utf-8")
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    # The entry is relative to the restore root; `..` must not reach victim.
+    _hostile_manifest(bdir, ["../victim"])
+
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    with pytest.raises(BackupError, match="unsafe"):
+        backup_mod.restore_backup(home2, bdir, force=True)
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_restore_rejects_symlink_escape_in_tree(brain_home, tmp_path, monkeypatch):
+    """SEC-T027: a symlink inside a restored directory tree is rejected."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    outside = tmp_path / "outside-content"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    target_dir = bdir / "config"
+    link = target_dir / "leak"
+    try:
+        kwargs = {"target_is_directory": True} if os.name == "nt" else {}
+        os.symlink(outside, link, **kwargs)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    with pytest.raises(BackupError, match="symlink"):
+        backup_mod.restore_backup(home2, bdir)
+
+
+def test_restore_rejects_symlinked_destination(brain_home, tmp_path, monkeypatch):
+    """SEC-T027b: a destination chain that resolves outside is refused."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    outside = tmp_path / "outside-home"
+    outside.mkdir()
+    # Replace the freshly laid-out empty projects/ dir with a symlink.
+    (home2 / "projects").rmdir()
+    try:
+        kwargs = {"target_is_directory": True} if os.name == "nt" else {}
+        os.symlink(outside, home2 / "projects", **kwargs)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform
+        pytest.skip(f"symlinks unavailable: {exc}")
+    with pytest.raises(BackupError, match="unsafe"):
+        backup_mod.restore_backup(home2, bdir, force=True)
+
+
+def test_restore_empty_copied_entry_rejected(brain_home, tmp_path, monkeypatch):
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    _hostile_manifest(bdir, [""])
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    with pytest.raises(BackupError, match="non-empty string"):
+        backup_mod.restore_backup(home2, bdir)
+
+
+def test_restore_non_string_copied_entry_rejected(brain_home, tmp_path, monkeypatch):
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    _hostile_manifest(bdir, ["config", 42])
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+    paths.ensure_layout(home2)
+    with pytest.raises(BackupError, match="non-empty string"):
+        backup_mod.restore_backup(home2, bdir)

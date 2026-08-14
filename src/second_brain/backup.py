@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import db, paths
 from .errors import BackupError
+from .security.paths import resolve_under
 
 MANIFEST_FORMAT = 1
 SNAPSHOT_DIRS = ("config", "constitution", "projects")
@@ -122,9 +123,27 @@ def load_manifest(backup_dir: Path) -> dict:
     return manifest
 
 
+def _validate_db_file_name(file_name: object) -> str:
+    """The manifest db.file must be a plain file name (no path semantics)."""
+    if not isinstance(file_name, str) or not file_name.strip():
+        raise BackupError("Backup manifest db.file must be a non-empty string")
+    if (
+        any(ord(ch) < 32 for ch in file_name)
+        or "/" in file_name
+        or "\\" in file_name
+        or ":" in file_name
+        or file_name in (".", "..")
+    ):
+        raise BackupError(
+            f"Backup manifest db.file is not a plain file name: {file_name!r}"
+        )
+    return file_name
+
+
 def _verify_db_hash(backup_dir: Path, manifest: dict) -> None:
     dbinfo = manifest.get("db") or {}
-    dbfile = backup_dir / dbinfo.get("file", "brain.sqlite")
+    db_file_name = _validate_db_file_name(dbinfo.get("file", "brain.sqlite"))
+    dbfile = backup_dir / db_file_name
     if not dbfile.exists():
         raise BackupError(f"Backup database file missing: {dbfile}")
     actual = sha256_file(dbfile)
@@ -196,6 +215,48 @@ def _drop_stale_db_sidecars(home: Path) -> None:
             stale.unlink()
 
 
+def _restore_plan(home: Path, backup_dir: Path, manifest: dict) -> list[tuple[str, Path, Path]]:
+    """Preflight every manifest entry before ANY mutation (INV-07).
+
+    Returns [(relative, source, destination)] where both source (inside the
+    backup dir) and destination (inside the Brain home) are canonically
+    proven contained, with symlinks rejected on both chains. A malformed
+    manifest therefore fails before the current Brain state is touched.
+    """
+    copied = manifest.get("copied", [])
+    if not isinstance(copied, list):
+        raise BackupError("Backup manifest 'copied' must be a list")
+    plan: list[tuple[str, Path, Path]] = []
+    for rel in copied:
+        if not isinstance(rel, str) or not rel.strip():
+            raise BackupError(
+                "Backup manifest entry must be a non-empty string (got "
+                f"{type(rel).__name__})"
+            )
+        try:
+            source = resolve_under(backup_dir, rel, allow_missing=False)
+            destination = resolve_under(home, rel, allow_missing=True)
+        except ValueError as exc:
+            raise BackupError(
+                f"Backup restore rejected: manifest entry {rel!r} is unsafe "
+                f"({exc})."
+            ) from exc
+        if source.is_dir():
+            # Reject symlinks anywhere inside a restored tree: a linked file
+            # inside the backup could otherwise make restore READ outside the
+            # backup root (and write that content into the Brain).
+            try:
+                for item in source.rglob("*"):
+                    if item.is_symlink():
+                        raise BackupError(
+                            f"Backup restore rejected: symlink inside {rel}: {item.name}"
+                        )
+            except OSError as exc:
+                raise BackupError(f"Backup entry {rel!r} cannot be scanned: {exc}") from exc
+        plan.append((rel, source, destination))
+    return plan
+
+
 def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path:
     """Restore a backup into `home`. Returns the backup dir on success.
 
@@ -203,6 +264,11 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
     would be overwritten. With --force, existing data is moved aside first;
     if the restore then fails, the moved-aside state is rolled back so the
     target is preserved exactly as it was.
+
+    Security (SEC-01): the manifest is untrusted. Every entry is validated
+    and proven contained (source in the backup dir, destination in the Brain
+    home) BEFORE any mutation; hostile entries abort the restore without
+    touching the target.
     """
     backup_dir = Path(backup_dir)
     if not backup_dir.is_dir():
@@ -211,6 +277,9 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
     _verify_db_hash(backup_dir, manifest)
 
     home.mkdir(parents=True, exist_ok=True)
+    # Preflight the complete restore plan before mutating anything.
+    plan = _restore_plan(home, backup_dir, manifest)
+
     existing = _targets_exist(home)
     if existing and not force:
         raise BackupError(
@@ -221,21 +290,22 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
     moved = None
     try:
         moved = _move_aside(home, existing) if existing else None
-        src_db = backup_dir / manifest.get("db", {}).get("file", "brain.sqlite")
+        src_db = backup_dir / _validate_db_file_name(
+            manifest.get("db", {}).get("file", "brain.sqlite")
+        )
         dst_db = db.db_path(home)
         dst_db.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_db, dst_db)
         _drop_stale_db_sidecars(home)
-        for rel in manifest.get("copied", []):
-            src = backup_dir / rel
+        for rel, src, destination in plan:
             if not src.exists():
                 raise BackupError(f"Backup is incomplete (missing {rel})")
             if src.is_dir():
-                if (home / rel).exists():
-                    shutil.rmtree(home / rel)
-                shutil.copytree(src, home / rel)
+                if destination.exists():
+                    shutil.rmtree(destination)
+                shutil.copytree(src, destination)
             else:
-                shutil.copy2(src, home / rel)
+                shutil.copy2(src, destination)
         # Verify the restored copy is byte-identical to the snapshot.
         expected_hash = manifest.get("db", {}).get("sha256")
         if expected_hash and sha256_file(dst_db) != expected_hash:
