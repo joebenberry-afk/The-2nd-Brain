@@ -21,6 +21,7 @@ from . import (
     engram,
     envsteward,
     episodes,
+    frontier,
     monitor,
     paths,
     plasticity,
@@ -456,6 +457,27 @@ def _parser() -> argparse.ArgumentParser:
     eg = sub.add_parser(
         "engrams", parents=[home_parent], help="workflow engrams (Phase 19, candidates only)"
     )
+    fr = sub.add_parser(
+        "frontier", parents=[home_parent], help="frontier memory review gate (Phase 21)"
+    )
+    frs = fr.add_subparsers(dest="frontier_command", required=True)
+    frr = frs.add_parser("review", parents=[home_parent], help="record a manual review")
+    frr.add_argument("change_id")
+    frr.add_argument("--summary", required=True)
+    frr.add_argument("--risk", choices=["low", "medium", "high"], required=True)
+    frr.add_argument("--reviewer", required=True)
+    frr.add_argument("--verdict", choices=["approve", "reject", "request_changes"], required=True)
+    frr.add_argument("--notes", default="")
+    fq = frs.add_parser("require", parents=[home_parent], help="require review before activation")
+    fq.add_argument("change_id")
+    fq.add_argument("--summary", required=True)
+    fq.add_argument("--risk", choices=["low", "medium", "high"], default="high")
+    fg = frs.add_parser("gate", parents=[home_parent], help="activation gate check")
+    fg.add_argument("change_id")
+    fst = frs.add_parser("status", parents=[home_parent], help="review-gate status")
+    fst.add_argument("--change-id", dest="change_id", default=None)
+    frs.add_parser("pending", parents=[home_parent], help="list held (unreviewed) changes")
+
     xm = sub.add_parser("models", parents=[home_parent], help="cross-model memory (Phase 20)")
     xms = xm.add_subparsers(dest="models_command", required=True)
     xmr = xms.add_parser("record", parents=[home_parent], help="record a model skill outcome")
@@ -1178,6 +1200,49 @@ def cmd_credit(args) -> int:
     return 2
 
 
+def cmd_frontier(args) -> int:
+    home = _home(args)
+    if args.frontier_command == "review":
+        path = frontier.frontier_review(
+            home,
+            args.change_id,
+            args.summary,
+            args.risk,
+            args.reviewer,
+            args.verdict,
+            notes=args.notes,
+        )
+        print(f"review: {path}")
+        return 0
+    if args.frontier_command == "require":
+        path = frontier.require_review(home, args.change_id, args.summary, risk=args.risk)
+        print(f"hold: {path if path else 'HARD GATE (high risk, no review)'}")
+        return 0
+    if args.frontier_command == "gate":
+        result = frontier.gate_check(home, args.change_id)
+        print(f"ok={result['ok']} missing={result['missing']}")
+        return 0 if result["ok"] else 1
+    if args.frontier_command == "status":
+        status = frontier.frontier_status(home, change_id=args.change_id)
+        if args.change_id:
+            print(
+                f"{status['change_id']}: latest={status['latest_verdict']} "
+                f"reviews={len(status['reviews'])}"
+            )
+        else:
+            print(
+                f"total={status['total']} approved={status['approved']} "
+                f"rejected={status['rejected']} request_changes={status['request_changes']} "
+                f"pending_high_risk={status['pending_high_risk']}"
+            )
+        return 0
+    if args.frontier_command == "pending":
+        for hold in frontier.list_pending(home):
+            print(hold)
+        return 0
+    return 2
+
+
 def cmd_models(args) -> int:
     home = _home(args)
     if args.models_command == "add":
@@ -1462,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
         "scout": cmd_scout,
         "engrams": cmd_engrams,
         "models": cmd_models,
+        "frontier": cmd_frontier,
         "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
