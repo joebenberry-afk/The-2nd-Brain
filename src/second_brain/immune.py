@@ -24,6 +24,8 @@ from pathlib import Path
 
 from . import frontier
 from .errors import BrainError
+from .security.identifiers import validate_policy_id, validate_trigger_id
+from .security.paths import resolve_under
 
 DETECTORS: tuple[str, ...] = (
     "tests_failed",
@@ -107,12 +109,42 @@ def sha256_file(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_policy_target(home: Path, raw: str) -> str:
+    """Turn a rollback target into a home-relative path proven contained.
+
+    SEC-05: the guard must name a Brain-managed file under the Brain home,
+    never an arbitrary filesystem target. Absolute paths are accepted only
+    when they resolve inside the home; everything else is treated as
+    home-relative. The stored form is a posix relative path; rollback
+    re-derives it through the containment boundary.
+    """
+    home_resolved = Path(home).resolve(strict=False)
+    raw_path = Path(raw)
+    if raw_path.is_absolute():
+        try:
+            rel = raw_path.resolve(strict=False).relative_to(home_resolved)
+        except ValueError as exc:
+            raise BrainError(
+                "guard.rollback_target must be inside the Brain home (absolute "
+                f"target {raw!r} is outside)"
+            ) from exc
+    else:
+        rel = raw_path
+    rel_posix = rel.as_posix()
+    try:
+        resolve_under(home, rel_posix, allow_missing=True)
+    except ValueError as exc:
+        raise BrainError(
+            f"guard.rollback_target {raw!r} is not a safe Brain-managed path: {exc}"
+        ) from exc
+    return rel_posix
+
+
 def register_policy(home: Path, policy_id: str, guard: dict) -> dict:
     """Record a policy change with its rollback guard. ``created_at`` is added
     automatically; the caller supplies the trigger id, target file, and the
     sha256 of the recorded (good) state."""
-    if not isinstance(policy_id, str) or not policy_id.strip():
-        raise BrainError("policy_id must be a non-empty string")
+    policy_id = validate_policy_id(policy_id)
     if not isinstance(guard, dict):
         raise BrainError("guard must be a dict")
     for key in ("rollback_trigger", "rollback_target", "backup_of"):
@@ -120,11 +152,12 @@ def register_policy(home: Path, policy_id: str, guard: dict) -> dict:
             raise BrainError(f"guard.{key} must be a non-empty string")
     if not _HEX64_RE.fullmatch(guard["backup_of"]):
         raise BrainError("guard.backup_of must be a 64-char hex sha256")
+    target_rel = _normalize_policy_target(home, guard["rollback_target"])
     record = {
         "policy_id": policy_id,
         "guard": {
             "rollback_trigger": guard["rollback_trigger"],
-            "rollback_target": guard["rollback_target"],
+            "rollback_target": target_rel,
             "backup_of": guard["backup_of"],
             "created_at": _utcnow(),
         },
@@ -139,8 +172,7 @@ def register_policy(home: Path, policy_id: str, guard: dict) -> dict:
 def register_trigger(home: Path, trigger_id: str, matcher: dict) -> dict:
     """Record a trigger: metric (from DETECTORS), comparison operator, numeric
     value, and a positive sample window."""
-    if not isinstance(trigger_id, str) or not trigger_id.strip():
-        raise BrainError("trigger_id must be a non-empty string")
+    trigger_id = validate_trigger_id(trigger_id)
     if not isinstance(matcher, dict):
         raise BrainError("matcher must be a dict")
     metric = matcher.get("metric")
@@ -233,6 +265,7 @@ def check_triggers(home: Path, policy_id: str | None = None) -> list[dict]:
     triggers_dir = _triggers_dir(home)
     trigger_files = sorted(p for p in triggers_dir.glob("*.json")) if triggers_dir.is_dir() else []
     if policy_id is not None:
+        policy_id = validate_policy_id(policy_id)
         policies_dir = _policies_dir(home)
         policy = _read_json(policies_dir / f"{policy_id}.json")
         wanted = policy["guard"]["rollback_trigger"]
@@ -284,6 +317,8 @@ def rollback(home: Path, policy_id: str, trigger_id: str, reason: str) -> dict:
     """
     if not isinstance(reason, str) or not reason.strip():
         raise BrainError("reason must be a non-empty string")
+    policy_id = validate_policy_id(policy_id)
+    trigger_id = validate_trigger_id(trigger_id)
     policies_dir = _policies_dir(home)
     policy_path = policies_dir / f"{policy_id}.json"
     if not policy_path.exists():
@@ -311,7 +346,15 @@ def rollback(home: Path, policy_id: str, trigger_id: str, reason: str) -> dict:
             if _read_json(old_record).get("ts", "") >= registered_at:
                 return {"rolled_back": False, "reason": "already_rolled_back"}
 
-    target = Path(guard["rollback_target"])
+    # SEC-05: re-derive the target through the containment boundary
+    # immediately before the operation; the stored value is home-relative and
+    # never an arbitrary external path. Symlinks are rejected by policy.
+    try:
+        target = resolve_under(home, guard["rollback_target"], allow_missing=False)
+    except (ValueError, TypeError, OSError) as exc:
+        raise BrainError(
+            f"Unsafe rollback target refused for policy {policy_id!r}: {exc}"
+        ) from exc
     if not target.is_file():
         return {"rolled_back": False, "reason": "target_missing"}
     current_sha = sha256_file(target)
