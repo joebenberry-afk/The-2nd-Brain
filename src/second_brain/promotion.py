@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import frontier, immune, paths, skillforge
 from .errors import BrainError
+from .security.identifiers import validate_skill_name
 
 LEVELS: tuple[str, ...] = ("shadow", "candidate", "active")
 LEVEL_RANK = {"shadow": 0, "candidate": 1, "active": 2}
@@ -128,6 +129,8 @@ def _write_record(home: Path, record: dict) -> Path:
 
 
 def _move_skill(home: Path, skill_name: str, from_level: str, to_level: str) -> Path:
+    # SEC-03: skill names reach filesystem moves; only validated identifiers.
+    skill_name = validate_skill_name(skill_name)
     source = _skill_dir(home, from_level) / skill_name
     target = _skill_dir(home, to_level) / skill_name
     if not source.is_dir():
@@ -163,8 +166,7 @@ def promote(
 ) -> dict:
     """Promote (or demote) a skill with all guards. Refusals return
     {promoted: False, reason}; never mutates on refusal."""
-    if not isinstance(skill_name, str) or not skill_name.strip():
-        raise BrainError("skill_name must be a non-empty string")
+    skill_name = validate_skill_name(skill_name)
     if not isinstance(session_id, str):
         raise BrainError("session_id must be a string")
     _validate_levels(from_level, to_level)
@@ -241,6 +243,7 @@ def promote(
 
 def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
     """Demote a skill to a lower level. No guards, but always records."""
+    skill_name = validate_skill_name(skill_name)
     if not isinstance(reason, str) or not reason.strip():
         raise BrainError("reason must be a non-empty string")
     if to_level not in LEVELS:
@@ -313,4 +316,5 @@ def promotion_status(home: Path, skill_name: str | None = None) -> dict:
 
 
 def is_active(home: Path, skill_name: str) -> bool:
+    skill_name = validate_skill_name(skill_name)
     return (_skills_dir(home) / "active" / skill_name).is_dir()

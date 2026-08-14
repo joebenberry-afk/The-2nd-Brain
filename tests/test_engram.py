@@ -230,3 +230,44 @@ def test_detect_matches_brute_force(brain_home, sequences):
     detected = {tuple(item["sequence"]): item["support"] for item in result}
     expected = {window: count for window, count in brute.items() if count >= 2}
     assert detected == expected
+
+
+# ---------------------------------------------------------------------------
+# SEC-03: engram lifecycle path escape
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../escape",
+        "..\\escape",
+        "a/b",
+        "a\\b",
+        "/abs",
+        "C:\\abs",
+        "a\nb",
+        "a*b",
+        ".",
+        "..",
+        "",
+    ],
+)
+def test_write_engram_rejects_hostile_names(brain_home, bad):
+    """SEC-T040: traversal/hostile engram names cannot reach the filesystem."""
+    _setup(brain_home)
+    with pytest.raises(BrainError):
+        engram.write_engram(brain_home, bad, skills=["scout"], source_sequences=[["scout"]])
+    with pytest.raises(BrainError):
+        engram.validate_engram(brain_home, bad)
+    root = brain_home / "engrams" / "candidates"
+    escaped = brain_home.parent / "escape"
+    assert not escaped.exists()
+
+
+def test_engram_collision_retry_still_contained(brain_home):
+    _setup(brain_home)
+    first = engram.write_engram(brain_home, "dup2", skills=["scout"], source_sequences=[["scout"]])
+    second = engram.write_engram(brain_home, "dup2", skills=["scout"], source_sequences=[["scout"]])
+    assert first.parent == second.parent == brain_home / "engrams" / "candidates"
+    assert second.name == "dup2-1.md"

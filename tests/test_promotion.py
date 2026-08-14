@@ -313,3 +313,33 @@ def test_guard_combos_match_reference(
     else:
         assert result["promoted"] is False
         assert result["reason"] == expected
+
+
+# ---------------------------------------------------------------------------
+# SEC-03: promotion cannot escape skill roots
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["../escape", "..\\escape", "a/b", "a\\b", "/abs", "a\nb", "a*b", ".", "..", ""],
+)
+def test_promote_demote_reject_hostile_skill_names(brain_home, bad):
+    with pytest.raises(BrainError):
+        promotion.promote(brain_home, bad, "shadow", "candidate")
+    with pytest.raises(BrainError):
+        promotion.demote(brain_home, bad, "shadow", "reason")
+    with pytest.raises(BrainError):
+        promotion.is_active(brain_home, bad)
+    assert not (brain_home.parent / "escape").exists()
+
+
+def test_promotion_record_names_contained(brain_home):
+    """Promotion records for a valid skill stay under state/promotions/."""
+    _skill(brain_home, name="record-me")
+    _evidence(brain_home, "record-me")
+    _approve(brain_home, "record-me")
+    result = promotion.promote(brain_home, "record-me", "shadow", "candidate")
+    assert result["promoted"] is True
+    record_path = Path(result["record_path"])
+    assert record_path.parent == brain_home / "state" / "promotions"

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import BrainError
+from .security.identifiers import validate_engram_name
 
 NON_RESPONSIBILITIES = "This engram duplicates NO skill logic; execute referenced skills instead."
 FORBIDDEN_SECTIONS = ("Procedure", "Steps")
@@ -125,8 +126,7 @@ def write_engram(
 ) -> Path:
     """Write a candidate engram file. Collision-safe: never overwrites (retries
     with a -N suffix). References must resolve to existing skills."""
-    if not isinstance(name, str) or not name.strip():
-        raise BrainError("name must be a non-empty string")
+    name = validate_engram_name(name)
     if (
         not isinstance(skills, list)
         or not skills
@@ -188,6 +188,8 @@ def write_engram(
 
 
 def _engram_file(home: Path, name: str) -> Path:
+    # SEC-03: engram names reach filesystem paths; only validated identifiers.
+    name = validate_engram_name(name)
     path = _candidates_dir(home) / f"{name}.md"
     if not path.exists():
         raise BrainError(f"No candidate engram {name!r} at {path}")
