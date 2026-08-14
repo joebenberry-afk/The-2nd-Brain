@@ -23,3 +23,13 @@ files = ["active-state.json", "requirements.json", "read-ledger.json",
 [capsule]
 # Active State Capsule is updated at meaningful checkpoints, not every token.
 min_update_interval_seconds = 30
+
+[rtd]
+# Reversible Tool Distillation (Phase 5). Shadow default: events are logged
+# (rtd_shadow telemetry) but tool results are NOT substituted until enabled
+# via SECOND_BRAIN_RTD=active AND enabled=true.
+enabled = false
+threshold_chars = 8000
+max_distill_chars = 2000
+whitelist_tools = ["bash"]
+whitelist_commands = ["pytest", "git", "rg", "grep"]
