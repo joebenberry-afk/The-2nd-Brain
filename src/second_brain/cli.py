@@ -15,6 +15,7 @@ from . import (
     __version__,
     artifacts,
     cerebellum,
+    credit,
     db,
     envsteward,
     episodes,
@@ -434,6 +435,21 @@ def _parser() -> argparse.ArgumentParser:
     rr2.add_argument("task")
     rr2.add_argument("--max-active", type=int, default=3)
     rts.add_parser("eval", parents=[home_parent], help="run the router fixture eval")
+
+    cr = sub.add_parser("credit", parents=[home_parent], help="credit assignment (Phase 18)")
+    crs = cr.add_subparsers(dest="credit_command", required=True)
+    ca = crs.add_parser("assign", parents=[home_parent], help="explicitly assign credit levels")
+    ca.add_argument("session_id")
+    ca.add_argument("--direct", nargs="*", default=[])
+    ca.add_argument("--contributory", nargs="*", default=[])
+    ca.add_argument("--correlated", nargs="*", default=[])
+    crep = crs.add_parser("report", parents=[home_parent], help="aggregate credit events")
+    crep.add_argument("--session", dest="session_id", default=None)
+    cf = crs.add_parser(
+        "counterfactual", parents=[home_parent], help="with/without-skill routing eval"
+    )
+    cf.add_argument("skill_name")
+    cf.add_argument("tasks_file")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -1076,6 +1092,46 @@ def cmd_router(args) -> int:
     return 2
 
 
+def cmd_credit(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.credit_command == "assign":
+        counts = credit.assign_credit(
+            home,
+            args.session_id,
+            direct=args.direct,
+            contributory=args.contributory,
+            correlated=args.correlated,
+        )
+        print(f"credit assigned: {counts}")
+        return 0
+    if args.credit_command == "report":
+        rep = credit.credit_report(home, session_id=args.session_id)
+        print(f"total_events={rep['total_events']}")
+        for s in rep["subjects"]:
+            print(
+                f"  {s['subject_id']:30s} {s['subject_kind']:12s} "
+                f"direct={s['direct']} contributory={s['contributory']} "
+                f"correlated={s['correlated']}"
+            )
+        return 0
+    if args.credit_command == "counterfactual":
+        data = json.loads(Path(args.tasks_file).read_text(encoding="utf-8"))
+        tasks = data["tasks"] if isinstance(data, dict) else data
+        result = credit.counterfactual_eval(home, args.skill_name, tasks)
+        print(
+            f"affected={result['tasks_affected']} "
+            f"unaffected={result['tasks_unaffected']} total={len(result['tasks'])}"
+        )
+        for t in result["results"]:
+            print(
+                f"  {t['text'][:60]!r}: with={t['selected_with']} without={t['selected_without']}"
+            )
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1284,6 +1340,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
         "reconsolidation": cmd_reconsolidation,
