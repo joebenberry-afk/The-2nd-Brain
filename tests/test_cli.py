@@ -37,7 +37,10 @@ def test_init_doctor_status_flow(tmp_path):
 
     r = run_cli(home, "status")
     assert r.returncode == 0
-    assert "schema v2" in r.stdout
+    from second_brain import db
+
+    expected = max(int(p.name[:4]) for p in db.migration_files())
+    assert f"schema v{expected}" in r.stdout
 
 
 def test_init_refuses_non_empty_non_brain(tmp_path):

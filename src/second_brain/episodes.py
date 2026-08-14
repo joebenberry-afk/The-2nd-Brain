@@ -195,6 +195,19 @@ def _render_body(summary: str, sections: dict[str, str] | None) -> str:
     return "\n".join(lines)
 
 
+def _write_file_exclusive(path: Path, data: str) -> None:
+    """Write with O_CREAT|O_EXCL: fails instead of overwriting (race-safe)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise
+
+
 def _write_file_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
@@ -239,31 +252,40 @@ def create_episode(
     date_part = created_at[:10].replace("-", "")
     episode_id: str | None = None
     path: Path | None = None
+
+    # Claim the id with an exclusive create (O_CREAT|O_EXCL): a concurrent
+    # same-id writer can never overwrite our file, and the DB-failure cleanup
+    # below can only ever delete a file WE exclusively created (never a
+    # racing winner's).
     for _ in range(ID_RETRIES):
         candidate = f"{episode_type}-{date_part}-{secrets.token_hex(4)}"
-        if _episode_path(home, candidate).exists() or _row_exists(home, candidate):
+        cand_path = _episode_path(home, candidate)
+        if cand_path.exists() or _row_exists(home, candidate):
+            continue
+        content = _render_frontmatter(
+            candidate,
+            project_id,
+            session_id,
+            task_id,
+            episode_type,
+            created_at,
+            prediction_error,
+            salience,
+            evidence_refs,
+        ) + _render_body(summary, sections)
+        try:
+            _write_file_exclusive(cand_path, content)
+        except FileExistsError:
             continue
         episode_id = candidate
-        path = _episode_path(home, candidate)
+        path = cand_path
         break
     if episode_id is None or path is None:
         raise BrainError("Could not allocate a unique episode id after 5 attempts")
 
-    content = _render_frontmatter(
-        episode_id,
-        project_id,
-        session_id,
-        task_id,
-        episode_type,
-        created_at,
-        prediction_error,
-        salience,
-        evidence_refs,
-    ) + _render_body(summary, sections)
-    _write_file_atomic(path, content)
-
-    conn = db.connect(_dbfile(home))
+    conn: sqlite3.Connection | None = None
     try:
+        conn = db.connect(_dbfile(home))
         conn.execute(
             """INSERT INTO episodes
                (episode_id, project_id, session_id, task_id, episode_type,
@@ -287,12 +309,14 @@ def create_episode(
         )
         conn.commit()
     except sqlite3.Error as exc:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         with contextlib.suppress(OSError):
-            path.unlink()  # no orphans: remove the file we just wrote
+            path.unlink()  # no orphans: we exclusively created this file
         raise BrainError(f"Could not insert episode {episode_id}: {exc}") from exc
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     return episode_id
 
 
@@ -306,7 +330,8 @@ def annotate_episode(home: Path, episode_id: str, note: str) -> Path:
     path = _episode_path(home, episode_id)
     if not path.exists():
         raise BrainError(f"Episode file missing for {episode_id!r}: {path}")
-    body = path.read_text(encoding="utf-8")
+    with path.open(encoding="utf-8", newline="") as fh:
+        body = fh.read()  # raw bytes: no CRLF->LF normalization
     addendum = f"## Addendum ({_utcnow()})\n\n{note.strip()}\n"
     _write_file_atomic(path, body.rstrip("\n") + "\n\n" + addendum)
     return path

@@ -35,7 +35,7 @@ No semantic auto-update (Phase 10 is separate).
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (238 tests)
+ruff/format/pyright/pytest -> green (228 tests)
 live: doctor 16/16 (migrations current at version 2)
 live: 9 real episodes captured; list/search verified
 ```
@@ -86,3 +86,15 @@ live: 9 real episodes captured; list/search verified
 semantic entries, contradiction handling, current/historical distinction.
 Manual curation first. Acceptance: repo contradiction supersedes stale
 memory; history preserved.
+
+
+## Phase 9 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase9-independent-verification.md):
+1. NIT — test count corrected to 228.
+2. NIT — id claim now race-safe: exclusive create (O_CREAT|O_EXCL) inside
+   the retry loop; DB-failure cleanup can only delete a file we exclusively
+   created (never a racing winner's).
+3. NIT — db.connect moved inside the guarded try (connect failure leaves no
+   orphan).
+4. NIT — annotate reads with newline='' (raw bytes; no CRLF normalization).
