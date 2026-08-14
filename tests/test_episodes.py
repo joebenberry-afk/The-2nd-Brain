@@ -188,15 +188,16 @@ def test_section_and_field_validation(brain_home):
 
 def test_lazy_migration_0002_on_v1_brain(brain_home):
     dbfile = db.db_path(brain_home)
-    # Simulate a v1 brain: drop episodes and forget version 2.
+    # Simulate a v1 brain: drop the phase 9/10 tables and forget versions >= 2.
     conn = db.connect(dbfile)
     try:
-        conn.execute("DROP TABLE episodes")
-        conn.execute("DELETE FROM schema_version WHERE version = 2")
+        for table in ("memory_versions", "memory_sources", "memories", "episodes"):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM schema_version WHERE version >= 2")
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2]
+    assert db.pending_migrations(dbfile) == [2, 3]
     eid = _create(brain_home)
     assert db.pending_migrations(dbfile) == []
     assert episodes.show_episode(brain_home, eid)["row"]["episode_id"] == eid
