@@ -196,6 +196,8 @@ def test_lazy_migration_0004(brain_home):
     conn = db.connect(dbfile)
     try:
         for table in (
+            "memory_activations",
+            "memory_retrievals",
             "credit_events",
             "prediction_errors",
             "outcomes",
@@ -210,7 +212,7 @@ def test_lazy_migration_0004(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2, 3, 4]
+    assert db.pending_migrations(dbfile) == [2, 3, 4, 5]
     pid = plasticity.record_prediction(brain_home, "s1", "a", "b", "b", "k")
     assert db.pending_migrations(dbfile) == []
     assert pid >= 1

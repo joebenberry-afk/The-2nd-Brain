@@ -21,6 +21,7 @@ from . import (
     monitor,
     paths,
     plasticity,
+    reconsolidation,
     registry,
     risk,
     scout,
@@ -379,6 +380,26 @@ def _parser() -> argparse.ArgumentParser:
     sc.add_argument("--limit", type=int, default=20)
     sc.add_argument("--apply", action="store_true", help="actually write (default: dry run)")
     sls.add_parser("queue", parents=[home_parent], help="show the replay queue")
+
+    rc = sub.add_parser(
+        "reconsolidation",
+        parents=[home_parent],
+        help="reconsolidation / forgetting (Phase 15, advisory)",
+    )
+    rcs = rc.add_subparsers(dest="reconsolidation_command", required=True)
+    rr = rcs.add_parser("retrieval", parents=[home_parent], help="record a memory retrieval")
+    rr.add_argument("memory_id")
+    rr.add_argument("--session", dest="session_id", default=None)
+    ra = rcs.add_parser("activation", parents=[home_parent], help="record a retrieval outcome")
+    ra.add_argument("memory_id")
+    ra.add_argument("outcome", choices=("correct", "irrelevant", "contradicted"))
+    ra.add_argument("--session", dest="session_id", default=None)
+    rh = rcs.add_parser("heat", parents=[home_parent], help="set heat state")
+    rh.add_argument("memory_id")
+    rh.add_argument("heat", choices=("HOT", "WARM", "COLD", "ARCHIVED"))
+    rcs.add_parser(
+        "decay", parents=[home_parent], help="decay pass (dry run unless --apply)"
+    ).add_argument("--apply", action="store_true")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -907,6 +928,31 @@ def cmd_sleep(args) -> int:
     return 2
 
 
+def cmd_reconsolidation(args) -> int:
+    home = _home(args)
+    if args.reconsolidation_command == "retrieval":
+        rid = reconsolidation.record_retrieval(home, args.memory_id, session_id=args.session_id)
+        print(f"retrieval {rid} recorded")
+        return 0
+    if args.reconsolidation_command == "activation":
+        aid = reconsolidation.record_activation(
+            home, args.memory_id, args.outcome, session_id=args.session_id
+        )
+        print(f"activation {aid} recorded ({args.outcome})")
+        return 0
+    if args.reconsolidation_command == "heat":
+        row = reconsolidation.apply_heat(home, args.memory_id, args.heat)
+        print(f"{args.memory_id} heat -> {row['heat']}")
+        return 0
+    if args.reconsolidation_command == "decay":
+        changes = reconsolidation.decay_pass(home, dry_run=not args.apply)
+        print(f"{len(changes)} memories would decay" + ("" if args.apply else " (dry run)"))
+        for c in changes:
+            print(f"  {c['memory_id']} {c['heat_before']}->{c['heat_after']} {c['reason']}")
+        return 0
+    return 2
+
+
 def cmd_scout(args) -> int:
     import json
 
@@ -1115,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
+        "reconsolidation": cmd_reconsolidation,
         "sleep": cmd_sleep,
         "plasticity": cmd_plasticity,
         "cerebellum": cmd_cerebellum,
