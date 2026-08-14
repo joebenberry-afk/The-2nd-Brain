@@ -22,6 +22,7 @@ from . import (
     envsteward,
     episodes,
     frontier,
+    immune,
     monitor,
     paths,
     plasticity,
@@ -460,6 +461,43 @@ def _parser() -> argparse.ArgumentParser:
     fr = sub.add_parser(
         "frontier", parents=[home_parent], help="frontier memory review gate (Phase 21)"
     )
+    im = sub.add_parser(
+        "immune", parents=[home_parent], help="immune system rollback triggers (Phase 22)"
+    )
+    ims = im.add_subparsers(dest="immune_command", required=True)
+    imp = ims.add_parser("policy", parents=[home_parent], help="register a guarded policy")
+    imp.add_argument("policy_id")
+    imp.add_argument("--trigger", dest="rollback_trigger", required=True)
+    imp.add_argument("--target", dest="rollback_target", required=True)
+    imp.add_argument("--backup-of", dest="backup_of", required=True)
+    imt = ims.add_parser("trigger", parents=[home_parent], help="register a metric trigger")
+    imt.add_argument("trigger_id")
+    imt.add_argument(
+        "--metric",
+        choices=[
+            "tests_failed",
+            "f1_delta",
+            "noise_delta",
+            "compile_error_count",
+            "success_rate_delta",
+        ],
+        required=True,
+    )
+    imt.add_argument("--operator", choices=["<", "<=", ">", ">=", "==", "!="], required=True)
+    imt.add_argument("--value", type=float, required=True)
+    imt.add_argument("--window", type=int, required=True)
+    imi = ims.add_parser("ingest", parents=[home_parent], help="ingest a metric sample")
+    imi.add_argument("metric")
+    imi.add_argument("value", type=float)
+    imi.add_argument("--run", dest="run_id", default="cli")
+    imc = ims.add_parser("check", parents=[home_parent], help="evaluate triggers")
+    imc.add_argument("--policy", dest="policy_id", default=None)
+    imr = ims.add_parser("rollback", parents=[home_parent], help="guarded rollback")
+    imr.add_argument("policy_id")
+    imr.add_argument("trigger_id")
+    imr.add_argument("--reason", required=True)
+    ims.add_parser("log", parents=[home_parent], help="rollback log")
+
     frs = fr.add_subparsers(dest="frontier_command", required=True)
     frr = frs.add_parser("review", parents=[home_parent], help="record a manual review")
     frr.add_argument("change_id")
@@ -1200,6 +1238,49 @@ def cmd_credit(args) -> int:
     return 2
 
 
+def cmd_immune(args) -> int:
+    home = _home(args)
+    if args.immune_command == "policy":
+        guard = {
+            "rollback_trigger": args.rollback_trigger,
+            "rollback_target": args.rollback_target,
+            "backup_of": args.backup_of,
+        }
+        rec = immune.register_policy(home, args.policy_id, guard)
+        print(f"policy registered: {rec['policy_id']}")
+        return 0
+    if args.immune_command == "trigger":
+        matcher = {
+            "metric": args.metric,
+            "operator": args.operator,
+            "value": args.value,
+            "window": args.window,
+        }
+        rec = immune.register_trigger(home, args.trigger_id, matcher)
+        print(f"trigger registered: {rec['trigger_id']}")
+        return 0
+    if args.immune_command == "ingest":
+        immune.ingest_metric(home, args.metric, args.value, args.run_id)
+        print(f"ingested {args.metric}={args.value}")
+        return 0
+    if args.immune_command == "check":
+        for r in immune.check_triggers(home, policy_id=args.policy_id):
+            print(
+                f"{r['trigger_id']}: matched={r['matched']} computed={r['computed']} "
+                f"policies={r['policy_ids']}"
+            )
+        return 0
+    if args.immune_command == "rollback":
+        result = immune.rollback(home, args.policy_id, args.trigger_id, args.reason)
+        print(f"rolled_back={result['rolled_back']} reason={result.get('reason', '')}")
+        return 0 if result["rolled_back"] else 1
+    if args.immune_command == "log":
+        for rec in immune.rollback_log(home):
+            print(f"{rec.get('ts', '')} {rec.get('policy_id', '')}: {rec.get('reason', '')}")
+        return 0
+    return 2
+
+
 def cmd_frontier(args) -> int:
     home = _home(args)
     if args.frontier_command == "review":
@@ -1528,6 +1609,7 @@ def main(argv: list[str] | None = None) -> int:
         "engrams": cmd_engrams,
         "models": cmd_models,
         "frontier": cmd_frontier,
+        "immune": cmd_immune,
         "credit": cmd_credit,
         "router": cmd_router,
         "skills": cmd_skills,
