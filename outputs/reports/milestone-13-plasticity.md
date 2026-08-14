@@ -32,7 +32,7 @@ an append-only utility log. Deterministic replay verified.
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (304 tests)
+ruff/format/pyright/pytest -> green (311 tests)
 live: deterministic replay (2 fresh brains, 5-event sequence -> content-equal)
 live: hindsight relabel (real: localization->environment), outcome vector, explicit credit, utility delta
 ```
@@ -80,3 +80,12 @@ conservative consolidation pass only (replay high-priority episodes, cluster,
 verify provenance, strengthen semantic memory, detect contradictions, update
 utility). Acceptance: no invented verified facts; all semantic updates
 provenance-linked; candidate ideas remain candidate.
+
+
+## Phase 13 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase13-independent-verification.md):
+1. NIT — test count corrected to 311.
+2. NIT — hindsight docstring corrected: the error signal lives in the
+   prediction_errors row (the prediction row's expected==actual by
+   construction), matching the documented design.
