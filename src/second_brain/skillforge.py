@@ -48,7 +48,8 @@ _ALLOWED_PLACEHOLDERS = {
     "verification": {"(eval required)"},
 }
 
-_DANGEROUS_TOKENS = ("rm -rf", "del /s", "format")
+_DANGEROUS_TOKENS = ("rm -rf", "del /s")
+_DISK_FORMAT_RE = re.compile(r"\bformat\s+[a-zA-Z]:(\s|/|$)|\bformat\s+\S+\s*/(q|fs|v):")
 _SECRET_RE = re.compile(r"\bsk-[A-Za-z0-9]{12,}|api_key\s*[:=]\s*\S{12,}")
 _EXFIL_URL_RE = re.compile(r"https?://(?!localhost|127\.0\.0\.1|0\.0\.0\.0)\S+")
 _INJECTION_PHRASES = ("ignore previous", "must not follow")
@@ -371,6 +372,13 @@ def security_review(home: Path, name: str) -> dict:
     for token in _DANGEROUS_TOKENS:
         if token.lower() in lowered:
             findings.append({"category": "destructive", "detail": f"contains {token!r}"})
+    for match in _DISK_FORMAT_RE.finditer(lowered):
+        findings.append(
+            {
+                "category": "destructive",
+                "detail": f"disk-format command at offset {match.start()}",
+            }
+        )
     for match in _SECRET_RE.finditer(text):
         findings.append(
             {"category": "secret", "detail": f"secret-like value at offset {match.start()}"}

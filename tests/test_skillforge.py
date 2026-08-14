@@ -312,3 +312,26 @@ def test_trigger_eval_random_deterministic(brain_home, texts):
     second = skillforge.trigger_eval(home, "skill", cases)
     assert first == second
     assert first["total"] == len(cases)
+
+
+def test_security_review_ruff_format_is_clean(brain_home):
+    _forge(brain_home)
+    path = _skill(brain_home, "restore-safety")
+    path.write_text(
+        "# Safety\nrun ruff format on the edited files only.\n# Procedure\n1. restore the backup\n",
+        encoding="utf-8",
+    )
+    result = skillforge.security_review(brain_home, "restore-safety")
+    assert result["passed"] is True
+
+
+def test_security_review_disk_format_flagged(brain_home):
+    _forge(brain_home)
+    path = _skill(brain_home, "restore-safety")
+    path.write_text(
+        "# Safety\nformat c: /q to wipe the drive.\n# Procedure\n1. restore the backup\n",
+        encoding="utf-8",
+    )
+    result = skillforge.security_review(brain_home, "restore-safety")
+    assert result["passed"] is False
+    assert any(f["category"] == "destructive" for f in result["findings"])
