@@ -168,7 +168,7 @@ def counterfactual_eval(home: Path, skill_name: str, tasks: list[dict]) -> dict:
 
 
 def _write_report(home: Path, skill_name: str, report: dict) -> Path:
-    out_dir = Path(home) / "outputs" / "reports"
+    out_dir = Path(home) / "outputs" / "audits"
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"counterfactual-{skill_name}.md"
     lines = [
