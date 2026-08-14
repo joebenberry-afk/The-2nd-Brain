@@ -277,3 +277,21 @@ def test_random_memory_sequences_consistent(brain_home, ops):
         assert [h["version"] for h in hist] == list(range(1, row["current_version"] + 1))
         for h in hist:
             assert (home / h["body_path"]).exists()
+
+
+def test_curate_syncs_file_frontmatter(brain_home):
+    mid = semantic.add_memory(brain_home, "T", "body", scope="project", grade="OBSERVED")
+    semantic.curate(brain_home, mid, grade="TESTED", status="current")
+    row = semantic.show_memory(brain_home, mid)
+    assert "grade: TESTED" in row["body"]
+    assert "status: current" in row["body"]
+    assert "body" in row["body"]
+
+
+def test_supersede_retired_version_keeps_original_time(brain_home):
+    mid = semantic.add_memory(brain_home, "T", "v1 body")
+    v1_created = semantic.show_memory(brain_home, mid)["row"]["created_at"]
+    semantic.supersede(brain_home, mid, new_body="v2 body", change_note="changed")
+    history = semantic.history(brain_home, mid)
+    retired = next(v for v in history if v["version"] == 1)
+    assert retired["created_at"] == v1_created

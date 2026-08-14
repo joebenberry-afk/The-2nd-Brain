@@ -84,6 +84,21 @@ def _ensure_migrated(home: Path) -> None:
         db.migrate(_dbfile(home))
 
 
+def _version_created_at(home: Path, memory_id: str, version: int, fallback: str) -> str:
+    """Original created_at of a version being retired (v1 = row's created_at)."""
+    if version <= 1:
+        return fallback
+    conn = db.connect(_dbfile(home))
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM memory_versions WHERE memory_id = ? AND version = ?",
+            (memory_id, version),
+        ).fetchone()
+        return row["created_at"] if row is not None else fallback
+    finally:
+        conn.close()
+
+
 def _row(home: Path, memory_id: str) -> dict | None:
     conn = db.connect(_dbfile(home))
     try:
@@ -179,6 +194,19 @@ def _render_file(
     return "\n".join(lines)
 
 
+def _write_file_exclusive(path: Path, data: str) -> None:
+    """Write with O_CREAT|O_EXCL: fails instead of overwriting (race-safe)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(data)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise
+
+
 def _write_file_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
@@ -212,18 +240,26 @@ def add_memory(
 
     now = _utcnow()
     memory_id: str | None = None
+    path: Path | None = None
+    # Exclusive create (O_CREAT|O_EXCL): a concurrent same-id writer can never
+    # overwrite our file; DB-failure cleanup below only ever removes OUR file.
     for _ in range(ID_RETRIES):
         candidate = "mem-" + secrets.token_hex(6)
-        if _v1_path(home, candidate).exists() or _row(home, candidate) is not None:
+        cand_path = _v1_path(home, candidate)
+        if cand_path.exists() or _row(home, candidate) is not None:
+            continue
+        content = _render_file(
+            candidate, title, scope, project_id, "candidate", grade, 1, now, body
+        )
+        try:
+            _write_file_exclusive(cand_path, content)
+        except FileExistsError:
             continue
         memory_id = candidate
+        path = cand_path
         break
-    if memory_id is None:
+    if memory_id is None or path is None:
         raise BrainError("Could not allocate a unique memory id after 5 attempts")
-
-    path = _v1_path(home, memory_id)
-    content = _render_file(memory_id, title, scope, project_id, "candidate", grade, 1, now, body)
-    _write_file_atomic(path, content)
 
     conn = db.connect(_dbfile(home))
     try:
@@ -277,6 +313,30 @@ def _check_grade_transition(current: str, new: str) -> None:
     )
 
 
+def _sync_file_metadata(home: Path, path: str, *, grade: str, status: str) -> None:
+    """Rewrite a memory file's frontmatter grade/status lines; body preserved."""
+    p = Path(home) / path
+    with p.open(encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    if not text.startswith("---"):
+        raise BrainError(f"Corrupt memory file (missing frontmatter): {p}")
+    fm_end = text.find("\n---\n")
+    if fm_end == -1:
+        raise BrainError(f"Corrupt memory file (unterminated frontmatter): {p}")
+    fm = text[:fm_end]  # "---\nid: ...\ncreated_at: ..."
+    rest = text[fm_end + 1 :]  # "---\n<body>" (closing fence kept)
+    fm_lines = []
+    for line in fm.splitlines():
+        if line.startswith("grade:"):
+            fm_lines.append(f"grade: {grade}")
+        elif line.startswith("status:"):
+            fm_lines.append(f"status: {status}")
+        else:
+            fm_lines.append(line)
+    new_text = "\n".join(fm_lines) + "\n" + rest
+    _write_file_atomic(p, new_text)
+
+
 def curate(
     home: Path,
     memory_id: str,
@@ -319,6 +379,9 @@ def curate(
         raise BrainError(f"Could not curate memory {memory_id}: {exc}") from exc
     finally:
         conn.close()
+    # Files are canonical (plan §7): keep the frontmatter in sync.
+    if grade is not None or status is not None:
+        _sync_file_metadata(home, row["body_path"], grade=new_grade, status=new_status)
     return _row(home, memory_id) or {}
 
 
@@ -387,6 +450,7 @@ def supersede(
     old_version = row["current_version"]
     new_version = old_version + 1
     now = _utcnow()
+    retired_created_at = _version_created_at(home, memory_id, old_version, row["created_at"])
     new_path = _version_path(home, memory_id, new_version)
     title = new_title if new_title is not None else row["title"]
     content = _render_file(
@@ -408,7 +472,14 @@ def supersede(
             "INSERT INTO memory_versions "
             "(memory_id, version, created_at, title, body_path, change_note) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (memory_id, old_version, now, row["title"], row["body_path"], change_note),
+            (
+                memory_id,
+                old_version,
+                retired_created_at,
+                row["title"],
+                row["body_path"],
+                change_note,
+            ),
         )
         conn.execute(
             "UPDATE memories SET title = ?, current_version = ?, updated_at = ?, "
