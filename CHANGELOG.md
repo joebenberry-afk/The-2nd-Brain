@@ -3,6 +3,14 @@
 Format: Keep a Changelog-ish. Entries reference milestone reports under
 `outputs/reports/`.
 
+## [0.3.0] — Project Integration (Phase 3)
+
+- `brainctl project add` = full attach: `.brain/project.toml` (never overwrites
+  user manifests), fenced AGENTS.md marker block (byte-exact preservation),
+  RepoWise detection.
+- `project detach` (rollback) + `project remove [--purge]`.
+- See `outputs/reports/milestone-03-project-integration.md`.
+
 ## [0.2.0] — Observability (Phase 2)
 
 - Prime Agent measurement extension (`brainstem/prime-extension/`): 11
