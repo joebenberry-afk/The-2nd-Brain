@@ -42,21 +42,31 @@ def _parser() -> argparse.ArgumentParser:
 
     pa = sub.add_parser("project", parents=[home_parent], help="project registry")
     ps = pa.add_subparsers(dest="project_command", required=True)
-    padd = ps.add_parser("add", help="attach a repository (registry + manifest + marker)")
+    padd = ps.add_parser(
+        "add",
+        parents=[home_parent],
+        help="attach a repository (registry + manifest + marker)",
+    )
     padd.add_argument("repo", type=Path)
     padd.add_argument("--name", default=None)
     padd.add_argument("--id", dest="project_id", default=None)
     padd.add_argument("--no-marker", action="store_true", help="skip the AGENTS.md marker block")
     padd.add_argument("--no-manifest", action="store_true", help="skip .brain/project.toml")
-    plist = ps.add_parser("list", help="list registered projects")
+    plist = ps.add_parser("list", parents=[home_parent], help="list registered projects")
     plist.add_argument("--inactive", action="store_true")
-    pstat = ps.add_parser("status", help="status of one registered project")
+    pstat = ps.add_parser("status", parents=[home_parent], help="status of one registered project")
     pstat.add_argument("key")
     pdet = ps.add_parser(
-        "detach", help="remove repo-side integration (marker/manifest) and deactivate"
+        "detach",
+        parents=[home_parent],
+        help="remove repo-side integration (marker/manifest) and deactivate",
     )
     pdet.add_argument("key")
-    prem = ps.add_parser("remove", help="delete a registry row (keep brain dir unless --purge)")
+    prem = ps.add_parser(
+        "remove",
+        parents=[home_parent],
+        help="delete a registry row (keep brain dir unless --purge)",
+    )
     prem.add_argument("key")
     prem.add_argument("--purge", action="store_true", help="also delete projects/<id>/")
 

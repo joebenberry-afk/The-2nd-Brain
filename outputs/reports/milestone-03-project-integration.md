@@ -51,14 +51,11 @@ live demo: attach / status / detach / remove on a scratch git repo -> all green
    initializing an index (`repowise init`) on a user repo is deferred until a
    phase actually consumes RepoWise (Phase 6 Scout). Detection is live in
    status. Recon shows zero usable indexes exist on this machine.
-2. **`[tools]` manifest omits `sz_tool`.** The plan's example manifest lists
-   `sz_tool = "auto"` (SZ-modding-specific). Generic manifests carry only
-   `repowise`/`ast_grep`; projects may add `sz_tool` themselves.
-3. **Marker-only AGENTS.md deletion.** If an AGENTS.md consisted solely of our
-   marker, detach deletes the (now empty) file. An empty file carries no user
-   content; non-empty files are restored byte-exactly.
-4. **Deactivated rows persist** until `project remove`; re-attach reactivates
+2. **Deactivated rows persist** until `project remove`; re-attach reactivates
    the same id (identity is stable).
+3. **Identity priority detail:** explicit manifest -> manual `--id` -> git
+   remote -> path hash. The plan lists manual last; an explicit user choice is
+   honored above derived identities (documented behavior).
 
 ## Known risks
 
@@ -78,3 +75,26 @@ live demo: attach / status / detach / remove on a scratch git repo -> all green
 **Phase 4 — Working Set / JIT Context** (plan §100): Active State Capsule,
 Requirement Ledger, JIT Context Compiler, Context Capsule, read ledger —
 advisory/shadow only, no aggressive pruning.
+
+
+## Independent verification reconciliation (post-gate)
+
+Retained independent reviewer verdict: **FAIL -> fixed** (report:
+`state/recon/phase3-independent-verification.md`). All findings reconciled:
+
+1. **BLOCKER — CRLF corruption (FIXED).** `_append_marker`/`_remove_marker`
+   read with `newline=""` (raw bytes, no CRLF->LF translation); detach now
+   restores Windows line endings byte-for-byte. Regression tests:
+   `test_attach_detach_preserves_crlf_exactly`,
+   `test_attach_detach_preserves_no_trailing_newline`.
+2. **MINOR — git-remote identity (FIXED).** `remote_identity()` implements
+   plan §10 priority 2 (normalized remote, trailing .git stripped, lowercase);
+   same remote at different paths resolves to the same id
+   (`test_remote_identity_priority`).
+3. **MINOR — manifest now includes `sz_tool = "auto"`** per plan §85
+   (`test_manifest_includes_sz_tool`); deviation 2 removed.
+4. **MINOR — `--home` accepted after leaf subcommands (FIXED)** via
+   `parents=[home_parent]` on project leaf parsers.
+5. **NIT — detach never deletes AGENTS.md (FIXED):** whitespace-only remaining
+   content is written back instead of unlinking
+   (`test_detach_keeps_whitespace_only_agents_file`); deviation 3 removed.

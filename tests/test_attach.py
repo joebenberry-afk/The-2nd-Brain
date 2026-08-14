@@ -71,11 +71,13 @@ def test_detach_restores_agents_exactly(brain_home, repo):
     assert (repo / "AGENTS.md").read_text(encoding="utf-8") == USER_TEXT
 
 
-def test_detach_removes_marker_only_agents_file(brain_home, repo):
+def test_detach_keeps_whitespace_only_agents_file(brain_home, repo):
+    (repo / "AGENTS.md").write_text("\n\n", encoding="utf-8", newline="")
     _attach(repo, brain_home)
     changes = registry.detach_project(brain_home, repo.name)
-    assert changes["agents_file_deleted"] is True
-    assert not (repo / "AGENTS.md").exists()
+    assert changes["marker_removed"] is True
+    assert (repo / "AGENTS.md").exists()
+    assert (repo / "AGENTS.md").read_text(encoding="utf-8", newline="") == "\n\n"
 
 
 def test_detach_removes_managed_manifest_keeps_user_manifest(brain_home, repo, tmp_path):
@@ -149,3 +151,67 @@ def test_remove_project_row_and_purge(brain_home, repo):
     out = registry.remove_project(brain_home, proj2.id, purge=True)
     assert out["purged"] == "True"
     assert not (brain_home / "projects" / proj2.id).exists()
+
+
+CRLF_TEXT = "# Rules\r\n\r\n- one\r\n- two\r\n"
+
+
+def test_attach_detach_preserves_crlf_exactly(brain_home, repo):
+    """Windows line endings must survive attach+detach byte-for-byte."""
+    (repo / "AGENTS.md").write_bytes(CRLF_TEXT.encode("utf-8"))
+    _attach(repo, brain_home)
+    attached = (repo / "AGENTS.md").read_bytes()
+    assert attached.startswith(CRLF_TEXT.encode("utf-8"))
+    changes = registry.detach_project(brain_home, repo.name)
+    assert changes["marker_removed"] is True
+    assert (repo / "AGENTS.md").read_bytes() == CRLF_TEXT.encode("utf-8")
+
+
+def test_attach_detach_preserves_no_trailing_newline(brain_home, repo):
+    text = "## rules\n- single\n- no trailing newline"
+    (repo / "AGENTS.md").write_bytes(text.encode("utf-8"))
+    _attach(repo, brain_home)
+    registry.detach_project(brain_home, repo.name)
+    assert (repo / "AGENTS.md").read_bytes() == text.encode("utf-8")
+
+
+def test_remote_identity_priority(brain_home, repo):
+    """Plan §10 priority 2: same git remote at different paths -> same id."""
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "https://github.com/acme/proj.git"],
+        check=True,
+        capture_output=True,
+    )
+    proj, _, _ = _attach(repo, brain_home)
+    assert proj.id == registry.remote_identity("https://github.com/acme/proj.git")
+    assert proj.id != registry.path_hash(str(repo))
+
+    repo2 = repo.parent / "clone-elsewhere"
+    import shutil
+
+    shutil.copytree(repo, repo2)
+    proj2, created2, _ = _attach(repo2, brain_home)
+    assert created2 is False  # same identity -> existing row refreshed
+    assert proj2.id == proj.id
+
+
+def test_manual_id_overrides_remote(brain_home, repo):
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "https://example.com/x.git"],
+        check=True,
+        capture_output=True,
+    )
+    proj, _, _ = _attach(repo, brain_home, project_id="explicit-choice")
+    assert proj.id == "explicit-choice"
+
+
+def test_manifest_includes_sz_tool(brain_home, repo):
+    import tomllib
+
+    _attach(repo, brain_home)
+    manifest = tomllib.loads((repo / ".brain" / "project.toml").read_text(encoding="utf-8"))
+    assert manifest["tools"]["sz_tool"] == "auto"
