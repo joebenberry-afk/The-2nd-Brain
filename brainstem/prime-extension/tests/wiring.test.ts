@@ -13,22 +13,29 @@ import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
+const ENV_KEYS = [
+  "SECOND_BRAIN_HOME",
+  "SECOND_BRAIN_OBSERVABILITY",
+  "SECOND_BRAIN_RTD",
+  "SECOND_BRAIN_RTD_THRESHOLD",
+] as const;
 const SAVED_ENV: Record<string, string | undefined> = {};
 let tmp: string;
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), "sb-wiring-"));
-  SAVED_ENV.SECOND_BRAIN_HOME = process.env.SECOND_BRAIN_HOME;
-  SAVED_ENV.SECOND_BRAIN_OBSERVABILITY = process.env.SECOND_BRAIN_OBSERVABILITY;
+  for (const key of ENV_KEYS) {
+    SAVED_ENV[key] = process.env[key];
+    delete process.env[key];
+  }
   process.env.SECOND_BRAIN_HOME = tmp;
-  delete process.env.SECOND_BRAIN_OBSERVABILITY;
 });
 
 afterEach(async () => {
-  if (SAVED_ENV.SECOND_BRAIN_HOME === undefined) delete process.env.SECOND_BRAIN_HOME;
-  else process.env.SECOND_BRAIN_HOME = SAVED_ENV.SECOND_BRAIN_HOME;
-  if (SAVED_ENV.SECOND_BRAIN_OBSERVABILITY === undefined) delete process.env.SECOND_BRAIN_OBSERVABILITY;
-  else process.env.SECOND_BRAIN_OBSERVABILITY = SAVED_ENV.SECOND_BRAIN_OBSERVABILITY;
+  for (const key of ENV_KEYS) {
+    if (SAVED_ENV[key] === undefined) delete process.env[key];
+    else process.env[key] = SAVED_ENV[key] as string;
+  }
   await rm(tmp, { recursive: true, force: true });
 });
 
@@ -83,6 +90,11 @@ async function waitForLines(minLines: number, timeoutMs = 3000): Promise<Record<
     await new Promise((r) => setTimeout(r, 15));
   }
   throw new Error(`timed out waiting for ${minLines} lines in ${file}; got ${last.length}`);
+}
+
+/** Give pending fire-and-forget writes a chance to land (negative assertions). */
+async function settle(ms = 150): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
 }
 
 /** Poll-read the telemetry dir for any .jsonl (unknown session stem). */
@@ -266,5 +278,102 @@ describe("factory wiring (src/index.ts)", () => {
     process.env.SECOND_BRAIN_OBSERVABILITY = "off";
     const handlers = loadFactory();
     expect(handlers.size).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 5 RTD shadow wiring
+  // -------------------------------------------------------------------------
+
+  it("tool_result with big bash pytest output writes rtd_shadow (shadow only)", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const bigContent = [{ type: "text", text: "x".repeat(9000) }];
+    const input = { command: "pytest -q tests/", timeout: 120 };
+    const originalInput = structuredClone(input);
+
+    const result = handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-1", input, content: bigContent, details: {}, isError: false },
+      ctx,
+    );
+    expect(result).toBeUndefined();
+    expect(input).toEqual(originalInput); // input unmutated
+
+    const records = await waitForLines(2); // tool_result + rtd_shadow
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(shadow).toBeDefined();
+    expect(shadow).toMatchObject({
+      v: 2,
+      kind: "rtd_shadow",
+      session: "wiring-test",
+      tool: "bash",
+      id: "rtd-1",
+      would_trigger: true,
+      reason: "ok",
+      threshold: 8000, // default, env unset
+    });
+    expect(shadow!.size).toBeGreaterThan(8000);
+    // privacy: neither command text nor content is ever stored
+    expect(JSON.stringify(records)).not.toContain("pytest -q");
+    expect(JSON.stringify(records)).not.toContain("xxxx");
+  });
+
+  it("tool_result with small output writes no rtd_shadow", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-2", input: { command: "pytest -q" }, content: "ok", details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["tool_result"]);
+    await settle();
+    const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_result"]);
+  });
+
+  it("tool_result with big non-bash output writes no rtd_shadow", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("tool_result")!(
+      { toolName: "ipython", toolCallId: "rtd-3", input: { code: "print(1)" }, content: "x".repeat(9000), details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["tool_result"]);
+    await settle();
+    const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_result"]);
+  });
+
+  it("SECOND_BRAIN_RTD=active logs intent without substituting", async () => {
+    process.env.SECOND_BRAIN_RTD = "active";
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-4", input: { command: "git status" }, content: "y".repeat(9000), details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(2);
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(shadow).toMatchObject({
+      reason: "would-substitute",
+      substitution: "enabled-not-implemented",
+      would_trigger: true,
+      tool: "bash",
+    });
+  });
+
+  it("SECOND_BRAIN_RTD_THRESHOLD overrides the default threshold", async () => {
+    process.env.SECOND_BRAIN_RTD_THRESHOLD = "100";
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-5", input: { command: "rg pattern" }, content: "z".repeat(500), details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(2);
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
+    expect(shadow!.size).toBe(502); // 500 chars + 2 JSON quotes
   });
 });
