@@ -79,3 +79,17 @@ from its own repeated integration loop, corrected one of its detectors from
 real use, and reconsolidated a stale memory with the repo as ground truth.
 All of it is independently verified. THE BUILD IS COMPLETE per plan §96-119,
 §120-140 definitions of done, §141-145 experiments, and §95.1 criteria.
+
+
+## Final verification reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report:
+state/recon/final-experiments-independent-verification.md) — all 14
+checklist rows confirmed against live evidence; experiments re-run in temp
+homes match the reports; pytest 426/426.
+1. NIT — E2's pre-fix buggy copy is now preserved as
+   `state/experiments/e2/report_mini.buggy.py` (reproduction verified:
+   contract test fails with outcomes=3 before the fix, passes after).
+Unverifiable-by-design, accepted as recorded: E2 pre-fix behavior is now
+re-runnable; E5 model identities remain self-reported/by-elimination
+(transparent in the E5 report).
