@@ -30,7 +30,7 @@ counterfactual evaluator that routes each task with and without a skill
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (383 tests)
+ruff/format/pyright/pytest -> green (374 tests)
 live: assign (direct+contributory), report aggregation, counterfactual 6/12 affected
 ```
 
@@ -71,3 +71,13 @@ live: assign (direct+contributory), report aggregation, counterfactual 6/12 affe
 **Phase 19 — Workflow Engrams** (plan §115): detect repeated skill sequences;
 candidate-only. Acceptance: engram references existing skills; does not
 duplicate giant logic.
+
+
+## Phase 18 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase18-independent-verification.md):
+1. MAJOR — the audits-relocation commit left two worker tests asserting the
+   old reports path (RED at HEAD): fixed (tests now assert outputs/audits).
+2. NIT — test count corrected to 374.
+3. NIT — eval_skill_credit note tightened: no credit events are written;
+   the counterfactual report file IS written (documented).
