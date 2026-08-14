@@ -260,7 +260,6 @@ def test_write_engram_rejects_hostile_names(brain_home, bad):
         engram.write_engram(brain_home, bad, skills=["scout"], source_sequences=[["scout"]])
     with pytest.raises(BrainError):
         engram.validate_engram(brain_home, bad)
-    root = brain_home / "engrams" / "candidates"
     escaped = brain_home.parent / "escape"
     assert not escaped.exists()
 

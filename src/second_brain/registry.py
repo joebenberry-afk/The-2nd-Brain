@@ -21,7 +21,7 @@ from pathlib import Path
 from . import db
 from .errors import BrainError
 from .security.identifiers import validate_project_id
-from .security.paths import assert_safe_recursive_delete, resolve_under, validated_project_dir
+from .security.paths import assert_safe_recursive_delete, validated_project_dir
 
 PROJECT_FILES = (
     "project.toml",

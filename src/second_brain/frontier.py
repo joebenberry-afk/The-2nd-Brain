@@ -234,7 +234,15 @@ def frontier_status(home: Path, change_id: str | None = None) -> dict:
         counts[count_key[latest["verdict"]]] += 1
         by_risk[latest["risk"]] = by_risk.get(latest["risk"], 0) + 1
     pending = _pending_dir(home)
-    held = sorted(p.stem for p in pending.glob("*.hold")) if pending.is_dir() else []
+    held = []
+    if pending.is_dir():
+        for path in pending.glob("*.hold"):
+            try:
+                cid = validate_frontier_id(path.stem)
+            except BrainError:
+                continue  # legacy/hostile hold names are not treated as changes
+            held.append(cid)
+    held = sorted(held)
     pending_high_risk = [cid for cid in held if _latest_verdict(home, cid) is None]
     return {**counts, "by_risk": by_risk, "pending_high_risk": pending_high_risk}
 

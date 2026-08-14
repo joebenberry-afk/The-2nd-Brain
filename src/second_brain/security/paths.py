@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from .identifiers import validate_identifier
@@ -51,6 +52,14 @@ def _validate_relative(relative: str) -> None:
         raise ValueError("dot/traversal parts are not allowed")
 
 
+def _is_link(path: Path) -> bool:
+    """True when the path is a symlink (or, on Windows, a junction)."""
+    if path.is_symlink():
+        return True
+    junction = getattr(path, "is_junction", None)
+    return callable(junction) and bool(junction())
+
+
 def _check_no_symlinks(root: Path, candidate: Path) -> None:
     """Reject when any lexical component from root to candidate is a symlink.
 
@@ -64,9 +73,7 @@ def _check_no_symlinks(root: Path, candidate: Path) -> None:
     current = root
     for part in rel.parts:
         current = current / part
-        if current.is_symlink() or (
-            hasattr(current, "is_junction") and current.is_junction()
-        ):
+        if _is_link(current):
             raise ValueError(f"symlink not allowed in path: {current}")
 
 
@@ -137,7 +144,7 @@ def assert_safe_recursive_delete(
     target: Path | str,
     *,
     required_parent: Path | str,
-    forbidden_roots: tuple[Path | str, ...] = (),
+    forbidden_roots: Sequence[Path | str] = (),
     expected_name: str | None = None,
 ) -> Path:
     """Guard for recursive deletion (INV-06). Raises ValueError on refusal.
@@ -161,9 +168,7 @@ def assert_safe_recursive_delete(
         raise ValueError(
             f"unsafe recursive delete refused: {target_path} is outside {parent}"
         ) from exc
-    if target_path.is_symlink() or (
-        hasattr(target_path, "is_junction") and target_path.is_junction()
-    ):
+    if _is_link(target_path):
         raise ValueError(f"unsafe recursive delete refused: {target_path} is a symlink")
     if expected_name is not None and target_path.name != expected_name:
         raise ValueError(
