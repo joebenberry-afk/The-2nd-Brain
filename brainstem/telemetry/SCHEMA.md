@@ -29,6 +29,7 @@ Kinds:
 | session_before_compact | branch_entries |
 | session_compact | from_extension |
 | session_shutdown | reason |
+| rtd_shadow | tool, id, size, threshold, would_trigger, reason |
 | extension_error | error (string, truncated) |
 
 Field names are snake_case and stable across schema versions; new fields are
@@ -47,3 +48,9 @@ additive.
   startup environment. Set `SECOND_BRAIN_HOME` (and any gate vars) BEFORE
   starting prime-agent so the daemon inherits them; otherwise the extension
   silently disables itself (missing home) or writes elsewhere.
+
+## Phase 5 addition (RTD shadow)
+
+`rtd_shadow` records appear when a tool result would have triggered Reversible
+Tool Distillation (size > threshold, whitelisted tool/command). They change no
+behavior: substitution happens only when `SECOND_BRAIN_RTD=active`.
