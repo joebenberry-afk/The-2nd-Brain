@@ -118,13 +118,13 @@ def test_restore_applies_pending_migrations(brain_home, tmp_path, monkeypatch):
 
     extra = tmp_path / "migs"
     extra.mkdir()
-    (extra / "0005_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
+    (extra / "0006_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
     monkeypatch.setattr(db, "MIGRATIONS_DIR", extra)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 5
+        assert v == 6
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "extra_table" in tables
     finally:

@@ -33,7 +33,7 @@ No dream pass yet (plan §53 conservative-first).
 ## Commands / checks actually run
 
 ```text
-ruff/format/pyright/pytest -> green (336 tests)
+ruff/format/pyright/pytest -> green (311 tests)
 live: sleep queue (9 episodes, corrections ranked 3.7/3.4/2.6 first)
 live: consolidate dry-run (no writes) then --apply (strengths 0.5->0.6..0.9 capped,
       sources provenance-linked, bodies byte-untouched, contradictions 0)
@@ -82,3 +82,15 @@ live: consolidate dry-run (no writes) then --apply (strengths 0.5->0.6..0.9 capp
 strength, labile state, supersede, hot/warm/cold/archive; forgetting starts
 advisory only. Acceptance: stale memory loses hot priority; critical protected
 memory does not decay; history still recoverable.
+
+
+## Phase 14 verifier reconciliation (post-gate)
+
+PASS-WITH-FINDINGS (report: state/recon/phase14-independent-verification.md):
+1. MINOR — plasticity docstring E501 at HEAD: wrapped (ruff green again).
+2. NIT — test count corrected to 311.
+3. NIT — re-apply now dedupes episode provenance sources (one row per
+   episode per memory; regression test added).
+4. NIT — §54 priority is a documented subset (pe*2 + salience + correction
+   bonus; no old-case interleaving yet) — recorded as a known limitation;
+   extended when replay volume justifies it.
