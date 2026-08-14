@@ -1,0 +1,15 @@
+{
+  "dataset": "training",
+  "tasks": [
+    {"task_id": "smoke-01", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-02", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-03", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-04", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-05", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-06", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-07", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-08", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-09", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}},
+    {"task_id": "smoke-10", "task_family": "short-response", "prompt": "Reply with exactly: ok", "oracle": {"type": "response_equals", "text": "ok"}}
+  ]
+}

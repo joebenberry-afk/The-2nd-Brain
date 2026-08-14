@@ -1,0 +1,11 @@
+{
+  "captured_utc": "2026-08-14",
+  "os": "Windows",
+  "python": "3.13.7",
+  "node": "v25.7.0",
+  "npm": "11.19.0",
+  "brain_commit": "06bf24642aad61a4bf527fc97ddb8d5d08a07f1d",
+  "prime_version": "0.7.2",
+  "prime_extension_version": "0.1.0",
+  "notes": "Versions are candidate-environment observations; reruns must record their own environment file."
+}

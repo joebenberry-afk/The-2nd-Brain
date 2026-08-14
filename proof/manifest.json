@@ -1,0 +1,22 @@
+{
+  "campaign": "The Second Brain OS v4.3",
+  "plan": {
+    "path": "C:/Users/assas/Downloads/The_Second_Brain_v4_3_Proof_and_Validation_Test_Plan.md",
+    "sha256": "EE8F245D2F0A5D02D584B0448C49C242EA3DE42F2837C45CF05944E21A9B2791"
+  },
+  "runner_version": "0.1.0",
+  "repair_base_commit": "06bf24642aad61a4bf527fc97ddb8d5d08a07f1d",
+  "holdout": {
+    "status": "not_created",
+    "hash_file": "proof/hashes/holdout.sha256",
+    "labels_exposed": false
+  },
+  "stop_conditions": [
+    "secret capture",
+    "canonical or SQLite corruption",
+    "condition leakage",
+    "holdout label exposure",
+    "stale approval accepted",
+    "missing primary measurements"
+  ]
+}
