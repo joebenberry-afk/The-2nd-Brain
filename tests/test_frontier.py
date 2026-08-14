@@ -275,3 +275,37 @@ def test_frontier_review_files_exact_name_matching(brain_home):
     from second_brain.frontier import _review_files
 
     assert [p.name for p in _review_files(brain_home, "alpha")] == ["alpha.md"]
+
+
+def test_frontier_status_validates_change_id_before_read(brain_home):
+    """SEC-T046 regression (validator-found): frontier_status must validate
+    change_id before building any path; hostile ids cannot read files
+    outside frontier/."""
+    # A sentinel that would raise a distinctive error if it were read.
+    sentinel = brain_home / "secret.md"
+    sentinel.write_text("NOT JSON {{{", encoding="utf-8")
+    bad_ids = [
+        "../secret",
+        "..\\secret",
+        "foo*",
+        "foo?",
+        "/abs",
+        "C:\\abs",
+        "\\srv\\share",
+        "a\nb",
+    ]
+    for bad in bad_ids:
+        with pytest.raises(BrainError, match="Invalid"):
+            frontier.frontier_status(brain_home, bad)
+    # The sentinel was never read: the failure was identifier rejection, not
+    # a corrupt-file error.
+    assert sentinel.read_text(encoding="utf-8") == "NOT JSON {{{"
+
+
+def test_frontier_status_valid_change_id_still_works(brain_home):
+    _review(brain_home, cid="status-ok")
+    result = frontier.frontier_status(brain_home, "status-ok")
+    assert set(result) == {"change_id", "reviews", "latest_verdict"}
+    assert result["change_id"] == "status-ok"
+    assert result["latest_verdict"] == "approve"
+    assert len(result["reviews"]) == 1
