@@ -1,0 +1,26 @@
+# brain.toml — core Brain identity and local-storage defaults
+schema_version = 1
+
+[brain]
+name = "The Second Brain"
+# Canonical home is resolved at runtime: $SECOND_BRAIN_HOME, else
+# %USERPROFILE%\Documents\The-Second-Brain. Never hardcode it here.
+
+[db]
+path = "db/brain.sqlite"        # relative to brain home
+journal_mode = "WAL"
+synchronous = "NORMAL"
+foreign_keys = true
+
+[backup]
+# brainctl backup target (relative to brain home)
+dir = "backups"
+include_db = true
+include_config = true
+include_constitution = true
+include_projects = true
+
+[git]
+# categories for commits about the Brain (see constitution/change-control.md)
+categories = ["brain(core)", "brain(memory)", "brain(skill)", "brain(policy)",
+              "brain(project)", "brain(immune)", "brain(db)", "brain(adapter)"]

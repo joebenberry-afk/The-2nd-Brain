@@ -1,0 +1,25 @@
+# context.toml — context governor and working-set defaults (Phase 4+ consumes)
+schema_version = 1
+
+[governor]
+# Pressure bands as configurable defaults (plan §72). Percentages are starting
+# defaults, NOT validated constants — tune with Prime telemetry later.
+green_until_pct = 60
+yellow_until_pct = 75
+orange_until_pct = 85
+# above orange_until_pct => RED
+actions = ["normal", "restrict_broad_reads", "distill_offload", "checkpoint",
+           "compact_handoff"]
+
+[read_ledger]
+# repeated reads are allowed when needed; ledger enables prior compact reference
+track = ["path", "hash", "range", "purpose", "turn", "artifact"]
+
+[working_set]
+dir = "state/sessions"          # per-session working set
+files = ["active-state.json", "requirements.json", "read-ledger.json",
+         "tool-ledger.json", "routing.json", "environment.json"]
+
+[capsule]
+# Active State Capsule is updated at meaningful checkpoints, not every token.
+min_update_interval_seconds = 30
