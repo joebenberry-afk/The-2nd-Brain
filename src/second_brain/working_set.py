@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -107,7 +108,9 @@ def _read_json(path: Path) -> object:
 def _atomic_write_json(path: Path, data: object) -> None:
     """Write JSON atomically (same-dir temp file + os.replace)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as fh:
             json.dump(data, fh, indent=2, ensure_ascii=False)

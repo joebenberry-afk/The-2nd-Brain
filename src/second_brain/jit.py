@@ -10,6 +10,7 @@ to ``(none)`` markers instead of crashing.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -207,5 +208,7 @@ def compile_context(
 
     output = home / "outputs" / "context-capsules" / f"{session_id}-{make_slug(task)}.md"
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("\n".join([*header, "", *body]) + "\n", encoding="utf-8", newline="\n")
+    tmp = output.with_name(output.name + ".tmp")
+    tmp.write_text("\n".join([*header, "", *body]) + "\n", encoding="utf-8", newline="\n")
+    os.replace(tmp, output)
     return output

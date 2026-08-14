@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, db, paths, registry, working_set
+from . import __version__, artifacts, db, paths, registry, working_set
 from . import backup as backup_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
@@ -43,21 +43,31 @@ def _parser() -> argparse.ArgumentParser:
 
     pa = sub.add_parser("project", parents=[home_parent], help="project registry")
     ps = pa.add_subparsers(dest="project_command", required=True)
-    padd = ps.add_parser("add", help="attach a repository (registry + manifest + marker)")
+    padd = ps.add_parser(
+        "add",
+        parents=[home_parent],
+        help="attach a repository (registry + manifest + marker)",
+    )
     padd.add_argument("repo", type=Path)
     padd.add_argument("--name", default=None)
     padd.add_argument("--id", dest="project_id", default=None)
     padd.add_argument("--no-marker", action="store_true", help="skip the AGENTS.md marker block")
     padd.add_argument("--no-manifest", action="store_true", help="skip .brain/project.toml")
-    plist = ps.add_parser("list", help="list registered projects")
+    plist = ps.add_parser("list", parents=[home_parent], help="list registered projects")
     plist.add_argument("--inactive", action="store_true")
-    pstat = ps.add_parser("status", help="status of one registered project")
+    pstat = ps.add_parser("status", parents=[home_parent], help="status of one registered project")
     pstat.add_argument("key")
     pdet = ps.add_parser(
-        "detach", help="remove repo-side integration (marker/manifest) and deactivate"
+        "detach",
+        parents=[home_parent],
+        help="remove repo-side integration (marker/manifest) and deactivate",
     )
     pdet.add_argument("key")
-    prem = ps.add_parser("remove", help="delete a registry row (keep brain dir unless --purge)")
+    prem = ps.add_parser(
+        "remove",
+        parents=[home_parent],
+        help="delete a registry row (keep brain dir unless --purge)",
+    )
     prem.add_argument("key")
     prem.add_argument("--purge", action="store_true", help="also delete projects/<id>/")
 
@@ -134,6 +144,24 @@ def _parser() -> argparse.ArgumentParser:
     ccomp.add_argument("session_id")
     ccomp.add_argument("task")
     ccomp.add_argument("--project", dest="project_key", default=None)
+
+    art = sub.add_parser(
+        "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
+    )
+    ars = art.add_subparsers(dest="artifact_command", required=True)
+    astore = ars.add_parser(
+        "store", parents=[home_parent], help="store a file or stdin as an artifact"
+    )
+    astore.add_argument("path", nargs="?", default=None, help="file to store (default: stdin)")
+    astore.add_argument("--kind", default="generic")
+    astore.add_argument("--tool", default="")
+    astore.add_argument("--session", default=None)
+    astore.add_argument("--no-distill", action="store_true", help="skip distilled preview")
+    aexp = ars.add_parser(
+        "expand", parents=[home_parent], help="recover a stored artifact byte-identically"
+    )
+    aexp.add_argument("hash_prefix")
+    ars.add_parser("list", parents=[home_parent], help="list stored artifacts")
 
     tel = sub.add_parser("telemetry", parents=[home_parent], help="agent telemetry (Phase 2)")
     ts = tel.add_subparsers(dest="telemetry_command", required=True)
@@ -273,6 +301,35 @@ def cmd_project(args) -> int:
         for k in ("marker_removed", "agents_file_deleted", "manifest_removed", "deactivated"):
             if k in changes:
                 print(f"{k:20s} {changes[k]}")
+        return 0
+    return 2
+
+
+def cmd_artifact(args) -> int:
+    home = _home(args)
+    if args.artifact_command == "store":
+        if args.path:
+            info = artifacts.store_file(
+                home, args.path, args.kind, tool=args.tool, session=args.session
+            )
+        else:
+            text = sys.stdin.read()
+            info = artifacts.store_text(home, text, args.kind, tool=args.tool, session=args.session)
+        print(info["handle"])
+        if not args.no_distill:
+            print("Distilled:")
+            print(info["distilled"])
+        print(artifacts.recover_hint(info["hash"]))
+        return 0
+    if args.artifact_command == "expand":
+        sys.stdout.buffer.write(artifacts.expand(home, args.hash_prefix))
+        return 0
+    if args.artifact_command == "list":
+        for m in artifacts.list_artifacts(home):
+            print(
+                f"{m['created_at']} {m['hash'][:12]} {m['size']:8d} {m['kind']:10s} "
+                f"{m['tool'] or '-'}"
+            )
         return 0
     return 2
 
@@ -454,6 +511,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
         "capsule": cmd_capsule,
+        "artifact": cmd_artifact,
         "requirements": cmd_requirements,
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
