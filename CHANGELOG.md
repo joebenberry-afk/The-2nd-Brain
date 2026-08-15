@@ -1,3 +1,19 @@
+## 2026-08-15 — Phase 14 recall hook + proof package update
+
+- `a8c6acb` "brain(adapter): default-off controlled Prime recall hook
+  (Phase 14)": `brainstem/prime-extension/src/recall-gate.ts` + `index.ts`
+  wiring. Default OFF (`SECOND_BRAIN_RECALL` unset/not in {1,true,yes});
+  env knobs `SECOND_BRAIN_RECALL_MAX_ROWS` (3), `MIN_CHARS` (40),
+  `TIMEOUT_MS` (5000). One bounded out-of-process `memory search` per
+  before_agent_start for substantial non-Sol prompts (non-blank, >=8 words,
+  >=minChars, not greeting/continuation); brief capped at 3 rows / 1000
+  words, appended to the full system prompt; every failure fails silent.
+  23 recall-gate + 6 wiring vitest tests. NOT deployed yet.
+- `outputs/reports/optimization-proof.md`: Prime Recall section rewritten
+  from NOT PROVEN to implemented-default-off (cited above); added Phases
+  15-17 conservative no-op section; risks/recommendation updated (recall
+  implemented-not-deployed; limited rollout stands).
+
 ## 2026-08-15 — Optimization Proof package + live reindex
 
 - Live Brain reindexed (derived data only, `memory reindex`): schema v6 -> v7,
