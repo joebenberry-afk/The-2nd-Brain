@@ -213,7 +213,9 @@ def test_route_cache_invalidates_on_skill_md_change(brain_home, monkeypatch):
         encoding="utf-8",
     )
     bumped = os.stat(skill_md).st_mtime_ns + 2_000_000  # guarantee a fresh mtime
-    os.utime(skill_md, (bumped, bumped))
+    # ns= form: on Windows, passing ns ints through the seconds tuple
+    # overflows the FILETIME conversion (WinError 87).
+    os.utime(skill_md, ns=(bumped, bumped))
     counter = _spy_skill_reads(monkeypatch)
     result = router.route(brain_home, "brand new trigger phrase")
     assert counter["reads"] == 1  # stale cache entry re-read after mtime change
