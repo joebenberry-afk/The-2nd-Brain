@@ -208,13 +208,15 @@ def test_lazy_migration_0004(brain_home):
             "memory_sources",
             "memories",
             "episodes",
+            "memory_index",
+            "memory_fts",
         ):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.execute("DELETE FROM schema_version WHERE version >= 2")
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6]
+    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6, 7]
     pid = plasticity.record_prediction(brain_home, "s1", "a", "b", "b", "k")
     assert db.pending_migrations(dbfile) == []
     assert pid >= 1
