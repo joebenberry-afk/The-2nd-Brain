@@ -39,13 +39,20 @@ import type {
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
-import { loadConfig } from "./config";
+import { loadConfig, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
   isOrchestratorModel,
   loadOrchestratorGuardConfig,
   orchestratorPolicyFor,
 } from "./orchestrator-guard";
+import {
+  buildBrainBrief,
+  loadRecallGateConfig,
+  runBrainRecall,
+  shouldAttemptRecall,
+  type RecallGateConfig,
+} from "./recall-gate";
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
@@ -252,13 +259,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // by the runtime across extensions); all other models get undefined
   // (measurement-only). Guard failures fail open: the record is still
   // appended and no patch is returned.
+  // before_agent_start: measurement + Sol contract injection + Phase 14
+  // recall gate. Sol-model sessions get the condensed orchestrator contract
+  // (recall must NOT double-inject for Sol). Other sessions, when recall is
+  // enabled (default OFF), get ONE bounded Brain recall: the handler returns
+  // a Promise the runtime awaits (bounded by cfg.timeoutMs), and on success
+  // appends the Brain Brief to the FULL current system prompt
+  // (ctx.getSystemPrompt() — the runtime REPLACES the system prompt with the
+  // returned string, so the brief alone must never be returned). Every
+  // failure is silent: no spawn, no injection, extension_error record only.
+  // Default OFF = this path returns undefined synchronously (zero behavior
+  // change, zero spawns).
   pi.on("before_agent_start", (event, ctx) => {
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
       getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt));
-      if (isOrchestratorModel(sensors.modelToString(ctx.model) ?? undefined, loadOrchestratorGuardConfig())) {
+      const modelId = sensors.modelToString(ctx.model) ?? undefined;
+      if (isOrchestratorModel(modelId, loadOrchestratorGuardConfig())) {
         return { systemPrompt: SOL_ORCHESTRATOR_CONTRACT };
+      }
+      const recallCfg = loadRecallGateConfig();
+      if (shouldAttemptRecall(event.prompt, recallCfg)) {
+        return recallBrief(ctx, event.prompt, session, recallCfg);
       }
     } catch (error) {
       try {
@@ -277,6 +300,36 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<ContextEvent>("context", (event, _ctx, session) =>
     sensors.context(session, event.messages),
   );
+
+  /**
+   * Phase 14: run ONE bounded Brain recall for a substantial non-Sol prompt
+   * and append the Brain Brief to the full system prompt. Fail silent on
+   * every error path (never throws, never returns a brief-only prompt).
+   */
+  async function recallBrief(
+    ctx: ExtensionContext,
+    prompt: string,
+    session: string,
+    cfg: RecallGateConfig,
+  ): Promise<{ systemPrompt: string } | undefined> {
+    try {
+      const home = resolveBrainHome();
+      if (!home) return undefined;
+      const rows = (await runBrainRecall({ home, query: prompt, cfg })) ?? [];
+      const brief = buildBrainBrief(rows, cfg.maxRows);
+      if (brief === undefined) return undefined;
+      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
+      if (base === undefined || base.trim() === "") return undefined; // never REPLACE the base prompt
+      return { systemPrompt: `${base}\n\n${brief}` };
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — stay silent
+      }
+      return undefined;
+    }
+  }
 
   // tool_call: read-only measurement + minimal-orchestrator guard.
   // event.input is never modified. The normal tool_call record is ALWAYS

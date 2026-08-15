@@ -80,15 +80,40 @@ prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
 | `ORCHESTRATOR_BLOCKED_TOOLS=<a,b>` | Comma-separated tool names blocked for orchestrator sessions (default `bash,edit,websearch`; `ipython` deliberately not listed) |
 | `SECOND_BRAIN_RTD=active` | RTD shadow records intent to substitute (substitution NOT implemented — shadow mode) |
 | `SECOND_BRAIN_RTD_THRESHOLD=<n>` | RTD size threshold in JSON chars (default 8000) |
+| `SECOND_BRAIN_RECALL=1\|true\|yes` | **Phase 14 recall hook (DEFAULT OFF)**: enables ONE bounded Brain recall per before_agent_start for substantial prompts |
+| `SECOND_BRAIN_RECALL_MAX_ROWS=<n>` | Max brief rows (default 3) |
+| `SECOND_BRAIN_RECALL_MIN_CHARS=<n>` | Min prompt length to attempt recall (default 40) |
+| `SECOND_BRAIN_RECALL_TIMEOUT_MS=<n>` | Recall spawn timeout (default 5000) |
 | *(unset)* | `%USERPROFILE%\Documents\The-Second-Brain` |
 
 Telemetry directory: `<brain-home>/telemetry/agent-performance/` (created
 once per extension lifecycle — one shared readiness step, not per record).
 
 **Deployment status (2026-08-15):** the committed source includes the Sol
-guard, but the installed copy at `~/.prime/agent/extensions/second-brain/`
-predates it. Deployment is a separate step pending campaign end; until then
-the live runtime remains measurement-only (advisory policy only).
+guard and the Phase 14 recall hook, but the installed copy at
+`~/.prime/agent/extensions/second-brain/` predates them. Deployment is a
+separate step pending campaign end; until then the live runtime remains
+measurement-only (advisory policy only).
+
+## Phase 14 — controlled recall hook (default OFF)
+
+`SECOND_BRAIN_RECALL` in {1,true,yes} enables one bounded Brain recall per
+`before_agent_start` for substantial, non-trivial prompts (default OFF =
+zero behavior change, zero spawns). The handler runs
+`<brain-home>/.venv/Scripts/python.exe -m second_brain memory search "<prompt>"`
+(cwd = brain home, `SECOND_BRAIN_HOME` set, `PYTHONHOME`/`PYTHONPATH`
+removed, hard timeout) and appends a compact **Brain Brief** (<= 3 rows,
+<= 1000 words, current/superseded/uncertain labels) to the FULL current
+system prompt (`ctx.getSystemPrompt()` — never replaces the base prompt).
+Recall never runs for orchestrator-model (Sol) sessions, which get the Sol
+contract instead. Every failure is silent (no spawn error, no injection;
+`extension_error` record only). Gate: disabled, blank/short (< 40 chars),
+< 8 words, greeting, or continuation/CLI-ish starts all skip.
+
+Limitations: `brain memory search` has no `--json` mode, so the CLI text
+format is parsed (id/status/grade/title only — summary/project are optional
+fields for a future JSON path); `parseRecallRows` already accepts a JSON
+array when a `--json` mode lands.
 Session id = basename of `ctx.sessionManager.getSessionFile()`
 without `.jsonl`; fallback `anon-<epochms>-<4 hex>` **created once per
 extension lifecycle** (Phase 2, 2026-08-15) so anonymous sessions write one

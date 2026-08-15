@@ -7,6 +7,12 @@ import factory, { type ExtensionOptions } from "../src/index";
 import { createTelemetryDirEnsurer } from "../src/storage";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
+const recallRunMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/recall-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/recall-gate")>();
+  return { ...actual, runBrainRecall: recallRunMock };
+});
+
 /**
  * Wiring tests: exercise the REAL factory from src/index.ts through a fake
  * ExtensionAPI / ExtensionContext, with SECOND_BRAIN_HOME pointed at a per-
@@ -22,6 +28,10 @@ const ENV_KEYS = [
   "SECOND_BRAIN_RTD_THRESHOLD",
   "ORCHESTRATOR_MODELS",
   "ORCHESTRATOR_BLOCKED_TOOLS",
+  "SECOND_BRAIN_RECALL",
+  "SECOND_BRAIN_RECALL_MAX_ROWS",
+  "SECOND_BRAIN_RECALL_MIN_CHARS",
+  "SECOND_BRAIN_RECALL_TIMEOUT_MS",
 ] as const;
 const SAVED_ENV: Record<string, string | undefined> = {};
 let tmp: string;
@@ -33,6 +43,7 @@ beforeEach(async () => {
     delete process.env[key];
   }
   process.env.SECOND_BRAIN_HOME = tmp;
+  recallRunMock.mockReset();
 });
 
 afterEach(async () => {
@@ -64,6 +75,7 @@ function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
       getSessionFile: () => join(tmp, "sessions", "wiring-test.jsonl"),
     },
     getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
+    getSystemPrompt: () => "BASE SYSTEM PROMPT",
     signal: undefined,
     hasUI: false,
     ui: undefined,
@@ -124,6 +136,7 @@ function anonCtx(): ExtensionContext {
     model: { id: "deepseek-v4-flash", provider: "deepseek" },
     sessionManager: { getSessionFile: () => undefined },
     getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
+    getSystemPrompt: () => "BASE SYSTEM PROMPT",
     signal: undefined,
     hasUI: false,
     ui: undefined,
@@ -867,5 +880,98 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
     expect(patch).toBeUndefined();
 
     await settle(); // drain fire-and-forget writes before the tmp dir is removed
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 14: controlled Prime recall hook (default OFF)
+// -------------------------------------------------------------------------
+
+const RECALL_PROMPT =
+  "the sqlite migration failed on the second run with a schema version mismatch and now the upgrade is blocked";
+
+describe("Phase 14 recall gate (src/index.ts)", () => {
+  it("default OFF: before_agent_start performs ZERO spawns and returns undefined", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // deepseek, non-Sol
+    const result = handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
+    expect(result).toBeUndefined();
+    expect(recallRunMock).not.toHaveBeenCalled();
+    // measurement record still appended
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+  });
+
+  it("enabled + substantial prompt: spawns ONCE and appends the brief to the full system prompt", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
+    recallRunMock.mockResolvedValue([
+      { memory_id: "mem-1", title: "sqlite migration failure recovery", status: "current", evidence_grade: "VERIFIED" },
+      { title: "no-id row", status: "candidate" },
+    ]);
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as {
+      systemPrompt?: string;
+    } | undefined;
+    expect(recallRunMock).toHaveBeenCalledTimes(1);
+    const [options] = recallRunMock.mock.calls[0]! as [
+      { home: string; query: string; cfg: { maxRows: number } },
+    ];
+    expect(options.home).toBe(tmp);
+    expect(options.query).toBe(RECALL_PROMPT);
+    expect(options.cfg.maxRows).toBe(3);
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("BASE SYSTEM PROMPT"); // base preserved, not replaced
+    expect(result!.systemPrompt).toContain("## Brain Brief (retrieved)");
+    expect(result!.systemPrompt).toContain("**sqlite migration failure recovery**");
+    expect(result!.systemPrompt!.indexOf("BASE SYSTEM PROMPT")).toBeLessThan(
+      result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
+    );
+  });
+
+  it("enabled + trivial prompt: no spawn, no injection", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const result = handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx);
+    expect(result).toBeUndefined();
+    expect(recallRunMock).not.toHaveBeenCalled();
+  });
+
+  it("enabled + recall spawn fails: silent, no injection, no throw", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
+    recallRunMock.mockRejectedValue(new Error("spawn boom"));
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
+    expect(result).toBeUndefined();
+    expect(recallRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("enabled but Sol session: contract injected, recall NOT spawned (no double-inject)", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
+    const handlers = loadFactory();
+    const ctx = makeCtx({ model: { id: "gpt-5.6-sol", provider: "openai-codex" } });
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as {
+      systemPrompt?: string;
+    } | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("MUST delegate"); // guard contract only
+    expect(result!.systemPrompt).not.toContain("## Brain Brief (retrieved)");
+    expect(recallRunMock).not.toHaveBeenCalled();
+  });
+
+  it("enabled + brief builder yields nothing (no valid rows): no injection", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
+    recallRunMock.mockResolvedValue([{ summary: "no title" }, "garbage"]);
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
+    expect(result).toBeUndefined();
+    expect(recallRunMock).toHaveBeenCalledTimes(1);
   });
 });
