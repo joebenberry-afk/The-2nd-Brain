@@ -24,9 +24,13 @@
 
 /** Bash command prefixes that qualify for distillation. */
 import type { ContentMeasurement } from "./sensors";
+import { resolveBrainHome, rtdThresholdFromConfig } from "./config";
 export const RTD_COMMAND_PREFIXES = ["pytest", "git", "rg", "grep"] as const;
 
-/** Default size threshold when SECOND_BRAIN_RTD_THRESHOLD is unset/invalid. */
+/**
+ * Default size threshold when neither SECOND_BRAIN_RTD_THRESHOLD nor
+ * context.toml [rtd] threshold_chars provides a value.
+ */
 export const RTD_DEFAULT_THRESHOLD = 8000;
 
 export type DistillReason = "size" | "tool" | "command" | "ok";
@@ -84,13 +88,24 @@ export function commandFromInput(input: unknown): string | undefined {
 }
 
 /**
- * Parse a SECOND_BRAIN_RTD_THRESHOLD-style raw value.
- * Invalid/missing/negative values fall back to `fallback` (default 8000).
+ * Resolve the RTD size threshold with the Phase 12 precedence ladder:
+ *   1. env `SECOND_BRAIN_RTD_THRESHOLD` (highest) — when set AND a valid
+ *      non-negative integer, it wins;
+ *   2. `<brain-home>/config/context.toml [rtd] threshold_chars` — when the
+ *      env value is absent OR invalid, the file value wins (brain home via
+ *      `config.resolveBrainHome`, same env gate as the rest of the
+ *      extension);
+ *   3. `fallback` (default 8000) — when neither provides a valid value.
+ * A missing/unreadable context.toml or absent/invalid file value falls back.
+ * File reads never throw (see `rtdThresholdFromConfig`).
  */
 export function parseThreshold(raw: string | undefined, fallback = RTD_DEFAULT_THRESHOLD): number {
-  if (raw === undefined || raw === null) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  if (raw !== undefined && raw !== null) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    // env set but invalid -> fall through to the file, then the fallback
+  }
+  return rtdThresholdFromConfig(resolveBrainHome()) ?? fallback;
 }
 
 /**

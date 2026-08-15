@@ -10,7 +10,7 @@
  *
  * All functions read the environment at call time so tests can manipulate it.
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Values of SECOND_BRAIN_OBSERVABILITY that disable the extension (case-insensitive). */
@@ -60,4 +60,56 @@ export function loadConfig(): ObservabilityConfig {
     return { enabled: false, home: null, telemetryDir: null };
   }
   return { enabled: true, home, telemetryDir: join(home, "telemetry", "agent-performance") };
+}
+
+// ---------------------------------------------------------------------------
+// context.toml [rtd] threshold_chars (Phase 12 wiring)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `threshold_chars` from a context.toml `[rtd]` section using a tiny
+ * TOML-subset parser (section headers `[name]` and `key = value` lines,
+ * `#` comments stripped). Deterministic and pure: never throws, never reads
+ * the filesystem.
+ *
+ * Returns the parsed non-negative integer, or undefined when the section,
+ * key, or a valid value is absent (an invalid value is treated as absent).
+ * Only `threshold_chars` is consumed — RTD tool/command eligibility stays
+ * fixed source constants (`rtd.ts` `RTD_COMMAND_PREFIXES`) and
+ * `enabled`/`max_distill_chars`/`whitelist_*` remain informational.
+ */
+export function thresholdCharsFromContextToml(text: string): number | undefined {
+  let inRtd = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inRtd = line.startsWith("[rtd]");
+      continue;
+    }
+    if (!inRtd || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (key !== "threshold_chars") continue;
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Read `[rtd] threshold_chars` from `<home>/config/context.toml`, or
+ * undefined when the home is null, the file is missing/unreadable, or the
+ * value is absent/invalid. Never throws.
+ */
+export function rtdThresholdFromConfig(home: string | null): number | undefined {
+  if (!home) return undefined;
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return thresholdCharsFromContextToml(text);
+  } catch {
+    return undefined;
+  }
 }

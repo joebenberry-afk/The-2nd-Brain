@@ -4,8 +4,10 @@
 schema_version = 1
 
 [governor]
-# Pressure bands as configurable defaults (plan §72). Percentages are starting
-# defaults, NOT validated constants — tune with Prime telemetry later.
+# PLANNED — no runtime module reads these bands yet: the existing context
+# pressure monitor (src/second_brain/monitor.py) uses hardcoded 50/80
+# boundaries; wiring governor bands is out of scope for this pass
+# (see proof/reports/config-consumption.md).
 green_until_pct = 60
 yellow_until_pct = 75
 orange_until_pct = 85
@@ -27,12 +29,18 @@ files = ["active-state.json", "requirements.json", "read-ledger.json",
 min_update_interval_seconds = 30
 
 [rtd]
-# Reversible Tool Distillation (Phase 5) — documented defaults; NOT WIRED.
-# The Prime extension reads ONLY the SECOND_BRAIN_RTD / SECOND_BRAIN_RTD_THRESHOLD
-# env vars and its source constants; these TOML values are NOT read at runtime
-# (see proof/reports/config-consumption.md).
-enabled = false
+# Reversible Tool Distillation (Phase 5) — SHADOW MODE (no substitution).
+# threshold_chars: ENFORCED — the Prime extension resolves the RTD size
+# threshold as env SECOND_BRAIN_RTD_THRESHOLD (highest) -> this file value ->
+# source default 8000 (see brainstem/prime-extension/src/rtd.ts parseThreshold
+# and config.ts rtdThresholdFromConfig).
 threshold_chars = 8000
+# The keys below are INFORMATIONAL only (NOT configurable): the extension
+# reads only threshold_chars plus its own source constants. enabled /
+# max_distill_chars / whitelist_tools / whitelist_commands are NOT read at
+# runtime — tool/command eligibility is fixed in rtd.ts RTD_COMMAND_PREFIXES
+# and the env gate SECOND_BRAIN_RTD (see proof/reports/config-consumption.md).
+enabled = false
 max_distill_chars = 2000
 whitelist_tools = ["bash"]
 whitelist_commands = ["pytest", "git", "rg", "grep"]
