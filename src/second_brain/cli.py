@@ -977,6 +977,15 @@ def cmd_memory(args) -> int:
             print("No matching memories.")
         for row in rows:
             print(f"{row['memory_id']}  [{row['status']}/{row['evidence_grade']}] {row['title']}")
+        conflicts = [r for r in rows if r.get("contradiction_with")]
+        if conflicts:
+            print()
+            print("Conflicting prior evidence:")
+            for row in conflicts:
+                print(
+                    f"  {row['memory_id']} <-> "
+                    f"{', '.join(row['contradiction_with'])}  ({row['title']})"
+                )
         return 0
     if args.memory_command == "reindex":
         counts = semantic.reindex_all(home)

@@ -251,7 +251,7 @@ def test_benchmark_fixture_canonical_target_ranks_first(brain_home):
     # bypassed together, per test_superseded_family_keeps_current_only)
     audit = _ids(
         semantic.search_memories(
-            brain_home, "wal frame", include_history=True, include_duplicates=True
+            brain_home, "wal frame", include_history=True, include_duplicates=True, top_k=20
         )
     )
     assert stale in audit

@@ -1,30 +1,68 @@
 # retrieval.toml — memory retrieval scoring defaults
-# Status: documented defaults; NOT WIRED — no live runtime reader yet
-# (see proof/reports/config-consumption.md); wiring planned in later phases.
-# NOTE: committed search is semantic.search_memories substring scan; the scoring
-# formula below is NOT executed. FTS5 + filters + dedupe + ranking are
-# implemented in the worktree and in final validation (uncommitted, 2026-08-15);
-# the retrieval.toml keys below remain unwired regardless.
+# Status: ENFORCED for [scoring].max_results and [scoring.weights] (read by
+# semantic.load_retrieval_config on every search; absent/invalid keys fall
+# back to the hardcoded defaults). components/log_all_components,
+# lateral_inhibition.* and decay.* remain documented-only (NOT WIRED) until a
+# later phase reads them.
 schema_version = 1
 
 [scoring]
-# score = relevance * trust * freshness * scope_match * historical_utility
-#         * predicted_decision_value * diversity_factor / token_cost
-#         - negative_transfer_risk   (plan §26; categories first, not overfit)
+# Result cap (Phase 11 top_k; plan: 1-3). Read at runtime by
+# semantic.search_memories — after filters/dedupe/ranking, only the top
+# `max_results` rows are returned.
+max_results = 3
+# Documented-only (NOT WIRED): the score formula is implemented as fixed
+# multiplicative terms in semantic._score_row; this list describes the plan's
+# component names, not a runtime switch. The per-term on/off knob is the
+# search_memories(score_terms=...) parameter.
 components = ["relevance", "trust", "freshness", "scope_match",
               "historical_utility", "predicted_decision_value",
               "diversity_factor", "token_cost", "negative_transfer_risk"]
-max_results = 5
-log_all_components = true
+log_all_components = true  # NOT WIRED (no component logging exists)
+
+[scoring.weights]
+# ENFORCED — every key maps 1:1 to a hardcoded weight in semantic._score_row
+# and its helpers (semantic.RetrievalWeights). Omitted or invalid values keep
+# the code default; no new weights exist here.
+title_boost_exact = 0.15        # full query-token title match bonus
+title_boost_partial = 0.05      # partial title-match bonus
+relevance_cap = 1.25            # relevance score ceiling
+bm25_relevance_scale = 10.0     # FTS bm25 normalization scale
+freshness_half_life_days = 180.0
+freshness_max_penalty = 0.2
+decision_boost_per_hit = 0.1    # per successful retrieval
+decision_boost_cap = 0.5
+negative_penalty_per_contradiction = 0.1
+negative_penalty_cap = 0.3
+token_free_limit = 400          # body tokens exempt from the ROI penalty
+token_penalty_cap = 0.25
+token_penalty_saturation = 2000
+
+[scoring.weights.grade_scores]
+# ENFORCED (partial tables merge over the defaults)
+VERIFIED = 1.0
+TESTED = 0.9
+OBSERVED = 0.8
+INFERRED = 0.7
+HISTORICAL = 0.6
+REJECTED = 0.5
+
+[scoring.weights.status_scores]
+# ENFORCED (partial tables merge over the defaults)
+current = 1.0
+labile = 0.95
+candidate = 0.9
+archived = 0.8
+superseded = 0.8
 
 [lateral_inhibition]
-# prefer 1 current fact + 1 supporting failure + 1 conflicting historical note
-# over 10 paraphrases of the same fact (plan §29)
+# NOT WIRED — dedupe is always on (semantic._dedupe_rows); these keys are
+# documented plan defaults only.
 deduplicate = true
 surface_contradictions = true
 
 [decay]
-# strategic forgetting (plan §52): states, not deletion
+# NOT WIRED — reconsolidation/sleep constants; documented plan defaults.
 states = ["HOT", "WARM", "COLD", "ARCHIVED"]
 protected = ["constitution", "security", "accepted_decisions",
              "critical_failure_immunizations", "user_preferences",
