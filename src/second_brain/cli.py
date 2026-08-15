@@ -312,6 +312,22 @@ def _parser() -> argparse.ArgumentParser:
         "contradictions", parents=[home_parent], help="list contradiction candidates"
     )
     mcon.add_argument("--scope", default="project")
+    msearch = mms.add_parser(
+        "search", parents=[home_parent], help="search memories (Phase 7 filters on by default)"
+    )
+    msearch.add_argument("term")
+    msearch.add_argument(
+        "--project", dest="project_id", default=None, help="restrict to one project"
+    )
+    msearch.add_argument(
+        "--history", action="store_true", help="re-include archived/superseded memories"
+    )
+    msearch.add_argument(
+        "--duplicates", action="store_true", help="return all near-duplicate versions (comparison)"
+    )
+    mms.add_parser(
+        "reindex", parents=[home_parent], help="rebuild the derived SQLite/FTS5 memory index"
+    )
 
     mc = sub.add_parser(
         "metacog", parents=[home_parent], help="metacognitive monitor (Phase 11, shadow)"
@@ -948,6 +964,26 @@ def cmd_memory(args) -> int:
             print("No contradiction candidates.")
         for pair in pairs:
             print(f"{pair['memory_id_a']} <-> {pair['memory_id_b']}  (title {pair['title']!r})")
+        return 0
+    if args.memory_command == "search":
+        rows = semantic.search_memories(
+            home,
+            args.term,
+            project_id=args.project_id,
+            include_history=args.history,
+            include_duplicates=args.duplicates,
+        )
+        if not rows:
+            print("No matching memories.")
+        for row in rows:
+            print(f"{row['memory_id']}  [{row['status']}/{row['evidence_grade']}] {row['title']}")
+        return 0
+    if args.memory_command == "reindex":
+        counts = semantic.reindex_all(home)
+        print(
+            f"reindexed {counts['indexed']} (skipped {counts['skipped']} unchanged, "
+            f"purged {counts['purged']} stale)"
+        )
         return 0
     return 2
 
