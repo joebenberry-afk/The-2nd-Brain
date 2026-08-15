@@ -1,4 +1,6 @@
-# environment.toml — Environment Steward defaults (Phase 8 consumes)
+# environment.toml — Environment Steward defaults
+# Status: documented defaults; NOT WIRED — no live runtime reader yet
+# (see proof/reports/config-consumption.md); wiring planned in later phases.
 schema_version = 1
 
 [track]
