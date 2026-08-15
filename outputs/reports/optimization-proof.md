@@ -182,12 +182,38 @@ gap** instead of papering over it.
   plus the guard's `before_agent_start` systemPrompt delegation rule
   (`61c536a`) — neither retrieves Brain memory.
 
+
+## 7b. Phases 15-17 (conservative no-op)
+
+Per the plan, Phases 15-17 intentionally make NO changes this campaign —
+each was reviewed and deferred with a recorded reason:
+
+- **Phase 15 (learning/plasticity)**: no change. The campaign's retrieval
+  work must be proven in live use before automatic learning signals feed
+  credit/utility updates; `learning.toml` modes remain documented-only
+  (config-consumption.md rows "none / no / no").
+- **Phase 16 (skill forging)**: no change. `skillforge.py` constants and
+  lifecycle stages stay as-is; routing/retrieval quality gates are not yet
+  strong enough to auto-forge skills (router is report-only, `shadow: true`).
+- **Phase 17 (sleep/replay + compaction)**: no change. Sibling Phase 14
+  sleep/replay commits (`0e49262`, `6ef579a`, `f5c173a`) are
+  reconciliation/verifier fixes to existing `sleep.py` behavior, not new
+  campaign features; compaction/lean-profile behavior in the Prime extension
+  (`session_before_compact`/`session_compact` telemetry) is measurement-only
+  and unchanged. `sleep.toml` engine/replay keys remain documented-only.
+- No lean-profile or systemPrompt-compaction changes were made by this
+  campaign beyond the guard contract + recall brief (both default-off for
+  non-Sol sessions).
+
 ## 8. Remaining Risks
 
 1. **Deployment pending**: the extension at `~/.prime/agent/extensions/second-brain`
-   predates `1f2c843` + `61c536a`; the anon-session fix, mkdir-once, RTD
-   ordering, threshold wiring, and the Sol guard are NOT live until
-   `scripts/install-prime-extension.ps1` runs and Prime restarts.
+   predates `1f2c843` + `61c536a` + `a8c6acb`; the anon-session fix,
+   mkdir-once, RTD ordering, threshold wiring, the Sol guard, AND the recall
+   hook are NOT live until `scripts/install-prime-extension.ps1` runs and
+   Prime restarts. Recall is additionally gated off by default
+   (`SECOND_BRAIN_RECALL` unset), so even after deployment it changes
+   nothing until explicitly enabled.
 2. **Guard live trial not run**: 0 violations is a property of "not
    deployed", not of live enforcement; the decision matrix is unit-proven only.
 3. **`contradiction_count` column never written** (read by scoring, no
@@ -198,6 +224,9 @@ gap** instead of papering over it.
    reproduced across three subsequent full runs — watch next run.
 6. **Bench R@5/P@5 now reflect the `top_k=3` cap** (default budget), not
    engine quality; compare pre/post-Phase-11 tables with the cap in mind.
+7. **Recall hook unexercised in production**: unit/wiring-proven only; the
+   one-spawn-per-session cost, brief injection quality, and interaction with
+   the guard contract need a live trial with `SECOND_BRAIN_RECALL=1`.
 7. Live Brain holds only 6 memories — FTS-vs-linear latency at scale is
    proven by the synthetic 10k corpus (p95 9.96 ms vs 1,426 ms linear),
    not by live data.
@@ -213,6 +242,7 @@ Limited rollout, in order:
    against real sessions; measure telemetry overhead on live sessions.
 3. Re-census the proof numbers (this document's section 2/3) from live data
    and refresh this file with a dated addendum.
-4. Close the gaps: wire `_CONTEXT_WINDOW_TOKENS`, write `contradiction_count`,
-   and decide whether Prime Recall (section 7) becomes a Phase 14+ deliverable
-   or stays an explicit non-goal.
+4. Trial the recall hook (now implemented, default off) on a live session
+   with `SECOND_BRAIN_RECALL=1` after deployment, audit the injected briefs,
+   then decide whether it becomes a default-on feature.
+5. Close the gaps: wire `_CONTEXT_WINDOW_TOKENS`, write `contradiction_count`.
