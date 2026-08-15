@@ -78,6 +78,8 @@ prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
 | `SECOND_BRAIN_HOME=<dir>` | Brain home (must exist, else silently disabled) |
 | `ORCHESTRATOR_MODELS=<a,b>` | Comma-separated model-id substrings identifying the orchestrator role (default `gpt-5.6-sol`; matched case-insensitively on the lowercased model id) |
 | `ORCHESTRATOR_BLOCKED_TOOLS=<a,b>` | Comma-separated tool names blocked for orchestrator sessions (default `bash,edit,websearch`; `ipython` deliberately not listed) |
+| `DRIVER_MODELS=<a,b>` | Comma-separated model-id substrings identifying the DRIVER role (default `deepseek-v4-pro,gpt-5.6-luna`; matched case-insensitively on the lowercased model id; see "Agent roles" below) |
+| `WORKER_MODELS=<a,b>` | Comma-separated model-id substrings identifying the WORKER role (default `deepseek-v4-flash,qwen3.5`; never receive the driver contract) |
 | `SECOND_BRAIN_RTD=active` | RTD shadow records intent to substitute (substitution NOT implemented — shadow mode) |
 | `SECOND_BRAIN_RTD_THRESHOLD=<n>` | RTD size threshold in JSON chars (default 8000) |
 | `SECOND_BRAIN_RECALL=1\|true\|yes` | **Phase 14 recall hook (DEFAULT OFF)**: enables ONE bounded Brain recall per before_agent_start for substantial prompts |
@@ -89,8 +91,31 @@ prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
 Telemetry directory: `<brain-home>/telemetry/agent-performance/` (created
 once per extension lifecycle — one shared readiness step, not per record).
 
+## Agent roles
+
+The active model is classified on `before_agent_start` into exactly one role
+(canonical policy: `brainstem/policies/driver-orchestration.md`; resolution in
+`src/driver-orchestrator.ts`):
+
+| Role | Default model substrings | Behavior |
+|---|---|---|
+| `hard_orchestrator` | `gpt-5.6-sol` (via `ORCHESTRATOR_MODELS`) | Strict Sol contract replaces the system prompt; execution tools blocked (`bash`/`edit`/`websearch`); ipython kept for delegation |
+| `driver` | `deepseek-v4-pro`, `gpt-5.6-luna` (via `DRIVER_MODELS`) | Driver-orchestration contract APPENDED to the full current system prompt (deduped by marker; default-off recall brief appends AFTER it in one patch) |
+| `worker` | `deepseek-v4-flash`, `qwen3.5` (via `WORKER_MODELS`) | Measurement-only; never receives the driver contract; does not inherit the driver role |
+| `normal` | anything else (e.g. `anthropic/claude-sonnet-5`, `openai-codex/gpt-5.6-terra`) | Measurement-only |
+
+Precedence: `hard_orchestrator` > `driver` > `worker` > `normal` (lowercased
+substring containment). The driver contract mandates: orchestrate substantive
+work by default (never wait for the user to ask for subagents), execute
+trivial work directly, delegate the bulk of execution-heavy work, concurrency
+default 1 / max 2 / never 3+, prefer the cheapest competent worker, and
+workers must never orchestrate (anti-recursion). Each `before_agent_start`
+telemetry record carries the resolved `role`; driver sessions also carry
+`driver_contract_injected` (see `brainstem/telemetry/SCHEMA.md`).
+
 **Deployment status (2026-08-15):** the committed source includes the Sol
-guard and the Phase 14 recall hook, but the installed copy at
+guard, the Phase 14 recall hook, and the driver-orchestration contract, but
+the installed copy at
 `~/.prime/agent/extensions/second-brain/` predates them. Deployment is a
 separate step pending campaign end; until then the live runtime remains
 measurement-only (advisory policy only).

@@ -47,6 +47,11 @@ import {
   orchestratorPolicyFor,
 } from "./orchestrator-guard";
 import {
+  appendDriverContract,
+  loadDriverOrchestratorConfig,
+  resolveAgentRole,
+} from "./driver-orchestrator";
+import {
   buildBrainBrief,
   loadRecallGateConfig,
   runBrainRecall,
@@ -253,35 +258,53 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model),
   );
 
-  // before_agent_start: measurement + Sol contract injection.
-  // Sol-model sessions get the condensed orchestrator contract as a
-  // systemPrompt addendum (BeforeAgentStartEventResult.systemPrompt, chained
-  // by the runtime across extensions); all other models get undefined
-  // (measurement-only). Guard failures fail open: the record is still
-  // appended and no patch is returned.
-  // before_agent_start: measurement + Sol contract injection + Phase 14
-  // recall gate. Sol-model sessions get the condensed orchestrator contract
-  // (recall must NOT double-inject for Sol). Other sessions, when recall is
-  // enabled (default OFF), get ONE bounded Brain recall: the handler returns
-  // a Promise the runtime awaits (bounded by cfg.timeoutMs), and on success
-  // appends the Brain Brief to the FULL current system prompt
-  // (ctx.getSystemPrompt() — the runtime REPLACES the system prompt with the
-  // returned string, so the brief alone must never be returned). Every
-  // failure is silent: no spawn, no injection, extension_error record only.
-  // Default OFF = this path returns undefined synchronously (zero behavior
-  // change, zero spawns).
+  // before_agent_start: measurement + role resolution + contract injection.
+  // Roles (brainstem/policies/driver-orchestration.md): hard_orchestrator
+  // (Sol — strict contract, unchanged), driver (deepseek-v4-pro / gpt-5.6-luna
+  // by default — driver contract APPENDED to the full current system prompt),
+  // worker / normal (measurement-only, never get the driver contract). The
+  // record always carries the resolved role; driver-role sessions also carry
+  // driver_contract_injected (true when the contract was appended).
+  // Phase 14 recall: for non-Sol sessions when enabled (default OFF), ONE
+  // bounded Brain recall appends the Brain Brief AFTER the driver contract in
+  // a single patch (patched is the composition base). Sol-model sessions get
+  // the condensed orchestrator contract (recall must NOT double-inject for
+  // Sol). Guard failures fail open: the record is still appended and no patch
+  // is returned. Default OFF recall = driver sessions get the contract
+  // synchronously, everyone else returns undefined (zero behavior change,
+  // zero spawns).
   pi.on("before_agent_start", (event, ctx) => {
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
-      getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt));
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
-      if (isOrchestratorModel(modelId, loadOrchestratorGuardConfig())) {
+      const guardCfg = loadOrchestratorGuardConfig();
+      const role = resolveAgentRole(
+        modelId,
+        loadDriverOrchestratorConfig(),
+        guardCfg.orchestratorModels,
+      );
+      if (isOrchestratorModel(modelId, guardCfg)) {
+        getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
         return { systemPrompt: SOL_ORCHESTRATOR_CONTRACT };
       }
+      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
+      const patched = role === "driver" ? appendDriverContract(base) : base;
+      const driverContractInjected = role === "driver" && patched !== undefined && patched !== base;
+      getStore(session)?.append(
+        sensors.beforeAgentStart(
+          session,
+          event.prompt,
+          role,
+          role === "driver" ? driverContractInjected : undefined,
+        ),
+      );
       const recallCfg = loadRecallGateConfig();
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
-        return recallBrief(ctx, event.prompt, session, recallCfg);
+        return recallBrief(event.prompt, session, recallCfg, patched);
+      }
+      if (driverContractInjected && patched !== undefined) {
+        return { systemPrompt: patched };
       }
     } catch (error) {
       try {
@@ -303,14 +326,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   /**
    * Phase 14: run ONE bounded Brain recall for a substantial non-Sol prompt
-   * and append the Brain Brief to the full system prompt. Fail silent on
-   * every error path (never throws, never returns a brief-only prompt).
+   * and append the Brain Brief AFTER `base` (the already-composed prompt —
+   * for driver sessions this is the driver contract appended to the system
+   * prompt, so contract + brief land in ONE patch). Fail silent on every
+   * error path (never throws, never returns a brief-only prompt).
    */
   async function recallBrief(
-    ctx: ExtensionContext,
     prompt: string,
     session: string,
     cfg: RecallGateConfig,
+    base: string | undefined,
   ): Promise<{ systemPrompt: string } | undefined> {
     try {
       const home = resolveBrainHome();
@@ -318,7 +343,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const rows = (await runBrainRecall({ home, query: prompt, cfg })) ?? [];
       const brief = buildBrainBrief(rows, cfg.maxRows);
       if (brief === undefined) return undefined;
-      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
       if (base === undefined || base.trim() === "") return undefined; // never REPLACE the base prompt
       return { systemPrompt: `${base}\n\n${brief}` };
     } catch (error) {

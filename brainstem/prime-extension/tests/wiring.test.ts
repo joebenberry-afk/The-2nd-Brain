@@ -975,3 +975,111 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     expect(recallRunMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// -------------------------------------------------------------------------
+// Driver Orchestration Contract (campaign): role resolution + contract
+// injection on before_agent_start. Driver = deepseek-v4-pro / gpt-5.6-luna
+// (defaults); workers/normal never get the contract; Sol keeps its contract.
+// -------------------------------------------------------------------------
+
+const DRIVER_CTX = makeCtx({ model: { id: "deepseek-v4-pro", provider: "deepseek" } });
+const TERRA_CTX = makeCtx({ model: { id: "gpt-5.6-terra", provider: "openai-codex" } });
+const MARKER = "second-brain-driver-orchestration-contract";
+
+describe("driver-orchestration contract (src/index.ts)", () => {
+  it("before_agent_start: driver model -> contract appended after the base prompt, record role=driver injected=true", async () => {
+    const handlers = loadFactory();
+    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, DRIVER_CTX);
+    const patch = result as { systemPrompt?: string } | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.systemPrompt).toContain("BASE SYSTEM PROMPT"); // base preserved, contract APPENDED
+    expect(patch!.systemPrompt).toContain(MARKER);
+    expect(patch!.systemPrompt!.indexOf("BASE SYSTEM PROMPT")).toBeLessThan(
+      patch!.systemPrompt!.indexOf(MARKER),
+    );
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+    expect(records[0].role).toBe("driver");
+    expect(records[0].driver_contract_injected).toBe(true);
+  });
+
+  it("before_agent_start: driver model with base already containing the marker -> no duplicate append", async () => {
+    const handlers = loadFactory();
+    const seeded = makeCtx({
+      model: { id: "gpt-5.6-luna", provider: "openai-codex" },
+      getSystemPrompt: () => `SEEDED BASE\n\n[${MARKER}] already there`,
+    });
+    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
+    expect(result).toBeUndefined(); // recall disabled; nothing new to inject
+
+    const records = await waitForLines(1);
+    expect(records[0].role).toBe("driver");
+    expect(records[0].driver_contract_injected).toBe(false);
+    await settle();
+    const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    // exactly one record; no second before_agent_start append ever happens
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["before_agent_start"]);
+  });
+
+  it("before_agent_start: worker model -> no contract, record role=worker", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // deepseek/deepseek-v4-flash
+    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+    expect(records[0].role).toBe("worker");
+    expect(records[0].driver_contract_injected).toBeUndefined();
+    expect(JSON.stringify(records)).not.toContain(MARKER);
+  });
+
+  it("before_agent_start: normal model -> no contract, record role=normal", async () => {
+    const handlers = loadFactory();
+    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records[0].role).toBe("normal");
+    expect(JSON.stringify(records)).not.toContain(MARKER);
+  });
+
+  it("before_agent_start: Sol model -> Sol contract only, record role=hard_orchestrator, no driver marker", async () => {
+    const handlers = loadFactory();
+    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
+    const patch = result as { systemPrompt?: string } | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.systemPrompt).toContain("MUST delegate"); // Sol contract
+    expect(patch!.systemPrompt).not.toContain(MARKER); // driver contract absent
+
+    const records = await waitForLines(1);
+    expect(records[0].role).toBe("hard_orchestrator");
+    expect(records[0].driver_contract_injected).toBeUndefined();
+  });
+
+  it("driver + recall enabled: ONE patch with the Brain Brief AFTER the contract", async () => {
+    process.env.SECOND_BRAIN_RECALL = "1";
+    process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
+    recallRunMock.mockResolvedValue([
+      { memory_id: "mem-1", title: "driver recall row", status: "current", evidence_grade: "VERIFIED" },
+    ]);
+    const handlers = loadFactory();
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, DRIVER_CTX)) as {
+      systemPrompt?: string;
+    } | undefined;
+    expect(recallRunMock).toHaveBeenCalledTimes(1);
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("BASE SYSTEM PROMPT");
+    expect(result!.systemPrompt).toContain(MARKER);
+    expect(result!.systemPrompt).toContain("## Brain Brief (retrieved)");
+    // ordering: contract before brief, in ONE patch
+    expect(result!.systemPrompt!.indexOf(MARKER)).toBeLessThan(
+      result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
+    );
+
+    const records = await waitForLines(1);
+    expect(records[0].role).toBe("driver");
+    expect(records[0].driver_contract_injected).toBe(true);
+  });
+});

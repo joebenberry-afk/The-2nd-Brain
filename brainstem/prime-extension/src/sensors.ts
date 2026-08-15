@@ -11,6 +11,7 @@
  *
  * Schema: brainstem/telemetry/SCHEMA.md (v=2). Field names are snake_case.
  */
+import type { AgentRole } from "./driver-orchestrator";
 
 /** Maximum length of stored bash command text (privacy rule). */
 export const BASH_COMMAND_MAX_CHARS = 500;
@@ -243,12 +244,31 @@ export function sessionStart(
 export interface BeforeAgentStartRecord extends BaseRecord {
   kind: "before_agent_start";
   prompt_chars: number;
+  /**
+   * Agent role of the active model for this session: hard_orchestrator |
+   * driver | worker | normal (additive, schema v2; absent when not provided).
+   */
+  role?: AgentRole;
+  /**
+   * Driver role only: whether the driver-orchestration contract was appended
+   * to the system prompt for this turn (additive; present for driver-role
+   * sessions, absent otherwise).
+   */
+  driver_contract_injected?: boolean;
 }
 
-export function beforeAgentStart(session: string, prompt: unknown): BeforeAgentStartRecord {
-  return base("before_agent_start", session, {
+export function beforeAgentStart(
+  session: string,
+  prompt: unknown,
+  role?: AgentRole,
+  driverContractInjected?: boolean,
+): BeforeAgentStartRecord {
+  const record = base("before_agent_start", session, {
     prompt_chars: typeof prompt === "string" ? prompt.length : 0,
   }) as unknown as BeforeAgentStartRecord;
+  if (role !== undefined) record.role = role;
+  if (driverContractInjected !== undefined) record.driver_contract_injected = driverContractInjected;
+  return record;
 }
 
 export interface TurnStartRecord extends BaseRecord {

@@ -1,3 +1,35 @@
+## 2026-08-15 — Driver Orchestration Contract (Prime extension)
+
+- `brainstem/prime-extension/src/driver-orchestrator.ts` (new): pure role
+  resolution + driver contract. Roles `hard_orchestrator` > `driver` >
+  `worker` > `normal` by lowercased substring containment; defaults
+  `DRIVER_MODELS=deepseek-v4-pro,gpt-5.6-luna`, `WORKER_MODELS=deepseek-v4-
+  flash,qwen3.5` (env CSV override, call-time reads, orchestrator-guard
+  style); `DRIVER_ORCHESTRATOR_CONTRACT` (170 words, marker
+  `second-brain-driver-orchestration-contract`, trivial-direct /
+  substantial-delegate / max-2 concurrency / never-wait-for-user / cheapest-
+  competent-worker / workers-do-not-orchestrate); `appendDriverContract`
+  appends with marker dedup, never replaces, never invents a prompt.
+- `brainstem/prime-extension/src/index.ts` (before_agent_start only): role
+  resolved before the unchanged Sol branch; driver sessions get the contract
+  APPENDED to the full system prompt (dedup -> no patch when marker already
+  present); default-off recall brief composes AFTER the contract in ONE
+  patch; non-driver sessions behave exactly as before (zero spawns when
+  recall disabled).
+- `brainstem/prime-extension/src/sensors.ts`: `before_agent_start` record
+  gains additive optional `role` + `driver_contract_injected` (schema v2,
+  additive per SCHEMA.md; absent for non-driver roles; Python validator
+  unaffected — extra fields ignored).
+- `brainstem/prime-extension/tests/driver-orchestrator.test.ts` (new, 16
+  tests) + 6 wiring tests + 2 sensors tests; suite 177 -> 201 passed, tsc
+  clean, eslint clean.
+- Docs: `brainstem/telemetry/SCHEMA.md` (additive note), `README.md` (env
+  rows + Agent roles section), `brainstem/policies/driver-orchestration.md`
+  (canonical policy). `orchestrator-guard.ts` / `recall-gate.ts` /
+  `config.ts` / `rtd.ts` / `storage.ts` / `types/*` byte-identical to HEAD.
+- NOT deployed: installed copy at `~/.prime/agent/extensions/second-brain/`
+  still predates the campaign (deployment is a separate step).
+
 ## 2026-08-15 — Live validation evidence (deployment + recall + census)
 
 - `a2be626` "docs: record live rollout baseline": pre-deployment baseline
