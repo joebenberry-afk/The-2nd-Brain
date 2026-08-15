@@ -76,3 +76,82 @@ in either copy (plain TS mirror).
 No credential/token/API-key values were read or printed. settings.json was
 inspected for KEY NAMES only. Process inventories show command lines only
 (no secrets). This report contains no secrets.
+
+
+---
+
+# Post-deployment re-census (2026-08-15T~12:00Z)
+
+Appended by worker-b, Phase 8 (read-only census; this section is the only mutation).
+
+Deployment: 2026-08-15T06:45:44Z (8 files, SHA-identical to repo).
+Pre-deployment baseline numbers (above + `outputs/reports/optimization-phase0-baseline.md`):
+files 360, anon 304, files<=2 records 310, records 13,032, non-anon files 56.
+
+## 1. Filesystem census (telemetry/agent-performance)
+
+| metric | pre-deploy | post-deploy | delta |
+|---|---|---|---|
+| total files | 360 | 387 | +27 |
+| anon-* files | 304 | 304 | **+0 (KEY CHECK PASS)** |
+| files with <=2 records | 310 | 308 | -2 |
+| total records | 13,032 | 22,615 | +9,583 |
+| non-anon (session) files | 56 | 83 | +27 |
+
+- Anon histogram: 304 files × exactly 1 record (unchanged). Newest anon mtime:
+  2026-08-14T20:05:49Z — **no anon-* file created since deployment**; all new
+  sessions use UUID stems.
+- Files <=2 records now: 304 anon (1 record) + 4 non-anon (2 records:
+  019ffef4-…, 01a0011f-…, 01a00129-…, 01a0014e-… — all pre-deploy stems).
+- Session files created after 06:45:44Z: **20**, stems:
+  01a002df, 01a003db, 01a0045c, 01a0045e, 01a0047b, 01a0047e-2d9b,
+  01a0047e-3473, 01a00510, 01a00511, 01a00512, 01a00513, 01a00514, 01a0051c,
+  01a00520, 01a0052a, 01a0052b, 01a00535, 01a0053b-0398, 01a0053b-84a5,
+  01a0053e. The headless deepseek-v4-flash test sessions are 01a00510/11/12/13
+  (7-12 records each), 01a00514 (146), 01a0051c (106), 01a00520 (171),
+  01a0052a (7), 01a0052b (117), 01a00535 (164), 01a0053b ×2 (12, 76),
+  01a0053e (7); 01a0047b/01a0047e are the campaign's own orchestrator/worker
+  sessions.
+
+## 2. Kind census (ALL files)
+
+| kind | count |
+|---|---|
+| turn_start | 4,640 |
+| context | 4,640 |
+| turn_end | 4,622 |
+| tool_call | 4,008 |
+| tool_result | 4,003 |
+| agent_end | 295 |
+| before_agent_start | 229 |
+| session_start | 99 |
+| session_shutdown | 76 |
+| session_before_compact | 7 |
+| session_compact | 4 |
+| **orchestrator_policy_violation** | **0 (expected: no Sol model+blocked-tool combo ran)** |
+| **rtd_shadow** | **0 (expected: live sessions expose only ipython; no bash)** |
+| **extension_error** | **0 (expected)** |
+
+session_start model distribution (99): deepseek/deepseek-v4-flash 45,
+deepseek/deepseek-v4-pro 20, openai-codex/gpt-5.6-sol 13,
+openai-codex/gpt-5.6-luna 11, lemonade/Qwen3.5-9B-GGUF-Q6_K 6,
+anthropic/claude-sonnet-5 3, openai-codex/gpt-5.6-terra 1.
+
+## 3. Schema health
+
+- Sampled 5 records from 3 post-deploy files (01a00510, 01a00511, 01a00512):
+  all parse as valid JSON, `v=2`, bounded schema fields only (session_start:
+  cwd/model/reason; before_agent_start: prompt_chars; turn_start: turn;
+  context: messages; tool_call: id/input_bytes/tool; turn_end:
+  context_usage/tool_results) — no free-text fields beyond schema.
+- Malformed lines: **1 total**, in `01a003e2-c6e4-71a8-8a36-53d88ffc786a.jsonl`
+  line 34 (a NUL-byte line; file mtime 2026-08-15T05:29:37Z) —
+  **pre-deployment artifact**, not produced by the deployed extension.
+  Zero malformed lines in any post-deployment file.
+
+## 4. Conclusion
+
+Deployed extension is behaviorally clean in production: zero new anon files,
+zero extension errors, zero RTD shadows, zero guard violations, schema-clean
+records, and every new session wrote a UUID-stem telemetry file. The only
+anomaly (one NUL line) predates deployment.

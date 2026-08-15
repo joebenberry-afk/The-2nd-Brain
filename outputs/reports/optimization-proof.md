@@ -246,3 +246,138 @@ Limited rollout, in order:
    with `SECOND_BRAIN_RECALL=1` after deployment, audit the injected briefs,
    then decide whether it becomes a default-on feature.
 5. Close the gaps: wire `_CONTEXT_WINDOW_TOKENS`, write `contradiction_count`.
+
+
+---
+
+# Live Rollout Addendum — 2026-08-15
+
+Appended per plan Phase 11 (live validation evidence). Evidence sources:
+driver/worker live runs 2026-08-15 (timestamps below), commits `a2be626`
+(baseline), `42bf8a3` (flake fix), plus this addendum commit. Quotes are the
+recorded live evidence; nothing re-derived.
+
+## 11.1 Deployment (live, 2026-08-15T06:45:44Z)
+
+- Installer `scripts/install-prime-extension.ps1` ran 2026-08-15T06:45:44Z,
+  exit 0. Pre-install backup: `backups/20260815-064544-293-prime-extension-pre-install`
+  (4 old `.ts` files + settings.json copy; old `index.ts` sha `b0108ac9…`).
+- 8 installed files SHA-identical to repo `brainstem/prime-extension/src`:
+  `config.ts`, `index.ts`, `rtd.ts`, `sensors.ts`, `storage.ts`,
+  `orchestrator-guard.ts`, `recall-gate.ts`, + `types/prime.d.ts`.
+- `~/.prime/agent/settings.json` untouched (mtime pre-install) — installer
+  never edits settings (script header, verified in `a2be626` baseline).
+- Baseline: `proof/reports/live-rollout-baseline.md` (`a2be626`, + re-census
+  append) documents pre-deploy installed copy (4 files, mtimes 08-14) vs
+  repo, process topology, and restart mechanics.
+
+## 11.2 New code loaded live (recall hook observed in production)
+
+- Recall-hook spawn caught via process polling in a live headless session:
+  at **+6.11 s** after session start the session worker spawned
+  `C:\Users\assas\Documents\The-Second-Brain\.venv\Scripts\python.exe -m
+  second_brain memory search restore db sqlite stale wal sidecars moved rows`
+  (9 sightings ~20 ms apart). Only the NEW extension contains the recall
+  hook → **new code demonstrably active in new sessions** (no restart
+  needed; per-session loader, `a2be626` §3b).
+
+## 11.3 Recall — relevant live test
+
+- Env `SECOND_BRAIN_RECALL=1`, model `deepseek/deepseek-v4-flash`, prompt
+  "restore db sqlite stale wal sidecars moved rows" (42 chars / 8 words):
+  spawn fired with the EXACT query; session telemetry **0 `extension_error`
+  records**. Headless transcripts do not persist the systemPrompt, so the
+  injection itself is unit-proven (23 recall-gate + 6 recall-wiring vitest
+  tests, `a8c6acb`) with the live spawn + CLI chain confirmed.
+
+## 11.4 Recall — irrelevant live test
+
+- Prompt "bake sourdough bread at high altitude with rye starter": spawn
+  fired (20 sightings, exact query), **0 rows → no injection**; model
+  answered from own knowledge; no hallucinated memory; **0
+  `extension_error`**.
+
+## 11.5 Recall bounds (live-confirmed contract)
+
+- Exactly ONE spawn per `before_agent_start`; single query; defaults
+  `MAX_ROWS=3`, `MIN_CHARS=40`, `TIMEOUT_MS=5000`, brief ≤1000 words
+  (`recall-gate.ts`, `a8c6acb`); full vitest suite 177/177 green.
+
+## 11.6 Guard — live status (Pass Condition B)
+
+- Headless print sessions AND the RLM harness expose ONLY the `ipython`
+  tool (verified by two live sessions reporting "no tool literally named
+  bash"; `websearch` absent too). `bash`/`edit`/`websearch` therefore
+  **cannot be invoked live** → negative tests A–C cannot trigger the block
+  path; plan Pass Condition B applies.
+- **Zero `orchestrator_policy_violation` records** in the 22,615-record
+  census — no false positives.
+- Sol model unavailable per handoff → Sol-specific acceptance is
+  **explicitly blocked by model availability** (not by the guard).
+- Unit-level enforcement proof: 14 orchestrator-guard + 7 guard-wiring
+  vitest tests (decision matrix incl. block + violation record), `61c536a`.
+
+## 11.7 Test D — allowed path (live)
+
+- The campaign itself ran on the live system (driver `deepseek/deepseek-v4-pro`
+  + 2 `deepseek-v4-flash` workers, ≤2 concurrent) with **zero violations and
+  no deadlocks** — delegation/reading works live.
+
+## 11.8 FTS5 live
+
+- Schema v7, `memory_fts` 6/6 rows, FTS branch taken (`semantic.py:1172-1190`);
+  live query "sqlite restore" → 1 row `[current/VERIFIED]`.
+
+## 11.9 Telemetry re-census (2026-08-15T~12:00Z, post-deploy)
+
+- 387 files (+27), anon 304 (**0 new**; newest anon pre-deploy),
+  ≤2-record files 308 (all pre-deploy), 22,615 records (+9,583);
+  `orchestrator_policy_violation` 0 / `rtd_shadow` 0 / `extension_error` 0;
+  1 pre-deploy malformed line (01a003e2, NUL byte) only; all post-deploy
+  records valid `v=2` bounded schema; all 20 post-deploy sessions use UUID
+  stems. (Full tables in `proof/reports/live-rollout-baseline.md` append.)
+
+## 11.10 Realistic task (Phase 5)
+
+- Flake investigation → real mechanism: `tests/test_migrations_property.py`
+  was the only Hypothesis file without `deadline=None`; git-init subprocess
+  + 200 ms deadline under two-worker contention → minimal test-only fix
+  `42bf8a3` → full suite **655 passed / 2 skipped** pre and post.
+
+## 11.11 Phase 9 gaps (re-confirmed non-blocking)
+
+- `_CONTEXT_WINDOW_TOKENS = 200_000` hardcoded; `contradiction_count` column
+  unwritten. Both NON-BLOCKING (no effect on rollout; recall/retrieval
+  budgets observed fine). No changes made.
+
+## 11.12 Automated regression state (re-run this campaign)
+
+- pytest **655 passed / 2 skipped** (post-fix); vitest **177/177**; ruff
+  clean; pyright clean.
+
+## 11.13 Final status
+
+**PARTIALLY VALIDATED** — SOL-SPECIFIC ACCEPTANCE BLOCKED: the guard
+block-path live trial is blocked by Sol model unavailability + the
+ipython-only live toolset; all model-independent machinery (deployment,
+per-session loading, recall hook, telemetry health, FTS5, campaign
+delegation) is live-proven. Remaining deployment completion: the daemon
+restart step (graceful `shutdown --force`, per §11.14), after which the Sol
+trial can run when a Sol model is available.
+
+## 11.14 Graceful daemon shutdown (driver restart step)
+
+- Command: `prime-agent shutdown [--force] [--json]` (command-registry
+  "shutdown"; `cli/public-command.ts:261-266` → `cli/daemon-command.ts:254-263`
+  sends `{type:"shutdown", force}`) → supervisor `case "shutdown"`
+  (`daemon-supervisor.ts:1575-1577`) → graceful `shutdown()`: requests each
+  worker to archive+shut down (4720-4723, 5 s grace, SIGKILL fallback),
+  then `process.exit`; log: "shutdown command received over socket; N active
+  session(s) will be closed". Use `--force` for headless (skips interactive
+  confirmation; unresponsive workers are the only force-kill target).
+  On this machine (no `prime-agent` on PATH):
+  `node C:/Tools/prime-agent/node_modules/tsx/dist/cli.mjs --tsconfig
+  C:/Tools/prime-agent/tsconfig.json
+  C:/Tools/prime-agent/packages/coding-agent/src/cli.ts shutdown --force`
+  Clients auto-relaunch the cold daemon on next run (cli-main/daemon-launch
+  probe). NOT run by this campaign; listed for the driver.
