@@ -1,10 +1,11 @@
 # Current State
 
-## Status (2026-08-14, milestone-24 committed - BUILD COMPLETE)
+## Status (2026-08-15 — BUILD COMPLETE; live rollout deployed)
 
 - Phases 0-23: COMPLETE, each gated by the retained independent reviewer
   (phase1-verifier, REUSED per user policy) with all findings reconciled.
-  Milestone reports: outputs/reports/milestone-01..24-*.md.
+  Milestone reports: outputs/reports/milestone-01..24-*.md (all 24
+  committed).
 - Experiments §141-145: COMPLETE with honest reports
   (outputs/reports/experiment-14*.md). E1/E2 neutral (recorded as such),
   E3 forged delivery-integration (now shadow), E4 stale-memory
@@ -12,16 +13,28 @@
   (transfers -> skill global).
 - First ACTIVE skill: sqlite-migration-verifier (promoted under its own
   gates); second shadow skill: delivery-integration.
-- Final experiments/checklist verification in flight (phase1-verifier).
-- Live DB v6; 14 episodes; 6 semantic memories (2 superseded with
-  history); frontier reviews + promotion records + immune records live.
+- Final experiments/checklist verification: COMPLETE — PASS-WITH-FINDINGS
+  (state/recon/final-experiments-independent-verification.md): all 14 §95.1
+  checklist rows confirmed against live evidence; experiments re-run in temp
+  homes match the reports.
+- v4.3 optimization campaign: live rollout + deployment done 2026-08-15 —
+  extension installed 06:45:44Z, 8 files SHA-identical to repo; guard live
+  (0 `orchestrator_policy_violation` in 22,615 records, Pass Condition B;
+  Sol-specific acceptance blocked by model availability); recall hook live
+  default-off (spawn observed); FTS5 live (schema v7, 6/6, ~5 ms). Final
+  status PARTIALLY VALIDATED (outputs/reports/optimization-proof.md).
+- Live DB schema v7 (reindexed 2026-08-15); memory_index 6/6, memory_fts
+  6/6; 14 episodes; 6 semantic memories (2 superseded with history);
+  frontier reviews + promotion records + immune records live.
 
 ## Live subsystems (dogfooded on the build itself)
 
-- telemetry (Prime extension installed globally), artifacts/RTD (shadow),
-  scout (advisory), working set + JIT + read ledger, requirement ledger
+- telemetry (Prime extension deployed globally 2026-08-15, guard live),
+  artifacts/RTD (shadow), retrieval (FTS5 live, schema v7 6/6), scout
+  (advisory), working set + JIT + read ledger, requirement ledger
   (material gate), risk/verify (advisory), env/processes (advisory),
-  episodes (9 real), semantic memory (3 curated + 1 superseded), sleep
+  episodes (14 total: 9 real build-dogfood + 5 delivery-integration),
+  semantic memory (6 total; 2 superseded with history), sleep
   (consolidation applied once), reconsolidation (retrieval+activation
   recorded), plasticity (hindsight relabel + credit records), skill forge +
   router (1 shadow skill: sqlite-migration-verifier), credit (no-auto-
@@ -57,10 +70,14 @@
 
 ## Next steps
 
-1. Phase 19 verification reconciliation (when it returns).
-2. Phase 20 (Cross-Model Memory): model_profiles table usage, model-scoped
-   skill outcomes, transfer test across models (deepseek-v4-flash vs
-   deepseek-v4-pro available).
-3. Phases 21-23 (frontier, immune, policy promotion), then the §141-145
-   real experiments and the final v4.2 self-hosting success-criteria
-   checklist.
+1. Run the Sol-specific guard acceptance trial when a Sol model becomes
+   available (blocked by model availability only — guard machinery is
+   live-proven).
+2. Audit recall-hook briefs under further live exposure
+   (`SECOND_BRAIN_RECALL=1`) and decide whether recall becomes default-on
+   (currently default-off).
+3. Prove the rtd_shadow live trigger (needs a live bash-exposing session).
+4. Close non-blocking Phase 9 gaps: wire `_CONTEXT_WINDOW_TOKENS`, write
+   `contradiction_count`.
+5. Real monitor/cerebellum calibration (fixtures currently hand-crafted);
+   initialize the RepoWise index on this machine.
