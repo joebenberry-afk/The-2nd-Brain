@@ -119,13 +119,15 @@ def test_restore_applies_pending_migrations(brain_home, tmp_path, monkeypatch):
 
     extra = tmp_path / "migs"
     extra.mkdir()
-    (extra / "0007_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
+    # 0008: the real migration set ends at 0007 (Phase 6 memory index); the
+    # custom migration must sort AFTER it to be "pending" on restore.
+    (extra / "0008_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
     monkeypatch.setattr(db, "MIGRATIONS_DIR", extra)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 7
+        assert v == 8
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "extra_table" in tables
     finally:
@@ -235,9 +237,7 @@ def _hostile_manifest(bdir, entries):
         ".",
     ],
 )
-def test_restore_rejects_hostile_manifest_entries(
-    brain_home, tmp_path, monkeypatch, entry
-):
+def test_restore_rejects_hostile_manifest_entries(brain_home, tmp_path, monkeypatch, entry):
     """SEC-T022..T026: hostile manifest entries abort before any mutation."""
     _seed(brain_home, "orig")
     bdir = backup_mod.create_backup(brain_home)
