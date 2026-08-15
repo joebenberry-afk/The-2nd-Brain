@@ -1,0 +1,289 @@
+"""Phase 0B shared event/protocol contracts (plan §6.2/6.4/6.5/6.7/8.2/9.4/11.2/14).
+
+Deterministic serialization contract tests: canonical packets, NO_INJECTION,
+supersede deltas, delivery dedupe, epoch/fingerprint round-trips, tool outcome
+state machine, unknown-event policy, and ledger schema versioning.
+"""
+
+import json
+
+import pytest
+
+from second_brain import contracts
+from second_brain.contracts import (
+    BrainDeliveryRecord,
+    BrainInjectionDecision,
+    BrainLifecycleEvent,
+    BrainPacket,
+    Confidence,
+    DivergenceCategory,
+    EpochReason,
+    InjectionDecision,
+    LedgerHeader,
+    LifecycleEventType,
+    MemoryItemStatus,
+    NoInjectionReason,
+    PacketItem,
+    RequestEpoch,
+    RequestFingerprint,
+    SurfaceVisibility,
+    ToolOutcome,
+    ToolOutcomeState,
+    ToolSignal,
+    canonical_json,
+    is_already_delivered,
+    read_ledger_header,
+    stable_content_hash,
+)
+from second_brain.errors import BrainError
+
+
+def _item(
+    memory_id: str = "mem-abc",
+    version: int = 1,
+    status: MemoryItemStatus = MemoryItemStatus.CURRENT,
+    confidence: Confidence = Confidence.HIGH,
+    supersedes: tuple[str, int] | None = None,
+) -> PacketItem:
+    return PacketItem(
+        memory_id=memory_id,
+        version=version,
+        status=status,
+        confidence=confidence,
+        title="Fix migration ordering",
+        observation="Migration must run idempotently.",
+        guidance="Verify schema_version before applying.",
+        evidence=f"brain://{memory_id}/{version}",
+        supersedes=supersedes,
+    )
+
+
+def _packet(**kw: object) -> BrainPacket:
+    defaults: dict[str, object] = {
+        "packet_id": "pkt-1",
+        "project": "second-brain",
+        "scope": "task",
+        "items": [_item()],
+    }
+    defaults.update(kw)
+    return BrainPacket(**defaults)  # type: ignore[arg-type]
+
+
+def test_packet_byte_identical_for_same_input() -> None:
+    a = _packet()
+    b = _packet()
+    assert a.render() == b.render()
+    assert a.render().encode("utf-8") == b.render().encode("utf-8")
+
+
+def test_packet_timestamp_excluded_from_stable_content() -> None:
+    pkt = _packet()
+    assert pkt.render(ts="2026-08-16T00:00:00Z") == pkt.render(ts=None)
+    assert stable_content_hash(pkt.render(ts="2026-08-16T00:00:00Z")) == stable_content_hash(
+        pkt.render()
+    )
+
+
+def test_no_relevant_memory_yields_no_injection() -> None:
+    d = BrainInjectionDecision(
+        decision=InjectionDecision.NO_INJECTION,
+        reason=NoInjectionReason.NO_RELEVANT_MEMORY,
+        candidate_ids=[],
+        selected_ids=[],
+        packet_ref=None,
+        packet_token_size=None,
+        recipient="worker-a",
+    )
+    assert d.decision is InjectionDecision.NO_INJECTION
+    assert d.reason is NoInjectionReason.NO_RELEVANT_MEMORY
+    assert d.packet_ref is None
+    assert d.packet_token_size is None
+
+
+def test_new_version_renders_supersedes_delta() -> None:
+    pkt = _packet(items=[_item(version=4, supersedes=("mem-abc", 3))])
+    text = pkt.render()
+    assert "UPDATE mem-abc v4 supersedes mem-abc v3" in text
+    assert "mem-abc@3" not in text  # old version never presented
+    assert "status: current" in text
+
+
+def test_contradicted_item_is_labeled() -> None:
+    text = _packet(
+        items=[_item(status=MemoryItemStatus.CONTRADICTED, confidence=Confidence.LOW)]
+    ).render()
+    assert "status: contradicted" in text
+    assert "confidence: low" in text
+
+
+def test_delivery_dedupe_skips_already_delivered() -> None:
+    h = stable_content_hash(_packet().render())
+    rec = BrainDeliveryRecord(
+        delivery_id="d1",
+        root_session_id="s1",
+        agent_session_id="a1",
+        branch_id="b1",
+        memory_id="mem-abc",
+        memory_version=1,
+        canonical_hash=h,
+        packet_id="pkt-1",
+        delivered_event_id="e1",
+        delivered_at="2026-08-16T00:00:00Z",
+        superseded_by_delivery_id=None,
+    )
+    assert is_already_delivered(h, [rec])
+    assert not is_already_delivered(
+        stable_content_hash(_packet(packet_id="pkt-2").render()), [rec]
+    )
+
+
+def test_canonical_json_sorted_keys_and_list_order() -> None:
+    assert canonical_json({"b": 1, "a": 2}) == canonical_json({"a": 2, "b": 1})
+    assert canonical_json({"a": 2, "b": 1}) == '{"a":2,"b":1}'
+    assert canonical_json({"xs": ["z", "a", "m"]}) == '{"xs":["z","a","m"]}'
+
+
+def test_epoch_deterministic_and_reason_roundtrip() -> None:
+    e = RequestEpoch(
+        epoch_id="ep1",
+        session_id="s1",
+        agent_id="a1",
+        reason=EpochReason.COMPACTION,
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        role_profile="worker",
+        system_hash="h1",
+        tools_hash="h2",
+        config_hash="h3",
+        host_adapter_version="0.1.0",
+        start_seq=10,
+        end_seq=None,
+    )
+    text = canonical_json(e)
+    assert text == canonical_json(RequestEpoch.from_dict(json.loads(text)))
+    assert '"reason":"compaction"' in text
+
+
+def test_fingerprint_divergence_roundtrip_and_null_cache_fields() -> None:
+    f = RequestFingerprint(
+        request_id="r1",
+        epoch_id="ep1",
+        seq=5,
+        session_id="s1",
+        agent_id="a1",
+        role_profile="orchestrator",
+        provider="openai",
+        model="gpt-5.6-luna",
+        system_structural_hash="s",
+        tool_schema_structural_hash="t",
+        message_sequence_hash="m",
+        model_visible_prefix_hash="p",
+        prompt_affecting_config_hash="c",
+        previous_request_id=None,
+        first_divergence_category=DivergenceCategory.COMPACTION_REPLACEMENT,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+        cache_miss_tokens=None,
+    )
+    text = canonical_json(f)
+    assert '"first_divergence_category":"COMPACTION_REPLACEMENT"' in text
+    assert '"cache_read_tokens":null' in text
+    rt = RequestFingerprint.from_dict(json.loads(text))
+    assert rt.first_divergence_category is DivergenceCategory.COMPACTION_REPLACEMENT
+    assert rt.cache_read_tokens is None
+    assert rt.cache_write_tokens is None
+    assert rt.cache_miss_tokens is None
+
+
+def test_tool_outcome_transitions() -> None:
+    assert ToolOutcomeState().apply(ToolSignal.NOT_STARTED).state is ToolOutcome.TOOL_NOT_STARTED
+    started = ToolOutcomeState().apply(ToolSignal.STARTED)
+    assert started.apply(ToolSignal.OUTCOME_UNKNOWN).state is ToolOutcome.TOOL_OUTCOME_UNKNOWN
+    assert started.apply(ToolSignal.RESULT).state is ToolOutcome.COMPLETE
+
+
+def test_tool_outcome_invalid_transitions() -> None:
+    with pytest.raises(BrainError):
+        ToolOutcomeState().apply(ToolSignal.RESULT)  # result before any start
+    with pytest.raises(BrainError):
+        ToolOutcomeState().apply(ToolSignal.STARTED).apply(ToolSignal.STARTED)  # double start
+    with pytest.raises(BrainError):
+        ToolOutcomeState().apply(ToolSignal.OUTCOME_UNKNOWN)  # unknown before any start
+
+
+def test_unknown_required_event_rejected_unknown_ignorable_skipped() -> None:
+    base = {
+        "seq": 1,
+        "event_id": "e1",
+        "internal_session_id": "s1",
+        "agent_id": "a1",
+        "parent_event_id": None,
+        "host_entry_id": None,
+        "host_parent_entry_id": None,
+        "segment_id": None,
+        "event_type": "mystery_event",
+        "timestamp": "2026-08-16T00:00:00Z",
+        "surface_visibility": SurfaceVisibility.RAW_ONLY,
+        "ignorable": False,
+        "payload": {},
+        "artifact_sha256": None,
+        "source_event_ids": [],
+    }
+    with pytest.raises(BrainError):
+        BrainLifecycleEvent.from_dict(base)
+    assert BrainLifecycleEvent.from_dict({**base, "ignorable": True}) is None
+
+
+def test_lifecycle_event_roundtrip() -> None:
+    ev = BrainLifecycleEvent(
+        seq=1,
+        event_id="e1",
+        internal_session_id="s1",
+        agent_id="a1",
+        parent_event_id=None,
+        host_entry_id="h1",
+        host_parent_entry_id=None,
+        segment_id="seg1",
+        event_type=LifecycleEventType.TOOL_COMPLETED,
+        timestamp="2026-08-16T00:00:00Z",
+        surface_visibility=SurfaceVisibility.MODEL_VISIBLE_APPEND,
+        ignorable=False,
+        payload={"tool": "bash", "exit_code": 0},
+        artifact_sha256=None,
+        source_event_ids=["e0"],
+    )
+    assert BrainLifecycleEvent.from_dict(json.loads(canonical_json(ev))) == ev
+
+
+def test_ledger_schema_versioning() -> None:
+    h = {
+        "schema_version": 1,
+        "brain_version": "0.1.0",
+        "adapter_name": "prime",
+        "adapter_version": "0.1.0",
+        "created_at": "2026-08-16T00:00:00Z",
+    }
+    header = read_ledger_header(h)
+    assert isinstance(header, LedgerHeader)
+    assert header.schema_version == contracts.LEDGER_SCHEMA_VERSION
+    with pytest.raises(BrainError, match="newer runtime"):
+        read_ledger_header({**h, "schema_version": 2})
+    with pytest.raises(BrainError, match="no in-memory upgrader"):
+        read_ledger_header({**h, "schema_version": 0})
+
+
+def test_packet_byte_identical_roundtrip() -> None:
+    pkt = _packet(
+        items=[
+            _item(),
+            _item(
+                memory_id="mem-xyz",
+                version=2,
+                status=MemoryItemStatus.CONTRADICTED,
+                confidence=Confidence.LOW,
+                supersedes=("mem-xyz", 1),
+            ),
+        ]
+    )
+    text = pkt.render()
+    assert BrainPacket.parse(text).render() == text
