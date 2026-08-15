@@ -1,0 +1,10 @@
+# autoinject.toml — P0 AutoInject budget (plan §6.6, Phase 0C)
+# Status: ENFORCED — read by autoinject.load_config on every prepare_injection.
+# Precedence: SECOND_BRAIN_AUTOINJECT_TARGET_TOKENS /
+# SECOND_BRAIN_AUTOINJECT_HARD_CAP_TOKENS env vars > this file > hardcoded
+# defaults (target 800, hard cap 2000). Absent/invalid keys fail open.
+schema_version = 1
+
+[budget]
+target_tokens = 800       # normal AutoInject target (~500-1000 per plan)
+hard_cap_tokens = 2000    # absolute hard max per injection (plan: <= 2000)

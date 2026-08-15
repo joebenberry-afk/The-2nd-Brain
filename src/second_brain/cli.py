@@ -172,6 +172,23 @@ def _parser() -> argparse.ArgumentParser:
     ccomp.add_argument("task")
     ccomp.add_argument("--project", dest="project_key", default=None)
 
+    ai = sub.add_parser(
+        "autoinject", parents=[home_parent], help="P0 AutoInject pipeline (SHADOW, Phase 0C)"
+    )
+    ais = ai.add_subparsers(dest="autoinject_command", required=True)
+    ashadow = ais.add_parser(
+        "shadow",
+        parents=[home_parent],
+        help="shadow run: decide + record, never mutate model context",
+    )
+    ashadow.add_argument("--task", required=True, help="task text (queried, never persisted)")
+    ashadow.add_argument("--project", dest="project_id", required=True, help="project id")
+    ashadow.add_argument("--session", dest="session_id", required=True, help="host session id")
+    ashadow.add_argument("--agent", dest="agent_id", required=True, help="host agent id")
+    ashadow.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
+    ashadow.add_argument("--role", dest="role_profile", default="orchestrator", help="role profile")
+    ashadow.add_argument("--json", action="store_true", help="print one deterministic JSON object")
+
     art = sub.add_parser(
         "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
     )
@@ -1653,6 +1670,54 @@ def cmd_context(args) -> int:
     return 2
 
 
+def cmd_autoinject(args) -> int:
+    from . import autoinject, contracts
+
+    home = _home(args)
+    if args.autoinject_command != "shadow":
+        return 2
+    session = contracts.BrainSessionIdentity(
+        internal_session_id="is-" + __import__("hashlib").sha256(
+            args.session_id.encode("utf-8")
+        ).hexdigest()[:12],
+        host="prime-cli",
+        host_session_id=args.session_id,
+        project_id=args.project_id,
+        created_at=__import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        status="active",
+        pinned=False,
+        schema_version=1,
+    )
+    lifecycle = autoinject.BrainLifecycle(home, session)
+    decision = lifecycle.prepare_injection(
+        args.task,
+        project_id=args.project_id,
+        agent_id=args.agent_id,
+        role_profile=args.role_profile,
+        session_id=args.session_id,
+        branch_id=args.branch,
+    )
+    packet = autoinject.render_packet(decision)
+    delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
+    if args.json:
+        out = {
+            "decision": decision.decision.value,
+            "reason": decision.reason.value if decision.reason is not None else None,
+            "packet": packet,
+            "packet_tokens": decision.packet_token_size,
+            "candidate_ids": decision.candidate_ids,
+            "selected_ids": decision.selected_ids,
+            "delivery_id": delivery_id,
+        }
+        print(contracts.canonical_json(out))
+    else:
+        print(f"decision: {decision.decision.value}")
+        print(f"reason: {decision.reason.value if decision.reason is not None else 'n/a'}")
+        print(f"selected: {', '.join(decision.selected_ids) or 'none'}")
+        print(f"delivery: {delivery_id or 'none'}")
+    return 0
+
+
 def cmd_telemetry(args) -> int:
     import json
 
@@ -1728,6 +1793,7 @@ def main(argv: list[str] | None = None) -> int:
         "requirements": cmd_requirements,
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
+        "autoinject": cmd_autoinject,
     }
     try:
         return handlers[args.command](args)
