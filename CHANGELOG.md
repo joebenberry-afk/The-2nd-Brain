@@ -1,3 +1,28 @@
+## 2026-08-15 — Live validation evidence (deployment + recall + census)
+
+- `a2be626` "docs: record live rollout baseline": pre-deployment baseline
+  (installed extension predates campaign; restart mechanics: per-session
+  extension loading, `/reload`, supervisor auto-respawn; headless launchEnv
+  propagation for client-owned sessions).
+- `42bf8a3` "brain(core): fix transient Hypothesis deadline flake in
+  migration property tests": `tests/test_migrations_property.py` was the only
+  Hypothesis file without `deadline=None`; git-init subprocess + 200 ms
+  deadline under two-worker contention → minimal test-only fix; full suite
+  655 passed / 2 skipped pre and post.
+- This commit "live validation evidence": `outputs/reports/optimization-proof.md`
+  gains the "Live Rollout Addendum — 2026-08-15" (deployment 06:45:44Z exit 0,
+  8 files SHA-identical; recall hook spawn observed live at +6.11 s with the
+  exact query; relevant/irrelevant recall tests with 0 extension_error;
+  recall bounds (1 spawn, 3 rows/1000 words); guard live status — ipython-only
+  toolset, 0 violations in 22,615 records, Pass Condition B, Sol-specific
+  acceptance blocked by model availability; Test D allowed path live (campaign
+  ran ≤2 concurrent, 0 violations); FTS5 live (schema v7, 6/6, FTS branch);
+  telemetry re-census 387/304/308/22,615 with 0/0/0 violations/shadows/errors;
+  realistic-task flake root cause; final status PARTIALLY VALIDATED; graceful
+  daemon shutdown command `shutdown --force` with citations).
+- `proof/reports/live-rollout-baseline.md`: post-deployment re-census section
+  appended (before/after table, kind census, schema-health sample).
+
 ## 2026-08-15 — Phase 14 recall hook + proof package update
 
 - `a8c6acb` "brain(adapter): default-off controlled Prime recall hook
