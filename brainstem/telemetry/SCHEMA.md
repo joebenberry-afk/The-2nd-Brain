@@ -31,6 +31,7 @@ Kinds:
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason |
 | extension_error | error (string, truncated) |
+| orchestrator_policy_violation | violation, model, detected_by, blocked |
 
 Field names are snake_case and stable across schema versions; new fields are
 additive.
@@ -54,3 +55,41 @@ additive.
 `rtd_shadow` records appear when a tool result would have triggered Reversible
 Tool Distillation (size > threshold, whitelisted tool/command). They change no
 behavior: substitution happens only when `SECOND_BRAIN_RTD=active`.
+
+## Phase 3 clarification (2026-08-15, RTD hot path; corrected)
+
+- `rtd_shadow.size` = legacy `JSON.stringify(content).length` (character
+  length, including quotes/escaping; `0` when the content is not
+  serializable). This is NOT the same as `tool_result.output_bytes`, which is
+  the UTF-8 byte count (raw string bytes for strings; serialized JSON bytes
+  for other content; `<unserializable>` fallback).
+- RTD eligibility (tool = bash, command prefix) is decided BEFORE any content
+  measurement (`rtdEligibility` in the real handler). Eligible results are
+  measured once (`measureContent` full) and that measurement is shared
+  between `tool_result.output_bytes` and `rtd_shadow` evaluation/recording —
+  exactly one JSON.stringify attempt plus one byte count.
+- Ineligible results perform ZERO RTD-specific serialization: primitive
+  strings get only the raw UTF-8 byte count base telemetry already requires
+  (no JSON.stringify at all); non-strings keep exactly the single
+  serialization/fallback that base telemetry already requires
+  (`measureContent(content, includeSerializedChars=false)`), and
+  `serializedChars` is recorded as 0 (never consumed by RTD).
+
+## Phase 1 addition (Sol minimal-orchestrator, 2026-08-15)
+
+`orchestrator_policy_violation` records are a privacy-safe detection fallback
+for the Sol minimal-orchestrator policy
+(`brainstem/policies/sol-minimal-orchestrator.md`). Fields are **bounded and
+enumerated only**:
+
+- `violation` — one of `direct_execution`, `undue_context_gather`,
+  `concurrency_overflow`, `wrong_tier`, `rediscovery`, `scope_drift`,
+  `evidence_gap`;
+- `model` — provider/id string or null (never a free-text label);
+- `detected_by` — one of `manual`, `runtime_guard`, `telemetry_audit`;
+- `blocked` — boolean.
+
+No free-text fields (no action description, note, reason, prompt, command, or
+payload). The pure sensor builder exists for future/manual use and is
+**NOT WIRED**: no extension hook emits this kind yet, and no automatic prompt
+inspection is performed.

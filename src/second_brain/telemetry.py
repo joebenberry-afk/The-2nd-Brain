@@ -26,6 +26,7 @@ KNOWN_KINDS = {
     "session_shutdown",
     "rtd_shadow",
     "extension_error",
+    "orchestrator_policy_violation",
 }
 REQUIRED_FIELDS = ("v", "kind", "session")
 
@@ -99,6 +100,12 @@ def report(home: Path, *, since: str | None = None) -> dict:
     models = Counter(str(r.get("model")) for r in starts if r.get("model"))
 
     errors = [r for r in records if r.get("kind") == "tool_result" and r.get("is_error")]
+    orchestrator_violations = [
+        r for r in records if r.get("kind") == "orchestrator_policy_violation"
+    ]
+    violation_codes = Counter(
+        v.get("violation") for v in orchestrator_violations if isinstance(v.get("violation"), str)
+    )
     compactions = [r for r in records if r.get("kind") == "session_compact"]
     ext_errors = [r for r in records if r.get("kind") == "extension_error"]
     bash_calls = [r for r in records if r.get("kind") == "tool_call" and r.get("tool") == "bash"]
@@ -127,6 +134,8 @@ def report(home: Path, *, since: str | None = None) -> dict:
         "bash_calls": len(bash_calls),
         "compactions": len(compactions),
         "extension_errors": len(ext_errors),
+        "orchestrator_violations": len(orchestrator_violations),
+        "violation_codes": dict(sorted(violation_codes.items())),
         "max_context_percent": round(max(context_pcts), 1) if context_pcts else None,
         "total_result_bytes": sum(x for x in result_bytes if isinstance(x, int)),
         "cwds": dict(sorted(cwds.items(), key=lambda kv: -kv[1])),
@@ -143,6 +152,7 @@ def format_report(rep: dict) -> str:
         f"bash calls:          {rep['bash_calls']}",
         f"Compactions:         {rep['compactions']}",
         f"Extension errors:    {rep['extension_errors']}",
+        f"Orchestrator viol.:  {rep['orchestrator_violations']}",
         f"Max context %:       {rep['max_context_percent']}",
         f"Result bytes:        {rep['total_result_bytes']}",
     ]

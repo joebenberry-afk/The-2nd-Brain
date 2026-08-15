@@ -6,10 +6,56 @@
  * append runs after the previous one. The first failure is logged to stderr
  * once; later failures stay silent so measurement can never disturb the
  * agent session.
+ *
+ * Phase 4 (fs churn): directory readiness is established at most ONCE per
+ * destination instead of mkdir-per-append. The extension factory shares one
+ * readiness seam (`createTelemetryDirEnsurer`) across every TelemetryStore it
+ * constructs, so one mkdir attempt covers the whole factory lifecycle even
+ * when several session stores share the destination (plan: "at extension
+ * startup, ensure the telemetry directory once"). The default per-store seam
+ * performs one mkdir per store for standalone/direct constructions. Fail-open
+ * is preserved: a readiness failure is swallowed (logged once through the
+ * store's one-time error reporting) and construction, appends, and final
+ * writes never throw into the caller. A failed first attempt is permanently
+ * marked attempted (never retried) — see `createTelemetryDirEnsurer`.
+ *
+ * Buffering is deliberately NOT implemented: Prime's daemon tears the worker
+ * process down immediately after the terminal `session_shutdown` event, and
+ * the only shutdown flush in this lifecycle is the synchronous
+ * `appendFinal()` write. There is no awaited session-end flush that could
+ * drain a buffer, so buffered records could be lost; immediate append
+ * semantics are kept.
  */
 import { appendFileSync, mkdirSync } from "node:fs";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+
+/** Directory-readiness seam: ensures a directory exists (at most once). */
+export type DirEnsurer = (dir: string) => void;
+
+/**
+ * Factory-scoped directory ensurer (Phase 4): the mkdir for the shared
+ * destination is ATTEMPTED AT MOST ONCE for the lifetime of the returned
+ * closure. Success or failure, the attempt is permanently recorded — a
+ * failed first attempt is deliberately NOT retried by later stores: the
+ * destination is unlikely to heal within one extension lifecycle, and the
+ * single failure is reported once through the first constructing store's
+ * one-time error handler (fail-open). Appends then fail silently per store
+ * rather than storming the filesystem with repeated mkdir attempts.
+ *
+ * `mkdir` is injectable for deterministic tests; the default is
+ * `mkdirSync(dir, { recursive: true })`.
+ */
+export function createTelemetryDirEnsurer(
+  mkdir: (dir: string) => void = (dir) => mkdirSync(dir, { recursive: true }),
+): DirEnsurer {
+  let attempted = false;
+  return (dir: string): void => {
+    if (attempted) return;
+    attempted = true;
+    mkdir(dir);
+  };
+}
 
 export class TelemetryStore {
   private chain: Promise<void> = Promise.resolve();
@@ -18,7 +64,17 @@ export class TelemetryStore {
   constructor(
     private readonly telemetryDir: string,
     readonly sessionId: string,
-  ) {}
+    private readonly ensureDir: (dir: string) => void = (dir) => mkdirSync(dir, { recursive: true }),
+  ) {
+    // Phase 4: establish directory readiness at most once per store
+    // lifecycle. Fail-open: a failure here is logged once and every append
+    // still fails independently and silently afterwards.
+    try {
+      this.ensureDir(this.telemetryDir);
+    } catch (error) {
+      this.logFailure(error);
+    }
+  }
 
   /** Absolute path of this session's telemetry file. */
   filePath(): string {
@@ -40,16 +96,9 @@ export class TelemetryStore {
     }
     this.chain = this.chain
       .then(async () => {
-        await mkdir(this.telemetryDir, { recursive: true });
         await appendFile(this.filePath(), `${line}\n`, "utf8");
       })
-      .catch((error: unknown) => {
-        if (!this.loggedFailure) {
-          this.loggedFailure = true;
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[second-brain-observability] telemetry write failed: ${message}`);
-        }
-      });
+      .catch((error: unknown) => this.logFailure(error));
   }
 
   /**
@@ -69,14 +118,18 @@ export class TelemetryStore {
       return;
     }
     try {
-      mkdirSync(this.telemetryDir, { recursive: true });
       appendFileSync(this.filePath(), `${line}\n`, "utf8");
     } catch (error) {
-      if (!this.loggedFailure) {
-        this.loggedFailure = true;
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[second-brain-observability] telemetry write failed: ${message}`);
-      }
+      this.logFailure(error);
+    }
+  }
+
+  /** Log the first failure once; later failures stay silent (fail-open). */
+  private logFailure(error: unknown): void {
+    if (!this.loggedFailure) {
+      this.loggedFailure = true;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[second-brain-observability] telemetry write failed: ${message}`);
     }
   }
 
