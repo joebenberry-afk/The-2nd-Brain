@@ -1,3 +1,14 @@
+## 2026-08-15 — Optimization Proof package + live reindex
+
+- Live Brain reindexed (derived data only, `memory reindex`): schema v6 -> v7,
+  `memory_fts` created and populated 6/6 (was absent — live path was the
+  linear Markdown scan); `memory_index` 6/6; real `memory search` now takes
+  the FTS5 branch (~5 ms). Canonical `memory/` files untouched.
+- `outputs/reports/optimization-proof.md` added: plan §24 required proof
+  package (Sol orchestration, telemetry, RTD, retrieval, configuration,
+  router, Prime recall, risks, recommendation) with commit/test/artifact
+  citations; Prime Recall section explicitly marked NOT PROVEN — gap.
+
 # Changelog
 
 > **Status note (2026-08-15 documentation truth pass):** the retrieval
