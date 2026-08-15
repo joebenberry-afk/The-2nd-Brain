@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -98,6 +100,36 @@ def test_corrupt_db_hash_refused(brain_home, tmp_path, monkeypatch):
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
     with pytest.raises(BackupError, match="hash mismatch"):
         backup_mod.restore_backup(home2, bdir)
+
+
+def test_restore_verifies_restored_db_byte_identity(brain_home, tmp_path, monkeypatch):
+    """The restored file itself is verified against the manifest sha256; a
+    corrupted copy must fail the restore, never silently pass."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    home2 = tmp_path / "brain2"
+    home2.mkdir()
+    paths.ensure_layout(home2)
+    db.migrate(db.db_path(home2))
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
+
+    real_copy2 = shutil.copy2
+
+    def corrupting_copy2(src, dst, *a, **kw):
+        real_copy2(src, dst, *a, **kw)
+        if Path(dst).name == "brain.sqlite":
+            with open(dst, "ab") as f:
+                f.write(b"corruption")
+
+    monkeypatch.setattr(backup_mod.shutil, "copy2", corrupting_copy2)
+    with pytest.raises(BackupError, match="byte-identity"):
+        backup_mod.restore_backup(home2, bdir, force=True)
+    # the previous state was rolled back in place, not left corrupt
+    conn = db.connect(db.db_path(home2))
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        conn.close()
 
 
 def test_not_a_backup_raises(tmp_path, monkeypatch):
