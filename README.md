@@ -30,6 +30,24 @@ text.
 Each phase is gated by its acceptance criteria in the plan. Milestone reports
 live in `outputs/reports/<milestone>.md`.
 
+### Optimization campaign status (2026-08-15)
+
+- Telemetry hot-path fixes (Phases 2-4) committed: stable per-lifecycle
+  anonymous session id; RTD eligibility decided before serialization with one
+  shared measurement; telemetry dir mkdir-once. RTD remains **shadow mode**
+  (no substitution); `context.toml [rtd]` values are NOT WIRED (env vars only
+  — see `proof/reports/config-consumption.md`).
+- Sol minimal-orchestrator guard committed (repo): the Prime extension blocks
+  `bash`/`edit`/`websearch` for orchestrator-model sessions and injects the
+  Sol contract via `before_agent_start`; **not deployed to `~/.prime` yet**
+  (deployment pending campaign end). Contract:
+  `brainstem/policies/sol-minimal-orchestrator.md`.
+- Skill router: `skills.toml [router] max_active` is ENFORCED (fallback 3,
+  CLI `--max-active` overrides); SKILL.md metadata cached with mtime
+  invalidation.
+- Retrieval (FTS5 + filters + dedupe + ranking) is **in final validation** —
+  implemented in the worktree but not committed yet.
+
 ## Layout
 
 - `constitution/` — protected rules (never auto-rewritten by the Brain)

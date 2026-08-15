@@ -1,5 +1,238 @@
 # Changelog
 
+> **Status note (2026-08-15 documentation truth pass):** the retrieval
+> entries below (Phases 6-8) describe work that lives in the WORKTREE only —
+> `semantic.py`, `cli.py`, migration `0007_memory_index.sql` and
+> `tests/test_retrieval_*.py` are NOT committed yet; a ranking fix and
+> benchmark are in final validation. Treat them as **in final validation**,
+> not shipped. Committed campaign state: telemetry hot-path fixes (Phase 2-4),
+> Sol minimal-orchestrator guard (Phase 1 wiring), skill router cache +
+> `router.max_active` (Phase 13).
+
+## 2026-08-15 — Optimization pass Phase 8: retrieval deduplication
+
+- `semantic.py` `search_memories(..., include_duplicates=False)` (new
+  keyword-only, backward compatible): post-filter, pre-budget dedupe shared by
+  the FTS and linear-fallback paths (`_dedupe_rows` / `_dedupe_family`).
+  * Families: normalized-title equality (primary) + body-token Jaccard >= 0.8
+    with a 6-token body minimum (secondary); features precomputed once;
+    pairwise body scan bounded by a deterministic 200-row work guard (broad
+    queries stay fast; title families always apply).
+  * Representative: highest current_version, then status (current > labile >
+    candidate > archived > superseded), then newest updated_at, then evidence
+    grade, then memory_id. Content is never merged — one row is selected.
+  * Scope rule: under a project context, global/domain-scope rows form a
+    DISTINCT bucket (comparison may be required); otherwise families dedupe.
+  * `include_duplicates=True` returns everything (comparison exception); it
+    does NOT bypass Phase 7 filters (history audits need include_history too).
+  * FTS path carries the body from the index (`f.body AS _body`) so similarity
+    detection needs no file reads.
+- Review N1 applied: ALL status='superseded' rows are now excluded by default
+  (carve-out removed — memory_versions preserves history); include_history
+  re-includes them; REJECTED stays always excluded. Docstrings/CHANGELOG/
+  tests updated.
+- Review N4 applied: the FTS5 availability check is now a single
+  process-global module flag (`_FTS_MODULE_CHECKED/_FTS_MODULE_OK`) instead of
+  a per-db-path cache (removes any temp-dir path-reuse hazard); the per-DB
+  `CREATE VIRTUAL TABLE IF NOT EXISTS` still runs for every new database.
+- CLI: `brainctl memory search --duplicates`.
+- Tests: `tests/test_retrieval_dedupe.py` (+7): superseded family keeps
+  current; near-identical pair keeps canonical (deterministic); project+global
+  distinct under project context / deduped globally; include_duplicates
+  returns all (with history); archived family member never representative;
+  fallback parity; distinct memories not merged.
+- Benchmark: dup rate 0.0000 with dedupe, stale 0.0000, recall/MRR no
+  regression, 10k p95 21 ms (see `proof/reports/retrieval-bench.md` Phase 8).
+
+## 2026-08-15 — Optimization pass Phase 7: retrieval hard filters
+
+- `semantic.py` `search_memories(home, term, *, project_id=None, include_history=False)`:
+  hard filters applied BEFORE ranking as SQL WHERE on the FTS path and via a
+  shared predicate (`_row_passes_filters`) on the linear fallback (fallback
+  cannot regress filter semantics):
+  * evidence grade REJECTED: always excluded (rejected != historical);
+  * status archived: excluded unless `include_history`;
+  * status superseded: excluded unless `include_history` (review N1: ALL
+    superseded rows excluded by default — memory_versions already preserves
+    version history, so no carve-out);
+  * project_id: restrict to one project (global/None = everything).
+  Deterministic tie-break: ORDER BY bm25(memory_fts), memory_id.
+- Review fixes from Phase 6 (F1/F2/F4): reindex_all purges gate `memory_fts`
+  DELETEs on `_fts_available` (derived once) so FTS5-less builds never crash
+  on missing-file purge; `_fts_query` returns None for non-ASCII or
+  token-less terms and search falls back to linear (never a fragment MATCH
+  like `"d"* "j"*` from "déjà"); `_safe_index` logs one warning
+  (`second_brain.semantic` logger) on index failure, still fail-open.
+- CLI: `brainctl memory search <term> [--project P] [--history]`.
+- Tests: `tests/test_retrieval_filters.py` (+10: archived/rejected/superseded
+  exclusion, unique-evidence exception, project filter, linear-fallback
+  parity, deterministic ordering, F1/F2/F4 regressions).
+- Benchmark (same harness/seed): stale activation rate 0.0000 at 100/1k/10k
+  with filters on (was 0.027-0.093 raw); 10k p95 20.7 ms (target <=200 ms);
+  see `proof/reports/retrieval-bench.md` Phase 7 section. No ranking tuning
+  (Phase 9).
+
+## 2026-08-15 — Optimization pass Phase 6: SQLite FTS5 retrieval (replaces linear scan)
+
+- Migration `0007_memory_index.sql`: derived `memory_index` metadata table
+  (title/summary/project/scope/status/grade/version/timestamps/body_path/
+  tags/file_hash/indexed_at). The `memory_fts` FTS5 virtual table is created
+  lazily in code behind an availability check so migrations never fail on
+  FTS5-less builds. Markdown stays canonical; the index is rebuildable via
+  `brainctl memory reindex` (never hand-edited).
+- `semantic.py`: indexer (`index_memory`, `reindex_all` incremental with
+  sha256 change detection + purge of missing files) hooked into
+  add/curate/supersede (fail-open via `_safe_index`); `search_memories` now
+  uses FTS5 (quoted prefix tokens, bm25 rank) with a documented linear-scan
+  FALLBACK when FTS5 is unavailable or the index is empty-but-memories-exist;
+  Phase 7-11 TODO anchors left at the filter/rank/dedupe/budget points.
+- Known divergence (tested + documented): FTS5 matches word prefixes, so a
+  middle-of-word substring (e.g. "arc" in "sidecar") matches only the linear
+  scan.
+- Benchmark harness `proof/runner/retrieval_bench.py` (v4.3 §14 labeled
+  corpus; Recall@1/3/5, Precision@5, MRR, dup/stale/contradiction rates,
+  tokens, p50/p95 at 100/1k/10k): FTS 10k p95 = 17.9 ms vs linear 1,440 ms
+  (~80x); see `proof/reports/retrieval-bench.md` (quality gates from Phase 7+).
+- Tests (`tests/test_memory_index.py`, +13): migration fresh create /
+  idempotent / reopen, backup-restore preserves the FTS index, auto-index on
+  add/curate/supersede, incremental reindex + purge, search parity vs linear,
+  linear fallback (fts unavailable / empty index), documented divergence.
+- CLI: `brainctl memory reindex`.
+
+## 2026-08-15 — Optimization pass Phase 4: telemetry filesystem churn reduced
+
+- `brainstem/prime-extension/src/storage.ts`: removed mkdir-per-append. New
+  factory-scoped `createTelemetryDirEnsurer()` seam: the shared destination's
+  mkdir is ATTEMPTED AT MOST ONCE per extension factory (plan: "at extension
+  startup, ensure the telemetry directory once"), shared by every
+  TelemetryStore in that factory regardless of session count; standalone
+  store construction keeps a one-shot per-store default. A failed first
+  attempt is deliberately permanent (never retried; reported once through the
+  first constructing store's one-time error handler, fail-open). The factory
+  accepts an optional `ensureTelemetryDir` test seam (`ExtensionOptions`,
+  factory-scoped, never module-global). Construction/append/appendFinal
+  remain non-fatal; append ordering, path sanitization, per-session files,
+  JSONL format, privacy, and Phase 2 anonymous identity are unchanged.
+- **Buffering NOT implemented** (documented in storage.ts): Prime's daemon
+  tears the worker down immediately after `session_shutdown`; the only
+  shutdown flush is the synchronous `appendFinal()` write, and there is no
+  awaited session-end flush that could drain a buffer — buffering could lose
+  the final records, so immediate append semantics are kept.
+- Tests (`tests/storage.test.ts`, +9; `tests/wiring.test.ts`, +2): ensurer
+  attempts mkdir exactly once across any call count and across two stores
+  sharing one ensurer; failed first attempt permanently marked (throws once,
+  never re-attempted); separate ensurers independent; two distinct session
+  stores from ONE factory share exactly one mkdir attempt (wiring-level with
+  injected seam); failing shared ensurer keeps construction non-fatal and
+  never re-attempts; concurrent/interleaved appends ordered and complete;
+  independent destinations no cross-talk; constructor/ensure failure
+  fail-open (construction + append + appendFinal never throw); appendFinal
+  reuses readiness (no re-mkdir).
+
+## 2026-08-15 — Optimization pass Phase 3: RTD hot-path serialization waste removed
+
+- `brainstem/prime-extension/src/rtd.ts`: eligibility (tool/command) decided
+  first via `rtdEligibility` — ineligible results short-circuit with zero
+  RTD-specific serialization (base telemetry's mandatory measurement is
+  unaffected; see the three-path clarification below).
+  `shouldDistill`/`rtdShadowRecord` consume a precomputed `ContentMeasurement`
+  (no content field in the RTD API), and the precomputed eligibility is passed
+  through so the input is read exactly once and the decision cannot diverge.
+- `brainstem/prime-extension/src/sensors.ts`: `measureContent` = ONE
+  serialization attempt producing both legacy RTD `serializedChars`
+  (JSON.stringify length; 0 when non-string/throws) and existing telemetry
+  `outputBytes` (raw string bytes; serialized JSON bytes; `<unserializable>`
+  fallback; Node-verified for undefined/function/symbol/circular/bigint).
+  `toolResult` now takes the precomputed byte count.
+- `brainstem/prime-extension/src/index.ts`: tool_result handler decides RTD
+  eligibility FIRST (`rtdEligibility`), then measures once and shares the
+  measurement with telemetry and RTD shadow; RTD threshold semantics (JSON
+  char length, Unicode/escaping/boundaries) unchanged.
+- **Correction (same day)**: eligibility is now computed BEFORE any content
+  measurement, and ineligible results perform ZERO RTD-specific serialization
+  — ineligible primitive strings get only the raw UTF-8 byte count base
+  telemetry already required (no JSON.stringify); ineligible non-strings keep
+  exactly the single serialization/fallback base telemetry already required
+  (`measureContent(content, includeSerializedChars=false)`); eligible results
+  keep exactly one JSON.stringify attempt plus one byte count. The precomputed
+  eligibility is passed into `rtdShadowRecord` so RTD never re-measures.
+- Tests: eligibility-before-measurement proofs, computed-once proof (toJSON
+  counter), JSON.stringify spy regressions (ineligible string: 0 stringifies;
+  eligible string: exactly 1; ineligible object: exactly 1 for base
+  telemetry), measurement-mode unit tests, Unicode/escaping/boundary
+  regressions, legacy-metric divergence (string: 500 bytes vs 502 chars).
+
+## 2026-08-15 — Optimization pass Phase 2: stable anonymous telemetry identity
+
+- `brainstem/prime-extension/src/index.ts`: anonymous fallback session id is
+  now created once per extension lifecycle (closure state, not a global) and
+  reused for every event without an explicit Prime session file — one
+  telemetry JSONL per anonymous lifecycle instead of one file per event.
+  Explicit Prime session file stems unchanged (always override the fallback).
+- Deterministic wiring tests for the four acceptance cases (stable id, single
+  file, distinct per-lifecycle ids, explicit override).
+- Baseline remains `outputs/reports/optimization-phase0-baseline.md` (pre-fix
+  snapshot: 304 single-record anon files); post-fix file-count evidence will
+  be recorded in a later milestone, not by rewriting the baseline.
+
+## 2026-08-15 — Optimization pass P0/P1: Sol minimal-orchestrator (Phase 0-1)
+
+- Baseline recorded: `outputs/reports/optimization-phase0-baseline.md` (telemetry
+  fragmentation 304 single-record anon files; retrieval p95 1426 ms @ 10k vs 200 ms
+  gate; router milestone numbers; config NOT WIRED findings).
+- Canonical Sol minimal-orchestrator policy added:
+  `brainstem/policies/sol-minimal-orchestrator.md` (ADVISORY; enforcement status
+  documented; not in constitution/).
+- `orchestrator_policy_violation` telemetry kind (schema v2) added: bounded
+  enumerated fields only (violation, model, detected_by, blocked); Python
+  aggregation in `telemetry.report`; pure report-only TS sensor (NOT WIRED).
+- Prime per-model tool restrictions: NOT CONFIGURED / UNVERIFIED — no global
+  Prime config changed.
+- See `outputs/reports/optimization-phase0-baseline.md` and
+  `brainstem/policies/sol-minimal-orchestrator.md`.
+
+## 2026-08-15 — Optimization pass Phase 1 wiring: Sol guard enforced (commit 61c536a)
+
+- `brainstem/prime-extension/src/orchestrator-guard.ts` (NEW): pure decision
+  module — `orchestratorPolicyFor(modelId, toolName, cfg)` blocks
+  `bash`/`edit`/`websearch` for orchestrator models (default substring
+  `gpt-5.6-sol`; env `ORCHESTRATOR_MODELS` / `ORCHESTRATOR_BLOCKED_TOOLS`
+  overrides; `ipython` deliberately NOT blocked — RLM delegation runs through
+  the IPython kernel); `buildPolicyBlockRecord` emits
+  `orchestrator_policy_violation` (bounded enumerated fields per SCHEMA.md).
+- `src/index.ts` wiring: `tool_call` handler appends the normal record, then
+  for orchestrator-model sessions returns `{block:true, reason}` and appends a
+  violation record (`detected_by=runtime_guard`, `blocked=true`, session stem
+  filled); `before_agent_start` injects the condensed Sol contract as a
+  `systemPrompt` patch for orchestrator-model sessions only. All other
+  sessions remain measurement-only. Fail-open: guard errors are recorded as
+  `extension_error` and never block.
+- `types/prime.d.ts`: added `ToolCallEventResult` / `BeforeAgentStartEventResult`
+  and typed `on` overloads (type-only; matches Prime runtime v0.7.2).
+- `docs/orchestration/SOL_MINIMAL_ORCHESTRATOR.md` (NEW): condensed Sol
+  contract (canonical: `brainstem/policies/sol-minimal-orchestrator.md`).
+- Tests: `tests/orchestrator-guard.test.ts` (14) + 7 wiring tests; suite 137.
+- **Deployment status: NOT deployed to `~/.prime` yet** — the installed
+  extension copy predates the guard; deployment is a separate step pending
+  campaign end.
+
+## 2026-08-15 — Optimization pass Phase 13: skill router cache + config (commit b4f0a47)
+
+- `src/second_brain/router.py`: SKILL.md section cache (path -> mtime_ns +
+  sections, lock-guarded) — each unchanged skill is read AT MOST ONCE per
+  `route()` call (was twice: triggers + procedure) and zero times on later
+  calls; mtime change invalidates. Scoring/thresholds unchanged (threshold
+  1.0, conservative).
+- `router.max_active` ENFORCED: `route()` resolves it from
+  `<home>/config/skills.toml [router] max_active` per call (tomllib pattern of
+  `working_set._material_gate_blocks`); invalid/absent -> 3; explicit arg
+  (CLI `--max-active`) overrides config.
+- `config/skills.toml` + defaults copy: `[router] max_active` comments now
+  ENFORCED.
+- Tests: `tests/test_router.py` +6 (read-once, zero-reads cache hit, mtime
+  invalidation, config honored/fallbacks, explicit override, conservative
+  routing unchanged); 16 in file, full suite green.
+
 ## 2026-08-14 — v4.2 complete, v4.3 proof campaign begins
 
 - v4.2 implementation and self-hosting milestones are complete.

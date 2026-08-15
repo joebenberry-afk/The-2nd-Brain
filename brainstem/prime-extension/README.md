@@ -1,13 +1,22 @@
 # Second Brain Observability — Prime Agent Extension
 
-Measurement-only [Prime Agent](https://prime.cursor.sh) extension for The Second
-Brain OS **Phase 2 (Observability)**. It observes the Prime agent lifecycle and
-appends JSONL telemetry. It **never** mutates agent behavior:
+[Prime Agent](https://prime.cursor.sh) extension for The Second Brain OS
+**Phase 2 (Observability) + Phase 1 (Sol minimal-orchestrator guard)**. It
+observes the Prime agent lifecycle, appends JSONL telemetry, and — for
+orchestrator-model sessions only (default model substring `gpt-5.6-sol`) —
+blocks direct execution tools and injects the Sol contract. Everything else is
+measurement-only:
 
-- No handler returns `{block}`, `{messages}`, `{systemPrompt}`, or any patch.
 - `tool_call` handlers only read `event.input` — they never modify it.
+- The ONLY patches returned are: `{ block: true, reason }` from `tool_call`
+  when an orchestrator model calls a blocked tool (`bash`/`edit`/`websearch`;
+  `ipython` is NOT blocked — RLM delegation runs through the IPython kernel),
+  and `{ systemPrompt }` from `before_agent_start` for orchestrator-model
+  sessions (the condensed Sol contract). Every other session/event returns
+  undefined.
 - Every handler is wrapped in try/catch; storage writes are fire-and-forget and
-  never throw into the session.
+  never throw into the session. Guard failures fail open (`extension_error`
+  record, no block).
 
 ## What it records
 
@@ -17,8 +26,10 @@ All 11 subscribed lifecycle events are mapped to schema v2 records (see
 `session_start`, `before_agent_start`, `turn_start`, `context`, `tool_call`,
 `tool_result`, `turn_end`, `session_before_compact`, `session_compact`,
 `agent_end`, `session_shutdown`, plus `extension_error` for internal failures.
-`orchestrator_policy_violation` (bounded enumerated fields; **report-only / NOT
-WIRED** — no hook emits it yet, per `brainstem/policies/sol-minimal-orchestrator.md`).
+`orchestrator_policy_violation` (bounded enumerated fields; **WIRED since
+commit 61c536a** — emitted by the `tool_call` guard when an orchestrator-model
+session is blocked, `detected_by=runtime_guard`, `blocked=true`; see
+`brainstem/policies/sol-minimal-orchestrator.md` §12-13).
 
 Each record carries `v: 2`, `ts` (ISO-8601 UTC, ms), `kind`, and `session`.
 Kinds are stored in
@@ -65,10 +76,19 @@ prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
 |---|---|
 | `SECOND_BRAIN_OBSERVABILITY=off\|0\|false\|no` (case-insensitive) | Disables the extension silently |
 | `SECOND_BRAIN_HOME=<dir>` | Brain home (must exist, else silently disabled) |
+| `ORCHESTRATOR_MODELS=<a,b>` | Comma-separated model-id substrings identifying the orchestrator role (default `gpt-5.6-sol`; matched case-insensitively on the lowercased model id) |
+| `ORCHESTRATOR_BLOCKED_TOOLS=<a,b>` | Comma-separated tool names blocked for orchestrator sessions (default `bash,edit,websearch`; `ipython` deliberately not listed) |
+| `SECOND_BRAIN_RTD=active` | RTD shadow records intent to substitute (substitution NOT implemented — shadow mode) |
+| `SECOND_BRAIN_RTD_THRESHOLD=<n>` | RTD size threshold in JSON chars (default 8000) |
 | *(unset)* | `%USERPROFILE%\Documents\The-Second-Brain` |
 
 Telemetry directory: `<brain-home>/telemetry/agent-performance/` (created
 once per extension lifecycle — one shared readiness step, not per record).
+
+**Deployment status (2026-08-15):** the committed source includes the Sol
+guard, but the installed copy at `~/.prime/agent/extensions/second-brain/`
+predates it. Deployment is a separate step pending campaign end; until then
+the live runtime remains measurement-only (advisory policy only).
 Session id = basename of `ctx.sessionManager.getSessionFile()`
 without `.jsonl`; fallback `anon-<epochms>-<4 hex>` **created once per
 extension lifecycle** (Phase 2, 2026-08-15) so anonymous sessions write one
@@ -86,11 +106,13 @@ bash tests/integration/run-integration.sh   # 2 real prime-agent runs
 
 Layout:
 
-- `src/index.ts` — factory; wires all handlers through a safe wrapper.
+- `src/index.ts` — factory; wires all handlers through a safe wrapper + Sol guard.
 - `src/config.ts` — config gate (env + brain home existence).
+- `src/orchestrator-guard.ts` — pure Sol-guard decision logic (no side effects).
 - `src/sensors.ts` — pure event→record mappings (no fs; unit-tested).
 - `src/storage.ts` — async JSONL store; promise chain; first failure logged once.
-- `types/prime.d.ts` — ambient type surface for the Prime API (type-only).
+- `types/prime.d.ts` — ambient type surface for the Prime API (type-only; includes
+  `ToolCallEventResult` / `BeforeAgentStartEventResult` return shapes).
 - `tests/` — Vitest unit tests + `integration/run-integration.sh`.
 
 ## Notes / limitations

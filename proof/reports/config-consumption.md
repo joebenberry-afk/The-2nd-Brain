@@ -77,7 +77,7 @@ does not make a policy key operative.
 | skills.toml | lifecycle.scopes | promotion/router constants | no | no |
 | skills.toml | quality.required_sections | skillforge constants | no | no |
 | skills.toml | gardener.sweep | none | no | no |
-| skills.toml | router.max_active | router.route/CLI default `3` | no; config mutation has no effect | no |
+| skills.toml | router.max_active | router._router_max_active (per-call read; CLI `--max-active` overrides; invalid/absent -> 3) | yes: tests/test_router.py::test_router_max_active_honors_skills_toml / test_router_max_active_explicit_override_beats_config | yes |
 | sleep.toml | schema_version | doctor.check_config (parse only) | parse | no |
 | sleep.toml | engine.mode | CLI/manual implementation | no | no |
 | sleep.toml | engine.conservative_pass | none | no | no |

@@ -1,4 +1,7 @@
-# verification.toml — verification ladder defaults (Phase 7 consumes)
+# verification.toml — verification ladder defaults
+# Status: documented defaults; ONE key is wired and tested:
+# requirement_ledger.material_unverified_blocks_completion; all other keys
+# NOT WIRED (see proof/reports/config-consumption.md).
 schema_version = 1
 
 [ladder]

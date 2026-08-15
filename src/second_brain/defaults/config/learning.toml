@@ -1,4 +1,6 @@
-# learning.toml — plasticity thresholds (Phase 11+ consumes)
+# learning.toml — plasticity thresholds
+# Status: documented defaults; NOT WIRED — no live runtime reader yet
+# (see proof/reports/config-consumption.md); wiring planned in later phases.
 schema_version = 1
 
 [modes]

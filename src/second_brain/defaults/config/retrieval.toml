@@ -1,4 +1,10 @@
-# retrieval.toml — memory retrieval scoring defaults (Phase 10+ consumes)
+# retrieval.toml — memory retrieval scoring defaults
+# Status: documented defaults; NOT WIRED — no live runtime reader yet
+# (see proof/reports/config-consumption.md); wiring planned in later phases.
+# NOTE: committed search is semantic.search_memories substring scan; the scoring
+# formula below is NOT executed. FTS5 + filters + dedupe + ranking are
+# implemented in the worktree and in final validation (uncommitted, 2026-08-15);
+# the retrieval.toml keys below remain unwired regardless.
 schema_version = 1
 
 [scoring]
