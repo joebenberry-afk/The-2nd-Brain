@@ -209,6 +209,8 @@ def test_lazy_migration_0005(brain_home):
         conn.execute("DROP TABLE IF EXISTS model_profiles")
         conn.execute("DROP TABLE IF EXISTS memory_activations")
         conn.execute("DROP TABLE IF EXISTS memory_retrievals")
+        conn.execute("DROP TABLE IF EXISTS memory_fts")
+        conn.execute("DROP TABLE IF EXISTS memory_index")
         # Rebuild memories without the 0005 columns (v4 shape). memory_sources /
         # memory_versions stay (empty in this fresh brain) so FK drops are safe.
         conn.execute(
@@ -222,7 +224,7 @@ def test_lazy_migration_0005(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [5, 6]
+    assert db.pending_migrations(dbfile) == [5, 6, 7]
     mid = semantic.add_memory(brain_home, "new memory", "body")
     assert db.pending_migrations(dbfile) == []
     assert _row(brain_home, mid)["heat"] == "WARM"

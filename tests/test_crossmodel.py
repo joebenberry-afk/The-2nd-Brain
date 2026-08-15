@@ -48,11 +48,13 @@ def test_migration_0006_on_v5_brain(brain_home):
     try:
         conn.execute("DROP TABLE IF EXISTS model_skill_outcomes")
         conn.execute("DROP TABLE IF EXISTS model_profiles")
-        conn.execute("DELETE FROM schema_version WHERE version = 6")
+        conn.execute("DROP TABLE IF EXISTS memory_fts")
+        conn.execute("DROP TABLE IF EXISTS memory_index")
+        conn.execute("DELETE FROM schema_version WHERE version >= 6")
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [6]
+    assert db.pending_migrations(dbfile) == [6, 7]
     profile = crossmodel.record_model(brain_home, "flash", family="deepseek")
     assert profile["model_id"] == "flash"
     assert db.pending_migrations(dbfile) == []

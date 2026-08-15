@@ -204,13 +204,15 @@ def test_lazy_migration_0002_on_v1_brain(brain_home):
             "memory_sources",
             "memories",
             "episodes",
+            "memory_index",
+            "memory_fts",
         ):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.execute("DELETE FROM schema_version WHERE version >= 2")
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6]
+    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6, 7]
     eid = _create(brain_home)
     assert db.pending_migrations(dbfile) == []
     assert episodes.show_episode(brain_home, eid)["row"]["episode_id"] == eid
