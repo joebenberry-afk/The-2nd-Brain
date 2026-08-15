@@ -38,6 +38,20 @@ describe("sensors: event -> record mapping", () => {
     expect(JSON.stringify(record)).not.toContain(prompt);
   });
 
+  it("before_agent_start -> additive role + driver_contract_injected fields (driver)", () => {
+    const record = sensors.beforeAgentStart(SESSION, "x", "driver", true);
+    expectBase(record, "before_agent_start");
+    expect(record.role).toBe("driver");
+    expect(record.driver_contract_injected).toBe(true);
+  });
+
+  it("before_agent_start -> role present without injected flag for non-driver roles", () => {
+    const record = sensors.beforeAgentStart(SESSION, "x", "worker");
+    expectBase(record, "before_agent_start");
+    expect(record.role).toBe("worker");
+    expect(record.driver_contract_injected).toBeUndefined();
+  });
+
   it("turn_start -> turn", () => {
     const record = sensors.turnStart(SESSION, 3);
     expectBase(record, "turn_start");

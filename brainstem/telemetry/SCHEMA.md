@@ -19,7 +19,7 @@ Kinds:
 | kind | extra fields |
 |---|---|
 | session_start | reason, cwd, model |
-| before_agent_start | prompt_chars |
+| before_agent_start | prompt_chars, role?, driver_contract_injected? |
 | turn_start | turn |
 | context | messages |
 | tool_call | tool, id, command? (bash only), input_bytes |
@@ -93,3 +93,23 @@ No free-text fields (no action description, note, reason, prompt, command, or
 payload). The pure sensor builder exists for future/manual use and is
 **NOT WIRED**: no extension hook emits this kind yet, and no automatic prompt
 inspection is performed.
+
+## Driver-Orchestration addition (2026-08-15)
+
+`before_agent_start` gains two OPTIONAL additive fields (absent when the
+emitting extension does not provide them — old records and other emitters are
+unaffected):
+
+- `role` — agent role of the active model for the session, one of
+  `hard_orchestrator` | `driver` | `worker` | `normal` (enumerated; resolution
+  per `brainstem/policies/driver-orchestration.md`, precedence
+  hard_orchestrator > driver > worker > normal);
+- `driver_contract_injected` — driver-role sessions only: `true` when the
+  driver-orchestration contract was appended to the system prompt for this
+  turn, `false` when the base prompt already carried the contract marker (or
+  no prompt patch was produced). Absent for every non-driver role.
+
+Both fields are snake_case and additive under the schema rule "new fields are
+additive"; the Python validator (`src/second_brain/telemetry.py`) requires no
+change (unknown/extra fields are ignored; only `v`, `kind`, `session`, `ts`
+are checked).
