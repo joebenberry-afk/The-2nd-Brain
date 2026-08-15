@@ -20,6 +20,8 @@ const ENV_KEYS = [
   "SECOND_BRAIN_OBSERVABILITY",
   "SECOND_BRAIN_RTD",
   "SECOND_BRAIN_RTD_THRESHOLD",
+  "ORCHESTRATOR_MODELS",
+  "ORCHESTRATOR_BLOCKED_TOOLS",
 ] as const;
 const SAVED_ENV: Record<string, string | undefined> = {};
 let tmp: string;
@@ -739,5 +741,131 @@ describe("Phase 3 correction: no RTD JSON work for ineligible results (src/index
     } finally {
       counter.restore();
     }
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 1: minimal-orchestrator guard wiring (Sol)
+// -------------------------------------------------------------------------
+
+const SOL_CTX = makeCtx({ model: { id: "gpt-5.6-sol", provider: "openai-codex" } });
+
+describe("minimal-orchestrator guard (src/index.ts)", () => {
+  it("tool_call: Sol model + bash -> {block:true} with reason and a violation record", async () => {
+    const handlers = loadFactory();
+    const event = { toolName: "bash", toolCallId: "sol-1", input: { command: "echo hi" } };
+    const inputBefore = structuredClone(event.input);
+
+    const result = handlers.get("tool_call")!(event, SOL_CTX);
+    expect(result).toEqual({ block: true, reason: expect.stringContaining("Sol minimal-orchestrator policy") });
+    expect(event.input).toEqual(inputBefore); // still read-only
+
+    const records = await waitForLines(2);
+    const kinds = records.map((r) => r.kind).sort();
+    expect(kinds).toEqual(["orchestrator_policy_violation", "tool_call"]);
+    const violation = records.find((r) => r.kind === "orchestrator_policy_violation");
+    expect(violation).toMatchObject({
+      v: 2,
+      kind: "orchestrator_policy_violation",
+      session: "wiring-test",
+      violation: "direct_execution",
+      model: "openai-codex/gpt-5.6-sol",
+      detected_by: "runtime_guard",
+      blocked: true,
+    });
+    // privacy: no free-text tool/reason/command fields on the record
+    expect(Object.keys(violation!).sort()).toEqual(
+      ["blocked", "detected_by", "kind", "model", "session", "ts", "v", "violation"].sort(),
+    );
+  });
+
+  it("tool_call: Sol model blocks edit and websearch too", async () => {
+    const handlers = loadFactory();
+    for (const tool of ["edit", "websearch"]) {
+      const result = handlers.get("tool_call")!({ toolName: tool, toolCallId: `sol-${tool}`, input: {} }, SOL_CTX);
+      expect(result).toEqual({ block: true, reason: expect.any(String) });
+    }
+    const records = await waitForLines(4); // 2 tool_call + 2 violation
+    expect(records.filter((r) => r.kind === "orchestrator_policy_violation")).toHaveLength(2);
+  });
+
+  it("tool_call: Sol model + ipython -> NOT blocked, no violation (delegation path)", async () => {
+    const handlers = loadFactory();
+    const result = handlers.get("tool_call")!(
+      { toolName: "ipython", toolCallId: "sol-ipy", input: { code: "await rlm('sub-task')" } },
+      SOL_CTX,
+    );
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["tool_call"]);
+    await settle();
+    const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_call"]);
+  });
+
+  it("tool_call: non-Sol model + bash -> NOT blocked, no violation (measurement only)", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // deepseek/deepseek-v4-flash
+    const result = handlers.get("tool_call")!(
+      { toolName: "bash", toolCallId: "wk-1", input: { command: "echo hi" } },
+      ctx,
+    );
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["tool_call"]);
+    await settle();
+    const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_call"]);
+  });
+
+  it("before_agent_start: Sol model -> systemPrompt contains the delegation rule", async () => {
+    const handlers = loadFactory();
+    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
+    expect(result).toBeDefined();
+    const patch = result as { systemPrompt?: string };
+    expect(typeof patch.systemPrompt).toBe("string");
+    expect(patch.systemPrompt).toContain("MUST delegate");
+    expect(patch.systemPrompt).toContain("WORKER RETURN CONTRACT");
+    expect(patch.systemPrompt!.split(/\s+/).length).toBeLessThan(1500); // contract size cap
+
+    // measurement record still appended alongside the patch
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+  });
+
+  it("before_agent_start: non-Sol model -> undefined, no systemPrompt", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // deepseek/deepseek-v4-flash
+    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+  });
+
+  it("ORCHESTRATOR_* env overrides change the wired guard behavior", async () => {
+    process.env.ORCHESTRATOR_MODELS = "deepseek-v4-flash";
+    process.env.ORCHESTRATOR_BLOCKED_TOOLS = "bash,ipython";
+    const handlers = loadFactory();
+    const workerCtx = makeCtx(); // deepseek is now the orchestrator under the override
+
+    const blocked = handlers.get("tool_call")!(
+      { toolName: "bash", toolCallId: "ov-1", input: { command: "echo hi" } },
+      workerCtx,
+    );
+    expect(blocked).toEqual({ block: true, reason: expect.any(String) });
+
+    // Sol is NOT the orchestrator under the override: bash allowed, no patch
+    const solBash = handlers.get("tool_call")!(
+      { toolName: "bash", toolCallId: "ov-2", input: { command: "echo hi" } },
+      SOL_CTX,
+    );
+    expect(solBash).toBeUndefined();
+    const patch = handlers.get("before_agent_start")!({ prompt: "hi" }, SOL_CTX);
+    expect(patch).toBeUndefined();
+
+    await settle(); // drain fire-and-forget writes before the tmp dir is removed
   });
 });
