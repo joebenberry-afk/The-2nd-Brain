@@ -36,6 +36,8 @@ export interface ExtensionContext {
   model: ModelInfo | undefined;
   sessionManager: SessionManagerSurface;
   getContextUsage(): ContextUsage | undefined;
+  /** Full current system prompt (base + earlier extensions' patches, chained). */
+  getSystemPrompt(): string;
   signal: AbortSignal | undefined;
   hasUI: boolean;
   ui: unknown;
@@ -164,10 +166,13 @@ export interface ExtensionAPI {
     event: "tool_call",
     handler: (event: ToolCallEvent, ctx: ExtensionContext) => ToolCallEventResult | undefined,
   ): void;
-  /** before_agent_start handlers may patch the system prompt. */
+  /** before_agent_start handlers may patch the system prompt (sync or awaited async — Phase 14 recall). */
   on(
     event: "before_agent_start",
-    handler: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => BeforeAgentStartEventResult | undefined,
+    handler: (
+      event: BeforeAgentStartEvent,
+      ctx: ExtensionContext,
+    ) => BeforeAgentStartEventResult | undefined | Promise<BeforeAgentStartEventResult | undefined>,
   ): void;
   on<E extends PrimeEvent>(
     name: E["type"],
