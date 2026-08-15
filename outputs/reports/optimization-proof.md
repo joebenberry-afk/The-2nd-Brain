@@ -357,13 +357,13 @@ recorded live evidence; nothing re-derived.
 
 ## 11.13 Final status
 
-**PARTIALLY VALIDATED** — SOL-SPECIFIC ACCEPTANCE BLOCKED: the guard
-block-path live trial is blocked by Sol model unavailability + the
-ipython-only live toolset; all model-independent machinery (deployment,
-per-session loading, recall hook, telemetry health, FTS5, campaign
-delegation) is live-proven. Remaining deployment completion: the daemon
-restart step (graceful `shutdown --force`, per §11.14), after which the Sol
-trial can run when a Sol model is available.
+**PARTIALLY VALIDATED** — SOL-SPECIFIC ACCEPTANCE BLOCKED (Sol-specific
+guard block-path trial still blocked solely by Sol model unavailability;
+guard machinery live-proven model-independent). All model-independent
+machinery (deployment, per-session loading, recall hook, telemetry health,
+FTS5, campaign delegation) is live-proven. The daemon restart step
+(graceful `shutdown --force`, per §11.14) is EXECUTED — 2026-08-15T12:11Z,
+recorded in §11.15; the Sol trial can run when a Sol model is available.
 
 ## 11.14 Graceful daemon shutdown (driver restart step)
 
@@ -380,4 +380,58 @@ trial can run when a Sol model is available.
   C:/Tools/prime-agent/tsconfig.json
   C:/Tools/prime-agent/packages/coding-agent/src/cli.ts shutdown --force`
   Clients auto-relaunch the cold daemon on next run (cli-main/daemon-launch
-  probe). NOT run by this campaign; listed for the driver.
+  probe). EXECUTED by this campaign on 2026-08-15: old supervisor pid 26652
+  last logged 12:07:34.870Z; the next client run auto-relaunched the cold
+  daemon — new supervisor pid 26456 id `b9da0028-ed7e-4ae0-a01f-e14ca9d68e30`
+  listening 12:11:43.579Z, fresh session worker pid 31216 id
+  `d7208ad5ffea` 12:11:45.750Z, fresh kernels 12:11:48Z. Full sequence and
+  load verification in §11.15.
+
+## 11.15 Post-restart load verification (2026-08-15T12:11–12:20Z)
+
+Restart sequence (daemon log `~/.prime/agent/logs/agent.jsonl` and
+`prime-agent-daemon.2245fa1c.log`; process census via
+`Get-CimInstance Win32_Process`):
+
+- Old supervisor pid 26652: last log line 2026-08-15T12:07:34.870Z
+  ("Supervisor command get_session_stats failed: Error: Session worker is
+  stopping" — session teardown underway); process gone post-restart.
+- New supervisor pid 26456, id `b9da0028-ed7e-4ae0-a01f-e14ca9d68e30`:
+  "listening on \\.\pipe\prime-agent-daemon" at
+  2026-08-15T12:11:43.579Z. All `node.exe` CLI processes (daemon chain)
+  created 12:11:37–43Z.
+- Fresh session worker pid 31216, id `d7208ad5ffea`: "listening on
+  \\.\pipe\prime-agent-worker-2245fa1c0e38-d7208ad5ffea" at
+  2026-08-15T12:11:45.750Z; descriptor `d7208ad5ffea.json` valid
+  (workerId/pid 31216/socketPath).
+- Fresh Python kernels pids 12836 + 26912 (`ipykernel_launcher`),
+  CreationDate 2026-08-15T12:11:48Z.
+- Startup hygiene: the new supervisor discarded two stale zero-filled
+  worker-descriptor files left by the pre-restart daemon's hard stop
+  ("Ignoring invalid worker descriptor ... not valid JSON",
+  12:11:41.858Z/.860Z) and continued; no extension error / crash /
+  missing-dependency lines in any log since 12:11:40Z
+  (`client-errors.log`: none).
+
+Extension identity post-restart (SHA-256, live vs repo
+`brainstem/prime-extension/src` + `types/prime.d.ts`):
+
+- 8/8 installed files byte-identical to repo: `config.ts`
+  `3ceb6dc5…`, `index.ts` `4405af2e…`, `orchestrator-guard.ts`
+  `c2950b86…`, `recall-gate.ts` `4b8253ae…`, `rtd.ts` `ac7820ee…`,
+  `sensors.ts` `e70f288e…`, `storage.ts` `3dad5234…`, `types/prime.d.ts`
+  `8feab2d6…`.
+- `~/.prime/agent/settings.json` untouched: LastWriteTimeUtc
+  2026-08-15T05:01:00Z (pre-restart).
+
+Restarted-session telemetry (this session
+`telemetry/agent-performance/01a00555-d423-721b-9545-ad54c630260e.jsonl`):
+
+- All lines valid JSON `v=2`; `session_start` at
+  2026-08-15T12:11:46.990Z (model `deepseek/deepseek-v4-pro`, reason
+  `startup`); **0 `extension_error`** records.
+- Anon census unchanged: 304 files matching `^anon`, none modified after
+  2026-08-15T12:11:40Z.
+
+Result: daemon restart fully executed; extension loads and telemetry
+records identically in the restarted daemon; no startup errors.
