@@ -6,14 +6,23 @@ score: +1 per positive trigger phrase matched in the task (case-insensitive
 substring), -2 per negative trigger phrase, +1.5 when an adjacent name bigram
 appears in the task, +0.25 per procedure-token overlap (capped 0.5, generic
 stopwords excluded). Only skills with score >= 1.0 are selected, capped at
-``max_active`` (sparse routing, plan §56). The natural baseline is the naive
-name-token match the plan says Brainstem must beat on trigger noise.
+``max_active`` (sparse routing, plan §56) — resolved from
+``config/skills.toml [router] max_active`` (fallback 3) unless the caller
+passes an explicit cap (CLI ``--max-active``). The natural baseline is the
+naive name-token match the plan says Brainstem must beat on trigger noise.
+
+Phase 13: SKILL.md sections are cached per path with mtime_ns invalidation,
+so each unchanged skill is read AT MOST ONCE per route() call and not at all
+on later calls. The cache is a plain dict guarded by a lock (the router is a
+single-process CLI; the lock only protects dict access).
 """
 
 from __future__ import annotations
 
 import itertools
 import re
+import threading
+import tomllib
 from pathlib import Path
 
 from . import paths
@@ -132,11 +141,35 @@ def _phrases(section_text: str) -> list[str]:
     return phrases
 
 
+# SKILL.md section cache: path -> (mtime_ns, parsed sections). Each
+# unchanged skill file is read at most once per route() call and skipped on
+# later calls (Phase 13). Single-process CLI; the lock only guards dict
+# access so concurrent route() calls cannot corrupt the cache.
+_SECTION_CACHE: dict[Path, tuple[int, dict[str, str]]] = {}
+_SECTION_CACHE_LOCK = threading.Lock()
+
+
+def _clear_skill_section_cache() -> None:
+    """Drop all cached SKILL.md sections (tests; also safe at runtime)."""
+    with _SECTION_CACHE_LOCK:
+        _SECTION_CACHE.clear()
+
+
 def _skill_sections(home: Path, name: str) -> dict[str, str]:
     for directory in _level_dirs(home):
         path = directory / name / "SKILL.md"
-        if path.exists():
-            return _parse_sections(path.read_text(encoding="utf-8"))
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        with _SECTION_CACHE_LOCK:
+            cached = _SECTION_CACHE.get(path)
+            if cached is not None and cached[0] == mtime_ns:
+                return cached[1]
+        sections = _parse_sections(path.read_text(encoding="utf-8"))
+        with _SECTION_CACHE_LOCK:
+            _SECTION_CACHE[path] = (mtime_ns, sections)
+        return sections
     raise BrainError(f"No skill {name!r} under skills/active|candidate|shadow")
 
 
@@ -187,11 +220,27 @@ def _score_skill(home: Path, name: str, task_lower: str, task_tokens: set[str]) 
     return round(score, 2)
 
 
+def _router_max_active(home: Path) -> int:
+    """[router] max_active from <home>/config/skills.toml, default 3.
+
+    Same tomllib pattern as working_set._material_gate_blocks. Invalid or
+    absent values fall back to 3 (fail-safe: sparse routing stays sparse).
+    """
+    try:
+        cfg = tomllib.loads((Path(home) / "config" / "skills.toml").read_text(encoding="utf-8"))
+        value = (cfg.get("router") or {}).get("max_active", 3)
+    except (OSError, tomllib.TOMLDecodeError):
+        return 3
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return 3
+    return value
+
+
 def route(
     home: Path,
     task: str,
     *,
-    max_active: int = 3,
+    max_active: int | None = None,
     skills: list[str] | None = None,
 ) -> dict:
     """Rank skills for `task` (Phase 23: active > candidate > shadow pool).
@@ -200,12 +249,18 @@ def route(
     Degenerate input never raises: a blank/whitespace-only task (including
     exotic whitespace like U+0085) routes to nothing rather than blocking.
 
+    ``max_active`` (Phase 13): explicit cap (CLI ``--max-active``). When
+    None (default), resolved from ``config/skills.toml [router] max_active``;
+    invalid or missing config values fall back to 3.
+
     ``skills`` (Phase 18): an explicit skill-name list override so callers can
     route over a filtered set (e.g. counterfactuals) without touching the
     filesystem. Defaults to all skills across active/candidate/shadow.
     """
     if not isinstance(task, str):
         raise BrainError("task must be a string")
+    if max_active is None:
+        max_active = _router_max_active(home)
     if not isinstance(max_active, int) or isinstance(max_active, bool) or max_active <= 0:
         raise BrainError("max_active must be a positive integer")
     if skills is not None and (

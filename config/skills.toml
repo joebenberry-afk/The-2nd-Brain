@@ -1,4 +1,8 @@
-# skills.toml — skill lifecycle defaults (Phase 16+ consumes)
+# skills.toml — skill lifecycle defaults
+# Status: [router].max_active is ENFORCED (router.py reads it per route() call,
+# fallback 3; CLI --max-active overrides). All other keys remain documented
+# defaults — no live runtime reader yet
+# (see proof/reports/config-consumption.md).
 schema_version = 1
 
 [lifecycle]
@@ -19,4 +23,6 @@ sweep = ["dead_skills", "overlap", "false_triggers", "never_used",
          "model_specific_quirks"]
 
 [router]
-max_active = 3      # sparse top-K (plan §56)
+max_active = 3      # ENFORCED — router.py resolves [router] max_active from this
+                    # file per route() call (invalid/absent -> 3); CLI --max-active
+                    # overrides it (Phase 13)
