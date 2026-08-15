@@ -20,7 +20,7 @@ def test_migration_0007_fresh_create(brain_home):
     conn = db.connect(dbf)
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 7
+        assert v == 8
         cols = {r[1] for r in conn.execute("PRAGMA table_info(memory_index)")}
         assert {
             "memory_id",
