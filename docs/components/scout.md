@@ -31,7 +31,7 @@ None in the repo; writes outputs/evidence-maps (derived).
 Prepass deterministic and probe-tolerant; command is a pure argv list (no shell — quotes/backticks/braces can't inject; plain `.replace` prompt embedding); 9-section structure preserved.
 
 ## Interactions
-`registry` (keys), `repowise`/`rg`/`git` binaries; `brainctl scout` (--no-agent prepass-only); parent runs the live baseline-vs-scout experiment.
+`registry` (keys), `repowise`/`rg`/`git` binaries; `brainctl scout` (--no-agent prepass-only); live baseline-vs-scout experiment run (milestone-06) — promoted to advisory.
 
 ## Failure behavior
 Unresolvable target → BrainError; probe failures → error entries; spawn failure captured (rc -1), never raised.
@@ -43,7 +43,7 @@ Unresolvable target → BrainError; probe failures → error entries; spawn fail
 Depends on rg (skips gracefully); repowise freshness is the raw CLI line (may include box chars); no RepoWise index init (decision #4).
 
 ## Future extension
-RepoWise index init + freshness gating; advisory promotion after baseline comparison (plan §102).
+RepoWise index init + freshness gating (advisory promotion after baseline comparison already done — milestone-06, plan §102).
 
 ## Relevant decisions
 `decisions/global/2026-08-14-build-decisions.md` #4, #10.

@@ -35,18 +35,26 @@ live in `outputs/reports/<milestone>.md`.
 - Telemetry hot-path fixes (Phases 2-4) committed: stable per-lifecycle
   anonymous session id; RTD eligibility decided before serialization with one
   shared measurement; telemetry dir mkdir-once. RTD remains **shadow mode**
-  (no substitution); `context.toml [rtd]` values are NOT WIRED (env vars only
-  — see `proof/reports/config-consumption.md`).
-- Sol minimal-orchestrator guard committed (repo): the Prime extension blocks
-  `bash`/`edit`/`websearch` for orchestrator-model sessions and injects the
-  Sol contract via `before_agent_start`; **not deployed to `~/.prime` yet**
-  (deployment pending campaign end). Contract:
+  (no substitution); `context.toml [rtd] threshold_chars` is now wired into
+  the threshold ladder (env override still highest); other `[rtd]` keys stay
+  informational (see `proof/reports/config-consumption.md`).
+- Sol minimal-orchestrator guard committed and deployed: the Prime extension
+  blocks `bash`/`edit`/`websearch` for orchestrator-model sessions and
+  injects the Sol contract via `before_agent_start`. Live rollout
+  2026-08-15T06:45:44Z: 8 files SHA-identical to repo; post-deploy census
+  clean (0 `orchestrator_policy_violation` in 22,615 records, 0
+  `extension_error`, 0 new anon files). Contract:
   `brainstem/policies/sol-minimal-orchestrator.md`.
 - Skill router: `skills.toml [router] max_active` is ENFORCED (fallback 3,
   CLI `--max-active` overrides); SKILL.md metadata cached with mtime
   invalidation.
-- Retrieval (FTS5 + filters + dedupe + ranking) is **in final validation** —
-  implemented in the worktree but not committed yet.
+- Retrieval (FTS5 + filters + dedupe + ranking) committed and live: FTS5
+  engine, hard filters, dedupe, ranking; live DB reindexed to schema v7,
+  `memory_fts` 6/6 (FTS branch ~5 ms).
+- Live rollout result (2026-08-15): final status **PARTIALLY VALIDATED** —
+  deployment, per-session loading, recall hook, telemetry health, FTS5 and
+  campaign delegation are live-proven; Sol-specific acceptance is blocked
+  only by model availability (proof: `outputs/reports/optimization-proof.md`).
 
 ## Layout
 

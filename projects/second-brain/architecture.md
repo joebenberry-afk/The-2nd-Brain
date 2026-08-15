@@ -1,8 +1,9 @@
 # Architecture (The Second Brain's own component map)
 
 Authoritative for the build itself. Repository reality outranks this file.
-Keep this current as phases land; it exists because the Brain's own memory
-subsystem does not exist yet (phases 9+).
+Keep this current as phases land; it was created because the Brain's own
+memory subsystem did not exist yet (phases 9+), and stays authoritative now
+that memory subsystems are live (milestones 09/10/16).
 
 ## Components
 
@@ -21,8 +22,9 @@ subsystem does not exist yet (phases 9+).
 
 ## Limitations (current)
 
-- No memory subsystems yet (episodic/semantic/procedural) — this file is the
-  durable stand-in. Replace/extend with real memories in phases 9-10+.
+- Memory subsystems are live: episodic (milestone-09), semantic
+  (milestone-10), procedural/skills (milestone-16). This file remains the
+  authoritative component map.
 - Telemetry: no per-file read ledger hook yet (Phase 5 RTD); no env snapshot
   (Phase 8); RepoWise index not initialized anywhere on this machine.
 - Machine gotchas: PYTHONHOME pollution (shims sanitize); npm/.cmd need

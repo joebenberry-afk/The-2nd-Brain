@@ -41,7 +41,7 @@ Extension errors → `extension_error` records; storage failure silent after one
 `tests/test_telemetry.py` (10); TS: `brainstem/prime-extension/tests/` — config (6), sensors (46, incl. privacy truncation), storage (19), wiring (33, no-mutation/error-swallow + Sol guard), rtd (19), orchestrator-guard (14); real-agent integration `tests/integration/run-integration.sh`; Pester `brainstem/tests/install-prime-extension.Tests.ps1`.
 
 ## Known limitations
-No env snapshot (Phase 8); context % only when runtime exposes it; anonymous fallback id is stable per lifecycle but distinct across lifecycles. RTD is SHADOW MODE (no substitution). The Sol guard is implemented in the repo but NOT deployed to `~/.prime` yet (deployment pending campaign end); the extension context exposes no rlmDepth, so a subagent spawned with an orchestrator model would also be guarded (acceptable: workers run cheaper models).
+No env snapshot (Phase 8); context % only when runtime exposes it; anonymous fallback id is stable per lifecycle but distinct across lifecycles. RTD is SHADOW MODE (no substitution). The Sol guard is deployed to `~/.prime` since 2026-08-15T06:45:44Z (8 files SHA-identical to repo); live census: 0 `orchestrator_policy_violation` in 22,615 records; Sol-specific acceptance blocked by model availability. The extension context exposes no rlmDepth, so a subagent spawned with an orchestrator model would also be guarded (acceptable: workers run cheaper models).
 
 ## Future extension
 RTD substitution (active mode), environment steward, sleep/replay inputs.

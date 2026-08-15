@@ -41,7 +41,7 @@ Failing migration rolls back atomically → `MigrationError`; doctor reports pen
 Single SQLite file; migrations append-only by convention (backup restore is the rollback path).
 
 ## Future extension
-Memory/skills/immune phases add their own `NNNN_*.sql` migrations. In-flight (worktree, NOT committed yet): `0007_memory_index.sql` — derived FTS5 index metadata for retrieval (in final validation with the retrieval pass).
+Memory/skills/immune phases add their own `NNNN_*.sql` migrations. Committed: `0007_memory_index.sql` — derived FTS5 index metadata for retrieval (commit `2ce8c0f`); live DB reindexed to schema v7.
 
 ## Relevant decisions
 `decisions/global/2026-08-14-build-decisions.md` #2 (stdlib-only).

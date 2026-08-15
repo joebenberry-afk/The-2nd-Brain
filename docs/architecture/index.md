@@ -27,12 +27,13 @@ record per v4.2 plan §95.1.
 | Backup/restore | `src/second_brain/backup.py` | [backup-restore](components/backup-restore.md) | 1 complete |
 | Doctor | `src/second_brain/doctor.py` | [doctor](components/doctor.md) | 1 complete |
 | Telemetry/observability | `src/second_brain/telemetry.py`, `brainstem/prime-extension/src/*.ts` | [telemetry-observability](components/telemetry-observability.md) | 2 complete |
-| Artifacts/RTD | `src/second_brain/artifacts.py`, `brainstem/prime-extension/src/rtd.ts` | [artifacts-rtd](components/artifacts-rtd.md) | 5 in progress (shadow) |
+| Artifacts/RTD | `src/second_brain/artifacts.py`, `brainstem/prime-extension/src/rtd.ts` | [artifacts-rtd](components/artifacts-rtd.md) | 5 complete (shadow-only) |
 | Working set | `src/second_brain/working_set.py` | [working-set](components/working-set.md) | 4 complete |
 | JIT context | `src/second_brain/jit.py` | [jit-context](components/jit-context.md) | 4 complete |
-| Scout | `src/second_brain/scout.py` | [scout](components/scout.md) | 6 implemented; live experiment pending |
+| Scout | `src/second_brain/scout.py` | [scout](components/scout.md) | 6 complete (advisory; live experiment run, promoted) |
 | brainctl CLI | `src/second_brain/cli.py` | [brainctl-cli](components/brainctl-cli.md) | 1-6 wired |
 
 Phase status per `projects/second-brain/current-state.md`: Phases 0-4
-complete and independently verified; Phase 5 shadow-only in progress;
-Phase 6 Python side implemented, parent runs the baseline-vs-scout gate.
+complete and independently verified; Phase 5 complete (shadow-only; live
+rtd_shadow trigger unproven); Phase 6 complete — baseline-vs-scout gate
+run, Scout promoted to advisory.
