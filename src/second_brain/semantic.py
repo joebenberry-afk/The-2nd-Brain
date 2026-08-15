@@ -23,6 +23,9 @@ import re
 import secrets
 import sqlite3
 import tempfile
+import tomllib
+from dataclasses import dataclass
+from dataclasses import field as _field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -1017,8 +1020,222 @@ def _query_tokens(term: str) -> set[str]:
 
 _BM25_RELEVANCE_SCALE = 10.0
 
+# ---------------------------------------------------------------------------
+# Phase 11/12 — retrieval budget + config wiring
+# ---------------------------------------------------------------------------
 
-def _relevance_score(row: dict, query_tokens: set[str], bm25_max: float | None) -> float:
+# Context-size assumption (tokens) for the retrieval budget ceiling. The plan
+# wires this from config later; the ceiling itself is
+# `reserve.retrieved_memory_pct_max` percent of this window.
+_CONTEXT_WINDOW_TOKENS = 200_000
+
+# Plan default: 1-3 retrieved memories. Configurable via
+# config/retrieval.toml [scoring].max_results (Phase 12).
+_DEFAULT_TOP_K = 3
+
+
+@dataclass(frozen=True)
+class RetrievalWeights:
+    """Phase 12: every hardcoded weight consumed by `_score_row` and its
+    helpers, overridable from config/retrieval.toml [scoring.weights].
+    Absent/invalid keys keep the hardcoded defaults (behavior unchanged)."""
+
+    title_boost_exact: float = _TITLE_BOOST_EXACT
+    title_boost_partial: float = _TITLE_BOOST_PARTIAL
+    relevance_cap: float = _RELEVANCE_CAP
+    bm25_relevance_scale: float = _BM25_RELEVANCE_SCALE
+    grade_scores: dict[str, float] = _field(default_factory=lambda: dict(_GRADE_SCORE))
+    status_scores: dict[str, float] = _field(default_factory=lambda: dict(_STATUS_SCORE))
+    freshness_half_life_days: float = _FRESHNESS_HALFLIFE_DAYS
+    freshness_max_penalty: float = _FRESHNESS_MAX_PENALTY
+    decision_boost_per_hit: float = _DECISION_BOOST_PER_HIT
+    decision_boost_cap: float = _DECISION_BOOST_CAP
+    negative_penalty_per_contradiction: float = _NEGATIVE_PENALTY_PER_CONTRADICTION
+    negative_penalty_cap: float = _NEGATIVE_PENALTY_CAP
+    token_free_limit: int = _TOKEN_FREE_LIMIT
+    token_penalty_cap: float = _TOKEN_PENALTY_CAP
+    token_penalty_saturation: int = _TOKEN_PENALTY_SATURATION
+
+
+@dataclass(frozen=True)
+class RetrievalConfig:
+    """Effective retrieval policy for one search: result cap, token budget,
+    and scoring weights. `top_k` caps the returned rows; `max_tokens` is the
+    hard token ceiling (None = unlimited)."""
+
+    top_k: int = _DEFAULT_TOP_K
+    max_tokens: int | None = None
+    weights: RetrievalWeights = _field(default_factory=RetrievalWeights)
+
+
+_DEFAULT_RETRIEVAL_CONFIG = RetrievalConfig()
+
+
+def _coerce_float(value: object, fallback: float) -> float:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else fallback
+
+
+def _coerce_int(value: object, fallback: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return fallback
+    return value
+
+
+def _coerce_scores(value: object, fallback: dict[str, float]) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return dict(fallback)
+    out = dict(fallback)
+    for key, item in value.items():
+        if isinstance(key, str) and isinstance(item, (int, float)) and not isinstance(item, bool):
+            out[key] = float(item)
+    return out
+
+
+def load_retrieval_config(home: Path) -> RetrievalConfig:
+    """Phase 12: read config/retrieval.toml ([scoring.weights],
+    [scoring].max_results) and config/context.toml
+    ([reserve].retrieved_memory_pct_max). Absent/invalid keys fall back to
+    the hardcoded defaults; unreadable TOML is ignored (fail open)."""
+    weights = RetrievalWeights()
+    top_k = _DEFAULT_TOP_K
+    budget_pct: float | None = None
+
+    rpath = Path(home) / "config" / "retrieval.toml"
+    if rpath.is_file():
+        try:
+            scoring = (tomllib.loads(rpath.read_text(encoding="utf-8")).get("scoring") or {})
+            raw_k = scoring.get("max_results")
+            if isinstance(raw_k, int) and not isinstance(raw_k, bool) and raw_k > 0:
+                top_k = raw_k
+            w = scoring.get("weights")
+            if isinstance(w, dict):
+                def _f(key: str, fallback: float) -> float:
+                    return _coerce_float(w.get(key), fallback)
+
+                weights = RetrievalWeights(
+                    title_boost_exact=_f("title_boost_exact", weights.title_boost_exact),
+                    title_boost_partial=_f("title_boost_partial", weights.title_boost_partial),
+                    relevance_cap=_f("relevance_cap", weights.relevance_cap),
+                    bm25_relevance_scale=_f("bm25_relevance_scale", weights.bm25_relevance_scale),
+                    grade_scores=_coerce_scores(w.get("grade_scores"), weights.grade_scores),
+                    status_scores=_coerce_scores(w.get("status_scores"), weights.status_scores),
+                    freshness_half_life_days=_f(
+                        "freshness_half_life_days", weights.freshness_half_life_days
+                    ),
+                    freshness_max_penalty=_f(
+                        "freshness_max_penalty", weights.freshness_max_penalty
+                    ),
+                    decision_boost_per_hit=_f(
+                        "decision_boost_per_hit", weights.decision_boost_per_hit
+                    ),
+                    decision_boost_cap=_f("decision_boost_cap", weights.decision_boost_cap),
+                    negative_penalty_per_contradiction=_f(
+                        "negative_penalty_per_contradiction",
+                        weights.negative_penalty_per_contradiction,
+                    ),
+                    negative_penalty_cap=_f(
+                        "negative_penalty_cap", weights.negative_penalty_cap
+                    ),
+                    token_free_limit=_coerce_int(
+                        w.get("token_free_limit"), weights.token_free_limit
+                    ),
+                    token_penalty_cap=_f("token_penalty_cap", weights.token_penalty_cap),
+                    token_penalty_saturation=_coerce_int(
+                        w.get("token_penalty_saturation"), weights.token_penalty_saturation
+                    ),
+                )
+        except (OSError, tomllib.TOMLDecodeError):
+            pass  # fail open: unreadable config keeps defaults
+
+    cpath = Path(home) / "config" / "context.toml"
+    if cpath.is_file():
+        try:
+            reserve = tomllib.loads(cpath.read_text(encoding="utf-8")).get("reserve") or {}
+            pct = reserve.get("retrieved_memory_pct_max")
+            if isinstance(pct, (int, float)) and not isinstance(pct, bool) and 0 <= pct <= 100:
+                budget_pct = float(pct)
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+
+    max_tokens = (
+        round(budget_pct / 100.0 * _CONTEXT_WINDOW_TOKENS) if budget_pct is not None else None
+    )
+    return RetrievalConfig(top_k=top_k, max_tokens=max_tokens, weights=weights)
+
+
+def _estimate_retrieval_tokens(row: dict) -> int:
+    """Token estimate for the retrieval budget: word-token count of the body
+    (same metric as the ranking token-cost penalty)."""
+    return _token_count(_body_text_for_dedupe(row))
+
+
+def _apply_budget(rows: list[dict], top_k: int | None, max_tokens: int | None) -> list[dict]:
+    """Phase 11: cap the ranked result set. `top_k` keeps only the N
+    highest-value rows; `max_tokens` trims the LOWEST-value rows (ranked
+    best-first, so the tail is dropped) while always keeping at least the
+    best row. Deterministic; never reorders."""
+    if top_k is not None and top_k > 0:
+        rows = rows[:top_k]
+    if max_tokens is None:
+        return rows
+    if max_tokens <= 0:
+        return rows[:1]  # zero ceiling: only the best row may be returned
+    kept: list[dict] = []
+    total = 0
+    for row in rows:
+        cost = _estimate_retrieval_tokens(row)
+        if kept and total + cost > max_tokens:
+            continue
+        kept.append(row)
+        total += cost
+    return kept
+
+
+def _contradiction_map(rows: list[dict]) -> dict[str, set[str]]:
+    """Phase 10: conflict pairs among the PRE-dedupe candidates. Same-title
+    (case-insensitive) rows with different body text conflict. Mirrors the
+    quality rule of `contradictions()`: REJECTED/archived sides never
+    conflict. File-free (uses the _body attached by the search paths); a row
+    with unavailable body text cannot be a conflict side. Returns
+    {memory_id: {conflicting memory_ids}} — computed BEFORE dedupe so the
+    marker survives family collapse (dedupe must not silently pick one)."""
+    by_title: dict[str, list[dict]] = {}
+    for row in rows:
+        if row.get("evidence_grade") == "REJECTED" or row.get("status") == "archived":
+            continue
+        key = str(row.get("title") or "").strip().lower()
+        if key:
+            by_title.setdefault(key, []).append(row)
+    conflicts: dict[str, set[str]] = {}
+    for entries in by_title.values():
+        entries.sort(key=lambda r: str(r.get("memory_id") or ""))
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                a, b = entries[i], entries[j]
+                body_a = _body_text_for_dedupe(a).strip()
+                body_b = _body_text_for_dedupe(b).strip()
+                if body_a and body_b and body_a != body_b:
+                    conflicts.setdefault(a["memory_id"], set()).add(b["memory_id"])
+                    conflicts.setdefault(b["memory_id"], set()).add(a["memory_id"])
+    return conflicts
+
+
+def _attach_contradictions(
+    rows: list[dict], conflicts: dict[str, set[str]]
+) -> list[dict]:
+    """Attach deterministic `contradiction_with` markers (sorted ids) to the
+    returned rows from a pre-dedupe conflict map. Rows trimmed by the budget
+    or collapsed by dedupe keep their markers on the surviving row."""
+    for row in rows:
+        ids = conflicts.get(str(row.get("memory_id") or ""))
+        if ids:
+            row["contradiction_with"] = sorted(ids)
+    return rows
+
+
+def _relevance_score(
+    row: dict, query_tokens: set[str], bm25_max: float | None, weights: RetrievalWeights
+) -> float:
     """FTS path: raw bm25 normalized exponentially against the best match in
     the result set — docs that score (nearly) equally on bm25 keep (nearly)
     equal relevance, so the deterministic metadata terms decide among them;
@@ -1029,7 +1246,7 @@ def _relevance_score(row: dict, query_tokens: set[str], bm25_max: float | None) 
     body_tokens = _score_tokens(_body_text_for_dedupe(row))
     raw = row.get("_bm25")
     if bm25_max is not None and raw is not None:
-        base = math.exp(-(bm25_max - float(raw)) / _BM25_RELEVANCE_SCALE)
+        base = math.exp(-(bm25_max - float(raw)) / weights.bm25_relevance_scale)
     elif not query_tokens:
         base = 1.0
     else:
@@ -1037,17 +1254,17 @@ def _relevance_score(row: dict, query_tokens: set[str], bm25_max: float | None) 
         base = len(query_tokens & hay) / len(query_tokens)
     in_title = query_tokens & title_tokens
     if query_tokens and in_title == query_tokens:
-        base += _TITLE_BOOST_EXACT
+        base += weights.title_boost_exact
     elif len(in_title) >= max(1, len(query_tokens) // 2):
-        base += _TITLE_BOOST_PARTIAL
-    return min(_RELEVANCE_CAP, base)
+        base += weights.title_boost_partial
+    return min(weights.relevance_cap, base)
 
 
-def _trust_score(row: dict) -> float:
+def _trust_score(row: dict, weights: RetrievalWeights) -> float:
     """Evidence grade * status, both bounded; REJECTED/superseded rows are
     normally filtered before ranking."""
-    return _GRADE_SCORE.get(str(row.get("evidence_grade") or ""), 0.8) * _STATUS_SCORE.get(
-        str(row.get("status") or ""), 0.9
+    return weights.grade_scores.get(str(row.get("evidence_grade") or ""), 0.8) * (
+        weights.status_scores.get(str(row.get("status") or ""), 0.9)
     )
 
 
@@ -1059,7 +1276,7 @@ def _scope_match_score(row: dict, project_id: str | None) -> float:
     return 0.9 if row.get("scope") in ("global", "domain") else 1.0
 
 
-def _freshness_score(updated_at: object) -> float:
+def _freshness_score(updated_at: object, weights: RetrievalWeights) -> float:
     """Gentle linear decay 1.0 -> 0.8 over 180 days; never below 0.8 so a
     stale-but-right memory stays findable (relevance dominates)."""
     try:
@@ -1067,32 +1284,43 @@ def _freshness_score(updated_at: object) -> float:
         days = max(0.0, (datetime.now(UTC) - dt).total_seconds() / 86400.0)
     except (TypeError, ValueError):
         return 0.9
-    return 1.0 - _FRESHNESS_MAX_PENALTY * min(1.0, days / _FRESHNESS_HALFLIFE_DAYS)
+    return 1.0 - weights.freshness_max_penalty * min(1.0, days / weights.freshness_half_life_days)
 
 
-def _decision_value_score(row: dict) -> float:
+def _decision_value_score(row: dict, weights: RetrievalWeights) -> float:
     """Memories that resolved past decisions (successful retrievals) rank
-    higher. Bounded 1.0..1.5."""
+    higher. Bounded by decision_boost_cap."""
     hits = int(row.get("successful_retrieval_count") or 0)
-    return 1.0 + _DECISION_BOOST_PER_HIT * min(hits, 5)
+    cap_hits = (
+        int(weights.decision_boost_cap / weights.decision_boost_per_hit)
+        if weights.decision_boost_per_hit > 0
+        else 0
+    )
+    return 1.0 + weights.decision_boost_per_hit * min(hits, max(1, cap_hits))
 
 
-def _negative_transfer_score(row: dict) -> float:
-    """Contradicted memories are a negative-transfer risk. Bounded 0.7..1.0."""
+def _negative_transfer_score(row: dict, weights: RetrievalWeights) -> float:
+    """Contradicted memories are a negative-transfer risk. Bounded by
+    negative_penalty_cap."""
     contradictions = int(row.get("contradiction_count") or 0)
-    return 1.0 - _NEGATIVE_PENALTY_PER_CONTRADICTION * min(contradictions, 3)
+    cap_count = (
+        int(weights.negative_penalty_cap / weights.negative_penalty_per_contradiction)
+        if weights.negative_penalty_per_contradiction > 0
+        else 0
+    )
+    return 1.0 - weights.negative_penalty_per_contradiction * min(contradictions, max(1, cap_count))
 
 
-def _token_cost_penalty(row: dict) -> float:
+def _token_cost_penalty(row: dict, weights: RetrievalWeights) -> float:
     """Gentle log-shaped per-token ROI penalty on very long bodies; never
-    zeroes the score (max 0.25 subtracted)."""
+    zeroes the score (max token_penalty_cap subtracted)."""
     n = _token_count(_body_text_for_dedupe(row))
-    if n <= _TOKEN_FREE_LIMIT:
+    if n <= weights.token_free_limit:
         return 0.0
-    return _TOKEN_PENALTY_CAP * min(
+    return weights.token_penalty_cap * min(
         1.0,
-        math.log2(n / _TOKEN_FREE_LIMIT)
-        / math.log2(_TOKEN_PENALTY_SATURATION / _TOKEN_FREE_LIMIT),
+        math.log2(n / weights.token_free_limit)
+        / math.log2(weights.token_penalty_saturation / weights.token_free_limit),
     )
 
 
@@ -1102,20 +1330,22 @@ def _score_row(
     bm25_max: float | None,
     project_id: str | None,
     score_terms: frozenset[str],
+    weights: RetrievalWeights | None = None,
 ) -> float:
-    score = _relevance_score(row, query_tokens, bm25_max)
+    w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
+    score = _relevance_score(row, query_tokens, bm25_max, w)
     if "trust" in score_terms:
-        score *= _trust_score(row)
+        score *= _trust_score(row, w)
     if "scope" in score_terms:
         score *= _scope_match_score(row, project_id)
     if "freshness" in score_terms:
-        score *= _freshness_score(row.get("updated_at"))
+        score *= _freshness_score(row.get("updated_at"), w)
     if "decision" in score_terms:
-        score *= _decision_value_score(row)
+        score *= _decision_value_score(row, w)
     if "negative" in score_terms:
-        score *= _negative_transfer_score(row)
+        score *= _negative_transfer_score(row, w)
     if "token" in score_terms:
-        score -= _token_cost_penalty(row)
+        score -= _token_cost_penalty(row, w)
     return score
 
 
@@ -1125,6 +1355,7 @@ def _rank_rows(
     *,
     project_id: str | None,
     score_terms: frozenset[str],
+    weights: RetrievalWeights | None = None,
 ) -> list[dict]:
     """Phase 9: score AFTER filters+dedupe, BEFORE budget; stable ordering:
     score desc, then original order (bm25 order on the FTS path, list order
@@ -1136,8 +1367,9 @@ def _rank_rows(
         if any(v is not None for v in bm25_values)
         else None
     )
+    w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
     scored = [
-        (row, index, _score_row(row, query_tokens, bm25_max, project_id, score_terms))
+        (row, index, _score_row(row, query_tokens, bm25_max, project_id, score_terms, w))
         for index, row in enumerate(rows)
     ]
     scored.sort(key=lambda item: (-item[2], item[1], item[0].get("memory_id") or ""))
@@ -1152,6 +1384,8 @@ def search_memories(
     include_history: bool = False,
     include_duplicates: bool = False,
     score_terms: frozenset[str] | None = None,
+    top_k: int | None = None,
+    max_tokens: int | None = None,
 ) -> list[dict]:
     """Search semantic memories (plan Phase 6 + Phase 7 hard filters).
 
@@ -1171,15 +1405,29 @@ def search_memories(
       - project_id given: only memories of that project (global/None keeps
         everything).
 
-    Phase 6 scope: minimal faithful ranking (bm25) only. Dedupe,
-    contradiction surfacing, and token budgets are Phases 8-11 (TODO anchors
-    below). Known divergence: FTS5 matches word prefixes, so a substring in
-    the middle of a word (e.g. "arc" inside "sidecar") matches the linear
+    Phase 10 (contradiction surfacing): returned rows that share a title with
+    a different-body result row carry `contradiction_with: [memory_id, ...]`.
+
+    Phase 11 (retrieval budget): after ranking, the result set is capped to
+    `top_k` rows and trimmed to the `max_tokens` token ceiling (lowest-value
+    rows dropped first; at least the best row is kept).
+
+    Phase 12 (config wiring): `top_k`/`max_tokens`/scoring weights default to
+    config/retrieval.toml ([scoring].max_results, [scoring.weights]) and
+    config/context.toml ([reserve].retrieved_memory_pct_max as a percent of
+    the _CONTEXT_WINDOW_TOKENS assumption); explicit arguments override the
+    config; absent/invalid config falls back to hardcoded defaults.
+
+    Known divergence: FTS5 matches word prefixes, so a substring in the
+    middle of a word (e.g. "arc" inside "sidecar") matches the linear
     scan but not FTS5.
     """
     if not isinstance(term, str) or not term.strip():
         raise BrainError("term must be a non-empty string")
     terms = score_terms if score_terms is not None else _SCORE_TERMS
+    cfg = load_retrieval_config(home)
+    eff_top_k = top_k if top_k is not None else cfg.top_k
+    eff_max_tokens = max_tokens if max_tokens is not None else cfg.max_tokens
     _ensure_migrated(home)
     match_expr = _fts_query(term)
     conn = db.connect(_dbfile(home))
@@ -1196,6 +1444,9 @@ def search_memories(
                     include_history=include_history,
                     include_duplicates=include_duplicates,
                     score_terms=terms,
+                    weights=cfg.weights,
+                    top_k=eff_top_k,
+                    max_tokens=eff_max_tokens,
                 )
             # Index exists but is empty while memories exist: not built yet.
             # Fall through to the linear scan (fail open).
@@ -1210,6 +1461,9 @@ def search_memories(
         include_history=include_history,
         include_duplicates=include_duplicates,
         score_terms=terms,
+        weights=cfg.weights,
+        top_k=eff_top_k,
+        max_tokens=eff_max_tokens,
     )
 
 
@@ -1249,6 +1503,9 @@ def _search_fts(
     include_history: bool = False,
     include_duplicates: bool = False,
     score_terms: frozenset[str] = _SCORE_TERMS,
+    weights: RetrievalWeights | None = None,
+    top_k: int | None = None,
+    max_tokens: int | None = None,
 ) -> list[dict]:
     """FTS5 query: quoted prefix tokens per word, hard filters (Phase 7),
     dedupe (Phase 8), then deterministic ranking (Phase 9) — post-filter,
@@ -1257,23 +1514,27 @@ def _search_fts(
     TODO(Phase 11): top_k / token budget trimming.
     """
     where, params = _filter_sql(project_id, include_history)
-    body_col = "f.body AS _body, " if not include_duplicates else ""
+    # _body is always selected: Phase 8 dedupe and Phase 10 contradiction
+    # surfacing both need the clean body text (comparison path included).
     rows = conn.execute(
-        f"SELECT m.*, {body_col}bm25(memory_fts) AS _bm25 FROM memory_fts f "
+        "SELECT m.*, f.body AS _body, bm25(memory_fts) AS _bm25 FROM memory_fts f "
         "JOIN memories m ON m.memory_id = f.memory_id "
         f"WHERE memory_fts MATCH ? AND {where} ORDER BY bm25(memory_fts), m.memory_id",
         [match_expr, *params],
     ).fetchall()
-    rows = _dedupe_rows(
-        [dict(row) for row in rows], project_id=project_id, include_duplicates=include_duplicates
-    )
+    rows = [dict(row) for row in rows]
+    # Phase 10: conflict map BEFORE dedupe (family collapse must not hide a
+    # conflicting sibling; the surviving row carries the marker).
+    conflicts = _contradiction_map(rows)
+    rows = _dedupe_rows(rows, project_id=project_id, include_duplicates=include_duplicates)
     # review N-D: only tokenize bodies for bounded result sets (the pairwise
     # body scan is already guarded; ranking falls back to title/summary
     # signals and zero token penalty for broad queries)
     if len(rows) > _DEDUPE_BODY_SCAN_LIMIT:
         for row in rows:
             row.pop("_body", None)
-    return _rank_rows(rows, term, project_id=project_id, score_terms=score_terms)
+    ranked = _rank_rows(rows, term, project_id=project_id, score_terms=score_terms, weights=weights)
+    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens), conflicts)
 
 
 def _search_linear(
@@ -1284,6 +1545,9 @@ def _search_linear(
     include_history: bool = False,
     include_duplicates: bool = False,
     score_terms: frozenset[str] = _SCORE_TERMS,
+    weights: RetrievalWeights | None = None,
+    top_k: int | None = None,
+    max_tokens: int | None = None,
 ) -> list[dict]:
     """Previous linear Markdown scan — FALLBACK when FTS5/index unavailable.
 
@@ -1319,5 +1583,7 @@ def _search_linear(
         row = dict(row)
         row["_body"] = body
         out.append(row)
+    conflicts = _contradiction_map(out)
     rows = _dedupe_rows(out, project_id=project_id, include_duplicates=include_duplicates)
-    return _rank_rows(rows, term, project_id=project_id, score_terms=score_terms)
+    ranked = _rank_rows(rows, term, project_id=project_id, score_terms=score_terms, weights=weights)
+    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens), conflicts)

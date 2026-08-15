@@ -34,7 +34,7 @@ does not make a policy key operative.
 | context.toml | rtd.whitelist_commands | none (INFORMATIONAL; eligibility fixed in rtd.ts `RTD_COMMAND_PREFIXES`) | no | no |
 | context.toml | reserve.task_execution_pct_min | none | no | no |
 | context.toml | reserve.verification_reserve_pct | none | no | no |
-| context.toml | reserve.retrieved_memory_pct_max | none | no | no |
+| context.toml | reserve.retrieved_memory_pct_max | semantic.load_retrieval_config (retrieval token budget = pct of 200k context assumption) | yes: tests/test_retrieval_budget.py::test_retrieved_memory_pct_max_caps_token_budget | yes |
 | context.toml | reserve.degrade_order | none | no | no |
 | learning.toml | schema_version | doctor.check_config (parse only) | parse | no |
 | learning.toml | modes.shadow | none | no | no |
@@ -49,9 +49,24 @@ does not make a policy key operative.
 | learning.toml | promotion.prefer_multiple_models | promotion does not load TOML | no | no |
 | learning.toml | promotion.require_no_unacceptable_regressions | promotion does not load TOML | no | no |
 | retrieval.toml | schema_version | doctor.check_config (parse only) | parse | no |
-| retrieval.toml | scoring.components | semantic.search_memories substring scan | no | no |
-| retrieval.toml | scoring.max_results | none | no | no |
+| retrieval.toml | scoring.components | none (term on/off is the search_memories(score_terms=...) parameter; the TOML list is documented-only) | no | no |
+| retrieval.toml | scoring.max_results | semantic.load_retrieval_config -> search_memories top_k (post-ranking result cap; default 3) | yes: tests/test_retrieval_budget.py::test_top_k_trims_to_highest_scoring_rows / test_retrieval_toml_weights_reorder_results | yes |
 | retrieval.toml | scoring.log_all_components | none | no | no |
+| retrieval.toml | scoring.weights.title_boost_exact | semantic.RetrievalWeights -> _relevance_score | yes: tests/test_retrieval_budget.py::test_retrieval_toml_weights_reorder_results (grade_scores; same loader) | yes |
+| retrieval.toml | scoring.weights.title_boost_partial | semantic.RetrievalWeights -> _relevance_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.relevance_cap | semantic.RetrievalWeights -> _relevance_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.bm25_relevance_scale | semantic.RetrievalWeights -> _relevance_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.freshness_half_life_days | semantic.RetrievalWeights -> _freshness_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.freshness_max_penalty | semantic.RetrievalWeights -> _freshness_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.decision_boost_per_hit | semantic.RetrievalWeights -> _decision_value_score | yes (same loader; decision test restores rank order) | yes |
+| retrieval.toml | scoring.weights.decision_boost_cap | semantic.RetrievalWeights -> _decision_value_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.negative_penalty_per_contradiction | semantic.RetrievalWeights -> _negative_transfer_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.negative_penalty_cap | semantic.RetrievalWeights -> _negative_transfer_score | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.token_free_limit | semantic.RetrievalWeights -> _token_cost_penalty | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.token_penalty_cap | semantic.RetrievalWeights -> _token_cost_penalty | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.token_penalty_saturation | semantic.RetrievalWeights -> _token_cost_penalty | yes (same loader) | yes |
+| retrieval.toml | scoring.weights.grade_scores | semantic.RetrievalWeights -> _trust_score | yes: tests/test_retrieval_budget.py::test_retrieval_toml_weights_reorder_results (VERIFIED demoted -> TESTED reorders) | yes |
+| retrieval.toml | scoring.weights.status_scores | semantic.RetrievalWeights -> _trust_score | yes (same loader) | yes |
 | retrieval.toml | lateral_inhibition.deduplicate | none | no | no |
 | retrieval.toml | lateral_inhibition.surface_contradictions | none | no | no |
 | retrieval.toml | decay.states | reconsolidation constants | no | no |

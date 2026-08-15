@@ -87,11 +87,18 @@ def test_linear_fallback_applies_same_filters(brain_home, monkeypatch):
 
     assert _search_ids(brain_home, "needle") == {live, other}
     assert _linear_ids(brain_home, "needle") == {live, other}
-    assert _search_ids(brain_home, "needle", include_history=True) == {live, arch, sup, other}
+    # this is a FILTERS test: lift the Phase 11 default top_k cap so the whole
+    # history set is visible (budget trimming is covered by its own tests)
+    assert _search_ids(brain_home, "needle", include_history=True, top_k=20) == {
+        live,
+        arch,
+        sup,
+        other,
+    }
     assert _search_ids(brain_home, "needle", project_id="other") == {other}
     assert _search_ids(brain_home, "needle", project_id="other", include_history=True) == {other}
     # rejected never comes back
-    assert rej not in _search_ids(brain_home, "needle", include_history=True)
+    assert rej not in _search_ids(brain_home, "needle", include_history=True, top_k=20)
 
 
 def test_deterministic_tie_ordering(brain_home):
