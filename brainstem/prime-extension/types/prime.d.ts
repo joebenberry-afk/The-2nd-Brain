@@ -133,8 +133,42 @@ export type PrimeEvent =
   | SessionCompactEvent
   | SessionShutdownEvent;
 
+/**
+ * Result from a `tool_call` handler: `{ block: true, reason? }` prevents the
+ * tool from executing (the runtime emits an error tool result with `reason`).
+ * Verified against packages/coding-agent/src/core/extensions/types.ts
+ * (ToolCallEventResult: block?: boolean; reason?: string).
+ */
+export interface ToolCallEventResult {
+  block?: boolean;
+  reason?: string;
+}
+
+/**
+ * Result from a `before_agent_start` handler: `{ systemPrompt }` replaces the
+ * system prompt for this turn (chained across extensions).
+ * Verified against packages/coding-agent/src/core/extensions/types.ts
+ * (BeforeAgentStartEventResult.systemPrompt?: string).
+ */
+export interface BeforeAgentStartEventResult {
+  /** Optional custom message appended before the turn. */
+  message?: unknown;
+  /** Replace the system prompt for this turn; multiple extensions chain. */
+  systemPrompt?: string;
+}
+
 /** Extension API surface used by this extension. */
 export interface ExtensionAPI {
+  /** tool_call handlers may block execution. */
+  on(
+    event: "tool_call",
+    handler: (event: ToolCallEvent, ctx: ExtensionContext) => ToolCallEventResult | undefined,
+  ): void;
+  /** before_agent_start handlers may patch the system prompt. */
+  on(
+    event: "before_agent_start",
+    handler: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => BeforeAgentStartEventResult | undefined,
+  ): void;
   on<E extends PrimeEvent>(
     name: E["type"],
     handler: (event: E, ctx: ExtensionContext) => unknown,

@@ -1,15 +1,24 @@
 /**
  * The Second Brain OS — Phase 2 observability extension (Prime Agent).
  *
- * MEASUREMENT ONLY. Observes the 11 lifecycle events and appends JSONL
- * telemetry to <brain-home>/telemetry/agent-performance/<session>.jsonl.
+ * MEASUREMENT FIRST, plus the Phase 1 minimal-orchestrator guard: observes
+ * the 11 lifecycle events, appends JSONL telemetry to
+ * <brain-home>/telemetry/agent-performance/<session>.jsonl, and — for Sol
+ * orchestrator-model sessions only — blocks direct execution tools
+ * (bash/edit/websearch) and injects the Sol contract as a systemPrompt
+ * addendum. All other sessions stay measurement-only.
  *
  * Safety invariants:
- *  - No handler ever returns {block}, {messages}, {systemPrompt}, or any
- *    patch — handlers always return undefined.
+ *  - Measurement handlers return undefined. The two guard-capable handlers
+ *    (tool_call, before_agent_start) return a patch ONLY for orchestrator
+ *    models: tool_call may return {block:true, reason} for Sol + blocked
+ *    tool; before_agent_start may return {systemPrompt} for Sol. Everything
+ *    else returns undefined.
  *  - tool_call handlers never modify event.input.
  *  - Every handler is wrapped in try/catch; on error an `extension_error`
  *    record is appended best-effort and nothing is thrown into the session.
+ *    Guard failures FAIL OPEN (recorded, never blocking) so measurement can
+ *    never disturb the agent session.
  *  - Writes are fire-and-forget: append() is never awaited on the critical
  *    path and storage never throws.
  *
@@ -18,7 +27,6 @@
  */
 import type {
   AgentEndEvent,
-  BeforeAgentStartEvent,
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
@@ -27,12 +35,17 @@ import type {
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
-  ToolCallEvent,
   ToolResultEvent,
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
 import { loadConfig } from "./config";
+import {
+  buildPolicyBlockRecord,
+  isOrchestratorModel,
+  loadOrchestratorGuardConfig,
+  orchestratorPolicyFor,
+} from "./orchestrator-guard";
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
@@ -50,6 +63,58 @@ function anonSessionId(): string {
     .padStart(4, "0");
   return `anon-${Date.now()}-${rand}`;
 }
+
+/**
+ * Sol minimal-orchestrator contract, injected as a systemPrompt addendum for
+ * Sol-model sessions only (via the before_agent_start guard below).
+ *
+ * Condensed from docs/orchestration/SOL_MINIMAL_ORCHESTRATOR.md (canonical
+ * source: brainstem/policies/sol-minimal-orchestrator.md). Kept under 1500
+ * words; embedded here so the installed extension copy stays self-contained.
+ *
+ * NOTE: the extension context exposes no rlmDepth, so a subagent spawned
+ * WITH a Sol model would also be guarded. That is acceptable: workers run
+ * cheaper models by policy; only the orchestrator role uses Sol.
+ */
+const SOL_ORCHESTRATOR_CONTRACT = `You are Sol, the minimal-cost ORCHESTRATOR. You do NOT execute work; you delegate it and read results.
+
+ROLE: understand the user's request from information already in your context; decide what information or work is required; delegate to the most appropriate worker; read returned evidence; audit for correctness, contradictions, missing proof, and scope drift; request corrections when necessary; make the final decision; return a concise synthesis.
+
+ALLOWED: read the user's request; read information already in your active context; read concise worker reports, focused patches/diffs, and test summaries; compare two worker reports; identify contradictions, missing evidence, and scope drift; judge whether a claim is sufficiently proven; reject a worker result; ask a worker to correct or verify; choose the next worker; decide escalation; make architecture/product decisions on collected evidence; stop when the goal is satisfied.
+
+FORBIDDEN (MUST delegate instead): searching the repository, enumerating files, grep/ripgrep, inspecting source files, browsing the web, executing shell commands or Python, querying databases, inspecting telemetry, running tests/benchmarks/builds, editing files, writing production code, creating patches, trial-and-error debugging, dependency discovery, investigating logs, broad code review, manual call-graph tracing, spawning several subagents merely to gain confidence.
+
+CRITICAL RULE: if you think "I need to inspect/check/search/verify/find...", the next action is normally to DELEGATE that exact information request to one worker. You MUST delegate. If more information is required, delegate.
+
+INFORMATION BOUNDARY: consume only information already handed to you: the user's request, your context, and worker evidence packages. A referenced-but-not-loaded file is delegated.
+
+WORKER SELECTION (cheapest competent first): Qwen 3.5 (local/cheap) for inventory, discovery, references, config mapping, static inspection, telemetry stats, doc-vs-code checks, mechanical refactors, low-risk tests, first-pass validation; DeepSeek V4 Flash (cheap/fast) for moderate implementation, targeted debugging, code comparison, patch review, contained fixes, small designs, performance analysis, stronger tests, second-pass review; GPT-5.6 Luna (premium) for cross-cutting changes, high correctness, failed cheaper workers, architecture-boundary issues, migration/compat, production-critical final validation. Never select by prestige. Escalate only when a worker is insufficient, uncertain, or failed, or the task becomes correctness-critical.
+
+CONCURRENCY: default 1 active worker; at most 2 when work is genuinely independent; NEVER 3+.
+
+WORKER TASK PACKET (every delegation):
+## Objective — one precise result required
+## Why — one/two sentences: what decision this enables
+## Scope — exact subsystem/files if already known
+## Constraints — what must not be changed
+## Required Evidence — what proof must be returned
+## Deliverable — the exact output you need
+Never hand workers the whole project history.
+
+WORKER RETURN CONTRACT (require this shape):
+## Result — Pass / Fail / Partial / Implemented
+## What I Found — concise factual findings
+## Evidence — path:line / symbol / command+observed result
+## Changes — only if changes were requested
+## Tests — exact tests and results
+## Risks / Uncertainty — anything not proven
+## Recommended Next Step — one concise recommendation
+
+AUDIT (5 checks, then decide): (1) Did the worker answer the exact assigned question? (2) Is the claim supported by evidence? (3) Did the worker change anything outside scope? (4) Are the tests strong enough to prove the change? (5) Does the result contradict existing verified information?
+
+CORRECTION LOOP: all five pass -> accept. One fails -> send a narrow correction task to the SAME worker (do not redo the work yourself). Escalate only after two failures, or when the flaw indicates the task is beyond the worker, the task is correctness-critical, or evidence is contradictory.
+
+FINAL RESPONSE: conclusion, important evidence, material caveats, next action if needed. No giant retelling of worker activity, raw logs, or unverified speculation. Keep your reasoning and output compact.`;
 
 /**
  * Resolve the session id for the current ctx. Prefers the persisted session
@@ -181,9 +246,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model),
   );
 
-  wire<BeforeAgentStartEvent>("before_agent_start", (event, _ctx, session) =>
-    sensors.beforeAgentStart(session, event.prompt),
-  );
+  // before_agent_start: measurement + Sol contract injection.
+  // Sol-model sessions get the condensed orchestrator contract as a
+  // systemPrompt addendum (BeforeAgentStartEventResult.systemPrompt, chained
+  // by the runtime across extensions); all other models get undefined
+  // (measurement-only). Guard failures fail open: the record is still
+  // appended and no patch is returned.
+  pi.on("before_agent_start", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt));
+      if (isOrchestratorModel(sensors.modelToString(ctx.model) ?? undefined, loadOrchestratorGuardConfig())) {
+        return { systemPrompt: SOL_ORCHESTRATOR_CONTRACT };
+      }
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+    }
+    return undefined;
+  });
 
   wire<TurnStartEvent>("turn_start", (event, _ctx, session) =>
     sensors.turnStart(session, event.turnIndex),
@@ -193,10 +278,47 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     sensors.context(session, event.messages),
   );
 
-  // tool_call: read-only. event.input is never modified.
-  wire<ToolCallEvent>("tool_call", (event, _ctx, session) =>
-    sensors.toolCall(session, event.toolName, event.toolCallId, event.input),
-  );
+  // tool_call: read-only measurement + minimal-orchestrator guard.
+  // event.input is never modified. The normal tool_call record is ALWAYS
+  // appended; on top of that, when the active model is the orchestrator
+  // (Sol) and the tool is blocked (bash/edit/websearch), an
+  // orchestrator_policy_violation record (kind per SCHEMA.md, bounded
+  // fields, detected_by=runtime_guard) is appended and {block:true, reason}
+  // is returned so the runtime turns the call into an error tool result.
+  // Every other model keeps the previous measurement-only behavior
+  // (returns undefined). ipython is NOT blocked: RLM delegation runs
+  // through the IPython kernel and must stay available to the orchestrator.
+  // Guard failures fail open: the violation is never recorded and the call
+  // is never blocked (an extension_error record is appended instead).
+  pi.on("tool_call", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
+      const modelId = sensors.modelToString(ctx.model) ?? undefined;
+      const decision = orchestratorPolicyFor(modelId, event.toolName, loadOrchestratorGuardConfig());
+      if (decision.block) {
+        // Fill the session stem the same way every other record does
+        // (buildPolicyBlockRecord leaves it as a placeholder).
+        const violation = buildPolicyBlockRecord(
+          modelId,
+          event.toolName,
+          decision.reason,
+          new Date().toISOString(),
+        );
+        violation.session = session;
+        getStore(session)?.append(violation);
+        return { block: true, reason: decision.reason };
+      }
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+    }
+    return undefined;
+  });
 
   // Phase 5 RTD (shadow only): after the normal tool_result record, decide
   // whether the result would be distilled and log rtd_shadow. Never
