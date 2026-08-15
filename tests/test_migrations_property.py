@@ -43,7 +43,11 @@ def _minimal_brain(home: Path) -> None:
     db.migrate(db.db_path(home))
 
 
-@settings(max_examples=8)
+# deadline=None follows the repo-wide Hypothesis convention (every other
+# property-test file sets it): the backup test spawns `git init` (backup.py)
+# and heavy temp-dir work that can exceed Hypothesis's default 200 ms example
+# deadline under concurrent load, producing a transient DeadlineExceeded flake.
+@settings(max_examples=8, deadline=None)
 @given(k=st.integers(min_value=0, max_value=3))
 def test_any_prefix_then_remainder_equals_full_apply(k: int) -> None:
     with tempfile.TemporaryDirectory() as td:
@@ -83,7 +87,7 @@ def test_any_prefix_then_remainder_equals_full_apply(k: int) -> None:
         assert db.migrate(dbfile, migrations_dir=full) == []
 
 
-@settings(max_examples=5)
+@settings(max_examples=5, deadline=None)
 @given(
     pid=st.text(
         alphabet=st.characters(whitelist_categories=("L", "N"), whitelist_characters="-"),
