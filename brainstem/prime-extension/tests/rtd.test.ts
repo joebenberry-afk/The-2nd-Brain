@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   commandFromInput,
   parseThreshold,
@@ -128,14 +131,77 @@ describe("shouldDistill", () => {
   });
 });
 
-describe("parseThreshold", () => {
-  it("parses ints; defaults on missing/invalid/negative", () => {
+describe("parseThreshold (Phase 12 ladder: env -> context.toml -> default)", () => {
+  // Hermetic brain home: env is isolated per test, so parseThreshold's file
+  // lookup never touches a real brain.
+  const ENV_KEYS = ["SECOND_BRAIN_HOME", "SECOND_BRAIN_RTD_THRESHOLD"] as const;
+  const saved: Record<string, string | undefined> = {};
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "sb-rtd-thr-"));
+    for (const key of ENV_KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.SECOND_BRAIN_HOME = home;
+  });
+
+  afterEach(async () => {
+    for (const key of ENV_KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key] as string;
+    }
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function writeContextToml(rtdBody: string): Promise<void> {
+    await mkdir(join(home, "config"), { recursive: true });
+    await writeFile(
+      join(home, "config", "context.toml"),
+      `schema_version = 1\n\n[rtd]\n${rtdBody}\n`,
+      "utf8",
+    );
+  }
+
+  it("parses ints from env; defaults on missing/invalid/negative env without a file", () => {
     expect(parseThreshold("8000")).toBe(8000);
     expect(parseThreshold("123")).toBe(123);
     expect(parseThreshold("12abc")).toBe(12);
-    expect(parseThreshold(undefined)).toBe(8000);
+    expect(parseThreshold(undefined)).toBe(8000); // no context.toml -> default
     expect(parseThreshold("abc")).toBe(8000);
     expect(parseThreshold("-5")).toBe(8000);
+  });
+
+  it("context.toml [rtd] threshold_chars drives the threshold when env is unset", async () => {
+    await writeContextToml("threshold_chars = 500");
+    expect(parseThreshold(undefined)).toBe(500);
+  });
+
+  it("env SECOND_BRAIN_RTD_THRESHOLD beats the file value", async () => {
+    await writeContextToml("threshold_chars = 500");
+    process.env.SECOND_BRAIN_RTD_THRESHOLD = "100";
+    expect(parseThreshold(process.env.SECOND_BRAIN_RTD_THRESHOLD)).toBe(100);
+    expect(parseThreshold("100")).toBe(100);
+  });
+
+  it("invalid env value falls through to the file value", async () => {
+    await writeContextToml("threshold_chars = 500");
+    expect(parseThreshold("abc")).toBe(500);
+    expect(parseThreshold("-5")).toBe(500);
+  });
+
+  it("invalid or absent file value falls back to the default", async () => {
+    await writeContextToml("threshold_chars = -5");
+    expect(parseThreshold(undefined)).toBe(8000);
+    await writeContextToml("threshold_chars = \"nope\"");
+    expect(parseThreshold(undefined)).toBe(8000);
+    await writeContextToml("whitelist_tools = [\"bash\"]"); // other keys only
+    expect(parseThreshold(undefined)).toBe(8000);
+  });
+
+  it("missing context.toml falls back to the default", async () => {
+    expect(parseThreshold(undefined)).toBe(8000);
   });
 });
 

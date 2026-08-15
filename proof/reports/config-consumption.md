@@ -19,19 +19,19 @@ does not make a policy key operative.
 | brain.toml | backup.include_projects | none | no | no |
 | brain.toml | git.categories | none | no | no |
 | context.toml | schema_version | doctor.check_config (parse only) | parse | no |
-| context.toml | governor.green_until_pct | none | no | no; monitor uses 50/80 boundaries |
-| context.toml | governor.yellow_until_pct | none | no | no |
-| context.toml | governor.orange_until_pct | none | no | no |
-| context.toml | governor.actions | none | no | no |
+| context.toml | governor.green_until_pct | none (PLANNED; monitor.py:164 uses hardcoded 50/80 boundaries) | no | no |
+| context.toml | governor.yellow_until_pct | none (PLANNED) | no | no |
+| context.toml | governor.orange_until_pct | none (PLANNED) | no | no |
+| context.toml | governor.actions | none (PLANNED) | no | no |
 | context.toml | read_ledger.track | working_set uses fixed JSON fields | no | no |
 | context.toml | working_set.dir | paths/session_dir | no | no |
 | context.toml | working_set.files | working_set uses fixed filenames | no | no |
 | context.toml | capsule.min_update_interval_seconds | none | no | no |
-| context.toml | rtd.enabled | Prime extension uses environment gate | no | no |
-| context.toml | rtd.threshold_chars | Prime extension uses `SECOND_BRAIN_RTD_THRESHOLD` | no | no |
-| context.toml | rtd.max_distill_chars | none | no | no |
-| context.toml | rtd.whitelist_tools | Prime extension has source constants | no | no |
-| context.toml | rtd.whitelist_commands | Prime extension has source constants | no | no |
+| context.toml | rtd.enabled | Prime extension uses env gate `SECOND_BRAIN_RTD` only (INFORMATIONAL here) | no | no |
+| context.toml | rtd.threshold_chars | rtd.parseThreshold: env `SECOND_BRAIN_RTD_THRESHOLD` (highest) -> this file -> default 8000 | yes: brainstem/prime-extension/tests/rtd.test.ts threshold-ladder tests | yes |
+| context.toml | rtd.max_distill_chars | none (INFORMATIONAL) | no | no |
+| context.toml | rtd.whitelist_tools | none (INFORMATIONAL; eligibility fixed in rtd.ts source constants) | no | no |
+| context.toml | rtd.whitelist_commands | none (INFORMATIONAL; eligibility fixed in rtd.ts `RTD_COMMAND_PREFIXES`) | no | no |
 | context.toml | reserve.task_execution_pct_min | none | no | no |
 | context.toml | reserve.verification_reserve_pct | none | no | no |
 | context.toml | reserve.retrieved_memory_pct_max | none | no | no |
@@ -90,6 +90,8 @@ does not make a policy key operative.
 ## Scope decision
 
 The campaign does not pretend these descriptive TOML values are executed
-behavior. The one operative gate is tested as shown. Retrieval claims are
+behavior. The operative gates are tested as shown (verification
+material_unverified_blocks_completion; skills.toml router.max_active; now
+context.toml rtd.threshold_chars). Retrieval claims are
 narrowed to the current substring search until a separately reviewed scorer is
 implemented and wired into an automatic ACTIVE path.

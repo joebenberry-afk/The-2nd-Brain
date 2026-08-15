@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,8 @@ import {
   loadConfig,
   observabilityDisabledByEnv,
   resolveBrainHome,
+  rtdThresholdFromConfig,
+  thresholdCharsFromContextToml,
 } from "../src/config";
 
 const ENV_KEYS = ["SECOND_BRAIN_OBSERVABILITY", "SECOND_BRAIN_HOME", "USERPROFILE", "HOME"] as const;
@@ -74,5 +76,72 @@ describe("config gate", () => {
     await mkdir(join(tmp, "Documents", "The-Second-Brain"), { recursive: true });
     expect(defaultBrainHome()).toBe(join(tmp, "Documents", "The-Second-Brain"));
     expect(resolveBrainHome()).toBe(join(tmp, "Documents", "The-Second-Brain"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 12: context.toml [rtd] threshold_chars parsing + file read
+// ---------------------------------------------------------------------------
+
+describe("thresholdCharsFromContextToml (tiny TOML subset)", () => {
+  it("reads threshold_chars inside the [rtd] section", () => {
+    expect(
+      thresholdCharsFromContextToml("schema_version = 1\n\n[rtd]\nthreshold_chars = 500\n"),
+    ).toBe(500);
+  });
+
+  it("ignores other sections, other keys, and inline comments", () => {
+    const text = [
+      "[governor]",
+      "threshold_chars = 999",
+      "",
+      "[rtd]",
+      "enabled = false",
+      "threshold_chars = 700  # RTD size gate",
+      "whitelist_tools = [\"bash\"]",
+      "",
+      "[reserve]",
+      "threshold_chars = 42",
+    ].join("\n");
+    expect(thresholdCharsFromContextToml(text)).toBe(700);
+  });
+
+  it("returns undefined when absent, in another section, or invalid", () => {
+    expect(thresholdCharsFromContextToml("[other]\nthreshold_chars = 5")).toBeUndefined();
+    expect(thresholdCharsFromContextToml("[rtd]\nenabled = false")).toBeUndefined();
+    expect(thresholdCharsFromContextToml("[rtd]\nthreshold_chars = \"abc\"")).toBeUndefined();
+    expect(thresholdCharsFromContextToml("[rtd]\nthreshold_chars = -5")).toBeUndefined();
+    expect(thresholdCharsFromContextToml("not toml at all")).toBeUndefined();
+    expect(thresholdCharsFromContextToml("")).toBeUndefined();
+  });
+
+  it("does not mistake a sub-section or prefixed section for [rtd]", () => {
+    expect(thresholdCharsFromContextToml("[rtdx]\nthreshold_chars = 1\n[rtd]")).toBeUndefined();
+  });
+});
+
+describe("rtdThresholdFromConfig (file read, never throws)", () => {
+  it("reads <home>/config/context.toml [rtd] threshold_chars", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-rtd-"));
+    try {
+      await mkdir(join(home, "config"), { recursive: true });
+      await writeFile(join(home, "config", "context.toml"), "[rtd]\nthreshold_chars = 123\n", "utf8");
+      expect(rtdThresholdFromConfig(home)).toBe(123);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined for null home, missing file, or invalid value", async () => {
+    expect(rtdThresholdFromConfig(null)).toBeUndefined();
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-rtd-"));
+    try {
+      expect(rtdThresholdFromConfig(home)).toBeUndefined(); // no config dir
+      await mkdir(join(home, "config"), { recursive: true });
+      await writeFile(join(home, "config", "context.toml"), "[rtd]\nthreshold_chars = \"x\"\n", "utf8");
+      expect(rtdThresholdFromConfig(home)).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });
