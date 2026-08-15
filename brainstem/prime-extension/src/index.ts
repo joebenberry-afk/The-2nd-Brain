@@ -33,9 +33,15 @@ import type {
   TurnStartEvent,
 } from "../types/prime";
 import { loadConfig } from "./config";
-import { parseThreshold, rtdShadowRecord } from "./rtd";
+import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
+import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
-import { sanitizeSessionStem, TelemetryStore } from "./storage";
+import {
+  createTelemetryDirEnsurer,
+  sanitizeSessionStem,
+  TelemetryStore,
+  type DirEnsurer,
+} from "./storage";
 
 /** Random fallback session id (used only when no session file exists). */
 function anonSessionId(): string {
@@ -47,10 +53,11 @@ function anonSessionId(): string {
 
 /**
  * Resolve the session id for the current ctx. Prefers the persisted session
- * file stem; falls back to an anonymous id so ephemeral sessions still get
- * telemetry without exposing a path.
+ * file stem (unchanged, always wins); falls back to `anonSession()` — the
+ * anonymous identity cached for THIS extension lifecycle — so ephemeral
+ * sessions get one stable in-process id instead of a new id per event.
  */
-function resolveSessionId(ctx: ExtensionContext): string {
+function resolveSessionId(ctx: ExtensionContext, anonSession: () => string): string {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
     if (typeof file === "string" && file.length > 0) {
@@ -61,7 +68,7 @@ function resolveSessionId(ctx: ExtensionContext): string {
   } catch {
     // fall through to anonymous id
   }
-  return anonSessionId();
+  return anonSession();
 }
 
 type Mapper<E extends PrimeEvent> = (
@@ -81,13 +88,14 @@ type Mapper<E extends PrimeEvent> = (
  */
 function safeHandler<E extends PrimeEvent>(
   getStore: (session: string) => TelemetryStore | null,
+  anonSession: () => string,
   mapper: Mapper<E>,
   final = false,
 ): (event: E, ctx: ExtensionContext) => void {
   return (event: E, ctx: ExtensionContext): void => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx);
+      session = resolveSessionId(ctx, anonSession);
       const record = mapper(event, ctx, session);
       if (!record) return;
       const store = getStore(session);
@@ -113,7 +121,16 @@ function safeHandler<E extends PrimeEvent>(
   };
 }
 
-export default function (pi: ExtensionAPI): void {
+export interface ExtensionOptions {
+  /**
+   * Factory-scoped directory-readiness seam (Phase 4 test hook). When
+   * omitted, a fresh `createTelemetryDirEnsurer()` is created per factory
+   * invocation. Never module-global.
+   */
+  ensureTelemetryDir?: DirEnsurer;
+}
+
+export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
   const config = loadConfig();
   if (!config.enabled || !config.telemetryDir) {
     // Silently disabled (env gate or missing brain home).
@@ -121,10 +138,33 @@ export default function (pi: ExtensionAPI): void {
   }
   const telemetryDir: string = config.telemetryDir;
 
+  // Phase 4: one shared directory-readiness seam for the whole factory
+  // (plan: "at extension startup, ensure the telemetry directory once").
+  // The first store construction performs the single mkdir attempt; every
+  // later store in this lifecycle reuses the result (success or failure —
+  // never retried). A failure propagates into the constructing store's
+  // fail-open handler, so it is reported exactly once and construction,
+  // appends, and final writes remain non-fatal. `options.ensureTelemetryDir`
+  // is a factory-scoped test seam; defaults to a fresh ensurer per factory.
+  const ensureTelemetryDir = options.ensureTelemetryDir ?? createTelemetryDirEnsurer();
+
+  // Phase 2 fix: the anonymous fallback identity is created once per
+  // extension lifecycle (this factory invocation) and reused for every event
+  // that lacks an explicit Prime session file. Closure state — not a
+  // module/process global — so separate lifecycles get separate identities
+  // and all anonymous events share one telemetry file.
+  let anonSessionIdValue: string | null = null;
+  const anonSession = (): string => {
+    if (anonSessionIdValue === null) {
+      anonSessionIdValue = anonSessionId();
+    }
+    return anonSessionIdValue;
+  };
+
   let store: TelemetryStore | null = null;
   const getStore = (session: string): TelemetryStore | null => {
     if (!store || store.sessionId !== session) {
-      store = new TelemetryStore(telemetryDir, session);
+      store = new TelemetryStore(telemetryDir, session, ensureTelemetryDir);
     }
     return store;
   };
@@ -134,7 +174,7 @@ export default function (pi: ExtensionAPI): void {
     mapper: Mapper<E>,
     final = false,
   ): void => {
-    pi.on(type, safeHandler<E>(getStore, mapper, final));
+    pi.on(type, safeHandler<E>(getStore, anonSession, mapper, final));
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) =>
@@ -162,14 +202,28 @@ export default function (pi: ExtensionAPI): void {
   // whether the result would be distilled and log rtd_shadow. Never
   // substitutes content in this phase. RTD failures must not disturb the
   // normal telemetry record, hence the inner try/catch.
+  //
+  // Phase 3 (corrected): RTD eligibility (tool/command) is decided FIRST —
+  // before ANY content measurement. Eligible results get one JSON.stringify
+  // attempt plus one UTF-8 byte count in `measureContent`, shared by
+  // ordinary telemetry (`output_bytes`) and RTD shadow evaluation/recording
+  // (`serializedChars`). Ineligible results perform ZERO RTD-specific
+  // serialization: primitive strings are measured with only the raw
+  // TextEncoder byte count base telemetry already required (no
+  // JSON.stringify), and non-strings keep exactly the single
+  // serialization/fallback base telemetry already required. The precomputed
+  // eligibility is passed to rtdShadowRecord so RTD never re-measures.
   wire<ToolResultEvent>("tool_result", (event, _ctx, session) => {
+    const eligibility = rtdEligibility(event.toolName, event.input);
+    const measurement = measureContent(event.content, eligibility === "ok");
     try {
       const shadow = rtdShadowRecord({
         session,
         tool: event.toolName,
         id: event.toolCallId,
-        content: event.content,
         input: event.input,
+        eligibility,
+        measurement,
         threshold: parseThreshold(process.env.SECOND_BRAIN_RTD_THRESHOLD),
         active: process.env.SECOND_BRAIN_RTD === "active",
       });
@@ -177,7 +231,13 @@ export default function (pi: ExtensionAPI): void {
     } catch {
       // measurement must not disturb measurement
     }
-    return sensors.toolResult(session, event.toolName, event.toolCallId, event.isError, event.content);
+    return sensors.toolResult(
+      session,
+      event.toolName,
+      event.toolCallId,
+      event.isError,
+      measurement.outputBytes,
+    );
   });
 
   wire<TurnEndEvent>("turn_end", (event, ctx, session) => {

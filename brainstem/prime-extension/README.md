@@ -17,6 +17,8 @@ All 11 subscribed lifecycle events are mapped to schema v2 records (see
 `session_start`, `before_agent_start`, `turn_start`, `context`, `tool_call`,
 `tool_result`, `turn_end`, `session_before_compact`, `session_compact`,
 `agent_end`, `session_shutdown`, plus `extension_error` for internal failures.
+`orchestrator_policy_violation` (bounded enumerated fields; **report-only / NOT
+WIRED** — no hook emits it yet, per `brainstem/policies/sol-minimal-orchestrator.md`).
 
 Each record carries `v: 2`, `ts` (ISO-8601 UTC, ms), `kind`, and `session`.
 Kinds are stored in
@@ -65,9 +67,12 @@ prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
 | `SECOND_BRAIN_HOME=<dir>` | Brain home (must exist, else silently disabled) |
 | *(unset)* | `%USERPROFILE%\Documents\The-Second-Brain` |
 
-Telemetry directory: `<brain-home>/telemetry/agent-performance/` (created on
-first write). Session id = basename of `ctx.sessionManager.getSessionFile()`
-without `.jsonl`; fallback `anon-<epochms>-<4 hex>`.
+Telemetry directory: `<brain-home>/telemetry/agent-performance/` (created
+once per extension lifecycle — one shared readiness step, not per record).
+Session id = basename of `ctx.sessionManager.getSessionFile()`
+without `.jsonl`; fallback `anon-<epochms>-<4 hex>` **created once per
+extension lifecycle** (Phase 2, 2026-08-15) so anonymous sessions write one
+telemetry file instead of one per event.
 
 ## Development
 

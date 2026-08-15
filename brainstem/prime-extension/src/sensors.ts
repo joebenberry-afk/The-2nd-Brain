@@ -41,6 +41,64 @@ export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max);
 }
 
+/**
+ * Content measurement (Phase 3, corrected).
+ *
+ * One serialization attempt yields both metrics downstream, so RTD and
+ * telemetry never serialize the same tool result twice:
+ *
+ * - `serializedChars`: legacy RTD metric — `JSON.stringify(content).length`
+ *   (character length, including quotes/escaping; 0 when not serializable OR
+ *   when the RTD char metric was not requested). Threshold decisions keep
+ *   their historical semantics for Unicode, escaping, and boundary values.
+ * - `outputBytes`: existing telemetry metric — UTF-8 bytes of the raw string
+ *   for string content, UTF-8 bytes of the JSON serialization for anything
+ *   else, with the current `<unserializable>` fallback (matches `byteLength`).
+ *
+ * `includeSerializedChars=false` requests the base-telemetry measurement
+ * ONLY (ineligible tool results): primitive strings are measured with one
+ * TextEncoder and ZERO JSON.stringify (no RTD-specific work); non-strings
+ * keep exactly the single serialization/fallback that base telemetry already
+ * required, and `serializedChars` is reported as 0.
+ */
+export interface ContentMeasurement {
+  serializedChars: number;
+  outputBytes: number;
+}
+
+/** Measure content exactly once; never throws. */
+export function measureContent(content: unknown, includeSerializedChars = true): ContentMeasurement {
+  if (!includeSerializedChars) {
+    // Base telemetry only: no RTD serialization work at all.
+    if (typeof content === "string") {
+      return { serializedChars: 0, outputBytes: new TextEncoder().encode(content).length };
+    }
+    // Non-strings: the single serialization/fallback base telemetry already
+    // required (byteLength semantics) — never an extra RTD path.
+    let serialized: unknown;
+    try {
+      serialized = JSON.stringify(content);
+    } catch {
+      serialized = "<unserializable>";
+    }
+    return { serializedChars: 0, outputBytes: new TextEncoder().encode(serialized as string).length };
+  }
+  let serialized: unknown;
+  let serializationFailed = false;
+  try {
+    serialized = JSON.stringify(content);
+  } catch {
+    serializationFailed = true;
+    serialized = "<unserializable>";
+  }
+  const serializedChars = serializationFailed || typeof serialized !== "string" ? 0 : serialized.length;
+  const text = typeof content === "string" ? content : serialized;
+  return {
+    serializedChars,
+    outputBytes: new TextEncoder().encode(text as string).length,
+  };
+}
+
 /** Common record fields (v, ts, kind, session). */
 export interface BaseRecord {
   v: 2;
@@ -253,18 +311,23 @@ export interface ToolResultRecord extends BaseRecord {
   output_bytes: number;
 }
 
+/**
+ * `outputBytes` is precomputed by the caller via `measureContent` (Phase 3)
+ * so the real handler measures each result once and shares the byte count
+ * with RTD shadow evaluation/recording.
+ */
 export function toolResult(
   session: string,
   toolName: unknown,
   toolCallId: unknown,
   isError: unknown,
-  content: unknown,
+  outputBytes: number,
 ): ToolResultRecord {
   return base("tool_result", session, {
     tool: typeof toolName === "string" ? toolName : "unknown",
     id: typeof toolCallId === "string" ? toolCallId : "unknown",
     is_error: isError === true,
-    output_bytes: byteLength(content),
+    output_bytes: outputBytes,
   }) as unknown as ToolResultRecord;
 }
 
@@ -330,6 +393,65 @@ export function sessionShutdown(session: string, reason: unknown): SessionShutdo
   return base("session_shutdown", session, {
     reason: typeof reason === "string" ? reason : String(reason),
   }) as unknown as SessionShutdownRecord;
+}
+
+/** Enumerated Sol orchestrator-policy violation codes (policy §13). */
+export const ORCHESTRATOR_VIOLATIONS = [
+  "direct_execution",
+  "undue_context_gather",
+  "concurrency_overflow",
+  "wrong_tier",
+  "rediscovery",
+  "scope_drift",
+  "evidence_gap",
+] as const;
+
+/** Enumerated detector identities for orchestrator violations. */
+export const ORCHESTRATOR_DETECTORS = ["manual", "runtime_guard", "telemetry_audit"] as const;
+
+export interface OrchestratorPolicyViolationRecord extends BaseRecord {
+  kind: "orchestrator_policy_violation";
+  /** Enumerated code; unknown values are coerced to "unknown", never free text. */
+  violation: string;
+  /** Provider/id string or null (see modelToString). */
+  model: string | null;
+  /** Enumerated detector id; unknown values are coerced to "unknown". */
+  detected_by: string;
+  /** Whether the action was blocked (hard enforcement) or only recorded (advisory). */
+  blocked: boolean;
+}
+
+/**
+ * Privacy-safe, report-only builder for orchestrator-policy violations.
+ *
+ * BOUNDED FIELDS ONLY: enumerated violation code, model id, enumerated
+ * detector, blocked flag. No free text (no action description, prompt,
+ * command, note, reason, or payload) ever enters the record.
+ *
+ * NOT WIRED: this sensor is available for manual/future use; no extension
+ * hook emits it today and no automatic prompt inspection is performed.
+ */
+export function orchestratorPolicyViolation(
+  session: string,
+  violation: unknown,
+  model: unknown,
+  detectedBy: unknown,
+  blocked: unknown,
+): OrchestratorPolicyViolationRecord {
+  const violationValue =
+    typeof violation === "string" && (ORCHESTRATOR_VIOLATIONS as readonly string[]).includes(violation)
+      ? violation
+      : "unknown";
+  const detector =
+    typeof detectedBy === "string" && (ORCHESTRATOR_DETECTORS as readonly string[]).includes(detectedBy)
+      ? detectedBy
+      : "unknown";
+  return base("orchestrator_policy_violation", session, {
+    violation: violationValue,
+    model: modelToString(model),
+    detected_by: detector,
+    blocked: blocked === true,
+  }) as unknown as OrchestratorPolicyViolationRecord;
 }
 
 export interface ExtensionErrorRecord extends BaseRecord {

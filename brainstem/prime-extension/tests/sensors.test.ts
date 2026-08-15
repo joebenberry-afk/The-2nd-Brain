@@ -88,9 +88,15 @@ describe("sensors: event -> record mapping", () => {
     expect(record.input_bytes).toBeGreaterThan(0);
   });
 
-  it("tool_result -> tool, id, is_error, output_bytes (no content)", () => {
+  it("tool_result -> tool, id, is_error, output_bytes (precomputed, no content)", () => {
     const content = [{ type: "text", text: "private tool output" }];
-    const record = sensors.toolResult(SESSION, "bash", "call-1", true, content);
+    const record = sensors.toolResult(
+      SESSION,
+      "bash",
+      "call-1",
+      true,
+      sensors.measureContent(content).outputBytes,
+    );
     expectBase(record, "tool_result");
     expect(record.tool).toBe("bash");
     expect(record.id).toBe("call-1");
@@ -102,7 +108,7 @@ describe("sensors: event -> record mapping", () => {
   });
 
   it("tool_result -> is_error false when not truthy", () => {
-    const record = sensors.toolResult(SESSION, "edit", "call-9", undefined, []);
+    const record = sensors.toolResult(SESSION, "edit", "call-9", undefined, 0);
     expect(record.is_error).toBe(false);
   });
 
@@ -280,5 +286,126 @@ describe("redactSensitiveCommand (SEC-08)", () => {
     const record2 = sensors.toolCall("s", "bash", "c2", { command: secretAtStart });
     expect(JSON.stringify(record2)).not.toContain(SECRET);
     expect(JSON.stringify(record2)).toContain("[REDACTED]");
+  });
+});
+
+describe("sensors: orchestrator_policy_violation (bounded fields, report-only)", () => {
+  it("maps enumerated violation code, model, detector, blocked flag", () => {
+    const record = sensors.orchestratorPolicyViolation(
+      SESSION,
+      "direct_execution",
+      { id: "gpt-5.6-sol", provider: "openai" },
+      "manual",
+      false,
+    );
+    expectBase(record, "orchestrator_policy_violation");
+    expect(record.violation).toBe("direct_execution");
+    expect(record.model).toBe("openai/gpt-5.6-sol");
+    expect(record.detected_by).toBe("manual");
+    expect(record.blocked).toBe(false);
+  });
+
+  it("blocks flag true when blocked===true, model null when model missing", () => {
+    const record = sensors.orchestratorPolicyViolation(SESSION, "wrong_tier", undefined, "telemetry_audit", true);
+    expect(record.model).toBeNull();
+    expect(record.blocked).toBe(true);
+  });
+
+  it("rejects free text and unknown codes: coerces to bounded 'unknown', never stores payload", () => {
+    const record = sensors.orchestratorPolicyViolation(
+      SESSION,
+      "ran: rm -rf --payload SECRET_VALUE_123",
+      { id: "gpt-5.6-sol" },
+      "human wrote a long note",
+      false,
+    );
+    expect(record.violation).toBe("unknown");
+    expect(record.detected_by).toBe("unknown");
+    expect(JSON.stringify(record)).not.toContain("SECRET_VALUE_123");
+    expect(JSON.stringify(record)).not.toContain("rm -rf");
+  });
+});
+
+describe("measureContent: one serialization, both metrics (Phase 3)", () => {
+  it("string content: serializedChars = JSON char length, outputBytes = RAW string UTF-8 bytes", () => {
+    const m = sensors.measureContent("hello");
+    expect(m.serializedChars).toBe(7); // '"hello"' = 7 chars
+    expect(m.outputBytes).toBe(5); // raw string bytes, no quotes
+  });
+
+  it("Unicode/escaping divergence: chars vs bytes differ, both legacy-correct", () => {
+    const m = sensors.measureContent("héllo");
+    expect(m.serializedChars).toBe(7); // '"héllo"' (é is 1 char)
+    expect(m.outputBytes).toBe(6); // é is 2 UTF-8 bytes
+    const escaped = sensors.measureContent('a"b');
+    expect(escaped.serializedChars).toBe(6); // '"a\\"b"' — quote escaped
+    expect(escaped.outputBytes).toBe(3); // raw bytes a " b
+  });
+
+  it("object content: one serialization feeds both metrics (UTF-8 bytes of the JSON)", () => {
+    const content = { a: 1, t: "héllo" };
+    const serialized = JSON.stringify(content);
+    const m = sensors.measureContent(content);
+    expect(m.serializedChars).toBe(serialized.length);
+    expect(m.outputBytes).toBe(new TextEncoder().encode(serialized).length);
+  });
+
+  it("undefined: JSON.stringify returns undefined (no throw) -> serializedChars 0, outputBytes matches legacy byteLength (Node-verified: encode(undefined) defaults to empty string, 0 bytes)", () => {
+    const m = sensors.measureContent(undefined);
+    expect(m.serializedChars).toBe(0);
+    expect(m.outputBytes).toBe(0);
+    expect(m.outputBytes).toBe(sensors.byteLength(undefined));
+    expect(m.outputBytes).toBe(new TextEncoder().encode(undefined).length); // Node: 0
+  });
+
+  it("function/symbol content: JSON.stringify returns undefined -> serializedChars 0, outputBytes matches legacy byteLength (Node-verified: 0 bytes)", () => {
+    const fn = () => 42;
+    const sym = Symbol("s");
+    expect(sensors.measureContent(fn).serializedChars).toBe(0);
+    expect(sensors.measureContent(fn).outputBytes).toBe(0);
+    expect(sensors.measureContent(fn).outputBytes).toBe(sensors.byteLength(fn));
+    expect(sensors.measureContent(sym).serializedChars).toBe(0);
+    expect(sensors.measureContent(sym).outputBytes).toBe(0);
+    expect(sensors.measureContent(sym).outputBytes).toBe(sensors.byteLength(sym));
+  });
+
+  it("circular/bigint content: throws -> serializedChars 0, outputBytes = legacy '<unserializable>' fallback (Node-verified: 16 bytes)", () => {
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+    const m = sensors.measureContent(circular);
+    expect(m.serializedChars).toBe(0);
+    expect(m.outputBytes).toBe(16); // '<unserializable>'
+    expect(m.outputBytes).toBe(sensors.byteLength(circular));
+    const big = sensors.measureContent(1n);
+    expect(big.serializedChars).toBe(0);
+    expect(big.outputBytes).toBe(16);
+    expect(big.outputBytes).toBe(sensors.byteLength(1n));
+  });
+});
+
+describe("measureContent modes (Phase 3 correction)", () => {
+  it("includeSerializedChars=false on a primitive string: ZERO JSON.stringify, raw bytes only, serializedChars 0", () => {
+    const m = sensors.measureContent("héllo", false);
+    expect(m.serializedChars).toBe(0); // RTD char metric not measured
+    expect(m.outputBytes).toBe(6); // raw UTF-8 bytes, legacy byteLength parity
+  });
+
+  it("includeSerializedChars=false on an object: single telemetry serialization, serializedChars 0", () => {
+    const content = { a: 1, t: "héllo" };
+    const m = sensors.measureContent(content, false);
+    expect(m.serializedChars).toBe(0);
+    expect(m.outputBytes).toBe(new TextEncoder().encode(JSON.stringify(content)).length); // base telemetry parity
+  });
+
+  it("includeSerializedChars=false on unserializable/undefined: serializedChars 0, legacy byteLength fallback", () => {
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+    expect(sensors.measureContent(circular, false)).toEqual({ serializedChars: 0, outputBytes: 16 });
+    expect(sensors.measureContent(undefined, false)).toEqual({ serializedChars: 0, outputBytes: 0 });
+  });
+
+  it("includeSerializedChars=true (default) still measures both metrics from one serialization", () => {
+    const m = sensors.measureContent("hello");
+    expect(m).toEqual({ serializedChars: 7, outputBytes: 5 });
   });
 });

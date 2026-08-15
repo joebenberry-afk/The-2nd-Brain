@@ -1,8 +1,10 @@
+import { mkdirSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import factory from "../src/index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import factory, { type ExtensionOptions } from "../src/index";
+import { createTelemetryDirEnsurer } from "../src/storage";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
 /**
@@ -39,15 +41,15 @@ afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
-/** Load the factory with a recording fake ExtensionAPI. */
-function loadFactory(): Map<string, Handler> {
+/** Load the factory with a recording fake ExtensionAPI (+ optional options). */
+function loadFactory(options?: ExtensionOptions): Map<string, Handler> {
   const handlers = new Map<string, Handler>();
   const pi = {
     on: (name: string, handler: Handler): void => {
       handlers.set(name, handler);
     },
   } as unknown as ExtensionAPI;
-  factory(pi);
+  factory(pi, options);
   return handlers;
 }
 
@@ -95,6 +97,35 @@ async function waitForLines(minLines: number, timeoutMs = 3000): Promise<Record<
 /** Give pending fire-and-forget writes a chance to land (negative assertions). */
 async function settle(ms = 150): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+/** Poll-read a specific telemetry file until it has `minLines` JSONL lines. */
+async function waitForFileLines(file: string, minLines: number, timeoutMs = 3000): Promise<Record<string, unknown>[]> {
+  const deadline = Date.now() + timeoutMs;
+  let last: string[] = [];
+  while (Date.now() < deadline) {
+    try {
+      last = (await readFile(file, "utf8")).split("\n").filter((l) => l.trim().length > 0);
+      if (last.length >= minLines) return last.map((l) => JSON.parse(l));
+    } catch {
+      // file not created yet
+    }
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  throw new Error(`timed out waiting for ${minLines} lines in ${file}; got ${last.length}`);
+}
+
+/** Context with NO session file: forces the anonymous fallback path. */
+function anonCtx(): ExtensionContext {
+  return {
+    cwd: "C:/work",
+    model: { id: "deepseek-v4-flash", provider: "deepseek" },
+    sessionManager: { getSessionFile: () => undefined },
+    getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
+    signal: undefined,
+    hasUI: false,
+    ui: undefined,
+  };
 }
 
 /** Poll-read the telemetry dir for any .jsonl (unknown session stem). */
@@ -375,5 +406,338 @@ describe("factory wiring (src/index.ts)", () => {
     const shadow = records.find((r) => r.kind === "rtd_shadow");
     expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
     expect(shadow!.size).toBe(502); // 500 chars + 2 JSON quotes
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 2: stable anonymous session identity (one id per extension lifecycle)
+// -------------------------------------------------------------------------
+
+describe("Phase 2 anonymous session identity (src/index.ts)", () => {
+  it("reuses ONE stable anonymous id for every event without a session file", async () => {
+    const handlers = loadFactory();
+    const ctx = anonCtx();
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }, ctx);
+    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    const file = await waitForAnyTelemetryFile();
+    const records = await waitForFileLines(file, 4);
+    const sessions = new Set(records.map((r) => String(r.session)));
+    expect(sessions.size).toBe(1);
+    expect([...sessions][0]).toMatch(/^anon-/);
+  });
+
+  it("appends all anonymous lifecycle events to ONE telemetry file, not one per event", async () => {
+    const handlers = loadFactory();
+    const ctx = anonCtx();
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }, ctx);
+    handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: [], details: {}, isError: false }, ctx);
+    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
+    handlers.get("agent_end")!({ messages: [] }, ctx);
+    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    const file = await waitForAnyTelemetryFile();
+    const records = await waitForFileLines(file, 8);
+    await settle();
+    const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
+    expect(names.length).toBe(1); // one session file for the whole anonymous lifecycle
+    expect(records.map((r) => r.kind).sort()).toEqual(
+      ["session_start", "before_agent_start", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
+    );
+    expect(new Set(records.map((r) => String(r.session))).size).toBe(1);
+  });
+
+  it("separate extension lifecycles get distinct anonymous ids (deterministic)", async () => {
+    // Deterministic: two factories consume two different Math.random draws.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValueOnce(0.5).mockReturnValueOnce(0.25);
+    try {
+      const handlersA = loadFactory();
+      const handlersB = loadFactory();
+      handlersA.get("turn_start")!({ turnIndex: 0 }, anonCtx());
+      handlersB.get("turn_start")!({ turnIndex: 0 }, anonCtx());
+
+      const fileA = await waitForAnyTelemetryFile();
+      await settle(250);
+      const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
+      expect(names.length).toBe(2);
+      const fileB = names.map((n) => join(telemetryDir(), n)).find((f) => f !== fileA)!;
+      const [recA] = await waitForFileLines(fileA, 1);
+      const [recB] = await waitForFileLines(fileB, 1);
+      expect(recA.session).toMatch(/^anon-/);
+      expect(recB.session).toMatch(/^anon-/);
+      expect(recA.session).not.toBe(recB.session);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it("explicit Prime session file stem still overrides the fallback, byte-for-byte", async () => {
+    const handlers = loadFactory();
+    // First event has NO session file -> anonymous fallback caches one id.
+    handlers.get("turn_start")!({ turnIndex: 0 }, anonCtx());
+    const anonFile = await waitForAnyTelemetryFile();
+    const [anonRec] = await waitForFileLines(anonFile, 1);
+    expect(anonRec.session).toMatch(/^anon-/);
+
+    // Later events WITH an explicit session file must still use the explicit
+    // stem (explicit identity always wins over the cached fallback).
+    const ctx = makeCtx(); // getSessionFile -> .../wiring-test.jsonl
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
+
+    const records = await waitForLines(2); // wiring-test.jsonl
+    expect(records.map((r) => String(r.session))).toEqual(["wiring-test", "wiring-test"]);
+    await settle();
+    // anon file unchanged: still exactly the one anonymous record
+    const anonAfter = (await readFile(anonFile, "utf8")).trim().split("\n").filter(Boolean);
+    expect(anonAfter.map((l) => JSON.parse(l).kind)).toEqual(["turn_start"]);
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 3: RTD hot path — eligibility first, content measured once and shared
+// -------------------------------------------------------------------------
+
+describe("Phase 3 RTD hot path (src/index.ts)", () => {
+  it("ineligible tool/command: no RTD shadow record, telemetry still measured once", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    let stringifyCount = 0;
+    const content = {
+      toJSON() {
+        stringifyCount += 1;
+        return { text: "x".repeat(9000) };
+      },
+    };
+
+    // ipython tool with big content: ineligible by tool
+    handlers.get("tool_result")!(
+      { toolName: "ipython", toolCallId: "rtd-t-1", input: { code: "print(1)" }, content, details: {}, isError: false },
+      ctx,
+    );
+    let records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["tool_result"]);
+    await settle();
+    let after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_result"]);
+
+    // bash tool with ineligible command and big content
+    const before = stringifyCount;
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-t-2", input: { command: "ls -la" }, content, details: {}, isError: false },
+      ctx,
+    );
+    await waitForLines(2);
+    await settle();
+    after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_result", "tool_result"]);
+    // the measurement was the telemetry one (one stringify per event), no extra RTD work
+    expect(stringifyCount).toBe(before + 1);
+  });
+
+  it("eligible result: content serialized exactly once, output_bytes and rtd_shadow.size share the same measurement", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    let stringifyCount = 0;
+    const content = {
+      toJSON() {
+        stringifyCount += 1;
+        return { type: "text", text: "x".repeat(9000) };
+      },
+    };
+
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-shared-1", input: { command: "pytest -q" }, content, details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(2); // tool_result + rtd_shadow
+    const result = records.find((r) => r.kind === "tool_result");
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(result).toBeDefined();
+    expect(shadow).toBeDefined();
+    // ASCII object: serialized chars == UTF-8 bytes, so both consumers report the SAME number
+    expect(shadow!.size).toBe(result!.output_bytes);
+    expect(shadow!.size).toBeGreaterThan(8000);
+    expect(shadow).toMatchObject({
+      reason: "ok",
+      threshold: 8000,
+      would_trigger: true,
+      tool: "bash",
+      id: "rtd-shared-1",
+    });
+    // ONE serialization served both records — nothing re-serialized afterwards
+    expect(stringifyCount).toBe(1);
+    // privacy: no content payload anywhere
+    expect(JSON.stringify(records)).not.toContain('"xxxx');
+    expect(JSON.stringify(records)).not.toContain("pytest -q");
+  });
+
+  it("eligible string result: telemetry raw-string bytes and RTD JSON char length stay divergent-legacy", async () => {
+    process.env.SECOND_BRAIN_RTD_THRESHOLD = "100";
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    // 500 ASCII chars: JSON char length 502 (quotes), raw UTF-8 bytes 500
+    handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-str-1", input: { command: "rg pattern" }, content: "z".repeat(500), details: {}, isError: false },
+      ctx,
+    );
+    const records = await waitForLines(2);
+    const result = records.find((r) => r.kind === "tool_result");
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(result!.output_bytes).toBe(500);
+    expect(shadow!.size).toBe(502); // legacy JSON char length preserved
+    expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 4: shared directory readiness across stores of one factory
+// -------------------------------------------------------------------------
+
+describe("Phase 4 shared directory readiness (src/index.ts)", () => {
+  it("two distinct session stores from ONE factory share exactly ONE mkdir attempt", async () => {
+    let mkdirCount = 0;
+    const ensureTelemetryDir = createTelemetryDirEnsurer((dir: string) => {
+      mkdirCount += 1;
+      mkdirSync(dir, { recursive: true });
+    });
+    const handlers = loadFactory({ ensureTelemetryDir });
+
+    // store A: anonymous session (no session file)
+    handlers.get("turn_start")!({ turnIndex: 0 }, anonCtx());
+    const anonFile = await waitForAnyTelemetryFile();
+    const [anonRec] = await waitForFileLines(anonFile, 1);
+    expect(anonRec.session).toMatch(/^anon-/);
+
+    // store B: explicit session file -> a SECOND TelemetryStore, same factory
+    const ctx = makeCtx();
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
+    const records = await waitForLines(2);
+    expect(records.map((r) => String(r.session))).toEqual(["wiring-test", "wiring-test"]);
+    await settle();
+
+    // one shared destination, one mkdir attempt across BOTH stores
+    expect(mkdirCount).toBe(1);
+    // both files exist and are complete
+    expect((await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl")).length).toBe(2);
+  });
+
+  it("a failing shared ensurer: first store reports once, second store still constructs and never re-attempts mkdir", async () => {
+    const blocker = join(tmp, "blocker-file");
+    await import("node:fs/promises").then((m) => m.writeFile(blocker, "not a dir"));
+    let mkdirCount = 0;
+    const ensureTelemetryDir = createTelemetryDirEnsurer(() => {
+      mkdirCount += 1;
+      throw new Error("mkdir boom");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handlers = loadFactory({ ensureTelemetryDir });
+
+    // store A (anon): constructor mkdir fails -> logged once, still fail-open
+    handlers.get("turn_start")!({ turnIndex: 0 }, anonCtx());
+    await settle();
+    expect(mkdirCount).toBe(1);
+    expect(errorSpy).toHaveBeenCalledTimes(1); // A's readiness failure reported once
+
+    // store B (explicit): second store construction -> NO mkdir re-attempt
+    // (permanently marked attempted), construction still non-fatal; B's own
+    // first append failure is reported once per its own one-time reporting
+    // (same as pre-Phase-4 per-store behavior; the mkdir storm is gone).
+    handlers.get("session_start")!({ reason: "startup" }, makeCtx());
+    await settle();
+    expect(mkdirCount).toBe(1); // the key invariant: mkdir attempted at most once per factory
+    expect(errorSpy).toHaveBeenCalledTimes(2); // A readiness + B first append
+    errorSpy.mockRestore();
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 3 correction: eligibility BEFORE measurement; zero RTD serialization
+// for ineligible results (JSON.stringify spy filtered by content identity)
+// -------------------------------------------------------------------------
+
+describe("Phase 3 correction: no RTD JSON work for ineligible results (src/index.ts)", () => {
+  /** Spy on JSON.stringify counting only calls whose first argument === content. */
+  function countStringifiesOf(content: unknown): { count: () => number; restore: () => void } {
+    let n = 0;
+    const real = JSON.stringify;
+    const spy = vi.spyOn(JSON, "stringify").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === content) n += 1;
+      return real.apply(JSON, args as [unknown]);
+    }) as typeof JSON.stringify);
+    return { count: () => n, restore: () => spy.mockRestore() };
+  }
+
+  it("ineligible primitive-string result: ZERO JSON.stringify of the content (raw TextEncoder only)", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const content = "x".repeat(9000);
+    const counter = countStringifiesOf(content);
+    try {
+      handlers.get("tool_result")!(
+        { toolName: "bash", toolCallId: "rtd-inelig-str", input: { command: "ls -la" }, content, details: {}, isError: false },
+        ctx,
+      );
+      const records = await waitForLines(1);
+      await settle();
+      expect(records.map((r) => r.kind)).toEqual(["tool_result"]); // no rtd_shadow
+      expect(records[0].output_bytes).toBe(9000); // raw UTF-8 bytes (legacy parity, no quotes)
+      expect(counter.count()).toBe(0); // never stringified for RTD
+    } finally {
+      counter.restore();
+    }
+  });
+
+  it("eligible primitive-string result: stringified EXACTLY once (shared by telemetry + RTD)", async () => {
+    process.env.SECOND_BRAIN_RTD_THRESHOLD = "100";
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const content = "z".repeat(500);
+    const counter = countStringifiesOf(content);
+    try {
+      handlers.get("tool_result")!(
+        { toolName: "bash", toolCallId: "rtd-elig-str", input: { command: "pytest -q" }, content, details: {}, isError: false },
+        ctx,
+      );
+      const records = await waitForLines(2); // tool_result + rtd_shadow
+      const result = records.find((r) => r.kind === "tool_result");
+      const shadow = records.find((r) => r.kind === "rtd_shadow");
+      expect(result!.output_bytes).toBe(500); // raw bytes
+      expect(shadow!.size).toBe(502); // legacy JSON char length (quotes)
+      expect(counter.count()).toBe(1); // exactly one stringify served both
+    } finally {
+      counter.restore();
+    }
+  });
+
+  it("ineligible object result: serialized exactly ONCE for base telemetry, no extra RTD work", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const content = [{ type: "text", text: "x".repeat(9000) }];
+    // expected bytes computed BEFORE the spy window (the assertion itself
+    // must not be counted)
+    const expectedBytes = new TextEncoder().encode(JSON.stringify(content)).length;
+    const counter = countStringifiesOf(content);
+    try {
+      handlers.get("tool_result")!(
+        { toolName: "ipython", toolCallId: "rtd-inelig-obj", input: { code: "print(1)" }, content, details: {}, isError: false },
+        ctx,
+      );
+      const records = await waitForLines(1);
+      await settle();
+      expect(records.map((r) => r.kind)).toEqual(["tool_result"]); // no rtd_shadow
+      expect(records[0].output_bytes).toBe(expectedBytes);
+      expect(counter.count()).toBe(1); // the ONE serialization base telemetry already required
+    } finally {
+      counter.restore();
+    }
   });
 });

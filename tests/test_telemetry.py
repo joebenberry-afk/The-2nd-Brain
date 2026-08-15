@@ -99,6 +99,59 @@ def test_format_report(brain_home):
     assert "Sessions:" in text
 
 
+def test_validate_accepts_orchestrator_policy_violation(brain_home):
+    _write_session(
+        brain_home,
+        "viol.jsonl",
+        [
+            _rec(
+                "orchestrator_policy_violation",
+                violation="direct_execution",
+                model="openai/gpt-5.6-sol",
+                detected_by="manual",
+                blocked=False,
+            )
+        ],
+    )
+    r = telemetry.validate(brain_home)
+    assert r["issues"] == []
+
+
+def test_report_counts_orchestrator_violations(brain_home):
+    _write_session(
+        brain_home,
+        "s1.jsonl",
+        [
+            _rec(
+                "orchestrator_policy_violation",
+                violation="wrong_tier",
+                model="m1",
+                detected_by="telemetry_audit",
+                blocked=False,
+            ),
+            _rec(
+                "orchestrator_policy_violation",
+                violation="wrong_tier",
+                model="m1",
+                detected_by="runtime_guard",
+                blocked=True,
+            ),
+            _rec(
+                "orchestrator_policy_violation",
+                violation="direct_execution",
+                model="m2",
+                detected_by="manual",
+                blocked=False,
+            ),
+            _rec("session_shutdown"),
+        ],
+    )
+    rep = telemetry.report(brain_home)
+    assert rep["orchestrator_violations"] == 3
+    assert rep["violation_codes"] == {"direct_execution": 1, "wrong_tier": 2}
+    assert "Orchestrator viol.:" in telemetry.format_report(rep)
+
+
 def test_validate_accepts_rtd_shadow(brain_home):
     _write_session(
         brain_home,
