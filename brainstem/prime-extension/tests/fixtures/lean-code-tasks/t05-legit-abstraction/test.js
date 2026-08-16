@@ -1,0 +1,10 @@
+const { validateName, validateTitle, validateCode, validateEmail } = require("./validators");
+const assert = require("assert");
+assert.strictEqual(validateName("ok"), true);
+assert.strictEqual(validateTitle("  "), false);
+assert.strictEqual(validateCode("x".repeat(51)), false);
+assert.strictEqual(validateName(42), false);
+assert.strictEqual(validateEmail("a@b.co"), true);
+assert.strictEqual(validateEmail(""), false);
+assert.strictEqual(validateEmail("x".repeat(51)), false);
+console.log("validators tests passed");
