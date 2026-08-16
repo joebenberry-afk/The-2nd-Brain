@@ -105,3 +105,14 @@ rules were used instead of `--dangerously-skip-permissions`.
 - real-stop-response-continue.json
 - real-transcript-sample.jsonl (sanitized sample of the real transcript)
 - hook-telemetry-excerpt.jsonl (Brain hook telemetry for the proof runs)
+
+
+## Post-cleanup confirmation run
+
+After removing temporary diagnostics and reinstalling the clean launcher, a
+final real run (conversation `3660f895-0219-4b6e-81a9-ffa0d1e92d72`,
+gemini-3.7-flash-high) produced: preinvocation INJECT (758 tokens, 6 selected,
+model_visible=true), PostInvocation turn_end, Stop stop_allowed; agent
+response `apply migrations in numeric order` with zero tool calls. The direct
+live PreInvocation response with the Migration-ordering packet was captured in
+real-preinvocation-response.json (smoke-13, conversation 17f141ff).
