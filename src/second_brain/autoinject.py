@@ -165,11 +165,73 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
             continue
         if row.get("evidence_grade") == "REJECTED":
             continue
+        # P0-G9 gate (§6.3.1): unverified write-back candidates are NOT
+        # current truth. Only VERIFIED/TESTED candidates may be retrieved.
+        if row.get("status") == "candidate" and row.get("evidence_grade") not in (
+            "VERIFIED",
+            "TESTED",
+        ):
+            continue
         if (
             intent.project_id is None
             or row.get("scope") == "global"
             or row.get("project_id") == intent.project_id
         ):
+            out.append(row)
+    return out
+
+
+_WORKER_ROLES = ("worker", "explorer", "verifier")
+
+
+def _tags_for(home: Path | str, memory_ids: list[str]) -> dict[str, set[str]]:
+    """Tags from the optional `tags:` frontmatter extension (memory_index.tags).
+
+    The canonical writer never emits tags; a user/agent may add
+    ``tags: worker`` to a memory file, and the indexer (semantic.index_memory)
+    mirrors it into memory_index + memory_fts. Absent tags -> empty set.
+    """
+    ids = [mid for mid in memory_ids if mid]
+    if not ids:
+        return {}
+    home = Path(home)
+    conn = db.connect(db_path(home), readonly=True)
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT memory_id, tags FROM memory_index WHERE memory_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        return {
+            str(r["memory_id"]): {t for t in str(r["tags"] or "").split(",") if t} for r in rows
+        }
+    finally:
+        conn.close()
+
+
+def _role_filter(home: Path | str, rows: list[dict], role_profile: str) -> list[dict]:
+    """P0-G7 worker-specific packets (hard filter, §6.3.1).
+
+    Rule (documented, no invented metadata): a role keeps memories tagged
+    with exactly its own tag OR untagged task-relevant memories. Memories
+    tagged with another role are excluded — a worker never receives the
+    parent's orchestrator-tagged memory and vice versa. Roles:
+    orchestrator -> "orchestrator" tag; worker family (worker/explorer/
+    verifier) -> their own tag. Unknown/control roles get no filter.
+    """
+    if not rows:
+        return rows
+    if role_profile == "orchestrator":
+        wanted = {"orchestrator"}
+    elif role_profile in _WORKER_ROLES:
+        wanted = {role_profile}
+    else:
+        return rows
+    tags = _tags_for(home, [str(r.get("memory_id")) for r in rows])
+    out: list[dict] = []
+    for row in rows:
+        row_tags = tags.get(str(row.get("memory_id")) or "", set())
+        if not row_tags or row_tags & wanted:
             out.append(row)
     return out
 
@@ -468,6 +530,13 @@ def prepare_injection(
     valid = _valid_candidates(intent, rows)
     if not valid:
         return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
+    role_rows = _role_filter(home, valid, intent.role_profile)
+    if not role_rows:
+        return decision(
+            NoInjectionReason.NO_RELEVANT_MEMORY,
+            candidate_ids=candidate_ids,
+            selected_ids=[],  # nothing passed the role filter -> nothing selected
+        )
 
     try:
         delivered = _delivered_keys(home, intent.session_id, intent.branch_id)
@@ -475,7 +544,7 @@ def prepare_injection(
         logger.warning("AutoInject ledger read failed (fail-open): %s", exc)
         return decision(NoInjectionReason.BRAIN_UNAVAILABLE, candidate_ids=candidate_ids)
 
-    items = _build_items(home, valid)
+    items = _build_items(home, role_rows)
     fresh = [
         item
         for item in items
@@ -670,3 +739,54 @@ class BrainLifecycle:
                 "session_finalized",
                 {"internal_session_id": self._session.internal_session_id},
             )
+
+    def writeback_candidate(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+        title: str,
+        observation: str,
+        guidance: str = "",
+        evidence: list[dict] | None = None,
+    ) -> str:
+        """P0-G9 write-back: create a CANDIDATE memory (never promoted to truth).
+
+        Uses semantic.add_memory with default status ``candidate`` and grade
+        ``OBSERVED``; provenance points at the session (first source) plus any
+        caller-supplied evidence refs. The validity gate (§6.3.1) keeps
+        unverified candidates OUT of retrieval; only after curation to
+        VERIFIED/TESTED does the candidate become retrievable (G10). Raises
+        BrainError on invalid input — the CLI applies fail-open.
+        """
+        sources: list[dict] = [{"ref": f"session:{session_id}", "kind": "episode"}]
+        for item in evidence or []:
+            if isinstance(item, dict) and item.get("ref"):
+                sources.append(
+                    {
+                        "ref": str(item["ref"]),
+                        "kind": str(item.get("kind") or "evidence"),
+                    }
+                )
+        memory_id = semantic.add_memory(
+            self._home,
+            title,
+            observation,
+            scope="project",
+            project_id=project_id,
+            grade="OBSERVED",
+            sources=sources,
+            summary=guidance or None,
+        )
+        _append_telemetry(
+            self._home,
+            session_id,
+            "writeback_candidate",
+            {
+                "memory_id": memory_id,
+                "project_id": project_id,
+                "status": "candidate",
+                "session_sha256": _task_sha256(session_id),
+            },
+        )
+        return memory_id
