@@ -193,23 +193,51 @@ t04/t08 no extra modules/tools).
   surface: ledger.py narrow fixes only (busy_timeout-first, bounded WAL
   retry, unique manifest temps, resolve retry, deterministic not-initialized).
 
-## Promotion status
+## Promotion status — FINAL (P3-J gate closure)
 
-**Recommendation: candidate → shadow** (per §20.1-§20.2).
-- §20.1 (candidate → shadow) gates: Skill Forge structural validation ✓
-  (P3-C), safety scan ✓, trigger quality ✓, kernel size budget ✓ (865 ≤
-  1200), no P0-P2 regression ✓ (348 vitest / 37 pytest / tsc / eslint),
-  baseline evaluation suite ready ✓ (17 fixtures + judges + arm template).
-- §20.2 (shadow → advisory/measured) evidence from this paired eval:
-  correctness non-inferior ✓ (17/17 vs 17/17); no protected-value regression
-  ✓; no systematic under-testing ✓ (full judge coverage, anti-tamper
-  oracles); high-risk tasks adequate effort ✓ (T11); no smallest-LOC gaming ✓
-  (T16 bound respected; T5/T9/T15 legit creation allowed).
-- Do NOT activate advisory/active yet: economics are within noise (median
-  marginal input +359 tokens vs the ~300 threshold; no measurable savings on
-  these fixtures — baseline arms were already disciplined), and P3-F (RTD)
-  plus live dogfood should confirm durable value before activation (§20.3
-  honesty rule: report savings-within-noise as such).
+### §20.1 candidate → shadow — ALL PASS
+
+| criterion | evidence | result |
+|---|---|---|
+| Skill Forge structural validation | P3-C gate: skillforge validate ok | PASS |
+| safety scan | P3-C: security eval pass (no disk-format/secret patterns) | PASS |
+| trigger/negative-trigger quality | P3-C: positive/negative trigger coverage reviewed | PASS |
+| kernel size budget | 865 chars ≤ 1200 (byte-stable, parsed live) | PASS |
+| no P0–P2 regression | vitest 369/369, pytest full 760+, tsc/eslint/ruff/pyright/doctor clean | PASS |
+| baseline evaluation suite ready | 17 fixtures + JUDGE.md + arm template + fixture sanity tests | PASS |
+
+### §20.2 shadow → advisory/measured (paired eval evidence) — ALL PASS
+
+| criterion | window-2 evidence | result |
+|---|---|---|
+| correctness non-inferior | 17/17 vs 17/17 acceptance, all judge exits 0 | PASS |
+| no protected-value regression | no oracle/test/README edits, no deps/installs, no commits by arms | PASS |
+| no systematic under-testing | every arm ran ≥ full judge sequence (anti-tamper oracles) | PASS |
+| high-risk tasks adequate effort | T11 full 5-step judge both arms, atomic pattern | PASS |
+| no "smallest LOC" gaming | T16 bound respected; T5/T9/T15 legit creation allowed | PASS |
+
+### §20.3 economics — kernel overhead PASS, savings NOT DEMONSTRATED
+
+- Kernel marginal ≈ 216 tok/turn (865 chars // 4 planning bound; the runtime
+  adapter serializes it once per turn) — within the ≤ ~300 median threshold.
+- Measured total per-pair input delta (candidate − baseline): median +359
+  tokens — within session/cache-warmth noise; 6/17 pairs cheaper in
+  candidate; cost delta +$0.0039 total (+4.9%).
+- **Meaningful savings on tasks with room to overbuild: NOT DEMONSTRATED** —
+  both arms were already minimal on these fixtures (identical footprints);
+  savings are within noise. Reported honestly per §20.3/§30.
+
+### VERDICT (per §30): SHADOW-ONLY HOLD
+
+The Lean candidate skill stays **candidate (inert)**. The runtime adapter and
+the file-based eval gate remain deployed-but-inert (config/skills.toml
+`[lean] eval` default off; `SECOND_BRAIN_LEAN` advisory available for future
+measurement arms). NO automatic kernel injection promotion, NO advisory/
+active activation. Rationale: §20.1 and §20.2 criteria are met, but §20.3
+requires meaningful economics on overbuild-prone tasks — not demonstrated;
+with savings within noise, activation would not be honest until a larger
+dogfood corpus (or RTD, P3-F) shows durable value. Promotion is the parent's
+decision; nothing was promoted.
 
 ## Window 1 (SUPERSEDED — history only)
 
@@ -237,3 +265,30 @@ numbers are NOT comparable to window 2 and must not be used for verdicts.
    logic here.
 5. Working copies were not preserved for re-judging (evidence.json +
    telemetry.jsonl only); judge exits + diff fields are the audit trail.
+
+## P3-J: ACTIVE Regression Gate evidence (§24.8) — collected 2026-08-16
+
+1. **One extension instance**: `~/.prime/agent/extensions/second-brain/`
+   (single installed copy; contains index.ts, lean-code.ts, rtd.ts,
+   ledger-mirror.ts, sensors.ts, ...). No duplicate/stale copies.
+2. **Ledger mirror contiguous + replayable**: `brainctl ledger verify
+   01a008bb-ae53-7120-a995-cdc0ade001f6` (parent session) ->
+   `{"events": 2232, "integrity": {"seq_contiguous": true, "orphan_parents": 0,
+   "object_digests_ok": true}, "replay_ok": true}`.
+3. **Zero recurrence of the fixed error classes**: all fixed classes
+   (unparsable output, ledger append/init Command-failed, duplicate event_id,
+   first-init race, schema-not-ready) end at 2026-08-16T10:17Z (window-2, pre
+   duplicate-tolerance deployment). Across ALL records after the fix
+   deployment cutoff (10:30Z) in the only two active sessions (parent + this
+   worker): **0 extension_errors of any class**.
+4. **Host-side model_visible truthfulness** (spot-check): Python
+   `brain_packet_delivered` = `model_visible:false, delivery_prepared:true`
+   (prepared/ledger state only — Python cannot observe host insertion);
+   host `autoinject_shadow_decision` = `mode:active, model_visible:true,
+   result_patch:true` on delivered packets (authoritative insertion point).
+   No inflated visibility claims.
+5. **AutoInject ACTIVE**: `config/autoinject.toml [autoinject] mode = active`
+   (untouched by P3).
+
+Final suite counts (P3-J): pytest full 760+ passed; vitest 369/369; tsc 0;
+eslint 0; ruff 0; pyright 0; doctor 16/16.
