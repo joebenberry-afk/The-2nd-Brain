@@ -1,0 +1,11 @@
+const { load, set } = require("../src/store");
+const assert = require("assert");
+const fs = require("fs");
+const path = require("path");
+const DB = path.join("data", "db.json");
+for (let i = 0; i < 10; i++) set("k" + i, i);
+for (let i = 0; i < 10; i++) assert.strictEqual(load()["k" + i], i);
+assert.doesNotThrow(() => JSON.parse(fs.readFileSync(DB, "utf8")));
+const leftovers = fs.readdirSync("data").filter((f) => f !== "db.json");
+assert.deepStrictEqual(leftovers, []);
+console.log("store tests passed");

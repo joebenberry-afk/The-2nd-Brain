@@ -1,0 +1,7 @@
+{
+  "name": "jsonc-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "jsonc-simple": "1.4.2"
+  }
+}
