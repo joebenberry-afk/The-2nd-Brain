@@ -115,8 +115,21 @@ export function resetAutoInjectEmitCache(): void {
  * hits work ACROSS processes. Best-effort: persistence failures never break
  * injection (fail open to in-memory-only behavior).
  */
+/**
+ * Resolve the cache directory home defensively: prefer the caller's home,
+ * fall back to SECOND_BRAIN_HOME, then to the OS default brain path
+ * (mirrors config.ts resolveBrainHome semantics for the state file).
+ */
+function emitCacheHome(home: string): string {
+  if (home !== undefined && home.trim().length > 0) return home;
+  const envHome = process.env.SECOND_BRAIN_HOME;
+  if (envHome !== undefined && envHome.trim().length > 0) return envHome;
+  const base = process.env.USERPROFILE ?? process.env.HOME ?? "";
+  return join(base, "Documents", "The-Second-Brain");
+}
+
 function emitCacheFile(home: string): string {
-  return join(home, "state", "autoinject-emit-cache.json");
+  return join(emitCacheHome(home), "state", "autoinject-emit-cache.json");
 }
 
 interface PersistedEmitEntry {
@@ -158,7 +171,7 @@ function loadEmitCache(home: string): void {
 
 function persistEmitCache(home: string): void {
   try {
-    const dir = join(home, "state");
+    const dir = join(emitCacheHome(home), "state");
     mkdirSync(dir, { recursive: true });
     const now = Date.now();
     const data: Record<string, PersistedEmitEntry> = {};
