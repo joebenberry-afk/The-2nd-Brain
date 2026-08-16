@@ -503,6 +503,10 @@ export interface AutoInjectShadowDecisionRecord extends BaseRecord {
   selected_count: number;
   delivery_id: string | null;
   packet_sha256: string | null;
+  /** Resolved host mode at decision time (Phase C4 instrumentation). */
+  mode: string | null;
+  /** True when the advisory/active path returned a custom_message patch. */
+  result_patch: boolean;
 }
 
 export function autoinjectShadowDecision(
@@ -516,6 +520,8 @@ export function autoinjectShadowDecision(
     selected_count: number;
     delivery_id: string | null;
     packet_sha256: string | null;
+    mode: string | null;
+    result_patch: boolean;
   },
 ): AutoInjectShadowDecisionRecord {
   return {
@@ -528,5 +534,7 @@ export function autoinjectShadowDecision(
     selected_count: fields.selected_count,
     delivery_id: fields.delivery_id,
     packet_sha256: fields.packet_sha256,
+    mode: fields.mode,
+    result_patch: fields.result_patch,
   } as unknown as AutoInjectShadowDecisionRecord;
 }
