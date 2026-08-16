@@ -165,6 +165,13 @@ describe("DRIVER_ORCHESTRATOR_CONTRACT content", () => {
     expect(DRIVER_ORCHESTRATOR_CONTRACT).toMatch(/must NOT orchestrate/i); // anti-recursion
   });
 
+  it("P3-H: contract carries the STOP-at-completion rule (§15.4)", () => {
+    expect(DRIVER_ORCHESTRATOR_CONTRACT).toMatch(/STOP/i);
+    expect(DRIVER_ORCHESTRATOR_CONTRACT).toMatch(/Requirement Ledger/);
+    expect(DRIVER_ORCHESTRATOR_CONTRACT).toMatch(/material gate/);
+    expect(DRIVER_ORCHESTRATOR_CONTRACT).toMatch(/never spawn "one more"/i);
+  });
+
   it("word count <= 230", () => {
     const words = DRIVER_ORCHESTRATOR_CONTRACT.split(/\s+/).filter((w) => w.length > 0);
     expect(words.length).toBeLessThanOrEqual(230);

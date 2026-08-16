@@ -440,3 +440,109 @@ def test_material_gate_config_wiring(brain_home):
     (brain_home / "config" / "verification.toml").unlink()
     result = ws.check_requirements(brain_home, "s1")
     assert result["gate"] is True  # fail-safe default
+
+# ---------------------------------------------------------------------------
+# P3-H: STOP / Requirement-Ledger dogfood (plan §15 + §24.7)
+# ---------------------------------------------------------------------------
+
+
+def test_material_unverified_remains_completion_gate(brain_home):
+    """A material (critical/high) requirement left unverified BLOCKS."""
+    ws.add_requirement(brain_home, "s1", "fix the parser", importance="high")
+    ws.add_requirement(brain_home, "s1", "keep config intact", importance="normal")
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["material_total"] == 1
+    assert result["material_unverified"] == 1
+    assert result["gate"] is True
+    assert result["blocks"] is True  # completion gate closed
+    # the CLI exit code is the gate signal
+    assert len(result["entries"]) == 1 and result["entries"][0]["id"] == "REQ-001"
+
+
+def test_all_material_verified_or_na_permits_stop(brain_home):
+    ws.add_requirement(brain_home, "s1", "fix the parser", importance="high")
+    ws.add_requirement(brain_home, "s1", "schema stays v1", importance="critical")
+    assert ws.check_requirements(brain_home, "s1")["blocks"] is True
+    ws.set_requirement_status(brain_home, "s1", "REQ-001", "verified")
+    ws.set_requirement_status(brain_home, "s1", "REQ-002", "not_applicable")
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["material_unverified"] == 0
+    assert result["blocks"] is False  # stop permitted
+    assert result["entries"] == []
+
+
+def test_cli_requirements_check_blocks_and_permits(brain_home):
+    """End-to-end: `brainctl requirements check` exit 1 while a material
+    requirement is unverified, exit 0 once all material are verified/N-A."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
+
+    ws.init_capsule(brain_home, "dogfood-s1", "Complete the change")
+    ws.add_requirement(brain_home, "dogfood-s1", "behavior works", importance="high")
+    legacy = "no regression on legacy input"
+    ws.add_requirement(brain_home, "dogfood-s1", legacy, importance="critical")
+
+    def check():
+        return subprocess.run(
+            [sys.executable, "-m", "second_brain", "--home", str(brain_home),
+             "requirements", "check", "dogfood-s1"],
+            capture_output=True, text=True, env=env, cwd=brain_home, timeout=120,
+        )
+
+    blocked = check()
+    assert blocked.returncode == 1, blocked.stdout
+    assert "2/2 material requirements unverified (gate on)" in blocked.stdout
+    ws.set_requirement_status(brain_home, "dogfood-s1", "REQ-001", "verified")
+    assert check().returncode == 1  # still blocked by REQ-002
+    ws.set_requirement_status(brain_home, "dogfood-s1", "REQ-002", "verified")
+    permitted = check()
+    assert permitted.returncode == 0, permitted.stdout
+    assert "0/2 material requirements unverified (gate on)" in permitted.stdout
+
+
+def test_no_lean_path_bypasses_requirement_ledger():
+    """Structural: the Lean candidate skill instructs requirement
+    verification and contains NO bypass instruction; the Lean runtime
+    adapter has no requirement-ledger code path (never touches it)."""
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    skill = (repo_root / "skills" / "candidates" / "lean-code" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    # positive: the canonical skill mandates the requirement check before stop
+    assert "material requirements are verified before stopping" in skill
+    assert "Requirement Ledger" in skill
+    # negative: no bypass language
+    for bypass in (
+        "skip the requirement",
+        "ignore the requirement",
+        "without verifying",
+        "bypass",
+        "do not run the ledger",
+    ):
+        assert bypass not in skill.lower(), f"lean skill contains bypass language: {bypass}"
+
+    adapter = (repo_root / "brainstem" / "prime-extension" / "src" / "lean-code.ts").read_text(
+        encoding="utf-8"
+    ).lower()
+    # the adapter's scope is the runtime kernel only: no requirements surface
+    for token in ("requirement", "requirements.json", "material_unverified"):
+        assert token not in adapter, f"lean-code.ts references {token!r}"
+
+
+def test_all_material_verified_triggers_no_continuation(brain_home):
+    """A completed task (all material verified) leaves the gate open for
+    stop: check_requirements reports blocks=False — the STOP mechanism has
+    no continuation step of its own."""
+    ws.add_requirement(brain_home, "s1", "done thing", importance="high")
+    ws.set_requirement_status(brain_home, "s1", "REQ-001", "verified")
+    result = ws.check_requirements(brain_home, "s1")
+    assert result["blocks"] is False
+    assert result["material_unverified"] == 0
+    assert result["entries"] == []  # nothing left that would trigger more work
