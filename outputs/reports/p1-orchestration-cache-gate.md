@@ -54,7 +54,7 @@
 
 - Formula (as implemented, T-PhaseD1): `1 − (driver_execution_attempts + emergency_execution_actions) / driver_actions_total`; null when total=0.
 - Honest classification: the 3 driver_execution_attempts in the campaign record are the parent's gate re-verification runs (direct CLI probes), not substantive execution; **all 16 substantive workstreams were delegated** (16/16). Campaign purity on substantive work = 1.0; raw 0.842 counts re-verification.
-- Comparative note (amendment §22): baseline = pre-amendment single-agent mode (driver executed everything); candidate = this campaign (16/16 delegated, worker reuse 100%, zero duplicate children). No vanity thresholds claimed beyond the plan's ≥99% target, which substantive work meets.
+- Comparative note (amendment §22): baseline = pre-amendment single-agent mode (driver executed everything); candidate = this campaign (16/16 substantive workstreams delegated; retained-worker reuse ≈57.1% task-weighted in the final campaign accounting; zero duplicate fresh children for the same role). No vanity thresholds claimed beyond the plan's ≥99% target, which substantive work meets.
 
 ## 4. Cache / prompt stability (P1.3/1C — honest)
 

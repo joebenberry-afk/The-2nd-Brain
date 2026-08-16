@@ -125,3 +125,50 @@ def test_home_after_leaf_subcommands(tmp_path):
     assert r.returncode == 0, r.stderr
     r = run_cli(home, "project", "list", "--home", str(home))
     assert "LeafRepo" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# P3-cleanup regression: memory add must not silently default to second-brain
+# (pre-P3 truth cleanup; Outcome B minimal fix)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_add_without_project_fails_clearly(tmp_path):
+    home = tmp_path / "brain"
+    r = run_cli(home, "init")
+    assert r.returncode == 0, r.stderr
+    r = run_cli(home, "memory", "add", "unattached title", "unattached body")
+    assert r.returncode == 2  # fails clearly, never silently second-brain
+    assert "requires --project" in r.stdout
+    from second_brain import semantic
+
+    assert semantic.list_memories(home) == []  # nothing written
+
+
+def test_memory_add_explicit_project_still_works(tmp_path):
+    home = tmp_path / "brain"
+    r = run_cli(home, "init")
+    assert r.returncode == 0, r.stderr
+    r = run_cli(home, "memory", "add", "scoped title", "scoped body", "--project", "second-brain")
+    assert r.returncode == 0, r.stderr
+    from second_brain import semantic
+
+    rows = semantic.list_memories(home)
+    assert rows[0]["project_id"] == "second-brain"
+
+
+def test_memory_add_resolves_registered_project_from_cwd(tmp_path):
+    home = tmp_path / "brain"
+    r = run_cli(home, "init")
+    assert r.returncode == 0, r.stderr
+    from second_brain import registry
+
+    proj_dir = tmp_path / "proj-x"
+    proj_dir.mkdir()
+    registry.add_project(home, proj_dir, name="Proj X", project_id="proj-x")
+    r = run_cli(home, "memory", "add", "resolved title", "resolved body", cwd=proj_dir)
+    assert r.returncode == 0, r.stderr
+    from second_brain import semantic
+
+    rows = semantic.list_memories(home)
+    assert rows[0]["project_id"] == "proj-x"
