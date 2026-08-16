@@ -72,7 +72,12 @@ class Confidence(StrEnum):
 
 
 class LifecycleEventType(StrEnum):
-    """Automatic activity capture event types (plan §6.7)."""
+    """Automatic activity capture event types (plan §6.7).
+
+    Includes the Prime host lifecycle events mirrored by the extension
+    (telemetry SCHEMA.md kinds ``turn_end`` / ``agent_end``) so the ledger
+    accepts the full live session stream (turn_end / agent_ended fixes).
+    """
 
     SESSION_STARTED = "session_started"
     USER_TASK = "user_task"
@@ -95,6 +100,8 @@ class LifecycleEventType(StrEnum):
     COMPACTION_COMPLETED = "compaction_completed"
     SESSION_INACTIVE = "session_inactive"
     SESSION_FINALIZED = "session_finalized"
+    TURN_END = "turn_end"
+    AGENT_ENDED = "agent_ended"
 
 
 class SurfaceVisibility(StrEnum):

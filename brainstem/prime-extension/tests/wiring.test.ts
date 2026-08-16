@@ -12,6 +12,11 @@ vi.mock("../src/recall-gate", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/recall-gate")>();
   return { ...actual, runBrainRecall: recallRunMock };
 });
+const mirrorFireAndForgetMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/ledger-mirror", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/ledger-mirror")>();
+  return { ...actual, mirrorFireAndForget: mirrorFireAndForgetMock };
+});
 
 /**
  * Wiring tests: exercise the REAL factory from src/index.ts through a fake
@@ -44,6 +49,7 @@ beforeEach(async () => {
   }
   process.env.SECOND_BRAIN_HOME = tmp;
   recallRunMock.mockReset();
+  mirrorFireAndForgetMock.mockReset();
 });
 
 afterEach(async () => {
@@ -233,6 +239,61 @@ describe("factory wiring (src/index.ts)", () => {
     handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const final = await waitForLines(3);
     expect(final.map((r) => r.kind)).toEqual(["session_start", "turn_end", "session_shutdown"]);
+  });
+
+  it("ledger-cwd-ordering-fix: user_task as FIRST mirror forwards ctx.cwd (project attribution)", async () => {
+    // Real-run regression: the user_task mirror (before_agent_start) can be
+    // the first to reach the ledger — its `ledger init` spawn wins the
+    // per-process race against session_started — so it MUST carry ctx.cwd or
+    // sessions.project_id resolves to ''.
+    mirrorFireAndForgetMock.mockResolvedValue(undefined);
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // cwd: "C:/work"
+
+    // before_agent_start fires WITHOUT a prior session_start mirror.
+    await handlers.get("before_agent_start")!({ prompt: "hello world" }, ctx);
+    await settle();
+    const userTaskCall = mirrorFireAndForgetMock.mock.calls.find(
+      (c) => (c[0] as { record: { kind: string } }).record.kind === "user_task",
+    )?.[0] as { cwd?: string };
+    expect(userTaskCall).toBeDefined();
+    expect(userTaskCall.cwd).toBe("C:/work");
+  });
+
+  it("ledger-cwd-ordering-fix: EVERY mirror call-site family forwards ctx.cwd when present", async () => {
+    mirrorFireAndForgetMock.mockResolvedValue(undefined);
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // cwd: "C:/work"
+
+    for (const [name, event] of EVENTS) {
+      await handlers.get(name)!(event, ctx);
+    }
+    await settle();
+    const calls = mirrorFireAndForgetMock.mock.calls.map(
+      (c) => c[0] as { cwd?: string; record: { kind: string } },
+    );
+    expect(calls.length).toBeGreaterThanOrEqual(10);
+    for (const call of calls) {
+      expect(call.cwd, `${call.record.kind} mirror must forward ctx.cwd`).toBe("C:/work");
+    }
+  });
+
+  it("ledger-cwd-ordering-fix: cwd absent -> mirrors forward undefined (init omits --cwd)", async () => {
+    mirrorFireAndForgetMock.mockResolvedValue(undefined);
+    const handlers = loadFactory();
+    const ctx = makeCtx({ cwd: "" });
+
+    for (const [name, event] of EVENTS) {
+      await handlers.get(name)!(event, ctx);
+    }
+    await settle();
+    const calls = mirrorFireAndForgetMock.mock.calls.map(
+      (c) => c[0] as { cwd?: string; record: { kind: string } },
+    );
+    expect(calls.length).toBeGreaterThanOrEqual(10);
+    for (const call of calls) {
+      expect(call.cwd, `${call.record.kind} must not fabricate a cwd`).toBeUndefined();
+    }
   });
 
   it("tool_call handler never mutates event.input", async () => {

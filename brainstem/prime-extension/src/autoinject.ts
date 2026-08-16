@@ -482,6 +482,9 @@ function appendDecisionRecord(
       delivery_id: outcome.deliveryId,
       packet_sha256: outcome.packetSha256,
       mode,
+      // Shadow decisions are never model-visible; advisory/active is the
+      // custom-message injection path (unambiguous marker, SCHEMA.md).
+      model_visible: mode === "advisory" || mode === "active",
       result_patch: resultPatch,
       emit_index: emitIndex,
       cache_hit: cacheHit,

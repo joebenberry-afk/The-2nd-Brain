@@ -234,6 +234,37 @@ def test_unknown_required_event_rejected_unknown_ignorable_skipped() -> None:
     assert BrainLifecycleEvent.from_dict({**base, "ignorable": True}) is None
 
 
+def test_prime_host_lifecycle_events_turn_end_and_agent_ended_accepted() -> None:
+    """Live Prime host events mirrored by the extension (SCHEMA.md kinds
+    turn_end / agent_end) are canonical and parse — regression for the
+    "unknown required event type: 'turn_end' / 'agent_ended'" rejection."""
+    for event_type, payload in (
+        ("turn_end", {"turn_index": 3, "tool_result_count": 2}),
+        ("agent_ended", {"message_count": 5}),
+    ):
+        ev = BrainLifecycleEvent.from_dict(
+            {
+                "seq": 0,
+                "event_id": f"mirror-{event_type}",
+                "internal_session_id": "s1",
+                "agent_id": "a1",
+                "parent_event_id": None,
+                "event_type": event_type,
+                "timestamp": "2026-08-16T00:00:00Z",
+                "surface_visibility": SurfaceVisibility.RAW_ONLY,
+                "ignorable": False,
+                "payload": payload,
+            }
+        )
+        assert ev is not None
+        assert ev.event_type in (
+            LifecycleEventType.TURN_END,
+            LifecycleEventType.AGENT_ENDED,
+        )
+        # roundtrip through canonical JSON stays stable
+        assert BrainLifecycleEvent.from_dict(json.loads(canonical_json(ev))) == ev
+
+
 def test_lifecycle_event_roundtrip() -> None:
     ev = BrainLifecycleEvent(
         seq=1,

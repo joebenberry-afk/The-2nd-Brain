@@ -359,6 +359,204 @@ def test_cli_ledger_flow(tmp_path) -> None:
     assert json.loads(r.stdout)["indexed"] == 1
 
 
+def test_cli_ledger_init_project_attribution(tmp_path) -> None:
+    """Project attribution regression: ``ledger init --cwd`` resolves
+    project_id through the SAME ladder AutoInject uses (registry root
+    containing the cwd); explicit ``--project`` wins; no ``--cwd``/``--project``
+    keeps the historical '' (empty session-ledger project_id gap)."""
+    import os
+    import subprocess
+    import sys
+
+    from second_brain import registry
+
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(k, None)
+    home = tmp_path / "brain"
+    home.mkdir()
+
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "second_brain", "--home", str(home), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=home,
+            timeout=120,
+        )
+
+    assert run("init").returncode == 0
+    proj_dir = tmp_path / "proj-x"
+    proj_dir.mkdir()
+    registry.add_project(home, proj_dir, name="Proj X", project_id="proj-x")
+
+    def project_id(host: str) -> str | None:
+        internal = ledger_mod.internal_session_id(host)
+        conn = sqlite3.connect(home / "state" / "sessions" / internal / "ledger.sqlite")
+        try:
+            row = conn.execute("SELECT project_id FROM sessions").fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    # --cwd inside the registered project root -> resolved via the ladder
+    r = run("ledger", "init", "--session", "host-cwd", "--cwd", str(proj_dir))
+    assert r.returncode == 0, r.stderr
+    assert project_id("host-cwd") == "proj-x"
+
+    # explicit --project still wins over --cwd resolution
+    r = run(
+        "ledger", "init", "--session", "host-exp",
+        "--project", "explicit-proj", "--cwd", str(proj_dir),
+    )
+    assert r.returncode == 0, r.stderr
+    assert project_id("host-exp") == "explicit-proj"
+
+    # no --cwd / no --project -> '' unchanged
+    r = run("ledger", "init", "--session", "host-none")
+    assert r.returncode == 0, r.stderr
+    assert project_id("host-none") == ""
+
+
+def _cli_env(tmp_path):
+    """Shared CLI harness: env-clean brainctl against a tmp home."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(k, None)
+    home = tmp_path / "brain"
+    home.mkdir()
+
+    def run(*args: str, stdin: str = "") -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "second_brain", "--home", str(home), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=home,
+            input=stdin,
+            timeout=120,
+        )
+
+    return home, run
+
+
+def _mirror_event(eid: str, event_type: str, **payload) -> dict:
+    """One event exactly as the Prime extension mirror sends it: no seq
+    (ledger auto-assigns), no internal_session_id (CLI derives it)."""
+    return {
+        "event_id": eid,
+        "agent_id": "a1",
+        "parent_event_id": None,
+        "event_type": event_type,
+        "timestamp": "2026-08-16T01:00:00Z",
+        "surface_visibility": "raw_only",
+        "ignorable": False,
+        "payload": payload,
+    }
+
+
+def test_cli_append_accepts_live_prime_events(tmp_path) -> None:
+    """Live host sequence (turn_end / agent_ended) is accepted by ledger
+    append and persists contiguously (regression: 'unknown required event
+    type: turn_end/agent_ended')."""
+    _home, run = _cli_env(tmp_path)
+    assert run("ledger", "init", "--session", HOST).returncode == 0
+    batch = [
+        _mirror_event("live-1", "session_started", agent_id="a1",
+            model="deepseek/deepseek-v4-flash"),
+        _mirror_event("live-2", "user_task", task_sha256="abc123"),
+        _mirror_event("live-3", "tool_requested", tool="bash", tool_call_id="t1"),
+        _mirror_event("live-4", "tool_completed", tool="bash", tool_call_id="t1", output_bytes=42),
+        _mirror_event("live-5", "turn_end", turn_index=0, tool_result_count=1),
+        _mirror_event("live-6", "agent_ended", message_count=1),
+    ]
+    r = run("ledger", "append", "--session", HOST, "--stdin-json", stdin=json.dumps(batch))
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["appended"] == [1, 2, 3, 4, 5, 6]
+    r = run("ledger", "verify", HOST)
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["integrity"]["seq_contiguous"] is True
+    assert out["replay_ok"] is True
+
+
+def test_cli_rejected_append_then_retry_stays_contiguous(tmp_path) -> None:
+    """A rejected event (unknown non-ignorable) fails the append without
+    advancing sequence state; the next append still lands contiguous."""
+    _home, run = _cli_env(tmp_path)
+    assert run("ledger", "init", "--session", HOST).returncode == 0
+    ok = _mirror_event("ok-1", "user_task", task_sha256="abc")
+    r = run("ledger", "append", "--session", HOST, "--stdin-json", stdin=json.dumps(ok))
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["appended"] == [1]
+
+    bad = _mirror_event("bad-1", "mystery_event")
+    r = run("ledger", "append", "--session", HOST, "--stdin-json", stdin=json.dumps(bad))
+    assert r.returncode == 2
+    assert "mystery_event" in r.stderr
+
+    # retry with the real event type: still contiguous, no gap from the failure
+    retry = _mirror_event("ok-2", "turn_end", turn_index=0)
+    r = run("ledger", "append", "--session", HOST, "--stdin-json", stdin=json.dumps(retry))
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["appended"] == [2]
+    out = json.loads(run("ledger", "verify", HOST).stdout)
+    assert out["integrity"]["seq_contiguous"] is True
+
+
+def test_cli_batch_with_ignorable_skip_stays_contiguous(tmp_path) -> None:
+    """Skipped unknown-ignorable events must not consume seq slots: the
+    surviving events get contiguous auto-assigned seqs (regression for the
+    CLI seq-counter gap that poisoned later mirror writes)."""
+    _home, run = _cli_env(tmp_path)
+    assert run("ledger", "init", "--session", HOST).returncode == 0
+    batch = [
+        _mirror_event("m-1", "user_task", task_sha256="a"),
+        dict(
+            _mirror_event("m-2", "host_artifact_ref", kind="transcript", path="x.jsonl"),
+            ignorable=True,
+        ),
+        _mirror_event("m-3", "turn_end", turn_index=0),
+    ]
+    r = run("ledger", "append", "--session", HOST, "--stdin-json", stdin=json.dumps(batch))
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["appended"] == [1, 2]  # no slot for the skip
+    out = json.loads(run("ledger", "verify", HOST).stdout)
+    assert out["integrity"]["seq_contiguous"] is True
+    assert out["integrity"]["event_count"] == 2
+
+
+def test_cli_concurrent_appends_all_contiguous(tmp_path) -> None:
+    """Concurrent mirror appends (one process per event, as the extension
+    fires them) all land contiguous: seq assignment happens inside the
+    append transaction (regression for 'seq contiguity violated: batch
+    starts at N but ledger expects N+1' races)."""
+    import concurrent.futures
+
+    _home, run = _cli_env(tmp_path)
+    assert run("ledger", "init", "--session", HOST).returncode == 0
+
+    def append(i: int):
+        return run(
+            "ledger", "append", "--session", HOST, "--stdin-json",
+            stdin=json.dumps(_mirror_event(f"race-{i}", "user_task", task_sha256=str(i))),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(append, range(8)))
+    assert all(r.returncode == 0 for r in results), [r.stderr for r in results if r.returncode != 0]
+    appended = sorted(s for r in results for s in json.loads(r.stdout)["appended"])
+    assert appended == list(range(1, 9))
+    out = json.loads(run("ledger", "verify", HOST).stdout)
+    assert out["integrity"]["seq_contiguous"] is True
+    assert out["integrity"]["event_count"] == 8
+
+
 def test_host_artifact_manifest_roundtrip(tmp_path) -> None:
     """T-G2: ledger init --host-artifact KIND=PATH records Prime-owned artifact
     REFERENCES in manifest.json (never copies content)."""
