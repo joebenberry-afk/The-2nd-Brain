@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +145,17 @@ function recordOf(records: Record<string, unknown>[], kind: string): Record<stri
   const rec = records.find((r) => r.kind === kind);
   if (!rec) throw new Error(`record kind ${kind} not found in ${JSON.stringify(records.map((r) => r.kind))}`);
   return rec;
+}
+
+/** Write config/context.toml with [rtd] enabled=true (P3-F activation switch). */
+function enableRtd(): void {
+  const dir = join(tmp, "config");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "context.toml"),
+    '[rtd]\nenabled = true\nthreshold_chars = 8000\nmax_distill_chars = 2000\nwhitelist_tools = ["bash"]\nwhitelist_commands = ["pytest", "git", "rg", "grep"]\n',
+    "utf8",
+  );
 }
 
 /** Context with NO session file: forces the anonymous fallback path. */
@@ -462,11 +473,11 @@ describe("factory wiring (src/index.ts)", () => {
     const input = { command: "pytest -q tests/", timeout: 120 };
     const originalInput = structuredClone(input);
 
-    const result = handlers.get("tool_result")!(
+    const result = await handlers.get("tool_result")!(
       { toolName: "bash", toolCallId: "rtd-1", input, content: bigContent, details: {}, isError: false },
       ctx,
     );
-    expect(result).toBeUndefined();
+    expect(result).toBeUndefined(); // shadow-only: no substitution patch
     expect(input).toEqual(originalInput); // input unmutated
 
     const records = await waitForLines(2); // tool_result + rtd_shadow
@@ -516,22 +527,73 @@ describe("factory wiring (src/index.ts)", () => {
     expect(after.map((l) => JSON.parse(l).kind)).toEqual(["tool_result"]);
   });
 
-  it("SECOND_BRAIN_RTD=active logs intent without substituting", async () => {
+  it("legacy env SECOND_BRAIN_RTD=active alone does NOT substitute (config is the switch, P3-F)", async () => {
     process.env.SECOND_BRAIN_RTD = "active";
     const handlers = loadFactory();
     const ctx = makeCtx();
-    handlers.get("tool_result")!(
+    const result = await handlers.get("tool_result")!(
       { toolName: "bash", toolCallId: "rtd-4", input: { command: "git status" }, content: "y".repeat(9000), details: {}, isError: false },
       ctx,
     );
+    expect(result).toBeUndefined(); // no substitution without [rtd] enabled=true
     const records = await waitForLines(2);
     const shadow = records.find((r) => r.kind === "rtd_shadow");
     expect(shadow).toMatchObject({
-      reason: "would-substitute",
-      substitution: "enabled-not-implemented",
+      reason: "ok",
       would_trigger: true,
       tool: "bash",
     });
+    expect(shadow!.substitution).toBeUndefined();
+  });
+
+  it("P3-F: [rtd] enabled=true + preservation OK -> substitution patch + distilled record", async () => {
+    enableRtd();
+    const handlers = loadFactory({
+      rtdPreserver: {
+        preserve: async (raw) => ({ sha256: require("node:crypto").createHash("sha256").update(raw).digest("hex"), handle: `[brain-artifact:sha256:${require("node:crypto").createHash("sha256").update(raw).digest("hex")}]` }),
+        verify: async (_sha256, raw) => raw === "x".repeat(9000),
+      },
+    });
+    const ctx = makeCtx();
+    const result = await handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-act-1", input: { command: "pytest -q tests/" }, content: [{ type: "text", text: "x".repeat(9000) }], details: {}, isError: false },
+      ctx,
+    );
+    const patch = result as { content: Array<{ type: "text"; text: string }> } | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.content[0]!.text).toContain("[SECOND_BRAIN_RTD]");
+    expect(patch!.content[0]!.text).toContain("original_chars=9000");
+    expect(patch!.content[0]!.text).toContain("truncated=true");
+    expect(patch!.content[0]!.text).toContain("artifact=[brain-artifact:sha256:");
+    const records = await waitForLines(2);
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(shadow).toMatchObject({
+      distilled: true,
+      original_chars: 9000,
+      command_class: "pytest",
+      error_status: false,
+    });
+    expect(shadow!.saved_chars).toBeGreaterThan(6000);
+    expect(shadow!.artifact_ref).toContain("brain-artifact:sha256:");
+  });
+
+  it("P3-F: [rtd] enabled=true but preservation FAILS -> original content unchanged + distilled=false record", async () => {
+    enableRtd();
+    const handlers = loadFactory({
+      rtdPreserver: {
+        preserve: async () => null, // store failed
+        verify: async () => false,
+      },
+    });
+    const ctx = makeCtx();
+    const result = await handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "rtd-act-2", input: { command: "git log -p" }, content: [{ type: "text", text: "y".repeat(9000) }], details: {}, isError: false },
+      ctx,
+    );
+    expect(result).toBeUndefined(); // plan §11.4: DO NOT DISTILL on preservation failure
+    const records = await waitForLines(2);
+    const shadow = records.find((r) => r.kind === "rtd_shadow");
+    expect(shadow).toMatchObject({ distilled: false, command_class: "git", original_chars: 9000 });
   });
 
   it("SECOND_BRAIN_RTD_THRESHOLD overrides the default threshold", async () => {

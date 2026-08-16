@@ -30,7 +30,7 @@ Kinds:
 | session_before_compact | branch_entries |
 | session_compact | from_extension |
 | session_shutdown | reason |
-| rtd_shadow | tool, id, size, threshold, would_trigger, reason |
+| rtd_shadow | tool, id, size, threshold, would_trigger, reason, original_chars?, visible_chars?, saved_chars?, artifact_ref?, command_class?, error_status?, distilled? (P3-F additive) |
 | lean_kernel | decision, reason, role, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; P3-D) |
 | extension_error | error (string, truncated) |
 | assistant_usage | provider, model, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
@@ -62,7 +62,30 @@ additive.
 
 `rtd_shadow` records appear when a tool result would have triggered Reversible
 Tool Distillation (size > threshold, whitelisted tool/command). They change no
-behavior: substitution happens only when `SECOND_BRAIN_RTD=active`.
+behavior: substitution happens only when `[rtd] enabled=true` in
+config/context.toml (P3-F; the legacy `SECOND_BRAIN_RTD=active` env is no
+longer the substitution switch).
+
+## Phase P3-F addition (RTD substitution, plan §11)
+
+When `[rtd] enabled=true`, eligible large bash results (pytest/git/rg/grep,
+text-only, size > threshold) are FIRST preserved byte-exactly through the
+artifact store (`second_brain artifact store`, sha256 content-addressed) and
+verified recoverable via `artifact expand`; only then is the model-visible
+content replaced by the deterministic `[SECOND_BRAIN_RTD]` block (metadata +
+bounded head/tail + command-class evidence + exact reopen instructions).
+Preservation failure returns the ORIGINAL content unchanged (plan §11.4);
+binary/non-text results are never distilled (§11.8). The `rtd_shadow` record
+gains ADDITIVE fields (absent in shadow mode, never raw content):
+
+- `original_chars` — exact raw result length;
+- `visible_chars` — full model-visible block length (metadata + evidence + pointer);
+- `saved_chars` — original − visible (≥ 0);
+- `artifact_ref` — `[brain-artifact:sha256:<hex>]` recovery handle;
+- `command_class` — pytest | git | rg | grep (first token);
+- `error_status` — whether the tool result was an error (conservative §11.7);
+- `distilled` — true = substitution applied; false = triggered but
+  preservation/verification failed (original content kept).
 
 ## Phase 3 clarification (2026-08-15, RTD hot path; corrected)
 

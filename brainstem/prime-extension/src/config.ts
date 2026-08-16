@@ -113,3 +113,95 @@ export function rtdThresholdFromConfig(home: string | null): number | undefined 
     return undefined;
   }
 }
+
+// ---------------------------------------------------------------------------
+// P3-F: full [rtd] config surface (plan §11.3) — the documented-but-unwired
+// fields become real for the RTD substitution surface ONLY. Same tiny
+// TOML-subset parser style; no second config file.
+// ---------------------------------------------------------------------------
+
+/** Default visible budget for the deterministic RTD block (plan §11.6). */
+export const RTD_DEFAULT_MAX_DISTILL_CHARS = 2000;
+
+/** Resolved [rtd] configuration for the Prime extension (defaults safe). */
+export interface RtdFileConfig {
+  /** Master switch: substitution happens only when true (plan §11.3/§11.5). */
+  enabled: boolean;
+  /** Distill when serialized result size exceeds this (legacy threshold ladder). */
+  thresholdChars: number;
+  /** Cap on the model-visible distilled block size (plan §11.6). */
+  maxDistillChars: number;
+  /** Tools eligible for RTD (default: bash only — plan §11.2). */
+  whitelistTools: string[];
+  /** First-token commands eligible for RTD (default: pytest/git/rg/grep). */
+  whitelistCommands: string[];
+}
+
+/** Parse a TOML string list `["a", "b"]` (quotes/whitespace stripped). */
+function parseStringList(raw: string): string[] | undefined {
+  const inner = raw.trim();
+  if (!inner.startsWith("[") || !inner.endsWith("]")) return undefined;
+  const items = inner
+    .slice(1, -1)
+    .split(",")
+    .map((item) => item.trim().replace(/^"|"$/g, "").toLowerCase())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+/**
+ * Parse the `[rtd]` section of config/context.toml into the full config
+ * surface. Missing/invalid values fall back to the documented defaults
+ * (safe-by-default: enabled=false). PURE, never throws, never reads fs.
+ */
+export function rtdConfigFromContextToml(text: string): RtdFileConfig {
+  let inRtd = false;
+  let enabled = false;
+  let thresholdChars = 8000; // rtd.ts RTD_DEFAULT_THRESHOLD (no import cycle)
+  let maxDistillChars = RTD_DEFAULT_MAX_DISTILL_CHARS;
+  let whitelistTools = ["bash"];
+  let whitelistCommands = ["pytest", "git", "rg", "grep"];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inRtd = line.startsWith("[rtd]");
+      continue;
+    }
+    if (!inRtd || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    if (key === "enabled") {
+      const v = value.toLowerCase();
+      enabled = v === "true" || v === "1" || v === "yes";
+    } else if (key === "threshold_chars") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) thresholdChars = parsed;
+    } else if (key === "max_distill_chars") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) maxDistillChars = parsed;
+    } else if (key === "whitelist_tools") {
+      const parsed = parseStringList(value);
+      if (parsed) whitelistTools = parsed;
+    } else if (key === "whitelist_commands") {
+      const parsed = parseStringList(value);
+      if (parsed) whitelistCommands = parsed;
+    }
+  }
+  return { enabled, thresholdChars, maxDistillChars, whitelistTools, whitelistCommands };
+}
+
+/**
+ * Load the full [rtd] config from `<home>/config/context.toml`; missing or
+ * unreadable file returns the safe defaults (enabled=false). Never throws.
+ */
+export function loadRtdConfig(home: string | null): RtdFileConfig {
+  if (!home) return rtdConfigFromContextToml("");
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return rtdConfigFromContextToml(text);
+  } catch {
+    return rtdConfigFromContextToml("");
+  }
+}

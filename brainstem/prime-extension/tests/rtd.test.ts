@@ -3,13 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildRtdBlock,
+  cliRtdPreserver,
   commandFromInput,
+  distillText,
   parseThreshold,
+  pytestEvidence,
   rtdEligibility,
   rtdShadowRecord,
+  runRtd,
   serializedSize,
   shouldDistill,
+  textFromContent,
+  type RtdPreserver,
 } from "../src/rtd";
+import { rtdConfigFromContextToml } from "../src/config";
 import { measureContent, type ContentMeasurement } from "../src/sensors";
 
 const BIG = "x".repeat(9000); // > 8000 default threshold
@@ -364,5 +372,233 @@ describe("single eligibility decision (no re-read, no divergence)", () => {
     reads = 0;
     expect(shouldDistill({ toolName: "bash", input }, 8000, M_BIG, "ok")).toEqual({ trigger: true, reason: "ok" });
     expect(reads).toBe(0); // precomputed: no input read at all
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-F substitution surface (plan §11)
+// ---------------------------------------------------------------------------
+
+const RTD_CFG_ON = rtdConfigFromContextToml(
+  '[rtd]\nenabled = true\nthreshold_chars = 8000\nmax_distill_chars = 2000\n' +
+    'whitelist_tools = ["bash"]\nwhitelist_commands = ["pytest", "git", "rg", "grep"]\n',
+);
+
+function fakePreserver(ok: boolean): RtdPreserver {
+  return {
+    preserve: async (_raw) =>
+      ok
+        ? {
+            sha256: "a".repeat(64),
+            handle: "[brain-artifact:sha256:" + "a".repeat(64) + "]",
+          }
+        : null,
+    verify: async () => ok,
+  };
+}
+
+const baseRtdOptions = {
+  session: "s-rtd",
+  tool: "bash",
+  id: "rtd-1",
+  input: { command: "pytest -q tests/" },
+  content: [{ type: "text", text: BIG }],
+  isError: false,
+  measurement: M_BIG,
+  threshold: 8000,
+  cfg: RTD_CFG_ON,
+};
+
+describe("rtdConfigFromContextToml (plan §11.3 — documented fields become real)", () => {
+  it("parses enabled/threshold/max/whitelists from [rtd]", () => {
+    const cfg = rtdConfigFromContextToml(
+      "[rtd]\nenabled = true\nthreshold_chars = 12345\nmax_distill_chars = 999\n" +
+        'whitelist_tools = ["bash", "ipython"]\nwhitelist_commands = ["pytest", "git"]\n',
+    );
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.thresholdChars).toBe(12345);
+    expect(cfg.maxDistillChars).toBe(999);
+    expect(cfg.whitelistTools).toEqual(["bash", "ipython"]);
+    expect(cfg.whitelistCommands).toEqual(["pytest", "git"]);
+  });
+
+  it("defaults are safe (enabled=false) when absent/invalid", () => {
+    const absent = rtdConfigFromContextToml("[router]\nmax_active = 3\n");
+    expect(absent.enabled).toBe(false);
+    expect(absent.thresholdChars).toBe(8000);
+    expect(absent.maxDistillChars).toBe(2000);
+    expect(absent.whitelistTools).toEqual(["bash"]);
+    expect(absent.whitelistCommands).toEqual(["pytest", "git", "rg", "grep"]);
+    const invalid = rtdConfigFromContextToml("[rtd]\nenabled = banana\nmax_distill_chars = -5\n");
+    expect(invalid.enabled).toBe(false);
+    expect(invalid.maxDistillChars).toBe(2000);
+  });
+
+  it("whitelists drive eligibility (config wins over fixed defaults)", () => {
+    const cfg = rtdConfigFromContextToml(
+      '[rtd]\nwhitelist_tools = ["ipython"]\nwhitelist_commands = ["pytest"]\n',
+    );
+    expect(rtdEligibility("ipython", { command: "pytest -q" }, cfg)).toBe("ok");
+    expect(rtdEligibility("bash", { command: "pytest -q" }, cfg)).toBe("tool");
+    expect(rtdEligibility("ipython", { command: "git status" }, cfg)).toBe("command");
+  });
+});
+
+describe("textFromContent (plan §11.8 — binary/non-text never distilled)", () => {
+  it("extracts concatenated text blocks", () => {
+    expect(textFromContent([{ type: "text", text: "a" }, { type: "text", text: "b" }])).toBe("ab");
+  });
+  it("returns undefined for image blocks / mixed / empty / non-arrays", () => {
+    expect(textFromContent([{ type: "image", image: "x" }])).toBeUndefined();
+    expect(textFromContent([{ type: "text", text: "a" }, { type: "image", image: "x" }])).toBeUndefined();
+    expect(textFromContent([])).toBeUndefined();
+    expect(textFromContent([{ type: "text" }])).toBeUndefined();
+    expect(textFromContent([42])).toBeUndefined();
+  });
+});
+
+describe("distillText + pytestEvidence (deterministic, plan §11.5/§11.6)", () => {
+  it("head/tail with omitted marker, bounded to maxChars", () => {
+    const out = distillText(BIG + "TAILMARKER", { commandClass: "git", maxChars: 2000, isError: false });
+    expect(out.visibleChars).toBeLessThanOrEqual(2000);
+    expect(out.text).toContain("… [");
+    expect(out.text).toContain(" chars omitted] …");
+    expect(out.text.endsWith("TAILMARKER")).toBe(true);
+    expect(out.text.startsWith("x".repeat(700))).toBe(true); // 40% head budget (marker reserved)
+  });
+
+  it("error results keep a longer tail (conservative, §11.7)", () => {
+    const ok = distillText(BIG, { commandClass: "git", maxChars: 2000, isError: false });
+    const err = distillText(BIG, { commandClass: "git", maxChars: 2000, isError: true });
+    const tailOf = (s: { text: string }) => s.text.slice(s.text.indexOf("… ["));
+    expect(tailOf(err).length).toBeGreaterThan(tailOf(ok).length);
+  });
+
+  it("small text is returned unchanged (no truncation)", () => {
+    const out = distillText("tiny", { commandClass: "git", maxChars: 2000, isError: false });
+    expect(out).toEqual({ text: "tiny", visibleChars: 4 });
+  });
+
+  it("pytest evidence: failures section + failing test names + summary", () => {
+    const raw = [
+      "collected 5 items",
+      "tests/test_a.py F",
+      "",
+      "=== FAILURES ===",
+      "____ test_broken ____",
+      "    assert 1 == 2",
+      "    AssertionError",
+      "=== short test summary info ===",
+      "FAILED tests/test_a.py::test_broken",
+      "=== 1 failed, 4 passed in 0.5s ===",
+    ].join("\n");
+    const extra = pytestEvidence(raw);
+    expect(extra).toContain("=== FAILURES ===");
+    expect(extra).toContain("FAILING TESTS (1):");
+    expect(extra).toContain("test_broken");
+    expect(extra).toContain("1 failed, 4 passed");
+    expect(pytestEvidence("no failures here")).toBeUndefined();
+  });
+
+  it("buildRtdBlock carries the full metadata + reopen pointer", () => {
+    const block = buildRtdBlock({
+      rawChars: 9000, visibleChars: 1900, sha256: "ab".repeat(32), artifactRef: "[brain-artifact:sha256:ab]",
+      commandClass: "git", isError: false, evidence: "head\n...\ntail", lineCount: 12,
+    });
+    expect(block).toContain("[SECOND_BRAIN_RTD]");
+    expect(block).toContain("original_chars=9000");
+    expect(block).toContain("visible_chars=1900");
+    expect(block).toContain("saved_chars=7100");
+    expect(block).toContain("lines=12");
+    expect(block).toContain("artifact=[brain-artifact:sha256:ab]");
+    expect(block).toContain("truncated=true");
+    expect(block).toContain("Full exact result preserved at");
+    expect(block).toContain("artifact expand");
+  });
+});
+
+describe("runRtd (substitution orchestrator, plan §11)", () => {
+  it("shadow path (enabled=false): record only, no patch", async () => {
+    const cfgOff = { ...RTD_CFG_ON, enabled: false };
+    const out = await runRtd({ ...baseRtdOptions, cfg: cfgOff, preserver: fakePreserver(true) });
+    expect(out.patch).toBeUndefined();
+    expect(out.record?.would_trigger).toBe(true);
+    expect(out.record?.distilled).toBeUndefined();
+  });
+
+  it("below threshold: no record, no patch", async () => {
+    const out = await runRtd({
+      ...baseRtdOptions,
+      content: [{ type: "text", text: SMALL }],
+      measurement: M_SMALL,
+      preserver: fakePreserver(true),
+    });
+    expect(out.record).toBeNull();
+    expect(out.patch).toBeUndefined();
+  });
+
+  it("ineligible tool/command: no record, no patch", async () => {
+    const out = await runRtd({
+      ...baseRtdOptions,
+      tool: "ipython",
+      input: { code: "print(1)" },
+      preserver: fakePreserver(true),
+    });
+    expect(out.record).toBeNull();
+    expect(out.patch).toBeUndefined();
+  });
+
+  it("preservation FAILURE -> original content unchanged, distilled=false record (plan §11.4)", async () => {
+    const out = await runRtd({ ...baseRtdOptions, preserver: fakePreserver(false) });
+    expect(out.patch).toBeUndefined();
+    expect(out.record?.distilled).toBe(false);
+    expect(out.record?.original_chars).toBe(9000);
+    expect(out.record?.command_class).toBe("pytest");
+  });
+
+  it("verify FAILURE after store -> original content unchanged", async () => {
+    const preserver: RtdPreserver = {
+      preserve: async () => ({ sha256: "a".repeat(64), handle: "[brain-artifact:sha256:" + "a".repeat(64) + "]" }),
+      verify: async () => false,
+    };
+    const out = await runRtd({ ...baseRtdOptions, preserver });
+    expect(out.patch).toBeUndefined();
+    expect(out.record?.distilled).toBe(false);
+  });
+
+  it("success: patch carries the deterministic block; record carries sizes/ref/class (no raw content)", async () => {
+    const out = await runRtd({ ...baseRtdOptions, preserver: fakePreserver(true) });
+    expect(out.patch).toBeDefined();
+    const text = out.patch!.content[0]!.text;
+    expect(text).toContain("[SECOND_BRAIN_RTD]");
+    expect(text).toContain("original_chars=9000");
+    expect(text).toContain("command=pytest");
+    expect(text).toContain("error_status=false");
+    expect(text).not.toContain(BIG); // raw content never leaks into the block
+    expect(out.record?.distilled).toBe(true);
+    expect(out.record?.original_chars).toBe(9000);
+    expect(out.record!.visible_chars!).toBeLessThan(3000);
+    expect(out.record!.saved_chars!).toBeGreaterThan(6000);
+    expect(out.record?.artifact_ref).toContain("brain-artifact:sha256:");
+    expect(out.record?.command_class).toBe("pytest");
+    expect(out.record?.error_status).toBe(false);
+  });
+
+  it("binary content (image block) is NEVER distilled even when enabled", async () => {
+    const out = await runRtd({
+      ...baseRtdOptions,
+      content: [{ type: "image", image: "x".repeat(9000) }],
+      preserver: fakePreserver(true),
+    });
+    expect(out.patch).toBeUndefined();
+  });
+});
+
+describe("cliRtdPreserver spawn contract (fail-open)", () => {
+  it("no venv -> preservation fails (null/false), never throws", async () => {
+    const preserver = cliRtdPreserver({ home: tmpdir(), session: "s" });
+    const preserved = await preserver.preserve("raw");
+    expect(preserved).toBeNull();
+    expect(await preserver.verify("a".repeat(64), "raw")).toBe(false);
   });
 });

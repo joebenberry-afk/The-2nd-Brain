@@ -1,9 +1,13 @@
 /**
- * Phase 5 (RTD — real-time distillation) shadow measurement.
- *
- * SHADOW ONLY: this module only decides and measures. It never substitutes
- * tool-result content. Actual substitution lands in a later phase after gate
- * review (plan §20/§21/§101).
+ * Phase 5 (RTD — real-time distillation). Shadow measurement PLUS the P3-F
+ * substitution surface (plan §11): when config/context.toml `[rtd] enabled =
+ * true`, eligible large bash results (pytest/git/rg/grep, text-only, above
+ * threshold_chars) are FIRST preserved byte-exactly through the existing
+ * artifact store (`second_brain artifact store`, sha256 content-addressed)
+ * and verified recoverable; ONLY THEN is the model-visible content replaced
+ * by a deterministic [SECOND_BRAIN_RTD] block (head/tail + command-class
+ * evidence + artifact pointer). Any preservation failure returns the ORIGINAL
+ * content unchanged (plan §11.4: never trade recoverability for savings).
  *
  * Trigger rule (Phase 3 order — eligibility BEFORE any content work):
  *   toolName === "bash"
@@ -23,7 +27,12 @@
  */
 
 /** Bash command prefixes that qualify for distillation. */
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ContentMeasurement } from "./sensors";
+import type { RtdFileConfig } from "./config";
 import { resolveBrainHome, rtdThresholdFromConfig } from "./config";
 export const RTD_COMMAND_PREFIXES = ["pytest", "git", "rg", "grep"] as const;
 
@@ -48,23 +57,29 @@ export interface DistillDecision {
 
 /**
  * Tool/command eligibility for RTD — decided WITHOUT touching result content
- * (Phase 3). Returns "tool" (not bash), "command" (bash command outside the
- * prefix list), or "ok" (eligible for the size check).
+ * (Phase 3). Returns "tool" (not bash / not whitelisted), "command" (bash
+ * command outside the prefix list), or "ok" (eligible for the size check).
+ *
+ * P3-F: an optional `[rtd]` config supplies whitelist_tools/whitelist_commands
+ * (plan §11.3); when omitted the fixed P3 defaults apply (bash +
+ * pytest/git/rg/grep — the proven bounded surface, plan §11.2). The first
+ * whitespace-separated token only: `git status` matches, `gitx` must not.
  */
 export function rtdEligibility(
   toolName: unknown,
   input: unknown,
+  cfg?: Pick<RtdFileConfig, "whitelistTools" | "whitelistCommands">,
 ): Extract<DistillReason, "tool" | "command" | "ok"> {
-  if (toolName !== "bash") {
+  const tools = cfg?.whitelistTools ?? ["bash"];
+  if (typeof toolName !== "string" || !tools.some((t) => t === toolName.toLowerCase())) {
     return "tool";
   }
   const command = commandFromInput(input);
   if (!command) return "command";
-  // First whitespace-separated token only: `git status` matches, `gitx`
-  // must not, and leading whitespace must not defeat the match.
   const firstToken = command.trim().split(/\s+/)[0] ?? "";
   const lower = firstToken.toLowerCase();
-  if (!RTD_COMMAND_PREFIXES.some((prefix) => prefix === lower)) {
+  const commands = cfg?.whitelistCommands ?? RTD_COMMAND_PREFIXES;
+  if (!commands.some((prefix) => prefix === lower)) {
     return "command";
   }
   return "ok";
@@ -154,6 +169,14 @@ export interface RtdShadowRecord {
   reason: string;
   /** Present only when SECOND_BRAIN_RTD=active: substitution not implemented yet. */
   substitution?: string;
+  // P3-F additive fields (plan §11.9 — never raw content):
+  original_chars?: number;
+  visible_chars?: number;
+  saved_chars?: number;
+  artifact_ref?: string;
+  command_class?: string;
+  error_status?: boolean;
+  distilled?: boolean;
 }
 
 export interface RtdShadowOptions {
@@ -173,6 +196,19 @@ export interface RtdShadowOptions {
   threshold: number;
   /** SECOND_BRAIN_RTD === "active" — records intent; substitution is NOT implemented. */
   active: boolean;
+  /** P3-F: populated on the substitution path (distilled or preservation-failed). */
+  distill?: RtdDistillDetail;
+}
+
+/** P3-F additive detail for the rtd_shadow record (plan §11.9). */
+export interface RtdDistillDetail {
+  originalChars: number;
+  visibleChars: number;
+  savedChars: number;
+  artifactRef: string;
+  commandClass: string;
+  errorStatus: boolean;
+  distilled: boolean;
 }
 
 /**
@@ -206,8 +242,361 @@ export function rtdShadowRecord(options: RtdShadowOptions): RtdShadowRecord | nu
     would_trigger: true,
     reason: options.active ? "would-substitute" : decision.reason,
   };
-  if (options.active) {
+  if (options.active && !options.distill) {
     record.substitution = "enabled-not-implemented";
   }
+  if (options.distill) {
+    record.original_chars = options.distill.originalChars;
+    record.visible_chars = options.distill.visibleChars;
+    record.saved_chars = options.distill.savedChars;
+    record.artifact_ref = options.distill.artifactRef;
+    record.command_class = options.distill.commandClass;
+    record.error_status = options.distill.errorStatus;
+    record.distilled = options.distill.distilled;
+  }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// P3-F substitution surface (plan §11) — preserve raw FIRST, then replace the
+// model-visible content with a deterministic [SECOND_BRAIN_RTD] block.
+// ---------------------------------------------------------------------------
+
+/** Preservation seam: persists the exact raw result + proves recoverability. */
+export interface RtdPreserver {
+  /** Persist raw text through the artifact store; returns sha256 + handle,
+   * or null when preservation failed (never throws). */
+  preserve(raw: string): Promise<{ sha256: string; handle: string } | null>;
+  /** Prove the artifact expands back to the EXACT raw bytes. */
+  verify(sha256: string, raw: string): Promise<boolean>;
+}
+
+/** Artifact handle template (artifacts.py make_handle). */
+export const RTD_ARTIFACT_HANDLE_RE = /\[brain-artifact:sha256:([0-9a-f]{64})\]/;
+
+/** sha256 hex (same primitive as sensors.sha256Hex, kept local). */
+export function rtdSha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * Real preservation via the existing CLI: `second_brain artifact store
+ * --kind rtd_raw --tool bash --session <sid> --no-distill` (content-addressed
+ * blob + meta, atomic) then `artifact expand <sha256>` byte-compared against
+ * the raw text (plan §11.4 "verify the reference is recoverable"). Any
+ * spawn/parse/mismatch failure => null/false (fail-open: caller returns the
+ * original content unchanged). No venv => not a runtime => fail open.
+ */
+export function cliRtdPreserver(opts: {
+  home: string;
+  session: string;
+  python?: string;
+  timeoutMs?: number;
+}): RtdPreserver {
+  const python = opts.python ?? join(opts.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = opts.home;
+  const run = (
+    args: string[],
+    input?: string,
+  ): Promise<{ error?: string; stdout: string }> =>
+    new Promise((resolve) => {
+      if (!existsSync(python)) {
+        resolve({ error: "no brain venv (RTD artifact store unavailable)", stdout: "" });
+        return;
+      }
+      const child = execFile(
+        python,
+        args,
+        {
+          cwd: opts.home,
+          env,
+          timeout: opts.timeoutMs ?? 5000,
+          windowsHide: true,
+          maxBuffer: 32 * 1024 * 1024,
+        },
+        (error, stdout) => resolve({ error: error?.message, stdout: stdout ?? "" }),
+      );
+      if (input !== undefined) {
+        child.stdin?.write(input);
+        child.stdin?.end();
+      }
+    });
+  return {
+    async preserve(raw) {
+      const result = await run(
+        [
+          "-m",
+          "second_brain",
+          "artifact",
+          "store",
+          "--kind",
+          "rtd_raw",
+          "--tool",
+          "bash",
+          "--session",
+          opts.session,
+          "--no-distill",
+        ],
+        raw,
+      );
+      if (result.error) return null;
+      const match = result.stdout.match(RTD_ARTIFACT_HANDLE_RE);
+      if (!match) return null;
+      const sha256 = match[1] ?? "";
+      // Content-addressing cross-check: the handle MUST be the sha256 of the
+      // exact raw bytes we sent.
+      if (sha256 !== rtdSha256Hex(raw)) return null;
+      return { sha256, handle: match[0] };
+    },
+    async verify(sha256, raw) {
+      const result = await run(["-m", "second_brain", "artifact", "expand", sha256]);
+      if (result.error) return false;
+      return result.stdout === raw; // byte-identical recovery
+    },
+  };
+}
+
+/** Command class of an eligible bash command (first token). */
+export function commandClassOf(input: unknown): string {
+  return commandFromInput(input)?.trim().split(/\s+/)[0]?.toLowerCase() ?? "bash";
+}
+
+/** Extract the exact raw text from Prime content blocks; undefined when any
+ * block is not a plain text block (images/binary => NEVER distill, §11.8). */
+export function textFromContent(content: unknown[]): string | undefined {
+  if (!Array.isArray(content) || content.length === 0) return undefined;
+  let text = "";
+  for (const item of content) {
+    if (!item || typeof item !== "object") return undefined;
+    const block = item as { type?: unknown; text?: unknown };
+    if (block.type !== "text" || typeof block.text !== "string") return undefined;
+    text += block.text;
+  }
+  return text.length > 0 ? text : undefined;
+}
+
+/**
+ * Deterministic pytest evidence: the FAILURES/ERRORS section (bounded),
+ * failing test names, and the summary line. No LLM, no parsing framework.
+ */
+export function pytestEvidence(raw: string): string | undefined {
+  const lines = raw.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^={3,}\s*(FAILURES|ERRORS)/.test(l));
+  const summary = lines.find((l) => /^={3,}\s*\d+\s+(passed|failed)/.test(l));
+  if (start === -1 && !summary) return undefined;
+  const parts: string[] = [];
+  if (start >= 0) {
+    const end = lines.findIndex(
+      (l, i) => i > start && /^={3,}\s*\d+\s+(passed|failed)/.test(l),
+    );
+    const section = lines
+      .slice(start, end > start ? end : Math.min(lines.length, start + 400))
+      .join("\n");
+    parts.push(section.slice(0, 1500));
+  }
+  const failing = lines.filter((l) => l.startsWith("FAILED ")).slice(0, 20);
+  if (failing.length > 0) {
+    parts.push(`FAILING TESTS (${failing.length}):\n${failing.join("\n")}`);
+  }
+  if (summary) parts.push(summary);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+/**
+ * Deterministic reduction (plan §11.5/§11.6): bounded head + tail with an
+ * omitted-count marker, pytest failure evidence prepended when present.
+ * Error results keep a longer tail (failure evidence lives at the end,
+ * §11.7 — never over-trim failures).
+ */
+export function distillText(
+  raw: string,
+  opts: { commandClass: string; maxChars: number; isError: boolean },
+): { text: string; visibleChars: number } {
+  if (raw.length <= opts.maxChars) return { text: raw, visibleChars: raw.length };
+  // Pytest evidence is the highest-value content: reserve up to 40% of the
+  // budget for it; the head/tail body gets the rest, marker included. The
+  // composed text is deterministically capped at maxChars.
+  let evidence = "";
+  if (opts.commandClass === "pytest") {
+    const extra = pytestEvidence(raw);
+    if (extra) {
+      const evBudget = Math.floor(opts.maxChars * 0.4);
+      evidence = extra.length > evBudget ? extra.slice(0, evBudget) : extra;
+    }
+  }
+  const joinLen = evidence.length > 0 ? 2 : 0; // "\n\n" separator
+  const markerLen = `\n\n… [${raw.length} chars omitted] …\n\n`.length;
+  const budget = Math.max(0, opts.maxChars - joinLen - evidence.length - markerLen);
+  const headRatio = opts.isError ? 0.15 : 0.4;
+  const headChars = Math.floor(budget * headRatio);
+  const tailChars = Math.max(0, budget - headChars);
+  const head = raw.slice(0, headChars);
+  const tail = raw.slice(Math.max(0, raw.length - tailChars));
+  const omitted = raw.length - head.length - tail.length;
+  const body = `${head}\n\n… [${omitted} chars omitted] …\n\n${tail}`;
+  const text = evidence.length > 0 ? `${evidence}\n\n${body}` : body;
+  const final = text.length > opts.maxChars ? text.slice(0, opts.maxChars) : text;
+  return { text: final, visibleChars: final.length };
+}
+
+/** Build the deterministic [SECOND_BRAIN_RTD] replacement block (§11.6). */
+export function buildRtdBlock(opts: {
+  rawChars: number;
+  visibleChars: number;
+  sha256: string;
+  artifactRef: string;
+  commandClass: string;
+  isError: boolean;
+  evidence: string;
+  lineCount: number;
+}): string {
+  const saved = Math.max(0, opts.rawChars - opts.visibleChars);
+  return [
+    "[SECOND_BRAIN_RTD]",
+    `original_chars=${opts.rawChars}`,
+    `visible_chars=${opts.visibleChars}`,
+    `saved_chars=${saved}`,
+    `lines=${opts.lineCount}`,
+    `sha256=${opts.sha256}`,
+    `artifact=${opts.artifactRef}`,
+    `command=${opts.commandClass}`,
+    `error_status=${opts.isError ? "true" : "false"}`,
+    "truncated=true",
+    "",
+    opts.evidence,
+    "",
+    `Full exact result preserved at ${opts.artifactRef}.`,
+    "Reopen (exact): python -m second_brain artifact expand <hash>  (or: second_brain artifact expand <hash>)",
+    "Request it only if the missing region is material to the current decision.",
+  ].join("\n");
+}
+
+/** Result of one RTD run on the substitution path. */
+export interface RtdRunResult {
+  /** rtd_shadow record (extended with P3-F fields) or null when not triggered. */
+  record: RtdShadowRecord | null;
+  /** Content replacement patch for Prime, or undefined (no substitution). */
+  patch: { content: Array<{ type: "text"; text: string }> } | undefined;
+}
+
+export interface RtdSubstitutionOptions {
+  session: string;
+  tool: unknown;
+  id: unknown;
+  input: unknown;
+  /** Prime tool_result content blocks (text-only eligible). */
+  content: unknown[];
+  isError: boolean;
+  /** Shared precomputed measurement (one serialization, both metrics). */
+  measurement: ContentMeasurement;
+  threshold: number;
+  cfg: RtdFileConfig;
+  preserver: RtdPreserver;
+}
+
+/**
+ * Orchestrate one RTD decision on the substitution path (plan §11):
+ * eligibility -> size -> enabled gate -> PRESERVE RAW FIRST (store + verify)
+ * -> deterministic block -> patch. Preservation failure returns NO patch
+ * (original content stays) and records distilled=false. Never throws, never
+ * stores raw content in telemetry.
+ */
+export async function runRtd(options: RtdSubstitutionOptions): Promise<RtdRunResult> {
+  const eligibility = rtdEligibility(options.tool, options.input, options.cfg);
+  const decision = shouldDistill(
+    { toolName: options.tool, input: options.input },
+    options.threshold,
+    options.measurement,
+    eligibility,
+  );
+  if (!decision.trigger) {
+    return { record: null, patch: undefined };
+  }
+  const commandClass = commandClassOf(options.input);
+  const baseRecord = (distill?: RtdDistillDetail): RtdShadowRecord | null =>
+    rtdShadowRecord({
+      session: options.session,
+      tool: options.tool,
+      id: options.id,
+      input: options.input,
+      eligibility,
+      measurement: options.measurement,
+      threshold: options.threshold,
+      active: options.cfg.enabled,
+      distill,
+    });
+
+  if (!options.cfg.enabled) {
+    return { record: baseRecord(), patch: undefined }; // shadow-only
+  }
+
+  // §11.4 PRESERVE RAW FIRST. Text-only (images/binary never distill, §11.8).
+  const raw = textFromContent(options.content);
+  if (raw === undefined) {
+    return { record: baseRecord(), patch: undefined };
+  }
+  const preserved = await options.preserver.preserve(raw);
+  if (preserved === null) {
+    // Preservation failed: DO NOT DISTILL — original content unchanged.
+    return {
+      record: baseRecord({
+        originalChars: raw.length,
+        visibleChars: raw.length,
+        savedChars: 0,
+        artifactRef: "",
+        commandClass,
+        errorStatus: options.isError,
+        distilled: false,
+      }),
+      patch: undefined,
+    };
+  }
+  const verified = await options.preserver.verify(preserved.sha256, raw);
+  if (!verified) {
+    return {
+      record: baseRecord({
+        originalChars: raw.length,
+        visibleChars: raw.length,
+        savedChars: 0,
+        artifactRef: "",
+        commandClass,
+        errorStatus: options.isError,
+        distilled: false,
+      }),
+      patch: undefined,
+    };
+  }
+
+  // Recoverability proven: build the deterministic block. visible/saved are
+  // measured on the FULL model-visible block (metadata + evidence + pointer).
+  const distilled = distillText(raw, {
+    commandClass,
+    maxChars: options.cfg.maxDistillChars,
+    isError: options.isError,
+  });
+  const block = buildRtdBlock({
+    rawChars: raw.length,
+    visibleChars: distilled.visibleChars,
+    sha256: preserved.sha256,
+    artifactRef: preserved.handle,
+    commandClass,
+    isError: options.isError,
+    evidence: distilled.text,
+    lineCount: raw.split(/\r?\n/).length,
+  });
+  return {
+    record: baseRecord({
+      originalChars: raw.length,
+      visibleChars: block.length,
+      savedChars: Math.max(0, raw.length - block.length),
+      artifactRef: preserved.handle,
+      commandClass,
+      errorStatus: options.isError,
+      distilled: true,
+    }),
+    patch: { content: [{ type: "text", text: block }] },
+  };
 }

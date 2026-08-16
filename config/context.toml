@@ -31,17 +31,23 @@ files = ["active-state.json", "requirements.json", "read-ledger.json",
 min_update_interval_seconds = 30
 
 [rtd]
-# Reversible Tool Distillation (Phase 5) — SHADOW MODE (no substitution).
+# Reversible Tool Distillation (P3-F) — substitution ACTIVE when enabled=true.
 # threshold_chars: ENFORCED — the Prime extension resolves the RTD size
 # threshold as env SECOND_BRAIN_RTD_THRESHOLD (highest) -> this file value ->
 # source default 8000 (see brainstem/prime-extension/src/rtd.ts parseThreshold
 # and config.ts rtdThresholdFromConfig).
 threshold_chars = 8000
-# The keys below are INFORMATIONAL only (NOT configurable): the extension
-# reads only threshold_chars plus its own source constants. enabled /
-# max_distill_chars / whitelist_tools / whitelist_commands are NOT read at
-# runtime — tool/command eligibility is fixed in rtd.ts RTD_COMMAND_PREFIXES
-# and the env gate SECOND_BRAIN_RTD (see proof/reports/config-consumption.md).
+# P3-F: the fields below are now REAL for the RTD substitution surface
+# (brainstem/prime-extension/src/config.ts loadRtdConfig + rtd.ts runRtd):
+#   enabled            — master switch: substitution happens only when true;
+#                        false = shadow measurement only (plan §11.3). Rollback
+#                        = set back to false (no redeploy needed, per-event read).
+#   max_distill_chars  — cap on the model-visible distilled block (plan §11.6).
+#   whitelist_tools    — tools eligible (default ["bash"], plan §11.2).
+#   whitelist_commands — first-token commands eligible (pytest/git/rg/grep).
+# Raw results are preserved byte-exactly through the artifact store BEFORE any
+# reduction and verified recoverable; preservation failure returns the ORIGINAL
+# content unchanged (plan §11.4). Binary/non-text results are never distilled.
 enabled = false
 max_distill_chars = 2000
 whitelist_tools = ["bash"]
