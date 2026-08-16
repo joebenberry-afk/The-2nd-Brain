@@ -234,6 +234,26 @@ def store_file(
     return _store(home, data, data.decode("utf-8", errors="replace"), kind, tool, session)
 
 
+def store_bytes(
+    home: Path,
+    data: bytes,
+    kind: str,
+    tool: str = "",
+    session: str | None = None,
+) -> dict:
+    """Store exact raw BYTES (P3-F: byte-exact stdin preservation).
+
+    Python's text-mode stdin applies universal-newline translation
+    (CRLF -> LF), which would change the stored bytes vs what the host
+    sent — breaking content-addressed sha256 recovery for multi-line
+    Windows tool output. Callers that must preserve EXACT bytes (the RTD
+    preserver) read sys.stdin.buffer and pass bytes here; the text form
+    (decoded, errors=replace) is used only for the distilled preview."""
+    if not isinstance(data, bytes):
+        raise BrainError("data must be bytes")
+    return _store(home, data, data.decode("utf-8", errors="replace"), kind, tool, session)
+
+
 def expand(home: Path, hash_or_prefix: str) -> bytes:
     """Return the exact stored bytes for a full hash or unique prefix (>=8 hex)."""
     if not isinstance(hash_or_prefix, str):

@@ -902,8 +902,10 @@ def cmd_artifact(args) -> int:
                 home, args.path, args.kind, tool=args.tool, session=args.session
             )
         else:
-            text = sys.stdin.read()
-            info = artifacts.store_text(home, text, args.kind, tool=args.tool, session=args.session)
+            # P3-F: read stdin as EXACT BYTES (text mode would translate
+            # CRLF -> LF and break content-addressed sha256 recovery).
+            data = sys.stdin.buffer.read()
+            info = artifacts.store_bytes(home, data, args.kind, tool=args.tool, session=args.session)
         print(info["handle"])
         if not args.no_distill:
             print("Distilled:")
