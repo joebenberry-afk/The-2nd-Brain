@@ -166,9 +166,16 @@ def _resolve_project_id(
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
     home_path = Path(home)
-    if cwd:
+    # Registry candidates: --cwd when given, else the Brain home path itself
+    # (Phase C3 FIX 2: sessions without a usable cwd still resolve the
+    # brain's own project before falling back to env/default).
+    candidates: list[str] = []
+    if cwd and str(cwd).strip():
+        candidates.append(str(cwd).strip())
+    candidates.append(str(home_path))
+    for candidate in candidates:
         try:
-            cwd_abs = os.path.abspath(cwd)
+            cwd_abs = os.path.abspath(candidate)
             for proj in registry.list_projects(home_path):
                 root = proj.repo_path
                 if root:
@@ -179,7 +186,7 @@ def _resolve_project_id(
                     except ValueError:
                         continue  # different drive
         except Exception:  # fail open: registry errors never break injection
-            pass
+            continue
     env_p = os.environ.get("SECOND_BRAIN_PROJECT")
     if env_p and env_p.strip():
         return env_p.strip()
