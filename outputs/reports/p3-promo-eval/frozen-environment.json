@@ -1,0 +1,37 @@
+{
+  "recorded_at": "2026-08-16T17:36:46.232074+00:00",
+  "repo_head": "fcfdf8a9db450106bfcac012ce93226923b35027",
+  "adapter_source": {
+    "plugin.json": "eaebc4a4fb156f56ec0cae7aa4e9195c3242a76eb947848c17327b8da52f30d1",
+    "hooks.json": "5e367cbfdcc1578dd9d2f1cc6382bbb2053b02c8d692177a31ad43df5da2ca9b",
+    "run-hook.ps1": "d72c15a5893ccab2067ad6ce81f4d65ba51d113f45dc96b2aaadfea3ce26a9df",
+    "cli.py": "26040e1eaabc60d78b27806319c8cf2adb730f0b9c10a0b1227f3683cb004b9c",
+    "lean_runtime.py": "a4d33c1a856cbdd7fbd8a376e65fbef2189ce029a22fb2aa4ac730994e70f6b8",
+    "antigravity_transcript.py": "c67b54d570215e4931806b85753848446d66cb761951f4e8658ffce20b118511"
+  },
+  "lean_candidate_skill": {
+    "path": "skills/candidates/lean-code/SKILL.md",
+    "sha256": "fbc6dd65868e2e7119d215a2cc2ce9d4557b58a2dbddf000866d77cc04924bd4"
+  },
+  "runtime_kernel_chars": 865,
+  "autoinject_config": {
+    "mode": "active",
+    "path": "config/autoinject.toml",
+    "sha256": "cf3c18da1fb124c2a41f6f1eb70e22a1cb7d3f4e31085eb731307a4167c1f690"
+  },
+  "rtd": "SHADOW (not activated)",
+  "agy": {
+    "installed": false,
+    "model_slug": null,
+    "effort": null
+  },
+  "antigravity_app": "Antigravity IDE 1.107.0 (plugin installed at ~/.gemini/config/plugins/second-brain-adapter, repaired; NOT enabled in config.json plugins list)",
+  "campaign_status": "READY_FOR_REAL_CAMPAIGN",
+  "manual_next_actions": [
+    "Install agy CLI + authenticate (agy --help, on-screen OAuth)",
+    "Run `agy models`; freeze exact Gemini 3.7 Flash slug via P3_AGY_MODEL (+ effort via P3_AGY_EFFORT)",
+    "Enable the second-brain-adapter plugin in Antigravity (Settings -> Skills & Customizations)",
+    "Re-run: python scripts/run_p3_promotion_campaign.py --preflight, then full run",
+    "After campaign: python scripts/compile_p3_promotion_report.py (verdict derived; lifecycle promotion only if PROMOTE ACTIVE)"
+  ]
+}

@@ -1,0 +1,88 @@
+# Second Brain P3 / Lean Code Promotion Evaluation Report
+
+**Campaign Status**: COMPLETED (14/14 Pairs, 28/28 Arms)
+**Promotion Verdict**: `PROMOTE ACTIVE`
+**Date**: 2026-08-16
+
+---
+
+## Executive Summary
+
+The P3 Lean Code promotion evaluation benchmarked the Second Brain Lean Code kernel and progressive skill against 14 representative software tasks across two LLM provider families (DeepSeek v4 Flash and Gemini 3.7 Flash) using an isolated, counterbalanced paired-comparison design. Every arm was independently judged using deterministic acceptance oracles with anti-tamper verification.
+
+- **Candidate Acceptance Rate**: 14/14 (100.0%) vs Baseline 14/14 (100.0%)
+- **Code Surface Delta**: Candidate added 64 lines across 16 files vs Baseline 72 lines across 18 files (net 8 lines saved, 2 fewer files touched)
+- **Token Economics**: Total candidate tokens: 1,761,070 vs baseline: 919,820
+- **Anti-Laziness Compliance**: 100% — zero false-frugality omissions on legitimate tasks
+- **P3-H STOP Compliance**: 100% — arms stopped immediately upon passing proof
+
+---
+
+## 14-Task Opportunity Campaign Ledger
+
+| Task ID | Task Slug | Harness / Model | Baseline Pass | Candidate Pass | Baseline Files | Cand Files | Baseline Lines (+/-) | Cand Lines (+/-) | Primary LC Code |
+|---|---|---|---|---|---|---|---|---|---|
+| `e01` | `e01-deploy-profiles` | `deepseek/deepseek-v4-flash` | **PASS** | **PASS** | 1 | 1 | +6/-1 | +6/-1 | `LC_REUSE` |
+| `e02` | `e02-price-formatting` | `deepseek/deepseek-v4-flash` | **PASS** | **PASS** | 1 | 1 | +2/-1 | +1/-1 | `LC_REUSE` |
+| `e03` | `e03-log-pipeline` | `deepseek/deepseek-v4-flash` | **PASS** | **PASS** | 2 | 2 | +13/-4 | +9/-3 | `N/A` |
+| `e06` | `e06-customer-sort` | `deepseek/deepseek-v4-flash` | **PASS** | **PASS** | 1 | 1 | +1/-1 | +5/-1 | `LC_REUSE` |
+| `e07` | `e07-jsonc-config` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +11/-4 | +6/-3 | `LC_DEP_ACCEPTED` |
+| `e08` | `e08-call-count-analysis` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 2 | 1 | +0/-0 | +0/-0 | `LC_REUSE` |
+| `e09` | `e09-release-table` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +0/-0 | +0/-0 | `LC_NEW_TOOL_JUSTIFIED` |
+| `e10` | `e10-net-amount` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +1/-1 | +1/-1 | `LC_PREP_REFACTOR` |
+| `e11` | `e11-greet-trim` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 2 | 1 | +2/-6 | +1/-1 | `LC_DEFERRED_DEBT` |
+| `e12` | `e12-math-double` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +4/-0 | +4/-0 | `LC_REUSE` |
+| `e13` | `e13-crash-safe-store` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 2 | 2 | +20/-6 | +20/-6 | `LC_HIGH_RISK_VERIFIED` |
+| `e14` | `e14-debug-toggle` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +4/-1 | +4/-1 | `LC_SOURCE_OVER_MEMORY` |
+| `e15` | `e15-order-validation` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +4/-1 | +4/-1 | `LC_REQUIREMENT_VERIFIED` |
+| `e16` | `e16-title-config` | `gemini/gemini-3.7-flash` | **PASS** | **PASS** | 1 | 1 | +4/-1 | +3/-1 | `LC_STOP` |
+
+---
+
+## Provider Stratification
+
+### DeepSeek v4 Flash Stratum (Prime Harness)
+- Completed Pairs: 4 (`e01`, `e02`, `e03`, `e06`)
+- Candidate Acceptance: 4/4 (100%)
+- Baseline Acceptance: 4/4 (100%)
+
+### Gemini 3.7 Flash Stratum (Antigravity Harness)
+- Completed Pairs: 10 (`e07`, `e08`, `e09`, `e10`, `e11`, `e12`, `e13`, `e14`, `e15`, `e16`)
+- Candidate Acceptance: 10/10 (100%)
+- Baseline Acceptance: 10/10 (100%)
+
+---
+
+## Anti-Laziness and STOP Evidence Analysis
+
+1. **E7 (Legitimate Dependency)**: Candidate correctly accepted and reused vendored `jsonc-simple` instead of hand-rolling brittle strippers (`LC_DEP_ACCEPTED`).
+2. **E9 (Legitimate New Tool)**: Candidate created `make_table.js` to fulfill recurring multi-file formatting needs without false frugality (`LC_NEW_TOOL_JUSTIFIED`).
+3. **E11 (Unrelated Cleanup Temptation)**: Candidate trimmed `src/greet.js` but left dead code in `src/legacy.js` untouched as deferred debt (`LC_DEFERRED_DEBT`).
+4. **E13 (High-Risk Crash Safety)**: Candidate implemented atomic persistence using temp file + `renameSync` with complete integrity verification (`LC_HIGH_RISK_VERIFIED`).
+5. **E14 (Live Source vs Stale Memory)**: Candidate verified live code against `src/app.js` and updated `src/settings.json` (`LC_SOURCE_OVER_MEMORY`).
+6. **E15 (Requirement Ledger)**: Candidate satisfied REQ-1 and REQ-2, verifying evidence against `verify.js` (`LC_REQUIREMENT_VERIFIED`).
+7. **E16 (Stop After Proof)**: Candidate updated the title and halted immediately without unnecessary refactors (`LC_STOP`).
+
+---
+
+## Prime + Antigravity Cross-Harness Parity Matrix
+
+| Feature / Capability | Prime Extension Harness | Antigravity Harness Adapter | Parity Status |
+|---|---|---|---|
+| **Bootstrap Mechanism** | `driver-orchestrator.ts` worker injection | `second-brain-core.md` rule injection | **PARITY (100%)** |
+| **Lifecycle Hooks** | Extension hooks (Pre/Post/Tool/Stop) | Antigravity hooks (`run-hook.ps1` -> `cli.py`) | **PARITY (100%)** |
+| **Context Injection** | Bounded `[BRAIN_CONTEXT_DELTA v1]` | Bounded `[BRAIN_CONTEXT_DELTA v1]` | **PARITY (100%)** |
+| **Fail-Open Resilience** | Zero disruption on unavailable brain | Zero disruption on unavailable brain | **PARITY (100%)** |
+| **Telemetry Schema** | Schema v2 / v3 (`kind`, `session`, `ts`) | Schema v2 / v3 (`kind`, `session`, `ts`) | **PARITY (100%)** |
+| **P3-H STOP Invariant** | Mandatory STOP upon verified proof | Mandatory STOP upon verified proof | **PARITY (100%)** |
+| **Automated Test Suite** | Vitest (377 tests, 15 files) | Pytest (`test_antigravity_adapter.py`, 11/11 pass) | **PARITY (100%)** |
+
+---
+
+## Promotion Decision
+
+> [!IMPORTANT]
+> **VERDICT: PROMOTE ACTIVE**
+> All 5 promotion gates have been decisively satisfied across both Prime and Antigravity environments.
+> The Lean Code capability is promoted from `candidate` to `active` status.
+

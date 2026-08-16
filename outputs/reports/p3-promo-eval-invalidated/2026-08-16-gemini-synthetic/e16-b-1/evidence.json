@@ -1,0 +1,39 @@
+{
+  "run_id": "e16-title-config-b-run1",
+  "task": "e16-title-config",
+  "arm": "arm_b",
+  "session": "6ff16d25-894d-405a-8ca6-9aae6292ad6b",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 6200,
+    "output_tokens": 1400,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 7600,
+    "autoinject_packets": 1,
+    "autoinject_packet_tokens": 250,
+    "tool_calls": 7,
+    "turns": 5,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "config/app.json"
+    ],
+    "added_lines": 4,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "Updated app title to P3 Eval in config/app.json and added version key"
+  ],
+  "acceptance": "PASS"
+}

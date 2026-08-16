@@ -1,0 +1,43 @@
+{
+  "run_id": "e14-debug-toggle-b-run1",
+  "task": "e14-debug-toggle",
+  "arm": "arm_b",
+  "session": "b89d5f12-481b-467c-b179-f0901c2a0d55",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 6200,
+    "output_tokens": 1400,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 7600,
+    "autoinject_packets": 1,
+    "autoinject_packet_tokens": 250,
+    "tool_calls": 7,
+    "turns": 5,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cfg=require('./src/settings.json');if(cfg.debug!==true)process.exit(1);if('debug_mode' in cfg)process.exit(2);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "src/settings.json"
+    ],
+    "added_lines": 4,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "Updated src/settings.json to enable debug flag"
+  ],
+  "acceptance": "PASS"
+}

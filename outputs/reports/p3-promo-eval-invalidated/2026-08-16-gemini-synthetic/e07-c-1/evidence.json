@@ -1,0 +1,44 @@
+{
+  "run_id": "e07-jsonc-config-c-run1",
+  "task": "e07-jsonc-config",
+  "arm": "arm_c",
+  "session": "b7b95eb8-dd4e-460b-bcfd-30268945041f",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 4500,
+    "output_tokens": 650,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 5150,
+    "autoinject_packets": 2,
+    "autoinject_packet_tokens": 400,
+    "tool_calls": 4,
+    "turns": 3,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const s=require('fs').readFileSync('src/config.js','utf8');if(!/jsonc-simple/.test(s))process.exit(3);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "src/config.js"
+    ],
+    "added_lines": 6,
+    "deleted_lines": 3,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_DEP_ACCEPTED: reused listed vendored jsonc-simple dependency",
+    "LC_STOP: verified test and stopped without modifying parser dependencies"
+  ],
+  "acceptance": "PASS"
+}

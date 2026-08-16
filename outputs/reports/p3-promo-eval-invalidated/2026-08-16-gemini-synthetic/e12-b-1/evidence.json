@@ -1,0 +1,40 @@
+{
+  "run_id": "e12-math-double-b-run1",
+  "task": "e12-math-double",
+  "arm": "arm_b",
+  "session": "0447f177-04de-436d-a154-710069f1b687",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 6200,
+    "output_tokens": 1400,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 7600,
+    "autoinject_packets": 1,
+    "autoinject_packet_tokens": 250,
+    "tool_calls": 7,
+    "turns": 5,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "lib/math.js"
+    ],
+    "added_lines": 4,
+    "deleted_lines": 0,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_REUSE: implemented double(x) by delegating directly to existing twice(x)",
+    "LC_STOP: minimal 3-line addition; stopped"
+  ],
+  "acceptance": "PASS"
+}
