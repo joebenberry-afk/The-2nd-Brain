@@ -33,8 +33,8 @@ Promotion rule: repeated enough times · clear inputs/outputs · deterministic c
 | Delivery ledger rows | **112 deliveries** (canonical db, incl. campaign + probe lineages) | db |
 | Purge receipts | 0 (no live purge run; purge path fully tested) | db |
 | Delegation purity records | **2**: driver-campaign **0.842105** (19 actions / 3 gate re-verification runs; substantive 16/16 delegated → 1.0) · verifier-cycle **1.0** | orchestration-*.jsonl |
-| Cached vs uncached input tokens | **UNAVAILABLE-not-inferred** (Prime 0.7.2 exposes no before_provider_request hook) | P1 gate §4 |
-| Output tokens / cost per accepted change | **UNAVAILABLE-not-inferred** (no provider counters exposed) | same |
+| Cached vs uncached input tokens | **UNAVAILABLE-not-inferred** — campaign audit originally marked this unavailable; P3 reconciliation against the installed v0.7.2 runtime proved the hook exists; the earlier local ambient type/audit surface was incomplete. Historical campaign measurements remain unavailable because they were not captured at the time. | P1 gate §4 |
+| Output tokens / cost per accepted change | **UNAVAILABLE-not-inferred** — same reconciliation note as above: the installed v0.7.2 runtime does expose provider usage counters (P3 reconciliation); they were not captured during the P0–P2 campaign. | same |
 | Root vs child token attribution | **UNAVAILABLE-not-inferred** | same |
 | Duplicate investigation count | **0** measured (no duplicate child for the same role; dedupe tests) | transcripts |
 | Skill invocation count | 0 new skills promoted (see Part E) | — |

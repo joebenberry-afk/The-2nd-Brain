@@ -95,7 +95,7 @@ git:    git diff --check -> clean
 | P2 | compaction dogfood | 57,989 → 35,641 tokens (−38.5%); barrier checkpoint ok:true before proceed |
 | P2 | rehydration | L1 pointer · L2 rationale (id e06a6e32…) · L3 exact payload + artifact sha seeded==recomputed (4e647ce4…) · L4 full; dedupe verified |
 | P2 | ledger dogfood session | 4-event session, seg-1 start_seq=5 rollover, integrity seq_contiguous/orphans=0/digests ok |
-| Provider cache | cached/uncached input, output tokens, cost/change, root-vs-child attribution | **UNAVAILABLE-not-inferred** — Prime 0.7.2 exposes no before_provider_request hook; no provider counters reachable |
+| Provider cache | cached/uncached input, output tokens, cost/change, root-vs-child attribution | **UNAVAILABLE-not-inferred** — campaign audit originally marked this unavailable; P3 reconciliation against the installed v0.7.2 runtime proved the hooks exist; the earlier local ambient type/audit surface was incomplete. Historical campaign measurements remain unavailable because they were not captured at the time. |
 
 ## F. Dogfood evidence
 
@@ -107,7 +107,7 @@ git:    git diff --check -> clean
 
 ## G. Provider cache (amendment §34)
 
-All items **UNAVAILABLE-not-inferred** with reason: Prime 0.7.2 has no `before_provider_request`/`after_provider_response` hook (audit b8195a7); DeepSeek KV-cache counters are not exposed through the extension; OpenAI responses-API cache fields not reachable from the session layer; Anthropic prompt-caching diagnostics not reachable. No synthetic telemetry was ever produced.
+All items **UNAVAILABLE-not-inferred** with reason: at campaign time the audit surface (audit b8195a7, covering the 11 extension-subscribed events) showed no `before_provider_request`/`after_provider_response` access. P3 reconciliation against the installed v0.7.2 runtime source proved both hooks exist (types.ts/runner.ts/sdk.ts). Historical campaign measurements remain unavailable because they were not captured at the time; no synthetic telemetry was ever produced.
 
 ## H. Residual limitations
 
