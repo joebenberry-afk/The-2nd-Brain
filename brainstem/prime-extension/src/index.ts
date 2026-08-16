@@ -38,7 +38,6 @@ import type {
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
-  ToolResultEvent,
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
@@ -62,8 +61,15 @@ import {
   type RecallGateConfig,
 } from "./recall-gate";
 import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
+import { loadRtdConfig } from "./config";
 import { join } from "node:path";
-import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
+import {
+  cliRtdPreserver,
+  parseThreshold,
+  rtdEligibility,
+  runRtd,
+  type RtdPreserver,
+} from "./rtd";
 import {
   loadAutoInjectHostConfig,
   runAdvisoryAutoInject,
@@ -223,6 +229,13 @@ export interface ExtensionOptions {
    * invocation. Never module-global.
    */
   ensureTelemetryDir?: DirEnsurer;
+  /**
+   * P3-F test seam: RTD raw-result preserver (plan §11.4). When omitted, the
+   * real CLI preserver (`second_brain artifact store` + `expand`) is created
+   * per tool_result event against the brain home. Fail-open: a failing
+   * preserver simply disables substitution (original content returned).
+   */
+  rtdPreserver?: RtdPreserver;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -704,58 +717,75 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return undefined;
   });
 
-  // Phase 5 RTD (shadow only): after the normal tool_result record, decide
-  // whether the result would be distilled and log rtd_shadow. Never
-  // substitutes content in this phase. RTD failures must not disturb the
-  // normal telemetry record, hence the inner try/catch.
+  // Phase 5 RTD (P3-F: substitution when config/context.toml [rtd]
+  // enabled=true; shadow-only otherwise). After the normal tool_result
+  // record, eligible large bash results (pytest/git/rg/grep) are FIRST
+  // preserved byte-exactly via the artifact store and verified recoverable
+  // (plan §11.4); only then is the model-visible content replaced by the
+  // deterministic [SECOND_BRAIN_RTD] block. Preservation failure returns the
+  // ORIGINAL content unchanged (never trade recoverability for savings).
+  // Registered directly (not via wire) because the handler may return a
+  // {content} patch that the host applies to the tool result (SDK
+  // ToolResultEventResult; Phase A probe proven live).
   //
   // Phase 3 (corrected): RTD eligibility (tool/command) is decided FIRST —
   // before ANY content measurement. Eligible results get one JSON.stringify
   // attempt plus one UTF-8 byte count in `measureContent`, shared by
-  // ordinary telemetry (`output_bytes`) and RTD shadow evaluation/recording
+  // ordinary telemetry (`output_bytes`) and RTD evaluation/recording
   // (`serializedChars`). Ineligible results perform ZERO RTD-specific
-  // serialization: primitive strings are measured with only the raw
-  // TextEncoder byte count base telemetry already required (no
-  // JSON.stringify), and non-strings keep exactly the single
-  // serialization/fallback base telemetry already required. The precomputed
-  // eligibility is passed to rtdShadowRecord so RTD never re-measures.
-  wire<ToolResultEvent>("tool_result", (event, ctx, session) => {
-    const eligibility = rtdEligibility(event.toolName, event.input);
-    // ONE shared measurement (Phase 3 correction: no extra serialization for
-    // ineligible results); the mirror reuses the same output_bytes.
-    const measurement = measureContent(event.content, eligibility === "ok");
-    mirror(
-      session,
-      "tool_completed",
-      {
-        tool: event.toolName,
-        result_bytes: measurement.outputBytes,
-        is_error: event.isError === true,
-      },
-      { cwd: ctxCwd(ctx) },
-    );
+  // serialization. The precomputed eligibility is passed through so RTD
+  // never re-measures.
+  pi.on("tool_result", async (event, ctx) => {
+    let session = "unknown";
     try {
-      const shadow = rtdShadowRecord({
+      session = resolveSessionId(ctx, anonSession);
+      const rtdCfg = loadRtdConfig(config.home);
+      const eligibility = rtdEligibility(event.toolName, event.input, rtdCfg);
+      // ONE shared measurement (Phase 3 correction); mirror reuses output_bytes.
+      const measurement = measureContent(event.content, eligibility === "ok");
+      mirror(
+        session,
+        "tool_completed",
+        {
+          tool: event.toolName,
+          result_bytes: measurement.outputBytes,
+          is_error: event.isError === true,
+        },
+        { cwd: ctxCwd(ctx) },
+      );
+      const rtd = await runRtd({
         session,
         tool: event.toolName,
         id: event.toolCallId,
         input: event.input,
-        eligibility,
+        content: Array.isArray(event.content) ? event.content : [],
+        isError: event.isError === true,
         measurement,
         threshold: parseThreshold(process.env.SECOND_BRAIN_RTD_THRESHOLD),
-        active: process.env.SECOND_BRAIN_RTD === "active",
+        cfg: rtdCfg,
+        preserver:
+          options.rtdPreserver ??
+          cliRtdPreserver({ home: config.home ?? "", session }),
       });
-      if (shadow) getStore(session)?.append(shadow);
-    } catch {
-      // measurement must not disturb measurement
+      if (rtd.record) getStore(session)?.append(rtd.record);
+      getStore(session)?.append(
+        sensors.toolResult(
+          session,
+          event.toolName,
+          event.toolCallId,
+          event.isError,
+          measurement.outputBytes,
+        ),
+      );
+      return rtd.patch;
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+      return undefined;
     }
-    return sensors.toolResult(
-      session,
-      event.toolName,
-      event.toolCallId,
-      event.isError,
-      measurement.outputBytes,
-    );
   });
 
   wire<TurnEndEvent>("turn_end", (event, ctx, session) => {
