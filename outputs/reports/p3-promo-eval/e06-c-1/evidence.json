@@ -1,0 +1,51 @@
+{
+  "run_id": "e06-customer-sort-promo-e06-arm1-1",
+  "task": "e06-customer-sort",
+  "arm": "promo-e06-arm1",
+  "session": "01a00b3d-80d8-7178-a1b3-8d7eeb0aea8f",
+  "economics": {
+    "assistant_usage_rows": 16,
+    "input_tokens": 18110,
+    "output_tokens": 10747,
+    "cache_read_tokens": 280320,
+    "cache_write_tokens": 0,
+    "total_tokens": 309177,
+    "cost_total": 0.0063294560000000015,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 18
+    },
+    "turns": 16,
+    "wall_ms": 116525
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/tests/test.js ./tests/test.js",
+      "exit": 0
+    },
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...git status --porcelain package.json/node_modules check...\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "src/report.js"
+    ],
+    "added_lines": 5,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_REUSE: reused existing Array.prototype.sort + loadCustomers pipeline; no new code path",
+    "LC_DEP_REJECTED: case-insensitive comparator built with stdlib toLowerCase; no dependency added (task constraint)",
+    "LC_STOP: stopped at acceptance after judge + stability verification"
+  ],
+  "acceptance": "PASS"
+}
