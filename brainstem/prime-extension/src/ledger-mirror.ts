@@ -157,3 +157,100 @@ export function mirrorFireAndForget(
 export function mirrorExtensionError(session: string, error: string): unknown {
   return extensionError(session, new Error(`ledger mirror: ${error}`));
 }
+
+// ---------------------------------------------------------------------------
+// T-G4: compaction barrier + segment rollover (plan §10.2/§10.3).
+// ---------------------------------------------------------------------------
+
+export interface LedgerCheckpointResult {
+  ok: boolean;
+  integrity?: Record<string, unknown>;
+  error?: string;
+}
+
+/** Pre-compaction durability barrier: `ledger segment checkpoint`. */
+export function runLedgerCheckpoint(options: {
+  home: string;
+  hostSessionId: string;
+  python?: string;
+  timeoutMs?: number;
+}): Promise<LedgerCheckpointResult> {
+  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  if (!existsSync(python)) {
+    return Promise.resolve({ ok: false, error: "no brain venv (checkpoint unavailable)" });
+  }
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  return new Promise((resolve) => {
+    execFile(
+      python,
+      ["-m", "second_brain", "ledger", "segment", "checkpoint", options.hostSessionId],
+      {
+        cwd: options.home,
+        env,
+        timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve({ ok: false, error: error.message });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as {
+            ok?: boolean;
+            integrity?: Record<string, unknown>;
+            error?: string;
+          };
+          resolve({
+            ok: parsed.ok === true,
+            integrity: parsed.integrity,
+            error: parsed.error,
+          });
+        } catch {
+          resolve({ ok: false, error: "checkpoint returned unparsable output" });
+        }
+      },
+    );
+  });
+}
+
+/** Segment rollover at the compaction boundary: `ledger segment open --reason compact`
+ * (closes the prior active segment and opens a new one). Fire-and-forget. */
+export function runLedgerSegmentRollover(options: {
+  home: string;
+  hostSessionId: string;
+  python?: string;
+  timeoutMs?: number;
+  onError?: (error: string) => void;
+}): void {
+  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  if (!existsSync(python)) return;
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  execFile(
+    python,
+    ["-m", "second_brain", "ledger", "segment", "open", options.hostSessionId, "--reason", "compact"],
+    {
+      cwd: options.home,
+      env,
+      timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    },
+    (error) => {
+      if (error && options.onError) {
+        try {
+          options.onError(error.message);
+        } catch {
+          // stay silent
+        }
+      }
+    },
+  );
+}

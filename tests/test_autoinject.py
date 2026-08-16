@@ -263,13 +263,13 @@ def test_fail_open_retrieval_error(brain_home, monkeypatch) -> None:
 
 
 def test_migration_0008_fresh_and_v7_upgrade(tmp_path, monkeypatch) -> None:
-    # Fresh db: v8 with deliveries table.
+    # Fresh db: v9 with deliveries table.
     home = tmp_path / "fresh"
     _make_brain(home, monkeypatch)
     conn = db.connect(db.db_path(home))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 8
+        assert v == 9
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
         assert "deliveries" in tables
     finally:
@@ -291,7 +291,7 @@ def test_migration_0008_fresh_and_v7_upgrade(tmp_path, monkeypatch) -> None:
     finally:
         conn.close()
     monkeypatch.setattr(db, "MIGRATIONS_DIR", real)
-    assert db.migrate(db.db_path(home7)) == [8]  # applies exactly 0008
+    assert db.migrate(db.db_path(home7)) == [8, 9]  # applies 0008+0009
     assert db.migrate(db.db_path(home7)) == []  # idempotent second run
     conn = db.connect(db.db_path(home7))
     try:
