@@ -1,0 +1,22 @@
+# Second Brain P0 Codex hooks — SHADOW (Phase 0C part 2; plan §6.10).
+#
+# TEMPLATE. The install script (scripts/install-codex-hooks.ps1) substitutes
+# the absolute path to run.ps1 for <RUN_PS1> and merges these event keys into
+# the [hooks] table of ~/.codex/config.toml (or $env:CODEX_HOME/config.toml).
+#
+# Schema verified against codex-cli 0.147.0: the installed plugin manifests
+# (e.g. ~/.codex/plugins/cache/claude-plugins-official/*/hooks/hooks.json)
+# declare hooks as  hooks.<Event> = [{ matcher?, hooks = [{ type = "command",
+# command = "...", async = false }] }]  — exactly the shape below. Event names
+# seen in the installed manifests: SessionStart, UserPromptSubmit,
+# SubagentStart, SubagentStop, PreToolUse, PostToolUse, Stop.
+#
+# SHADOW behavior: run.ps1 forwards the hook payload to
+# `brainctl autoinject codex-shadow` (decision recorded in Brain telemetry)
+# and prints {} to stdout — no additionalContext, no model-visible mutation.
+[hooks]
+SessionStart = [{ hooks = [{ type = "command", command = "<RUN_PS1>", async = false }] }]
+UserPromptSubmit = [{ hooks = [{ type = "command", command = "<RUN_PS1>", async = false }] }]
+SubagentStart = [{ hooks = [{ type = "command", command = "<RUN_PS1>", async = false }] }]
+Stop = [{ hooks = [{ type = "command", command = "<RUN_PS1>", async = false }] }]
+SessionEnd = [{ hooks = [{ type = "command", command = "<RUN_PS1>", async = false }] }]

@@ -7,8 +7,11 @@ backup, restore. Later phases add capture/recall/sleep/skills/... commands.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -188,6 +191,12 @@ def _parser() -> argparse.ArgumentParser:
     ashadow.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
     ashadow.add_argument("--role", dest="role_profile", default="orchestrator", help="role profile")
     ashadow.add_argument("--json", action="store_true", help="print one deterministic JSON object")
+
+    ais.add_parser(
+        "codex-shadow",
+        parents=[home_parent],
+        help="Codex hook adapter: one JSON object on stdin, one on stdout (SHADOW)",
+    )
 
     art = sub.add_parser(
         "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
@@ -1670,20 +1679,104 @@ def cmd_context(args) -> int:
     return 2
 
 
+def _autoinject_output(
+    decision, packet: str | None, delivery_id: str | None
+) -> dict:
+    """Deterministic one-object JSON shape shared by shadow + codex-shadow."""
+    return {
+        "decision": decision.decision.value,
+        "reason": decision.reason.value if decision.reason is not None else None,
+        "packet": packet,
+        "packet_tokens": decision.packet_token_size,
+        "candidate_ids": decision.candidate_ids,
+        "selected_ids": decision.selected_ids,
+        "delivery_id": delivery_id,
+    }
+
+
+def _cmd_codex_shadow(home: Path) -> int:
+    """Codex hook adapter (SHADOW, Phase 0C; plan §6.10).
+
+    Reads ONE JSON object from stdin {session_id, project, task, agent_id,
+    branch, role, source}; writes ONE JSON object to stdout. Task text NEVER
+    passes through argv (STOP §23 #6) — stdin only. Fail-open: malformed or
+    missing input -> NO_INJECTION(BRAIN_UNAVAILABLE), exit 0.
+    """
+    import json
+
+    from . import autoinject, contracts
+
+    payload = None
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else None
+    except Exception:  # fail-open: never raise into the hook
+        payload = None
+    task = None
+    if isinstance(payload, dict):
+        task = payload.get("task") or payload.get("prompt")
+        if not (isinstance(task, str) and task.strip()):
+            task = None
+    if task is None:
+        bad = contracts.BrainInjectionDecision(
+            decision=contracts.InjectionDecision.NO_INJECTION,
+            reason=contracts.NoInjectionReason.BRAIN_UNAVAILABLE,
+            candidate_ids=[],
+            selected_ids=[],
+            packet_ref=None,
+            packet_token_size=None,
+            recipient="codex",
+        )
+        print(contracts.canonical_json(_autoinject_output(bad, None, None)))
+        return 0
+    payload_dict = payload if isinstance(payload, dict) else {}
+    session_id = str(payload_dict.get("session_id") or "codex-anon")
+    project_id = str(
+        payload_dict.get("project") or os.environ.get("SECOND_BRAIN_PROJECT") or "default"
+    )
+    agent_id = str(payload_dict.get("agent_id") or payload_dict.get("model") or "codex")
+    branch = str(payload_dict.get("branch") or "main")
+    role = str(payload_dict.get("role") or "worker")
+    session = contracts.BrainSessionIdentity(
+        internal_session_id="is-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12],
+        host="codex-hooks",
+        host_session_id=session_id,
+        project_id=project_id,
+        created_at=datetime.now(UTC).isoformat(),
+        status="active",
+        pinned=False,
+        schema_version=1,
+    )
+    lifecycle = autoinject.BrainLifecycle(home, session)
+    decision = lifecycle.prepare_injection(
+        task,
+        project_id=project_id,
+        agent_id=agent_id,
+        role_profile=role,
+        session_id=session_id,
+        branch_id=branch,
+    )
+    packet = autoinject.render_packet(decision)
+    delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
+    print(contracts.canonical_json(_autoinject_output(decision, packet, delivery_id)))
+    return 0
+
+
 def cmd_autoinject(args) -> int:
     from . import autoinject, contracts
 
     home = _home(args)
+    if args.autoinject_command == "codex-shadow":
+        return _cmd_codex_shadow(home)
     if args.autoinject_command != "shadow":
         return 2
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-" + __import__("hashlib").sha256(
-            args.session_id.encode("utf-8")
-        ).hexdigest()[:12],
+        internal_session_id="is-"
+        + hashlib.sha256(args.session_id.encode("utf-8")).hexdigest()[:12],
         host="prime-cli",
         host_session_id=args.session_id,
         project_id=args.project_id,
-        created_at=__import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         status="active",
         pinned=False,
         schema_version=1,
@@ -1700,16 +1793,7 @@ def cmd_autoinject(args) -> int:
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
     if args.json:
-        out = {
-            "decision": decision.decision.value,
-            "reason": decision.reason.value if decision.reason is not None else None,
-            "packet": packet,
-            "packet_tokens": decision.packet_token_size,
-            "candidate_ids": decision.candidate_ids,
-            "selected_ids": decision.selected_ids,
-            "delivery_id": delivery_id,
-        }
-        print(contracts.canonical_json(out))
+        print(contracts.canonical_json(_autoinject_output(decision, packet, delivery_id)))
     else:
         print(f"decision: {decision.decision.value}")
         print(f"reason: {decision.reason.value if decision.reason is not None else 'n/a'}")
