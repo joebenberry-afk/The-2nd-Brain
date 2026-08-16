@@ -749,3 +749,53 @@ def test_select_oldest_inactive_unpinned(tmp_path) -> None:
     rows = ledger_mod.list_sessions(tmp_path)
     live = {r["host_session_id"] for r in rows if not r.get("purged")}
     assert live == {"host-a", "host-b", "host-c"}
+
+
+# ---------------------------------------------------------------------------
+# T-G6 fixes: seq:0 auto-assign, decision_id rehydration match
+# ---------------------------------------------------------------------------
+
+
+def test_append_auto_assigns_seq_zero(tmp_path) -> None:
+    """T-G6-F1: events with seq<=0 auto-assign contiguous seqs."""
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        _seed(s, 1)
+        seqs = s.append_events(
+            [
+                _ev(0, "z-1", LifecycleEventType.USER_TASK, parent="e-1"),
+                _ev(0, "z-2", LifecycleEventType.USER_TASK, parent="z-1"),
+            ]
+        )
+        assert seqs == [2, 3]
+        assert s.integrity()["seq_contiguous"] is True
+
+
+def test_rehydrate_decision_id_match(tmp_path) -> None:
+    """T-G6-F2: --decision matches event_id OR payload decision_id."""
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        s.append_events(
+            [
+                _ev(
+                    1,
+                    "d-1",
+                    LifecycleEventType.DECISION,
+                    payload={"decision_id": "dec-abc", "decision": "use X"},
+                ),
+                _ev(
+                    2,
+                    "d-2",
+                    LifecycleEventType.DECISION,
+                    payload={"decision_id": "dec-xyz", "decision": "use Y"},
+                ),
+            ]
+        )
+    rh = ledger_mod.LedgerRehydrator(ledger_mod.LedgerStore(tmp_path, HOST).open())
+    by_event = rh.rehydrate(2, decision="d-1")
+    assert [p["event_id"] for p in by_event["evidence_packets"]] == ["d-1"]
+    by_payload = rh.rehydrate(2, decision="dec-xyz")
+    assert [p["event_id"] for p in by_payload["evidence_packets"]] == ["d-2"]
+    # substring match across both decision_ids -> different content (not deduped)
+    by_substring = rh.rehydrate(2, decision="dec")
+    assert [p["event_id"] for p in by_substring["evidence_packets"]] == ["d-1", "d-2"]
+    led = ledger_mod.LedgerStore(tmp_path, HOST)
+    led.close()

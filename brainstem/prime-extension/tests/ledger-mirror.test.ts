@@ -18,6 +18,7 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
 import {
   buildMirrorEventJson,
   mirrorEvent,
+  resetMirrorInitCache,
   taskSha256,
 } from "../src/ledger-mirror";
 import factory from "../src/index";
@@ -33,6 +34,7 @@ beforeEach(() => {
   }
   execFileMock.mockReset();
   mirrorFireAndForgetMock.mockReset();
+  resetMirrorInitCache();
 });
 
 afterEach(() => {
@@ -58,21 +60,14 @@ function fakeSpawn(result: { error?: Error; stdout?: string }) {
 }
 
 describe("mirrorEvent spawn contract", () => {
-  it("spawns env-clean ledger append with one event JSON on stdin", async () => {
+  it("spawns env-clean ledger append with one event JSON on stdin (after auto-init)", async () => {
     const { home, python } = await fakeHome();
-    fakeSpawn({ stdout: '{"appended":[1]}' });
-    let stdinPayload = "";
-    execFileMock.mockImplementation((py, args, opts, cb) => {
-      expect(args).toEqual([
-        "-m", "second_brain", "ledger", "append",
-        "--session", "host-1", "--stdin-json",
-      ]);
-      expect(opts.env.PYTHONHOME).toBeUndefined();
-      expect(opts.env.PYTHONPATH).toBeUndefined();
-      expect(opts.env.SECOND_BRAIN_HOME).toBe(home);
-      expect(opts.timeout).toBe(5000);
+    const calls: { args: string[]; opts: { env: Record<string, string | undefined>; timeout: number }; stdin: string }[] = [];
+    execFileMock.mockImplementation((_py, args, opts, cb) => {
+      const entry = { args: args as string[], opts: opts as never, stdin: "" };
+      calls.push(entry);
       const child = {
-        stdin: { write: (s: string) => { stdinPayload = s; }, end: () => {} },
+        stdin: { write: (s: string) => { entry.stdin = s; }, end: () => {} },
       };
       cb(null, '{"appended":[1]}');
       return child as never;
@@ -84,7 +79,21 @@ describe("mirrorEvent spawn contract", () => {
       python,
     });
     expect(result.ok).toBe(true);
-    const parsed = JSON.parse(stdinPayload);
+    // call 1 = init, call 2 = append
+    expect(calls.length).toBe(2);
+    expect(calls[0].args).toContain("init");
+    expect(calls[0].args).toContain("--host");
+    expect(calls[0].args).toContain("prime");
+    const append = calls[1];
+    expect(append.args).toEqual([
+      "-m", "second_brain", "ledger", "append",
+      "--session", "host-1", "--stdin-json",
+    ]);
+    expect(append.opts.env.PYTHONHOME).toBeUndefined();
+    expect(append.opts.env.PYTHONPATH).toBeUndefined();
+    expect(append.opts.env.SECOND_BRAIN_HOME).toBe(home);
+    expect(append.opts.timeout).toBe(5000);
+    const parsed = JSON.parse(append.stdin);
     expect(parsed.event_type).toBe("user_task");
     expect(parsed.payload.task_sha256).toBe("abc");
   });
@@ -280,5 +289,61 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
     expect(args).toContain("open");
     expect(args).toContain("--reason");
     expect(args).toContain("compact");
+  });
+});
+
+
+describe("T-G6-F1/F2 mirror fixes", () => {
+  it("mirror payload carries NO seq key (ledger auto-assigns)", () => {
+    const json = buildMirrorEventJson({ kind: "user_task", fields: {} });
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    expect(parsed.seq).toBeUndefined();
+  });
+
+  it("first event auto-inits the ledger (init argv) then appends; second skips init", async () => {
+    const { home, python } = await fakeHome();
+    const calls: string[][] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      calls.push(args as string[]);
+      cb(null, '{"appended":[1]}');
+      return {} as never;
+    });
+    const record = { kind: "user_task", fields: { task_sha256: "abc" } };
+    await mirrorEvent({ home, hostSessionId: "s-f2", record, python });
+    await mirrorEvent({ home, hostSessionId: "s-f2", record, python });
+    const initCalls = calls.filter((a) => a.includes("init"));
+    const appendCalls = calls.filter((a) => a.includes("append"));
+    expect(initCalls.length).toBe(1); // init exactly once per session
+    expect(initCalls[0]).toContain("--host");
+    expect(initCalls[0]).toContain("prime");
+    expect(appendCalls.length).toBe(2); // both events appended
+    // different session -> init again
+    await mirrorEvent({ home, hostSessionId: "s-f2b", record, python });
+    expect(calls.filter((a) => a.includes("init")).length).toBe(2);
+  });
+
+  it("init failure -> ok=false with ledger init error (no append attempted)", async () => {
+    const { home, python } = await fakeHome();
+    resetMirrorInitCache();
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if (args.includes("init")) {
+        cb(new Error("init boom"));
+        return {} as never;
+      }
+      cb(null, '{"appended":[1]}');
+      return {} as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-f2c",
+      record: { kind: "user_task", fields: {} },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ledger init");
+    const appends = execFileMock.mock.calls.filter((c) =>
+      (c[1] as string[]).includes("append"),
+    );
+    expect(appends.length).toBe(0);
   });
 });
