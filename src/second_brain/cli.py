@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -218,6 +219,19 @@ def _parser() -> argparse.ArgumentParser:
         default="[]",
         help='JSON list of {"ref","kind"} source refs (default: [])',
     )
+
+    orch = sub.add_parser(
+        "orchestration",
+        parents=[home_parent],
+        help="P1 orchestration telemetry (Phase D; amendment §12/§22)",
+    )
+    ors = orch.add_subparsers(dest="orchestration_command", required=True)
+    orec = ors.add_parser(
+        "record",
+        parents=[home_parent],
+        help="record one orchestration counters event from JSON stdin; computes delegation_purity",
+    )
+    orec.add_argument("--session", default=None, help="session id for the telemetry file name")
 
 
     art = sub.add_parser(
@@ -1866,6 +1880,95 @@ def _cmd_writeback(home: Path, args) -> int:
     return 0
 
 
+_ORCH_COUNTER_KEYS = (
+    "driver_actions_total",
+    "driver_execution_attempts",
+    "blocked_execution_attempts",
+    "emergency_execution_actions",
+    "worker_tasks",
+    "worker_corrections",
+    "worker_verifications",
+    "fan_out_width",
+    "recursion_depth",
+)
+
+
+def cmd_orchestration(args) -> int:
+    """P1 orchestration telemetry (plan §19/20 purity; amendment §12/§22).
+
+    `orchestration record --json-stdin`: reads ONE JSON event with the nine
+    counter fields, computes delegation_purity, appends a privacy-safe JSONL
+    record to telemetry/agent-performance/orchestration-<session>.jsonl.
+    Fail-open: malformed/missing/invalid input -> {"recorded": false,
+    "error": ...} with exit 0; only the nine counters are ever persisted
+    (no secrets, no arbitrary payload).
+    """
+    import json
+
+    from . import contracts
+    from . import telemetry as telemetry_mod
+
+    home = _home(args)
+    if args.orchestration_command != "record":
+        return 2
+    payload = None
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else None
+    except Exception:  # fail-open
+        payload = None
+    session = args.session or (
+        str(payload.get("session"))
+        if isinstance(payload, dict) and payload.get("session")
+        else "unknown"
+    )
+    if not isinstance(payload, dict):
+        print(contracts.canonical_json({"recorded": False, "error": "expected one JSON object"}))
+        return 0
+    counters: dict[str, int] = {}
+    for key in _ORCH_COUNTER_KEYS:
+        value = payload.get(key, 0)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            print(
+                contracts.canonical_json(
+                    {"recorded": False, "error": f"{key} must be a non-negative int"}
+                )
+            )
+            return 0
+        counters[key] = value
+    total = counters["driver_actions_total"]
+    if total > 0:
+        purity = 1.0 - (
+            counters["driver_execution_attempts"] + counters["emergency_execution_actions"]
+        ) / total
+        purity = round(purity, 6)
+    else:
+        purity = None  # no actions recorded -> not inferred, never fabricate
+    record = {
+        "v": 2,
+        "ts": datetime.now(UTC).isoformat(),
+        "kind": "orchestration_record",
+        "session": session,
+        "delegation_purity": purity,
+        **counters,
+    }
+    try:
+        tdir = telemetry_mod.telemetry_dir(home)
+        tdir.mkdir(parents=True, exist_ok=True)
+        stem = re.sub(r"[^A-Za-z0-9_-]", "-", session) or "unknown"
+        with open(tdir / f"orchestration-{stem}.jsonl", "a", encoding="utf-8") as f:
+            f.write(contracts.canonical_json(record) + "\n")
+    except Exception as exc:  # fail-open
+        print(contracts.canonical_json({"recorded": False, "error": str(exc)}))
+        return 0
+    print(
+        contracts.canonical_json(
+            {"recorded": True, "delegation_purity": purity, "session": session}
+        )
+    )
+    return 0
+
+
 def cmd_autoinject(args) -> int:
     from . import autoinject, contracts
 
@@ -1986,6 +2089,7 @@ def main(argv: list[str] | None = None) -> int:
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
         "autoinject": cmd_autoinject,
+        "orchestration": cmd_orchestration,
     }
     try:
         return handlers[args.command](args)

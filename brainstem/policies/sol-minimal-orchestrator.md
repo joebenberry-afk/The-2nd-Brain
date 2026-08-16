@@ -225,3 +225,14 @@ retrieval budget as a hard ceiling, not a target (normal use 0–5% of context;
 - `proof/conditions.json` C2–C7 remain `blocked_until_contract`: automatic
   Prime integration (recall/skill injection) stays off until retrieval quality
   gates pass. See `outputs/reports/optimization-phase0-baseline.md`.
+
+---
+
+## Amendment note (P0-P2 Maximum Harness, Phase D)
+
+The hard universal `<= 2 workers` cap is replaced by **adaptive fan-out**
+for driver-role sessions (amendment §12.2): default conservative fan-out
+(1), configurable ceiling (config/orchestration.toml [concurrency],
+default 2), env override SECOND_BRAIN_CONCURRENCY_CEILING, hard local
+resource ceiling, telemetry. Sol hard-orchestrator sessions remain minimal:
+this contract is unchanged, and Sol does not fan out — it delegates.
