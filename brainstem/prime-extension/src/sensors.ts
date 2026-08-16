@@ -485,3 +485,48 @@ export function extensionError(session: string, error: unknown): ExtensionErrorR
     error: truncate(message, ERROR_MAX_CHARS),
   }) as unknown as ExtensionErrorRecord;
 }
+
+
+// ---------------------------------------------------------------------------
+// Phase 0C: P0 AutoInject SHADOW decision record (plan §6.12, SCHEMA.md).
+// Privacy-safe: decision/reason/tokens/latency/counts/ids/hash only — never
+// task text or packet content.
+// ---------------------------------------------------------------------------
+
+export interface AutoInjectShadowDecisionRecord extends BaseRecord {
+  kind: "autoinject_shadow_decision";
+  decision: string | null;
+  reason: string | null;
+  packet_tokens: number | null;
+  latency_ms: number;
+  candidate_count: number;
+  selected_count: number;
+  delivery_id: string | null;
+  packet_sha256: string | null;
+}
+
+export function autoinjectShadowDecision(
+  session: string,
+  fields: {
+    decision: string | null;
+    reason: string | null;
+    packet_tokens: number | null;
+    latency_ms: number;
+    candidate_count: number;
+    selected_count: number;
+    delivery_id: string | null;
+    packet_sha256: string | null;
+  },
+): AutoInjectShadowDecisionRecord {
+  return {
+    ...base("autoinject_shadow_decision", session, {}),
+    decision: fields.decision,
+    reason: fields.reason,
+    packet_tokens: fields.packet_tokens,
+    latency_ms: fields.latency_ms,
+    candidate_count: fields.candidate_count,
+    selected_count: fields.selected_count,
+    delivery_id: fields.delivery_id,
+    packet_sha256: fields.packet_sha256,
+  } as unknown as AutoInjectShadowDecisionRecord;
+}

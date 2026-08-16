@@ -59,6 +59,11 @@ import {
   type RecallGateConfig,
 } from "./recall-gate";
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
+import {
+  loadAutoInjectHostConfig,
+  resolveProject,
+  runShadowAutoInject,
+} from "./autoinject";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
 import {
@@ -254,9 +259,20 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     pi.on(type, safeHandler<E>(getStore, anonSession, mapper, final));
   };
 
-  wire<SessionStartEvent>("session_start", (event, ctx, session) =>
-    sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model),
-  );
+  wire<SessionStartEvent>("session_start", (event, ctx, session) => {
+    // Phase 0C SHADOW: decide + record only; session_start carries no task
+    // text, so the adapter no-ops on empty tasks. Never returns a patch.
+    void runShadowAutoInject({
+      home: config.home ?? "",
+      session,
+      task: "",
+      agentId: sensors.modelToString(ctx.model) ?? "prime",
+      project: resolveProject(),
+      cfg: loadAutoInjectHostConfig(),
+      append: (record) => getStore(session)?.append(record),
+    });
+    return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
+  });
 
   // before_agent_start: measurement + role resolution + contract injection.
   // Roles (brainstem/policies/driver-orchestration.md): hard_orchestrator
@@ -277,6 +293,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      // Phase 0C SHADOW: task AutoInject decision + record; the adapter
+      // never returns a packet/patch in shadow mode (fire-and-forget so a
+      // slow/broken brain never delays the turn).
+      void runShadowAutoInject({
+        home: config.home ?? "",
+        session,
+        task: typeof event.prompt === "string" ? event.prompt : "",
+        agentId: sensors.modelToString(ctx.model) ?? "prime",
+        project: resolveProject(),
+        cfg: loadAutoInjectHostConfig(),
+        append: (record) => getStore(session)?.append(record),
+      });
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
