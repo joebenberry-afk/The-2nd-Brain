@@ -1,0 +1,54 @@
+{
+ "run_id": "t07-baseline-1",
+ "task": "t07-legit-dep",
+ "arm": "baseline",
+ "session": "01a0097b-1c00-744a-b42e-d385ff7d48af",
+ "economics": {
+  "assistant_usage_rows": 12,
+  "input_tokens": 16812,
+  "output_tokens": 6700,
+  "cache_read_tokens": 189312,
+  "cache_write_tokens": 0,
+  "total_tokens": 212824,
+  "cost_total": 0.0047597536000000005,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 12
+  },
+  "turns": 12,
+  "wall_ms": 68624
+ },
+ "judge": [
+  {
+   "command": "step0_restore_oracle",
+   "exit": 0
+  },
+  {
+   "command": "step1_node_test",
+   "exit": 0
+  },
+  {
+   "command": "step2_uses_confparse",
+   "exit": 0
+  },
+  {
+   "command": "step3_diff_scoped",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [
+   "load.js"
+  ],
+  "added_lines": 2,
+  "deleted_lines": 1,
+  "new_files": []
+ },
+ "files_touched": 1,
+ "lc_decisions": [
+  "LC_REUSE: reused shipped confparse dependency (repo's declared JSONC parser) instead of hand-rolling a comment stripper, as the task mandate requires",
+  "LC_STOP: stopped at acceptance once all JUDGE commands passed; no scope creep"
+ ],
+ "acceptance": "PASS"
+}

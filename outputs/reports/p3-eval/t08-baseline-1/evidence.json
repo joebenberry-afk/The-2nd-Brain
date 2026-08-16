@@ -1,0 +1,49 @@
+{
+  "run_id": "t08-baseline-1",
+  "task": "t08-tool-temptation",
+  "arm": "baseline",
+  "session": "01a0097c-96e9-70e2-9783-edd7c396b1c3",
+  "economics": {
+    "assistant_usage_rows": 7,
+    "input_tokens": 16046,
+    "output_tokens": 4574,
+    "cache_read_tokens": 93184,
+    "cache_write_tokens": 0,
+    "total_tokens": 113804,
+    "cost_total": 0.0037880752,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 9
+    },
+    "turns": 7,
+    "wall_ms": 48428
+  },
+  "judge": [
+    {
+      "command": "node -e \"const fs=require('fs');const got=fs.readdirSync('data').sort();const want=['alpha-beta.txt','epsilon-zeta.log','gamma-delta.csv'];if(JSON.stringify(got)!==JSON.stringify(want))process.exit(1);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git status --porcelain').toString();for(const line of out.split('\\n')){if(!line)continue;const st=line.slice(0,2).trim();const p=line.slice(3);if(st==='??'&&!p.startsWith('data/'))process.exit(2);}\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "data/alpha_beta.txt",
+      "data/epsilon_zeta.log",
+      "data/gamma_delta.csv"
+    ],
+    "added_lines": 0,
+    "deleted_lines": 4,
+    "new_files": [
+      "data/alpha-beta.txt",
+      "data/epsilon-zeta.log",
+      "data/gamma-delta.csv"
+    ]
+  },
+  "files_touched": 6,
+  "lc_decisions": [],
+  "acceptance": "PASS"
+}

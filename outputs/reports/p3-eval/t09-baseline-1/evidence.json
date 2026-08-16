@@ -1,0 +1,46 @@
+{
+ "run_id": "t09-baseline-1",
+ "task": "t09-legit-tool",
+ "arm": "baseline",
+ "session": "01a0097e-af7d-764a-a750-278fc87a880a",
+ "economics": {
+  "assistant_usage_rows": 8,
+  "input_tokens": 16429,
+  "output_tokens": 9018,
+  "cache_read_tokens": 123264,
+  "cache_write_tokens": 0,
+  "total_tokens": 148711,
+  "cost_total": 0.0051702392,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 10
+  },
+  "turns": 8,
+  "wall_ms": 82113
+ },
+ "judge": [
+  {
+   "command": "JUDGE.md cmd1: node -e 'execFileSync(node,make_table.js); assert a.csv table (| name | qty |\\n| apple | 3 |\\n| pear | 5 |) and b.csv table (| name | price |\\n| apple | 1.5 |) in output'",
+   "exit": 0
+  },
+  {
+   "command": "JUDGE.md cmd2: node -e 'git status --porcelain; exit 3 if any untracked path other than make_table.js'",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [],
+  "added_lines": 0,
+  "deleted_lines": 0,
+  "new_files": [
+   "make_table.js"
+  ]
+ },
+ "files_touched": 1,
+ "lc_decisions": [
+  "LC_DEP_REJECTED: no CSV/glob library; node stdlib fs.readdirSync + string split only",
+  "LC_STOP: stopped at acceptance; no extra output (no separators/filenames beyond contract), no commit, no scope expansion"
+ ],
+ "acceptance": "PASS"
+}
