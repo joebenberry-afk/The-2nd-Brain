@@ -18,6 +18,7 @@ Invariants:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -926,10 +927,8 @@ class LedgerStore:
                 fh.write(canonical_json(manifest) + "\n")
             os.replace(Path(tmp_name), target)
         except BaseException:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_name)
-            except OSError:
-                pass
             raise
 
 
