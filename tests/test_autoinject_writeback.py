@@ -136,3 +136,52 @@ def test_writeback_does_not_reinject_same_lineage(tmp_path) -> None:
     assert second.reason is not None and second.reason.value == "ALREADY_DELIVERED"
     # The write-back candidate itself is unverified -> also withheld.
     assert second.selected_ids == [mid]
+
+
+def test_writeback_evidence_dict_normalized(tmp_path) -> None:
+    """T-G6-F4: --evidence accepts a plain dict {ref: kind} and normalizes to
+    the canonical [{ref, kind}] list schema."""
+    home = tmp_path / "brain"
+    _init(home)
+    r = _run_cli(
+        home,
+        "autoinject",
+        "writeback",
+        "--session",
+        "s-ev",
+        "--project",
+        "proj-a",
+        "--title",
+        "Dict evidence lesson",
+        "--observation",
+        "dict form works",
+        "--evidence",
+        '{"tests/test_verify.py": "test", "docs/decisions/x.md": "decision"}',
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["status"] == "candidate"
+    sources = semantic._sources(home, out["memory_id"])
+    pairs = {(s["ref"], s["kind"]) for s in sources}
+    assert ("tests/test_verify.py", "test") in pairs
+    assert ("docs/decisions/x.md", "decision") in pairs
+    # list form stays canonical
+    r2 = _run_cli(
+        home,
+        "autoinject",
+        "writeback",
+        "--session",
+        "s-ev2",
+        "--project",
+        "proj-a",
+        "--title",
+        "List evidence lesson",
+        "--observation",
+        "list form stays",
+        "--evidence",
+        '[{"ref": "tests/test_db.py", "kind": "test"}]',
+    )
+    out2 = json.loads(r2.stdout)
+    sources2 = semantic._sources(home, out2["memory_id"])
+    pairs2 = {(s["ref"], s["kind"]) for s in sources2}
+    assert ("tests/test_db.py", "test") in pairs2

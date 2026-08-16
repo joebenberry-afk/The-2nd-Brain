@@ -51,6 +51,18 @@ export interface MirrorOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Sessions whose ledger was auto-initialized in THIS process (T-G6-F3).
+ * Process-scoped; a recovered worker re-inits (idempotent: `ledger init`
+ * uses create_session INSERT OR REPLACE), so races are tolerated.
+ */
+const initializedSessions = new Set<string>();
+
+/** Test seam: clear the per-process init cache. */
+export function resetMirrorInitCache(): void {
+  initializedSessions.clear();
+}
+
 function sha256Hex(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -62,7 +74,8 @@ function eventIdFor(kind: string): string {
 
 export function buildMirrorEventJson(record: MirrorRecord): string {
   const event = {
-    seq: 0, // python assigns the authoritative contiguous seq
+    // T-G6-F1: seq is OMITTED entirely — the ledger auto-assigns the
+    // authoritative contiguous seq (host mirrors are stateless).
     event_id: record.eventId ?? eventIdFor(record.kind),
     agent_id: record.agentId ?? null,
     parent_event_id: record.parentEventId ?? null,
@@ -95,7 +108,7 @@ export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
   delete env.PYTHONPATH;
   env.SECOND_BRAIN_HOME = options.home;
   const json = buildMirrorEventJson(options.record);
-  const args = [
+  const appendArgs = [
     "-m",
     "second_brain",
     "ledger",
@@ -104,11 +117,55 @@ export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
     options.hostSessionId,
     "--stdin-json",
   ];
-  return new Promise((resolve) => {
-    const child = execFile(
-      python,
-      args,
-      {
+  const initArgs = [
+    "-m",
+    "second_brain",
+    "ledger",
+    "init",
+    "--session",
+    options.hostSessionId,
+    "--host",
+    "prime",
+  ];
+  const run = (
+    args: string[],
+    input?: string,
+  ): Promise<{ error?: string; stdout?: string }> =>
+    new Promise((resolve) => {
+      const child = execFile(
+        python,
+        args,
+        {
+          cwd: options.home,
+          env,
+          timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+          windowsHide: true,
+          maxBuffer: 1024 * 1024,
+        },
+        (error, stdout) => resolve({ error: error?.message, stdout }),
+      );
+      if (input !== undefined) {
+        child.stdin?.write(input);
+        child.stdin?.end();
+      }
+    });
+  // T-G6-F3: auto-init the ledger once per session BEFORE the first append
+  // (fire-and-forget chain; idempotent across races and recovered workers).
+  const ensureInit = initializedSessions.has(options.hostSessionId)
+    ? Promise.resolve({ error: undefined, stdout: "" })
+    : run(initArgs).then((result) => {
+        if (!result.error) initializedSessions.add(options.hostSessionId);
+        return result;
+      });
+  return ensureInit.then((initResult) => {
+    if (initResult.error) {
+      return { ok: false, error: `ledger init: ${initResult.error}` };
+    }
+    return new Promise((resolve) => {
+      const child = execFile(
+        python,
+        appendArgs,
+        {
         cwd: options.home,
         env,
         timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
@@ -134,6 +191,7 @@ export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
     );
     child.stdin?.write(json);
     child.stdin?.end();
+  });
   });
 }
 

@@ -1929,8 +1929,15 @@ def _cmd_writeback(home: Path, args) -> int:
 
     try:
         evidence = json.loads(args.evidence) if args.evidence.strip() else []
+        if isinstance(evidence, dict):
+            # T-G6-F4: plain dict {ref: kind, ...} normalizes to the canonical
+            # list schema [{ref, kind}, ...]
+            evidence = [
+                {"ref": str(ref), "kind": str(kind) if isinstance(kind, str) else "evidence"}
+                for ref, kind in evidence.items()
+            ]
         if not isinstance(evidence, list):
-            raise ValueError("--evidence must be a JSON list of {ref, kind} dicts")
+            raise ValueError("--evidence must be a JSON list of {ref, kind} dicts or a dict")
         session = contracts.BrainSessionIdentity(
             internal_session_id="is-"
             + hashlib.sha256(args.session_id.encode("utf-8")).hexdigest()[:12],
@@ -2129,7 +2136,11 @@ def cmd_ledger(args) -> int:
                 if not isinstance(item, dict):
                     print(contracts.canonical_json({"error": "event entries must be objects"}))
                     return 0
-                if "seq" not in item or not isinstance(item.get("seq"), int):
+                if (
+                    "seq" not in item
+                    or not isinstance(item.get("seq"), int)
+                    or int(item.get("seq", 0)) <= 0
+                ):
                     item["seq"] = next_seq  # host mirror: ledger assigns contiguous seq
                 next_seq += 1
                 # host mirrors are stateless: the ledger derives its own ids

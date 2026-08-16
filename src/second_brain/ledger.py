@@ -75,7 +75,7 @@ LEDGER_ADAPTER_NAME = "second-brain"
 LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
 _OBJECT_DIR = "objects"
-_FTS_KEYS = ("title", "summary", "file", "symbol", "task", "decision", "tool")
+_FTS_KEYS = ("title", "summary", "file", "symbol", "task", "task_sha256", "decision", "tool")
 
 # Ordered in-memory upgraders for OLD versions, keyed by the version they
 # upgrade FROM. Empty stub today: any unknown old version is a deterministic
@@ -432,7 +432,9 @@ class LedgerStore:
             row = self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
             next_seq = int(row[0]) + 1
             for i, event in enumerate(events):
-                if event.seq != next_seq + i:
+                # T-G6-F1: seq<=0 (host mirrors) auto-assigns; explicit seqs
+                # must stay contiguous with the ledger.
+                if event.seq > 0 and event.seq != next_seq + i:
                     raise BrainError(
                         f"seq contiguity violated: batch starts at {events[0].seq} "
                         f"but ledger expects {next_seq}"
@@ -454,7 +456,8 @@ class LedgerStore:
                             f"invalid parent_event_id: {event.parent_event_id!r}"
                         )
             seqs: list[int] = []
-            for event in events:
+            for insert_index, event in enumerate(events):
+                effective_seq = event.seq if event.seq > 0 else next_seq + insert_index
                 self._conn.execute(
                     "INSERT INTO events (seq, event_id, internal_session_id, agent_id, "
                     " parent_event_id, host_entry_id, host_parent_entry_id, segment_id, "
@@ -462,7 +465,7 @@ class LedgerStore:
                     " artifact_sha256, source_event_ids) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        event.seq,
+                        effective_seq,
                         event.event_id,
                         event.internal_session_id,
                         event.agent_id,
@@ -479,7 +482,7 @@ class LedgerStore:
                         canonical_json(event.source_event_ids),
                     ),
                 )
-                seqs.append(event.seq)
+                seqs.append(effective_seq)
             for event in events:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO events_fts (event_id, event_type, payload_text) "
@@ -1073,12 +1076,23 @@ class LedgerRehydrator:
                 "citation": f"segments/{segment or 'all'}/events",
             }
         elif level == 2:
+            def matches_decision(e: BrainLifecycleEvent) -> bool:
+                if decision is None:
+                    return True
+                if e.event_id == decision:
+                    return True
+                # T-G6-F2: match payload decision_id too (event_id first)
+                payload_id = e.payload.get("decision_id")
+                if payload_id is not None and str(payload_id) == decision:
+                    return True
+                return isinstance(payload_id, str) and decision in payload_id
+
             decisions = [
                 e
                 for e in events
                 if e.event_type
                 in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
-                and (decision is None or e.event_id == decision)
+                and matches_decision(e)
             ]
             content = {
                 "level": 2,
