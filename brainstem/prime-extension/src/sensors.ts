@@ -507,6 +507,16 @@ export interface AutoInjectShadowDecisionRecord extends BaseRecord {
   mode: string | null;
   /** True when the advisory/active path returned a custom_message patch. */
   result_patch: boolean;
+  /** Emit ordinal for this (session, task) key (1 = the spawning emit). */
+  emit_index: number;
+  /** True when served from the emit cache (no new spawn). */
+  cache_hit: boolean;
+  /** True when this run actually returned the custom_message patch. */
+  handler_returned_message: boolean;
+  /** Length of the parsed packet text (null when no packet). */
+  cli_packet_chars: number | null;
+  /** Length of the raw CLI stdout that was parsed. */
+  cli_stdout_chars: number;
 }
 
 export function autoinjectShadowDecision(
@@ -522,6 +532,11 @@ export function autoinjectShadowDecision(
     packet_sha256: string | null;
     mode: string | null;
     result_patch: boolean;
+    emit_index: number;
+    cache_hit: boolean;
+    handler_returned_message: boolean;
+    cli_packet_chars: number | null;
+    cli_stdout_chars: number;
   },
 ): AutoInjectShadowDecisionRecord {
   return {
@@ -536,5 +551,10 @@ export function autoinjectShadowDecision(
     packet_sha256: fields.packet_sha256,
     mode: fields.mode,
     result_patch: fields.result_patch,
+    emit_index: fields.emit_index,
+    cache_hit: fields.cache_hit,
+    handler_returned_message: fields.handler_returned_message,
+    cli_packet_chars: fields.cli_packet_chars,
+    cli_stdout_chars: fields.cli_stdout_chars,
   } as unknown as AutoInjectShadowDecisionRecord;
 }

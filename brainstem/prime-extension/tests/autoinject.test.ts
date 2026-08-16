@@ -27,7 +27,9 @@ let realRunShadowAutoInject: typeof import("../src/autoinject")["runShadowAutoIn
 let realRunAdvisoryAutoInject: typeof import("../src/autoinject")["runAdvisoryAutoInject"];
 import {
   AUTOINJECT_CUSTOM_TYPE,
+  AUTOINJECT_DEFAULT_EMIT_TTL_MS,
   AUTOINJECT_DEFAULT_TIMEOUT_MS,
+  resetAutoInjectEmitCache,
   AUTOINJECT_MAX_TASK_ARG_CHARS,
   loadAutoInjectHostConfig,
   parseShadowOutput,
@@ -38,6 +40,7 @@ import {
   type AutoInjectShadowOutcome,
 } from "../src/autoinject";
 import { autoinjectShadowDecision, extensionError } from "../src/sensors";
+import { REAL_CLI_INJECT_OUTPUT } from "./real-cli-output.fixture";
 import factory from "../src/index";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
@@ -59,6 +62,7 @@ beforeEach(async () => {
   );
   realRunShadowAutoInject = realModule.runShadowAutoInject;
   realRunAdvisoryAutoInject = realModule.runAdvisoryAutoInject;
+  resetAutoInjectEmitCache();
   execFileMock.mockReset();
   shadowRunMock.mockReset();
   advisoryRunMock.mockReset();
@@ -141,6 +145,15 @@ describe("parseShadowOutput", () => {
     expect(parseShadowOutput('"str"')).toBeNull();
     expect(parseShadowOutput("{}")).toBeNull();
   });
+  it("REAL captured CLI output (INJECT) -> packet parsed end-to-end", () => {
+    const out = parseShadowOutput(REAL_CLI_INJECT_OUTPUT);
+    expect(out).not.toBeNull();
+    expect(out?.decision).toBe("INJECT");
+    expect(out?.packet).not.toBeNull();
+    expect(out?.packet?.startsWith("[BRAIN_CONTEXT_DELTA v1]")).toBe(true);
+    expect(out?.cliPacketChars).toBe(out?.packet?.length);
+    expect(out?.cliStdoutChars).toBe(REAL_CLI_INJECT_OUTPUT.length);
+  });
 });
 
 describe("runAutoInjectShadow (execFile mocked)", () => {
@@ -203,6 +216,8 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
       candidateCount: 1,
       selectedCount: 1,
       packetSha256: "ab",
+      cliPacketChars: null,
+      cliStdoutChars: 0,
     });
     const callObj: Parameters<typeof runShadowAutoInject>[0] = {
       home: "H:/brain",
@@ -318,6 +333,8 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
       candidateCount: 1,
       selectedCount: 1,
       packetSha256: "ab",
+      cliPacketChars: null,
+      cliStdoutChars: 0,
     });
     const callObj: Parameters<typeof runAdvisoryAutoInject>[0] = {
       home: "H:/brain",
@@ -360,6 +377,8 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
           candidateCount: 0,
           selectedCount: 0,
           packetSha256: null,
+          cliPacketChars: null,
+          cliStdoutChars: 0,
         }),
     });
     expect(await realRunAdvisoryAutoInject(callObj)).toBeUndefined();
@@ -506,6 +525,150 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
   });
 });
 
+describe("emit stability (Phase C5)", () => {
+  function makeCall(
+    mode: "shadow" | "advisory",
+    over: Partial<Parameters<typeof runAdvisoryAutoInject>[0]> = {},
+  ): {
+    callObj: Parameters<typeof runAdvisoryAutoInject>[0];
+    append: ReturnType<typeof vi.fn>;
+    runner: ReturnType<typeof vi.fn>;
+  } {
+    const append = vi.fn<(record: unknown) => void>();
+    const runner = vi.fn<() => Promise<AutoInjectShadowOutcome | null>>().mockResolvedValue({
+      decision: "INJECT",
+      reason: null,
+      packet: "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-x\nauthority: advisory\n",
+      packetTokens: 117,
+      deliveryId: "del-1",
+      candidateCount: 1,
+      selectedCount: 1,
+      packetSha256: "ab",
+      cliPacketChars: null,
+      cliStdoutChars: 0,
+    });
+    const callObj: Parameters<typeof runAdvisoryAutoInject>[0] = {
+      home: "H:/brain",
+      session: "s1",
+      task: "adaptive fan-out policy",
+      agentId: "a1",
+      cwd: "C:/work",
+      cfg: { mode, timeoutMs: 5000 },
+      append,
+      runner,
+      ...over,
+    };
+    return { callObj, append, runner };
+  }
+
+  it("advisory: same task twice within TTL -> ONE spawn, identical message object", async () => {
+    const { callObj, append, runner } = makeCall("advisory");
+    const first = await realRunAdvisoryAutoInject(callObj);
+    const second = await realRunAdvisoryAutoInject(callObj);
+    expect(runner).toHaveBeenCalledTimes(1); // exactly one spawn
+    expect(second).toBe(first); // identical cached object
+    const kinds = append.mock.calls.map((c) => (c[0] as Record<string, unknown>).kind);
+    const hit = append.mock.calls.find(
+      (c) => (c[0] as Record<string, unknown>).cache_hit === true,
+    )?.[0] as Record<string, unknown>;
+    expect(hit).toBeDefined();
+    expect(hit.emit_index).toBe(2);
+    expect(hit.result_patch).toBe(true);
+    expect(kinds.filter((k) => k === "autoinject_shadow_decision").length).toBe(2);
+  });
+
+  it("advisory: after TTL expiry -> second spawn", async () => {
+    vi.useFakeTimers();
+    try {
+      const { callObj, runner } = makeCall("advisory");
+      await realRunAdvisoryAutoInject(callObj);
+      await vi.advanceTimersByTimeAsync(AUTOINJECT_DEFAULT_EMIT_TTL_MS + 1000);
+      await realRunAdvisoryAutoInject(callObj);
+      expect(runner).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("different task -> second spawn", async () => {
+    const { callObj, runner } = makeCall("advisory");
+    await realRunAdvisoryAutoInject(callObj);
+    await realRunAdvisoryAutoInject({ ...callObj, task: "another task entirely" });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("different session -> second spawn", async () => {
+    const { callObj, runner } = makeCall("advisory");
+    await realRunAdvisoryAutoInject(callObj);
+    await realRunAdvisoryAutoInject({ ...callObj, session: "s2" });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("shadow: re-emit within TTL -> zero additional spawns", async () => {
+    const { callObj, runner } = makeCall("shadow");
+    await realRunShadowAutoInject(callObj);
+    await realRunShadowAutoInject(callObj);
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("3 re-emits with varying trailing prompt metadata -> ONE spawn, identical message (Phase C8)", async () => {
+    const { callObj, runner } = makeCall("advisory");
+    // > 64 chars so appended metadata lands AFTER the prompt-head guard window
+    const base = "adaptive fan-out policy for the P1 orchestration design with recursion blocked";
+    const first = await realRunAdvisoryAutoInject({ ...callObj, task: base });
+    const second = await realRunAdvisoryAutoInject({
+      ...callObj,
+      task: `${base} (attempt 2 - retry metadata)`,
+    });
+    const third = await realRunAdvisoryAutoInject({
+      ...callObj,
+      task: `${base} [extra metadata appended]`,
+    });
+    expect(runner).toHaveBeenCalledTimes(1); // trailing metadata must NOT respawn
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+  });
+
+  it("different prompt head within TTL -> replace entry + new spawn (Phase C8 guard)", async () => {
+    const { callObj, runner } = makeCall("advisory");
+    await realRunAdvisoryAutoInject(callObj);
+    await realRunAdvisoryAutoInject({
+      ...callObj,
+      task: "completely different task about pizza flavors",
+    });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("REAL captured CLI output through the advisory pipeline -> message returned, handler_returned_message=true", async () => {
+    const out = parseShadowOutput(REAL_CLI_INJECT_OUTPUT);
+    expect(out).not.toBeNull();
+    const { callObj, append, runner } = makeCall("advisory");
+    runner.mockResolvedValue(out);
+    const message = await realRunAdvisoryAutoInject(callObj);
+    expect(message).toBeDefined();
+    expect(message?.content).toBe(out?.packet);
+    const record = append.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(record.handler_returned_message).toBe(true);
+    expect(record.result_patch).toBe(true);
+    expect(record.cli_packet_chars).toBe(out?.packet?.length);
+    expect(record.cli_stdout_chars).toBe(REAL_CLI_INJECT_OUTPUT.length);
+  });
+
+  it("file-backed cache survives process restart (recovered worker)", async () => {
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-persist-"));
+    const { callObj, runner } = makeCall("advisory", { home });
+    const first = await realRunAdvisoryAutoInject(callObj);
+    expect(first).toBeDefined();
+    // Simulate a session-worker recovery: fresh process -> empty in-memory
+    // cache, but the persisted file must serve the next emit.
+    resetAutoInjectEmitCache();
+    const second = await realRunAdvisoryAutoInject(callObj);
+    expect(runner).toHaveBeenCalledTimes(1); // no second spawn
+    expect(second).toBeDefined();
+    expect(second).toEqual(first);
+  });
+});
+
 describe("sensor record kind", () => {
   it("autoinject_shadow_decision has the documented shape", () => {
     const record = autoinjectShadowDecision("s1", {
@@ -519,12 +682,21 @@ describe("sensor record kind", () => {
       packet_sha256: null,
       mode: "shadow",
       result_patch: false,
+      emit_index: 1,
+      cache_hit: false,
+      handler_returned_message: false,
+      cli_packet_chars: null,
+      cli_stdout_chars: 120,
     });
     expect(record.kind).toBe("autoinject_shadow_decision");
     expect(record.session).toBe("s1");
     expect(record.reason).toBe("NO_RELEVANT_MEMORY");
     expect(record.mode).toBe("shadow");
     expect(record.result_patch).toBe(false);
+    expect(record.emit_index).toBe(1);
+    expect(record.cache_hit).toBe(false);
+    expect(record.handler_returned_message).toBe(false);
+    expect(record.cli_stdout_chars).toBe(120);
   });
   it("extensionError stays available for fail-open records", () => {
     const record = extensionError("s1", new Error("boom"));
