@@ -365,6 +365,12 @@ def _parser() -> argparse.ArgumentParser:
     rassess.add_argument("repo", type=Path)
     rassess.add_argument("--file", dest="files", action="append", default=[])
     rassess.add_argument("--criticality", default=None, choices=risk.RISK_LEVELS)
+    rassess.add_argument(
+        "--verification-ladder",
+        action="store_true",
+        help="append the compact risk-adaptive verification ladder for the "
+        "resulting risk level (plan §10; config/verification.toml [ladder])",
+    )
 
     vf = sub.add_parser("verify", parents=[home_parent], help="intent verifier brief (Phase 7)")
     vfs = vf.add_subparsers(dest="verify_command", required=True)
@@ -905,7 +911,9 @@ def cmd_artifact(args) -> int:
             # P3-F: read stdin as EXACT BYTES (text mode would translate
             # CRLF -> LF and break content-addressed sha256 recovery).
             data = sys.stdin.buffer.read()
-            info = artifacts.store_bytes(home, data, args.kind, tool=args.tool, session=args.session)
+            info = artifacts.store_bytes(
+                home, data, args.kind, tool=args.tool, session=args.session
+            )
         print(info["handle"])
         if not args.no_distill:
             print("Distilled:")
@@ -931,6 +939,21 @@ def cmd_risk(args) -> int:
     for s in result["signals"]:
         if s["points"]:
             print(f"  {s['name']:20s} {s['points']}  {s['detail']}")
+    if args.verification_ladder:
+        # P3-G: compact risk-adaptive verification ladder for the RESULTING
+        # level (user criticality already applied — the ladder follows it).
+        payload = verify.verification_ladder_payload(result["level"], home=_home(args))
+        print(f"Verification ladder ({payload['level']}):")
+        for index, action in enumerate(payload["actions"], 1):
+            print(f"  {index}. {action}")
+        verifier_line = (
+            "REQUIRED (brainctl verify build-brief)"
+            if payload["independent_verifier"]
+            else "not required"
+        )
+        print("  independent verifier: " + verifier_line)
+        approval_line = "REQUIRED" if payload["approval_required"] else "not required"
+        print("  human approval: " + approval_line)
     return 0
 
 
