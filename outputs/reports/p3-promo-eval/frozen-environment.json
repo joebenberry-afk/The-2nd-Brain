@@ -61,5 +61,36 @@
     "Ensure campaign workspace permission rules (exact command() allows for brainctl/node/git) mirror the smoke grants",
     "python scripts/run_p3_promotion_campaign.py --preflight, then full run",
     "python scripts/compile_p3_promotion_report.py (derived verdict; promote only if PROMOTE ACTIVE)"
-  ]
+  ],
+  "campaign_started_at": "2026-08-16T18:45:35.839903+00:00",
+  "harness": {
+    "run_p3_promotion_campaign.py": "86f2e9641f0a902d2ae514c3e517b1b377870307bc6c2d56d5df57dafab2bfe1",
+    "compile_p3_promotion_report.py": "eba2a98d2fcdff8295617fa71476a26c20ad99b4f6a6b53c06c509134efebc81",
+    "cli.py": "e10da1d6275f758b17503892f7bfc7c698152749d0130e1e697e77e3bc392c4b",
+    "hooks.json": "dea6affd627ed03ad9f0530958f461a320f886f5ba023145f870ea2251972eb2",
+    "run-hook.ps1": "d72c15a5893ccab2067ad6ce81f4d65ba51d113f45dc96b2aaadfea3ce26a9df",
+    "lean_runtime.py": "a4d33c1a856cbdd7fbd8a376e65fbef2189ce029a22fb2aa4ac730994e70f6b8",
+    "antigravity_transcript.py": "9304b0aad6d4e037ac90cd0f0569ffa81a3af02cbfa88f44f5f2fe0cdd9d4993"
+  },
+  "campaign_execution": {
+    "model": "gemini-3.7-flash-high",
+    "effort": null,
+    "print_timeout_s": 600,
+    "arm_timeout_s": 900,
+    "permissions": "P3_AGY_SKIP_PERMISSIONS=1 for campaign arms: CLI permission rules are EXACT-match only (verified: no wildcards/prefix), infeasible to scope 20 autonomous arms; arms run in disposable git-initialized temp workspaces with vendored fixtures and no credentials; acceptance oracle + diff computed by the runner outside the agent; Brain hooks still enforce injection/Lean/STOP policy. Plan \u00a730 explicit justification recorded here.",
+    "pilot_arms": {
+      "e16-b OFF": "VALID_COMPLETE (conv 5bda9bab..., usage real, lean omit/off, acceptance PASS)",
+      "e16-c ON": "VALID_COMPLETE (lean inject/advisory kernel_chars=865, acceptance PASS)"
+    },
+    "frozen_during_campaign": [
+      "adapter",
+      "lean kernel",
+      "skill",
+      "task cards",
+      "evaluator",
+      "model",
+      "effort",
+      "permissions"
+    ]
+  }
 }
