@@ -15,19 +15,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const execFileMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 const shadowRunMock = vi.hoisted(() => vi.fn());
+const advisoryRunMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/autoinject", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/autoinject")>();
-  return { ...actual, runShadowAutoInject: shadowRunMock };
+  return { ...actual, runShadowAutoInject: shadowRunMock, runAdvisoryAutoInject: advisoryRunMock };
 });
 // The real runShadowAutoInject (module is mocked for wiring tests; unit
 // tests below fetch the actual implementation explicitly).
 let realRunShadowAutoInject: typeof import("../src/autoinject")["runShadowAutoInject"];
+let realRunAdvisoryAutoInject: typeof import("../src/autoinject")["runAdvisoryAutoInject"];
 import {
+  AUTOINJECT_CUSTOM_TYPE,
   AUTOINJECT_DEFAULT_TIMEOUT_MS,
   AUTOINJECT_MAX_TASK_ARG_CHARS,
   loadAutoInjectHostConfig,
   parseShadowOutput,
   resolveProject,
+  runAdvisoryAutoInject,
   runAutoInjectShadow,
   runShadowAutoInject,
   type AutoInjectShadowOutcome,
@@ -49,11 +53,14 @@ beforeEach(async () => {
     SAVED[key] = process.env[key];
     delete process.env[key];
   }
-  realRunShadowAutoInject = (
-    await vi.importActual<typeof import("../src/autoinject")>("../src/autoinject")
-  ).runShadowAutoInject;
+  const realModule = await vi.importActual<typeof import("../src/autoinject")>(
+    "../src/autoinject",
+  );
+  realRunShadowAutoInject = realModule.runShadowAutoInject;
+  realRunAdvisoryAutoInject = realModule.runAdvisoryAutoInject;
   execFileMock.mockReset();
   shadowRunMock.mockReset();
+  advisoryRunMock.mockReset();
 });
 
 afterEach(() => {
@@ -169,6 +176,7 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
     const runner = vi.fn<() => Promise<AutoInjectShadowOutcome | null>>().mockResolvedValue({
       decision: "INJECT",
       reason: null,
+      packet: null,
       packetTokens: 117,
       deliveryId: "del-abc",
       candidateCount: 1,
@@ -266,6 +274,138 @@ describe("index.ts wiring (real factory, fake ExtensionAPI)", () => {
     expect(() => handlers.get("session_start")!({ reason: "startup" }, ctx)).not.toThrow();
     expect(shadowRunMock).toHaveBeenCalledTimes(1);
     expect((shadowRunMock.mock.calls[0]?.[0] as Record<string, unknown>).task).toBe("");
+  });
+});
+
+describe("runAdvisoryAutoInject (real implementation)", () => {
+  function makeCall(
+    over: Partial<Parameters<typeof runAdvisoryAutoInject>[0]> = {},
+  ): {
+    callObj: Parameters<typeof runAdvisoryAutoInject>[0];
+    append: ReturnType<typeof vi.fn>;
+  } {
+    const append = vi.fn<(record: unknown) => void>();
+    const runner = vi.fn<() => Promise<AutoInjectShadowOutcome | null>>().mockResolvedValue({
+      decision: "INJECT",
+      reason: null,
+      packet: "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-x\nauthority: advisory\n",
+      packetTokens: 117,
+      deliveryId: "del-abc",
+      candidateCount: 1,
+      selectedCount: 1,
+      packetSha256: "ab",
+    });
+    const callObj: Parameters<typeof runAdvisoryAutoInject>[0] = {
+      home: "H:/brain",
+      session: "s1",
+      task: "wire the adapter",
+      agentId: "a1",
+      cfg: { mode: "advisory", timeoutMs: 5000 },
+      append,
+      runner,
+      ...over,
+    };
+    return { callObj, append };
+  }
+  it("INJECT -> returns low-authority custom_message patch, record logged", async () => {
+    const { callObj, append } = makeCall();
+    const result = await realRunAdvisoryAutoInject(callObj);
+    expect(result).toEqual({
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-x\nauthority: advisory\n",
+      display: true,
+      details: { delivery_id: "del-abc", packet_tokens: 117 },
+    });
+    const record = append.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(record.kind).toBe("autoinject_shadow_decision");
+    expect(record.decision).toBe("INJECT");
+  });
+  it("NO_INJECTION -> undefined, no patch", async () => {
+    const { callObj, append } = makeCall({
+      runner: vi
+        .fn<() => Promise<AutoInjectShadowOutcome | null>>()
+        .mockResolvedValue({
+          decision: "NO_INJECTION",
+          reason: "NO_RELEVANT_MEMORY",
+          packet: null,
+          packetTokens: null,
+          deliveryId: null,
+          candidateCount: 0,
+          selectedCount: 0,
+          packetSha256: null,
+        }),
+    });
+    expect(await realRunAdvisoryAutoInject(callObj)).toBeUndefined();
+    expect(append.mock.calls[0]?.[0]).toMatchObject({ kind: "autoinject_shadow_decision" });
+  });
+  it("spawn failure -> extension_error, undefined (fail-open)", async () => {
+    const { callObj, append } = makeCall({ runner: vi.fn<() => Promise<null>>().mockResolvedValue(null) });
+    expect(await realRunAdvisoryAutoInject(callObj)).toBeUndefined();
+    expect(append.mock.calls[0]?.[0]).toMatchObject({ kind: "extension_error" });
+  });
+  it("shadow/off modes never return a patch", async () => {
+    const { callObj } = makeCall({ cfg: { mode: "shadow", timeoutMs: 5000 } });
+    expect(await realRunAdvisoryAutoInject(callObj)).toBeUndefined();
+  });
+});
+
+describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", () => {
+  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+  function loadFactory(): Map<string, Handler> {
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on(name: string, handler: Handler) {
+        handlers.set(name, handler);
+      },
+    } as unknown as ExtensionAPI;
+    factory(pi);
+    return handlers;
+  }
+
+  const ctx = {
+    cwd: "C:/work",
+    model: { id: "deepseek/deepseek-v4-flash" },
+    sessionManager: undefined,
+  } as unknown as ExtensionContext;
+
+  it("same session twice -> first call returns custom_message patch, second undefined (ALREADY_DELIVERED)", async () => {
+    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-adv-"));
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const handlers = loadFactory();
+    const packet = "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-x\nauthority: advisory\n";
+    advisoryRunMock
+      .mockResolvedValueOnce({
+        customType: AUTOINJECT_CUSTOM_TYPE,
+        content: packet,
+        display: true,
+        details: { delivery_id: "del-1", packet_tokens: 117 },
+      })
+      .mockResolvedValueOnce(undefined);
+    const first = await handlers.get("before_agent_start")!({ prompt: "wire the adapter" }, ctx);
+    expect(first).toEqual({
+      message: {
+        customType: AUTOINJECT_CUSTOM_TYPE,
+        content: packet,
+        display: true,
+        details: { delivery_id: "del-1", packet_tokens: 117 },
+      },
+    });
+    expect(advisoryRunMock).toHaveBeenCalledTimes(1);
+    const second = await handlers.get("before_agent_start")!({ prompt: "wire the adapter" }, ctx);
+    expect(second).toBeUndefined(); // python says ALREADY_DELIVERED -> no patch
+    expect(advisoryRunMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shadow mode never returns a patch even when runner would", async () => {
+    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-sh-"));
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "shadow";
+    const handlers = loadFactory();
+    shadowRunMock.mockResolvedValue(undefined);
+    const result = await handlers.get("before_agent_start")!({ prompt: "wire the adapter" }, ctx);
+    expect(result).toBeUndefined();
+    expect(shadowRunMock).toHaveBeenCalledTimes(1);
+    expect(advisoryRunMock).not.toHaveBeenCalled();
   });
 });
 

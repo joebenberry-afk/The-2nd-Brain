@@ -27,6 +27,7 @@
  */
 import type {
   AgentEndEvent,
+  BeforeAgentStartEvent,
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
@@ -62,7 +63,9 @@ import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import {
   loadAutoInjectHostConfig,
   resolveProject,
+  runAdvisoryAutoInject,
   runShadowAutoInject,
+  type AdvisoryAutoInjectCall,
 } from "./autoinject";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
@@ -289,22 +292,47 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // is returned. Default OFF recall = driver sessions get the contract
   // synchronously, everyone else returns undefined (zero behavior change,
   // zero spawns).
-  pi.on("before_agent_start", (event, ctx) => {
+  // Phase 0D: SHADOW (fire-and-forget, never injects) vs ADVISORY/ACTIVE
+  // (awaited; may return a LOW-AUTHORITY custom_message patch). The packet
+  // text carries "authority: advisory" from the contracts renderer — never
+  // upgraded here. Fail-open: any spawn error resolves to no patch.
+  const autoinjectCall = (
+    session: string,
+    event: BeforeAgentStartEvent,
+    context: ExtensionContext,
+  ): AdvisoryAutoInjectCall => ({
+    home: config.home ?? "",
+    session,
+    task: typeof event.prompt === "string" ? event.prompt : "",
+    agentId: sensors.modelToString(context.model) ?? "prime",
+    project: resolveProject(),
+    cfg: loadAutoInjectHostConfig(),
+    append: (record) => getStore(session)?.append(record),
+  });
+
+  /** Merge a custom_message patch into any existing handler result. */
+  function withMessage<T extends { systemPrompt?: string } | undefined>(
+    result: T,
+    message: unknown,
+  ): T | { systemPrompt?: string; message: unknown } {
+    if (!message) return result;
+    return { ...(result ?? {}), message } as T | { systemPrompt?: string; message: unknown };
+  }
+
+  pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
-      // Phase 0C SHADOW: task AutoInject decision + record; the adapter
-      // never returns a packet/patch in shadow mode (fire-and-forget so a
-      // slow/broken brain never delays the turn).
-      void runShadowAutoInject({
-        home: config.home ?? "",
-        session,
-        task: typeof event.prompt === "string" ? event.prompt : "",
-        agentId: sensors.modelToString(ctx.model) ?? "prime",
-        project: resolveProject(),
-        cfg: loadAutoInjectHostConfig(),
-        append: (record) => getStore(session)?.append(record),
-      });
+      // Phase 0C/0D: SHADOW = fire-and-forget (never returns a patch);
+      // ADVISORY/ACTIVE = awaited and may append a low-authority
+      // custom_message (packet carries "authority: advisory").
+      const aiCfg = loadAutoInjectHostConfig();
+      let aiMessage: unknown = undefined;
+      if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
+        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
+      } else {
+        void runShadowAutoInject(autoinjectCall(session, event, ctx));
+      }
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
@@ -314,7 +342,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       );
       if (isOrchestratorModel(modelId, guardCfg)) {
         getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
-        return { systemPrompt: SOL_ORCHESTRATOR_CONTRACT };
+        return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, aiMessage);
       }
       const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
       const patched = role === "driver" ? appendDriverContract(base) : base;
@@ -329,11 +357,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       );
       const recallCfg = loadRecallGateConfig();
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
-        return recallBrief(event.prompt, session, recallCfg, patched);
+        return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), aiMessage);
       }
       if (driverContractInjected && patched !== undefined) {
-        return { systemPrompt: patched };
+        return withMessage({ systemPrompt: patched }, aiMessage);
       }
+      return withMessage(undefined, aiMessage);
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -477,6 +506,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.turnEnd(session, event.turnIndex, usage, event.toolResults);
   });
 
+  // agent_end: P0-G9 write-back is intentionally NOT wired here. The SDK
+  // AgentEndEvent carries only `messages: AgentMessage[]` — no outcome,
+  // summary, or task-success signal — so any extraction would be fabrication.
+  // Documented no-op; write-back happens through explicit `brainctl
+  // autoinject writeback` (Python authority) and the Codex Stop trigger.
   wire<AgentEndEvent>("agent_end", (event, _ctx, session) =>
     sensors.agentEnd(session, event.messages),
   );

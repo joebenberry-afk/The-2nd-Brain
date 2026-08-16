@@ -27,17 +27,23 @@ import { autoinjectShadowDecision, extensionError } from "./sensors";
 
 export const AUTOINJECT_DEFAULT_TIMEOUT_MS = 5000;
 export const AUTOINJECT_MODE_OFF_VALUES = new Set(["off", "0", "false", "no"]);
+export const AUTOINJECT_MODE_ACTIVE_VALUES = new Set(["advisory", "active", "1", "true", "yes"]);
+export const AUTOINJECT_CUSTOM_TYPE = "brain.autoinject.packet";
 /** Windows argv safety margin for --task (CreateProcess ~32k char limit). */
 export const AUTOINJECT_MAX_TASK_ARG_CHARS = 4000;
 
+export type AutoInjectMode = "off" | "shadow" | "advisory" | "active";
+
 export interface AutoInjectHostConfig {
-  mode: "off" | "shadow";
+  mode: AutoInjectMode;
   timeoutMs: number;
 }
 
 export function loadAutoInjectHostConfig(): AutoInjectHostConfig {
   const raw = (process.env.SECOND_BRAIN_AUTOINJECT_MODE ?? "shadow").trim().toLowerCase();
-  const mode = AUTOINJECT_MODE_OFF_VALUES.has(raw) ? "off" : "shadow";
+  let mode: AutoInjectMode = "shadow";
+  if (AUTOINJECT_MODE_OFF_VALUES.has(raw)) mode = "off";
+  else if (raw === "advisory" || raw === "active") mode = raw;
   const parsed = Number(process.env.SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS ?? AUTOINJECT_DEFAULT_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(parsed) && parsed > 0 ? parsed : AUTOINJECT_DEFAULT_TIMEOUT_MS;
   return { mode, timeoutMs };
@@ -52,6 +58,7 @@ export function resolveProject(): string {
 export interface AutoInjectShadowOutcome {
   decision: string;
   reason: string | null;
+  packet: string | null;
   packetTokens: number | null;
   deliveryId: string | null;
   candidateCount: number;
@@ -86,6 +93,7 @@ export function parseShadowOutput(stdout: string): AutoInjectShadowOutcome | nul
   return {
     decision: obj.decision,
     reason: typeof obj.reason === "string" ? obj.reason : null,
+    packet,
     packetTokens: typeof obj.packet_tokens === "number" ? obj.packet_tokens : null,
     deliveryId: typeof obj.delivery_id === "string" ? obj.delivery_id : null,
     candidateCount: Array.isArray(obj.candidate_ids) ? obj.candidate_ids.length : 0,
@@ -161,6 +169,84 @@ export interface ShadowAutoInjectCall {
 }
 
 /**
+ * Orchestrates one ADVISORY/ACTIVE decision: guard -> spawn -> record ->
+ * return a LOW-AUTHORITY model-visible custom_message patch (SDK
+ * BeforeAgentStartEventResult.message = Pick<CustomMessage, "customType" |
+ * "content" | "display" | "details">; CustomMessage.role = "custom").
+ * The packet itself carries "authority: advisory" (contracts renderer) —
+ * this adapter never claims higher authority. NEVER throws; every failure
+ * degrades to undefined (fail-open). Returns undefined for NO_INJECTION.
+ */
+export interface AdvisoryAutoInjectCall extends ShadowAutoInjectCall {
+  customType?: string;
+}
+
+export async function runAdvisoryAutoInject(
+  call: AdvisoryAutoInjectCall,
+): Promise<{ customType: string; content: string; display: boolean; details: unknown } | undefined> {
+  if (call.cfg.mode === "off" || call.cfg.mode === "shadow") return undefined;
+  const task = (call.task ?? "").trim();
+  if (task.length === 0) return undefined;
+  if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
+    return undefined;
+  }
+  const started = Date.now();
+  try {
+    const outcome = await (call.runner ?? runAutoInjectShadow)({
+      home: call.home,
+      task,
+      project: call.project ?? resolveProject(),
+      sessionId: call.session,
+      agentId: call.agentId,
+      branchId: call.branchId,
+      roleProfile: call.roleProfile,
+      cfg: call.cfg,
+    });
+    const latencyMs = Date.now() - started;
+    if (outcome === null) {
+      call.append(
+        extensionError(call.session, new Error("autoinject advisory spawn failed (timeout/error)")),
+      );
+      return undefined;
+    }
+    appendDecisionRecord(call, outcome, latencyMs);
+    if (outcome.decision !== "INJECT" || outcome.packet === null) return undefined;
+    return {
+      customType: call.customType ?? AUTOINJECT_CUSTOM_TYPE,
+      content: outcome.packet,
+      display: true,
+      details: { delivery_id: outcome.deliveryId, packet_tokens: outcome.packetTokens },
+    };
+  } catch (error) {
+    try {
+      call.append(extensionError(call.session, error));
+    } catch {
+      // storage failed too — stay silent
+    }
+    return undefined;
+  }
+}
+
+function appendDecisionRecord(
+  call: ShadowAutoInjectCall,
+  outcome: AutoInjectShadowOutcome,
+  latencyMs: number,
+): void {
+  call.append(
+    autoinjectShadowDecision(call.session, {
+      decision: outcome.decision,
+      reason: outcome.reason,
+      packet_tokens: outcome.packetTokens,
+      latency_ms: latencyMs,
+      candidate_count: outcome.candidateCount,
+      selected_count: outcome.selectedCount,
+      delivery_id: outcome.deliveryId,
+      packet_sha256: outcome.packetSha256,
+    }),
+  );
+}
+
+/**
  * Orchestrates one SHADOW decision: guard -> spawn -> record. NEVER throws,
  * NEVER returns a patch (shadow invariant), never blocks on the event path
  * (callers fire-and-forget). Empty task text (e.g. session_start has no
@@ -194,18 +280,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
       );
       return;
     }
-    call.append(
-      autoinjectShadowDecision(call.session, {
-        decision: outcome.decision,
-        reason: outcome.reason,
-        packet_tokens: outcome.packetTokens,
-        latency_ms: latencyMs,
-        candidate_count: outcome.candidateCount,
-        selected_count: outcome.selectedCount,
-        delivery_id: outcome.deliveryId,
-        packet_sha256: outcome.packetSha256,
-      }),
-    );
+    appendDecisionRecord(call, outcome, latencyMs);
   } catch (error) {
     try {
       call.append(extensionError(call.session, error));
