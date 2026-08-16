@@ -31,6 +31,7 @@ Kinds:
 | session_compact | from_extension |
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason |
+| lean_kernel | decision, reason, role, skill_status, mode, kernel_chars, dedup_hit (v=2; P3-D) |
 | extension_error | error (string, truncated) |
 | assistant_usage | provider, model, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
 | provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
@@ -123,6 +124,62 @@ are checked).
 
 
 ## Phase P3-B addition — economics instrumentation (2026-08-16)
+
+## Phase P3-D addition — lean runtime adapter (2026-08-16)
+
+`lean_kernel` records are emitted by the Prime extension on every
+`before_agent_start` lean decision (P3-D adapter, `src/lean-code.ts`,
+plan §8). One record per decision, additive v=2, privacy-safe (enumerated
+values + character counts only — never kernel text or prompt content):
+
+- `decision` — `inject` (a kernel patch was produced) | `omit` (no patch).
+- `reason` — enumerated:
+  - `active` — skill lifecycle status is `active`; kernel injected for
+    driver/worker sessions;
+  - `advisory` — `SECOND_BRAIN_LEAN=advisory` eval mode forced injection for
+    driver/worker even though the skill is candidate/shadow (P3-E candidate
+    arms without promotion; retired always wins over advisory — §26.1);
+  - `off` — env `SECOND_BRAIN_LEAN=off`, or lifecycle state not active
+    (candidate/shadow default = measurement only; retired = disabled), or
+    the base prompt was absent (never invent a prompt);
+  - `role` — session role is `hard_orchestrator` (Sol, never injected, §8.3)
+    or `normal` (kernel inert for non-code roles);
+  - `skill-missing` — skill file missing/unreadable/without a parsable
+    `# Runtime Kernel` section; fail-open (no patch, bounded
+    `extension_error` also recorded, no invented policy text).
+- `role` — agent role at decision time (`hard_orchestrator` | `driver` |
+  `worker` | `normal`).
+- `skill_status` — resolved lifecycle status (`active` | `shadow` |
+  `candidate` | `retired`) or null when the file is missing.
+- `mode` — raw `SECOND_BRAIN_LEAN` value (lowercased) or null when unset.
+- `kernel_chars` — character length of the canonical `# Runtime Kernel`
+  section (0 when unavailable).
+- `dedup_hit` — true when the base prompt already carried the stable marker
+  `second-brain-lean-code-kernel` (no re-injection; plan §8.4). A record with
+  `decision=omit` and reason `active`/`advisory` together with `dedup_hit=true`
+  means the lifecycle wanted injection but the marker was already present.
+
+Kernel source is the canonical skill file ONLY (`skills/<level>/lean-code/
+SKILL.md`, level = active > shadow > candidates > retired, mirroring
+`src/second_brain/paths.py` SKILL_LEVEL_DIRS). The kernel text is never
+duplicated as a TS constant and is cached in-process keyed by resolved path +
+mtime/size (plan §8.6). Marginal overhead estimate: `kernel_chars // 4` input
+tokens (host AutoInject estimation convention); the REAL per-turn cost comes
+from live `assistant_usage` deltas in P3-E paired runs.
+
+Real model-facing ordering (verified against Prime v0.7.2 SDK assembly —
+`runner.ts` emitBeforeAgentStart, `agent-session.ts`
+_appendBeforeAgentStartMessages/_applyPreparedSystemPrompt, `messages.ts`
+convertToLlm): the extension's `systemPrompt` patch (base -> driver contract
+-> lean kernel -> recall brief, when recall fires) becomes the session system
+prompt; the AutoInject packet is a separate custom message that the host
+pushes AFTER the current user task and maps to a `user`-role message. The
+plan §7.4 ideal ordering (stable base -> stable kernel -> dynamic Brain
+context delta -> task/tool evidence) is satisfied for the kernel (system
+prompt precedes all messages); the dynamic AutoInject packet's position is
+host-determined (after the task) and is NOT faked here.
+
+
 
 Additive schema v3 records emitted by the Prime extension (`sensors.ts` /
 `index.ts`) from the provider hooks proven live in Phase A:
