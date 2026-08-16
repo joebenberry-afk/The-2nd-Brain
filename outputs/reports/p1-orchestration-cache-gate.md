@@ -43,7 +43,7 @@
 
 - Sent: `agent_message.send("shared assumption: is the config-file mode branch live? …", receiver_role="sibling", receiver_name="a2a-peer")` → `agentmsg_bb5db890-dad4-477c-966b-2f6b26fa2f80`, 01:49:28Z, deliveryStatus `queued` (target `a2a-peer` session 01a00841-c941-733e-b9df-3c67725f7ce9).
 - Peer session observed via `agent_observe.recent_messages("a2a-peer")`: active, `queuedCount: 1` (message received at the daemon), peer processing (status tool/model).
-- Expected reply: `A2A_ACK` (parent-announced protocol); one message only was sent.
+- A2A_ACK reply DELIVERED 01:52:20Z: 'A2A_ACK: shared assumption: i | sibling link works | from a2a-peer' (agentmsg_3e3d34c7-1497-4fd6-a042-18653ff4f28e) — sibling->sibling live-proven (queued while peer busy, delivered on idle, ACK returned). One message only was sent.
 
 ## 3. Orchestration economics (amendment §22)
 
