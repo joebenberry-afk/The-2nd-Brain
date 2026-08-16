@@ -1,109 +1,108 @@
-# Driver Orchestration Contract (canonical)
+# Driver Orchestration Contract (canonical, P0-P2 amendment Phase D)
 
-Source: Driver-Orchestration campaign (optimization pass, 2026-08-15). This
-is the canonical orchestration contract for the **driver role** in the Prime
-extension (`brainstem/prime-extension`): a model that runs the agent session
-but delegates the bulk of execution-heavy work to worker subagents. It lives
-under `brainstem/policies/` deliberately: it is a runtime policy, **not** part
+Source: Driver-Orchestration campaign (2026-08-15/16), updated for the
+Maximum Prime-Agent Harness Amendment (§12/§13/§22/§31). This is the
+canonical orchestration contract for the **driver role** in the Prime
+extension (`brainstem/prime-extension`). It is a runtime policy, **not** part
 of the protected `constitution/` change-control surface.
 
-Status labels used below: **IMPLEMENTED** = wired and proven in this repo;
-**ADVISORY** = encoded as guidance only, no hard enforcement yet;
-**NOT CONFIGURED / UNVERIFIED** = capability not verified on the active Prime
-runtime; **PLANNED** = accepted, not yet built.
+Status labels: **IMPLEMENTED** = wired and proven; **ADVISORY** = guidance
+only, no hard enforcement; **NOT CONFIGURED / UNVERIFIED**; **PLANNED**.
 
 ## 1. Role model
 
-Every session's active model is classified into exactly one of four roles on
-`before_agent_start` (resolution: `src/driver-orchestrator.ts`
+Four roles, resolved on `before_agent_start` (`src/driver-orchestrator.ts`
 `resolveAgentRole`; precedence hard_orchestrator > driver > worker > normal;
-lowercased substring containment, same semantics as the Sol guard):
+lowercased substring match):
 
-| Role | Default model substrings | Default source |
+| Role | Default model substrings | Source |
 |---|---|---|
-| `hard_orchestrator` | `gpt-5.6-sol` | `ORCHESTRATOR_MODELS` (existing Sol guard, unchanged) |
-| `driver` | `deepseek-v4-pro`, `gpt-5.6-luna` | `DRIVER_MODELS` (new) |
-| `worker` | `deepseek-v4-flash`, `qwen3.5` | `WORKER_MODELS` (new) |
-| `normal` | anything else (e.g. `anthropic/claude-sonnet-5`, `openai-codex/gpt-5.6-terra`) | — |
+| `hard_orchestrator` | `gpt-5.6-sol` | `ORCHESTRATOR_MODELS` (Sol guard, unchanged) |
+| `driver` | `deepseek-v4-pro`, `gpt-5.6-luna` | `DRIVER_MODELS` |
+| `worker` | `deepseek-v4-flash`, `qwen3.5` | `WORKER_MODELS` |
+| `normal` | anything else | — |
 
-Model ids are matched case-insensitively as substrings of the lowercased
-`provider/id` serialization (e.g. `deepseek/deepseek-v4-pro`).
-`deepseek-v4-pro` and `deepseek-v4-flash` are mutually exclusive substrings.
-Blank/null model ids are always `normal`.
+## 2. Driver execution policy (amendment §31 override)
 
-## 2. Role behaviors
+The original plan forbade the driver from executing routine work. Per the
+amendment the driver **MAY execute trivial deterministic work** and **must
+not personally execute substantial work** when delegation is advantageous:
 
-- **hard_orchestrator (Sol)** — unchanged: strict Sol contract replaces the
-  system prompt (`SOL_ORCHESTRATOR_CONTRACT`), `bash`/`edit`/`websearch` are
-  blocked by the runtime guard, `ipython` stays available for delegation
-  (see `sol-minimal-orchestrator.md`). The driver contract is NEVER applied.
-- **driver** — the driver-orchestration contract
-  (`DRIVER_ORCHESTRATOR_CONTRACT`, embedded in `src/driver-orchestrator.ts`,
-  <= 230 words, marker `second-brain-driver-orchestration-contract`) is
-  APPENDED to the full current system prompt (`ctx.getSystemPrompt()` + the
-  contract). Never replaces the base prompt. Deduplicated by the marker:
-  when the base already contains the marker, no second append happens and
-  no prompt patch is returned (unless the recall hook produces one).
-- **worker** — measurement-only. Never receives the driver contract. Workers
-  do not inherit the driver role and must not orchestrate (anti-recursion).
-- **normal** — measurement-only, no contract.
+- **MAY (Tier 0/1):** read kernel/context state already held; run one-line
+  deterministic commands (status reads, single greps, `git status`) when
+  doing so is cheaper than delegation.
+- **MUST NOT (default):** bulk repo exploration, multi-file inspection,
+  editing, patch application, test-suite execution, builds, DB queries,
+  trial-and-error debugging, broad review. These are delegated.
+- **Emergency escape:** documented, explicit, and logged (counts toward
+  `emergency_execution_actions`); never silent.
 
-## 3. Contract content (IMPLEMENTED)
+## 3. Primitive-selection ladder (Tier 0 -> Tier 6)
 
-The driver contract states, in order: (1) the driver orchestrates substantive
-work by default and never waits for the user to explicitly ask for subagents;
-(2) TRIVIAL work (one obvious action, tiny edit, typo, loaded-context
-question) is executed directly — never spawn workers merely because workers
-exist; (3) SUBSTANTIAL work (repo investigation, debugging, unknown root
-cause, multi-file implementation, research, nontrivial review) is delegated —
-the bulk of execution-heavy work goes to workers, small control-plane actions
-stay with the driver, and worker work is never duplicated; (4) concurrency:
-parallelize only genuinely independent workstreams, default 1 active worker,
-at most 2, never 3+; (5) worker selection prefers the cheapest competent
-worker (deepseek-v4-flash or qwen3.5), stronger workers only when required;
-(6) every worker spawn gets a narrow objective, scope, constraints, required
-evidence, and completion condition; (7) workers do not inherit the driver
-role and must not orchestrate; (8) the driver reviews every worker result
-(evidence quality, contradictions), prefers one targeted correction over
-replacing a worker, and owns final integration and the final answer.
+Choose the lowest tier that reliably solves the step:
 
-## 4. Configuration (IMPLEMENTED)
+1. **Tier 0 — held kernel state** (variables, prior results in context).
+2. **Tier 1 — deterministic shell/python/project command** (one-liner,
+   no model reasoning needed).
+3. **Tier 2 — existing Python-backed skill** (stable, tested, bounded).
+4. **Tier 3 — retained worker** (idle/completed child with usable context;
+   prefer reuse over respawn — no duplicate fresh child for the same task).
+5. **Tier 4 — fresh worker** (new task, no suitable retained child).
+6. **Tier 5 — adaptive fan-out** (independent workstreams; width from
+   `config/orchestration.toml [concurrency]`: default 1, ceiling 2, env
+   `SECOND_BRAIN_CONCURRENCY_CEILING`; no swarm without decomposition).
+7. **Tier 6 — recursion** (root -> worker -> specialist; this machine caps
+   child recursion at `RLM_MAX_DEPTH=1` — depth-2 delegation is
+   **BLOCKED**; record as `recursion_depth` telemetry; simple work never
+   recurses gratuitously).
 
-Env vars, comma-separated, trimmed/lowercased, empty items dropped; unset or
-all-empty falls back to the defaults (read at call time, `process.env` by
-default — same style as `orchestrator-guard.ts`):
+## 4. Delegation purity (comparative, not vanity)
 
-- `DRIVER_MODELS` — driver-role model-id substrings (default
-  `deepseek-v4-pro,gpt-5.6-luna`).
-- `WORKER_MODELS` — worker-role model-id substrings (default
-  `deepseek-v4-flash,qwen3.5`).
+Original plan target: **>= 99% delegation purity** (plan §19/20).
+Amendment §22: purity is measured and compared (baseline vs candidate), not
+worshipped. Formula (implemented in `brainctl orchestration record`):
 
-No file-based configuration; no new env vars beyond these two. The existing
-concurrency ceiling of the system (`config/skills.toml [router] max_active`,
-default 3) is not the driver contract's limit: the CONTRACT enforces a
-stricter 1-default / 2-max / never-3+ rule on the driver role itself.
+```text
+delegation_purity = 1 - (driver_execution_attempts + emergency_execution_actions) / driver_actions_total
+```
 
-## 5. Enforcement (IMPLEMENTED)
+A single trivial deterministic action is not a purity failure; repeated
+unnecessary driver execution is.
 
-- `src/index.ts` `before_agent_start` handler: role resolution, contract
-  append (driver only), recall composition (brief appended AFTER the contract
-  in one patch when the default-off recall hook is enabled), telemetry record
-  with `role` (always) and `driver_contract_injected` (driver only).
-- `src/sensors.ts` `beforeAgentStart`: additive optional `role` /
-  `driver_contract_injected` fields (schema v2, snake_case, additive per
-  `brainstem/telemetry/SCHEMA.md`).
-- Pure decision module `src/driver-orchestrator.ts` with no I/O; unit-tested
-  (`tests/driver-orchestrator.test.ts`); wiring tested
-  (`tests/wiring.test.ts`).
-- The Sol guard (`orchestrator-guard.ts`) is NOT modified; Sol isolation is
-  preserved by role precedence (hard_orchestrator wins) and by the handler
-  ordering (Sol branch returns before any driver/recall composition).
+## 5. Worker result contract (§12.8)
 
-## 6. Anti-recursion (IMPLEMENTED)
+Workers return concise structured evidence: Conclusion / Evidence /
+Files-symbols / Commands-tests / Changes / Uncertainty / Next action /
+Artifacts. No giant raw transcripts unless requested; raw evidence lives in
+files, kernel state, or the Brain artifact store (`state/artifacts`).
 
-Workers (and normal models) never receive the driver contract, so a spawned
-worker cannot itself act as a driver; `ORCHESTRATOR_MODELS`/`DRIVER_MODELS`
-defaults are disjoint from `WORKER_MODELS`, and role resolution is
-deterministic per model id. Operator overrides that put the same substring in
-both lists are possible but discouraged; precedence resolves ties in favor
-of the higher role.
+## 6. Driver review contract (§12.9)
+
+The driver verifies the worker answered the real task, inspects evidence
+quality, detects contradictions, asks targeted follow-ups, never blindly
+trusts, never redoes all worker work, and integrates only when evidence is
+sufficient.
+
+## 7. Independent verification (§12.7)
+
+For consequential changes: implementation owner -> artifacts/evidence ->
+**fresh verifier** (see `verifier-role.md`) -> driver acceptance. Verifier
+question: "If you did not know the original request, what problem would you
+infer this patch solves?" Compare against the real requirement. A verifier
+must not repeat the implementer's conclusion.
+
+## 8. Shared-file safety (§23)
+
+One writer per owned file/module at a time; explicit ownership + A2A
+coordination; verifiers normally inspect, not write; no blind simultaneous
+writers.
+
+## 9. Telemetry
+
+Per-turn orchestration counters recorded via
+`brainctl orchestration record` (privacy-safe JSONL in
+`telemetry/agent-performance/orchestration-<session>.jsonl`):
+driver_actions_total, driver_execution_attempts, blocked_execution_attempts,
+emergency_execution_actions, worker_tasks, worker_corrections,
+worker_verifications, fan_out_width, recursion_depth; delegation_purity
+computed and stored with each record.

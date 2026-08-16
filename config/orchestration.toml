@@ -1,0 +1,12 @@
+# orchestration.toml — P1 orchestration concurrency (Phase D; amendment §12.2)
+# Status: ADVISORY (policy text + telemetry today; no hard TS guard — the
+# Sol tool-guard in orchestrator-guard.ts blocks only bash/edit/websearch and
+# contains NO concurrency enforcement).
+# Local resource safety: never fan out without an explicit work
+# decomposition; on constrained hardware the ceiling should be 1.
+schema_version = 1
+
+[concurrency]
+default_active = 1          # default conservative fan-out width
+hard_ceiling = 2            # absolute ceiling (was the universal max-2 cap)
+# Env override: SECOND_BRAIN_CONCURRENCY_CEILING (highest precedence)

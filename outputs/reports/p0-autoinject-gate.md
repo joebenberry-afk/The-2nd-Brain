@@ -94,4 +94,43 @@ Seeded 4 genuine campaign memories (project `second-brain`, scope `p0-p2-campaig
 
 ## 9. Verdict
 
-**P0: PARTIAL.** All 12 gates have deterministic evidence (G1–G12 table) and control-path live evidence stands (pipeline INJECT 00:39:53Z with ledger row, restraint runs, Codex `additionalContext` live). The single outstanding item: **in-context model-visible observation of the `[BRAIN_CONTEXT_DELTA v1]` custom_message in a live Prime session** — not observed on the scheduled turn because the running Prime processes had loaded the pre-sync extension (no autoinject adapter; telemetry shows 0 `brain_*` records from the parent during the window). Exact next step: restart/create a Prime session after this gate (the synced extension loads), set `mode = "advisory"`, send a task containing e.g. "adaptive fan-out" — expect the packet custom_message + `brain_packet_delivered` telemetry, then flip back to shadow. Everything else — control path, adapters, ledger, fail-open, rollback (flipped 00:41:35Z) — is proven.
+**FINAL VERDICT: P0 = PARTIAL** (decided by campaign parent after 8 live observations).
+
+- **PASS:** G2–G12 (all deterministic gates, see table) + **G1 automatic arm** (pipeline fired at `before_agent_start` automatically and injected into the delivery ledger in every live observation — control path proven end-to-end live).
+- **OPEN (exactly 1 item):** G1 **in-context arm** — the `[BRAIN_CONTEXT_DELTA v1]` custom_message never became model-visible in an observed session.
+
+### Observation log (8 live observations)
+
+| # | Session | Window (Z) | Result |
+|---|---|---|---|
+| 1 | (window) 01a007b7… | 00:36–00:41 | no adapter in running processes (pre-sync extension) |
+| 2 | 01a00815-c7fb… | 01:00:42 | pipeline fired, INJECT 735t recorded, no message |
+| 3 | 01a00815… | 01:00:43 | 3 spawns (2 INJECT + WRONG_PROJECT), 0 extension_error, no message |
+| 4 | 01a0081e-6969… | 01:10:07 | 3 record shapes (C3/C4/C5-era modules), no message; worker recovery 01:10:37Z |
+| 5 | 01a00823-617e… | 01:15:32 | 4 module versions, INJECTs from C3-era processes, no message |
+| 6 | 01a00828-51e7… | 01:20:58 | 7 attempts, SAME task_sha256; no message; worker recovery 01:28:04Z |
+| 7 | 01a0082e-6d87… | 01:27:36 | impossible row (packet chars + result_patch=false) — torn module graph |
+| 8 | (C9 hardening) | 01:31 | invariant test shipped; retry recipe defined |
+
+### Root causes (documented, code-invariant-tested)
+
+1. **Host multi-emit last-wins:** `before_agent_start` is re-emitted ~4–8× per turn (agent-session.ts:5713-5727 overwrites `prepared.result` per emit; runner.ts:938-966 collects messages per emit); the final committed emit decides insertion.
+2. **Host worker recovery:** daemon logs show `Session worker is recovering` repeatedly (01:10:37Z, 01:28:04Z; agent.jsonl) — recovered workers load the extension at their start; long-lived workers keep stale module graphs; syncs during live loads can produce torn compiles (jiti, moduleCache:false).
+3. **Mixed module versions per session** (C3/C4/C5/C6/C7-era record shapes in single telemetry files) — per-process caches can't share; fixed with a file-backed, session-keyed emit cache (C6/C8).
+
+### Fixes applied (commits feda116..e29a897, working tree)
+
+C3 worker-role message return + catch hardening · C4 mode/result_patch instrumentation · C5 emit cache (TTL, emit_index) · C6 file-backed cross-process cache + deterministic message build · C7 message built from outcome.packet in ALL paths + real-output parse tests · C8 session-only cache key + prompt-head guard · C9 emitCacheHome env fallback + invariant vitest (`handler_returned_message=true implies the handler result carries the SAME message object` — the obs7 impossible row is now a test failure if reintroduced). vitest 242, pytest 699/2, ruff/pyright clean.
+
+### Retry recipe (future clean environment)
+
+1. Stop Prime entirely (TUI quit + kill daemon pids in `~/.prime/agent/logs/`); wait 10s; confirm no pre-sync worker survives.
+2. Sync extension only while no Prime process is running (backup + copy + 10/10 hash).
+3. `config/autoinject.toml` `[autoinject] mode = "advisory"`.
+4. Start Prime; spawn observer session; task contains the trigger phrase (e.g. "adaptive fan-out policy").
+5. Expected: ONE spawn, `cache_hit=true` from emit 2, `handler_returned_message=true`, packet in context.
+6. Flip back to shadow; if still absent after a clean run, P0 in-context arm is a host limitation (worker-recovery semantics) and stays PARTIAL by design.
+
+### Rollback (current state)
+
+`config/autoinject.toml` `mode = "shadow"` (set 00:41:35Z, confirmed); env `SECOND_BRAIN_AUTOINJECT_MODE=off` wins; Codex hooks uninstall via `scripts/uninstall-codex-hooks.ps1 [-RestoreBackup]`; extension backups `second-brain.bak-20260815-*` retained.
