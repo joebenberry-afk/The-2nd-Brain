@@ -22,6 +22,11 @@ import { join } from "node:path";
 import { extensionError } from "./sensors";
 
 export const MIRROR_DEFAULT_TIMEOUT_MS = 5000;
+/** P3-E fix: ONE bounded retry on transient ledger spawn failures (first-init
+ * races under mirror bursts). Delay between attempts. */
+export const MIRROR_RETRY_DELAY_MS = 150;
+/** Total spawn attempts per mirrored event (1 initial + 1 retry). */
+export const MIRROR_MAX_ATTEMPTS = 2;
 
 export interface MirrorResult {
   ok: boolean;
@@ -101,15 +106,16 @@ export function taskSha256(prompt: string): string {
  * venv (not a runtime — no-op, matches the autoinject adapter); resolves
  * {ok:false, error} on any spawn failure. NEVER throws, NEVER blocks.
  */
-export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
+export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
   const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) {
-    return Promise.resolve({ ok: true }); // no runtime installed -> silent no-op
+    return { ok: true }; // no runtime installed -> silent no-op
   }
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;
   env.SECOND_BRAIN_HOME = options.home;
+  // Payload is built ONCE; every retry re-sends the SAME byte-identical JSON.
   const json = buildMirrorEventJson(options.record);
   const appendArgs = [
     "-m",
@@ -158,50 +164,65 @@ export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
         child.stdin?.end();
       }
     });
-  // T-G6-F3: auto-init the ledger once per session BEFORE the first append
-  // (fire-and-forget chain; idempotent across races and recovered workers).
-  const ensureInit = initializedSessions.has(options.hostSessionId)
-    ? Promise.resolve({ error: undefined, stdout: "" })
-    : run(initArgs).then((result) => {
-        if (!result.error) initializedSessions.add(options.hostSessionId);
-        return result;
+  // One full init->append chain. P3-E fix: on ANY transient failure (init
+  // race under burst, locked append, unparsable output) the caller retries
+  // this chain ONCE after a short delay; fail-open is preserved (a second
+  // failure records the existing bounded error and never throws).
+  const attempt = (): Promise<MirrorResult> => {
+    // T-G6-F3: auto-init the ledger once per session BEFORE the first append
+    // (fire-and-forget chain; idempotent across races and recovered workers).
+    // Only added to the cache on SUCCESS, so a retry after a failed init
+    // re-runs the init chain.
+    const ensureInit = initializedSessions.has(options.hostSessionId)
+      ? Promise.resolve({ error: undefined, stdout: "" })
+      : run(initArgs).then((result) => {
+          if (!result.error) initializedSessions.add(options.hostSessionId);
+          return result;
+        });
+    return ensureInit.then((initResult) => {
+      if (initResult.error) {
+        return { ok: false, error: `ledger init: ${initResult.error}` };
+      }
+      return new Promise((resolve) => {
+        const child = execFile(
+          python,
+          appendArgs,
+          {
+            cwd: options.home,
+            env,
+            timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          },
+          (error, stdout) => {
+            if (error) {
+              resolve({ ok: false, error: error.message });
+              return;
+            }
+            try {
+              const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
+              if (parsed && parsed.error) {
+                resolve({ ok: false, error: String(parsed.error) });
+                return;
+              }
+              resolve({ ok: true });
+            } catch {
+              resolve({ ok: false, error: "ledger append returned unparsable output" });
+            }
+          },
+        );
+        child.stdin?.write(json);
+        child.stdin?.end();
       });
-  return ensureInit.then((initResult) => {
-    if (initResult.error) {
-      return { ok: false, error: `ledger init: ${initResult.error}` };
-    }
-    return new Promise((resolve) => {
-      const child = execFile(
-        python,
-        appendArgs,
-        {
-        cwd: options.home,
-        env,
-        timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
-        windowsHide: true,
-        maxBuffer: 1024 * 1024,
-      },
-      (error, stdout) => {
-        if (error) {
-          resolve({ ok: false, error: error.message });
-          return;
-        }
-        try {
-          const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
-          if (parsed && parsed.error) {
-            resolve({ ok: false, error: String(parsed.error) });
-            return;
-          }
-          resolve({ ok: true });
-        } catch {
-          resolve({ ok: false, error: "ledger append returned unparsable output" });
-        }
-      },
-    );
-    child.stdin?.write(json);
-    child.stdin?.end();
-  });
-  });
+    });
+  };
+  let result = await attempt();
+  if (!result.ok) {
+    // Bounded: exactly ONE retry (MIRROR_MAX_ATTEMPTS total spawn chains).
+    await new Promise((resolve) => setTimeout(resolve, MIRROR_RETRY_DELAY_MS));
+    result = await attempt();
+  }
+  return result;
 }
 
 /** Fire-and-forget wrapper used by index.ts: mirrors and records
