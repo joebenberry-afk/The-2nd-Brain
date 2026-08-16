@@ -574,6 +574,67 @@ describe("T-G6-F1/F2 mirror fixes", () => {
     expect(appends).toBe(2); // exactly one retry — bounded
   });
 
+  it("P3-E final: duplicate of THIS event after a persisted-but-failed first attempt resolves ok (no error record)", async () => {
+    const { home, python } = await fakeHome();
+    let appends = 0;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if (!(args as string[]).includes("append")) {
+        cb(null, '{"initialized":"x","schema_version":1}');
+        return {} as never;
+      }
+      appends += 1;
+      const child = {
+        stdin: {
+          write: (s: string) => {
+            // attempt 1: transient failure (event persisted anyway, e.g.
+            // crash between commit and stdout). attempt 2: the ledger's
+            // deterministic duplicate rejection for THE SAME event_id.
+            if (appends === 1) {
+              cb(new Error("Command failed: ledger append (transient)"));
+            } else {
+              const eventId = (JSON.parse(s) as { event_id: string }).event_id;
+              cb(null, `{"error":"brainctl: error: duplicate event_id: '${eventId}'"}`);
+            }
+          },
+          end: () => {},
+        },
+      };
+      return child as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-dup-ok",
+      record: { kind: "user_task", fields: { task_sha256: "abc", prompt_chars: 9 } },
+      python,
+    });
+    expect(result.ok).toBe(true); // event is durable in the ledger — delivery succeeded
+    expect(result.error).toBeUndefined();
+    expect(appends).toBe(2); // retry still bounded to exactly one
+  });
+
+  it("P3-E final: a duplicate of a DIFFERENT event is still a real error (fail-open, bounded)", async () => {
+    const { home, python } = await fakeHome();
+    let appends = 0;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if (!(args as string[]).includes("append")) {
+        cb(null, '{"initialized":"x","schema_version":1}');
+        return {} as never;
+      }
+      appends += 1;
+      cb(null, `{"error":"brainctl: error: duplicate event_id: 'mirror-other-${appends}-00000000-0000-0000-0000-000000000000'"}`);
+      return {} as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-dup-other",
+      record: { kind: "turn_end", fields: { turn_index: 0, tool_results: 0 } },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("duplicate event_id");
+    expect(appends).toBe(2); // bounded retry still applies to real errors
+  });
+
   it("P3-E fix: init failure is retried once too (init chain re-runs on retry)", async () => {
     const { home, python } = await fakeHome();
     resetMirrorInitCache();
