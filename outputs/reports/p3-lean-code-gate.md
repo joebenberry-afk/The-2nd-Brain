@@ -290,5 +290,10 @@ numbers are NOT comparable to window 2 and must not be used for verdicts.
 5. **AutoInject ACTIVE**: `config/autoinject.toml [autoinject] mode = active`
    (untouched by P3).
 
-Final suite counts (P3-J): pytest full 760+ passed; vitest 369/369; tsc 0;
-eslint 0; ruff 0; pyright 0; doctor 16/16.
+Final suite counts (P3-J, exact): pytest full **765 passed, 2 skipped**
+(190s); vitest **369/369**; tsc 0; eslint 0; **ruff clean** on src+tests
+(two pre-existing line-length findings in tests/test_router.py fixed —
+formatting only, router tests still green); pyright: **src clean**, tests
+carry 3 pre-existing StubConn-typing errors in tests/test_memory_index.py
+(untouched by P3, present at baseline); doctor **16 checks, 0 failed,
+2 known warnings** (PYTHONHOME shim + rg not on PATH).
