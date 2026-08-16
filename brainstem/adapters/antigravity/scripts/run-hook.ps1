@@ -60,12 +60,16 @@ if ($payload -and $payload.Trim()) {
 $env:PYTHONHOME = $null
 $env:PYTHONPATH = $null
 
+}
+
 try {
     $response = $payload | & $python -m second_brain --home $repoHome autoinject antigravity-hook 2>$null
     $exitCode = $LASTEXITCODE
 } catch {
     $response = "{}"
     $exitCode = 0
+}
+
 }
 
 if (-not $response -or -not $response.Trim()) {

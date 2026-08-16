@@ -99,8 +99,28 @@ if ($identical) {
     if (Test-Path $TargetDir) { Remove-Item -Recurse -Force $TargetDir }
     New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
     Copy-Item -Recurse -Force (Join-Path $Src "*") $TargetDir
-    Write-Host "Installed Second Brain Antigravity adapter to $TargetDir"
+
+    # Post-copy integrity: every copied file must be non-empty and byte-identical.
+    $mismatch = $false
+    Get-ChildItem -Recurse -File $Src | ForEach-Object {
+        $rel = $_.FullName.Substring($Src.Length).TrimStart("\\")
+        $dst = Join-Path $TargetDir $rel
+        if (-not (Test-Path $dst) -or (Get-Item $dst).Length -eq 0) {
+            Write-Warning "MISSING/EMPTY after copy: $rel"
+            $mismatch = $true
+        } elseif ((Get-FileHash $_.FullName).Hash -ne (Get-FileHash $dst).Hash) {
+            Write-Warning "HASH MISMATCH after copy: $rel"
+            $mismatch = $true
+        }
+    }
+    if ($mismatch) {
+        Write-Warning "Install incomplete; re-run after fixing the source."
+        exit 5
+    }
+    Write-Host "Installed Second Brain Antigravity adapter to $TargetDir (hashes verified)"
     Write-Host "Pre-install backup: $BackupDir"
 }
+Write-Host "IMPORTANT: do NOT run 'agy plugin import' against this plugin dir (it truncates plugin files)."
+Write-Host "Use 'agy plugin install <repo>/brainstem/adapters/antigravity' for the CLI."
 Write-Host "Next: enable the plugin in Antigravity (Settings -> Skills & Customizations -> Plugins) and verify hooks are listed."
 exit 0

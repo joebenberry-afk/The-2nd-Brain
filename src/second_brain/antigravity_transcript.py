@@ -49,10 +49,41 @@ def _content_text(content: object) -> str | None:
     return None
 
 
+_REAL_USER_SOURCES = {"user_explicit", "user", "human"}
+_REAL_USER_TYPES = {"user_input", "user", "user_message"}
+
+
+def _unwrap_user_request(content: str) -> str:
+    """Extract the task text from the real Antigravity <USER_REQUEST> wrapper."""
+    import re
+
+    m = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.S)
+    if m:
+        return m.group(1).strip()
+    # drop trailing <ADDITIONAL_METADATA>...</ADDITIONAL_METADATA> if present
+    idx = content.find("<ADDITIONAL_METADATA>")
+    if idx > 0:
+        content = content[:idx]
+    return content.strip()
+
+
 def _line_user_text(line: dict) -> str | None:
     """Return the user task text from one parsed JSONL line, or None."""
     if not isinstance(line, dict):
         return None
+    # Real Antigravity transcript schema: source/type based (e.g.
+    # {"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "<USER_REQUEST>..."}).
+    source = str(line.get("source") or "").strip().lower()
+    line_type = str(line.get("type") or "").strip().lower()
+    if source in _REAL_USER_SOURCES and line_type in _REAL_USER_TYPES:
+        content = line.get("content")
+        if isinstance(content, str) and content.strip():
+            return _unwrap_user_request(content)
+        return _content_text(content)
+    if line_type == "user_input":
+        content = line.get("content")
+        if isinstance(content, str) and content.strip():
+            return _unwrap_user_request(content)
     line_type = str(line.get("type") or "").strip().lower()
     if line_type in _SKIP_TYPES:
         return None
