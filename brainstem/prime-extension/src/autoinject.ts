@@ -213,7 +213,10 @@ function emitKey(sessionId: string): string {
 }
 
 function promptHead(task: string): string {
-  return task.slice(0, 64);
+  // Phase C10 (verifier): 128-char guard window — long enough that trailing
+  // metadata (timestamps, retry markers) almost never lands inside it while
+  // still cheap to compare.
+  return task.slice(0, 128);
 }
 
 function lookupEmitEntry(sessionId: string, task: string): AutoInjectEmitEntry | undefined {
@@ -368,6 +371,12 @@ export interface ShadowAutoInjectCall {
   branchId?: string;
   roleProfile?: string;
   cfg: AutoInjectHostConfig;
+  /**
+   * Telemetry sink. Assumed non-throwing: TelemetryStore.append is
+   * fire-and-forget — unserializable records are dropped and write failures
+   * are swallowed by its internal promise chain (storage.ts) — so callers
+   * may invoke it outside try/catch.
+   */
   append: (record: unknown) => void;
   runner?: (options: AutoInjectRunOptions) => Promise<AutoInjectShadowOutcome | null>;
 }
@@ -515,17 +524,13 @@ function serveEmitCacheHit(
   entry.message = message;
   if (entry.emits === 2) {
     // One extra record per key on the first hit (emit_stability marker);
-    // later re-emits stay silent (no per-emit rows).
+    // later re-emits stay silent (no per-emit rows). Phase C10 (verifier):
+    // result_patch / handler_returned_message must be true ONLY in
+    // advisory/active — a shadow cache hit never returned a patch, and
+    // telemetry must never claim one.
     if (entry.outcome !== null) {
-      appendDecisionRecord(
-        call,
-        entry.outcome,
-        0,
-        mode,
-        message !== undefined,
-        entry.emits,
-        true,
-      );
+      const returnedPatch = (mode === "advisory" || mode === "active") && message !== undefined;
+      appendDecisionRecord(call, entry.outcome, 0, mode, returnedPatch, entry.emits, true);
     }
   }
   return message;

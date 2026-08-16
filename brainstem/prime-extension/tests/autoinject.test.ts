@@ -454,6 +454,51 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     expect(advisoryRunMock).not.toHaveBeenCalled();
   });
 
+  it("config FILE mode=advisory + env unset -> ADVISORY branch runs (C10 verifier fix)", async () => {
+    // The branch decision must read the config file via config.home: with
+    // env unset and [autoinject] mode = "advisory" in the brain's
+    // config/autoinject.toml, the awaited advisory path runs (not shadow).
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-filemode-"));
+    const configDir = joinTmp(home, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(joinTmp(configDir, "autoinject.toml"), "[autoinject]\nmode = \"advisory\"\n");
+    process.env.SECOND_BRAIN_HOME = home;
+    delete process.env.SECOND_BRAIN_AUTOINJECT_MODE;
+    const handlers = loadFactory();
+    advisoryRunMock.mockResolvedValueOnce({
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "packet-text",
+      display: true,
+      details: { delivery_id: "del-1", packet_tokens: 10 },
+    });
+    const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out policy" }, ctx);
+    expect(result).toEqual({
+      message: {
+        customType: AUTOINJECT_CUSTOM_TYPE,
+        content: "packet-text",
+        display: true,
+        details: { delivery_id: "del-1", packet_tokens: 10 },
+      },
+    });
+    expect(advisoryRunMock).toHaveBeenCalledTimes(1);
+    expect(shadowRunMock).not.toHaveBeenCalled();
+  });
+
+  it("config FILE mode=shadow + env unset -> SHADOW branch runs", async () => {
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-filemode2-"));
+    const configDir = joinTmp(home, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(joinTmp(configDir, "autoinject.toml"), "[autoinject]\nmode = \"shadow\"\n");
+    process.env.SECOND_BRAIN_HOME = home;
+    delete process.env.SECOND_BRAIN_AUTOINJECT_MODE;
+    const handlers = loadFactory();
+    shadowRunMock.mockResolvedValue(undefined);
+    const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out policy" }, ctx);
+    expect(result).toBeUndefined();
+    expect(shadowRunMock).toHaveBeenCalledTimes(1);
+    expect(advisoryRunMock).not.toHaveBeenCalled();
+  });
+
   it("advisory worker role returns a bare { message } patch (FIX 1)", async () => {
     process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-w-"));
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
@@ -611,10 +656,27 @@ describe("emit stability (Phase C5)", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
+  it("shadow cache-hit record: result_patch=false even when outcome has a packet (C10 verifier)", async () => {
+    // The shadow spawn outcome carries an INJECT packet (makeCall default),
+    // but shadow never returns a patch: the first-hit record must claim
+    // result_patch=false + handler_returned_message=false.
+    const { callObj, append, runner } = makeCall("shadow");
+    await realRunShadowAutoInject(callObj);
+    await realRunShadowAutoInject(callObj); // cache hit -> marker record
+    expect(runner).toHaveBeenCalledTimes(1);
+    const hit = append.mock.calls.find(
+      (c) => (c[0] as Record<string, unknown>).cache_hit === true,
+    )?.[0] as Record<string, unknown>;
+    expect(hit).toBeDefined();
+    expect(hit.result_patch).toBe(false);
+    expect(hit.handler_returned_message).toBe(false);
+  });
+
   it("3 re-emits with varying trailing prompt metadata -> ONE spawn, identical message (Phase C8)", async () => {
     const { callObj, runner } = makeCall("advisory");
-    // > 64 chars so appended metadata lands AFTER the prompt-head guard window
-    const base = "adaptive fan-out policy for the P1 orchestration design with recursion blocked";
+    // > 128 chars so appended metadata lands AFTER the prompt-head guard window
+    const base =
+      "adaptive fan-out policy for the P1 orchestration design with recursion blocked and retained worker reuse across multiple independent workstreams";
     const first = await realRunAdvisoryAutoInject({ ...callObj, task: base });
     const second = await realRunAdvisoryAutoInject({
       ...callObj,
