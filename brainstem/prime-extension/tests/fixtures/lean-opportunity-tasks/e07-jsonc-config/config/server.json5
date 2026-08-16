@@ -1,0 +1,6 @@
+{
+  // server settings — comments allowed
+  "host": "localhost",
+  "port": 8080,   // trailing comma ok
+  "url": "http://example.com//docs",
+}
