@@ -639,6 +639,38 @@ describe("emit stability (Phase C5)", () => {
     expect(runner).toHaveBeenCalledTimes(2);
   });
 
+  it("INVARIANT: handler_returned_message=true implies the handler result carries the SAME message object", async () => {
+    // For every INJECT outcome the record flag must equal (message returned),
+    // and when true the returned object is the message that was recorded as
+    // returned — the flag can never be false while a packet was parsed.
+    const { callObj, append, runner } = makeCall("advisory");
+    const result = await realRunAdvisoryAutoInject(callObj);
+    const record = append.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(record.handler_returned_message).toBe(result !== undefined);
+    expect(record.result_patch).toBe(result !== undefined);
+    expect(result).toBeDefined();
+    expect(result?.content.length).toBeGreaterThan(0);
+    // NO_INJECTION outcome: flag false, no message.
+    runner.mockResolvedValueOnce({
+      decision: "NO_INJECTION",
+      reason: "NO_RELEVANT_MEMORY",
+      packet: null,
+      packetTokens: null,
+      deliveryId: null,
+      candidateCount: 0,
+      selectedCount: 0,
+      packetSha256: null,
+      cliPacketChars: null,
+      cliStdoutChars: 489,
+    });
+    resetAutoInjectEmitCache();
+    const call2 = { ...callObj, session: "s-inv2" };
+    const result2 = await realRunAdvisoryAutoInject(call2);
+    expect(result2).toBeUndefined();
+    const rec2 = append.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(rec2.handler_returned_message).toBe(false);
+  });
+
   it("REAL captured CLI output through the advisory pipeline -> message returned, handler_returned_message=true", async () => {
     const out = parseShadowOutput(REAL_CLI_INJECT_OUTPUT);
     expect(out).not.toBeNull();
