@@ -94,7 +94,26 @@ Seeded 4 genuine campaign memories (project `second-brain`, scope `p0-p2-campaig
 
 ## 9. Verdict
 
-**FINAL VERDICT: P0 = PARTIAL** (decided by campaign parent after 8 live observations).
+**FINAL VERDICT: P0 = PASS** (upgraded 2026-08-16T01:46Z after observer9).
+
+### Observer9 evidence (G1 in-context arm — PROVEN LIVE)
+
+- Session `01a0083f-9c36-7340-8143-7b77c4b28b31`, task turn 01:46:23Z, config `mode = "advisory"` (env `SECOND_BRAIN_AUTOINJECT_MODE` unset — config file as sole source, the C10 regression).
+- Key telemetry row (`autoinject_shadow_decision`): decision=INJECT, mode=advisory, result_patch=true, handler_returned_message=true, cli_packet_chars=2942, cli_stdout_chars=3478, packet_tokens=735, delivery `del-d2fc634d444b438f5671f765`, emit_index=1, cache_hit=false.
+- The observer's context received the full packet: `[BRAIN_CONTEXT_DELTA v1]` header, `packet_id: pkt-…`, `authority: advisory`, source_count=5, items incl. `mem-b67de5057f76 v2` with the `UPDATE mem-b67de5057f76 v2 supersedes mem-b67de5057f76 v1` delta (G3 supersede live), statuses current/uncertain as graded.
+- Config flipped back to `mode = "shadow"` at 01:46:44Z (rollback confirmed).
+
+### The verifier's role (why P0 took 10 rounds)
+
+A **fresh verifier** (independent of the 8 observations) found the MEDIUM root cause that all 8 observations missed: the `before_agent_start` branch called `loadAutoInjectHostConfig()` with no home (index.ts:323/336) → env-only mode → the config-file flip switch was inert → every advisory window silently ran the SHADOW branch (fire-and-forget, no patch) while telemetry records claimed mode=advisory (from the other cfg). Fixed in C10 (commit `b013650`): both call sites pass `config.home`; shadow cache-hit records now honestly report result_patch=false; prompt-head guard extended to 128 chars. The 8-observation history above stands as dogfood evidence of the debug loop (multi-emit last-wins, worker recovery, torn module graphs were real secondary factors).
+
+### Recall-precision note (not a gate failure)
+
+Observer9's `or_fallback` union included the untagged SZ item `mem-ae7a34f105c5` for this campaign task — the OR-fallback recall tradeoff (broader recall, budget-bounded by hard cap 2000/`_MAX_CANDIDATES`). Flagged for future tuning (per-topic intent splitting or tag-weighted union ranking), not a P0 gate failure: the packet stayed bounded and low-authority.
+
+### Verifier-cycle orchestration telemetry
+
+Recorded 2026-08-16T01:4xZ via `brainctl orchestration record --session verifier-cycle`: `{"kind":"orchestration_record","delegation_purity":1.0,"driver_actions_total":2,"driver_execution_attempts":0,"worker_tasks":2,"worker_verifications":1,"fan_out_width":2,"recursion_depth":0,...}` at `telemetry/agent-performance/orchestration-verifier-cycle.jsonl` (derived data, gitignored).
 
 - **PASS:** G2–G12 (all deterministic gates, see table) + **G1 automatic arm** (pipeline fired at `before_agent_start` automatically and injected into the delivery ledger in every live observation — control path proven end-to-end live).
 - **OPEN (exactly 1 item):** G1 **in-context arm** — the `[BRAIN_CONTEXT_DELTA v1]` custom_message never became model-visible in an observed session.
