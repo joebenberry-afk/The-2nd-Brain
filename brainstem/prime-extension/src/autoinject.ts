@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoinjectShadowDecision, extensionError } from "./sensors";
 
@@ -39,11 +39,51 @@ export interface AutoInjectHostConfig {
   timeoutMs: number;
 }
 
-export function loadAutoInjectHostConfig(): AutoInjectHostConfig {
-  const raw = (process.env.SECOND_BRAIN_AUTOINJECT_MODE ?? "shadow").trim().toLowerCase();
+/**
+ * Read `[autoinject] mode` from `<home>/config/autoinject.toml` using the
+ * same tiny TOML-subset parser style as config.ts (`[section]` headers,
+ * `key = value` lines, `#` comments). Returns undefined when home is null,
+ * the file is missing/unreadable, or the key is absent/invalid. The file is
+ * the LIVE FLIP SWITCH (Phase C): editing it takes effect on the next event
+ * without redeploying; rollback = set `mode = "shadow"`.
+ */
+export function modeFromAutoinjectToml(text: string): AutoInjectMode | undefined {
+  let inAutoinject = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inAutoinject = line.startsWith("[autoinject]");
+      continue;
+    }
+    if (!inAutoinject || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (key !== "mode") continue;
+    const value = line.slice(eq + 1).split("#")[0].trim().replace(/^"|"$/g, "").toLowerCase();
+    if (AUTOINJECT_MODE_OFF_VALUES.has(value)) return "off";
+    if (value === "advisory" || value === "active") return value;
+    if (value === "shadow") return "shadow";
+    return undefined;
+  }
+  return undefined;
+}
+
+export function loadAutoInjectHostConfig(home?: string | null): AutoInjectHostConfig {
+  // Precedence: env override > config/autoinject.toml [autoinject] mode > shadow.
+  const envRaw = (process.env.SECOND_BRAIN_AUTOINJECT_MODE ?? "").trim().toLowerCase();
   let mode: AutoInjectMode = "shadow";
-  if (AUTOINJECT_MODE_OFF_VALUES.has(raw)) mode = "off";
-  else if (raw === "advisory" || raw === "active") mode = raw;
+  if (envRaw !== "") {
+    if (AUTOINJECT_MODE_OFF_VALUES.has(envRaw)) mode = "off";
+    else if (envRaw === "advisory" || envRaw === "active") mode = envRaw;
+  } else if (home) {
+    try {
+      const text = readFileSync(join(home, "config", "autoinject.toml"), "utf8");
+      mode = modeFromAutoinjectToml(text) ?? "shadow";
+    } catch {
+      // missing/unreadable file -> shadow (fail safe)
+    }
+  }
   const parsed = Number(process.env.SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS ?? AUTOINJECT_DEFAULT_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(parsed) && parsed > 0 ? parsed : AUTOINJECT_DEFAULT_TIMEOUT_MS;
   return { mode, timeoutMs };

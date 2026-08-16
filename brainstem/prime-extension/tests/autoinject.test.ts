@@ -7,6 +7,7 @@
  * - wiring: real factory + fake ExtensionAPI — handlers return undefined and
  *   the shadow runner is called with the event task (no packet in any return).
  */
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as joinTmp } from "node:path";
@@ -99,6 +100,23 @@ describe("loadAutoInjectHostConfig", () => {
   it("falls back on invalid timeout", () => {
     process.env.SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS = "bogus";
     expect(loadAutoInjectHostConfig().timeoutMs).toBe(AUTOINJECT_DEFAULT_TIMEOUT_MS);
+  });
+  it("reads mode from config/autoinject.toml [autoinject] when env unset", async () => {
+    delete process.env.SECOND_BRAIN_AUTOINJECT_MODE;
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-cfg-"));
+    const configDir = joinTmp(home, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(joinTmp(configDir, "autoinject.toml"), "[autoinject]\nmode = \"advisory\"\n");
+    expect(loadAutoInjectHostConfig(home).mode).toBe("advisory");
+    expect(loadAutoInjectHostConfig().mode).toBe("shadow"); // absent file -> shadow
+  });
+  it("env overrides config file", async () => {
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "active";
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-cfg-"));
+    const configDir = joinTmp(home, "config");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(joinTmp(configDir, "autoinject.toml"), "[autoinject]\nmode = \"shadow\"\n");
+    expect(loadAutoInjectHostConfig(home).mode).toBe("active");
   });
 });
 
