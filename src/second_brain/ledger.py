@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import semantic
 from .contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
@@ -40,9 +42,35 @@ from .contracts import (
     canonical_json,
 )
 from .errors import BrainError
-from .security.paths import resolve_under
+from .security.paths import assert_safe_recursive_delete, resolve_under
 
 LEDGER_SCHEMA_VERSION = 1
+
+_DEFAULT_RETENTION: dict[str, Any] = {
+    "inactive_grace_minutes": 10080,
+    "max_single_session_bytes": 104857600,
+    "max_total_session_bytes": 1073741824,
+    "auto_extract_before_purge": True,
+    "preserve_pinned": True,
+}
+
+
+def load_retention_config(home: Path | str) -> dict[str, Any]:
+    """config/session-retention.toml [retention]; absent/invalid -> defaults."""
+    import tomllib
+
+    out = dict(_DEFAULT_RETENTION)
+    path = Path(home) / "config" / "session-retention.toml"
+    if path.is_file():
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+            section = data.get("retention") or {}
+            for key in out:
+                if key in section and isinstance(section[key], (int, float, bool)):
+                    out[key] = section[key]
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+    return out
 LEDGER_ADAPTER_NAME = "second-brain"
 LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
@@ -1196,3 +1224,401 @@ def checkpoint_ledger(store: LedgerStore) -> dict[str, Any]:
         return {"ok": ok, "durability": "flushed", "integrity": integrity}
     except Exception as exc:  # fail open to a failure flag, never raise
         return {"ok": False, "durability": "failed", "error": str(exc)}
+
+# ---------------------------------------------------------------------------
+# Session lifecycle: crash recovery, retention, finalization, purge
+# (plan §11.3, §12, §13.3, §17.6/§17.7; amendment §19.4; Phase G/T-G5).
+# ---------------------------------------------------------------------------
+
+SESSION_STATUSES = (
+    "active",
+    "inactive_grace",
+    "finalizing",
+    "extracted",
+    "purged",
+    "degraded",
+)
+# Allowed transitions (order + special cases); PINNED is the sessions.pinned
+# flag, orthogonal to status.
+_STATUS_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "active": ("inactive_grace", "finalizing", "degraded"),
+    "inactive_grace": ("finalizing", "active", "degraded"),
+    "finalizing": ("extracted", "active", "degraded"),
+    "extracted": ("purged",),
+    "degraded": ("active", "inactive_grace", "finalizing"),
+}
+
+
+class SessionLifecycleError(BrainError):
+    """Invalid session status transition or purge precondition."""
+
+
+def _load_manifest(session_path: Path) -> dict[str, Any]:
+    try:
+        return json.loads((session_path / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BrainError(f"manifest unreadable for {session_path.name}: {exc}") from exc
+
+
+def _write_manifest_status(session_path: Path, status: str) -> None:
+    manifest = _load_manifest(session_path)
+    manifest["status"] = status
+    tmp = session_path / "manifest.json.tmp"
+    tmp.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
+    os.replace(tmp, session_path / "manifest.json")
+
+
+def _write_manifest_pinned(session_path: Path, pinned: bool) -> None:
+    manifest = _load_manifest(session_path)
+    manifest["pinned"] = pinned
+    tmp = session_path / "manifest.json.tmp"
+    tmp.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
+    os.replace(tmp, session_path / "manifest.json")
+
+
+class SessionLifecycle:
+    """Recovery + retention + finalization + purge for one session ledger."""
+
+    def __init__(self, home: Path | str, host_session_id: str) -> None:
+        self._home = Path(home)
+        self._host_session_id = host_session_id
+        self._internal = internal_session_id(host_session_id)
+        self._dir = session_dir(home, host_session_id)
+
+    @property
+    def session_path(self) -> Path:
+        return self._dir
+
+    # -- status -------------------------------------------------------------
+
+    def mark_status(self, status: str) -> None:
+        if status not in SESSION_STATUSES:
+            raise SessionLifecycleError(f"unknown session status {status!r}")
+        current = self.status()
+        if status != current and status not in _STATUS_TRANSITIONS.get(current, ()):
+            raise SessionLifecycleError(
+                f"invalid transition {current!r} -> {status!r}"
+            )
+        with LedgerStore(self._home, self._host_session_id).open() as store:
+            assert store._conn is not None
+            store._conn.execute(
+                "UPDATE sessions SET status = ? WHERE internal_session_id = ?",
+                (status, self._internal),
+            )
+            store._conn.commit()
+        _write_manifest_status(self._dir, status)
+
+    def status(self) -> str:
+        manifest = _load_manifest(self._dir)
+        return str(manifest.get("status") or "active")
+
+    def pin(self, pinned: bool) -> None:
+        with LedgerStore(self._home, self._host_session_id).open() as store:
+            assert store._conn is not None
+            store._conn.execute(
+                "UPDATE sessions SET pinned = ? WHERE internal_session_id = ?",
+                (1 if pinned else 0, self._internal),
+            )
+            store._conn.commit()
+        _write_manifest_pinned(self._dir, pinned)
+
+    def is_pinned(self) -> bool:
+        return bool(_load_manifest(self._dir).get("pinned"))
+
+    # -- crash recovery (plan §11.3, §17.6) ---------------------------------
+
+    def recover_report(self) -> dict[str, Any]:
+        """Detect interrupted compaction brackets, unclosed segments, and
+        tool crash states; append ONE recovery finding event when an
+        interrupted compaction is found. Returns the report (no fabrication).
+        """
+        with LedgerStore(self._home, self._host_session_id).open() as store:
+            assert store._conn is not None
+            rows = store._conn.execute(
+                "SELECT * FROM events ORDER BY seq"
+            ).fetchall()
+            events = [_row_to_event(r) for r in rows]
+            starts = [e for e in events if e.event_type is LifecycleEventType.COMPACTION_STARTED]
+            completions = {
+                e.parent_event_id
+                for e in events
+                if e.event_type is LifecycleEventType.COMPACTION_COMPLETED
+            }
+            closed_by_recovery = {
+                e.parent_event_id
+                for e in events
+                if e.event_type is LifecycleEventType.FINDING
+                and str(e.payload.get("kind") or "") == "recovery"
+            }
+            unclosed = [
+                e
+                for e in starts
+                if e.event_id not in completions and e.event_id not in closed_by_recovery
+            ]
+            unclosed_segments = [
+                dict(r)
+                for r in store._conn.execute(
+                    "SELECT * FROM segments WHERE active = 1"
+                ).fetchall()
+            ]
+            tools = classify_tool_outcome(events)
+            outcome_unknown = [
+                {"tool": t, "guidance": d["guidance"]}
+                for t, d in tools.items()
+                if d["state"] == ToolOutcome.TOOL_OUTCOME_UNKNOWN.value
+            ]
+            not_started = [
+                {"tool": t, "guidance": d["guidance"]}
+                for t, d in tools.items()
+                if d["state"] == ToolOutcome.TOOL_NOT_STARTED.value
+            ]
+            wal_exists = (self._dir / "ledger.sqlite-wal").is_file()
+            if unclosed:
+                # explicit recovery event (plan §11.3)
+                next_seq = int(
+                    store._conn.execute(
+                        "SELECT COALESCE(MAX(seq), 0) FROM events"
+                    ).fetchone()[0]
+                ) + 1
+                store.append_events(
+                    [
+                        BrainLifecycleEvent(
+                            seq=next_seq,
+                            event_id=f"recovery-{_now()}",
+                            internal_session_id=self._internal,
+                            agent_id="unknown",
+                            parent_event_id=unclosed[-1].event_id,
+                            event_type=LifecycleEventType.FINDING,
+                            timestamp=_now(),
+                            surface_visibility=SurfaceVisibility.RAW_ONLY,
+                            ignorable=False,
+                            payload={
+                                "kind": "recovery",
+                                "note": f"interrupted compaction {unclosed[-1].event_id}",
+                            },
+                        )
+                    ]
+                )
+            return {
+                "unclosed_compaction": [e.event_id for e in unclosed],
+                "unclosed_segments": [s["segment_id"] for s in unclosed_segments],
+                "tool_outcome_unknown": outcome_unknown,
+                "tool_not_started": not_started,
+                "wal_recovered": wal_exists,
+            }
+
+    # -- finalization/extraction (plan §12.2) --------------------------------
+
+    def extract_durable(self, *, project_id: str | None = None) -> list[str]:
+        """Writeback-style durable extraction: create CANDIDATE memories from
+        continuation-capsule decisions/findings ONLY (never raw events), with
+        provenance pointers. Returns memory ids; raises on failure (caller
+        must verify before purge)."""
+        with LedgerStore(self._home, self._host_session_id).open() as store:
+            assert store._conn is not None
+            capsule = store.continuation_capsule()
+        created: list[str] = []
+        for decision in capsule.get("decisions", []):
+            title = str(decision.get("decision") or "Extracted decision")
+            body = str(decision.get("rationale") or title)
+            if not title.strip() or (
+                title == "Extracted decision" and not decision.get("decision")
+            ):
+                continue
+            mid = semantic.add_memory(
+                self._home,
+                title[:200],
+                body[:2000],
+                scope="project",
+                project_id=project_id or "default",
+                grade="OBSERVED",
+                sources=[
+                    {"ref": f"session:{self._host_session_id}", "kind": "episode"},
+                    {"ref": f"ledger:{decision.get('event_id')}", "kind": "evidence"},
+                ],
+                summary="Extracted at session finalization (plan §12.2)",
+            )
+            created.append(mid)
+        return created
+
+    # -- purge (plan §13.3/§13.4, §17.7) -------------------------------------
+
+    def purge(
+        self,
+        *,
+        inactive: bool = False,
+        dry_run: bool = False,
+        retention: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        retention = retention or {}
+        auto_extract = bool(retention.get("auto_extract_before_purge", True))
+        preserve_pinned = bool(retention.get("preserve_pinned", True))
+
+        if not self._dir.is_dir():
+            raise SessionLifecycleError(f"session ledger missing: {self._host_session_id!r}")
+        manifest = _load_manifest(self._dir)
+        if manifest.get("internal_id") != self._internal:
+            raise SessionLifecycleError("manifest identity mismatch: refusing purge")
+        if manifest.get("host_session_id") != self._host_session_id:
+            raise SessionLifecycleError("manifest host identity mismatch: refusing purge")
+        status = self.status()
+        pinned = self.is_pinned()
+        if preserve_pinned and pinned:
+            raise SessionLifecycleError("pinned session: refusing purge")
+        allowed = status in ("finalizing", "extracted") or (inactive and status == "inactive_grace")
+        if not allowed:
+            raise SessionLifecycleError(
+                f"session status {status!r} not purgeable (need finalizing/extracted or --inactive)"
+            )
+
+        extracted_ids: list[str] = []
+        if auto_extract and status != "extracted":
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "action": "extract+purge",
+                    "status": status,
+                    "extract": True,
+                    "reason": "auto_extract_before_purge",
+                }
+            if status in ("active", "inactive_grace"):
+                self.mark_status("finalizing")  # state machine path to extraction
+            try:
+                extracted_ids = self.extract_durable()
+            except Exception as exc:  # extraction failure must block purge
+                raise SessionLifecycleError(
+                    f"extraction failed ({exc}); refusing purge"
+                ) from exc
+            if not extracted_ids and self._has_decisions():
+                raise SessionLifecycleError("extraction produced no memories: refusing purge")
+            self.mark_status("extracted")
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "action": "purge",
+                "status": status,
+                "extracted": extracted_ids,
+            }
+
+        # safety (plan §13.3): strict containment + identity + symlink policy
+        target = assert_safe_recursive_delete(
+            self._dir,
+            required_parent=self._home / "state" / "sessions",
+            forbidden_roots=(self._home,),
+            expected_name=self._internal,
+        )
+        shutil.rmtree(target)
+
+        receipt_id = f"purge-{_now()}"
+        self._write_receipt(
+            receipt_id,
+            status_before=status,
+            extracted_ids=extracted_ids,
+            reason="retention" if not inactive else "user-inactive",
+        )
+        return {
+            "purged": self._host_session_id,
+            "receipt_id": receipt_id,
+            "extracted_memory_ids": extracted_ids,
+        }
+
+    def _has_decisions(self) -> bool:
+        try:
+            with LedgerStore(self._home, self._host_session_id).open() as store:
+                assert store._conn is not None
+                row = store._conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_type IN ('decision', 'finding')"
+                ).fetchone()
+                return int(row[0]) > 0
+        except BrainError:
+            return False
+
+    def _write_receipt(
+        self, receipt_id: str, *, status_before: str, extracted_ids: list[str], reason: str
+    ) -> None:
+        from . import db as db_mod
+
+        home_path = Path(self._home)
+        db_mod.migrate(db_mod.db_path(home_path))
+        conn = db_mod.connect(db_mod.db_path(home_path))
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO purge_receipts (receipt_id, internal_session_id, "
+                " host_session_id, status_before, extracted_memory_ids, purged_at, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    receipt_id,
+                    self._internal,
+                    self._host_session_id,
+                    status_before,
+                    canonical_json(extracted_ids),
+                    _now(),
+                    reason,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def list_sessions(home: Path | str) -> list[dict[str, Any]]:
+    """All session ledgers from manifests + canonical purge receipts."""
+    from . import db as db_mod
+
+    root = Path(home) / "state" / "sessions"
+    out: list[dict[str, Any]] = []
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or not (child / "manifest.json").is_file():
+                continue
+            try:
+                manifest = _load_manifest(child)
+            except BrainError:
+                continue
+            out.append(
+                {
+                    "host_session_id": manifest.get("host_session_id"),
+                    "internal_id": manifest.get("internal_id"),
+                    "status": manifest.get("status") or "active",
+                    "pinned": bool(manifest.get("pinned")),
+                    "created_at": manifest.get("created_at"),
+                }
+            )
+    try:
+        home_path = Path(home)
+        db_mod.migrate(db_mod.db_path(home_path))
+        conn = db_mod.connect(db_mod.db_path(home_path), readonly=True)
+        try:
+            for r in conn.execute(
+                "SELECT host_session_id, internal_session_id, status_before, purged_at, "
+                " extracted_memory_ids FROM purge_receipts ORDER BY purged_at"
+            ).fetchall():
+                out.append(
+                    {
+                        "host_session_id": r["host_session_id"],
+                        "internal_id": r["internal_session_id"],
+                        "status": "purged",
+                        "pinned": False,
+                        "created_at": r["purged_at"],
+                        "purged": True,
+                        "status_before": r["status_before"],
+                        "extracted_memory_ids": json.loads(r["extracted_memory_ids"]),
+                    }
+                )
+        finally:
+            conn.close()
+    except BrainError:
+        pass
+    return out
+
+
+def select_oldest_inactive_unpinned(home: Path | str) -> str | None:
+    """Storage pressure (plan §17.7): oldest inactive_grace, unpinned session."""
+    candidates = [
+        s
+        for s in list_sessions(home)
+        if s.get("status") == "inactive_grace" and not s.get("pinned") and s.get("host_session_id")
+    ]
+    candidates.sort(key=lambda s: s.get("created_at") or "")
+    return candidates[0]["host_session_id"] if candidates else None

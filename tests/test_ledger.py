@@ -14,6 +14,7 @@ import pytest
 from second_brain import ledger as ledger_mod
 from second_brain.contracts import (
     BrainLifecycleEvent,
+    BrainSessionIdentity,
     LifecycleEventType,
     SurfaceVisibility,
     ToolOutcome,
@@ -555,3 +556,196 @@ def test_rehydrate_levels_and_dedupe(store) -> None:
     different = rh.rehydrate(3, from_seq=1, to_seq=1)
     assert different.get("deduplicated") is None
     assert [e["event_id"] for e in different["events"]] == ["task"]
+
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# T-G5: crash recovery, retention, finalization, purge
+# ---------------------------------------------------------------------------
+
+
+def _identity(
+    host: str, *, status: str = "active", pinned: bool = False, project: str = ""
+) -> BrainSessionIdentity:
+    return BrainSessionIdentity(
+        internal_session_id=ledger_mod.internal_session_id(host),
+        host="prime",
+        host_session_id=host,
+        project_id=project,
+        created_at="2026-08-16T01:00:00Z",
+        status=status,
+        pinned=pinned,
+        schema_version=1,
+    )
+
+
+def _create(store, host: str = HOST, **kw) -> None:
+    store.create_session(_identity(host, **kw))
+
+
+def test_status_transitions(store) -> None:
+    _create(store)
+    life = ledger_mod.SessionLifecycle(store._home, HOST)
+    assert life.status() == "active"
+    life.mark_status("inactive_grace")
+    assert life.status() == "inactive_grace"
+    life.mark_status("finalizing")
+    life.mark_status("extracted")
+    with pytest.raises(ledger_mod.SessionLifecycleError, match="invalid transition"):
+        life.mark_status("active")  # extracted cannot go back
+    life.mark_status("purged")
+    with pytest.raises(ledger_mod.SessionLifecycleError):
+        life.mark_status("bogus")
+
+
+def test_recover_report_flags(tmp_path) -> None:
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        s.append_events(
+            [
+                _ev(1, "comp-1", LifecycleEventType.COMPACTION_STARTED, payload={}),
+                _ev(2, "t-req", LifecycleEventType.TOOL_REQUESTED, payload={"tool_call_id": "t1"}),
+                _ev(3, "t-sta", LifecycleEventType.TOOL_STARTED, payload={"tool_call_id": "t1"}),
+                _ev(4, "t2-req", LifecycleEventType.TOOL_REQUESTED, payload={"tool_call_id": "t2"}),
+            ]
+        )
+    life = ledger_mod.SessionLifecycle(tmp_path, HOST)
+    report = life.recover_report()
+    assert report["unclosed_compaction"] == ["comp-1"]
+    unknown = report["tool_outcome_unknown"]
+    assert unknown == [{"tool": "t1", "guidance": unknown[0]["guidance"]}]
+    not_started = report["tool_not_started"]
+    assert not_started == [{"tool": "t2", "guidance": not_started[0]["guidance"]}]
+    # recovery finding event appended (plan §11.3)
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as s:
+        assert s._conn is not None
+        kinds = [
+            r["event_type"]
+            for r in s._conn.execute("SELECT event_type FROM events ORDER BY seq").fetchall()
+        ]
+        assert "finding" in kinds
+    # second run: bracket closed by the recovery event -> no new recovery
+    report2 = life.recover_report()
+    assert report2["unclosed_compaction"] == []
+
+
+def test_purge_refuses_active_and_pinned(tmp_path, monkeypatch) -> None:
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        _create(s)
+        _seed(s, 1)
+    life = ledger_mod.SessionLifecycle(tmp_path, HOST)
+    with pytest.raises(ledger_mod.SessionLifecycleError, match="not purgeable"):
+        life.purge()  # active refuses
+    life.pin(True)
+    life.mark_status("finalizing")
+    with pytest.raises(ledger_mod.SessionLifecycleError, match="pinned"):
+        life.purge()
+    life.pin(False)
+    # durable decisions exist but extraction yields nothing -> refuse purge
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as s:
+        s.append_events(
+            [
+                _ev(
+                    2,
+                    "dec",
+                    LifecycleEventType.DECISION,
+                    payload={"decision": "use X", "rationale": "y"},
+                )
+            ]
+        )
+    monkeypatch.setattr(ledger_mod.SessionLifecycle, "extract_durable", lambda self: [])
+    with pytest.raises(ledger_mod.SessionLifecycleError, match="extraction produced no memories"):
+        life.purge()
+
+
+def test_purge_flow_with_extraction_and_receipt(tmp_path) -> None:
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        _create(s, project="proj-a")
+        s.append_events(
+            [
+                _ev(1, "task", LifecycleEventType.USER_TASK, payload={"task_sha256": "abc"}),
+                _ev(
+                    2,
+                    "dec",
+                    LifecycleEventType.DECISION,
+                    payload={"decision": "use X", "rationale": "because Y"},
+                ),
+                _ev(
+                    3,
+                    "rep",
+                    LifecycleEventType.WORKER_REPORT,
+                    payload={"worker": "w1", "summary": "done"},
+                ),
+            ]
+        )
+    life = ledger_mod.SessionLifecycle(tmp_path, HOST)
+    life.mark_status("inactive_grace")
+    retention = ledger_mod.load_retention_config(tmp_path)
+    # dry-run: nothing deleted
+    dry = life.purge(inactive=True, dry_run=True, retention=retention)
+    assert dry["dry_run"] is True
+    assert (life.session_path / "ledger.sqlite").is_file()
+    # real purge with extraction
+    result = life.purge(inactive=True, retention=retention)
+    assert result["purged"] == HOST
+    assert len(result["extracted_memory_ids"]) == 1  # the decision
+    assert not life.session_path.exists()  # dir gone incl db/wal/shm
+    # receipt written in the canonical db
+    from second_brain import db as db_mod
+
+    conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+    rows = conn.execute("SELECT * FROM purge_receipts").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["host_session_id"] == HOST
+    assert rows[0]["status_before"] == "inactive_grace"
+    conn.close()
+
+
+def test_purge_safety_traversal_and_identity(tmp_path, monkeypatch) -> None:
+    # hostile host ids are neutralized BY the hash: hex dirs only (plan §13.1)
+    for hostile in ("..", "C:/Windows", "/etc", "..\\..\\brain"):
+        internal = ledger_mod.internal_session_id(hostile)
+        assert set(internal) <= set("0123456789abcdef")
+        assert "/" not in internal and "\\" not in internal and ":" not in internal
+        d = ledger_mod.session_dir(tmp_path, hostile)
+        assert d.name == internal
+        assert str(d).startswith(str((tmp_path / "state" / "sessions").resolve()))
+    # manifest identity mismatch refuses purge
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True):
+        pass
+    internal = ledger_mod.internal_session_id(HOST)
+    manifest_path = tmp_path / "state" / "sessions" / internal / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["internal_id"] = "deadbeef"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    life = ledger_mod.SessionLifecycle(tmp_path, HOST)
+    with pytest.raises(ledger_mod.SessionLifecycleError, match="identity mismatch"):
+        life.purge(inactive=True)
+    # symlink escape refused by containment
+    import os as _os
+
+    if hasattr(_os, "symlink"):
+        target = tmp_path / "outside"
+        target.mkdir()
+        link = tmp_path / "state" / "sessions" / internal / "objects-link"
+        try:
+            _os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pass
+        else:
+            with pytest.raises(ValueError):
+                ledger_mod._contained(tmp_path / "state" / "sessions" / internal, "objects-link/x")
+
+
+def test_select_oldest_inactive_unpinned(tmp_path) -> None:
+    for _i, host in enumerate(("host-a", "host-b", "host-c")):
+        with ledger_mod.LedgerStore(tmp_path, host).open(create=True) as s:
+            _create(s, host)
+    ledger_mod.SessionLifecycle(tmp_path, "host-a").mark_status("inactive_grace")
+    ledger_mod.SessionLifecycle(tmp_path, "host-c").mark_status("inactive_grace")
+    ledger_mod.SessionLifecycle(tmp_path, "host-c").pin(True)
+    assert ledger_mod.select_oldest_inactive_unpinned(tmp_path) == "host-a"
+    rows = ledger_mod.list_sessions(tmp_path)
+    live = {r["host_session_id"] for r in rows if not r.get("purged")}
+    assert live == {"host-a", "host-b", "host-c"}
