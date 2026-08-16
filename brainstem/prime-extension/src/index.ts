@@ -320,13 +320,20 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
+    let aiCfg = loadAutoInjectHostConfig();
+    let aiMessage: unknown = undefined;
     try {
       session = resolveSessionId(ctx, anonSession);
       // Phase 0C/0D: SHADOW = fire-and-forget (never returns a patch);
       // ADVISORY/ACTIVE = awaited and may append a low-authority
-      // custom_message (packet carries "authority: advisory").
-      const aiCfg = loadAutoInjectHostConfig();
-      let aiMessage: unknown = undefined;
+      // custom_message (packet carries "authority: advisory"). The message
+      // is returned on EVERY role path (Phase C3 FIX 1): orchestrator and
+      // driver merge it with their systemPrompt patch, worker/normal return
+      // a bare { message } result — the host appends it as a model-visible
+      // role:"custom" entry (SDK runner.ts emitBeforeAgentStart: messages
+      // are collected from every handler result and inserted as custom
+      // messages; _appendBeforeAgentStartMessages builds role:"custom").
+      aiCfg = loadAutoInjectHostConfig();
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
         aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
       } else {
@@ -367,6 +374,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(sensors.extensionError(session, error));
       } catch {
         // storage failed too — measurement must not crash the session.
+      }
+      // Phase C3 FIX 1 hardening: a packet already computed by the pipeline
+      // is NEVER dropped by a later handler failure (role resolution, config
+      // load, prompt getter). Return it bare in advisory/active; shadow/off
+      // keep returning undefined (aiMessage is undefined there).
+      if (
+        aiMessage !== undefined &&
+        (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+      ) {
+        return { message: aiMessage };
       }
     }
     return undefined;
@@ -448,8 +465,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(sensors.extensionError(session, error));
       } catch {
         // storage failed too — measurement must not crash the session.
-      }
-    }
+      }    }
     return undefined;
   });
 

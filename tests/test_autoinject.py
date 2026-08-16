@@ -543,3 +543,22 @@ def test_no_relevant_only_when_both_modes_empty(brain_home) -> None:
         if r.get("session") == "s-none1"
     ]
     assert modes and modes[-1] == "or_fallback"
+
+
+def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
+    """Phase C3 FIX 2: no --cwd -> registry lookup uses the Brain home path
+    itself before env/default."""
+    from second_brain import registry
+
+    registry.add_project(
+        brain_home, brain_home, name="Self", project_id="self-proj"
+    )
+    _seed_current(brain_home, "Self rule", "self project rule", project_id="self-proj")
+    d = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "self project rule", agent_id="a1", session_id="s-self1", cwd=""
+    )
+    assert d.decision is InjectionDecision.INJECT
+    d2 = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "self project rule", agent_id="a1", session_id="s-self2", cwd=None
+    )
+    assert d2.decision is InjectionDecision.INJECT

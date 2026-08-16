@@ -238,6 +238,8 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
     expect(record.kind).toBe("autoinject_shadow_decision");
     expect(record.decision).toBe("INJECT");
     expect(record.latency_ms).toBeGreaterThanOrEqual(0);
+    expect(record.mode).toBe("shadow");
+    expect(record.result_patch).toBe(false);
   });
   it("spawn failure -> extension_error recorded, fail-open", async () => {
     const { callObj, append, runner } = makeCall({ runner: vi.fn<() => Promise<null>>().mockResolvedValue(null) });
@@ -342,6 +344,8 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
     const record = append.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(record.kind).toBe("autoinject_shadow_decision");
     expect(record.decision).toBe("INJECT");
+    expect(record.mode).toBe("advisory");
+    expect(record.result_patch).toBe(true);
   });
   it("NO_INJECTION -> undefined, no patch", async () => {
     const { callObj, append } = makeCall({
@@ -430,6 +434,76 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     expect(shadowRunMock).toHaveBeenCalledTimes(1);
     expect(advisoryRunMock).not.toHaveBeenCalled();
   });
+
+  it("advisory worker role returns a bare { message } patch (FIX 1)", async () => {
+    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-w-"));
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const handlers = loadFactory();
+    advisoryRunMock.mockResolvedValueOnce({
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "packet-text",
+      display: true,
+      details: { delivery_id: "del-1", packet_tokens: 10 },
+    });
+    const result = await handlers.get("before_agent_start")!(
+      { prompt: "adaptive fan-out policy" },
+      ctx, // deepseek-v4-flash -> worker role
+    );
+    expect(result).toEqual({
+      message: {
+        customType: AUTOINJECT_CUSTOM_TYPE,
+        content: "packet-text",
+        display: true,
+        details: { delivery_id: "del-1", packet_tokens: 10 },
+      },
+    });
+  });
+
+  it("advisory orchestrator role merges message with the Sol systemPrompt (FIX 1)", async () => {
+    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-o-"));
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    process.env.ORCHESTRATOR_MODELS = "openai-codex/gpt-5.6-sol";
+    const handlers = loadFactory();
+    advisoryRunMock.mockResolvedValueOnce({
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "packet-text",
+      display: true,
+      details: { delivery_id: "del-1", packet_tokens: 10 },
+    });
+    const solCtx = {
+      cwd: "C:/work",
+      model: { id: "openai-codex/gpt-5.6-sol" },
+      sessionManager: undefined,
+    } as unknown as ExtensionContext;
+    const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, solCtx);
+    expect(result).toBeDefined();
+    const r = result as Record<string, unknown>;
+    expect(typeof r.systemPrompt).toBe("string"); // Sol contract present
+    expect((r.message as Record<string, unknown>).content).toBe("packet-text");
+  });
+
+  it("advisory driver role merges message with the driver contract (FIX 1)", async () => {
+    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-d-"));
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const handlers = loadFactory();
+    advisoryRunMock.mockResolvedValueOnce({
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "packet-text",
+      display: true,
+      details: { delivery_id: "del-1", packet_tokens: 10 },
+    });
+    const driverCtx = {
+      cwd: "C:/work",
+      model: { id: "deepseek/deepseek-v4-pro" },
+      sessionManager: undefined,
+      getSystemPrompt: () => "base prompt",
+    } as unknown as ExtensionContext;
+    const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, driverCtx);
+    expect(result).toBeDefined();
+    const r = result as Record<string, unknown>;
+    expect(typeof r.systemPrompt).toBe("string"); // driver contract appended
+    expect((r.message as Record<string, unknown>).content).toBe("packet-text");
+  });
 });
 
 describe("sensor record kind", () => {
@@ -443,10 +517,14 @@ describe("sensor record kind", () => {
       selected_count: 0,
       delivery_id: null,
       packet_sha256: null,
+      mode: "shadow",
+      result_patch: false,
     });
     expect(record.kind).toBe("autoinject_shadow_decision");
     expect(record.session).toBe("s1");
     expect(record.reason).toBe("NO_RELEVANT_MEMORY");
+    expect(record.mode).toBe("shadow");
+    expect(record.result_patch).toBe(false);
   });
   it("extensionError stays available for fail-open records", () => {
     const record = extensionError("s1", new Error("boom"));
