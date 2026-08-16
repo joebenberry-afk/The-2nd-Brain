@@ -356,3 +356,66 @@ def test_cli_ledger_flow(tmp_path) -> None:
     r = run("ledger", "reindex", HOST)
     assert r.returncode == 0
     assert json.loads(r.stdout)["indexed"] == 1
+
+
+def test_host_artifact_manifest_roundtrip(tmp_path) -> None:
+    """T-G2: ledger init --host-artifact KIND=PATH records Prime-owned artifact
+    REFERENCES in manifest.json (never copies content)."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(k, None)
+    home = tmp_path / "brain"
+    home.mkdir()
+    subprocess.run(
+        [sys.executable, "-m", "second_brain", "--home", str(home), "init"],
+        capture_output=True, text=True, env=env, cwd=home, timeout=120, check=True,
+    )
+    r = subprocess.run(
+        [sys.executable, "-m", "second_brain", "--home", str(home), "ledger", "init",
+         "--session", HOST,
+         "--host-artifact", "transcript=C:/sessions/host-1.jsonl",
+         "--host-artifact", "telemetry=C:/brain/telemetry/agent-performance/host-1.jsonl"],
+        capture_output=True, text=True, env=env, cwd=home, timeout=120,
+    )
+    assert r.returncode == 0, r.stderr
+    internal = ledger_mod.internal_session_id(HOST)
+    manifest = json.loads(
+        (home / "state" / "sessions" / internal / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["host_artifacts"] == [
+        {"kind": "transcript", "path": "C:/sessions/host-1.jsonl"},
+        {"kind": "telemetry", "path": "C:/brain/telemetry/agent-performance/host-1.jsonl"},
+    ]
+    # malformed artifact spec -> usage error
+    r2 = subprocess.run(
+        [sys.executable, "-m", "second_brain", "--home", str(home), "ledger", "init",
+         "--session", "other-session", "--host-artifact", "noseparator"],
+        capture_output=True, text=True, env=env, cwd=home, timeout=120,
+    )
+    assert r2.returncode == 2
+
+
+def test_inline_agent_registration(store) -> None:
+    """T-G2: session_started agent payload fields register the agent inline."""
+    store.register_agent(
+        {
+            "agent_id": "deepseek/deepseek-v4-flash",
+            "internal_session_id": ledger_mod.internal_session_id(HOST),
+            "host_agent_id": "deepseek/deepseek-v4-flash",
+            "parent_agent_id": None,
+            "role_profile": "worker",
+            "model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "created_at": "2026-08-16T01:00:00Z",
+        }
+    )
+    row = store._conn.execute(
+        "SELECT role_profile, model FROM agents WHERE agent_id = ?",
+        ("deepseek/deepseek-v4-flash",),
+    ).fetchone()
+    assert row["role_profile"] == "worker"
+    assert row["model"] == "deepseek-v4-flash"

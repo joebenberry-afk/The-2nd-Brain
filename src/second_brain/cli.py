@@ -241,6 +241,14 @@ def _parser() -> argparse.ArgumentParser:
     lin.add_argument("--session", dest="host_session_id", required=True, help="HOST session id")
     lin.add_argument("--project", dest="project_id", default=None)
     lin.add_argument("--host", default="prime")
+    lin.add_argument(
+        "--host-artifact",
+        dest="host_artifacts",
+        action="append",
+        default=[],
+        metavar="KIND=PATH",
+        help="reference a Prime-owned artifact (repeatable; never copied into the ledger)",
+    )
     lapp = leds.add_parser("append", parents=[home_parent], help="append events from JSON stdin")
     lapp.add_argument("--session", dest="host_session_id", required=True)
     lapp.add_argument(
@@ -1996,6 +2004,20 @@ def cmd_orchestration(args) -> int:
     return 0
 
 
+def sqlite_max_seq(store) -> int:
+    """Next expected seq from the open ledger (host mirrors are stateless)."""
+    import sqlite3 as _sqlite3
+
+    conn = store._conn
+    if conn is None:
+        return 0
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
+        return int(row[0])
+    except _sqlite3.Error:
+        return 0
+
+
 def cmd_ledger(args) -> int:
     """P2 session ledger CLI (plan §9/§9.10/§14)."""
     import json as _json
@@ -2005,7 +2027,20 @@ def cmd_ledger(args) -> int:
     home = _home(args)
     cmd = args.ledger_command
     if cmd == "init":
-        with ledger.LedgerStore(home, args.host_session_id).open(create=True) as store:
+        artifacts: list[dict[str, str]] = []
+        for spec in args.host_artifacts:
+            kind, _, path = spec.partition("=")
+            if not kind or not path:
+                print(
+                    contracts.canonical_json(
+                        {"error": f"bad --host-artifact {spec!r} (KIND=PATH)"}
+                    )
+                )
+                return 2
+            artifacts.append({"kind": kind, "path": path})
+        store = ledger.LedgerStore(home, args.host_session_id)
+        store._init_host_artifacts = artifacts  # carried into the manifest at open
+        with store.open(create=True):
             internal = ledger.internal_session_id(args.host_session_id)
             store.create_session(
                 contracts.BrainSessionIdentity(
@@ -2036,15 +2071,44 @@ def cmd_ledger(args) -> int:
             print(contracts.canonical_json({"error": "expected one event object or an array"}))
             return 0
         events: list[contracts.BrainLifecycleEvent] = []
-        for item in data:
-            if not isinstance(item, dict):
-                print(contracts.canonical_json({"error": "event entries must be objects"}))
-                return 0
-            parsed = contracts.BrainLifecycleEvent.from_dict(item)
-            if parsed is None:
-                continue  # unknown + ignorable -> skip
-            events.append(parsed)
         with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            row = sqlite_max_seq(store)
+            next_seq = row + 1
+            for item in data:
+                if not isinstance(item, dict):
+                    print(contracts.canonical_json({"error": "event entries must be objects"}))
+                    return 0
+                if "seq" not in item or not isinstance(item.get("seq"), int):
+                    item["seq"] = next_seq  # host mirror: ledger assigns contiguous seq
+                next_seq += 1
+                # host mirrors are stateless: the ledger derives its own ids
+                if not item.get("internal_session_id"):
+                    item["internal_session_id"] = ledger.internal_session_id(
+                        args.host_session_id
+                    )
+                if not item.get("agent_id"):
+                    item["agent_id"] = "unknown"
+                parsed = contracts.BrainLifecycleEvent.from_dict(item)
+                if parsed is None:
+                    continue  # unknown + ignorable -> skip
+                events.append(parsed)
+                if parsed.event_type is contracts.LifecycleEventType.SESSION_STARTED:
+                    payload = parsed.payload or {}
+                    if payload.get("agent_id"):
+                        store.register_agent(
+                            {
+                                "agent_id": str(payload["agent_id"]),
+                                "internal_session_id": parsed.internal_session_id,
+                                "host_agent_id": str(
+                                payload.get("host_agent_id") or payload["agent_id"]
+                            ),
+                                "parent_agent_id": payload.get("parent_agent_id"),
+                                "role_profile": str(payload.get("role_profile") or "worker"),
+                                "model": str(payload.get("model") or "unknown"),
+                                "provider": str(payload.get("provider") or "unknown"),
+                                "created_at": parsed.timestamp,
+                            }
+                        )
             seqs = store.append_events(events)
         print(contracts.canonical_json({"appended": seqs}))
         return 0

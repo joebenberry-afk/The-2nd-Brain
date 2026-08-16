@@ -1,0 +1,201 @@
+/**
+ * P2 host event mirror (Phase 2B): spawn contract, privacy (sha256-only task
+ * text), fail-open behavior, and index.ts wiring per event kind.
+ */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const execFileMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+const mirrorFireAndForgetMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/ledger-mirror", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/ledger-mirror")>();
+  return { ...actual, mirrorFireAndForget: mirrorFireAndForgetMock };
+});
+import {
+  buildMirrorEventJson,
+  mirrorEvent,
+  taskSha256,
+} from "../src/ledger-mirror";
+import factory from "../src/index";
+import type { ExtensionAPI, ExtensionContext } from "../types/prime";
+
+const ENV_KEYS = ["SECOND_BRAIN_HOME"] as const;
+const SAVED: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  for (const key of ENV_KEYS) {
+    SAVED[key] = process.env[key];
+    delete process.env[key];
+  }
+  execFileMock.mockReset();
+  mirrorFireAndForgetMock.mockReset();
+});
+
+afterEach(() => {
+  for (const key of ENV_KEYS) {
+    if (SAVED[key] === undefined) delete process.env[key];
+    else process.env[key] = SAVED[key] as string;
+  }
+  vi.restoreAllMocks();
+});
+
+async function fakeHome(): Promise<{ home: string; python: string }> {
+  const home = await mkdtemp(join(tmpdir(), "sb-mirror-"));
+  const bin = join(home, ".venv", "Scripts");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "python.exe"), "");
+  return { home, python: join(bin, "python.exe") };
+}
+
+function fakeSpawn(result: { error?: Error; stdout?: string }) {
+  execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+    cb(result.error ?? null, result.stdout ?? "");
+  });
+}
+
+describe("mirrorEvent spawn contract", () => {
+  it("spawns env-clean ledger append with one event JSON on stdin", async () => {
+    const { home, python } = await fakeHome();
+    fakeSpawn({ stdout: '{"appended":[1]}' });
+    let stdinPayload = "";
+    execFileMock.mockImplementation((py, args, opts, cb) => {
+      expect(args).toEqual([
+        "-m", "second_brain", "ledger", "append",
+        "--session", "host-1", "--stdin-json",
+      ]);
+      expect(opts.env.PYTHONHOME).toBeUndefined();
+      expect(opts.env.PYTHONPATH).toBeUndefined();
+      expect(opts.env.SECOND_BRAIN_HOME).toBe(home);
+      expect(opts.timeout).toBe(5000);
+      const child = {
+        stdin: { write: (s: string) => { stdinPayload = s; }, end: () => {} },
+      };
+      cb(null, '{"appended":[1]}');
+      return child as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "host-1",
+      record: { kind: "user_task", fields: { task_sha256: "abc", prompt_chars: 10 } },
+      python,
+    });
+    expect(result.ok).toBe(true);
+    const parsed = JSON.parse(stdinPayload);
+    expect(parsed.event_type).toBe("user_task");
+    expect(parsed.payload.task_sha256).toBe("abc");
+  });
+
+  it("never sends raw task text in the payload", async () => {
+    const json = buildMirrorEventJson({
+      kind: "user_task",
+      fields: { task_sha256: taskSha256("the full secret prompt"), prompt_chars: 25 },
+    });
+    const payload = JSON.parse(json).payload as Record<string, unknown>;
+    expect(payload.task_sha256).toBe(taskSha256("the full secret prompt"));
+    expect(JSON.stringify(payload)).not.toContain("secret prompt");
+    expect(payload.task_sha256).not.toBe("the full secret prompt");
+  });
+
+  it("resolves ok=false on spawn error (fail-open, never throws)", async () => {
+    const { home, python } = await fakeHome();
+    fakeSpawn({ error: new Error("timeout") });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s1",
+      record: { kind: "session_started", fields: {} },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("timeout");
+  });
+
+  it("resolves ok=false on CLI error output", async () => {
+    const { home, python } = await fakeHome();
+    fakeSpawn({ stdout: '{"error":"boom"}' });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s1",
+      record: { kind: "turn_end", fields: {} },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("boom");
+  });
+
+  it("silent no-op (ok=true) when the brain home has no venv", async () => {
+    const result = await mirrorEvent({
+      home: "H:/no-such-home",
+      hostSessionId: "s1",
+      record: { kind: "user_task", fields: {} },
+      python: "H:/no-such-home/.venv/Scripts/python.exe",
+    });
+    expect(result.ok).toBe(true);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("index.ts wiring — every lifecycle event mirrors one ledger record", () => {
+  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+  function loadFactory(): Map<string, Handler> {
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on(name: string, handler: Handler) {
+        handlers.set(name, handler);
+      },
+    } as unknown as ExtensionAPI;
+    factory(pi);
+    return handlers;
+  }
+
+  const ctx = {
+    cwd: "C:/work",
+    model: { id: "deepseek/deepseek-v4-flash" },
+    sessionManager: undefined,
+  } as unknown as ExtensionContext;
+
+  it("fires mirror records for session_started/user_task/tool_requested/tool_completed/turn_end/agent_ended/compaction/session_inactive", async () => {
+    process.env.SECOND_BRAIN_HOME = await fakeHome().then((h) => h.home);
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
+    const handlers = loadFactory();
+    mirrorFireAndForgetMock.mockResolvedValue(undefined);
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    handlers.get("before_agent_start")!({ prompt: "secret task text" }, ctx);
+    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "ls" } }, ctx);
+    handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: ["out"], details: {}, isError: false }, ctx);
+    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
+    handlers.get("agent_end")!({ messages: [] }, ctx);
+    handlers.get("session_before_compact")!({ preparation: {}, branchEntries: [] }, ctx);
+    handlers.get("session_compact")!({ compactionEntry: {}, fromExtension: false }, ctx);
+    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget settle
+    const kinds = mirrorFireAndForgetMock.mock.calls.map(
+      (c) => (c[0] as { record: { kind: string } }).record.kind,
+    );
+    require("node:fs").writeFileSync("C:/Users/assas/AppData/Local/Temp/kinds-debug.json", JSON.stringify(kinds));
+    expect(kinds).toContain("session_started");
+    expect(kinds).toContain("user_task");
+    expect(kinds).toContain("tool_requested");
+    expect(kinds).toContain("tool_completed");
+    expect(kinds).toContain("turn_end");
+    expect(kinds).toContain("agent_ended");
+    expect(kinds).toContain("compaction_started");
+    expect(kinds).toContain("compaction_completed");
+    expect(kinds).toContain("session_inactive");
+    // privacy: user_task payload carries only the hash
+    const userTask = mirrorFireAndForgetMock.mock.calls.find(
+      (c) => (c[0] as { record: { kind: string } }).record.kind === "user_task",
+    )?.[0] as { record: { fields: Record<string, unknown> } };
+    expect(userTask.record.fields.task_sha256).toBe(taskSha256("secret task text"));
+    expect(JSON.stringify(userTask.record.fields)).not.toContain("secret task text");
+    // artifact refs recorded on session_start (reference only)
+    expect(kinds).toContain("host_artifact_ref");
+  });
+});

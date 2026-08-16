@@ -1,0 +1,159 @@
+/**
+ * P2 host event mirror — thin fail-open adapter (plan §16 PHASE 2B,
+ * amendment §19.1/19.3).
+ *
+ * Mirrors ONE privacy-safe lifecycle event into the Brain session ledger by
+ * spawning the Python control CLI:
+ *
+ *   <home>/.venv/Scripts/python.exe -m second_brain ledger append
+ *     --session <hostSessionId> --stdin-json
+ *
+ * with cwd=<home>, SECOND_BRAIN_HOME=<home>, PYTHONHOME/PYTHONPATH removed,
+ * 5s timeout. PRIVACY: task text is only ever sent as a sha256; tool events
+ * carry names + byte sizes only. NEVER raw prompts, never transcript
+ * content. Fail-open: any error/timeout/non-zero exit resolves
+ * {ok:false,error} — the caller records an extension_error; nothing throws,
+ * nothing blocks the host turn.
+ */
+import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { extensionError } from "./sensors";
+
+export const MIRROR_DEFAULT_TIMEOUT_MS = 5000;
+
+export interface MirrorResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface MirrorRecord {
+  /** Lifecycle event type (contracts LifecycleEventType value). */
+  kind: string;
+  /** Privacy-safe fields, already hashed/trimmed by the caller. */
+  fields: Record<string, unknown>;
+  /** Optional event_id (auto-generated when absent). */
+  eventId?: string;
+  /** Optional parent event id for lineage. */
+  parentEventId?: string;
+  agentId?: string;
+  /** bookkeeping events are recorded but skipped in projections. */
+  ignorable?: boolean;
+  surfaceVisibility?: string;
+}
+
+export interface MirrorOptions {
+  home: string;
+  hostSessionId: string;
+  record: MirrorRecord;
+  python?: string;
+  timeoutMs?: number;
+}
+
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Deterministic event id for a mirror record (unique per call). */
+function eventIdFor(kind: string): string {
+  return `mirror-${kind}-${randomUUID()}`;
+}
+
+export function buildMirrorEventJson(record: MirrorRecord): string {
+  const event = {
+    seq: 0, // python assigns the authoritative contiguous seq
+    event_id: record.eventId ?? eventIdFor(record.kind),
+    agent_id: record.agentId ?? null,
+    parent_event_id: record.parentEventId ?? null,
+    event_type: record.kind,
+    timestamp: new Date().toISOString(),
+    surface_visibility: record.surfaceVisibility ?? "raw_only",
+    ignorable: record.ignorable ?? false,
+    payload: record.fields,
+  };
+  return JSON.stringify(event);
+}
+
+/** sha256 of a task prompt — the ONLY form task text ever takes in the ledger. */
+export function taskSha256(prompt: string): string {
+  return sha256Hex(prompt);
+}
+
+/**
+ * Mirror one event. Resolves {ok:true} silently when the brain home has no
+ * venv (not a runtime — no-op, matches the autoinject adapter); resolves
+ * {ok:false, error} on any spawn failure. NEVER throws, NEVER blocks.
+ */
+export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
+  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  if (!existsSync(python)) {
+    return Promise.resolve({ ok: true }); // no runtime installed -> silent no-op
+  }
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const json = buildMirrorEventJson(options.record);
+  const args = [
+    "-m",
+    "second_brain",
+    "ledger",
+    "append",
+    "--session",
+    options.hostSessionId,
+    "--stdin-json",
+  ];
+  return new Promise((resolve) => {
+    const child = execFile(
+      python,
+      args,
+      {
+        cwd: options.home,
+        env,
+        timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve({ ok: false, error: error.message });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
+          if (parsed && parsed.error) {
+            resolve({ ok: false, error: String(parsed.error) });
+            return;
+          }
+          resolve({ ok: true });
+        } catch {
+          resolve({ ok: false, error: "ledger append returned unparsable output" });
+        }
+      },
+    );
+    child.stdin?.write(json);
+    child.stdin?.end();
+  });
+}
+
+/** Fire-and-forget wrapper used by index.ts: mirrors and records
+ * extension_error on failure (fail-open, never blocks). */
+export function mirrorFireAndForget(
+  options: MirrorOptions & { onError?: (error: string) => void },
+): void {
+  void mirrorEvent(options).then((result) => {
+    if (!result.ok && options.onError) {
+      try {
+        options.onError(result.error ?? "ledger mirror failed");
+      } catch {
+        // storage failed too — stay silent
+      }
+    }
+  });
+}
+
+/** Convenience: build an extension_error record for a mirror failure. */
+export function mirrorExtensionError(session: string, error: string): unknown {
+  return extensionError(session, new Error(`ledger mirror: ${error}`));
+}
