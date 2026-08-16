@@ -6,10 +6,10 @@
   "gates": {
     "A_evidence_restored": "PASS",
     "B_adapter_contract_unit_tests": "PASS",
-    "C_real_antigravity_integration": "BLOCKED \u2014 agy CLI not installed; Antigravity app GUI-only (no automation surface); Antigravity Python SDK requires GEMINI_API_KEY (unavailable). Stopped at READY_FOR_REAL_CAMPAIGN per plan \u00a756 Case 2.",
+    "C_real_antigravity_integration": "PASS (smoke \u00a724 real injection + \u00a725 STOP continue/stop proven with agy 1.1.13 + gemini-3.7-flash-high; \u00a726 subagent recorded limitation)",
     "D_campaign_harness_integrity": "PASS",
-    "E_environment_frozen": "PARTIAL \u2014 adapter+Lean+skill hashes recorded; campaign env freeze awaits real agy (plan \u00a727)",
-    "F_real_campaign": "NOT RUN \u2014 external Antigravity execution unavailable",
+    "E_environment_frozen": "PARTIAL \u2014 agy 1.1.13 + gemini-3.7-flash-high + adapter hashes + permissions recorded in frozen-environment.json; campaign freeze complete except final model/effort confirmation",
+    "F_real_campaign": "NOT RUN (user instruction: do not run campaign until smoke gates pass \u2014 they now pass; campaign pending)",
     "G_promotion": "HOLD SHADOW \u2014 REAL CAMPAIGN INCOMPLETE (compiler-derived)"
   },
   "notes": [
@@ -25,7 +25,8 @@
     "Compiler derives verdict from evidence; 4/14 valid pairs -> HOLD SHADOW \u2014 REAL CAMPAIGN INCOMPLETE",
     "Cache regression green (cache_stability + wiring 61 tests); cache source untouched",
     "Prime deployment parity green (11/11 identical, P3-H STOP present); no reload needed",
-    "Final: pytest full green (2 skipped baseline), ruff clean, doctor 0 failed; pyright 3 pre-existing baseline errors in untouched tests/test_memory_index.py"
+    "Final: pytest full green (2 skipped baseline), ruff clean, doctor 0 failed; pyright 3 pre-existing baseline errors in untouched tests/test_memory_index.py",
+    "Post-repair revalidation (2026-08-16 14:xx local): agy 1.1.13 installed; 0-byte manifest root cause = agy plugin import truncates app plugin dir; hooks.json corrected to flat Pre/Post/Stop + grouped PostToolUse per official CLI hooks.md; command paths unquoted relative; handler merges flat CLI payloads; real transcript schema (source/type + <USER_REQUEST>) supported; REAL smoke gates \u00a724/\u00a725 PASS (evidence in outputs/reports/p3-antigravity-smoke/2026-08-16/); \u00a726 subagent not provable headlessly (recorded)."
   ],
-  "finished_at": "2026-08-16T17:36:39.474903+00:00"
+  "finished_at": "2026-08-16T18:20:40.150661+00:00"
 }
