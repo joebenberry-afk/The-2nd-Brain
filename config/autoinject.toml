@@ -9,7 +9,7 @@ schema_version = 1
 # Edit here and the next event picks it up — no redeploy needed.
 # Rollback = set mode back to "shadow".
 [autoinject]
-mode = "shadow"
+mode = "active"
 
 [budget]
 target_tokens = 800       # normal AutoInject target (~500-1000 per plan)
