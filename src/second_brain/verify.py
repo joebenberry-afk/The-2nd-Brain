@@ -1,4 +1,5 @@
-"""Intent Verifier brief builder (plan §37-38, Phase 7 §103).
+"""Intent Verifier brief builder (plan §37-38, Phase 7 §103) + risk-adaptive
+verification ladder (plan §10, P3-G).
 
 Builds a fresh-context verifier brief from the session working set: the
 requirements ledger, capsule constraints, the diff of capsule-recorded touched
@@ -9,6 +10,12 @@ BEFORE the requirements so the verifier must perform backward reconstruction
 
 The brief is written atomically to ``outputs/verification/<session-id>.md``
 and is deterministic for identical inputs (only ``generated_at`` differs).
+
+P3-G: the smallest consumer that maps a risk result (risk.py level) to the
+verification ladder from config/verification.toml ``[ladder]`` (read per
+invocation). Output is a COMPACT deterministic action list per level
+(plan §10.2/§10.4) — no verification engine, no new subsystem. Invalid or
+absent config falls back to the documented defaults (safe default).
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ import contextlib
 import os
 import subprocess
 import tempfile
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -163,3 +171,142 @@ def build_verifier_brief(home: Path, session_id: str, repo: Path) -> Path:
             os.unlink(tmp)
         raise BrainError(f"Could not write verifier brief {target}: {exc}") from exc
     return target
+
+# ---------------------------------------------------------------------------
+# P3-G: risk-adaptive verification ladder (plan §10.2/§10.3/§10.4).
+# ---------------------------------------------------------------------------
+
+RISK_LEVELS: tuple[str, ...] = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+
+# Documented defaults (mirror config/verification.toml [ladder]) — used when
+# the config is absent/invalid. Cumulative tokens (all_medium/all_high) make
+# the ladder self-referential: HIGH includes MEDIUM+LOW, CRITICAL includes all.
+DEFAULT_VERIFICATION_LADDER: dict[str, list[str]] = {
+    "LOW": ["targeted_test", "typecheck_or_compile", "diff_sanity"],
+    "MEDIUM": [
+        "targeted_plus_relevant_tests",
+        "requirement_ledger",
+        "affected_file_review",
+        "simplification_check",
+    ],
+    "HIGH": [
+        "all_medium",
+        "repowise_impact_context",
+        "independent_intent_verifier",
+        "negative_adversarial_tests",
+        "rollback_check",
+    ],
+    "CRITICAL": [
+        "all_high",
+        "human_approval_for_irreversible",
+        "optional_second_independent_verification",
+    ],
+}
+
+# Compact human-readable labels for each ladder token (deterministic).
+LADDER_ACTION_LABELS: dict[str, str] = {
+    "targeted_test": "run existing targeted test/check",
+    "typecheck_or_compile": "typecheck or compile",
+    "diff_sanity": "diff sanity review",
+    "targeted_plus_relevant_tests": "run targeted + relevant tests",
+    "requirement_ledger": "requirement-ledger check",
+    "affected_file_review": "review affected files",
+    "simplification_check": "confirm no unrelated simplification",
+    "repowise_impact_context": "impact context (repo-wide scan)",
+    "independent_intent_verifier": "fresh independent verifier brief (brainctl verify build-brief)",
+    "negative_adversarial_tests": "negative/adversarial test where relevant",
+    "rollback_check": "rollback/reversibility check",
+    "human_approval_for_irreversible": (
+        "explicit human approval for irreversible/high-impact actions"
+    ),
+    "optional_second_independent_verification": "optional second independent verification",
+}
+
+
+def ladder_from_toml(text: str) -> dict[str, list[str]]:
+    """Parse the ``[ladder]`` section of config/verification.toml.
+
+    Invalid TOML, a missing/empty section, or a non-string-list value for a
+    level falls back to the documented default for that level (safe default —
+    a broken config never silences verification). PURE, never throws, never
+    reads the filesystem.
+    """
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        data = {}
+    section = data.get("ladder")
+    if not isinstance(section, dict):
+        return {level: list(DEFAULT_VERIFICATION_LADDER[level]) for level in RISK_LEVELS}
+    out: dict[str, list[str]] = {}
+    for level in RISK_LEVELS:
+        value = section.get(level)
+        if isinstance(value, list) and len(value) > 0 and all(
+            isinstance(item, str) for item in value
+        ):
+            out[level] = [str(item) for item in value]
+        else:
+            out[level] = list(DEFAULT_VERIFICATION_LADDER[level])
+    return out
+
+
+def load_verification_ladder(home: Path | str | None) -> dict[str, list[str]]:
+    """Read ``<home>/config/verification.toml [ladder]`` per invocation.
+
+    Missing/unreadable file -> documented defaults (never throws).
+    """
+    if home is None:
+        return ladder_from_toml("")
+    try:
+        text = (Path(home) / "config" / "verification.toml").read_text(encoding="utf-8")
+        return ladder_from_toml(text)
+    except OSError:
+        return ladder_from_toml("")
+
+
+def expand_ladder_actions(ladder: dict[str, list[str]], level: str) -> list[str]:
+    """Resolve the verification ladder into a self-contained, order-stable
+    list of leaf action tokens for `level`.
+
+    Cumulativity is STRUCTURAL (plan §10.2): every level includes all lower
+    levels' actions (LOW subset MEDIUM subset HIGH subset CRITICAL), so the
+    config's ``all_medium``/``all_high`` reference tokens are redundant and
+    skipped — which also makes malformed self-referential configs (e.g.
+    MEDIUM containing all_medium) degrade deterministically with no recursion.
+    """
+    if level not in RISK_LEVELS:
+        raise BrainError(f"unknown risk level: {level!r}")
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for current in RISK_LEVELS[: RISK_LEVELS.index(level) + 1]:
+        for token in ladder.get(current, []):
+            if token in ("all_medium", "all_high"):
+                continue  # structural cumulativity already covers them
+            if token not in seen:
+                seen.add(token)
+                resolved.append(token)
+    return resolved
+
+
+def verification_ladder_payload(
+    level: str,
+    *,
+    home: Path | str | None = None,
+    ladder: dict[str, list[str]] | None = None,
+) -> dict:
+    """Compact deterministic verification-ladder payload for a risk level.
+
+    Returns ``{"level", "actions", "independent_verifier", "approval_required"}``
+    — level + actions + the two high-signal flags, nothing more (plan §10.4).
+    ``ladder`` is a test seam; when omitted the config is read per invocation
+    (``home``), falling back to the documented defaults.
+    """
+    ladder = ladder if ladder is not None else load_verification_ladder(home)
+    tokens = expand_ladder_actions(ladder, level)
+    actions = [LADDER_ACTION_LABELS.get(token, token.replace("_", " ")) for token in tokens]
+    return {
+        "level": level,
+        "actions": actions,
+        "independent_verifier": "independent_intent_verifier" in tokens,
+        "approval_required": "human_approval_for_irreversible" in tokens,
+    }
