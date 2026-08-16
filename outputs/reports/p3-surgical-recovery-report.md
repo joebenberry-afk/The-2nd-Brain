@@ -50,11 +50,24 @@ The current official contract was extracted from the installed Antigravity IDE 1
 
 ## F. Real Dogfood Proof
 
-**Not achievable on this machine — blocked** (see §H). No fake telemetry was produced. Unit + integration contract tests prove the adapter against the official payload shapes; a real run requires the Antigravity app (GUI, no automation surface) or `agy` (not installed) or the Python SDK (requires `GEMINI_API_KEY` — unavailable). Telemetry schema is ready (`harness=antigravity`, session, model, project, packet tokens, lean state).
+**PASSED on revalidation (2026-08-16 14:xx local, agy 1.1.13 + gemini-3.7-flash-high).**
+Real headless `agy` runs prove: PreInvocation returns
+`{"injectSteps":[{"ephemeralMessage":"[BRAIN_CONTEXT_DELTA v1] ... Migration ordering ..."}]}`
+(758 tokens, model_visible=true, delivery recorded); the agent answered
+`apply migrations in numeric order` from the injected context with zero tool
+calls (conversations 17f141ff / 3660f895). Real P3-H STOP proven (continue on
+unresolved material requirement with agent re-entry; stop on completion). Real
+PostToolUse/PostInvocation telemetry recorded. Evidence:
+`outputs/reports/p3-antigravity-smoke/2026-08-16/` (real payloads, responses,
+streams, telemetry, transcript sample).
 
 ## G. Real Subagent Proof
 
-**Blocked with the real harness** (same dependency as §F). Adapter supports subagent identification via `parentConversationId` → role `worker` + distinct session identity; bounded context; no full-parent-transcript copy (parser never persists transcript text).
+**Not proven headlessly — recorded limitation (plan §26).** The CLI exposes no
+subagent spawn surface (`agy agent` lists none; no subagent flag); the SDK
+requires `GEMINI_API_KEY` (absent); the app is GUI-only. The adapter
+implements the subagent payload path (`parentConversationId` → worker role +
+distinct session identity, bounded context) and no parent ID is invented.
 
 ## H. Real Campaign Status — Blocker
 
