@@ -1,0 +1,66 @@
+{
+  "run_id": "t05-candidate-1",
+  "task": "t05-legit-abstraction",
+  "arm": "candidate",
+  "session": "01a009a9-a5ec-77fa-b213-2cb8b53861aa",
+  "economics": {
+    "assistant_usage_rows": 11,
+    "input_tokens": 16344,
+    "output_tokens": 5209,
+    "cache_read_tokens": 170752,
+    "cache_write_tokens": 0,
+    "total_tokens": 192305,
+    "cost_total": 0.004224785599999999,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 11
+    },
+    "turns": 11,
+    "wall_ms": 59344
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/test.js ./test.js",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const s=require('fs').readFileSync('validators.js','utf8');const defs=(s.match(/function checkText/g)||[]).length;const calls=(s.match(/checkText\\(/g)||[]).length;if(defs!==1)process.exit(1);if(calls<4)process.exit(2);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git status --porcelain').toString();if(/\\?\\?/.test(out))process.exit(3);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "validators.js"
+    ],
+    "added_lines": 11,
+    "deleted_lines": 9,
+    "new_files": [
+      "alidators.js"
+    ]
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_REUSE",
+      "note": "Extracted the existing 3x-repeated predicate verbatim as checkText(v, max) instead of inventing new validation semantics."
+    },
+    {
+      "code": "LC_ABSTRACTION_JUSTIFIED",
+      "note": "Task-mandated extraction: shared check now has 4 call sites (3 existing + validateEmail), making the helper the lean choice over a 4th copy."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance: no extra files, no test.js edits, no unrelated cleanup."
+    }
+  ],
+  "acceptance": "PASS"
+}

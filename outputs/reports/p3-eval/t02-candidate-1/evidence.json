@@ -1,0 +1,60 @@
+{
+  "run_id": "t02-candidate-1",
+  "task": "t02-existing-reuse",
+  "arm": "candidate",
+  "session": "01a009b0-b3f4-76dc-94b2-ee729613e790",
+  "economics": {
+    "assistant_usage_rows": 10,
+    "input_tokens": 16881,
+    "output_tokens": 8439,
+    "cache_read_tokens": 162304,
+    "cache_write_tokens": 0,
+    "total_tokens": 187624,
+    "cost_total": 0.0051807112,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 10
+    },
+    "turns": 10,
+    "wall_ms": 83484
+  },
+  "judge": [
+    {
+      "command": "node cli.js title hello world | grep -qx \"Hello World\"",
+      "exit": 0
+    },
+    {
+      "command": "node cli.js title oNCE uPON A | grep -qx \"Once Upon A\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...lib/strings reference check...\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...git status --porcelain untracked check...\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "cli.js"
+    ],
+    "added_lines": 4,
+    "deleted_lines": 0,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_REUSE",
+      "note": "Reused existing capitalize helper from lib/strings.js via require instead of duplicating logic in cli.js"
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance after all 4 judge commands passed; no scope expansion"
+    }
+  ],
+  "acceptance": "PASS"
+}

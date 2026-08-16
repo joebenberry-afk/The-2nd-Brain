@@ -1,0 +1,63 @@
+{
+ "run_id": "t07-candidate-1",
+ "task": "t07-legit-dep",
+ "arm": "candidate",
+ "session": "01a009a6-5cb8-73ed-be1b-0b50ff9fffc4",
+ "economics": {
+  "assistant_usage_rows": 12,
+  "input_tokens": 16273,
+  "output_tokens": 5607,
+  "cache_read_tokens": 171904,
+  "cache_write_tokens": 0,
+  "total_tokens": 193784,
+  "cost_total": 0.0043295112,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 12
+  },
+  "turns": 12,
+  "wall_ms": 61849
+ },
+ "judge": [
+  {
+   "command": "node -e copyFileSync <fixture>/test.js ./test.js (JUDGE step 0: restore pristine oracle)",
+   "exit": 0
+  },
+  {
+   "command": "node test.js (JUDGE step 1)",
+   "exit": 0
+  },
+  {
+   "command": "node -e confparse-presence check on load.js (JUDGE step 2)",
+   "exit": 0
+  },
+  {
+   "command": "node -e git diff --name-only allowed-files check (JUDGE step 3)",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [
+   "load.js"
+  ],
+  "added_lines": 2,
+  "deleted_lines": 1,
+  "new_files": [
+   "oad.js"
+  ]
+ },
+ "files_touched": 1,
+ "lc_decisions": [
+  {
+   "code": "LC_REUSE",
+   "note": "Reused shipped vendored confparse (existing declared dep) instead of hand-rolling a JSONC comment stripper, as mandated by task."
+  },
+  {
+   "code": "LC_STOP",
+   "note": "Stopped after acceptance steps passed; no scope expansion, no extra files."
+  }
+ ],
+ "acceptance": "PASS",
+ "notes": "Template snippet artifact: new_files ['oad.js'] is a slice(3) artifact of ' M load.js' porcelain output; real git status shows only 'M load.js' (no new files)."
+}
