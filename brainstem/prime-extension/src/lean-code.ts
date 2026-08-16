@@ -22,6 +22,16 @@
  * candidate-arm runs happen without promotion. `SECOND_BRAIN_LEAN=off` forces
  * inert. No second promotion hierarchy, no new config file.
  *
+ * P3-E fix (2026-08-16): the env gate alone cannot reach daemon-spawned
+ * children (the Prime daemon pins its startup env), so the eval gate is
+ * FILE-BASED as well: `SECOND_BRAIN_LEAN` (advisory/off) OVERRIDES; else
+ * `config/skills.toml` `[lean] eval = "advisory" | "off"` is read per event
+ * (absent => inert) — same live-flip pattern as AutoInject's
+ * `config/autoinject.toml [autoinject] mode`. Precedence:
+ * env advisory/off > file advisory/off > inert. No daemon, no new file, no
+ * second promotion hierarchy. The resolved mode + its source are recorded
+ * on every lean_kernel record (`mode`, `eval_source`).
+ *
  * Sol hard-orchestrator sessions NEVER get the kernel (plan §8.3): the
  * wiring returns before this module could inject, and this module also
  * refuses the role defensively.
@@ -69,6 +79,9 @@ export const LEAN_OFF_VALUES = new Set(["off", "0", "false", "no"]);
 /** Values of SECOND_BRAIN_LEAN that force injection (eval mode, plan §8.2). */
 export const LEAN_ADVISORY_VALUES = new Set(["advisory"]);
 
+/** Resolved eval gate mode (env or file). */
+export type LeanEvalMode = "advisory" | "off";
+
 /** Lifecycle status resolved from the skill directory (missing = no file). */
 export type LeanSkillStatus = "active" | "shadow" | "candidate" | "retired" | "missing";
 
@@ -81,8 +94,12 @@ export interface LeanRuntimeOutcome {
   decision: "inject" | "omit";
   /** Why: active/advisory lifecycle; off (env or not-yet-active/retired); role (not driver/worker); skill-missing. */
   reason: LeanReason;
-  /** Raw SECOND_BRAIN_LEAN value (trimmed, lowercased) or null when unset. */
+  /** Resolved eval gate value (trimmed, lowercased) or null when inert:
+   * env SECOND_BRAIN_LEAN advisory/off wins; else config/skills.toml
+   * [lean] eval advisory/off; absent => null (inert). */
   mode: string | null;
+  /** Where the resolved mode came from: "env" | "file" | null. */
+  evalSource: "env" | "file" | null;
   /** Resolved skill lifecycle status (null when the file is missing). */
   skillStatus: LeanSkillStatus | null;
   /** Character length of the canonical kernel section (0 when unavailable). */
@@ -223,6 +240,79 @@ export function loadLeanKernel(home: string): LeanSkillCacheEntry {
  * prompt is required for injection (never invent a prompt) and checked for
  * the dedup marker.
  */
+/**
+ * Parse `[lean] eval` from a config/skills.toml text using the same tiny
+ * TOML-subset parser style as autoinject.ts `modeFromAutoinjectToml`
+ * (section headers, `key = value` lines, `#` comments stripped). PURE and
+ * deterministic: never throws, never touches the filesystem.
+ *
+ * Returns "advisory" | "off" when the `[lean]` section carries a recognized
+ * `eval` value, undefined when the section/key/value is absent or invalid
+ * (absent => inert; invalid values are treated as absent — the AutoInject
+ * precedent). An unrecognized value is NOT a parse error: it is inert.
+ */
+export function leanEvalFromSkillsToml(text: string): LeanEvalMode | undefined {
+  let inLean = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inLean = line.startsWith("[lean]");
+      continue;
+    }
+    if (!inLean || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (key !== "eval") continue;
+    const value = line.slice(eq + 1).split("#")[0].trim().replace(/^"|"$/g, "").toLowerCase();
+    if (LEAN_ADVISORY_VALUES.has(value)) return "advisory";
+    if (LEAN_OFF_VALUES.has(value)) return "off";
+    return undefined;
+  }
+  return undefined;
+}
+
+export interface LeanEvalResolution {
+  mode: LeanEvalMode | null;
+  source: "env" | "file" | null;
+  /** Bounded failure detail (unreadable config file); undefined = ok. */
+  error: string | undefined;
+}
+
+/**
+ * Resolve the eval gate for one event: env `SECOND_BRAIN_LEAN` (advisory/off)
+ * OVERRIDES; otherwise `config/skills.toml [lean] eval` (absent => inert).
+ * An unrecognized env value falls through to the file (same as unset). A
+ * missing file/key/value is NOT an error (default-off); an existing-but-
+ * unreadable file is a fail-open bounded error (caller records ONE
+ * extension_error and stays inert). No daemon, no new file.
+ */
+export function resolveLeanEvalFromFile(
+  home: string | null,
+): Omit<LeanEvalResolution, "source"> & { source: "file" | null } {
+  if (home === null || home.trim() === "") {
+    return { mode: null, source: null, error: undefined };
+  }
+  const file = join(home, "config", "skills.toml");
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if (existsSync(file)) {
+      return {
+        mode: null,
+        source: null,
+        error: `cannot read config/skills.toml: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return { mode: null, source: null, error: undefined }; // absent file => inert
+  }
+  const mode = leanEvalFromSkillsToml(text);
+  return mode === undefined
+    ? { mode: null, source: null, error: undefined }
+    : { mode, source: "file", error: undefined };
+}
+
 export function decideLeanRuntime(opts: {
   home: string | null;
   role: AgentRole;
@@ -230,7 +320,7 @@ export function decideLeanRuntime(opts: {
   env?: Record<string, string | undefined>;
 }): LeanRuntimeOutcome {
   const env = opts.env ?? process.env;
-  const mode = (env[LEAN_ENV] ?? "").trim().toLowerCase() || null;
+  const rawEnv = (env[LEAN_ENV] ?? "").trim().toLowerCase() || null;
 
   const omit = (
     reason: LeanReason,
@@ -238,10 +328,13 @@ export function decideLeanRuntime(opts: {
     kernelChars: number,
     dedupHit: boolean,
     error: string | undefined,
+    mode: string | null,
+    evalSource: "env" | "file" | null,
   ): LeanRuntimeOutcome => ({
     decision: "omit",
     reason,
     mode,
+    evalSource,
     skillStatus,
     kernelChars,
     dedupHit,
@@ -249,41 +342,64 @@ export function decideLeanRuntime(opts: {
     kernel: undefined,
   });
 
-  // Sol hard-orchestrator (plan §8.3) and non-code roles: NEVER inject.
+  // Sol hard-orchestrator (plan §8.3) and non-code roles: NEVER inject —
+  // resolved before any env/file gate access (no config I/O on those paths).
   if (opts.role === "hard_orchestrator" || (opts.role !== "driver" && opts.role !== "worker")) {
-    return omit("role", null, 0, false, undefined);
+    return omit("role", null, 0, false, undefined, null, null);
   }
-  // Explicit off: forces inert (plan §8.2 env=off).
-  if (mode !== null && LEAN_OFF_VALUES.has(mode)) {
-    return omit("off", null, 0, false, undefined);
+
+  // Eval gate: env advisory/off OVERRIDES; unrecognized env falls through to
+  // the file; file advisory/off applies; absent => inert.
+  let mode: LeanEvalMode | null = null;
+  let evalSource: "env" | "file" | null = null;
+  if (rawEnv !== null && LEAN_ADVISORY_VALUES.has(rawEnv)) {
+    mode = "advisory";
+    evalSource = "env";
+  } else if (rawEnv !== null && LEAN_OFF_VALUES.has(rawEnv)) {
+    mode = "off";
+    evalSource = "env";
+  } else {
+    const file = resolveLeanEvalFromFile(opts.home);
+    if (file.error !== undefined) {
+      // Fail-open: unreadable config -> inert + one bounded error.
+      return omit("off", null, 0, false, file.error, null, null);
+    }
+    mode = file.mode;
+    evalSource = file.source;
+  }
+
+  // Explicit off (env or file): forces inert (plan §8.2 env=off).
+  if (mode === "off") {
+    return omit("off", null, 0, false, undefined, mode, evalSource);
   }
   if (opts.home === null || opts.home.trim() === "") {
-    return omit("skill-missing", null, 0, false, "brain home unavailable");
+    return omit("skill-missing", null, 0, false, "brain home unavailable", mode, evalSource);
   }
   const loaded = loadLeanKernel(opts.home);
   if (loaded.error !== undefined || loaded.kernel === undefined) {
-    return omit("skill-missing", loaded.status, 0, false, loaded.error);
+    return omit("skill-missing", loaded.status, 0, false, loaded.error, mode, evalSource);
   }
   // Retired disables runtime behavior (plan §26.1) — even under advisory.
   if (loaded.status === "retired") {
-    return omit("off", loaded.status, loaded.kernel.length, false, undefined);
+    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
   }
   const lifecycleActive = loaded.status === "active";
-  const advisory = mode !== null && LEAN_ADVISORY_VALUES.has(mode);
+  const advisory = mode === "advisory";
   if (!lifecycleActive && !advisory) {
-    return omit("off", loaded.status, loaded.kernel.length, false, undefined);
+    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
   }
   const reason: LeanReason = lifecycleActive ? "active" : "advisory";
   const base = opts.base;
   if (base === undefined || base.trim() === "") {
     // Never invent a prompt: nothing to append to.
-    return omit(reason, loaded.status, loaded.kernel.length, false, undefined);
+    return omit(reason, loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
   }
   const dedupHit = base.includes(LEAN_KERNEL_MARKER);
   return {
     decision: dedupHit ? "omit" : "inject",
     reason,
     mode,
+    evalSource,
     skillStatus: loaded.status,
     kernelChars: loaded.kernel.length,
     dedupHit,

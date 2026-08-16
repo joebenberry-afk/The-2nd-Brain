@@ -31,7 +31,7 @@ Kinds:
 | session_compact | from_extension |
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason |
-| lean_kernel | decision, reason, role, skill_status, mode, kernel_chars, dedup_hit (v=2; P3-D) |
+| lean_kernel | decision, reason, role, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; P3-D) |
 | extension_error | error (string, truncated) |
 | assistant_usage | provider, model, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
 | provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
@@ -151,7 +151,17 @@ values + character counts only — never kernel text or prompt content):
   `worker` | `normal`).
 - `skill_status` — resolved lifecycle status (`active` | `shadow` |
   `candidate` | `retired`) or null when the file is missing.
-- `mode` — raw `SECOND_BRAIN_LEAN` value (lowercased) or null when unset.
+- `mode` — resolved eval gate value (lowercased) or null when inert:
+  env `SECOND_BRAIN_LEAN=advisory|off` OVERRIDES; otherwise
+  `config/skills.toml [lean] eval = "advisory" | "off"` applies (read per
+  event, same live-flip pattern as AutoInject's `config/autoinject.toml
+  [autoinject] mode`); absent env+file => null (inert). An unrecognized env
+  value falls through to the file; an invalid file value is treated as
+  absent; an unreadable config file is fail-open (inert + one bounded
+  `extension_error`).
+- `eval_source` — `env` (SECOND_BRAIN_LEAN won) | `file` (skills.toml won) |
+  null (no gate active). Added for the P3-E re-run so the analysis can prove
+  which gate produced the recorded mode.
 - `kernel_chars` — character length of the canonical `# Runtime Kernel`
   section (0 when unavailable).
 - `dedup_hit` — true when the base prompt already carried the stable marker

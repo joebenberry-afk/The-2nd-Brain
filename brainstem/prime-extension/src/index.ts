@@ -476,6 +476,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           role,
           skill_status: lean.skillStatus,
           mode: lean.mode,
+          eval_source: lean.evalSource,
           kernel_chars: lean.kernelChars,
           dedup_hit: lean.dedupHit,
         }),

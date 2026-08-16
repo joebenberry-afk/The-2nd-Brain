@@ -593,8 +593,10 @@ export interface LeanKernelRecord extends BaseRecord {
   role: string;
   /** Resolved skill lifecycle status (null when the file is missing). */
   skill_status: string | null;
-  /** Raw SECOND_BRAIN_LEAN value (lowercased) or null when unset. */
+  /** Resolved eval gate value (env advisory/off, else file [lean] eval) or null. */
   mode: string | null;
+  /** Where the resolved mode came from: "env" | "file" | null. */
+  eval_source: "env" | "file" | null;
   /** Character length of the canonical kernel section (0 when unavailable). */
   kernel_chars: number;
   /** True when the base prompt already carried the marker (no re-injection). */
@@ -609,6 +611,7 @@ export function leanKernel(
     role: string;
     skill_status: string | null;
     mode: string | null;
+    eval_source: "env" | "file" | null;
     kernel_chars: number;
     dedup_hit: boolean;
   },
@@ -620,6 +623,7 @@ export function leanKernel(
     role: fields.role,
     skill_status: fields.skill_status,
     mode: fields.mode,
+    eval_source: fields.eval_source,
     kernel_chars: fields.kernel_chars,
     dedup_hit: fields.dedup_hit,
   } as unknown as LeanKernelRecord;
