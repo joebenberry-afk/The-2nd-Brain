@@ -10,6 +10,7 @@ import {
   decideLeanRuntime,
   extractRuntimeKernel,
   LEAN_KERNEL_MARKER,
+  leanEvalFromSkillsToml,
   leanKernelCacheSize,
   loadLeanKernel,
   resetLeanKernelCache,
@@ -82,6 +83,18 @@ afterEach(async () => {
   }
   await rm(tmp, { recursive: true, force: true });
 });
+
+function writeSkillsToml(evalValue?: string): string {
+  const dir = join(tmp, "config");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "skills.toml");
+  const body =
+    evalValue === undefined
+      ? "# skills.toml — no [lean] section\nschema_version = 1\n\n[router]\nmax_active = 3\n"
+      : `schema_version = 1\n\n[router]\nmax_active = 3\n\n[lean]\neval = "${evalValue}"\n`;
+  writeFileSync(file, body);
+  return file;
+}
 
 function writeSkill(level: "active" | "shadow" | "candidates" | "retired", text: string): string {
   const dir = join(tmp, "skills", level, "lean-code");
@@ -344,6 +357,130 @@ describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () =
   });
 });
 
+describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] eval, P3-E fix)", () => {
+  it("file advisory (env unset) -> inject/advisory for driver, eval_source=file", () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE" });
+    expect(out.decision).toBe("inject");
+    expect(out.reason).toBe("advisory");
+    expect(out.mode).toBe("advisory");
+    expect(out.evalSource).toBe("file");
+    expect(out.kernel).toBe(CANONICAL_KERNEL);
+  });
+
+  it("file advisory (env unset) -> inject/advisory for worker, eval_source=file", () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("inject");
+    expect(out.reason).toBe("advisory");
+    expect(out.evalSource).toBe("file");
+  });
+
+  it("env off OVERRIDES file advisory -> omit/off, eval_source=env", () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE", env: { SECOND_BRAIN_LEAN: "off" } });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.mode).toBe("off");
+    expect(out.evalSource).toBe("env");
+  });
+
+  it("env advisory OVERRIDES file off -> inject/advisory, eval_source=env", () => {
+    writeCandidate();
+    writeSkillsToml("off");
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
+    expect(out.decision).toBe("inject");
+    expect(out.reason).toBe("advisory");
+    expect(out.evalSource).toBe("env");
+  });
+
+  it("file off -> omit/off even for an ACTIVE skill", () => {
+    writeSkill("active", SKILL_TEMPLATE("active"));
+    writeSkillsToml("off");
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.mode).toBe("off");
+    expect(out.evalSource).toBe("file");
+  });
+
+  it("absent [lean] key -> inert (omit/off, no error)", () => {
+    writeCandidate();
+    writeSkillsToml(undefined); // file exists but has no [lean] section
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.mode).toBeNull();
+    expect(out.evalSource).toBeNull();
+    expect(out.error).toBeUndefined();
+  });
+
+  it("absent file -> inert (omit/off, no error)", () => {
+    writeCandidate();
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.mode).toBeNull();
+    expect(out.error).toBeUndefined();
+  });
+
+  it("invalid file value -> treated as absent -> inert", () => {
+    writeCandidate();
+    writeSkillsToml("banana");
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.mode).toBeNull();
+    expect(out.error).toBeUndefined();
+  });
+
+  it("unreadable config file -> fail-open: inert + bounded error (no crash)", () => {
+    writeCandidate();
+    mkdirSync(join(tmp, "config", "skills.toml"), { recursive: true }); // dir as file -> read error
+    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+    expect(out.error).toBeDefined();
+    expect(out.kernel).toBeUndefined();
+  });
+
+  it("file advisory + normal role -> omit/role (role beats file)", () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "normal", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("role");
+  });
+
+  it("file advisory + Sol hard-orchestrator -> omit/role (NEVER injected)", () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "hard_orchestrator", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("role");
+  });
+
+  it("retired + file advisory -> omit/off (retirement beats advisory)", () => {
+    writeSkill("retired", SKILL_TEMPLATE("retired"));
+    writeSkillsToml("advisory");
+    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE" });
+    expect(out.decision).toBe("omit");
+    expect(out.reason).toBe("off");
+  });
+
+  it("leanEvalFromSkillsToml: parses [lean] eval advisory/off; ignores other sections", () => {
+    expect(leanEvalFromSkillsToml('[router]\nmax_active = 3\n\n[lean]\neval = "advisory"\n')).toBe("advisory");
+    expect(leanEvalFromSkillsToml('[lean]\neval = "off"\n')).toBe("off");
+    expect(leanEvalFromSkillsToml('[lean]\neval = OFF\n')).toBe("off"); // case-insensitive, unquoted
+    expect(leanEvalFromSkillsToml('[router]\nmax_active = 3\n')).toBeUndefined();
+    expect(leanEvalFromSkillsToml('[lean]\nmax_active = 3\n')).toBeUndefined();
+    expect(leanEvalFromSkillsToml("[lean]\neval = 'banana'\n")).toBeUndefined();
+  });
+});
+
 describe("appendLeanKernel (dedup marker, plan §8.4)", () => {
   it("appends the marker block + canonical kernel verbatim", () => {
     const out = appendLeanKernel("BASE", CANONICAL_KERNEL);
@@ -394,6 +531,35 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lean?.role).toBe("worker");
     expect(lean?.kernel_chars).toBe(865);
     expect(lean?.dedup_hit).toBe(false);
+  });
+
+  it("FILE gate: skills.toml [lean] eval=advisory (env unset) -> kernel injected, eval_source=file", async () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const handlers = loadFactory();
+    const result = await fireBeforeAgentStart(handlers, makeCtx());
+    expect(promptOf(result)).toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toContain(CANONICAL_KERNEL);
+    const lines = await waitForLines(2);
+    const lean = lines.find((l) => l.kind === "lean_kernel");
+    expect(lean?.decision).toBe("inject");
+    expect(lean?.reason).toBe("advisory");
+    expect(lean?.mode).toBe("advisory");
+    expect(lean?.eval_source).toBe("file");
+  });
+
+  it("FILE gate: env off overrides file advisory at wiring level", async () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    process.env.SECOND_BRAIN_LEAN = "off";
+    const handlers = loadFactory();
+    const result = await fireBeforeAgentStart(handlers, makeCtx());
+    expect(result).toBeUndefined();
+    const lines = await waitForLines(2);
+    const lean = lines.find((l) => l.kind === "lean_kernel");
+    expect(lean?.decision).toBe("omit");
+    expect(lean?.reason).toBe("off");
+    expect(lean?.eval_source).toBe("env");
   });
 
   it("advisory + driver -> contract and kernel merged once, kernel AFTER contract (plan §7.4 ordering)", async () => {
