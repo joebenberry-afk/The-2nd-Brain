@@ -212,7 +212,7 @@ def test_lazy_migration_0002_on_v1_brain(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6, 7, 8]
+    assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6, 7, 8, 9]
     eid = _create(brain_home)
     assert db.pending_migrations(dbfile) == []
     assert episodes.show_episode(brain_home, eid)["row"]["episode_id"] == eid

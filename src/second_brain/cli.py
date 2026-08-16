@@ -290,6 +290,35 @@ def _parser() -> argparse.ArgumentParser:
     lrh.add_argument("--from-seq", dest="from_seq", type=int, default=None)
     lrh.add_argument("--to-seq", dest="to_seq", type=int, default=None)
 
+    ses = sub.add_parser(
+        "session",
+        parents=[home_parent],
+        help="P2 session lifecycle: recovery, retention, purge (plan §12/§13)",
+    )
+    sess = ses.add_subparsers(dest="session_command", required=True)
+    slist = sess.add_parser(
+        "list", parents=[home_parent], help="list session ledgers + purge receipts"
+    )
+    slist.add_argument("--json", action="store_true")
+    spin = sess.add_parser(
+        "pin", parents=[home_parent], help="pin a session (preserve from auto-purge)"
+    )
+    spin.add_argument("host_session_id")
+    spin.add_argument("--unpin", action="store_true")
+    spurg = sess.add_parser("purge", parents=[home_parent], help="finalize+purge a session ledger")
+    spurg.add_argument("host_session_id", nargs="?", default=None)
+    spurg.add_argument(
+        "--inactive", action="store_true", help="allow purging an inactive_grace session"
+    )
+    spurg.add_argument("--dry-run", action="store_true")
+    spurg.add_argument(
+        "--oldest",
+        action="store_true",
+        help="choose the oldest inactive unpinned session (storage pressure)",
+    )
+    srec = sess.add_parser("recover", parents=[home_parent], help="crash recovery report")
+    srec.add_argument("host_session_id")
+
 
     art = sub.add_parser(
         "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
@@ -2199,6 +2228,59 @@ def cmd_ledger(args) -> int:
     return 2
 
 
+def cmd_session(args) -> int:
+    """P2 session lifecycle CLI (plan §12/§13; Phase G/T-G5)."""
+    from . import contracts, ledger
+
+    home = _home(args)
+    cmd = args.session_command
+    if cmd == "list":
+        sessions = ledger.list_sessions(home)
+        if args.json:
+            print(contracts.canonical_json({"sessions": sessions}))
+        else:
+            for s in sessions:
+                flag = "P" if s.get("pinned") else " "
+                purged = " [PURGED]" if s.get("purged") else ""
+                print(
+                    f"{flag} {s.get('host_session_id')} {s.get('status')} "
+                    f"{s.get('created_at') or ''}{purged}"
+                )
+        return 0
+    if cmd == "pin":
+        life = ledger.SessionLifecycle(home, args.host_session_id)
+        life.pin(not args.unpin)
+        print(contracts.canonical_json({"pinned": not args.unpin, "session": args.host_session_id}))
+        return 0
+    if cmd == "recover":
+        life = ledger.SessionLifecycle(home, args.host_session_id)
+        report = life.recover_report()
+        print(contracts.canonical_json(report))
+        return 0
+    if cmd == "purge":
+        host = args.host_session_id
+        if args.oldest:
+            host = ledger.select_oldest_inactive_unpinned(home)
+            if host is None:
+                print(contracts.canonical_json({"error": "no inactive unpinned session"}))
+                return 0
+        if host is None:
+            print(contracts.canonical_json({"error": "host_session_id required (or --oldest)"}))
+            return 2
+        try:
+            result = ledger.SessionLifecycle(home, host).purge(
+                inactive=args.inactive,
+                dry_run=args.dry_run,
+                retention=ledger.load_retention_config(home),
+            )
+        except ledger.SessionLifecycleError as exc:
+            print(contracts.canonical_json({"error": str(exc), "purged": False}))
+            return 0  # fail-open: report, never crash
+        print(contracts.canonical_json(result))
+        return 0
+    return 2
+
+
 def cmd_autoinject(args) -> int:
     from . import autoinject, contracts
 
@@ -2321,6 +2403,7 @@ def main(argv: list[str] | None = None) -> int:
         "autoinject": cmd_autoinject,
         "orchestration": cmd_orchestration,
         "ledger": cmd_ledger,
+        "session": cmd_session,
     }
     try:
         return handlers[args.command](args)
