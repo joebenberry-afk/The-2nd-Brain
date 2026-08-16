@@ -48,3 +48,27 @@ Acceptance: 17/17 per window, 34/34 total (judge exits all 0, full sequences
 run). New files across 34 runs: required deliverables only. Per-pair table:
 p3-lean-code-gate.md. Marginal Lean kernel cost: NOT MEASURED (zero
 injections); planning bound 865 chars ≈ 216 input tokens/turn.
+
+## Window 2 — VALID paired-eval window (17 tasks × 2 arms; added 2026-08-16)
+
+Evidence: outputs/reports/p3-eval/<task>-{baseline,candidate}-2/ (committed
+3e64bc9). This window is the authoritative comparison: candidate arms had the
+Lean kernel injected (lean_kernel inject/advisory/eval_source=file/865 per
+arm, verified), baseline arms omit/off. Window 1 is superseded (invalid).
+
+| metric | B window sum/median | C window sum/median |
+|---|---|---|
+| input_tokens | 329,286 / 17,234 | 318,110 / 17,558 |
+| output_tokens | 94,088 / 5,249 | 110,440 / 6,233 |
+| cache_read_tokens | 2,633,984 / 148,352 | 2,955,008 / 164,992 |
+| cache_write_tokens | 0 / 0 | 0 / 0 |
+| cost_total $ | 0.07982 / 0.00428 | 0.08373 / 0.00465 |
+| turns | 170 / 10 | 179 / 10 |
+| tool_calls | 186 | 203 |
+| wall_ms | 1,032,642 / 57,743 | 1,168,487 / 66,888 |
+| AutoInject packets / packet_tokens | 50 / 43,958 | 50 / 43,958 |
+
+Acceptance 17/17 per arm (34/34), judge exits all 0. Kernel marginal input
+delta median +359 tok/pair (TOTAL realistic cost incl. cache-warmth; no pure
+Lean claim). Gate verdict: PASS — candidate → shadow recommended. Per-pair
+table + full analysis: p3-lean-code-gate.md.

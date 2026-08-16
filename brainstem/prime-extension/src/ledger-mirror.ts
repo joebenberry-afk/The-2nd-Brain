@@ -80,6 +80,28 @@ function eventIdFor(kind: string): string {
   return `mirror-${kind}-${randomUUID()}`;
 }
 
+/**
+ * True when the CLI error is the ledger's duplicate rejection for THE SAME
+ * event this mirror is delivering (P3-E final fix). The bounded retry
+ * re-sends the byte-identical payload when a first attempt persisted the
+ * event but reported failure (crash between commit and stdout); the ledger's
+ * deterministic duplicate rejection then means the event IS durably in the
+ * ledger — delivery succeeded (fire-and-forget goal met; the ledger remains
+ * the sequence authority). A duplicate of a DIFFERENT event is a real error.
+ */
+function isDuplicateOfThisEvent(cliError: string, eventJson: string): boolean {
+  let eventId: unknown;
+  try {
+    eventId = (JSON.parse(eventJson) as { event_id?: unknown }).event_id;
+  } catch {
+    return false;
+  }
+  return (
+    typeof eventId === "string" &&
+    cliError.includes(`duplicate event_id: '${eventId}'`)
+  );
+}
+
 export function buildMirrorEventJson(record: MirrorRecord): string {
   const event = {
     // T-G6-F1: seq is OMITTED entirely — the ledger auto-assigns the
@@ -202,6 +224,14 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
             try {
               const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
               if (parsed && parsed.error) {
+                // P3-E final fix: the retry re-sends the SAME payload; if the
+                // ledger already holds THIS event (first attempt persisted but
+                // reported failure), delivery succeeded — resolve ok, do not
+                // pollute telemetry with an error record.
+                if (isDuplicateOfThisEvent(String(parsed.error), json)) {
+                  resolve({ ok: true });
+                  return;
+                }
                 resolve({ ok: false, error: String(parsed.error) });
                 return;
               }
