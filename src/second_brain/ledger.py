@@ -23,6 +23,8 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -211,15 +213,34 @@ def internal_session_id(host_session_id: str) -> str:
     return hashlib.sha256((host_session_id or "").encode("utf-8")).hexdigest()
 
 
+def _resolve_under_retry(root: Path, relative: str) -> Path:
+    """resolve_under with a bounded retry for the FIRST-INIT RACE.
+
+    Reproduced under concurrent init of a brand-new session ledger: the
+    session directory appears (created by a sibling process) between the
+    existence check and the Windows path resolution, and the transient
+    handle-open failure surfaces as an OSError-wrapped ValueError. Retrying
+    a few times with a short delay lets the sibling finish; the failure is
+    otherwise deterministic (bounded, never silent)."""
+    last: BaseException | None = None
+    for _attempt in range(3):
+        try:
+            return resolve_under(root, relative, allow_missing=True)
+        except (ValueError, OSError) as exc:
+            last = exc
+            time.sleep(0.1)
+    raise last  # type: ignore[misc]
+
+
 def session_dir(home: Path | str, host_session_id: str) -> Path:
     """Prove + return ``<home>/state/sessions/<internal_id>`` (containment)."""
     root = Path(home) / "state" / "sessions"
     internal = internal_session_id(host_session_id)
-    return resolve_under(root, internal, allow_missing=True)
+    return _resolve_under_retry(root, internal)
 
 
 def _contained(session_path: Path, relative: str) -> Path:
-    return resolve_under(session_path, relative, allow_missing=True)
+    return _resolve_under_retry(session_path, relative)
 
 
 @dataclass(frozen=True)
@@ -257,12 +278,30 @@ class LedgerStore:
         dbfile = self.dbfile
         if not dbfile.exists() and not create:
             raise BrainError(f"ledger not initialized: {self._host_session_id!r}")
-        conn = sqlite3.connect(dbfile)
+        conn = sqlite3.connect(dbfile, timeout=5.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        # P3-E fix (burst resilience): busy_timeout must be in effect BEFORE
+        # any other statement — under a spawn burst, concurrent first-open of
+        # a fresh ledger observed "database is locked" here. Ordinary
+        # statements then wait instead of failing (P3 §24.8: zero recurrence
+        # of ledger error classes).
+        conn.execute("PRAGMA busy_timeout=5000")
+        # journal_mode=WAL is a schema-level change sqlite does NOT reliably
+        # subject to the busy handler (reproduced: OperationalError 'database
+        # is locked' on concurrent init of the same fresh ledger). Bounded
+        # retry keeps first-init atomic without a lock service.
+        journal_error: sqlite3.OperationalError | None = None
+        for _attempt in range(3):
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                journal_error = exc
+                time.sleep(0.1)
+        else:
+            raise journal_error  # type: ignore[misc]
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=5000")
         self._conn = conn
         if create:
             self._init_schema()
@@ -318,9 +357,20 @@ class LedgerStore:
 
     def _check_version(self) -> None:
         assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT value FROM ledger_meta WHERE key = 'schema_version'"
-        ).fetchone()
+        try:
+            row = self._conn.execute(
+                "SELECT value FROM ledger_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            # P3-E fix: under a spawn burst the ledger file may already exist
+            # (a concurrent init created it) while its schema is not yet
+            # committed. Surface that as the deterministic not-initialized
+            # BrainError (CLI prints it cleanly, exit 2) instead of an
+            # unhandled traceback — the extension's single retry then re-runs
+            # the init chain and the append lands.
+            raise BrainError(
+                f"ledger not initialized (schema not ready): {exc}"
+            ) from exc
         if row is None:
             raise BrainError("ledger missing schema_version header")
         version = int(row["value"])
@@ -865,9 +915,22 @@ class LedgerStore:
             "host_artifacts": host_artifacts or [],
         }
         target = _contained(self._dir, _MANIFEST)
-        tmp = _contained(self._dir, f"{_MANIFEST}.tmp")
-        tmp.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
-        os.replace(tmp, target)
+        # P3-E fix: a FIXED tmp name collided under concurrent init of the
+        # same fresh session (Windows sharing violation on write). Use a
+        # unique temp name per process, then one atomic os.replace.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{_MANIFEST}.tmp.", dir=self._dir, text=True
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(canonical_json(manifest) + "\n")
+            os.replace(Path(tmp_name), target)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
 
 def replay_session(home: Path | str, host_session_id: str, lineage: list[str]) -> ProjectedContext:

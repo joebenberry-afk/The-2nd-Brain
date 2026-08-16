@@ -557,6 +557,41 @@ def test_cli_concurrent_appends_all_contiguous(tmp_path) -> None:
     assert out["integrity"]["event_count"] == 8
 
 
+def test_cli_concurrent_init_and_append_burst(tmp_path) -> None:
+    """P3-E fix regression (plan §24.8: zero recurrence of ledger error
+    classes): a BURST of concurrent init+append chains on a BRAND-NEW session
+    ledger (one process per event, exactly how the extension mirrors events
+    at child-session spawn / task-arrival moments) must ALL succeed. Covers
+    the first-init race the 8-way append test cannot: busy_timeout before any
+    statement, bounded journal_mode=WAL retry, unique manifest temp names,
+    and the resolve retry keep it self-healing; seq stays contiguous and the
+    durable ledger remains the sequence authority."""
+    import concurrent.futures
+    import time as _time
+
+    _home, run = _cli_env(tmp_path)
+    host = f"burst-{_time.time_ns()}"
+
+    def init_and_append(i: int):
+        init = run("ledger", "init", "--session", host, "--host", "prime")
+        if init.returncode != 0:
+            return init
+        return run(
+            "ledger", "append", "--session", host, "--stdin-json",
+            stdin=json.dumps(_mirror_event(f"burst-{i}", "user_task", task_sha256=str(i))),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(init_and_append, range(8)))
+    bad = [r for r in results if r.returncode != 0]
+    assert not bad, [r.stderr for r in bad]
+    appended = sorted(s for r in results for s in json.loads(r.stdout)["appended"])
+    assert appended == list(range(1, 9))
+    out = json.loads(run("ledger", "verify", host).stdout)
+    assert out["integrity"]["seq_contiguous"] is True
+    assert out["integrity"]["event_count"] == 8
+
+
 def test_host_artifact_manifest_roundtrip(tmp_path) -> None:
     """T-G2: ledger init --host-artifact KIND=PATH records Prime-owned artifact
     REFERENCES in manifest.json (never copies content)."""

@@ -510,4 +510,97 @@ describe("T-G6-F1/F2 mirror fixes", () => {
     );
     expect(appends.length).toBe(0);
   });
+
+  it("P3-E fix: ONE bounded retry — transient append failure then success resolves ok with byte-identical payload", async () => {
+    const { home, python } = await fakeHome();
+    const appendStdin: string[] = [];
+    let calls = 0;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      const isAppend = (args as string[]).includes("append");
+      calls += 1;
+      const child = {
+        stdin: {
+          write: (s: string) => {
+            if (isAppend) appendStdin.push(s); // captured when the wrapper writes
+          },
+          end: () => {},
+        },
+      };
+      if (!isAppend) {
+        cb(null, '{"initialized":"x","schema_version":1}');
+        return child as never;
+      }
+      if (calls === 2) {
+        cb(new Error("Command failed: ledger append (transient burst race)"));
+      } else {
+        cb(null, '{"appended":[1]}');
+      }
+      return child as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-retry-ok",
+      record: { kind: "user_task", fields: { task_sha256: "abc", prompt_chars: 9 } },
+      python,
+    });
+    expect(result.ok).toBe(true);
+    // exactly one retry: init(1) + append(2) — no third spawn
+    expect(execFileMock.mock.calls.length).toBe(3);
+    expect(appendStdin.length).toBe(2);
+    expect(appendStdin[0]).toBe(appendStdin[1]); // byte-identical payload on retry
+    expect(JSON.parse(appendStdin[1]).payload.task_sha256).toBe("abc");
+  });
+
+  it("P3-E fix: retry is BOUNDED — a second failure records the error (never a third attempt, fail-open)", async () => {
+    const { home, python } = await fakeHome();
+    let appends = 0;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if ((args as string[]).includes("append")) {
+        appends += 1;
+        cb(new Error("Command failed: ledger append boom"));
+        return {} as never;
+      }
+      cb(null, '{"initialized":"x","schema_version":1}');
+      return {} as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-retry-fail",
+      record: { kind: "tool_requested", fields: { tool: "bash", input_bytes: 4 } },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("boom");
+    expect(appends).toBe(2); // exactly one retry — bounded
+  });
+
+  it("P3-E fix: init failure is retried once too (init chain re-runs on retry)", async () => {
+    const { home, python } = await fakeHome();
+    resetMirrorInitCache();
+    let inits = 0;
+    let appends = 0;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if ((args as string[]).includes("init")) {
+        inits += 1;
+        if (inits === 1) {
+          cb(new Error("Command failed: ledger init (first-init race)"));
+        } else {
+          cb(null, '{"initialized":"x","schema_version":1}');
+        }
+        return {} as never;
+      }
+      appends += 1;
+      cb(null, '{"appended":[1]}');
+      return {} as never;
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-retry-init",
+      record: { kind: "session_started", fields: {} },
+      python,
+    });
+    expect(result.ok).toBe(true);
+    expect(inits).toBe(2); // first init failed -> retried
+    expect(appends).toBe(1);
+  });
 });
