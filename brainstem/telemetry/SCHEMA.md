@@ -32,7 +32,7 @@ Kinds:
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason |
 | extension_error | error (string, truncated) |
 | orchestrator_policy_violation | violation, model, detected_by, blocked |
-| autoinject_shadow_decision | decision, reason, packet_tokens, latency_ms, candidate_count, selected_count, delivery_id, packet_sha256, mode, result_patch (mode = resolved host mode at decision time; result_patch = true when advisory/active returned the custom_message patch) |
+| autoinject_shadow_decision | decision, reason, packet_tokens, latency_ms, candidate_count, selected_count, delivery_id, packet_sha256, mode, result_patch, emit_index, cache_hit, handler_returned_message, cli_packet_chars, cli_stdout_chars (mode = resolved host mode; result_patch = patch returned; emit_index = emit ordinal per session+task key, 1 = spawning emit; cache_hit = served from the emit cache without a new spawn; handler_returned_message = this run returned the patch; cli_packet_chars / cli_stdout_chars = parsed packet text length / raw CLI stdout length — Phase C5/C7 instrumentation) |
 | codex_hook_shadow_decision | decision, reason, packet_tokens, delivery_id, candidate_count, selected_count (logged by brainstem/codex-hooks/run.ps1 to codex-hooks.jsonl) |
 
 Field names are snake_case and stable across schema versions; new fields are

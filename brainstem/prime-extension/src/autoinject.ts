@@ -21,7 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoinjectShadowDecision, extensionError } from "./sensors";
 
@@ -29,6 +29,8 @@ export const AUTOINJECT_DEFAULT_TIMEOUT_MS = 5000;
 export const AUTOINJECT_MODE_OFF_VALUES = new Set(["off", "0", "false", "no"]);
 export const AUTOINJECT_MODE_ACTIVE_VALUES = new Set(["advisory", "active", "1", "true", "yes"]);
 export const AUTOINJECT_CUSTOM_TYPE = "brain.autoinject.packet";
+export const AUTOINJECT_DEFAULT_EMIT_TTL_MS = 45000;
+export const AUTOINJECT_EMIT_TTL_ENV = "SECOND_BRAIN_AUTOINJECT_EMIT_TTL_MS";
 /** Windows argv safety margin for --task (CreateProcess ~32k char limit). */
 export const AUTOINJECT_MAX_TASK_ARG_CHARS = 4000;
 
@@ -69,6 +71,145 @@ export function modeFromAutoinjectToml(text: string): AutoInjectMode | undefined
   return undefined;
 }
 
+export interface AutoInjectEmitEntry {
+  /** Cached patch payload (undefined when the decision produced no packet). */
+  message:
+    | { customType: string; content: string; display: boolean; details: unknown }
+    | undefined;
+  /** Outcome from the spawn that populated the cache. */
+  outcome: AutoInjectShadowOutcome | null;
+  /** Number of emits served by this entry (1 = the spawning emit). */
+  emits: number;
+  expiresAt: number;
+  /** First 64 chars of the task that produced this entry (correctness guard:
+   * the key is session-only, so a genuinely different task within TTL must
+   * replace the entry instead of being served a stale message). */
+  promptHead: string;
+}
+
+/**
+ * Per-extension-process emit cache (Phase C5): the host re-emits
+ * before_agent_start multiple times per turn and the LAST result wins, so
+ * every re-emit of the SAME task must return the SAME computed message
+ * without re-spawning (which also prevents duplicate deliveries and
+ * re-resolution variance such as project=default). Key = session + task
+ * sha256; TTL bounds staleness; process-scoped, no global clearing needed.
+ */
+const autoInjectEmitCache = new Map<string, AutoInjectEmitEntry>();
+
+export function autoInjectEmitCacheSize(): number {
+  return autoInjectEmitCache.size;
+}
+
+/** Test seam: clear the process-scoped emit cache. */
+export function resetAutoInjectEmitCache(): void {
+  autoInjectEmitCache.clear();
+}
+
+/**
+ * Cross-process emit cache (Phase C6): the daemon can recover/replace the
+ * session worker mid-turn (observed: "Session worker is recovering" while a
+ * turn was preparing), which resets the in-memory cache and makes a
+ * recovered worker re-spawn + possibly drop the message (last-emit-wins).
+ * Persist entries to <brain home>/state/autoinject-emit-cache.json so cache
+ * hits work ACROSS processes. Best-effort: persistence failures never break
+ * injection (fail open to in-memory-only behavior).
+ */
+function emitCacheFile(home: string): string {
+  return join(home, "state", "autoinject-emit-cache.json");
+}
+
+interface PersistedEmitEntry {
+  message:
+    | { customType: string; content: string; display: boolean; details: unknown }
+    | null;
+  outcome: AutoInjectShadowOutcome | null;
+  emits: number;
+  expiresAt: number;
+  promptHead: string;
+}
+
+function loadEmitCache(home: string): void {
+  try {
+    const raw = readFileSync(emitCacheFile(home), "utf8");
+    const data = JSON.parse(raw) as Record<string, PersistedEmitEntry>;
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(data)) {
+      if (
+        entry !== null &&
+        typeof entry === "object" &&
+        typeof entry.expiresAt === "number" &&
+        entry.expiresAt > now &&
+        !autoInjectEmitCache.has(key)
+      ) {
+        autoInjectEmitCache.set(key, {
+          message: entry.message ?? undefined,
+          outcome: entry.outcome ?? null,
+          emits: typeof entry.emits === "number" ? entry.emits : 1,
+          expiresAt: entry.expiresAt,
+          promptHead: typeof entry.promptHead === "string" ? entry.promptHead : "",
+        });
+      }
+    }
+  } catch {
+    // missing/corrupt file -> empty cache (fail open)
+  }
+}
+
+function persistEmitCache(home: string): void {
+  try {
+    const dir = join(home, "state");
+    mkdirSync(dir, { recursive: true });
+    const now = Date.now();
+    const data: Record<string, PersistedEmitEntry> = {};
+    for (const [key, entry] of autoInjectEmitCache) {
+      if (entry.expiresAt > now) {
+        data[key] = {
+          message: entry.message ?? null,
+          outcome: entry.outcome,
+          emits: entry.emits,
+          expiresAt: entry.expiresAt,
+          promptHead: entry.promptHead,
+        };
+      }
+    }
+    const target = emitCacheFile(home);
+    const tmp = `${target}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data));
+    renameSync(tmp, target);
+  } catch {
+    // persistence must never break injection (fail open)
+  }
+}
+
+function emitTtlMs(): number {
+  const raw = Number(process.env[AUTOINJECT_EMIT_TTL_ENV] ?? AUTOINJECT_DEFAULT_EMIT_TTL_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : AUTOINJECT_DEFAULT_EMIT_TTL_MS;
+}
+
+/**
+ * Phase C8: the cache key is the SESSION only — the host re-emits the same
+ * turn several times with identical prompt text (verified: 7/7
+ * brain_retrieval_attempt rows carried the same task_sha256 in observer6),
+ * and worker processes are long-lived + diverse, so per-task keys fragment
+ * the cache. Correctness: the prompt-head guard (first 64 chars) in
+ * lookupEmitEntry ensures a genuinely different task replaces the entry.
+ */
+function emitKey(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+function promptHead(task: string): string {
+  return task.slice(0, 64);
+}
+
+function lookupEmitEntry(sessionId: string, task: string): AutoInjectEmitEntry | undefined {
+  const entry = autoInjectEmitCache.get(emitKey(sessionId));
+  if (entry === undefined || entry.expiresAt <= Date.now()) return undefined;
+  if (entry.promptHead !== promptHead(task)) return undefined; // new task -> replace
+  return entry;
+}
+
 export function loadAutoInjectHostConfig(home?: string | null): AutoInjectHostConfig {
   // Precedence: env override > config/autoinject.toml [autoinject] mode > shadow.
   const envRaw = (process.env.SECOND_BRAIN_AUTOINJECT_MODE ?? "").trim().toLowerCase();
@@ -104,6 +245,10 @@ export interface AutoInjectShadowOutcome {
   candidateCount: number;
   selectedCount: number;
   packetSha256: string | null;
+  /** Length of the parsed packet text (Phase C7 instrumentation). */
+  cliPacketChars: number | null;
+  /** Length of the raw CLI stdout that was parsed. */
+  cliStdoutChars: number;
 }
 
 export interface AutoInjectRunOptions {
@@ -140,6 +285,8 @@ export function parseShadowOutput(stdout: string): AutoInjectShadowOutcome | nul
     selectedCount: Array.isArray(obj.selected_ids) ? obj.selected_ids.length : 0,
     packetSha256:
       packet !== null ? createHash("sha256").update(packet, "utf8").digest("hex") : null,
+    cliPacketChars: packet !== null ? packet.length : null,
+    cliStdoutChars: stdout.length,
   };
 }
 
@@ -231,6 +378,17 @@ export async function runAdvisoryAutoInject(
   if (call.cfg.mode === "off" || call.cfg.mode === "shadow") return undefined;
   const task = (call.task ?? "").trim();
   if (task.length === 0) return undefined;
+  // Phase C5/C6 emit stability: every re-emit of the same task returns the
+  // SAME computed message without a new spawn (host re-emits
+  // before_agent_start several times per turn; last result wins). The cache
+  // is file-backed so a recovered session worker (new process) still serves
+  // cache hits instead of re-spawning.
+  const key = emitKey(call.session);
+  loadEmitCache(call.home);
+  const hit = lookupEmitEntry(call.session, task);
+  if (hit !== undefined) {
+    return serveEmitCacheHit(call, hit, call.cfg.mode);
+  }
   if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
     return undefined;
   }
@@ -251,18 +409,27 @@ export async function runAdvisoryAutoInject(
       call.append(
         extensionError(call.session, new Error("autoinject advisory spawn failed (timeout/error)")),
       );
+      autoInjectEmitCache.set(key, {
+        message: undefined,
+        outcome: null,
+        emits: 1,
+        expiresAt: Date.now() + emitTtlMs(),
+        promptHead: promptHead(task),
+      });
+      persistEmitCache(call.home);
       return undefined;
     }
-    const resultPatch =
-      outcome.decision === "INJECT" && outcome.packet !== null;
-    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, resultPatch);
-    if (outcome.packet === null) return undefined;
-    return {
-      customType: call.customType ?? AUTOINJECT_CUSTOM_TYPE,
-      content: outcome.packet,
-      display: true,
-      details: { delivery_id: outcome.deliveryId, packet_tokens: outcome.packetTokens },
-    };
+    const message = messageFromOutcome(outcome, call.customType ?? AUTOINJECT_CUSTOM_TYPE);
+    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, message !== undefined, 1, false);
+    autoInjectEmitCache.set(key, {
+      message,
+      outcome,
+      emits: 1,
+      expiresAt: Date.now() + emitTtlMs(),
+      promptHead: promptHead(task),
+    });
+    persistEmitCache(call.home);
+    return message;
   } catch (error) {
     try {
       call.append(extensionError(call.session, error));
@@ -279,6 +446,8 @@ function appendDecisionRecord(
   latencyMs: number,
   mode: "off" | "shadow" | "advisory" | "active",
   resultPatch: boolean,
+  emitIndex: number,
+  cacheHit: boolean,
 ): void {
   call.append(
     autoinjectShadowDecision(call.session, {
@@ -292,8 +461,61 @@ function appendDecisionRecord(
       packet_sha256: outcome.packetSha256,
       mode,
       result_patch: resultPatch,
+      emit_index: emitIndex,
+      cache_hit: cacheHit,
+      handler_returned_message: resultPatch,
+      cli_packet_chars: outcome.cliPacketChars ?? null,
+      cli_stdout_chars: outcome.cliStdoutChars,
     }),
   );
+}
+
+/**
+ * Build the patch message deterministically from an outcome's packet text
+ * (Phase C7): the message must be derived from the packet, never from
+ * ambient entry state — an entry persisted by the shadow path may carry
+ * message=undefined while outcome.packet is present, and advisory re-emits
+ * must still return the SAME message.
+ */
+function messageFromOutcome(
+  outcome: AutoInjectShadowOutcome | null,
+  customType: string,
+): AutoInjectEmitEntry["message"] {
+  if (outcome === null || outcome.packet === null) return undefined;
+  return {
+    customType,
+    content: outcome.packet,
+    display: true,
+    details: { delivery_id: outcome.deliveryId, packet_tokens: outcome.packetTokens },
+  };
+}
+
+/** Serve a cache hit: bump the emit counter, record the FIRST hit only. */
+function serveEmitCacheHit(
+  call: ShadowAutoInjectCall,
+  entry: AutoInjectEmitEntry,
+  mode: "off" | "shadow" | "advisory" | "active",
+): AutoInjectEmitEntry["message"] {
+  entry.emits += 1;
+  const message =
+    entry.message ?? messageFromOutcome(entry.outcome, AUTOINJECT_CUSTOM_TYPE);
+  entry.message = message;
+  if (entry.emits === 2) {
+    // One extra record per key on the first hit (emit_stability marker);
+    // later re-emits stay silent (no per-emit rows).
+    if (entry.outcome !== null) {
+      appendDecisionRecord(
+        call,
+        entry.outcome,
+        0,
+        mode,
+        message !== undefined,
+        entry.emits,
+        true,
+      );
+    }
+  }
+  return message;
 }
 
 /**
@@ -306,6 +528,15 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
   if (call.cfg.mode === "off") return;
   const task = (call.task ?? "").trim();
   if (task.length === 0) return;
+  // Phase C5: cache also applies to shadow — re-emits of the same task skip
+  // the spawn entirely (no duplicate ledger writes, no duplicate records).
+  const key = emitKey(call.session);
+  loadEmitCache(call.home);
+  const hit = lookupEmitEntry(call.session, task);
+  if (hit !== undefined) {
+    serveEmitCacheHit(call, hit, call.cfg.mode);
+    return;
+  }
   // Fail-open: a Brain home without an installed venv is not a runtime;
   // skip silently (no spawn, no record) so host sessions are never touched.
   if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
@@ -328,9 +559,25 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
       call.append(
         extensionError(call.session, new Error("autoinject shadow spawn failed (timeout/error)")),
       );
+      autoInjectEmitCache.set(key, {
+        message: undefined,
+        outcome: null,
+        emits: 1,
+        expiresAt: Date.now() + emitTtlMs(),
+        promptHead: promptHead(task),
+      });
+      persistEmitCache(call.home);
       return;
     }
-    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, false);
+    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, false, 1, false);
+    autoInjectEmitCache.set(key, {
+      message: messageFromOutcome(outcome, AUTOINJECT_CUSTOM_TYPE),
+      outcome,
+      emits: 1,
+      expiresAt: Date.now() + emitTtlMs(),
+      promptHead: promptHead(task),
+    });
+    persistEmitCache(call.home);
   } catch (error) {
     try {
       call.append(extensionError(call.session, error));
