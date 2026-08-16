@@ -147,7 +147,7 @@ describe("runAutoInjectShadow (execFile mocked)", () => {
   const baseOpts = () => ({
     home: "H:/brain",
     task: "wire the adapter",
-    project: "test",
+    cwd: "C:/work/proj",
     sessionId: "s1",
     agentId: "a1",
     cfg: CFG,
@@ -156,6 +156,9 @@ describe("runAutoInjectShadow (execFile mocked)", () => {
     execFileMock.mockImplementation((_py, args, opts, cb) => {
       expect(args[0]).toBe("-m");
       expect(args).toContain("--json");
+      expect(args).toContain("--cwd");
+      expect(args[args.indexOf("--cwd") + 1]).toBe("C:/work/proj");
+      expect(args).not.toContain("--project"); // project resolved in Python
       expect(opts.timeout).toBe(5000);
       expect(opts.env.PYTHONHOME).toBeUndefined();
       expect(opts.env.PYTHONPATH).toBeUndefined();
@@ -206,6 +209,7 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
       session: "s1",
       task: "wire the adapter",
       agentId: "a1",
+      cwd: "C:/work/proj",
       cfg: CFG,
       append,
       runner,
@@ -283,7 +287,7 @@ describe("index.ts wiring (real factory, fake ExtensionAPI)", () => {
     expect(shadowRunMock).toHaveBeenCalledTimes(1);
     const call = shadowRunMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(call.task).toBe("wire the adapter");
-    expect(call.project).toBe("default");
+    expect(call.cwd).toBe("C:/work");
   });
 
   it("session_start schedules shadow run (empty task) and still records session_start", async () => {
@@ -318,6 +322,7 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
       session: "s1",
       task: "wire the adapter",
       agentId: "a1",
+      cwd: "C:/work/proj",
       cfg: { mode: "advisory", timeoutMs: 5000 },
       append,
       runner,

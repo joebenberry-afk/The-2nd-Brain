@@ -446,3 +446,100 @@ def test_role_filter_only_role_tagged_memory_available(brain_home) -> None:
     d = _inject(brain_home, "delegation rules", role_profile="worker", session_id="sw2")
     assert d.decision is InjectionDecision.NO_INJECTION
     assert orch_mem not in d.selected_ids
+
+
+# ---------------------------------------------------------------------------
+# Phase C2 fixes: cwd project resolution, OR-fallback recall, telemetry honesty
+# ---------------------------------------------------------------------------
+
+
+def _attempt_records(home: Path) -> list[dict]:
+    """brain_retrieval_attempt records for this brain's telemetry dir."""
+    import json as _json
+
+    tdir = home / "telemetry" / "agent-performance"
+    out = []
+    if not tdir.is_dir():
+        return out
+    for f in tdir.glob("*.jsonl"):
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = _json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("kind") == "brain_retrieval_attempt":
+                out.append(rec)
+    return out
+
+
+def test_cwd_resolves_project_from_registry(brain_home, tmp_path) -> None:
+    from second_brain import registry
+
+    proj_dir = tmp_path / "proj-x"
+    proj_dir.mkdir()
+    (proj_dir / "marker.txt").write_text("x")
+    registry.add_project(brain_home, proj_dir, name="Proj X", project_id="proj-x")
+    _seed_current(brain_home, "Project X rule", "project x specific rule", project_id="proj-x")
+    # no explicit project: cwd inside the registered root resolves to proj-x
+    d = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "project x specific rule", agent_id="a1", session_id="s-cwd1", cwd=str(proj_dir)
+    )
+    assert d.decision is InjectionDecision.INJECT
+    assert d.selected_ids  # matched the proj-x memory (wrong-project filter would block otherwise)
+
+
+def test_cwd_unregistered_falls_back_to_env_then_default(brain_home, tmp_path, monkeypatch) -> None:
+    _seed_current(brain_home, "Default rule", "default project rule", project_id="default")
+    # unregistered cwd + env fallback -> env project
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "default")
+    d = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "default project rule", agent_id="a1", session_id="s-cwd2", cwd=str(tmp_path / "elsewhere")
+    )
+    assert d.decision is InjectionDecision.INJECT
+    monkeypatch.delenv("SECOND_BRAIN_PROJECT")
+    # no env -> "default" -> memory with project default matches
+    d2 = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "default project rule", agent_id="a1", session_id="s-cwd3", cwd=str(tmp_path / "elsewhere")
+    )
+    assert d2.decision is InjectionDecision.INJECT
+
+
+def test_or_fallback_recall_and_query_mode(brain_home) -> None:
+    mid = _seed_current(
+        brain_home, "Adaptive fan-out", "adaptive fan-out replaces the hard two worker cap"
+    )
+    decoy = _seed_current(brain_home, "Neapolitan pizza", "pizza has three flavors")
+    # AND would return 0 candidates ("policy" absent from every body)
+    d = _inject(brain_home, "adaptive fan-out policy", session_id="s-or1")
+    assert d.decision is InjectionDecision.INJECT
+    assert mid in d.selected_ids
+    assert decoy not in d.selected_ids  # irrelevant decoy still not injected
+    modes = [
+        r.get("query_mode")
+        for r in _attempt_records(brain_home)
+        if r.get("session") == "s-or1"
+    ]
+    assert modes and modes[-1] == "or_fallback"
+    # AND-first unchanged: exact words -> and mode
+    d2 = _inject(brain_home, "adaptive fan-out", session_id="s-or2")
+    assert d2.decision is InjectionDecision.INJECT
+    modes2 = [
+        r.get("query_mode")
+        for r in _attempt_records(brain_home)
+        if r.get("session") == "s-or2"
+    ]
+    assert modes2 and modes2[-1] == "and"
+
+
+def test_no_relevant_only_when_both_modes_empty(brain_home) -> None:
+    d = _inject(brain_home, "zzzqqqx unknown gibberish", session_id="s-none1")
+    assert d.decision is InjectionDecision.NO_INJECTION
+    assert d.reason is NoInjectionReason.NO_RELEVANT_MEMORY
+    modes = [
+        r.get("query_mode")
+        for r in _attempt_records(brain_home)
+        if r.get("session") == "s-none1"
+    ]
+    assert modes and modes[-1] == "or_fallback"
