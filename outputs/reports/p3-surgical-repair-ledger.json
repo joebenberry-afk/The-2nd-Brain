@@ -1,0 +1,31 @@
+{
+  "repair": "second_brain_p3_deepseek_surgical_recovery",
+  "started_at": "2026-08-16T17:16:09.707702+00:00",
+  "branch": "brain/p3-lean-code",
+  "head": "fcfdf8a9db450106bfcac012ce93226923b35027",
+  "gates": {
+    "A_evidence_restored": "PASS",
+    "B_adapter_contract_unit_tests": "PASS",
+    "C_real_antigravity_integration": "BLOCKED \u2014 agy CLI not installed; Antigravity app GUI-only (no automation surface); Antigravity Python SDK requires GEMINI_API_KEY (unavailable). Stopped at READY_FOR_REAL_CAMPAIGN per plan \u00a756 Case 2.",
+    "D_campaign_harness_integrity": "PASS",
+    "E_environment_frozen": "PARTIAL \u2014 adapter+Lean+skill hashes recorded; campaign env freeze awaits real agy (plan \u00a727)",
+    "F_real_campaign": "NOT RUN \u2014 external Antigravity execution unavailable",
+    "G_promotion": "HOLD SHADOW \u2014 REAL CAMPAIGN INCOMPLETE (compiler-derived)"
+  },
+  "notes": [
+    "Synthetic Gemini evidence (e07-e16) quarantined to outputs/reports/p3-promo-eval-invalidated/2026-08-16-gemini-synthetic/ with INVALIDATED.md",
+    "Genuine e07-b-1 DeepSeek partial restored from HEAD fcfdf8a",
+    "False 28/28 PROMOTE ACTIVE report archived as .md.invalid; interim + derived reports written",
+    "Brain memory mem-bb634354ec69 superseded to v2 through brainctl memory lifecycle (history preserved)",
+    "Adapter repaired against exa.hooks_pb contract extracted from installed Antigravity IDE 1.107.0 (camelCase payloads; injectSteps[].ephemeralMessage; Stop decision/reason; PostToolUse {}; no PreToolUse)",
+    "run-hook.ps1 is now a thin transport; AutoInject mode resolved by autoinject.resolve_autoinject_mode (env > config > shadow default)",
+    "Lean runtime: src/second_brain/lean_runtime.py harness-neutral helper mirrors Prime lean-code.ts; kernel single-source from skills/candidates/lean-code/SKILL.md (865 chars, unchanged)",
+    "Transcript parser: src/second_brain/antigravity_transcript.py (bounded tail, fail-open)",
+    "Campaign runner rewritten as orchestrator-only; preflight stops at READY_FOR_REAL_CAMPAIGN with manual next action; do-nothing-agent test proves arms reject",
+    "Compiler derives verdict from evidence; 4/14 valid pairs -> HOLD SHADOW \u2014 REAL CAMPAIGN INCOMPLETE",
+    "Cache regression green (cache_stability + wiring 61 tests); cache source untouched",
+    "Prime deployment parity green (11/11 identical, P3-H STOP present); no reload needed",
+    "Final: pytest full green (2 skipped baseline), ruff clean, doctor 0 failed; pyright 3 pre-existing baseline errors in untouched tests/test_memory_index.py"
+  ],
+  "finished_at": "2026-08-16T17:36:39.474903+00:00"
+}

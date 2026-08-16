@@ -1,0 +1,40 @@
+{
+  "run_id": "e10-net-amount-c-run1",
+  "task": "e10-net-amount",
+  "arm": "arm_c",
+  "session": "8c96755b-4b50-4ce1-a7f8-08c6f551138d",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 4500,
+    "output_tokens": 650,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 5150,
+    "autoinject_packets": 2,
+    "autoinject_packet_tokens": 400,
+    "tool_calls": 4,
+    "turns": 3,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "lib/tax.js"
+    ],
+    "added_lines": 1,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_PREP_REFACTOR: fixed tax calculation in netAmount to use gross * taxRate",
+    "LC_STOP: passed test.js and stopped"
+  ],
+  "acceptance": "PASS"
+}

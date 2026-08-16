@@ -1,0 +1,39 @@
+{
+  "run_id": "e16-title-config-c-run1",
+  "task": "e16-title-config",
+  "arm": "arm_c",
+  "session": "a1c5d6c5-4cba-420f-aed5-58f4bd36ef57",
+  "model": "gemini/gemini-3.7-flash",
+  "harness": "antigravity",
+  "economics": {
+    "input_tokens": 4500,
+    "output_tokens": 650,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "total_tokens": 5150,
+    "autoinject_packets": 2,
+    "autoinject_packet_tokens": 400,
+    "tool_calls": 4,
+    "turns": 3,
+    "wall_ms": 0
+  },
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "config/app.json"
+    ],
+    "added_lines": 3,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_STOP: changed title to 'P3 Eval' in config/app.json and stopped immediately"
+  ],
+  "acceptance": "PASS"
+}
