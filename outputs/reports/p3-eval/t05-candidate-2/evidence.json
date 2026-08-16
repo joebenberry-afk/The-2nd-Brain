@@ -1,0 +1,54 @@
+{
+  "run_id": "t05-candidate-2",
+  "task": "t05-legit-abstraction",
+  "arm": "candidate",
+  "session": "01a009ed-8955-7300-8c12-4375eea477d6",
+  "economics": {
+    "assistant_usage_rows": 10,
+    "input_tokens": 20180,
+    "output_tokens": 4171,
+    "cache_read_tokens": 152704,
+    "cache_write_tokens": 0,
+    "total_tokens": 177055,
+    "cost_total": 0.0044206512,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 13
+    },
+    "turns": 10,
+    "wall_ms": 50711
+  },
+  "judge": [
+    {
+      "command": "step0: restore pristine oracle test.js from fixture source",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e ... checkText defs==1 and calls>=4",
+      "exit": 0
+    },
+    {
+      "command": "node -e ... git status --porcelain has no ?? entries",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "validators.js"
+    ],
+    "added_lines": 11,
+    "deleted_lines": 9,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_ABSTRACTION_JUSTIFIED: extracted shared checkText(v,max) helper \u2014 task explicitly required it and pattern proven stable across 3 existing validators; all 4 validators now delegate to it",
+    "LC_STOP: stopped once JUDGE acceptance commands all passed; no unrelated edits, no new files"
+  ],
+  "acceptance": "PASS"
+}

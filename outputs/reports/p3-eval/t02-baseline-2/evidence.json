@@ -1,0 +1,60 @@
+{
+  "run_id": "t02-baseline-2",
+  "task": "t02-existing-reuse",
+  "arm": "baseline",
+  "session": "01a009e4-6ba1-72bc-828f-b2c44f567253",
+  "economics": {
+    "assistant_usage_rows": 7,
+    "input_tokens": 14818,
+    "output_tokens": 5249,
+    "cache_read_tokens": 89728,
+    "cache_write_tokens": 0,
+    "total_tokens": 109795,
+    "cost_total": 0.0037954784,
+    "autoinject_packets": 2,
+    "autoinject_packet_tokens": 1990,
+    "tool_calls": {
+      "ipython": 8
+    },
+    "turns": 7,
+    "wall_ms": 49539
+  },
+  "judge": [
+    {
+      "command": "node cli.js title hello world | grep -qx \"Hello World\"",
+      "exit": 0
+    },
+    {
+      "command": "node cli.js title oNCE uPON A | grep -qx \"Once Upon A\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const s=require('fs').readFileSync('cli.js','utf8');if(!/lib\\/strings/.test(s))process.exit(1);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git status --porcelain').toString();if(/\\?\\?/.test(out))process.exit(2);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "cli.js"
+    ],
+    "added_lines": 3,
+    "deleted_lines": 0,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_REUSE",
+      "note": "Reused existing capitalize() in lib/strings.js via require instead of duplicating capitalization logic (task's explicit requirement)."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped immediately after all 4 JUDGE acceptance commands exited 0; no extra polish or scope creep."
+    }
+  ],
+  "acceptance": "PASS"
+}

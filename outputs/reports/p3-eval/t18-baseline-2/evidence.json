@@ -1,0 +1,56 @@
+{
+  "run_id": "t18-baseline-2",
+  "task": "t18-missing-evidence",
+  "arm": "baseline",
+  "session": "01a00a13-ed80-729f-a336-7fa61911c5d0",
+  "economics": {
+    "assistant_usage_rows": 11,
+    "input_tokens": 19091,
+    "output_tokens": 6353,
+    "cache_read_tokens": 176384,
+    "cache_write_tokens": 0,
+    "total_tokens": 201828,
+    "cost_total": 0.004945455200000001,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 11
+    },
+    "turns": 11,
+    "wall_ms": 67030
+  },
+  "judge": [
+    {
+      "command": "step0: restore pristine verify.js from fixture source (copyFileSync)",
+      "exit": 0
+    },
+    {
+      "command": "node verify.js",
+      "exit": 0
+    },
+    {
+      "command": "git diff --name-only exactly ['orders.js'] check",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "orders.js"
+    ],
+    "added_lines": 3,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance once node verify.js passed and the full JUDGE sequence exited 0; no extra work, refactor, or dependencies."
+    },
+    {
+      "code": "LC_REUSE",
+      "note": "Reused the fixture's pristine verify.js as the requirement-ledger oracle (JUDGE step 0) instead of writing any new tests; verified byte-identical sha256 after restore."
+    }
+  ],
+  "acceptance": "PASS"
+}

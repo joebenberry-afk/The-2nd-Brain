@@ -1,0 +1,43 @@
+{
+ "run_id": "t09-baseline-2",
+ "task": "t09-legit-tool",
+ "arm": "baseline",
+ "session": "01a009f8-e162-70d7-bdf4-960169f2d0ac",
+ "economics": {
+  "assistant_usage_rows": 12,
+  "input_tokens": 16072,
+  "output_tokens": 2678,
+  "cache_read_tokens": 153216,
+  "cache_write_tokens": 0,
+  "total_tokens": 171966,
+  "cost_total": 0.0034289248,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 12
+  },
+  "turns": 12,
+  "wall_ms": 42462
+ },
+ "judge": [
+  {
+   "command": "node -e \"...execFileSync('node',['make_table.js']); check a.csv & b.csv table output...\"",
+   "exit": 0
+  },
+  {
+   "command": "node -e \"...git status --porcelain; only make_table.js untracked...\"",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [],
+  "added_lines": 0,
+  "deleted_lines": 0,
+  "new_files": [
+   "make_table.js"
+  ]
+ },
+ "files_touched": 1,
+ "lc_decisions": [],
+ "acceptance": "PASS"
+}
