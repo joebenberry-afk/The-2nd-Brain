@@ -170,6 +170,20 @@ const EVENTS: Array<[string, unknown]> = [
   ["before_agent_start", { prompt: "hello world" }],
   ["turn_start", { turnIndex: 0 }],
   ["context", { messages: [{}, {}] }],
+  // P3-B economics events: message_end carries usage so its record kind
+  // (assistant_usage) is written by the generic loop below.
+  ["before_provider_request", { payload: { model: "deepseek/deepseek-v4-flash", messages: [] } }],
+  ["after_provider_response", { status: 200, headers: { "x-ratelimit-remaining": "1" } }],
+  [
+    "message_end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      },
+    },
+  ],
   ["tool_call", { toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }],
   ["tool_result", { toolName: "bash", toolCallId: "c1", input: {}, content: [], details: {}, isError: false }],
   ["turn_end", { turnIndex: 0, message: {}, toolResults: [] }],
@@ -180,7 +194,7 @@ const EVENTS: Array<[string, unknown]> = [
 ];
 
 describe("factory wiring (src/index.ts)", () => {
-  it("subscribes exactly the 11 lifecycle events", () => {
+  it("subscribes exactly the 14 lifecycle events (11 + P3-B economics)", () => {
     const handlers = loadFactory();
     expect([...handlers.keys()].sort()).toEqual(EVENTS.map(([name]) => name).sort());
   });
@@ -188,12 +202,18 @@ describe("factory wiring (src/index.ts)", () => {
   it("every handler returns undefined (void) and still writes one record each", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
-    expect(handlers.size).toBe(11);
+    expect(handlers.size).toBe(14);
     for (const [name, event] of EVENTS) {
       const handler = handlers.get(name);
       expect(handler, `handler for ${name}`).toBeDefined();
       const result = await handler!(event, ctx);
-      if (name === "session_before_compact") {
+      if (name === "message_end") {
+        // P3-B: message_end MUST return the finalized message unchanged
+        // (role preserved — the runtime replaces the message in place).
+        expect(result).toEqual({
+          message: (event as { message: unknown }).message,
+        });
+      } else if (name === "session_before_compact") {
         // T-G4: the pre-compaction durability barrier returns {cancel:true}
         // when the ledger checkpoint cannot prove durability (venv-less test
         // homes) — compaction must not proceed unprotected.
@@ -211,18 +231,28 @@ describe("factory wiring (src/index.ts)", () => {
     // land ahead of still-queued async writes, so order is asserted as a set
     // here; real ordering (shutdown last) is covered by the dedicated test
     // below, where prior writes have settled before shutdown fires.
-    const records = await waitForLines(12); // 11 event kinds + optional barrier extension_error
+    const records = await waitForLines(15); // 14 event records + optional barrier extension_error
     const kinds = records.map((r) => r.kind).sort();
-    const expected = EVENTS.map(([name]) => name).sort();
+    // The three P3-B hooks write record kinds that differ from their event
+    // names (provider_request_meta / provider_response_meta / assistant_usage)
+    // and are asserted separately; every other subscribed event writes its
+    // own kind.
+    const p3Kinds = ["provider_request_meta", "provider_response_meta", "assistant_usage"];
+    const expected = EVENTS.map(([name]) => name)
+      .filter((n) => !["before_provider_request", "after_provider_response", "message_end"].includes(n))
+      .sort();
     // T-G4: the venv-less test home cannot prove the pre-compaction barrier,
     // so session_before_compact appends one extra extension_error and returns
-    // {cancel:true}; the 11 lifecycle kinds must all still be present.
+    // {cancel:true}; every subscribed kind must still be present.
     for (const kind of expected) {
+      expect(kinds).toContain(kind);
+    }
+    for (const kind of p3Kinds) {
       expect(kinds).toContain(kind);
     }
     expect(kinds.filter((k) => k === "extension_error").length).toBeLessThanOrEqual(1);
     for (const rec of records) {
-      expect(rec.v).toBe(2);
+      expect([2, 3]).toContain(rec.v); // v=2 legacy kinds + v=3 P3-B kinds
       expect(rec.session).toBe("wiring-test");
     }
   });
@@ -1161,5 +1191,212 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const records = await waitForLines(1);
     expect(records[0].role).toBe("driver");
     expect(records[0].driver_contract_injected).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-B economics wiring (plan §5.1/§5.4/§5.5; schema v3 records)
+// ---------------------------------------------------------------------------
+
+describe("P3-B economics wiring", () => {
+  it("before_provider_request appends provider_request_meta and never replaces the payload", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const payload = {
+      model: "deepseek/deepseek-v4-flash",
+      messages: [
+        { role: "system", content: "SYSTEM-SECRET" },
+        { role: "user", content: "TOP SECRET TASK" },
+      ],
+      tools: [{ name: "bash" }],
+    };
+    const result = handlers.get("before_provider_request")!(
+      { type: "before_provider_request", payload },
+      ctx,
+    );
+    expect(result).toBeUndefined(); // payload untouched, measurement only
+
+    const records = await waitForLines(1);
+    const meta = records.find((r) => r.kind === "provider_request_meta");
+    expect(meta).toBeDefined();
+    expect(meta?.v).toBe(3);
+    expect(meta?.request_seq).toBe(1);
+    expect(meta?.message_count).toBe(2);
+    expect(meta?.payload_keys).toEqual(["messages", "model", "tools"]);
+    expect(meta?.provider).toBe("deepseek");
+    expect(meta?.model).toBe("deepseek-v4-flash");
+    expect(typeof meta?.system_prefix_sha).toBe("string");
+    expect(typeof meta?.tool_surface_sha).toBe("string");
+    // privacy: no payload content anywhere in the telemetry file
+    expect(JSON.stringify(records)).not.toContain("TOP SECRET");
+    expect(JSON.stringify(records)).not.toContain("SYSTEM-SECRET");
+    expect(JSON.stringify(records)).not.toContain("bash");
+  });
+
+  it("before_provider_request request_seq increments across requests", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("before_provider_request")!({ type: "before_provider_request", payload: {} }, ctx);
+    handlers.get("before_provider_request")!({ type: "before_provider_request", payload: {} }, ctx);
+    const records = await waitForLines(2);
+    const seqs = records
+      .filter((r) => r.kind === "provider_request_meta")
+      .map((r) => r.request_seq);
+    expect(seqs).toEqual([1, 2]);
+  });
+
+  it("message_end returns the SAME message (role preserved) and records assistant_usage with exact host values", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 18,
+        cost: { input: 0.01, output: 0.02, cacheRead: 0.03, cacheWrite: 0.04, total: 0.1 },
+      },
+    };
+    const result = handlers.get("message_end")!({ type: "message_end", message }, ctx) as {
+      message?: unknown;
+    };
+    expect(result?.message).toBe(message); // identical object, role untouched
+
+    const records = await waitForLines(1);
+    const usage = records.find((r) => r.kind === "assistant_usage");
+    expect(usage).toBeDefined();
+    expect(usage?.v).toBe(3);
+    expect(usage?.provider).toBe("deepseek");
+    expect(usage?.model).toBe("deepseek-v4-flash");
+    expect(usage?.input_tokens).toBe(10);
+    expect(usage?.output_tokens).toBe(5);
+    expect(usage?.cache_read_tokens).toBe(3);
+    expect(usage?.cache_write_tokens).toBe(0); // zero preserved
+    expect(usage?.total_tokens).toBe(18);
+    expect(usage?.cost_total).toBe(0.1);
+    expect(JSON.stringify(records)).not.toContain("hi"); // message content never persisted
+  });
+
+  it("message_end without usage writes no assistant_usage record and still returns the message", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const message = { role: "assistant", content: [] };
+    const result = handlers.get("message_end")!({ type: "message_end", message }, ctx) as {
+      message?: unknown;
+    };
+    expect(result?.message).toBe(message);
+    await settle();
+    let lines: string[] = [];
+    try {
+      lines = (await readFile(telemetryFile(), "utf8")).split("\n").filter((l) => l.trim().length > 0);
+    } catch {
+      // no file yet — nothing was written
+    }
+    expect(lines.some((l) => l.includes('"assistant_usage"'))).toBe(false);
+  });
+
+  it("message_end falls back to ctx model when the message lacks provider/model", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx(); // deepseek/deepseek-v4-flash
+    const message = { role: "assistant", usage: { input: 1, output: 2 } };
+    handlers.get("message_end")!({ type: "message_end", message }, ctx);
+    const records = await waitForLines(1);
+    const usage = records.find((r) => r.kind === "assistant_usage");
+    expect(usage?.provider).toBe("deepseek");
+    expect(usage?.model).toBe("deepseek-v4-flash");
+    // counters the host did not report are omitted, never invented
+    expect(usage).not.toHaveProperty("cache_read_tokens");
+    expect(usage).not.toHaveProperty("total_tokens");
+    expect(usage).not.toHaveProperty("cost_total");
+  });
+
+  it("after_provider_response records status and hashed allowlisted headers only", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const result = handlers.get("after_provider_response")!(
+      {
+        type: "after_provider_response",
+        status: 200,
+        headers: {
+          "x-ratelimit-remaining": "99",
+          "content-type": "application/json",
+          "x-request-id": "abc123",
+          authorization: "Bearer sk-abc",
+        },
+      },
+      ctx,
+    );
+    expect(result).toBeUndefined(); // read-only hook
+
+    const records = await waitForLines(1);
+    const meta = records.find((r) => r.kind === "provider_response_meta");
+    expect(meta).toBeDefined();
+    expect(meta?.v).toBe(3);
+    expect(meta?.status).toBe(200);
+    expect(meta?.headers).toHaveLength(1);
+    expect((meta?.headers as { key: string; value_sha256: string }[])[0].key).toBe(
+      "x-ratelimit-remaining",
+    );
+    expect(
+      (meta?.headers as { key: string; value_sha256: string }[])[0].value_sha256,
+    ).toMatch(/^[0-9a-f]{64}$/);
+    const text = JSON.stringify(records);
+    expect(text).not.toContain("abc123");
+    expect(text).not.toContain("application/json");
+    expect(text).not.toContain("sk-abc");
+  });
+
+  it("provider hooks fail open: a throwing payload getter records extension_error and never blocks", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const payload: Record<string, unknown> = {};
+    Object.defineProperty(payload, "messages", {
+      get() {
+        throw new Error("payload boom");
+      },
+    });
+    let threw = false;
+    let result: unknown;
+    try {
+      result = handlers.get("before_provider_request")!(
+        { type: "before_provider_request", payload },
+        ctx,
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    expect(records[0].kind).toBe("extension_error");
+    expect(records[0].error).toBe("payload boom");
+  });
+
+  it("message_end fail open: a throwing usage getter still returns the message unchanged", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const message: Record<string, unknown> = { role: "assistant" };
+    Object.defineProperty(message, "usage", {
+      get() {
+        throw new Error("usage boom");
+      },
+    });
+    let threw = false;
+    let result: unknown;
+    try {
+      result = handlers.get("message_end")!({ type: "message_end", message }, ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect((result as { message?: unknown }).message).toBe(message);
+
+    const records = await waitForLines(1);
+    expect(records[0].kind).toBe("extension_error");
+    expect(records[0].error).toBe("usage boom");
   });
 });

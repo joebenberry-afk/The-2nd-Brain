@@ -73,6 +73,48 @@ export interface ContextEvent {
   messages: unknown[];
 }
 
+// ---------------------------------------------------------------------------
+// P3-B economics events (plan §5.1/§5.4/§5.5; verified against the installed
+// v0.7.2 runtime — packages/coding-agent/src/core/extensions/types.ts:612,
+// :618, :690 — and the Phase A live probe).
+// ---------------------------------------------------------------------------
+
+/**
+ * Fired before a provider request is sent. `payload` is the raw provider
+ * request object. Returning a value REPLACES the payload — this extension
+ * only measures and always returns undefined.
+ */
+export interface BeforeProviderRequestEvent {
+  type: "before_provider_request";
+  payload: unknown;
+}
+
+/** Fired after a provider response is received, before the stream is consumed. Read-only hook. */
+export interface AfterProviderResponseEvent {
+  type: "after_provider_response";
+  status: number;
+  headers: Record<string, string>;
+}
+
+/** Minimal assistant-message surface consumed by message_end (usage capture only). */
+export interface MessageEndMessage {
+  role?: string;
+  provider?: unknown;
+  model?: unknown;
+  usage?: Usage;
+  [key: string]: unknown;
+}
+
+/**
+ * Fired when an assistant message finishes streaming. Returning
+ * `{ message }` replaces the finalized message; the runtime REQUIRES the
+ * replacement to keep the original message role (agent-session.ts:3315).
+ */
+export interface MessageEndEvent {
+  type: "message_end";
+  message: MessageEndMessage;
+}
+
 export interface ToolCallEvent {
   type: "tool_call";
   toolName: string;
@@ -127,6 +169,9 @@ export type PrimeEvent =
   | BeforeAgentStartEvent
   | TurnStartEvent
   | ContextEvent
+  | BeforeProviderRequestEvent
+  | AfterProviderResponseEvent
+  | MessageEndEvent
   | ToolCallEvent
   | ToolResultEvent
   | TurnEndEvent
@@ -159,6 +204,58 @@ export interface BeforeAgentStartEventResult {
   systemPrompt?: string;
 }
 
+/**
+ * Provider usage counters as reported by the host on every assistant message
+ * (verified against @earendil-works/pi-ai src/types.ts:201). All fields are
+ * numbers when present; the P3 sensors preserve the host's zero-vs-missing
+ * distinction and never invent values.
+ */
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
+/**
+ * Result from a `message_end` handler: `{ message }` replaces the finalized
+ * message. The replacement MUST keep the original message role — the runtime
+ * rejects role changes (types.ts:951, runner.ts:729).
+ */
+export interface MessageEndEventResult {
+  message?: MessageEndMessage;
+}
+
+/**
+ * Result from a `tool_result` handler: only defined `content`/`details`/
+ * `isError` fields are applied (runner.ts:770-781). Verified against
+ * types.ts:945.
+ */
+export interface ToolResultEventResult {
+  content?: unknown[];
+  details?: unknown;
+  isError?: boolean;
+}
+
+/** Result from a `context` handler: `{ messages }` replaces the LLM context (types.ts:925). */
+export interface ContextEventResult {
+  messages?: unknown[];
+}
+
+/** Minimal tool descriptor returned by `getAllTools` (only `name` is consumed). */
+export interface ToolInfo {
+  name: string;
+  [key: string]: unknown;
+}
+
 /** Extension API surface used by this extension. */
 export interface ExtensionAPI {
   /** tool_call handlers may block execution. */
@@ -174,6 +271,31 @@ export interface ExtensionAPI {
       ctx: ExtensionContext,
     ) => BeforeAgentStartEventResult | undefined | Promise<BeforeAgentStartEventResult | undefined>,
   ): void;
+  /** P3-B: before_provider_request is measured only — returning undefined keeps the payload. */
+  on(
+    event: "before_provider_request",
+    handler: (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => unknown,
+  ): void;
+  /** P3-B: after_provider_response is a read-only hook (status + header metadata). */
+  on(
+    event: "after_provider_response",
+    handler: (event: AfterProviderResponseEvent, ctx: ExtensionContext) => void,
+  ): void;
+  /** P3-B: message_end handlers may replace the finalized message (role must be preserved). */
+  on(
+    event: "message_end",
+    handler: (event: MessageEndEvent, ctx: ExtensionContext) => MessageEndEventResult | undefined,
+  ): void;
+  /** tool_result handlers may patch content/details/isError (only defined fields apply). */
+  on(
+    event: "tool_result",
+    handler: (event: ToolResultEvent, ctx: ExtensionContext) => ToolResultEventResult | undefined,
+  ): void;
+  /** context handlers may replace the LLM context via { messages }. */
+  on(
+    event: "context",
+    handler: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined,
+  ): void;
   on<E extends PrimeEvent>(
     name: E["type"],
     handler: (event: E, ctx: ExtensionContext) => unknown,
@@ -181,4 +303,8 @@ export interface ExtensionAPI {
   /** Not used; modeled so callers can type-check `pi` fully. */
   exec?(command: string, args?: string[], options?: unknown): Promise<unknown>;
   appendEntry?(customType: string, data?: unknown): void;
+  /** P3-B tool-control API (types.ts:1435-1439) — modeled for Phase J measurement, not consumed today. */
+  getActiveTools?(): string[];
+  getAllTools?(): ToolInfo[];
+  setActiveTools?(toolNames: string[]): void;
 }

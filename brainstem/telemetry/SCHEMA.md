@@ -6,8 +6,9 @@ record per line, in `<SECOND_BRAIN_HOME>/telemetry/agent-performance/<session-st
 `session` = basename of the Prime session file without `.jsonl`, else
 `anon-<epochms>-<rand>`.
 
-Common fields on every record: `v` (schema version, =2), `ts` (ISO-8601 UTC,
-ms precision), `kind`, `session`.
+Common fields on every record: `v` (schema version — =2 for pre-P3 kinds,
+=3 for the P3-B economics kinds below; additive), `ts` (ISO-8601 UTC, ms
+precision), `kind`, `session`.
 
 Privacy rule (constitution/security-boundaries.md): never store message
 content, prompts, tool I/O payloads, or chain-of-thought. Store only counts,
@@ -31,10 +32,13 @@ Kinds:
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason |
 | extension_error | error (string, truncated) |
+| assistant_usage | provider, model, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
+| provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
+| provider_response_meta | provider, model, status?, headers? [{key, value_sha256}] (v=3; P3-B) |
 | orchestrator_policy_violation | violation, model, detected_by, blocked |
 | autoinject_shadow_decision | decision, reason, packet_tokens, latency_ms, candidate_count, selected_count, delivery_id, packet_sha256, mode, model_visible, result_patch, emit_index, cache_hit, handler_returned_message, cli_packet_chars, cli_stdout_chars (mode = resolved host mode; model_visible = true when this decision path is the model-visible custom-message injection path (advisory/active), false for shadow (decide+record only, never model-visible); result_patch = patch returned; emit_index = emit ordinal per session+task key, 1 = spawning emit; cache_hit = served from the emit cache without a new spawn; handler_returned_message = this run returned the patch; cli_packet_chars / cli_stdout_chars = parsed packet text length / raw CLI stdout length — Phase C5/C7 instrumentation) |
 | codex_hook_shadow_decision | decision, reason, packet_tokens, delivery_id, candidate_count, selected_count (logged by brainstem/codex-hooks/run.ps1 to codex-hooks.jsonl) |
-| brain_packet_delivered | packet_id, item_count, packet_tokens, delivery_count, canonical_packet_hash, model_visible (Python AutoInject pipeline, `second_brain/autoinject.py`; model_visible = false — the Python pipeline only PREPARES deliveries, actual model-visible injection happens via the host adapter custom-message path) |
+| brain_packet_delivered | packet_id, item_count, packet_tokens, delivery_count, canonical_packet_hash, model_visible, delivery_prepared (Python AutoInject pipeline, `second_brain/autoinject.py`; model_visible = false and delivery_prepared = true — the Python event is the PREPARED/delivery-ledger state, NOT host insertion; actual model-visible injection happens via the host adapter custom-message path) |
 
 Field names are snake_case and stable across schema versions; new fields are
 additive.
@@ -116,3 +120,56 @@ Both fields are snake_case and additive under the schema rule "new fields are
 additive"; the Python validator (`src/second_brain/telemetry.py`) requires no
 change (unknown/extra fields are ignored; only `v`, `kind`, `session`, `ts`
 are checked).
+
+
+## Phase P3-B addition — economics instrumentation (2026-08-16)
+
+Additive schema v3 records emitted by the Prime extension (`sensors.ts` /
+`index.ts`) from the provider hooks proven live in Phase A:
+
+### `assistant_usage` (v=3; per assistant message, `message_end`)
+
+- Fields: `provider`, `model`, `input_tokens`, `output_tokens`,
+  `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `cost_total`.
+- Uses the EXACT host values (`Usage.input/output/cacheRead/cacheWrite/
+  totalTokens/cost.total`). A counter is **omitted** when the host did not
+  report it — never invented. Zero is preserved as `0` where the host
+  distinguishes zero from missing.
+- `provider`/`model` come from the message itself when the host exposes them,
+  else from the extension context model (provider/id split); null when
+  unknown. No record is emitted when the host exposes no usage object.
+
+### `provider_request_meta` (v=3; per provider request, `before_provider_request`)
+
+Metadata ONLY — never payload content:
+
+- `request_seq` — monotonic per-extension request sequence;
+- `request_bytes` — UTF-8 byte size of the serialized payload;
+- `message_count` — number of messages in the payload;
+- `payload_keys` — sorted top-level payload key names;
+- `system_prefix_sha` — sha256 of the JSON serialization of the stable
+  prefix: the messages preceding the LAST user message (the provider-cache
+  prefix portion; the whole messages array when no user message exists);
+- `tool_surface_sha` — sha256 of the serialized `tools` surface; absent when
+  the payload has no tools.
+
+Purpose: detect stable-prefix epochs (system-prompt/tool-schema changes) and
+correlate `cacheRead`/`cacheWrite` with prefix stability (plan §5.4).
+
+### `provider_response_meta` (v=3; per provider response, `after_provider_response`)
+
+- `status` — numeric HTTP status (absent when not reported);
+- `headers` — ONLY known cache/rate-limit diagnostic header entries, each
+  `{key, value_sha256}` (key lowercased; value stored as sha256, never raw):
+  `x-ratelimit-*`, `ratelimit-*`, `rate-limit*`, `x-cache*`, `cache-control`,
+  `cf-cache-status`, `retry-after`. No unrelated headers are ever stored and
+  no specific header is ever assumed to exist (plan §5.5).
+
+### Model-visibility reconciliation (plan §0A.8 / §5.2)
+
+- Python `brain_packet_delivered` (v=2) = **prepared/delivery-ledger state**:
+  `delivery_prepared: true`, `model_visible: false` — Python prepares/selects
+  the packet and cannot observe host insertion.
+- The Prime host-side mode-aware `autoinject_shadow_decision.model_visible`
+  event is **authoritative** for actual model visibility (advisory/active =
+  true, shadow = false).

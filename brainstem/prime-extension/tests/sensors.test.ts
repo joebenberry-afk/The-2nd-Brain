@@ -5,7 +5,7 @@ const SESSION = "test-session-123";
 
 /** All records must carry the common schema fields. */
 function expectBase(record: object, kind: string): void {
-  const r = record as Record<string, unknown>;
+  const r = record as unknown as Record<string, unknown>;
   expect(r.v).toBe(2);
   expect(typeof r.ts).toBe("string");
   expect(new Date(r.ts as string).toISOString()).toBe(r.ts); // ISO-8601 UTC, ms precision
@@ -180,6 +180,154 @@ describe("sensors: event -> record mapping", () => {
 
   it("extension_error -> stringified non-Error values", () => {
     expect(sensors.extensionError(SESSION, 42).error).toBe("42");
+  });
+});
+
+describe("sensors: P3-B economics records (schema v3)", () => {
+  it("assistant_usage maps exact host usage counters to snake_case (zeros preserved)", () => {
+    const record = sensors.assistantUsage(SESSION, "deepseek", "deepseek-v4-flash", {
+      input: 100,
+      output: 50,
+      cacheRead: 200,
+      cacheWrite: 0,
+      totalTokens: 350,
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10.5 },
+    });
+    expect(record).not.toBeNull();
+    const r = record as unknown as Record<string, unknown>;
+    expect(r.v).toBe(3);
+    expect(r.kind).toBe("assistant_usage");
+    expect(r.provider).toBe("deepseek");
+    expect(r.model).toBe("deepseek-v4-flash");
+    expect(r.input_tokens).toBe(100);
+    expect(r.output_tokens).toBe(50);
+    expect(r.cache_read_tokens).toBe(200);
+    expect(r.cache_write_tokens).toBe(0); // zero is preserved, not dropped
+    expect(r.total_tokens).toBe(350);
+    expect(r.cost_total).toBe(10.5);
+  });
+
+  it("assistant_usage omits missing counters — never invents values", () => {
+    const record = sensors.assistantUsage(SESSION, "p", "m", {
+      input: 5,
+      output: 3,
+      // no cacheRead/cacheWrite/totalTokens/cost from this host
+    });
+    const r = record as unknown as Record<string, unknown>;
+    expect(r.input_tokens).toBe(5);
+    expect(r.output_tokens).toBe(3);
+    expect(r).not.toHaveProperty("cache_read_tokens");
+    expect(r).not.toHaveProperty("cache_write_tokens");
+    expect(r).not.toHaveProperty("total_tokens");
+    expect(r).not.toHaveProperty("cost_total");
+  });
+
+  it("assistant_usage returns null when the host exposes no usage object", () => {
+    expect(sensors.assistantUsage(SESSION, "p", "m", undefined)).toBeNull();
+    expect(sensors.assistantUsage(SESSION, "p", "m", null)).toBeNull();
+  });
+
+  it("provider_request_meta contains keys/counts/sizes/hashes only, never content", () => {
+    const payload = {
+      model: "deepseek/deepseek-v4-flash",
+      messages: [
+        { role: "system", content: "SECRET SYSTEM PROMPT" },
+        { role: "user", content: "top-secret task text" },
+      ],
+      tools: [{ type: "function", name: "bash" }],
+      stream: true,
+    };
+    const record = sensors.providerRequestMeta(SESSION, "deepseek", "deepseek-v4-flash", 7, payload);
+    expect(record.kind).toBe("provider_request_meta");
+    expect(record.v).toBe(3);
+    expect(record.request_seq).toBe(7);
+    expect(record.request_bytes).toBe(new TextEncoder().encode(JSON.stringify(payload)).length);
+    expect(record.message_count).toBe(2);
+    expect(record.payload_keys).toEqual(["messages", "model", "stream", "tools"]);
+    expect(typeof record.system_prefix_sha).toBe("string");
+    expect(record.system_prefix_sha).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof record.tool_surface_sha).toBe("string");
+    const text = JSON.stringify(record);
+    // privacy: no prompt text, no tool output, no raw tool name
+    expect(text).not.toContain("SECRET");
+    expect(text).not.toContain("top-secret");
+    expect(text).not.toContain("bash");
+  });
+
+  it("provider_request_meta fingerprint is stable across changing user content", () => {
+    const base = { messages: [{ role: "system", content: "STABLE" }], tools: [] };
+    const r1 = sensors.providerRequestMeta(SESSION, "p", "m", 1, {
+      ...base,
+      messages: [...base.messages, { role: "user", content: "task A" }],
+    });
+    const r2 = sensors.providerRequestMeta(SESSION, "p", "m", 2, {
+      ...base,
+      messages: [...base.messages, { role: "user", content: "task B" }],
+    });
+    // stable prefix (system message) is the same → same fingerprint
+    expect(r1.system_prefix_sha).toBe(r2.system_prefix_sha);
+    // but a changed system prompt changes the fingerprint
+    const r3 = sensors.providerRequestMeta(SESSION, "p", "m", 3, {
+      ...base,
+      messages: [{ role: "system", content: "CHANGED" }, { role: "user", content: "task A" }],
+    });
+    expect(r3.system_prefix_sha).not.toBe(r1.system_prefix_sha);
+  });
+
+  it("provider_request_meta omits tool_surface_sha when the payload has no tools", () => {
+    const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, { messages: [] });
+    expect(record.tool_surface_sha).toBeUndefined();
+    expect(typeof record.system_prefix_sha).toBe("string"); // empty prefix still hashable
+  });
+
+  it("provider_request_meta handles non-object payloads defensively", () => {
+    const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, undefined);
+    expect(record.message_count).toBe(0);
+    expect(record.payload_keys).toEqual([]);
+    expect(record.request_bytes).toBeGreaterThan(0);
+  });
+
+  it("provider_response_meta keeps status and allowlisted cache/rate-limit headers only", () => {
+    const record = sensors.providerResponseMeta(SESSION, "deepseek", "m", 200, {
+      "x-ratelimit-remaining": "42",
+      "x-cache": "HIT",
+      "content-type": "application/json",
+      "x-request-id": "req-123",
+      authorization: "Bearer sk-secret-value",
+    });
+    expect(record.kind).toBe("provider_response_meta");
+    expect(record.v).toBe(3);
+    expect(record.status).toBe(200);
+    expect(record.headers).toHaveLength(2);
+    expect(record.headers?.[0]?.key).toBe("x-ratelimit-remaining");
+    expect(record.headers?.[0]?.value_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(record.headers?.[1]?.key).toBe("x-cache");
+    const text = JSON.stringify(record);
+    // header VALUES are hashed, never raw; unrelated headers never stored
+    expect(text).not.toContain("HIT");
+    expect(text).not.toContain('"42"'); // raw value would appear quoted
+    expect(text).not.toContain("application/json");
+    expect(text).not.toContain("req-123");
+    expect(text).not.toContain("sk-secret");
+  });
+
+  it("provider_response_meta omits status/headers when absent or disallowed", () => {
+    const r1 = sensors.providerResponseMeta(SESSION, "p", "m", undefined, {
+      "x-arbitrary": "v",
+    });
+    expect(r1.status).toBeUndefined();
+    expect(r1.headers).toBeUndefined();
+    const r2 = sensors.providerResponseMeta(SESSION, "p", "m", "ok", {});
+    expect(r2.status).toBeUndefined();
+  });
+
+  it("splitProviderModel splits provider/id and is null-safe", () => {
+    expect(sensors.splitProviderModel("deepseek/deepseek-v4-flash")).toEqual({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    expect(sensors.splitProviderModel("bare-model")).toEqual({ provider: null, model: "bare-model" });
+    expect(sensors.splitProviderModel(null)).toEqual({ provider: null, model: null });
   });
 });
 

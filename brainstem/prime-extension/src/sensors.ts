@@ -11,6 +11,7 @@
  *
  * Schema: brainstem/telemetry/SCHEMA.md (v=2). Field names are snake_case.
  */
+import { createHash } from "node:crypto";
 import type { AgentRole } from "./driver-orchestrator";
 
 /** Maximum length of stored bash command text (privacy rule). */
@@ -100,9 +101,9 @@ export function measureContent(content: unknown, includeSerializedChars = true):
   };
 }
 
-/** Common record fields (v, ts, kind, session). */
+/** Common record fields (v, ts, kind, session). v=2 for pre-P3 kinds; v=3 for P3-B economics kinds (SCHEMA.md). */
 export interface BaseRecord {
-  v: 2;
+  v: 2 | 3;
   ts: string;
   kind: string;
   session: string;
@@ -111,6 +112,17 @@ export interface BaseRecord {
 function base(kind: string, session: string, extra: Record<string, unknown>): Record<string, unknown> {
   return {
     v: 2 as const,
+    ts: new Date().toISOString(),
+    kind,
+    session,
+    ...extra,
+  };
+}
+
+/** v3 record base (P3-B economics kinds; additive schema version, SCHEMA.md). */
+function baseV3(kind: string, session: string, extra: Record<string, unknown>): Record<string, unknown> {
+  return {
+    v: 3 as const,
     ts: new Date().toISOString(),
     kind,
     session,
@@ -563,4 +575,211 @@ export function autoinjectShadowDecision(
     cli_packet_chars: fields.cli_packet_chars,
     cli_stdout_chars: fields.cli_stdout_chars,
   } as unknown as AutoInjectShadowDecisionRecord;
+}
+
+
+// ---------------------------------------------------------------------------
+// P3-B economics sensors (plan §5.1/§5.4/§5.5; schema v3, SCHEMA.md).
+// Privacy (plan §25): counts, sizes, keys, and sha256 hashes ONLY — never
+// prompt text, source/tool output, provider payloads, auth data, or raw
+// header values.
+// ---------------------------------------------------------------------------
+
+/** sha256 hex digest (privacy: only the hash ever leaves this module). */
+export function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** JSON serialization that never throws; undefined when not serializable. */
+function stableJson(value: unknown): string | undefined {
+  try {
+    const text = JSON.stringify(value);
+    return typeof text === "string" ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when a provider-payload message has role "user". */
+function isUserMessage(message: unknown): boolean {
+  if (message == null || typeof message !== "object") return false;
+  return (message as { role?: unknown }).role === "user";
+}
+
+/** Split a "provider/id" model string into its parts (null-safe). */
+export function splitProviderModel(value: string | null): {
+  provider: string | null;
+  model: string | null;
+} {
+  if (value == null) return { provider: null, model: null };
+  const slash = value.indexOf("/");
+  if (slash > 0) return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
+  return { provider: null, model: value };
+}
+
+/** Numeric usage counter when the host reported one; undefined otherwise
+ * (zero vs missing preserved — never invent values). */
+function usageCounter(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+export interface AssistantUsageRecord extends BaseRecord {
+  v: 3;
+  kind: "assistant_usage";
+  provider: string | null;
+  model: string | null;
+  /** Each counter present ONLY when the host reported it (zero preserved). */
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  total_tokens?: number;
+  cost_total?: number;
+}
+
+/**
+ * Per-assistant-message provider usage (plan §5.1, message_end). Uses the
+ * EXACT host values; absent counters are omitted, zeros are preserved.
+ * Returns null when the host exposed no usage object (no record emitted).
+ */
+export function assistantUsage(
+  session: string,
+  provider: string | null,
+  model: string | null,
+  usage: unknown,
+): AssistantUsageRecord | null {
+  if (usage == null || typeof usage !== "object") return null;
+  const u = usage as Record<string, unknown>;
+  const extra: Record<string, unknown> = { provider, model };
+  const input = usageCounter(u.input);
+  if (input !== undefined) extra.input_tokens = input;
+  const output = usageCounter(u.output);
+  if (output !== undefined) extra.output_tokens = output;
+  const cacheRead = usageCounter(u.cacheRead);
+  if (cacheRead !== undefined) extra.cache_read_tokens = cacheRead;
+  const cacheWrite = usageCounter(u.cacheWrite);
+  if (cacheWrite !== undefined) extra.cache_write_tokens = cacheWrite;
+  const total = usageCounter(u.totalTokens);
+  if (total !== undefined) extra.total_tokens = total;
+  if (u.cost != null && typeof u.cost === "object") {
+    const costTotal = usageCounter((u.cost as Record<string, unknown>).total);
+    if (costTotal !== undefined) extra.cost_total = costTotal;
+  }
+  return baseV3("assistant_usage", session, extra) as unknown as AssistantUsageRecord;
+}
+
+export interface ProviderRequestMetaRecord extends BaseRecord {
+  v: 3;
+  kind: "provider_request_meta";
+  provider: string | null;
+  model: string | null;
+  request_seq: number;
+  request_bytes: number;
+  message_count: number;
+  payload_keys: string[];
+  /** sha256 of the stable prefix (messages before the last user message). */
+  system_prefix_sha?: string;
+  /** sha256 of the serialized tool surface; absent when the payload has no tools. */
+  tool_surface_sha?: string;
+}
+
+/**
+ * Provider-request fingerprint (plan §5.4): metadata only — top-level payload
+ * keys (sorted), serialized byte size, message count, and sha256 fingerprints
+ * of the stable system/messages prefix and the tool surface. NEVER the
+ * payload content itself.
+ *
+ * `system_prefix_sha` = sha256 of the JSON serialization of the messages
+ * preceding the LAST user message (the stable provider-cache prefix); when
+ * there is no user message the whole messages array is fingerprinted. This
+ * detects stable-prefix epochs busted by system-prompt/tool-schema changes.
+ */
+export function providerRequestMeta(
+  session: string,
+  provider: string | null,
+  model: string | null,
+  requestSeq: number,
+  payload: unknown,
+): ProviderRequestMetaRecord {
+  const obj =
+    payload != null && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : {};
+  const keys = Object.keys(obj).sort();
+  const messages = Array.isArray(obj.messages) ? (obj.messages as unknown[]) : [];
+  const extra: Record<string, unknown> = {
+    provider,
+    model,
+    request_seq: requestSeq,
+    request_bytes: byteLength(obj),
+    message_count: messages.length,
+    payload_keys: keys,
+  };
+  let prefix = messages;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isUserMessage(messages[i])) {
+      prefix = messages.slice(0, i);
+      break;
+    }
+  }
+  const prefixJson = stableJson(prefix);
+  if (prefixJson !== undefined) extra.system_prefix_sha = sha256Hex(prefixJson);
+  if (obj.tools !== undefined) {
+    const toolsJson = stableJson(obj.tools);
+    if (toolsJson !== undefined) extra.tool_surface_sha = sha256Hex(toolsJson);
+  }
+  return baseV3("provider_request_meta", session, extra) as unknown as ProviderRequestMetaRecord;
+}
+
+/** Header entries permitted into telemetry: cache/rate-limit diagnostics only. */
+export const RESPONSE_HEADER_ALLOWLIST: readonly RegExp[] = [
+  /^x-ratelimit-/i,
+  /^ratelimit-/i,
+  /^rate-limit/i,
+  /^x-cache/i,
+  /^cache-control$/i,
+  /^cf-cache-status$/i,
+  /^retry-after$/i,
+];
+
+export interface ResponseHeaderMeta {
+  key: string;
+  value_sha256: string;
+}
+
+export interface ProviderResponseMetaRecord extends BaseRecord {
+  v: 3;
+  kind: "provider_response_meta";
+  provider: string | null;
+  model: string | null;
+  /** Present only when the host reported a numeric status. */
+  status?: number;
+  /** Present only when at least one allowlisted header was found. */
+  headers?: ResponseHeaderMeta[];
+}
+
+/**
+ * Provider-response metadata (plan §5.5): status plus ONLY known
+ * cache/rate-limit diagnostic header KEYS with sha256-hashed values. Never
+ * depends on a specific header existing; unrelated headers are never stored.
+ */
+export function providerResponseMeta(
+  session: string,
+  provider: string | null,
+  model: string | null,
+  status: unknown,
+  headers: unknown,
+): ProviderResponseMetaRecord {
+  const extra: Record<string, unknown> = { provider, model };
+  if (typeof status === "number") extra.status = status;
+  const headerEntries: ResponseHeaderMeta[] = [];
+  if (headers != null && typeof headers === "object") {
+    for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+      if (typeof value !== "string") continue;
+      if (!RESPONSE_HEADER_ALLOWLIST.some((re) => re.test(key))) continue;
+      headerEntries.push({ key: key.toLowerCase(), value_sha256: sha256Hex(value) });
+    }
+  }
+  if (headerEntries.length > 0) extra.headers = headerEntries;
+  return baseV3("provider_response_meta", session, extra) as unknown as ProviderResponseMetaRecord;
 }
