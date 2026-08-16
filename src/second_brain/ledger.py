@@ -47,7 +47,7 @@ LEDGER_ADAPTER_NAME = "second-brain"
 LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
 _OBJECT_DIR = "objects"
-_FTS_KEYS = ("title", "summary", "file", "symbol", "task", "decision")
+_FTS_KEYS = ("title", "summary", "file", "symbol", "task", "decision", "tool")
 
 # Ordered in-memory upgraders for OLD versions, keyed by the version they
 # upgrade FROM. Empty stub today: any unknown old version is a deterministic
@@ -238,7 +238,7 @@ class LedgerStore:
         self._conn = conn
         if create:
             self._init_schema()
-            self._write_manifest()
+            self._write_manifest(self._init_host_artifacts)
         else:
             self._check_version()
         return self
@@ -255,6 +255,8 @@ class LedgerStore:
         self.close()
 
     # -- schema/versioning --------------------------------------------------
+
+    _init_host_artifacts: list[dict[str, str]] | None = None
 
     def _init_schema(self) -> None:
         assert self._conn is not None
@@ -337,6 +339,7 @@ class LedgerStore:
 
     def register_agent(self, agent: dict[str, Any]) -> None:
         assert self._conn is not None
+        self._ensure_session_row()
         self._conn.execute(
             "INSERT OR REPLACE INTO agents (agent_id, internal_session_id, host_agent_id, "
             " parent_agent_id, role_profile, model, provider, created_at, ended_at) "
@@ -697,7 +700,7 @@ class LedgerStore:
         rows = self._conn.execute("SELECT key, value FROM ledger_meta").fetchall()
         return {r["key"]: r["value"] for r in rows}
 
-    def _write_manifest(self) -> None:
+    def _write_manifest(self, host_artifacts: list[dict[str, str]] | None = None) -> None:
         manifest = {
             "internal_id": self._internal,
             "host": "prime",
@@ -705,6 +708,7 @@ class LedgerStore:
             "created_at": _now(),
             "schema_version": LEDGER_SCHEMA_VERSION,
             "db": "ledger.sqlite",
+            "host_artifacts": host_artifacts or [],
         }
         target = _contained(self._dir, _MANIFEST)
         tmp = _contained(self._dir, f"{_MANIFEST}.tmp")

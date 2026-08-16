@@ -59,6 +59,7 @@ import {
   shouldAttemptRecall,
   type RecallGateConfig,
 } from "./recall-gate";
+import { join } from "node:path";
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import {
   loadAutoInjectHostConfig,
@@ -66,6 +67,7 @@ import {
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
+import { mirrorExtensionError, mirrorFireAndForget, taskSha256 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
 import {
@@ -261,6 +263,35 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     pi.on(type, safeHandler<E>(getStore, anonSession, mapper, final));
   };
 
+  // P2 host event mirror (Phase 2B): fire-and-forget, fail-open, privacy-safe
+  // (task text only as sha256; tool names + byte sizes only). Errors append an
+  // extension_error record; the host turn is never blocked.
+  const mirror = (
+    sessionId: string,
+    kind: string,
+    fields: Record<string, unknown>,
+    opts: { agentId?: string; parentEventId?: string; ignorable?: boolean } = {},
+  ): void => {
+    mirrorFireAndForget({
+      home: config.home ?? "",
+      hostSessionId: sessionId,
+      record: {
+        kind,
+        fields,
+        agentId: opts.agentId,
+        parentEventId: opts.parentEventId,
+        ignorable: opts.ignorable,
+      },
+      onError: (error) => {
+        try {
+          getStore(sessionId)?.append(mirrorExtensionError(sessionId, error));
+        } catch {
+          // storage failed too — stay silent
+        }
+      },
+    });
+  };
+
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
@@ -273,6 +304,44 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       cfg: loadAutoInjectHostConfig(config.home),
       append: (record) => getStore(session)?.append(record),
     });
+    const modelId = sensors.modelToString(ctx.model) ?? "unknown";
+    const role = resolveAgentRole(
+      modelId,
+      loadDriverOrchestratorConfig(),
+      loadOrchestratorGuardConfig().orchestratorModels,
+    );
+    mirror(
+      session,
+      "session_started",
+      {
+        host: "prime",
+        reason: event.reason,
+        cwd: typeof ctx.cwd === "string" ? ctx.cwd : null,
+        model: modelId,
+        agent_id: modelId,
+        role_profile: role,
+        provider: modelId.split("/")[0] ?? "unknown",
+        host_agent_id: modelId,
+      },
+      { agentId: modelId },
+    );
+    // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
+    try {
+      const transcript = ctx.sessionManager?.getSessionFile?.();
+      if (typeof transcript === "string" && transcript.length > 0) {
+        mirror(session, "host_artifact_ref", { kind: "transcript", path: transcript }, { ignorable: true });
+      }
+    } catch {
+      // artifact reference is best-effort
+    }
+    if (config.telemetryDir) {
+      mirror(
+        session,
+        "host_artifact_ref",
+        { kind: "telemetry", path: join(config.telemetryDir, `${session}.jsonl`) },
+        { ignorable: true },
+      );
+    }
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 
@@ -343,6 +412,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } else {
         void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
+      mirror(session, "user_task", {
+        task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
+        prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+      });
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
@@ -449,6 +522,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       session = resolveSessionId(ctx, anonSession);
       getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
+      mirror(session, "tool_requested", {
+        tool: event.toolName,
+        input_bytes: sensors.byteLength(JSON.stringify(event.input ?? {})),
+      });
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const decision = orchestratorPolicyFor(modelId, event.toolName, loadOrchestratorGuardConfig());
       if (decision.block) {
@@ -490,7 +567,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // eligibility is passed to rtdShadowRecord so RTD never re-measures.
   wire<ToolResultEvent>("tool_result", (event, _ctx, session) => {
     const eligibility = rtdEligibility(event.toolName, event.input);
+    // ONE shared measurement (Phase 3 correction: no extra serialization for
+    // ineligible results); the mirror reuses the same output_bytes.
     const measurement = measureContent(event.content, eligibility === "ok");
+    mirror(session, "tool_completed", {
+      tool: event.toolName,
+      result_bytes: measurement.outputBytes,
+      is_error: event.isError === true,
+    });
     try {
       const shadow = rtdShadowRecord({
         session,
@@ -522,6 +606,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     } catch {
       usage = undefined;
     }
+    mirror(session, "turn_end", {
+      turn_index: event.turnIndex,
+      tool_result_count: Array.isArray(event.toolResults) ? event.toolResults.length : 0,
+    });
     return sensors.turnEnd(session, event.turnIndex, usage, event.toolResults);
   });
 
@@ -530,21 +618,31 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // summary, or task-success signal — so any extraction would be fabrication.
   // Documented no-op; write-back happens through explicit `brainctl
   // autoinject writeback` (Python authority) and the Codex Stop trigger.
-  wire<AgentEndEvent>("agent_end", (event, _ctx, session) =>
-    sensors.agentEnd(session, event.messages),
-  );
+  wire<AgentEndEvent>("agent_end", (event, _ctx, session) => {
+    mirror(session, "agent_ended", {
+      message_count: Array.isArray(event.messages) ? event.messages.length : 0,
+    });
+    return sensors.agentEnd(session, event.messages);
+  });
 
-  wire<SessionBeforeCompactEvent>("session_before_compact", (event, _ctx, session) =>
-    sensors.sessionBeforeCompact(session, event.branchEntries),
-  );
+  wire<SessionBeforeCompactEvent>("session_before_compact", (event, _ctx, session) => {
+    mirror(session, "compaction_started", {
+      branch_entries: Array.isArray(event.branchEntries) ? event.branchEntries.length : 0,
+    });
+    return sensors.sessionBeforeCompact(session, event.branchEntries);
+  });
 
-  wire<SessionCompactEvent>("session_compact", (event, _ctx, session) =>
-    sensors.sessionCompact(session, event.fromExtension),
-  );
+  wire<SessionCompactEvent>("session_compact", (event, _ctx, session) => {
+    mirror(session, "compaction_completed", { from_extension: event.fromExtension === true });
+    return sensors.sessionCompact(session, event.fromExtension);
+  });
 
   wire<SessionShutdownEvent>(
     "session_shutdown",
-    (event, _ctx, session) => sensors.sessionShutdown(session, event.reason),
+    (event, _ctx, session) => {
+      mirror(session, "session_inactive", { reason: event.reason });
+      return sensors.sessionShutdown(session, event.reason);
+    },
     true, // final: sync write so the record survives worker teardown
   );
 }
