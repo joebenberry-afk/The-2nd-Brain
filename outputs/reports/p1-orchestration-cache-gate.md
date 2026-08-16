@@ -59,7 +59,7 @@
 ## 4. Cache / prompt stability (P1.3/1C — honest)
 
 - **Contracts exist:** `RequestEpoch`/`RequestFingerprint` + `DivergenceCategory` in `src/second_brain/contracts.py` (commit 9c88c70) — the substrate for prefix-diff detection.
-- **Extension-layer envelope capture: UNAVAILABLE.** Prime 0.7.2 exposes NO `before_provider_request`/`after_provider_response` hook (audit b8195a7 hook list: SessionStart/BeforeAgentStart/AgentStart/AgentEnd/TurnStart/TurnEnd/Context/ToolCall/ToolResult/SessionBeforeCompact/SessionCompact/SessionShutdown only). Tier B request-envelope capture cannot be wired at the extension layer → recorded UNAVAILABLE-not-inferred.
+- **Extension-layer envelope capture: UNAVAILABLE at campaign time.** The audit of record (b8195a7) covered only the 11 extension-subscribed events (SessionStart/BeforeAgentStart/AgentStart/AgentEnd/TurnStart/TurnEnd/Context/ToolCall/ToolResult/SessionBeforeCompact/SessionCompact/SessionShutdown). P3 reconciliation against the installed v0.7.2 runtime source proved `before_provider_request`/`after_provider_response` do exist. Historical campaign measurements remain unavailable because they were not captured at the time; Tier B capture was recorded UNAVAILABLE-not-inferred.
 - **Provider cache metrics: UNAVAILABLE-not-inferred** (no provider exposes counters through Prime 0.7.2; amendment §34 rule applied).
 - **Evidence we DO have:** emit-cache design (C5–C10: TTL, session key, prompt-head guard, file persistence) keeps the model-visible prefix append-only within a turn; packet injection is one bounded low-authority custom_message; worker result contract keeps reports compact. Cache Doctor / prefix divergence measurement deferred to the P2 ledger (Phase G) where the ledger provides the replay substrate.
 

@@ -1,0 +1,89 @@
+# P3 §36 Worker A — Brain capability audit (reuse matrix)
+
+- **Date:** 2026-08-16
+- **Worker:** p3-brain-audit (P3 §36 Worker A)
+- **Scope:** verify plan §3.1–3.12 reuse candidates against LIVE source at HEAD `3278818` (`brain/p3-lean-code`), per plan §24.8 gate
+- **Method:** read-only source inspection (git-tracked files at HEAD), plus read-only baseline runs (pytest, vitest). No commits.
+- **Tree note:** at start, `git status --porcelain` was empty (clean per parent packet). During the audit, two UNTRACKED files appeared that this worker did not create (sibling Worker B artifacts): `brainstem/p3-probes/`, `outputs/reports/p3-prime-capability-reconciliation.md`. Left untouched.
+
+## 1. Reuse matrix (verified vs live source)
+
+| # | Primitive (plan §3) | Exact file:symbol | What it ACTUALLY provides today (from source) | Satisfies |
+|---|---|---|---|---|
+| 3.1 | working_set.py | `src/second_brain/working_set.py`: `init_capsule` L170, `update_capsule` L218, `show_capsule` L234, `add_requirement` L281, `add_evidence` L321, `set_requirement_status` L333, `check_requirements` L360, `record_read` L421, `show_reads` L459 | Active State Capsule (`active-state.json`: objective, task_mode ∈ MICRO..HANDOFF, risk ∈ LOW..CRITICAL, constraints, confirmed_facts, current_hypotheses, decisions_this_session, files_touched, open_questions, verification, next_action, brain_refs, artifact_refs; schema-validated on every load/write, atomic JSON writes); Requirement Ledger (`requirements.json`: REQ-### ids, importance ∈ critical/high/normal/low, status ∈ unverified/partially_verified/verified/not_applicable/blocked, evidence list); material-completion gate — `check_requirements()` returns {material_total, material_unverified, gate, blocks} honoring `verification.toml [requirement_ledger] material_unverified_blocks_completion` (fail-safe default True); Read Ledger (`read-ledger.json`: path, sha256 hash, range, purpose, turn, artifact, ts) | §3.1 all listed fields + Requirement Ledger + material gate + Read Ledger | None |
+| 3.2 | risk.py | `src/second_brain/risk.py`: `assess_risk(repo, files_touched, user_criticality)` L171 | Scores 9 signals (blast_radius, centrality, concurrency, persistence, security_boundary, public_api, data_loss, config_scope, hotspot/churn) → `{level: LOW/MEDIUM/HIGH/CRITICAL, score, signals:[{name,value,points,detail}], user_criticality}`; user_criticality can escalate; hotspot degrades to "unavailable", never raises | §3.2 risk controller | None |
+| 3.3 | verify.py + verification.toml | `src/second_brain/verify.py`: `build_verifier_brief(home, session_id, repo)` L83; `config/verification.toml` | Fresh-context verifier brief (deterministic, written atomically to `outputs/verification/<session-id>.md`): diff FIRST (git diff of capsule files_touched, ≤400 lines, error-graced) with backward-reconstruction mandate, then Requirements (from ledger, `REQ-### [importance/status]`), Constraints, Validation Evidence, 8 Verifier Questions; solver-reasoning fields (hypotheses/decisions/next_action/open_questions) excluded by whitelist constant `EXCLUDED_CAPSULE_FIELDS`; `verification.toml` documents risk ladder LOW/MEDIUM/HIGH/CRITICAL + `[intent_verifier] fresh_context/backward_reconstruction_first` + `[requirement_ledger]` statuses/material gate | §3.3 fresh brief, diff-first, backward reconstruction, solver-reasoning exclusion, requirement ledger, constraints, validation evidence | **GAP-G1**: `[ladder]` keys (LOW/MEDIUM/HIGH/CRITICAL step lists) are documented-only — no runtime reader consumes the ladder; only `material_unverified_blocks_completion` is wired (config itself states "ONE key is wired and tested") |
+| 3.4 | semantic.py + retrieval.toml | `src/second_brain/semantic.py`: `search_memories(home, term, *, project_id, include_history, include_duplicates, score_terms, top_k, max_tokens)` L1379; `_filter_sql` L1470; `_apply_budget` L1172; `load_retrieval_config` L1094; `config/retrieval.toml` | SQLite FTS5 (bm25) primary path + linear Markdown fallback sharing the SAME hard filters/scorer; hard filters BEFORE ranking: evidence_grade REJECTED always excluded, status archived/superseded excluded unless include_history, project hard filter when project_id given; dedupe (Jaccard families); scoring terms relevance/trust/freshness/scope_match/decision_value/diversity/token_cost/negative_transfer (weights from toml, enforced); contradiction surfacing (`contradiction_with`); top-k cap + explicit token budget (`max_tokens`, from `[reserve].retrieved_memory_pct_max` % of 200k assumption, best row always kept) | §3.4 project hard filter, exclusions, grades (grade_scores table), freshness/trust/scope/diversity/negative-transfer, top-k, token budget, FTS5+fallback, contradiction surfacing | None (documented-but-unwired: `log_all_components`, `lateral_inhibition.*`, `decay.*` — not needed by P3) |
+| 3.5 | autoinject.py + autoinject.ts | `src/second_brain/autoinject.py`: `prepare_injection` L541, `_valid_candidates` L218, `insert_deliveries` L408, `load_config` L88; `brainstem/prime-extension/src/autoinject.ts`: `runAdvisoryAutoInject` L397, `modeFromAutoinjectToml` L52; `config/autoinject.toml` (mode=**active**, budget target 800/hard cap 2000) | Bounded packets (target/hard-cap tokens, env-overridable; packet rendered + cached); validity gate (`_valid_candidates`: superseded/archived/REJECTED never current; P0-G9 unverified candidates excluded; project/global scope); selective NO_INJECTION with enumerated reasons (BRAIN_UNAVAILABLE, NO_RELEVANT_MEMORY, WRONG_PROJECT, ALREADY_DELIVERED, CONTRADICTORY_UNRESOLVED, CONTEXT_PRESSURE); dedupe via delivery ledger (migration 0008 `deliveries`, key root_session/branch/memory/version + canonical_hash) + process/file emit cache; delivery ledger rows with packet_id/delivered_event_id/superseded pointer; low authority (packet carries "authority: advisory", adapter never claims higher); TS host adapter is fail-open, 5s timeout, spawns `python -m second_brain autoinject` once per event; mode flip switch live | §3.5 bounded packets, validity gate, NO_INJECTION, dedupe, delivery ledger, project scoping, low authority; §3.12 ACTIVE dependency (mode=active) | None |
+| 3.6 | skillforge.py + router.py + promotion.py + skills/ dirs | `skillforge.py`: REQUIRED_SECTIONS L30 (10 sections: **purpose, positive_triggers, negative_triggers, inputs, procedure, tools, safety, verification, output, references**), `forge_candidate` L289, `validate_candidate` L407, `validate_execution_ready` L197, `shadow_candidate` L591, `security_review` L545, `trigger_eval`/`workflow_eval`/`regression_eval`, `audit_lifecycle` L214; `router.py`: `route` L239, `_router_max_active` L223; `promotion.py`: `promote` L160, `demote` L244, `_guard_checks` L89 | Forge builds candidates from episodes with all 10 sections (placeholders where allowed); validation enforces 10 sections non-empty, placeholder policy, no TBD/TODO; security detector (dangerous tokens, disk-format regex, secrets, exfiltration URLs, injection phrases); shadow candidates with trigger/regression evals; router = deterministic sparse routing (score ≥ threshold, active>candidate>shadow pool), max-active cap from `skills.toml [router] max_active` (default 3, CLI override), report-only (`shadow: True`); promotion guards: evidence counts (credit_events/model_skill_outcomes ≥1), frontier verdict approve, immune rollback check, frontier binding current, execution-ready for active; demote records without guards; rollback guard via `immune.rollback_log`; promotion records in `state/promotions/` | §3.6 candidate creation/validation, 10 required sections, shadow, sparse routing, max-active cap, promotion/demotion, evidence requirements, rollback guard | None (lifecycle dirs + config `[lifecycle] stages`/`[quality] required_sections`/`[gardener]` documented; gardener sweep NOT wired — not needed by P3) |
+| 3.7 | simplification-debt.md | `projects/second-brain/simplification-debt.md`; `templates/project/simplification-debt.md` | Format exists: "Valid deferred simplifications (plan §71). Do not re-discover them repeatedly." + `| Debt | Why deferred | Revisit trigger |` table (currently empty) | §3.7 existing debt format | None |
+| 3.8 | telemetry.py + sensors.ts + storage.ts + SCHEMA.md | `telemetry.py`: KNOWN_KINDS L15, `validate` L57, `report` L88; `sensors.ts`: sessionStart/beforeAgentStart/turnStart/context/toolCall/toolResult/turnEnd/agentEnd/sessionBeforeCompact/sessionCompact/sessionShutdown/rtdShadow/orchestratorPolicyViolation/extensionError/autoinjectShadowDecision; `storage.ts`: TelemetryStore L60 (fire-and-forget JSONL append chain, fail-open); `brainstem/telemetry/SCHEMA.md` | Schema v2 JSONL at `telemetry/agent-performance/<session>.jsonl`; lifecycle kinds (session_start, turn_start/end, context, agent_end, compactions, shutdown), tool_call/tool_result (tool, id, input_bytes/output_bytes, is_error, bash command ≤500 chars), context usage (turn_end.context_usage used/total/percent), rtd_shadow, orchestrator_policy_violation (enumerated bounded fields), autoinject_shadow_decision; privacy-safe (counts/sizes/hashes only); telemetry.py validates + aggregates deterministically | §3.8 lifecycle events, tool calls/results, context usage, errors, compaction, orchestration violations, RTD shadow decisions | None |
+| 3.9 | ledger.py + ledger-mirror.ts | `ledger.py`: `LedgerStore` L234 (open L254, create_session L345, append_events L419, add_object L500, read_object L518, flush L539, integrity L545, open_segment L585, close_segment L619, continuation_capsule L641, replay L795), `LedgerRehydrator` L1018, `checkpoint_ledger` L1227, `SessionLifecycle` L1293 (recover_report L1344, extract_durable L1426, purge L1460); `ledger-mirror.ts`: mirrorEvent/mirrorFireAndForget/runLedgerCheckpoint/runLedgerSegmentRollover | Durable append-only per-session sqlite ledger (WAL + synchronous=FULL); transactional contiguous seq batches (duplicate event_id / invalid parent rejects whole batch); content-addressed artifacts/object refs (sha256 files + digest-verified read_object); segments (open/close, continuation capsule); integrity() + replay_session + compare_projection; checkpoint/segment rollover commands; rehydration (`LedgerRehydrator`, level-based, manifest-tracked); SessionLifecycle status/pin/recover/extract/purge; TS mirror is privacy-safe (task text only as sha256, tool names+sizes), fail-open 5s timeout, seq omitted (auto-assigned) | §3.9 durable events, WAL/FULL, replay/integrity, artifacts/object refs, segments, compaction barriers, rehydration | None |
+| 3.10 | rtd.ts + context.toml [rtd] | `brainstem/prime-extension/src/rtd.ts`: `rtdEligibility` L54, `shouldDistill` L125, `parseThreshold` L102, RTD_COMMAND_PREFIXES L28; `config/context.toml [rtd]` | Shadow measurement ONLY (never substitutes content): eligibility = tool `bash` + first token ∈ pytest/git/rg/grep (source constant, case-insensitive), measured once (shared ContentMeasurement), trigger = serializedChars > threshold; threshold precedence env `SECOND_BRAIN_RTD_THRESHOLD` → `[rtd] threshold_chars` (8000) → default 8000 — **wired**; rtd_shadow records (tool, id, size, threshold, would_trigger, reason); `SECOND_BRAIN_RTD=active` records `substitution: "enabled-not-implemented"` — substitution deliberately NOT implemented | §3.10 shadow measurement of bash+pytest/git/rg/grep; preferred P3 activation target | **GAP-G2**: `[rtd] enabled / max_distill_chars / whitelist_tools / whitelist_commands` are informational only (NOT read at runtime — eligibility is fixed in `RTD_COMMAND_PREFIXES`); actual substitution/offload does not exist yet (by design; P3's job) |
+| 3.11 | RepoWise | CLI on PATH: `C:\Users\assas\AppData\Local\Programs\Python\Python313\Scripts\repowise.EXE`; data: `.repowise/wiki.db` (repo root); setting: `.brain/project.toml` `[performance] repo_intelligence = "repowise-preferred"`, `[tools] repowise = "auto"`; consumers: `envsteward.py` (TOOL_NAMES + repowise_freshness), `doctor.py` (tool presence), `verification.toml` HIGH ladder step "repowise_impact_context" | RepoWise IS present and usable: `repowise status` rc=0 when run with PYTHONHOME/PYTHONPATH removed (sync-state table, currently **0 pages synced** — wiki.db exists but empty). Without env sanitization the CLI crashes `ModuleNotFoundError: No module named 'repo…'` (Python 3.13 shim resolving against polluted env) | §3.11 RepoWise + live reads as source analysis; repo_intelligence setting present | **GAP-G3**: RepoWise CLI is broken under the machine's default (PYTHONHOME-polluted) env — requires `env -u PYTHONHOME -u PYTHONPATH`; and the local wiki has 0 synced pages (no intelligence data yet, only the tool) |
+| 3.12 | AutoInject ACTIVE | see 3.5; `config/autoinject.toml [autoinject] mode = "active"`; extension `index.ts` wiring + `brainstem/telemetry/SCHEMA.md` `brain_packet_delivered` kind; migration 0008 deliveries | Mode flip switch live at "active"; budget enforced; delivery ledger schema present; host adapter spawns Python control CLI per event; fail-open; §24.8 regression gate referenced | §3.12 fixed P3 dependency | None |
+
+## 2. Skills lifecycle dirs (job 12) — current occupants
+
+- `skills/candidates/` — exists, EMPTY (only `.gitkeep`)
+- `skills/shadow/` — `delivery-integration` (SKILL.md)
+- `skills/active/` — `sqlite-migration-verifier` (SKILL.md)
+- `skills/retired/`, `skills/quarantine/`, `skills/staged/` — exist, EMPTY (`.gitkeep`)
+- `skills/approved/{domain,global,model,project}/` — exist, EMPTY
+- `skills/evals/`, `skills/principles/` — exist (`.gitkeep`); `skills/candidate/` (singular, legacy) — empty
+- Promotion records dir `state/promotions/` — consumed by `audit_lifecycle`/`promotion.py` (empty or absent at HEAD; active skill audit requires promotion record — see `audit_lifecycle` L244-263)
+
+## 3. Genuine gaps (only)
+
+- **G1 (§3.3)** Verification ladder by risk (`verification.toml [ladder]`) is DOCUMENTED-ONLY: no code reads the ladder steps; only `material_unverified_blocks_completion` is wired. P3 "wire/reuse these capabilities" must add a ladder consumer or explicitly rely on the brief alone.
+- **G2 (§3.10)** RTD is shadow-measurement only: `[rtd] enabled/max_distill_chars/whitelist_tools/whitelist_commands` are NOT read at runtime (eligibility fixed in source `RTD_COMMAND_PREFIXES`), and substitution/offload is unimplemented (`SECOND_BRAIN_RTD=active` → "enabled-not-implemented"). P3's activation target requires implementing the offload path (or at minimum honoring `enabled` + whitelist from config).
+- **G3 (§3.11)** RepoWise CLI crashes under the machine's default env (PYTHONHOME pollution): usable only with `env -u PYTHONHOME -u PYTHONPATH`; `.repowise/wiki.db` exists but has 0 synced pages (no actual repo intelligence content yet).
+
+Not gaps (verified present): working_set capsule+ledgers+gate, risk engine, verifier brief (diff-first), semantic retrieval (FTS5+fallback, filters, grades, top-k, token budget), autoinject (bounded/validity/NO_INJECTION/dedupe/delivery ledger/low authority), skillforge 10 sections+shadow+security review, router sparse routing+max-active, promotion guards+rollback, simplification-debt format, telemetry schema v2 lifecycle/tool/context, ledger WAL/replay/segments/objects/rehydration.
+
+## 4. Entry baseline at 3278818 (health)
+
+| Suite | Command | Result |
+|---|---|---|
+| Python (pytest) | `env -u PYTHONHOME -u PYTHONPATH .venv/Scripts/python.exe -m pytest -q` | **746 collected → 744 passed, 2 skipped, 0 failed** (rc=0, ~212s) |
+| TypeScript (vitest) | `npx vitest run --reporter=dot` (in `brainstem/prime-extension`) | **10 files / 267 tests passed** (rc=0, ~6s) |
+
+- `git status` at start: clean at `3278818`; at end: only the two untracked sibling artifacts listed above (not touched; no commits made by this worker).
+
+
+---
+
+## Driver Reconciliation + Plan Pruning (post-audit, §36)
+
+Audits: `p3-reuse-audit.md` (Brain reuse matrix) + `p3-prime-capability-reconciliation.md`
+(installed Prime v0.7.2). Entry baseline @3278818: pytest 744/2 skipped/0 failed;
+vitest 267. AutoInject ACTIVE throughout.
+
+**PRUNED from the plan (audits proved unnecessary):**
+1. §9.1 `resources_discover` skill-path integration — SKIPPED. Direct file lookup of
+   the rare full Lean skill is acceptable; the hook exists but adds schema/token
+   overhead with no proven need.
+2. §13 dynamic `setActiveTools` restriction — MEASURE-ONLY until Phase J evidence
+   proves material schema cost; no activation work scheduled.
+3. Any new economics telemetry store or DB migration — CONFIRMED UNNECESSARY:
+   existing JSONL telemetry + sensors.ts + P2 ledger mirror suffice (plan §5.3).
+
+**Confirmed reuse (no new subsystems):** working-set capsule + Requirement/Read
+ledgers + material gate; 9-signal risk engine; diff-first verifier brief;
+semantic retrieval (project filter, archived/superseded/REJECTED exclusion);
+AutoInject ACTIVE as fixed dependency; Skill Forge 10-section lifecycle +
+sparse router + promotion guards; simplification-debt; telemetry v2 schema;
+P2 durable ledger; RTD shadow; RepoWise (env-sanitized invocation — G3).
+
+**Genuine gaps — all map to already-planned phases, no new work added:**
+- G1: verification.toml ladder documented-only (no consumer) → P3-G wiring.
+- G2: RTD substitution unimplemented; [rtd] config documented-but-unwired → P3-F.
+- G3: RepoWise requires env-sanitized shell (PYTHONHOME pollution); wiki.db 0 pages.
+
+**Prime capability verdict:** all official v0.7.2 hook claims PRESENT in the
+installed runtime (source-verified). P0–P2 "unavailable" claims were audit-surface
+artifacts — corrected in 3 historical reports (§4.5 form, preserved context).
+
+**Next:** live probe (`brainstem/p3-probes/provider-probe/`) → install + daemon
+reload → prove hooks fire → remove probe; then P3-B economics instrumentation
+(shim updates for consumed members only).
