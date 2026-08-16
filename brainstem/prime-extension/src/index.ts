@@ -61,6 +61,7 @@ import {
   shouldAttemptRecall,
   type RecallGateConfig,
 } from "./recall-gate";
+import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
 import { join } from "node:path";
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import {
@@ -457,12 +458,33 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         loadDriverOrchestratorConfig(),
         guardCfg.orchestratorModels,
       );
+      // P3-D lean runtime adapter (plan §8): decide + record BEFORE the
+      // branch points so every path emits exactly ONE lean_kernel record.
+      // Sol resolves omit/role here and is never injected (the guard branch
+      // returns before any kernel could be applied). The dedup check runs
+      // against the pre-patch base; appendLeanKernel re-checks the assembled
+      // prompt (contract + kernel) when applying.
+      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
+      const lean = decideLeanRuntime({ home: config.home ?? "", role, base });
+      if (lean.error !== undefined) {
+        getStore(session)?.append(sensors.extensionError(session, lean.error));
+      }
+      getStore(session)?.append(
+        sensors.leanKernel(session, {
+          decision: lean.decision,
+          reason: lean.reason,
+          role,
+          skill_status: lean.skillStatus,
+          mode: lean.mode,
+          kernel_chars: lean.kernelChars,
+          dedup_hit: lean.dedupHit,
+        }),
+      );
       if (isOrchestratorModel(modelId, guardCfg)) {
         getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
         return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, aiMessage);
       }
-      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
-      const patched = role === "driver" ? appendDriverContract(base) : base;
+      let patched = role === "driver" ? appendDriverContract(base) : base;
       const driverContractInjected = role === "driver" && patched !== undefined && patched !== base;
       getStore(session)?.append(
         sensors.beforeAgentStart(
@@ -472,11 +494,24 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           role === "driver" ? driverContractInjected : undefined,
         ),
       );
+      // P3-D: apply the kernel AFTER the stable role/base context (driver
+      // contract) and BEFORE the dynamic recall brief / AutoInject packet
+      // (plan §7.4 ordering — the kernel lives in the systemPrompt patch;
+      // the AutoInject packet is a separate custom message appended by the
+      // host after the task; real assembly order is documented in
+      // src/lean-code.ts). appendLeanKernel dedups on the stable marker and
+      // never invents a prompt (undefined base stays undefined).
+      if (lean.decision === "inject" && lean.kernel !== undefined) {
+        const merged = appendLeanKernel(patched, lean.kernel);
+        if (merged !== patched) {
+          patched = merged;
+        }
+      }
       const recallCfg = loadRecallGateConfig();
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
         return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), aiMessage);
       }
-      if (driverContractInjected && patched !== undefined) {
+      if (patched !== undefined && patched !== base) {
         return withMessage({ systemPrompt: patched }, aiMessage);
       }
       return withMessage(undefined, aiMessage);

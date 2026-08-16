@@ -135,6 +135,18 @@ async function waitForFileLines(file: string, minLines: number, timeoutMs = 3000
   throw new Error(`timed out waiting for ${minLines} lines in ${file}; got ${last.length}`);
 }
 
+/**
+ * P3-D additive telemetry (plan §8, SCHEMA.md `lean_kernel`): every
+ * before_agent_start now also emits one lean_kernel record (plus a bounded
+ * extension_error when the lean-code skill file is absent in the test home).
+ * Exact-kind assertions below account for the new records.
+ */
+function recordOf(records: Record<string, unknown>[], kind: string): Record<string, unknown> {
+  const rec = records.find((r) => r.kind === kind);
+  if (!rec) throw new Error(`record kind ${kind} not found in ${JSON.stringify(records.map((r) => r.kind))}`);
+  return rec;
+}
+
 /** Context with NO session file: forces the anonymous fallback path. */
 function anonCtx(): ExtensionContext {
   return {
@@ -231,7 +243,9 @@ describe("factory wiring (src/index.ts)", () => {
     // land ahead of still-queued async writes, so order is asserted as a set
     // here; real ordering (shutdown last) is covered by the dedicated test
     // below, where prior writes have settled before shutdown fires.
-    const records = await waitForLines(15); // 14 event records + optional barrier extension_error
+    // 14 event records + optional barrier extension_error + P3-D lean
+    // fail-open records (missing skill in the venv-less test home).
+    const records = await waitForLines(17);
     const kinds = records.map((r) => r.kind).sort();
     // The three P3-B hooks write record kinds that differ from their event
     // names (provider_request_meta / provider_response_meta / assistant_usage)
@@ -250,7 +264,8 @@ describe("factory wiring (src/index.ts)", () => {
     for (const kind of p3Kinds) {
       expect(kinds).toContain(kind);
     }
-    expect(kinds.filter((k) => k === "extension_error").length).toBeLessThanOrEqual(1);
+    expect(kinds).toContain("lean_kernel"); // P3-D: one lean decision per before_agent_start
+    expect(kinds.filter((k) => k === "extension_error").length).toBeLessThanOrEqual(2);
     for (const rec of records) {
       expect([2, 3]).toContain(rec.v); // v=2 legacy kinds + v=3 P3-B kinds
       expect(rec.session).toBe("wiring-test");
@@ -569,12 +584,13 @@ describe("Phase 2 anonymous session identity (src/index.ts)", () => {
     handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     const file = await waitForAnyTelemetryFile();
-    const records = await waitForFileLines(file, 8);
+    // P3-D: before_agent_start adds lean_kernel + fail-open extension_error
+    const records = await waitForFileLines(file, 10);
     await settle();
     const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
     expect(names.length).toBe(1); // one session file for the whole anonymous lifecycle
     expect(records.map((r) => r.kind).sort()).toEqual(
-      ["session_start", "before_agent_start", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
+      ["session_start", "before_agent_start", "lean_kernel", "extension_error", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
     );
     expect(new Set(records.map((r) => String(r.session))).size).toBe(1);
   });
@@ -953,9 +969,11 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
     expect(patch.systemPrompt).toContain("WORKER RETURN CONTRACT");
     expect(patch.systemPrompt!.split(/\s+/).length).toBeLessThan(1500); // contract size cap
 
-    // measurement record still appended alongside the patch
-    const records = await waitForLines(1);
-    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+    // measurement records still appended alongside the patch (P3-D: the
+    // lean_kernel omit/role record proves Sol is never injected)
+    const records = await waitForLines(2);
+    expect(records.map((r) => r.kind)).toEqual(["lean_kernel", "before_agent_start"]);
+    expect(recordOf(records, "lean_kernel").reason).toBe("role");
   });
 
   it("before_agent_start: non-Sol model -> undefined, no systemPrompt", async () => {
@@ -964,8 +982,10 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     expect(result).toBeUndefined();
 
-    const records = await waitForLines(1);
-    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+    // P3-D: venv-less test home has no lean-code skill -> fail-open records
+    const records = await waitForLines(3);
+    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    expect(recordOf(records, "lean_kernel").reason).toBe("skill-missing");
   });
 
   it("ORCHESTRATOR_* env overrides change the wired guard behavior", async () => {
@@ -1007,9 +1027,9 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
-    // measurement record still appended
-    const records = await waitForLines(1);
-    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
+    // measurement records still appended (P3-D lean fail-open on missing skill)
+    const records = await waitForLines(3);
+    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
   });
 
   it("enabled + substantial prompt: spawns ONCE and appends the brief to the full system prompt", async () => {
@@ -1058,6 +1078,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
+    await settle(); // drain fire-and-forget telemetry writes before teardown
   });
 
   it("enabled but Sol session: contract injected, recall NOT spawned (no double-inject)", async () => {
@@ -1108,10 +1129,11 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       patch!.systemPrompt!.indexOf(MARKER),
     );
 
-    const records = await waitForLines(1);
-    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
-    expect(records[0].role).toBe("driver");
-    expect(records[0].driver_contract_injected).toBe(true);
+    const records = await waitForLines(3);
+    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const contract = recordOf(records, "before_agent_start");
+    expect(contract.role).toBe("driver");
+    expect(contract.driver_contract_injected).toBe(true);
   });
 
   it("before_agent_start: driver model with base already containing the marker -> no duplicate append", async () => {
@@ -1123,13 +1145,14 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
     expect(result).toBeUndefined(); // recall disabled; nothing new to inject
 
-    const records = await waitForLines(1);
-    expect(records[0].role).toBe("driver");
-    expect(records[0].driver_contract_injected).toBe(false);
+    const records = await waitForLines(3);
+    const contract = recordOf(records, "before_agent_start");
+    expect(contract.role).toBe("driver");
+    expect(contract.driver_contract_injected).toBe(false);
     await settle();
     const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
-    // exactly one record; no second before_agent_start append ever happens
-    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["before_agent_start"]);
+    // exactly the three P3-D records; no second before_agent_start append ever happens
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
   });
 
   it("before_agent_start: worker model -> no contract, record role=worker", async () => {
@@ -1138,10 +1161,11 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     expect(result).toBeUndefined();
 
-    const records = await waitForLines(1);
-    expect(records.map((r) => r.kind)).toEqual(["before_agent_start"]);
-    expect(records[0].role).toBe("worker");
-    expect(records[0].driver_contract_injected).toBeUndefined();
+    const records = await waitForLines(3);
+    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const contract = recordOf(records, "before_agent_start");
+    expect(contract.role).toBe("worker");
+    expect(contract.driver_contract_injected).toBeUndefined();
     expect(JSON.stringify(records)).not.toContain(MARKER);
   });
 
@@ -1188,9 +1212,10 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
     );
 
-    const records = await waitForLines(1);
-    expect(records[0].role).toBe("driver");
-    expect(records[0].driver_contract_injected).toBe(true);
+    const records = await waitForLines(3);
+    const contract = recordOf(records, "before_agent_start");
+    expect(contract.role).toBe("driver");
+    expect(contract.driver_contract_injected).toBe(true);
   });
 });
 

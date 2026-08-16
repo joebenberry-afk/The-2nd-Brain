@@ -577,6 +577,53 @@ export function autoinjectShadowDecision(
   } as unknown as AutoInjectShadowDecisionRecord;
 }
 
+// ---------------------------------------------------------------------------
+// P3-D lean runtime adapter sensor (plan §8, SCHEMA.md `lean_kernel`).
+// Privacy-safe: enumerated decisions/reasons/roles/status + mode value +
+// character counts only — never kernel text or prompt content.
+// ---------------------------------------------------------------------------
+
+export interface LeanKernelRecord extends BaseRecord {
+  kind: "lean_kernel";
+  /** inject = kernel patch produced; omit = no patch. */
+  decision: "inject" | "omit";
+  /** Enumerated: active | advisory | off | role | skill-missing. */
+  reason: "active" | "advisory" | "off" | "role" | "skill-missing";
+  /** Agent role at decision time (driver-orchestration vocabulary). */
+  role: string;
+  /** Resolved skill lifecycle status (null when the file is missing). */
+  skill_status: string | null;
+  /** Raw SECOND_BRAIN_LEAN value (lowercased) or null when unset. */
+  mode: string | null;
+  /** Character length of the canonical kernel section (0 when unavailable). */
+  kernel_chars: number;
+  /** True when the base prompt already carried the marker (no re-injection). */
+  dedup_hit: boolean;
+}
+
+export function leanKernel(
+  session: string,
+  fields: {
+    decision: "inject" | "omit";
+    reason: "active" | "advisory" | "off" | "role" | "skill-missing";
+    role: string;
+    skill_status: string | null;
+    mode: string | null;
+    kernel_chars: number;
+    dedup_hit: boolean;
+  },
+): LeanKernelRecord {
+  return {
+    ...base("lean_kernel", session, {}),
+    decision: fields.decision,
+    reason: fields.reason,
+    role: fields.role,
+    skill_status: fields.skill_status,
+    mode: fields.mode,
+    kernel_chars: fields.kernel_chars,
+    dedup_hit: fields.dedup_hit,
+  } as unknown as LeanKernelRecord;
+}
 
 // ---------------------------------------------------------------------------
 // P3-B economics sensors (plan §5.1/§5.4/§5.5; schema v3, SCHEMA.md).
