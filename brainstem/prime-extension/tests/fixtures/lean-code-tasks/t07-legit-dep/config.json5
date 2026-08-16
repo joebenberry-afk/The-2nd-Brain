@@ -1,0 +1,5 @@
+{
+  // server settings
+  "host": "localhost", // bind address
+  "port": 8080,
+}
