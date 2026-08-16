@@ -391,3 +391,58 @@ def test_cli_unknown_project_no_injection_not_crash(tmp_path) -> None:
     out = json.loads(r.stdout)
     assert out["decision"] == "NO_INJECTION"
     assert out["reason"] in ("WRONG_PROJECT", "NO_RELEVANT_MEMORY")
+
+
+# ---------------------------------------------------------------------------
+# P0-G7 worker-specific packets (Phase 0D, plan §6.10/§17.1): role-scoped
+# hard filter over the optional `tags:` frontmatter extension.
+# ---------------------------------------------------------------------------
+
+
+def _tag_memory(home: Path, memory_id: str, tag: str) -> None:
+    """Add the optional `tags:` frontmatter extension (documented extension:
+    the canonical writer never emits it; the indexer reads it)."""
+    path = home / "memory" / "semantic" / f"{memory_id}.md"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("---\n", "---\ntags: " + tag + "\n", 1)
+    path.write_text(text, encoding="utf-8")
+    assert semantic.index_memory(home, memory_id)
+
+
+def test_role_scoped_packets_worker_vs_orchestrator(brain_home) -> None:
+    shared = _seed_current(brain_home, "Delegation rules", "delegation rules for everyone")
+    worker_mem = _seed_current(
+        brain_home, "Worker delegation rules", "worker delegation rules apply"
+    )
+    orch_mem = _seed_current(
+        brain_home, "Orchestrator delegation rules", "orchestrator delegation rules apply"
+    )
+    _tag_memory(brain_home, worker_mem, "worker")
+    _tag_memory(brain_home, orch_mem, "orchestrator")
+
+    # Worker: shared untagged + worker-tagged; NEVER the parent-only memory.
+    dw = _inject(brain_home, "delegation rules", role_profile="worker", session_id="sw1")
+    assert dw.decision is InjectionDecision.INJECT
+    assert shared in dw.selected_ids
+    assert worker_mem in dw.selected_ids
+    assert orch_mem not in dw.selected_ids
+
+    # Orchestrator: shared untagged + orchestrator-tagged; NEVER worker memory.
+    do_ = _inject(brain_home, "delegation rules", role_profile="orchestrator", session_id="so1")
+    assert do_.decision is InjectionDecision.INJECT
+    assert shared in do_.selected_ids
+    assert orch_mem in do_.selected_ids
+    assert worker_mem not in do_.selected_ids
+
+    # Parent packet != worker packet for the same task.
+    assert autoinject.render_packet(dw) != autoinject.render_packet(do_)
+
+
+def test_role_filter_only_role_tagged_memory_available(brain_home) -> None:
+    orch_mem = _seed_current(
+        brain_home, "Orchestrator delegation rules", "orchestrator delegation rules apply"
+    )
+    _tag_memory(brain_home, orch_mem, "orchestrator")
+    d = _inject(brain_home, "delegation rules", role_profile="worker", session_id="sw2")
+    assert d.decision is InjectionDecision.NO_INJECTION
+    assert orch_mem not in d.selected_ids
