@@ -1,0 +1,216 @@
+/**
+ * P0 AutoInject host adapter — SHADOW (plan §6.9/§6.10, Phase 0C part 2).
+ *
+ * Thin deterministic adapter: on host lifecycle events it spawns the Python
+ * control CLI (`second_brain autoinject shadow --json`) once per event,
+ * records the decision privacy-safe, and NEVER returns a packet/patch in
+ * shadow mode. Fail-open: any spawn error, timeout, non-zero exit, or parse
+ * failure records an `extension_error` and resolves silently — the host
+ * session is never blocked and never mutated.
+ *
+ * Mode switch: SECOND_BRAIN_AUTOINJECT_MODE = "shadow" (default) | "off".
+ * "advisory"/"active" are reserved for Phase 0D and deliberately not
+ * accepted here.
+ *
+ * Spawn contract (verified against cli.py `cmd_autoinject`):
+ *   <home>/.venv/Scripts/python.exe -m second_brain autoinject shadow
+ *     --task <task> --project <project> --session <sid> --agent <aid>
+ *     --branch <branch> --role <role> --json
+ * with cwd=<home>, SECOND_BRAIN_HOME=<home>, PYTHONHOME/PYTHONPATH removed.
+ * stdout is ONE canonical JSON object (contracts.canonical_json).
+ */
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { autoinjectShadowDecision, extensionError } from "./sensors";
+
+export const AUTOINJECT_DEFAULT_TIMEOUT_MS = 5000;
+export const AUTOINJECT_MODE_OFF_VALUES = new Set(["off", "0", "false", "no"]);
+/** Windows argv safety margin for --task (CreateProcess ~32k char limit). */
+export const AUTOINJECT_MAX_TASK_ARG_CHARS = 4000;
+
+export interface AutoInjectHostConfig {
+  mode: "off" | "shadow";
+  timeoutMs: number;
+}
+
+export function loadAutoInjectHostConfig(): AutoInjectHostConfig {
+  const raw = (process.env.SECOND_BRAIN_AUTOINJECT_MODE ?? "shadow").trim().toLowerCase();
+  const mode = AUTOINJECT_MODE_OFF_VALUES.has(raw) ? "off" : "shadow";
+  const parsed = Number(process.env.SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS ?? AUTOINJECT_DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(parsed) && parsed > 0 ? parsed : AUTOINJECT_DEFAULT_TIMEOUT_MS;
+  return { mode, timeoutMs };
+}
+
+/** Project id: no host event carries one today -> env override, else "default". */
+export function resolveProject(): string {
+  const p = process.env.SECOND_BRAIN_PROJECT;
+  return p !== undefined && p.trim().length > 0 ? p.trim() : "default";
+}
+
+export interface AutoInjectShadowOutcome {
+  decision: string;
+  reason: string | null;
+  packetTokens: number | null;
+  deliveryId: string | null;
+  candidateCount: number;
+  selectedCount: number;
+  packetSha256: string | null;
+}
+
+export interface AutoInjectRunOptions {
+  home: string;
+  task: string;
+  project: string;
+  sessionId: string;
+  agentId: string;
+  branchId?: string;
+  roleProfile?: string;
+  cfg: AutoInjectHostConfig;
+  python?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function parseShadowOutput(stdout: string): AutoInjectShadowOutcome | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.decision !== "string") return null;
+  const packet = typeof obj.packet === "string" ? obj.packet : null;
+  return {
+    decision: obj.decision,
+    reason: typeof obj.reason === "string" ? obj.reason : null,
+    packetTokens: typeof obj.packet_tokens === "number" ? obj.packet_tokens : null,
+    deliveryId: typeof obj.delivery_id === "string" ? obj.delivery_id : null,
+    candidateCount: Array.isArray(obj.candidate_ids) ? obj.candidate_ids.length : 0,
+    selectedCount: Array.isArray(obj.selected_ids) ? obj.selected_ids.length : 0,
+    packetSha256:
+      packet !== null ? createHash("sha256").update(packet, "utf8").digest("hex") : null,
+  };
+}
+
+/**
+ * One bounded out-of-process spawn (execFile) with env cleanup and a hard
+ * timeout. Resolves null on ANY failure (fail-open); never rejects.
+ */
+export function runAutoInjectShadow(options: AutoInjectRunOptions): Promise<AutoInjectShadowOutcome | null> {
+  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...(options.env ?? process.env) };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const task = options.task.slice(0, AUTOINJECT_MAX_TASK_ARG_CHARS);
+  const args = [
+    "-m",
+    "second_brain",
+    "autoinject",
+    "shadow",
+    "--task",
+    task,
+    "--project",
+    options.project,
+    "--session",
+    options.sessionId,
+    "--agent",
+    options.agentId,
+    "--branch",
+    options.branchId ?? "main",
+    "--role",
+    options.roleProfile ?? "worker",
+    "--json",
+  ];
+  return new Promise((resolve) => {
+    execFile(
+      python,
+      args,
+      {
+        cwd: options.home,
+        env,
+        timeout: options.cfg.timeoutMs,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        resolve(parseShadowOutput(stdout));
+      },
+    );
+  });
+}
+
+export interface ShadowAutoInjectCall {
+  home: string;
+  session: string;
+  task: string;
+  agentId: string;
+  project?: string;
+  branchId?: string;
+  roleProfile?: string;
+  cfg: AutoInjectHostConfig;
+  append: (record: unknown) => void;
+  runner?: (options: AutoInjectRunOptions) => Promise<AutoInjectShadowOutcome | null>;
+}
+
+/**
+ * Orchestrates one SHADOW decision: guard -> spawn -> record. NEVER throws,
+ * NEVER returns a patch (shadow invariant), never blocks on the event path
+ * (callers fire-and-forget). Empty task text (e.g. session_start has no
+ * prompt) is a legitimate no-op — nothing to retrieve.
+ */
+export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<void> {
+  if (call.cfg.mode === "off") return;
+  const task = (call.task ?? "").trim();
+  if (task.length === 0) return;
+  // Fail-open: a Brain home without an installed venv is not a runtime;
+  // skip silently (no spawn, no record) so host sessions are never touched.
+  if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
+    return;
+  }
+  const started = Date.now();
+  try {
+    const outcome = await (call.runner ?? runAutoInjectShadow)({
+      home: call.home,
+      task,
+      project: call.project ?? resolveProject(),
+      sessionId: call.session,
+      agentId: call.agentId,
+      branchId: call.branchId,
+      roleProfile: call.roleProfile,
+      cfg: call.cfg,
+    });
+    const latencyMs = Date.now() - started;
+    if (outcome === null) {
+      call.append(
+        extensionError(call.session, new Error("autoinject shadow spawn failed (timeout/error)")),
+      );
+      return;
+    }
+    call.append(
+      autoinjectShadowDecision(call.session, {
+        decision: outcome.decision,
+        reason: outcome.reason,
+        packet_tokens: outcome.packetTokens,
+        latency_ms: latencyMs,
+        candidate_count: outcome.candidateCount,
+        selected_count: outcome.selectedCount,
+        delivery_id: outcome.deliveryId,
+        packet_sha256: outcome.packetSha256,
+      }),
+    );
+  } catch (error) {
+    try {
+      call.append(extensionError(call.session, error));
+    } catch {
+      // storage failed too — stay silent
+    }
+  }
+}
