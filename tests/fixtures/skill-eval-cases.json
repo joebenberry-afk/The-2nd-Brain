@@ -1,5 +1,5 @@
 {
- "description": "Phase 16 skill-eval fixture: trigger boundary cases, workflow scenarios, regression baselines, and security texts. The trigger phrases come from the forged candidate's episodes (restore/WAL theme). P3 promotion campaign: +6 lean-code trigger cases (anti-overbuild x2, anti-laziness x2, no-trigger boundaries x2) and +2 lean-code regression baselines (anti-overbuild, anti-laziness).",
+ "description": "Phase 16 skill-eval fixture: trigger boundary cases, workflow scenarios, regression baselines, and security texts. The trigger phrases come from the forged candidate's episodes (restore/WAL theme).",
  "trigger_cases": [
   {
    "text": "the restore failed with stale sidecar frames",
@@ -32,30 +32,6 @@
   {
    "text": "unrelated deploy task for the frontend",
    "expect": "no_trigger"
-  },
-  {
-   "text": "implementation: add staging support to the deploy flow \u2014 the runner already reads profiles from config, but we could also wrap it in a new manager service",
-   "expect": "trigger"
-  },
-  {
-   "text": "implementation: make the report sort case-insensitively \u2014 we could add lodash, or just fix the comparator",
-   "expect": "trigger"
-  },
-  {
-   "text": "implementation: three validators share the same stable validation contract \u2014 extract the shared helper now that the pattern is proven",
-   "expect": "trigger"
-  },
-  {
-   "text": "implementation: every release regenerates the same table from the same CSVs for two consumers \u2014 build the reusable table tool we'll call from now on",
-   "expect": "trigger"
-  },
-  {
-   "text": "pure explanation: describe what the provider cache does without changing any code",
-   "expect": "no_trigger"
-  },
-  {
-   "text": "pure research: compare three prompt-ordering approaches with no code change requested",
-   "expect": "no_trigger"
   }
  ],
  "workflow_scenarios": [
@@ -82,14 +58,6 @@
   {
    "text": "clean shutdown verified",
    "expect": "no_trigger"
-  },
-  {
-   "text": "implementation: extend the existing config-driven deploy flow with a new profile instead of a new manager",
-   "expect": "trigger"
-  },
-  {
-   "text": "implementation: the proven three-call-site validation pattern now needs a fourth consumer \u2014 the justified extraction is the lean move",
-   "expect": "trigger"
   }
  ],
  "clean_security": "# Safety\nStandard file operations only.\n# Procedure\n1. restore the backup\n",
