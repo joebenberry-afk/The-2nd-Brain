@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-16
 **Branch**: `brain/p3-lean-code` (HEAD `fcfdf8a9`)
-**Verdict**: `HOLD SHADOW — REAL CAMPAIGN INCOMPLETE`
+**Verdict**: `HOLD SHADOW` (derived from the completed real campaign: 14/14 valid pairs / 28/28 real arms)
 
 ---
 
