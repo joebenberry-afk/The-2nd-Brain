@@ -270,7 +270,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       task: "",
       agentId: sensors.modelToString(ctx.model) ?? "prime",
       cwd: typeof ctx.cwd === "string" ? ctx.cwd : undefined,
-      cfg: loadAutoInjectHostConfig(),
+      cfg: loadAutoInjectHostConfig(config.home),
       append: (record) => getStore(session)?.append(record),
     });
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
@@ -320,7 +320,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
-    let aiCfg = loadAutoInjectHostConfig();
+    let aiCfg = loadAutoInjectHostConfig(config.home);
     let aiMessage: unknown = undefined;
     try {
       session = resolveSessionId(ctx, anonSession);
@@ -333,7 +333,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // role:"custom" entry (SDK runner.ts emitBeforeAgentStart: messages
       // are collected from every handler result and inserted as custom
       // messages; _appendBeforeAgentStartMessages builds role:"custom").
-      aiCfg = loadAutoInjectHostConfig();
+      // Phase C10 (verifier): the BRANCH decision MUST read the same cfg as
+      // the records — config.home is required so config/autoinject.toml
+      // [autoinject] mode is honored (env-only cfg made the live flip
+      // switch inert and silently ran the shadow branch).
+      aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
         aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
       } else {
