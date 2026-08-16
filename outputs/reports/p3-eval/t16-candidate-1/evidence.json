@@ -1,0 +1,55 @@
+{
+  "run_id": "t16-candidate-1",
+  "task": "t16-already-minimal",
+  "arm": "candidate",
+  "session": "01a00993-7115-7376-9a6e-fddafc1eec65",
+  "economics": {
+    "assistant_usage_rows": 14,
+    "input_tokens": 28276,
+    "output_tokens": 8824,
+    "cache_read_tokens": 334848,
+    "cache_write_tokens": 0,
+    "total_tokens": 371948,
+    "cost_total": 0.0073669344000000005,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 15
+    },
+    "turns": 14,
+    "wall_ms": 89462
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" \"C:/Users/assas/Documents/The-Second-Brain/brainstem/prime-extension/tests/fixtures/lean-code-tasks/t16-already-minimal/test.js\" ./test.js",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git diff --numstat').toString();let add=0;for(const line of out.split('\\n')){if(!line)continue;const m=line.match(/^(\\d+)/);if(m)add+=parseInt(m[1],10);}if(add>5)process.exit(1);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git diff --name-only').toString().trim().split('\\n').filter(Boolean);const allowed=new Set(['math.js']);for(const f of out)if(!allowed.has(f))process.exit(2);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git status --porcelain').toString();if(/\\?\\?/.test(out))process.exit(3);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "math.js"
+    ],
+    "added_lines": 2,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [],
+  "acceptance": "PASS"
+}

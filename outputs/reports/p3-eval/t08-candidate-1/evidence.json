@@ -1,0 +1,53 @@
+{
+ "run_id": "t08-candidate-1",
+ "task": "t08-tool-temptation",
+ "arm": "candidate",
+ "session": "01a009a3-b4f7-777f-b814-5da36432935c",
+ "economics": {
+  "assistant_usage_rows": 14,
+  "input_tokens": 17702,
+  "output_tokens": 16008,
+  "cache_read_tokens": 256000,
+  "cache_write_tokens": 0,
+  "total_tokens": 289710,
+  "cost_total": 0.0076773200000000005,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 17
+  },
+  "turns": 14,
+  "wall_ms": 145696
+ },
+ "judge": [
+  {
+   "command": "node -e \"...readdirSync('data').sort()...want=['alpha-beta.txt','epsilon-zeta.log','gamma-delta.csv']...\"",
+   "exit": 0
+  },
+  {
+   "command": "node -e \"...git status --porcelain...?? outside data/ -> exit(2)...\"",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [
+   "data/alpha_beta.txt",
+   "data/epsilon_zeta.log",
+   "data/gamma_delta.csv"
+  ],
+  "added_lines": 0,
+  "deleted_lines": 4,
+  "new_files": [
+   "ata/alpha_beta.txt",
+   "data/alpha-beta.txt",
+   "data/epsilon-zeta.log",
+   "data/gamma-delta.csv"
+  ]
+ },
+ "files_touched": 6,
+ "lc_decisions": [
+  "LC_REUSE: one-shot shell loop (mv ${f//_/-}) reused instead of creating a rename script/tool file, per task constraint",
+  "LC_STOP: stopped at acceptance after JUDGE steps passed; no extra work"
+ ],
+ "acceptance": "PASS"
+}

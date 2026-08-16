@@ -1,0 +1,58 @@
+{
+  "run_id": "t12-candidate-1",
+  "task": "t12-prep-refactor",
+  "arm": "candidate",
+  "session": "01a0099c-eb43-775b-8961-c80dcdca6583",
+  "economics": {
+    "assistant_usage_rows": 17,
+    "input_tokens": 21534,
+    "output_tokens": 18400,
+    "cache_read_tokens": 382976,
+    "cache_write_tokens": 0,
+    "total_tokens": 422910,
+    "cost_total": 0.0092390928,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 17
+    },
+    "turns": 17,
+    "wall_ms": 171397
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/test.js ./test.js  (step 0 anti-tamper restore)",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...round2 defs===1, calls>=2...\"  (round2 defined once, called >=2)",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...git status --porcelain no '??'...\"  (no untracked files)",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "calc.js"
+    ],
+    "added_lines": 5,
+    "deleted_lines": 2,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_PREP_REFACTOR: extracted duplicated Math.round(x*taxRate*100)/100 into round2(x) first, then fixed netAmount to use round2(gross*taxRate), per task order",
+    "LC_STOP: stopped at acceptance; test.js untouched, no new files, no extra scope"
+  ],
+  "acceptance": "PASS",
+  "notes": [
+    "Template evidence snippet's diff.new_files computation has a trim() artifact: .trim() strips the leading space of the first git-status--porcelain line, so slice(3) mis-slices it (' M calc.js' -> 'M calc.js' -> 'alc.js'). Verified truthfully via raw git status: only ' M calc.js' (modified tracked calc.js), zero untracked files.",
+    "Two transient junk files created in the copy by a cmd.exe quoting mishap during my first evidence-snippet invocation were removed; final git status is clean except the intended calc.js modification."
+  ]
+}
