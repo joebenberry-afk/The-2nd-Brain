@@ -104,3 +104,69 @@ def test_empty_file(tmp_path) -> None:
     p = tmp_path / "empty.jsonl"
     p.write_text("", encoding="utf-8")
     assert at.extract_latest_user_task(p) is None
+
+
+def test_real_antigravity_transcript_schema(tmp_path) -> None:
+    """Real CLI transcript shape: source/type based with <USER_REQUEST> wrapper."""
+    lines = [
+        {
+            "step_index": 0,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "status": "DONE",
+            "created_at": "2026-08-16T18:11:56Z",
+            "content": (
+                "<USER_REQUEST>\nWe need to apply our database migrations. "
+                "According to the Second Brain, what is the recorded rule for "
+                "migration ordering? Reply with only that rule.\n</USER_REQUEST>\n"
+                "<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-16T14:11:56-04:00.\n"
+                "</ADDITIONAL_METADATA>\n"
+            ),
+        },
+        {
+            "step_index": 1,
+            "source": "SYSTEM",
+            "type": "CONVERSATION_HISTORY",
+            "status": "DONE",
+            "created_at": "2026-08-16T18:11:56Z",
+        },
+        {
+            "step_index": 2,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-08-16T18:11:56Z",
+            "tool_calls": [{"name": "view_file", "args": {"AbsolutePath": "C:/x"}}],
+        },
+        {
+            "step_index": 3,
+            "source": "MODEL",
+            "type": "RUN_COMMAND",
+            "status": "DONE",
+            "created_at": "2026-08-16T18:12:04Z",
+            "content": "tool output that must not be treated as user intent",
+        },
+    ]
+    p = _write(tmp_path, lines)
+    result = at.extract_latest_user_task(p)
+    assert result == (
+        "We need to apply our database migrations. According to the Second Brain, "
+        "what is the recorded rule for migration ordering? Reply with only that rule."
+    )
+
+
+def test_real_transcript_followup_wins(tmp_path) -> None:
+    p = _write(tmp_path, [
+        {
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "content": "<USER_REQUEST>first task</USER_REQUEST>",
+        },
+        {"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": [{"name": "view_file"}]},
+        {
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "content": "<USER_REQUEST>follow-up task</USER_REQUEST>",
+        },
+    ])
+    assert at.extract_latest_user_task(p) == "follow-up task"

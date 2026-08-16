@@ -2054,8 +2054,22 @@ def _cmd_antigravity_hook(home: Path) -> int:
             break
     else:
         event = str(_get("event", default="PreInvocation") or "PreInvocation")
+
+    # The official CLI sends event fields FLAT at the payload root (e.g.
+    # stepIdx/toolCall/error for PostToolUse); the app may send them nested
+    # under the per-event args block. Merge: nested wins, root fills gaps.
+    _EVENT_FIELDS = {
+        "PreInvocation": ("invocationNum", "initialNumSteps"),
+        "PostInvocation": ("invocationNum", "initialNumSteps"),
+        "PostToolUse": ("stepIdx", "toolCall", "error"),
+        "PreToolUse": ("toolCall", "stepIdx"),
+        "Stop": ("executionNum", "terminationReason", "error", "fullyIdle"),
+    }
     raw_hook_args = payload_dict.get(args_key) if args_key else {}
     hook_args = raw_hook_args if isinstance(raw_hook_args, dict) else {}
+    for field in _EVENT_FIELDS.get(event, ()):
+        if field not in hook_args and field in payload_dict:
+            hook_args[field] = payload_dict[field]
 
     # --- Common metadata (official camelCase + snake_case fallback) ---
     conversation_id = str(

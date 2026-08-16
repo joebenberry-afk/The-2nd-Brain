@@ -3,26 +3,16 @@
     "enabled": true,
     "PreInvocation": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PreInvocation",
-            "timeout": 30
-          }
-        ]
+        "type": "command",
+        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PreInvocation",
+        "timeout": 30
       }
     ],
     "PostInvocation": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PostInvocation",
-            "timeout": 30
-          }
-        ]
+        "type": "command",
+        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PostInvocation",
+        "timeout": 30
       }
     ],
     "PostToolUse": [
@@ -31,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PostToolUse",
+            "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PostToolUse",
             "timeout": 30
           }
         ]
@@ -39,14 +29,9 @@
     ],
     "Stop": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event Stop",
-            "timeout": 30
-          }
-        ]
+        "type": "command",
+        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event Stop",
+        "timeout": 30
       }
     ]
   }
