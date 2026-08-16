@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "second-brain-adapter",
+  "description": "Google Antigravity thin harness adapter for The Second Brain OS"
+}

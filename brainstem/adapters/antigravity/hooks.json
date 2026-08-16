@@ -1,0 +1,53 @@
+{
+  "second-brain": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PreInvocation",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PostInvocation",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event PostToolUse",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File \"${PLUGIN_ROOT}/scripts/run-hook.ps1\" -Event Stop",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -897,3 +897,69 @@ class BrainLifecycle:
             },
         )
         return memory_id
+
+
+
+AUTOINJECT_MODE_OFF_VALUES = {"off", "0", "false", "no"}
+AUTOINJECT_MODE_ACTIVE_VALUES = {"advisory", "active", "1", "true", "yes"}
+DEFAULT_AUTOINJECT_MODE = "shadow"
+
+
+def mode_from_autoinject_toml(text: str) -> str | None:
+    """Read `[autoinject] mode` from config/autoinject.toml text (tiny parser).
+
+    Mirrors Prime autoinject.ts `modeFromAutoinjectToml`. Returns None when
+    the key is absent/invalid (absent => default).
+    """
+    in_autoinject = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("["):
+            in_autoinject = line.startswith("[autoinject]")
+            continue
+        if not in_autoinject or line == "" or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, rest = line.partition("=")
+        if key.strip() != "mode":
+            continue
+        value = rest.split("#")[0].strip().strip('"').lower()
+        if value in AUTOINJECT_MODE_OFF_VALUES:
+            return "off"
+        if value in AUTOINJECT_MODE_ACTIVE_VALUES:
+            return value
+        if value == "shadow":
+            return "shadow"
+        return None
+    return None
+
+
+def resolve_autoinject_mode(home: Path | str, env: dict[str, str] | None = None) -> str:
+    """Canonical AutoInject mode resolution (plan §11 / §22).
+
+    Precedence: SECOND_BRAIN_AUTOINJECT_* env override > config/autoinject.toml
+    [autoinject] mode > default "shadow". No second hierarchy.
+    """
+    env_map = env if env is not None else os.environ
+    env_raw = (env_map.get("SECOND_BRAIN_AUTOINJECT_MODE", "") or "").strip().lower()
+    mode: str | None = None
+    if env_raw:
+        if env_raw in AUTOINJECT_MODE_OFF_VALUES:
+            mode = "off"
+        elif env_raw in AUTOINJECT_MODE_ACTIVE_VALUES:
+            mode = env_raw
+        elif env_raw == "shadow":
+            mode = "shadow"
+    if mode is not None:
+        return mode
+    path = Path(home) / "config" / "autoinject.toml"
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        file_mode = mode_from_autoinject_toml(text)
+        if file_mode is not None:
+            return file_mode
+    return DEFAULT_AUTOINJECT_MODE
