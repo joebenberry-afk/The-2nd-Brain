@@ -67,7 +67,13 @@ import {
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
-import { mirrorExtensionError, mirrorFireAndForget, taskSha256 } from "./ledger-mirror";
+import {
+  mirrorExtensionError,
+  mirrorFireAndForget,
+  runLedgerCheckpoint,
+  runLedgerSegmentRollover,
+  taskSha256,
+} from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
 import {
@@ -625,15 +631,71 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.agentEnd(session, event.messages);
   });
 
-  wire<SessionBeforeCompactEvent>("session_before_compact", (event, _ctx, session) => {
-    mirror(session, "compaction_started", {
-      branch_entries: Array.isArray(event.branchEntries) ? event.branchEntries.length : 0,
-    });
-    return sensors.sessionBeforeCompact(session, event.branchEntries);
+  // session_before_compact: pre-compaction DURABILITY BARRIER (plan §10.2).
+  // The checkpoint is AWAITED (5s timeout). On flush/integrity failure the
+  // handler returns { cancel: true } — the host throws "Compaction cancelled"
+  // (SDK agent-session.ts:7199 reads result.cancel) and no context is lost.
+  // The event is registered directly (not via wire) so the handler can await.
+  pi.on("session_before_compact", async (event, ctx) => {
+    const compactEvent = event as SessionBeforeCompactEvent;
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      mirror(session, "compaction_started", {
+        branch_entries: Array.isArray(compactEvent.branchEntries)
+          ? compactEvent.branchEntries.length
+          : 0,
+      });
+      // measurement record first (every lifecycle event writes one record),
+      // then the durability barrier decides whether compaction may proceed.
+      getStore(session)?.append(
+        sensors.sessionBeforeCompact(session, compactEvent.branchEntries),
+      );
+      const checkpoint = await runLedgerCheckpoint({
+        home: config.home ?? "",
+        hostSessionId: session,
+      });
+      if (!checkpoint.ok) {
+        mirror(
+          session,
+          "ledger_degraded",
+          {
+            reason: "pre-compaction checkpoint failed",
+            detail: checkpoint.error ?? "integrity bad",
+          },
+          { ignorable: true },
+        );
+        getStore(session)?.append(
+          mirrorExtensionError(session, `pre-compaction checkpoint failed: ${checkpoint.error ?? "integrity bad"}`),
+        );
+        return { cancel: true };
+      }
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — stay silent
+      }
+      return { cancel: true }; // never compact on an unproven barrier
+    }
+    return undefined;
   });
 
   wire<SessionCompactEvent>("session_compact", (event, _ctx, session) => {
     mirror(session, "compaction_completed", { from_extension: event.fromExtension === true });
+    // Compaction boundary: close the prior segment and open a new one
+    // (plan §10.3) — fire-and-forget; failure only records an extension_error.
+    runLedgerSegmentRollover({
+      home: config.home ?? "",
+      hostSessionId: session,
+      onError: (error) => {
+        try {
+          getStore(session)?.append(mirrorExtensionError(session, `segment rollover: ${error}`));
+        } catch {
+          // storage failed too — stay silent
+        }
+      },
+    });
     return sensors.sessionCompact(session, event.fromExtension);
   });
 

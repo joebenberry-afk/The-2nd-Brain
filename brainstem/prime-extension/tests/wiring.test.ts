@@ -187,15 +187,34 @@ describe("factory wiring (src/index.ts)", () => {
       const handler = handlers.get(name);
       expect(handler, `handler for ${name}`).toBeDefined();
       const result = await handler!(event, ctx);
-      expect(result, `${name} handler returned a value`).toBeUndefined();
+      if (name === "session_before_compact") {
+        // T-G4: the pre-compaction durability barrier returns {cancel:true}
+        // when the ledger checkpoint cannot prove durability (venv-less test
+        // homes) — compaction must not proceed unprotected.
+        expect(
+          result === undefined ||
+            (typeof result === "object" && result !== null && "cancel" in (result as object)),
+          `${name} handler returned an unexpected value`,
+        ).toBe(true);
+      } else {
+        expect(result, `${name} handler returned a value`).toBeUndefined();
+      }
     }
     // all 11 records land in the same session file (fire-and-forget drained).
     // NOTE: invoked back-to-back, the sync final write for session_shutdown can
     // land ahead of still-queued async writes, so order is asserted as a set
     // here; real ordering (shutdown last) is covered by the dedicated test
     // below, where prior writes have settled before shutdown fires.
-    const records = await waitForLines(11);
-    expect(records.map((r) => r.kind).sort()).toEqual(EVENTS.map(([name]) => name).sort());
+    const records = await waitForLines(12); // 11 event kinds + optional barrier extension_error
+    const kinds = records.map((r) => r.kind).sort();
+    const expected = EVENTS.map(([name]) => name).sort();
+    // T-G4: the venv-less test home cannot prove the pre-compaction barrier,
+    // so session_before_compact appends one extra extension_error and returns
+    // {cancel:true}; the 11 lifecycle kinds must all still be present.
+    for (const kind of expected) {
+      expect(kinds).toContain(kind);
+    }
+    expect(kinds.filter((k) => k === "extension_error").length).toBeLessThanOrEqual(1);
     for (const rec of records) {
       expect(rec.v).toBe(2);
       expect(rec.session).toBe("wiring-test");

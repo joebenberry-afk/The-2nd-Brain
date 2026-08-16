@@ -419,3 +419,139 @@ def test_inline_agent_registration(store) -> None:
     ).fetchone()
     assert row["role_profile"] == "worker"
     assert row["model"] == "deepseek-v4-flash"
+
+
+# ---------------------------------------------------------------------------
+# T-G4: segments, checkpoint barrier, continuation capsule, rehydration
+# ---------------------------------------------------------------------------
+
+
+def test_segment_lifecycle(store) -> None:
+    _seed(store, 2)
+    seg1 = store.open_segment("startup")
+    assert seg1 == "seg-1"
+    # open_segment advanced start_seq to 3; append seqs 3-4 explicitly
+    store.append_events(
+        [
+            _ev(3, "f-1", LifecycleEventType.USER_TASK, parent="e-2"),
+            _ev(4, "f-2", LifecycleEventType.USER_TASK, parent="f-1"),
+        ]
+    )
+    seg2 = store.open_segment("compact")
+    assert seg2 == "seg-2"
+    rows = store._conn.execute(
+        "SELECT segment_id, start_seq, end_seq, active FROM segments ORDER BY idx"
+    ).fetchall()
+    assert [dict(r) for r in rows] == [
+        {"segment_id": "seg-1", "start_seq": 3, "end_seq": 4, "active": 0},
+        {"segment_id": "seg-2", "start_seq": 5, "end_seq": None, "active": 1},
+    ]
+    closed = store.close_segment()
+    assert closed["segment_id"] == "seg-2"
+    assert closed["end_seq"] == 4
+    assert store.close_segment() is None  # nothing active
+
+
+def test_checkpoint_ok_and_failure_flag(tmp_path) -> None:
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+        _seed(s, 3)
+        result = ledger_mod.checkpoint_ledger(s)
+        assert result["ok"] is True
+        assert result["durability"] == "flushed"
+        assert result["integrity"]["seq_contiguous"] is True
+        # inject a seq gap -> checkpoint reports failure, never raises
+        conn = sqlite3.connect(s.dbfile)
+        conn.execute("DELETE FROM events WHERE seq = 2")
+        conn.commit()
+        conn.close()
+        bad = ledger_mod.checkpoint_ledger(s)
+        assert bad["ok"] is False
+        assert bad["integrity"]["seq_contiguous"] is False
+
+
+def test_continuation_capsule_from_events(store) -> None:
+    store.append_events(
+        [
+            _ev(1, "start", LifecycleEventType.SESSION_STARTED, payload={"agent_id": "a1"}),
+            _ev(
+                2,
+                "task",
+                LifecycleEventType.USER_TASK,
+                payload={"task_sha256": "abc", "prompt_chars": 3},
+            ),
+            _ev(
+                3,
+                "dec",
+                LifecycleEventType.DECISION,
+                payload={"decision": "use X", "rationale": "because Y"},
+            ),
+            _ev(
+                4,
+                "rep",
+                LifecycleEventType.WORKER_REPORT,
+                payload={"worker": "w1", "summary": "done"},
+            ),
+        ]
+    )
+    capsule = store.continuation_capsule()
+    assert capsule["current_task"]["task_sha256"] == "abc"
+    assert any(d["decision"] == "use X" for d in capsule["decisions"])
+    assert capsule["worker_status"]["w1"]["summary"] == "done"
+    assert capsule["pointers"]["artifact_count"] == 0
+
+
+def test_rehydrate_levels_and_dedupe(store) -> None:
+    store.open_segment("startup")
+    store.append_events(
+        [
+            _ev(1, "task", LifecycleEventType.USER_TASK, payload={"task_sha256": "abc"}),
+            _ev(
+                2,
+                "dec",
+                LifecycleEventType.DECISION,
+                payload={"decision": "use X", "rationale": "because Y"},
+                parent="task",
+            ),
+        ]
+    )
+    digest = store.add_object(b"exact artifact bytes", mime="text/plain", role="artifact")
+    # attach the artifact to the decision event via direct update (mirror of tool flow)
+    store._conn.execute(
+        "UPDATE events SET artifact_sha256 = ? WHERE event_id = 'dec'", (digest,)
+    )
+    store._conn.commit()
+    store.open_segment("compact")
+
+    rh = ledger_mod.LedgerRehydrator(store)
+    l1 = rh.rehydrate(1)
+    assert l1["level"] == 1
+    assert l1["pointer"]["segments"][0]["segment_id"] == "seg-1"
+    assert l1["pointer"]["event_range"] == {"from": 1, "to": 2}
+
+    l2 = rh.rehydrate(2)
+    assert l2["level"] == 2
+    assert l2["evidence_packets"][0]["decision"] == "use X"
+    assert l2["evidence_packets"][0]["rationale"] == "because Y"
+
+    l3 = rh.rehydrate(3, from_seq=1, to_seq=2)
+    assert l3["level"] == 3
+    payloads = {e["event_id"]: e["payload"] for e in l3["events"]}
+    assert payloads["dec"] == {"decision": "use X", "rationale": "because Y"}
+    assert l3["artifacts"][0]["digest_verified"] is True
+    assert l3["artifacts"][0]["excerpt"] == "exact artifact bytes"
+
+    l4 = rh.rehydrate(4)
+    assert l4["level"] == 4
+    assert len(l4["segments"]) == 2
+    assert len(l4["events"]) == 2
+
+    # stable rehydration_id + dedupe: same level+content -> deduplicated
+    stable = {k: v for k, v in l1.items() if k != "rehydration_id"}
+    assert l1["rehydration_id"] == ledger_mod._rehydration_id(stable)
+    again = rh.rehydrate(1)
+    assert again["deduplicated"] is True
+    assert again["rehydration_id"] == l1["rehydration_id"]
+    # a different range is NOT deduplicated (returns full content, no flag)
+    different = rh.rehydrate(3, from_seq=1, to_seq=1)
+    assert different.get("deduplicated") is None
+    assert [e["event_id"] for e in different["events"]] == ["task"]

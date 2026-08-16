@@ -549,6 +549,129 @@ class LedgerStore:
             "event_count": n,
         }
 
+    # -- segments ---------------------------------------------------------------
+
+    def open_segment(self, started_reason: str = "manual") -> str:
+        """Close the prior active segment (end_seq = max seq) and open a new
+        one (index+1, start_seq = max seq + 1). Returns the new segment_id."""
+        assert self._conn is not None
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._ensure_session_row()
+            max_seq = int(
+                self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+            )
+            active = self._conn.execute(
+                "SELECT segment_id FROM segments WHERE active = 1"
+            ).fetchone()
+            if active is not None:
+                self._conn.execute(
+                    "UPDATE segments SET end_seq = ?, active = 0 WHERE segment_id = ?",
+                    (max_seq, active["segment_id"]),
+                )
+            idx = int(
+                self._conn.execute("SELECT COALESCE(MAX(idx), -1) FROM segments").fetchone()[0]
+            ) + 1
+            segment_id = f"seg-{idx + 1}"
+            self._conn.execute(
+                "INSERT INTO segments (segment_id, internal_session_id, idx, start_seq, "
+                " end_seq, started_reason, compaction_id, active) "
+                "VALUES (?, ?, ?, ?, NULL, ?, NULL, 1)",
+                (segment_id, self._internal, idx, max_seq + 1, started_reason),
+            )
+            self._conn.commit()
+            return segment_id
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def close_segment(self) -> dict[str, Any] | None:
+        """Close the active segment at the current max seq. Returns the closed
+        segment row (or None when no segment is active)."""
+        assert self._conn is not None
+        max_seq = int(
+            self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+        )
+        row = self._conn.execute(
+            "SELECT * FROM segments WHERE active = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        self._conn.execute(
+            "UPDATE segments SET end_seq = ?, active = 0 WHERE segment_id = ?",
+            (max_seq, row["segment_id"]),
+        )
+        self._conn.commit()
+        updated = self._conn.execute(
+            "SELECT * FROM segments WHERE segment_id = ?", (row["segment_id"],)
+        ).fetchone()
+        return dict(updated)
+
+    def continuation_capsule(self) -> dict[str, Any]:
+        """Continuation capsule from recent events (plan §17.5/§10.4): only
+        what exists in the ledger — never fabricated."""
+        assert self._conn is not None
+        rows = self._conn.execute("SELECT * FROM events ORDER BY seq DESC LIMIT 500").fetchall()
+        events = [_row_to_event(r) for r in rows][::-1]
+        current_task: dict[str, Any] | None = None
+        for e in reversed(events):
+            if e.event_type is LifecycleEventType.USER_TASK and e.payload.get("task_sha256"):
+                current_task = {"task_sha256": e.payload["task_sha256"], "seq": e.seq}
+                break
+        decisions = [
+            {
+                "seq": e.seq,
+                "decision": e.payload.get("decision") or e.payload.get("title"),
+                "rationale": e.payload.get("rationale") or e.payload.get("guidance"),
+                "event_id": e.event_id,
+            }
+            for e in events
+            if e.event_type is LifecycleEventType.DECISION and e.payload
+        ]
+        contradictions = [
+            {
+                "seq": e.seq,
+                "event_id": e.event_id,
+                "note": e.payload.get("summary") or e.payload.get("decision"),
+            }
+            for e in events
+            if e.event_type is LifecycleEventType.FINDING
+            and str(e.payload.get("kind") or "").lower() == "contradiction"
+        ]
+        worker_status: dict[str, dict[str, Any]] = {}
+        for e in events:
+            if e.event_type is LifecycleEventType.WORKER_REPORT:
+                worker = str(e.payload.get("worker") or e.agent_id or "unknown")
+                worker_status[worker] = {
+                    "seq": e.seq,
+                    "summary": e.payload.get("summary") or e.payload.get("conclusion"),
+                    "uncertainty": e.payload.get("uncertainty"),
+                }
+        segments = [
+            dict(r)
+            for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
+        ]
+        return {
+            "current_task": current_task,
+            "decisions": decisions,
+            "contradictions": contradictions,
+            "worker_status": worker_status,
+            "pointers": {
+                "segments": [
+                    {
+                        "segment_id": s["segment_id"],
+                        "start_seq": s["start_seq"],
+                        "end_seq": s["end_seq"],
+                        "active": bool(s["active"]),
+                    }
+                    for s in segments
+                ],
+                "artifact_count": int(
+                    self._conn.execute("SELECT COUNT(*) FROM object_refs").fetchone()[0]
+                ),
+            },
+        }
+
     # -- FTS --------------------------------------------------------------------
 
     @staticmethod
@@ -846,3 +969,230 @@ def classify_tool_outcome(events: Iterable[BrainLifecycleEvent]) -> dict[str, di
             )
         out[tool_id] = {"state": state.value, "guidance": guidance}
     return out
+
+# ---------------------------------------------------------------------------
+# Segments, checkpoint barrier, continuation capsule, rehydration (plan
+# §10.2/§10.3/§17.5, amendment §19.4; Phase G/T-G4).
+# ---------------------------------------------------------------------------
+
+
+def _rehydration_id(content: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(content).encode("utf-8")).hexdigest()
+
+
+class SegmentError(BrainError):
+    """Segment lifecycle violation."""
+
+
+class LedgerRehydrator:
+    """Level 1-4 rehydration with stable rehydration_id dedupe."""
+
+    def __init__(self, store: LedgerStore) -> None:
+        self._store = store
+        self._seen: set[str] = set()
+
+    def rehydrate(
+        self,
+        level: int,
+        *,
+        segment: str | None = None,
+        decision: str | None = None,
+        from_seq: int | None = None,
+        to_seq: int | None = None,
+    ) -> dict[str, Any]:
+        store = self._store
+        assert store._conn is not None
+        segments = [
+            dict(r)
+            for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
+        ]
+        event_where: list[str] = []
+        params: list[Any] = []
+        if segment is not None:
+            event_where.append("segment_id = ?")
+            params.append(segment)
+        if from_seq is not None:
+            event_where.append("seq >= ?")
+            params.append(from_seq)
+        if to_seq is not None:
+            event_where.append("seq <= ?")
+            params.append(to_seq)
+        where = f" WHERE {' AND '.join(event_where)}" if event_where else ""
+        rows = store._conn.execute(
+            f"SELECT * FROM events{where} ORDER BY seq", params
+        ).fetchall()
+        events = [_row_to_event(r) for r in rows]
+
+        if level == 1:
+            content: dict[str, Any] = {
+                "level": 1,
+                "pointer": {
+                    "session": store._host_session_id,
+                    "segments": [
+                        {
+                            "segment_id": s["segment_id"],
+                            "index": s["idx"],
+                            "start_seq": s["start_seq"],
+                            "end_seq": s["end_seq"],
+                            "active": bool(s["active"]),
+                        }
+                        for s in segments
+                    ],
+                    "event_range": (
+                        {"from": events[0].seq, "to": events[-1].seq} if events else None
+                    ),
+                },
+                "citation": f"segments/{segment or 'all'}/events",
+            }
+        elif level == 2:
+            decisions = [
+                e
+                for e in events
+                if e.event_type
+                in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
+                and (decision is None or e.event_id == decision)
+            ]
+            content = {
+                "level": 2,
+                "evidence_packets": [
+                    {
+                        "event_id": e.event_id,
+                        "seq": e.seq,
+                        "decision": e.payload.get("decision")
+                        or e.payload.get("title")
+                        or e.payload.get("summary"),
+                        "rationale": e.payload.get("rationale")
+                        or e.payload.get("guidance")
+                        or e.payload.get("observation"),
+                        "evidence_refs": e.source_event_ids or [],
+                        "segment_id": e.segment_id,
+                    }
+                    for e in decisions
+                ],
+            }
+        elif level == 3:
+            artifacts: list[dict[str, Any]] = []
+            for e in events:
+                if not e.artifact_sha256:
+                    continue
+                try:
+                    data = store.read_object(e.artifact_sha256)
+                    artifacts.append(
+                        {
+                            "event_id": e.event_id,
+                            "sha256": e.artifact_sha256,
+                            "size": len(data),
+                            "excerpt": data[:2000].decode("utf-8", errors="replace"),
+                            "digest_verified": True,
+                        }
+                    )
+                except BrainError as exc:
+                    artifacts.append(
+                        {
+                            "event_id": e.event_id,
+                            "sha256": e.artifact_sha256,
+                            "digest_verified": False,
+                            "error": str(exc),
+                        }
+                    )
+            content = {
+                "level": 3,
+                "events": [
+                    {
+                        "seq": e.seq,
+                        "event_id": e.event_id,
+                        "event_type": e.event_type.value,
+                        "timestamp": e.timestamp,
+                        "segment_id": e.segment_id,
+                        "agent_id": e.agent_id,
+                        "parent_event_id": e.parent_event_id,
+                        "payload": e.payload,
+                        "source_event_ids": e.source_event_ids,
+                    }
+                    for e in events
+                ],
+                "artifacts": artifacts,
+            }
+        elif level == 4:
+            content = {
+                "level": 4,
+                "session": store._host_session_id,
+                "segments": segments,
+                "agents": [
+                    dict(r)
+                    for r in store._conn.execute(
+                        "SELECT * FROM agents ORDER BY created_at"
+                    ).fetchall()
+                ],
+                "epochs": [
+                    dict(r)
+                    for r in store._conn.execute(
+                        "SELECT * FROM request_epochs ORDER BY start_seq"
+                    ).fetchall()
+                ],
+                "events": [
+                    {
+                        "seq": e.seq,
+                        "event_id": e.event_id,
+                        "event_type": e.event_type.value,
+                        "timestamp": e.timestamp,
+                        "segment_id": e.segment_id,
+                        "agent_id": e.agent_id,
+                        "parent_event_id": e.parent_event_id,
+                        "surface_visibility": e.surface_visibility.value,
+                        "ignorable": e.ignorable,
+                        "payload": e.payload,
+                        "artifact_sha256": e.artifact_sha256,
+                        "source_event_ids": e.source_event_ids,
+                    }
+                    for e in events
+                ],
+            }
+        else:
+            raise BrainError(f"unknown rehydration level: {level}")
+
+        rid = _rehydration_id(content)
+        if rid in self._seen or rid in self._manifest_rehydrations():
+            return {"rehydration_id": rid, "deduplicated": True}
+        self._seen.add(rid)
+        self._note_rehydration(rid)
+        content["rehydration_id"] = rid
+        return content
+
+    def _manifest_rehydrations(self) -> set[str]:
+        try:
+            manifest = json.loads(
+                (self._store.session_path / "manifest.json").read_text(encoding="utf-8")
+            )
+            return set(manifest.get("rehydrations", []))
+        except (OSError, ValueError):
+            return set()
+
+    def _note_rehydration(self, rid: str) -> None:
+        try:
+            path = self._store.session_path / "manifest.json"
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            ids = list(manifest.get("rehydrations", []))
+            ids.append(rid)
+            manifest["rehydrations"] = ids[-100:]
+            tmp = self._store.session_path / "manifest.json.tmp"
+            tmp.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+        except (OSError, ValueError):
+            pass  # dedupe note is best-effort; in-memory set still guards
+
+
+def checkpoint_ledger(store: LedgerStore) -> dict[str, Any]:
+    """Pre-compaction durability barrier (plan §10.2): flush + integrity.
+    Returns {ok, integrity, closed_segment?}. Never raises."""
+    try:
+        store.flush()
+        integrity = store.integrity()
+        ok = bool(
+            integrity["seq_contiguous"]
+            and integrity["orphan_parents"] == 0
+            and integrity["object_digests_ok"]
+        )
+        return {"ok": ok, "durability": "flushed", "integrity": integrity}
+    except Exception as exc:  # fail open to a failure flag, never raise
+        return {"ok": False, "durability": "failed", "error": str(exc)}
