@@ -428,7 +428,11 @@ def _parser() -> argparse.ArgumentParser:
     madd.add_argument("title")
     madd.add_argument("body")
     madd.add_argument("--scope", default="project", choices=semantic.SCOPES)
-    madd.add_argument("--project", dest="project_id", default="second-brain")
+    # P3-cleanup (pre-P3 truth): NO silent second-brain default. A
+    # project-scoped write must resolve from explicit --project or the
+    # registered-project root containing the working directory, or fail
+    # clearly (see cmd_memory). Global/domain scopes are unaffected.
+    madd.add_argument("--project", dest="project_id", default=None)
     madd.add_argument("--grade", default="OBSERVED", choices=semantic.GRADES)
     madd.add_argument("--source", dest="sources", action="append", default=None)
     mcur = mms.add_parser(
@@ -1043,15 +1047,46 @@ def _parse_sources(raw: list[str] | None) -> list[dict] | None:
     return out
 
 
+def _project_from_cwd(home: Path) -> str | None:
+    """Authoritative project resolution for CLI writes: the registered
+    project whose root contains the current working directory (plan §10).
+    None when no registered project contains cwd — caller must fail clearly."""
+    try:
+        cwd_abs = os.path.abspath(os.getcwd())
+        for proj in registry.list_projects(home):
+            root = proj.repo_path
+            if root:
+                root_abs = os.path.abspath(root)
+                try:
+                    if os.path.commonpath([cwd_abs, root_abs]) == root_abs:
+                        return proj.id
+                except ValueError:
+                    continue
+    except Exception:  # fail open: registry errors -> unresolved -> caller errors
+        return None
+    return None
+
+
 def cmd_memory(args) -> int:
     home = _home(args)
     if args.memory_command == "add":
+        project_id = args.project_id
+        if args.scope == "project" and project_id is None:
+            # Reuse the authoritative project registry (root containing cwd);
+            # never silently fall back to second-brain.
+            project_id = _project_from_cwd(home)
+            if project_id is None:
+                print(
+                    "memory add with scope=project requires --project "
+                    "(no registered project root contains the working directory)"
+                )
+                return 2
         mid = semantic.add_memory(
             home,
             args.title,
             args.body,
             scope=args.scope,
-            project_id=args.project_id,
+            project_id=project_id,
             grade=args.grade,
             sources=_parse_sources(args.sources),
         )
