@@ -186,7 +186,7 @@ describe("factory wiring (src/index.ts)", () => {
     for (const [name, event] of EVENTS) {
       const handler = handlers.get(name);
       expect(handler, `handler for ${name}`).toBeDefined();
-      const result = handler!(event, ctx);
+      const result = await handler!(event, ctx);
       expect(result, `${name} handler returned a value`).toBeUndefined();
     }
     // all 11 records land in the same session file (fire-and-forget drained).
@@ -450,7 +450,7 @@ describe("Phase 2 anonymous session identity (src/index.ts)", () => {
     const ctx = anonCtx();
 
     handlers.get("session_start")!({ reason: "startup" }, ctx);
-    handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
     handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }, ctx);
     handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: [], details: {}, isError: false }, ctx);
@@ -835,7 +835,7 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
 
   it("before_agent_start: Sol model -> systemPrompt contains the delegation rule", async () => {
     const handlers = loadFactory();
-    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
     expect(result).toBeDefined();
     const patch = result as { systemPrompt?: string };
     expect(typeof patch.systemPrompt).toBe("string");
@@ -851,7 +851,7 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
   it("before_agent_start: non-Sol model -> undefined, no systemPrompt", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek/deepseek-v4-flash
-    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     expect(result).toBeUndefined();
 
     const records = await waitForLines(1);
@@ -876,7 +876,7 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
       SOL_CTX,
     );
     expect(solBash).toBeUndefined();
-    const patch = handlers.get("before_agent_start")!({ prompt: "hi" }, SOL_CTX);
+    const patch = await handlers.get("before_agent_start")!({ prompt: "hi" }, SOL_CTX);
     expect(patch).toBeUndefined();
 
     await settle(); // drain fire-and-forget writes before the tmp dir is removed
@@ -894,7 +894,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
   it("default OFF: before_agent_start performs ZERO spawns and returns undefined", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek, non-Sol
-    const result = handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
+    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
     // measurement record still appended
@@ -934,7 +934,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     const handlers = loadFactory();
     const ctx = makeCtx();
-    const result = handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx);
+    const result = await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
   });
@@ -989,7 +989,7 @@ const MARKER = "second-brain-driver-orchestration-contract";
 describe("driver-orchestration contract (src/index.ts)", () => {
   it("before_agent_start: driver model -> contract appended after the base prompt, record role=driver injected=true", async () => {
     const handlers = loadFactory();
-    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, DRIVER_CTX);
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, DRIVER_CTX);
     const patch = result as { systemPrompt?: string } | undefined;
     expect(patch).toBeDefined();
     expect(patch!.systemPrompt).toContain("BASE SYSTEM PROMPT"); // base preserved, contract APPENDED
@@ -1010,7 +1010,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       model: { id: "gpt-5.6-luna", provider: "openai-codex" },
       getSystemPrompt: () => `SEEDED BASE\n\n[${MARKER}] already there`,
     });
-    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
     expect(result).toBeUndefined(); // recall disabled; nothing new to inject
 
     const records = await waitForLines(1);
@@ -1025,7 +1025,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
   it("before_agent_start: worker model -> no contract, record role=worker", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek/deepseek-v4-flash
-    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
+    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     expect(result).toBeUndefined();
 
     const records = await waitForLines(1);
@@ -1037,7 +1037,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
 
   it("before_agent_start: normal model -> no contract, record role=normal", async () => {
     const handlers = loadFactory();
-    const result = handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX);
+    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX);
     expect(result).toBeUndefined();
 
     const records = await waitForLines(1);
@@ -1047,7 +1047,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
 
   it("before_agent_start: Sol model -> Sol contract only, record role=hard_orchestrator, no driver marker", async () => {
     const handlers = loadFactory();
-    const result = handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, SOL_CTX);
     const patch = result as { systemPrompt?: string } | undefined;
     expect(patch).toBeDefined();
     expect(patch!.systemPrompt).toContain("MUST delegate"); // Sol contract

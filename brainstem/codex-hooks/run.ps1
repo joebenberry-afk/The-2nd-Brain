@@ -4,9 +4,12 @@
 #         carry {prompt|task, session_id, cwd, ...}).
 # flow  : payload -> `brainctl autoinject codex-shadow` (Python control
 #         authority; task text travels via stdin only, never argv).
-# stdout: `{}` — SHADOW invariant: no additionalContext, no model-visible
-#         mutation. The decision JSON is appended (privacy-safe) to
-#         <brain>/telemetry/agent-performance/codex-hooks.jsonl.
+# modes : SECOND_BRAIN_AUTOINJECT_MODE is inherited (never stripped):
+#           shadow|off (default shadow) -> stdout `{}` (SHADOW invariant: no
+#             additionalContext); decision logged privacy-safe below.
+#           advisory|active -> stdout is the CLI JSON, i.e.
+#             {"additionalContext": "<packet>"} — low-authority model-visible
+#             injection (packet text carries "authority: advisory").
 # exit  : forwards the CLI exit code; the CLI always exits 0 on handled
 #         failures (fail-open), so hooks never break the Codex session.
 $ErrorActionPreference = "Stop"
@@ -24,6 +27,8 @@ $env:PYTHONPATH = $null
 
 $decisionJson = $payload | & $python -m second_brain --home $repoHome autoinject codex-shadow 2>$null
 $exitCode = $LASTEXITCODE
+
+$mode = if ($env:SECOND_BRAIN_AUTOINJECT_MODE) { $env:SECOND_BRAIN_AUTOINJECT_MODE.ToLower() } else { "shadow" }
 
 try {
   # Privacy-safe decision record (SCHEMA.md rules): counts/ids/hash only —
@@ -50,5 +55,12 @@ try {
   # logging must never fail the hook
 }
 
-Write-Output "{}"
+if ($mode -eq "advisory" -or $mode -eq "active") {
+  # Hook response for Codex 0.147.0: the CLI JSON contains
+  # {"additionalContext": "<packet>"}; unknown extra keys are ignored.
+  Write-Output $decisionJson
+} else {
+  # SHADOW/off: no additionalContext, no model-visible mutation.
+  Write-Output "{}"
+}
 exit $exitCode

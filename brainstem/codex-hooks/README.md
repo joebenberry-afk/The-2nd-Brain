@@ -1,8 +1,23 @@
 # Second Brain P0 Codex hooks — SHADOW (Phase 0C part 2)
 
 Repo-local, reversible Codex hook wiring for the P0 AutoInject pipeline
-(plan §6.10, Phase 0C). **SHADOW only**: decisions are computed and recorded;
-Codex sessions are never mutated (`{}` is returned — no `additionalContext`).
+(plan §6.10, Phase 0C/0D). Mode is controlled by `SECOND_BRAIN_AUTOINJECT_MODE`
+(default `shadow`); the launcher inherits it unchanged:
+
+| Mode      | Hook stdout                                    | Effect |
+|-----------|------------------------------------------------|--------|
+| off       | `{}`                                           | no pipeline call, no injection |
+| shadow    | `{}` (decision logged privacy-safe)            | decide + record, never inject |
+| advisory  | `{"additionalContext": "<packet>"}`            | low-authority model-visible packet (packet text carries `authority: advisory`) |
+| active    | same as advisory                               | same path; authority remains advisory |
+
+`advisory` and `active` behave identically in this adapter — the packet is
+always low-authority (the contracts renderer fixes `authority: advisory`);
+0D/1C may distinguish them for orchestration policy later. In every mode the
+decision is recorded in the canonical DB delivery ledger + telemetry, and
+fail-open stays: any error/timeout/malformed input yields
+`NO_INJECTION(BRAIN_UNAVAILABLE)` with exit 0. Task text only ever appears
+inside the packet / `additionalContext`, never in argv or logs.
 
 ## What happens on each event
 
@@ -31,13 +46,19 @@ exit 0 — the hook never breaks a Codex session.
   touches `[hooks.state]`/`[agents]`; prints the diff; keeps a timestamped
   backup; `-RestoreBackup` fully reverses to the pre-install state.
 
-## Install / uninstall
+## Install / uninstall / rollback
 
 ```powershell
 .\scripts\install-codex-hooks.ps1            # merge into ~/.codex/config.toml
 .\scripts\uninstall-codex-hooks.ps1          # remove block (keeps other tables)
 .\scripts\uninstall-codex-hooks.ps1 -RestoreBackup   # exact prior state
 ```
+
+Rollback ladder (plan §22): drop to shadow/off with
+`SECOND_BRAIN_AUTOINJECT_MODE=off` (no config change needed); remove hooks
+with the uninstall script; restore the exact pre-install file with
+`-RestoreBackup` (timestamped backups are kept at
+`config.toml.sb-hooks-backup-*`). Rollback never deletes user memory.
 
 Test safely without touching the real config:
 
