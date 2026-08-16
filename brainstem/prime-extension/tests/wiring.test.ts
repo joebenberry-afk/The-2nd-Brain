@@ -1205,7 +1205,9 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       getSystemPrompt: () => `SEEDED BASE\n\n[${MARKER}] already there`,
     });
     const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
-    expect(result).toBeUndefined(); // recall disabled; nothing new to inject
+    const patch = result as { systemPrompt?: string } | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.systemPrompt).toBe(`SEEDED BASE\n\n[${MARKER}] already there`); // stable prompt returned, no duplicate append
 
     const records = await waitForLines(3);
     const contract = recordOf(records, "before_agent_start");

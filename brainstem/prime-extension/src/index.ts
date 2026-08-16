@@ -525,6 +525,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
         return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), aiMessage);
       }
+      if (role === "driver" && patched !== undefined) {
+        return withMessage({ systemPrompt: patched }, aiMessage);
+      }
       if (patched !== undefined && patched !== base) {
         return withMessage({ systemPrompt: patched }, aiMessage);
       }
