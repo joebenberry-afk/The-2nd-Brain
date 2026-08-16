@@ -253,8 +253,10 @@ export async function runAdvisoryAutoInject(
       );
       return undefined;
     }
-    appendDecisionRecord(call, outcome, latencyMs);
-    if (outcome.decision !== "INJECT" || outcome.packet === null) return undefined;
+    const resultPatch =
+      outcome.decision === "INJECT" && outcome.packet !== null;
+    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, resultPatch);
+    if (outcome.packet === null) return undefined;
     return {
       customType: call.customType ?? AUTOINJECT_CUSTOM_TYPE,
       content: outcome.packet,
@@ -275,6 +277,8 @@ function appendDecisionRecord(
   call: ShadowAutoInjectCall,
   outcome: AutoInjectShadowOutcome,
   latencyMs: number,
+  mode: "off" | "shadow" | "advisory" | "active",
+  resultPatch: boolean,
 ): void {
   call.append(
     autoinjectShadowDecision(call.session, {
@@ -286,6 +290,8 @@ function appendDecisionRecord(
       selected_count: outcome.selectedCount,
       delivery_id: outcome.deliveryId,
       packet_sha256: outcome.packetSha256,
+      mode,
+      result_patch: resultPatch,
     }),
   );
 }
@@ -324,7 +330,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
       );
       return;
     }
-    appendDecisionRecord(call, outcome, latencyMs);
+    appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, false);
   } catch (error) {
     try {
       call.append(extensionError(call.session, error));
