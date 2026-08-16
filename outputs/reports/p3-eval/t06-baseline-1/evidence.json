@@ -1,0 +1,62 @@
+{
+  "run_id": "t06-baseline-1",
+  "task": "t06-dep-temptation",
+  "arm": "baseline",
+  "session": "01a00978-6829-7029-b917-b9ec779b869b",
+  "economics": {
+    "assistant_usage_rows": 13,
+    "input_tokens": 17335,
+    "output_tokens": 5264,
+    "cache_read_tokens": 194688,
+    "cache_write_tokens": 0,
+    "total_tokens": 217287,
+    "cost_total": 0.0044459464,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 13
+    },
+    "turns": 13,
+    "wall_ms": 141903
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/test.js ./test.js  (step 0: oracle restore)",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "test ! -e package.json",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...git status --porcelain... if(/\\?\\?/.test(out))process.exit(2);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "sort.js"
+    ],
+    "added_lines": 1,
+    "deleted_lines": 1,
+    "new_files": [
+      "ort.js"
+    ]
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_DEP_REJECTED",
+      "note": "Solved with stdlib String.prototype.toLowerCase() only; no package.json, node_modules, or any manifest/dependency added (task constraint)."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance: single comparator edit (1 line +/-, 1 file); no extra refactors, no formatting churn."
+    }
+  ],
+  "acceptance": "PASS"
+}

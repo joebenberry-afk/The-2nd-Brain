@@ -1,0 +1,57 @@
+{
+  "run_id": "t02-baseline-1",
+  "task": "t02-existing-reuse",
+  "arm": "baseline",
+  "session": "01a00970-42a7-723a-9ef0-462e861bc184",
+  "economics": {
+    "assistant_usage_rows": 11,
+    "input_tokens": 16944,
+    "output_tokens": 10171,
+    "cache_read_tokens": 181120,
+    "cache_write_tokens": 0,
+    "total_tokens": 208235,
+    "cost_total": 0.0057271760000000005,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 14
+    },
+    "turns": 11,
+    "wall_ms": 87386
+  },
+  "judge": [
+    {
+      "command": "node cli.js title hello world | grep -qx \"Hello World\"",
+      "exit": 0
+    },
+    {
+      "command": "node cli.js title oNCE uPON A | grep -qx \"Once Upon A\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const s=require('fs').readFileSync('cli.js','utf8');if(!/lib\\/strings/.test(s))process.exit(1);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git status --porcelain').toString();if(/\\?\\?/.test(out))process.exit(2);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "cli.js"
+    ],
+    "added_lines": 3,
+    "deleted_lines": 0,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_REUSE: reused existing capitalize helper in lib/strings.js via require('./lib/strings') instead of duplicating its logic",
+    "LC_STOP: stopped at acceptance once all four judge commands exited 0"
+  ],
+  "acceptance": "PASS",
+  "notes": [
+    "Template evidence snippet reports new_files ['li.js'] \u2014 parsing artifact: it trims each 'git status --porcelain' line (dropping the leading status column) then slices 3 chars, so ' M cli.js' -> 'li.js'. Verified ground truth: git ls-files --others is empty and judge step 4 (no '??' in porcelain) exited 0. diff fields here use verified truth."
+  ]
+}
