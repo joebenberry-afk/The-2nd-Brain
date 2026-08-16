@@ -1,0 +1,49 @@
+{
+ "run_id": "t03-candidate-2",
+ "task": "t03-tiny-bugfix",
+ "arm": "candidate",
+ "session": "01a009e7-22bd-70c8-84ef-b9bd954d4130",
+ "economics": {
+  "assistant_usage_rows": 9,
+  "input_tokens": 17373,
+  "output_tokens": 5508,
+  "cache_read_tokens": 132480,
+  "cache_write_tokens": 0,
+  "total_tokens": 155361,
+  "cost_total": 0.004345404,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 9
+  },
+  "turns": 9,
+  "wall_ms": 57590
+ },
+ "judge": [
+  {
+   "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/test.js ./test.js",
+   "exit": 0
+  },
+  {
+   "command": "node test.js",
+   "exit": 0
+  },
+  {
+   "command": "node -e \"...git diff --name-only must be exactly sum.js...\"",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [
+   "sum.js"
+  ],
+  "added_lines": 1,
+  "deleted_lines": 1,
+  "new_files": []
+ },
+ "files_touched": 1,
+ "lc_decisions": [
+  "LC_STOP: stopped at acceptance; no scope expansion beyond the one-character inclusive-range fix"
+ ],
+ "acceptance": "PASS"
+}

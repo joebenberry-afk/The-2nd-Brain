@@ -1,0 +1,64 @@
+{
+  "run_id": "t05-baseline-2",
+  "task": "t05-legit-abstraction",
+  "arm": "baseline",
+  "session": "01a009eb-ea72-7735-9d42-b1549f78b9a6",
+  "economics": {
+    "assistant_usage_rows": 9,
+    "input_tokens": 52906,
+    "output_tokens": 7085,
+    "cache_read_tokens": 235392,
+    "cache_write_tokens": 0,
+    "total_tokens": 295383,
+    "cost_total": 0.0100497376,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 11
+    },
+    "turns": 9,
+    "wall_ms": 68655
+  },
+  "judge": [
+    {
+      "command": "node -e \"require('fs').copyFileSync(process.argv[1],process.argv[2])\" <FIXTURE_SOURCE>/test.js ./test.js (step 0: restore pristine oracle)",
+      "exit": 0
+    },
+    {
+      "command": "node test.js (step 1)",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...checkText defs===1, calls>=4...\" (step 2)",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"...git status --porcelain no ??...\" (step 3)",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "validators.js"
+    ],
+    "added_lines": 11,
+    "deleted_lines": 9,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_ABSTRACTION_JUSTIFIED",
+      "note": "Extracted the 3x-repeated predicate into checkText(v, max) verbatim; 4 call sites now (3 existing + validateEmail), exactly as the task mandates."
+    },
+    {
+      "code": "LC_REUSE",
+      "note": "validateEmail reuses checkText with the same non-empty/max-50 contract; no new validation semantics invented."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance: only validators.js changed, test.js untouched, no new files, no extra polish."
+    }
+  ],
+  "acceptance": "PASS"
+}

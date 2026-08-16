@@ -1,0 +1,64 @@
+{
+  "run_id": "t12-candidate-2",
+  "task": "t12-prep-refactor",
+  "arm": "candidate",
+  "session": "01a009fe-ed0c-76f2-af8a-360175bf00ec",
+  "economics": {
+    "assistant_usage_rows": 13,
+    "input_tokens": 21257,
+    "output_tokens": 11408,
+    "cache_read_tokens": 255104,
+    "cache_write_tokens": 0,
+    "total_tokens": 287769,
+    "cost_total": 0.0068845111999999995,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 13
+    },
+    "turns": 13,
+    "wall_ms": 104320
+  },
+  "judge": [
+    {
+      "command": "step0: node -e copyFileSync <FIXTURE_SOURCE>/test.js ./test.js (anti-tamper oracle restore)",
+      "exit": 0
+    },
+    {
+      "command": "step1: node test.js",
+      "exit": 0
+    },
+    {
+      "command": "step2: calc.js defines 'function round2' once and round2( calls >= 2",
+      "exit": 0
+    },
+    {
+      "command": "step3: git status --porcelain has no untracked (??) entries",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "calc.js"
+    ],
+    "added_lines": 5,
+    "deleted_lines": 2,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_PREP_REFACTOR",
+      "note": "Extracted duplicated Math.round(x*100)/100 rounding into round2(x) helper FIRST, then fixed netAmount to gross - round2(gross * taxRate), per TASK PROMPT ordering."
+    },
+    {
+      "code": "LC_REUSE",
+      "note": "Both netAmount and grossUp call the extracted helper; no new files, dependencies, or tools introduced."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance after JUDGE steps 0-3 all exited 0; test.js untouched, no extra scope."
+    }
+  ],
+  "acceptance": "PASS"
+}

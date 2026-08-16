@@ -1,0 +1,56 @@
+{
+  "run_id": "t01-baseline-2",
+  "task": "t01-config-reuse",
+  "arm": "baseline",
+  "session": "01a009cc-9c13-73cd-b01b-dc35daf93181",
+  "economics": {
+    "assistant_usage_rows": 9,
+    "input_tokens": 16272,
+    "output_tokens": 3036,
+    "cache_read_tokens": 116864,
+    "cache_write_tokens": 0,
+    "total_tokens": 136172,
+    "cost_total": 0.0034553792000000007,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 9
+    },
+    "turns": 9,
+    "wall_ms": 45420
+  },
+  "judge": [
+    {
+      "command": "node app.js | grep -q '^debug: starting logger'",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"... git diff --name-only must be exactly config.json ...\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"... git status --porcelain must have no untracked files ...\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "config.json"
+    ],
+    "added_lines": 1,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    {
+      "code": "LC_REUSE",
+      "note": "Reused the existing built-in debug/verbose config flag; no new mechanism, code, or files needed."
+    },
+    {
+      "code": "LC_STOP",
+      "note": "Stopped at acceptance after the three JUDGE.md commands all exited 0."
+    }
+  ],
+  "acceptance": "PASS"
+}

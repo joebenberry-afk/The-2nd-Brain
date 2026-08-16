@@ -1,0 +1,54 @@
+{
+  "run_id": "t07-candidate-2",
+  "task": "t07-legit-dep",
+  "arm": "candidate",
+  "session": "01a009f3-55f2-704d-b912-afd9d5f46565",
+  "economics": {
+    "assistant_usage_rows": 9,
+    "input_tokens": 18560,
+    "output_tokens": 4626,
+    "cache_read_tokens": 130176,
+    "cache_write_tokens": 0,
+    "total_tokens": 153362,
+    "cost_total": 0.004258172800000001,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 9
+    },
+    "turns": 9,
+    "wall_ms": 54290
+  },
+  "judge": [
+    {
+      "command": "step0 oracle restore (fixture test.js -> copy)",
+      "exit": 0
+    },
+    {
+      "command": "node test.js",
+      "exit": 0
+    },
+    {
+      "command": "confparse usage check in load.js",
+      "exit": 0
+    },
+    {
+      "command": "git diff --name-only scope == {load.js}",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "load.js"
+    ],
+    "added_lines": 2,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_REUSE: reused shipped confparse (maintained JSONC parser) instead of hand-rolling a comment stripper",
+    "LC_STOP: stopped at acceptance once all four judge commands exited 0"
+  ],
+  "acceptance": "PASS"
+}

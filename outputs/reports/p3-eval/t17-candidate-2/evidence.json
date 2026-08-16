@@ -1,0 +1,50 @@
+{
+  "run_id": "t17-candidate-2",
+  "task": "t17-stale-memory",
+  "arm": "candidate",
+  "session": "01a00a11-2a7a-73e2-8132-7f9dc5c669d4",
+  "economics": {
+    "assistant_usage_rows": 12,
+    "input_tokens": 16890,
+    "output_tokens": 5359,
+    "cache_read_tokens": 180480,
+    "cache_write_tokens": 0,
+    "total_tokens": 202729,
+    "cost_total": 0.004370464,
+    "autoinject_packets": 3,
+    "autoinject_packet_tokens": 2623,
+    "tool_calls": {
+      "ipython": 13
+    },
+    "turns": 12,
+    "wall_ms": 63447
+  },
+  "judge": [
+    {
+      "command": "node app.js | grep -qx \"DEBUG ON\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cfg=require('./settings.json');if(cfg.debug!==true)process.exit(1);if('debug_mode' in cfg)process.exit(2);\"",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const cp=require('child_process');const out=cp.execSync('git diff --name-only').toString().trim().split('\\n').filter(Boolean);if(out.length!==1||out[0]!=='settings.json')process.exit(3);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "settings.json"
+    ],
+    "added_lines": 1,
+    "deleted_lines": 1,
+    "new_files": []
+  },
+  "files_touched": 1,
+  "lc_decisions": [
+    "LC_REUSE: reused the existing `debug` key in settings.json (flipped false->true) instead of introducing `debug_mode` suggested by the stale doc/memory; live source app.js reads settings.debug",
+    "LC_STOP: stopped at acceptance \u2014 no further changes, no commit, no installs"
+  ],
+  "acceptance": "PASS"
+}
