@@ -22,3 +22,29 @@ tool_call=64, tool_result=63 | files touched=1 (skill) | validation ok=True
 - cache_write=0 on both samples (provider reports no cache writes for these
   turns) — recorded exactly as exposed, zero-vs-missing preserved.
 - Further samples appended as P3-D/P3-E candidate and control runs complete.
+
+## Sample 2 — P3-E eval window (34 runs, 17 tasks × 2 arms; added 2026-08-16)
+
+Paired-eval windows (evidence: outputs/reports/p3-eval/, analysis:
+p3-lean-code-gate.md). IMPORTANT: BOTH windows ran Lean-OFF — the candidate
+window's SECOND_BRAIN_LEAN=advisory never reached the daemon-spawned children
+(all 34 lean_kernel records mode=null, decision=omit reason=off). No Lean
+effect was measured; these are the two-window Lean-OFF aggregates.
+
+| metric | B window sum/median | C window sum/median |
+|---|---|---|
+| assistant_usage rows | 189/11 | 195/11 |
+| input_tokens | 288,765 / 16,812 | 304,902 / 17,102 |
+| output_tokens | 125,155 / 6,700 | 144,529 / 7,316 |
+| cache_read_tokens | 2,960,768 / 165,376 | 3,376,256 / 167,040 |
+| cache_write_tokens | 0 / 0 | 0 / 0 |
+| cost_total $ | 0.0838 / 0.0047 | 0.0926 / 0.0047 |
+| tool_calls | 210 | 213 |
+| wall_ms | 1,318,628 / 70,004 | 1,467,109 / 75,702 |
+| AutoInject packets | 51 / 3 per run | 51 / 3 per run |
+| AutoInject packet_tokens | 44,591 / 2,623 | 44,591 / 2,623 |
+
+Acceptance: 17/17 per window, 34/34 total (judge exits all 0, full sequences
+run). New files across 34 runs: required deliverables only. Per-pair table:
+p3-lean-code-gate.md. Marginal Lean kernel cost: NOT MEASURED (zero
+injections); planning bound 865 chars ≈ 216 input tokens/turn.
