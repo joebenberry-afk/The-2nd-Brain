@@ -62,7 +62,6 @@ import {
 import { parseThreshold, rtdEligibility, rtdShadowRecord } from "./rtd";
 import {
   loadAutoInjectHostConfig,
-  resolveProject,
   runAdvisoryAutoInject,
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
@@ -270,7 +269,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       session,
       task: "",
       agentId: sensors.modelToString(ctx.model) ?? "prime",
-      project: resolveProject(),
+      cwd: typeof ctx.cwd === "string" ? ctx.cwd : undefined,
       cfg: loadAutoInjectHostConfig(),
       append: (record) => getStore(session)?.append(record),
     });
@@ -305,7 +304,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session,
     task: typeof event.prompt === "string" ? event.prompt : "",
     agentId: sensors.modelToString(context.model) ?? "prime",
-    project: resolveProject(),
+    cwd: typeof context.cwd === "string" ? context.cwd : undefined,
     cfg: loadAutoInjectHostConfig(config.home),
     append: (record) => getStore(session)?.append(record),
   });

@@ -109,7 +109,7 @@ export interface AutoInjectShadowOutcome {
 export interface AutoInjectRunOptions {
   home: string;
   task: string;
-  project: string;
+  cwd?: string;
   sessionId: string;
   agentId: string;
   branchId?: string;
@@ -154,6 +154,9 @@ export function runAutoInjectShadow(options: AutoInjectRunOptions): Promise<Auto
   delete env.PYTHONPATH;
   env.SECOND_BRAIN_HOME = options.home;
   const task = options.task.slice(0, AUTOINJECT_MAX_TASK_ARG_CHARS);
+  // Project resolution happens in Python (FIX 1): explicit --project or
+  // Brain registry root containing cwd, then env, then "default". The host
+  // passes its working directory; env SECOND_BRAIN_PROJECT still works.
   const args = [
     "-m",
     "second_brain",
@@ -161,8 +164,6 @@ export function runAutoInjectShadow(options: AutoInjectRunOptions): Promise<Auto
     "shadow",
     "--task",
     task,
-    "--project",
-    options.project,
     "--session",
     options.sessionId,
     "--agent",
@@ -173,6 +174,9 @@ export function runAutoInjectShadow(options: AutoInjectRunOptions): Promise<Auto
     options.roleProfile ?? "worker",
     "--json",
   ];
+  if (options.cwd !== undefined && options.cwd.trim().length > 0) {
+    args.push("--cwd", options.cwd);
+  }
   return new Promise((resolve) => {
     execFile(
       python,
@@ -200,7 +204,7 @@ export interface ShadowAutoInjectCall {
   session: string;
   task: string;
   agentId: string;
-  project?: string;
+  cwd?: string;
   branchId?: string;
   roleProfile?: string;
   cfg: AutoInjectHostConfig;
@@ -235,7 +239,7 @@ export async function runAdvisoryAutoInject(
     const outcome = await (call.runner ?? runAutoInjectShadow)({
       home: call.home,
       task,
-      project: call.project ?? resolveProject(),
+      cwd: call.cwd,
       sessionId: call.session,
       agentId: call.agentId,
       branchId: call.branchId,
@@ -306,7 +310,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
     const outcome = await (call.runner ?? runAutoInjectShadow)({
       home: call.home,
       task,
-      project: call.project ?? resolveProject(),
+      cwd: call.cwd,
       sessionId: call.session,
       agentId: call.agentId,
       branchId: call.branchId,

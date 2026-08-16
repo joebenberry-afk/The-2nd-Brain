@@ -185,7 +185,15 @@ def _parser() -> argparse.ArgumentParser:
         help="shadow run: decide + record, never mutate model context",
     )
     ashadow.add_argument("--task", required=True, help="task text (queried, never persisted)")
-    ashadow.add_argument("--project", dest="project_id", required=True, help="project id")
+    ashadow.add_argument(
+        "--project",
+        dest="project_id",
+        default=None,
+        help="project id (default: registry root containing --cwd > env > 'default')",
+    )
+    ashadow.add_argument(
+        "--cwd", default=None, help="working directory for project resolution"
+    )
     ashadow.add_argument("--session", dest="session_id", required=True, help="host session id")
     ashadow.add_argument("--agent", dest="agent_id", required=True, help="host agent id")
     ashadow.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
@@ -1794,6 +1802,7 @@ def _cmd_codex_shadow(home: Path) -> int:
         role_profile=role,
         session_id=session_id,
         branch_id=branch,
+        cwd=str(payload_dict.get("cwd")) if payload_dict.get("cwd") else None,
     )
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
@@ -1867,12 +1876,13 @@ def cmd_autoinject(args) -> int:
         return _cmd_writeback(home, args)
     if args.autoinject_command != "shadow":
         return 2
+    resolved_project = autoinject._resolve_project_id(home, args.cwd, args.project_id)
     session = contracts.BrainSessionIdentity(
         internal_session_id="is-"
         + hashlib.sha256(args.session_id.encode("utf-8")).hexdigest()[:12],
         host="prime-cli",
         host_session_id=args.session_id,
-        project_id=args.project_id,
+        project_id=resolved_project,
         created_at=datetime.now(UTC).isoformat(),
         status="active",
         pinned=False,
@@ -1886,6 +1896,7 @@ def cmd_autoinject(args) -> int:
         role_profile=args.role_profile,
         session_id=args.session_id,
         branch_id=args.branch,
+        cwd=args.cwd,
     )
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None

@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, semantic, telemetry
+from . import db, registry, semantic, telemetry
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -152,6 +152,60 @@ def _task_sha256(task: str) -> str:
 # semantic.search_memories (reused unchanged); this gate only ADDS the
 # validity dimensions the plan requires and never re-scores.
 # ---------------------------------------------------------------------------
+
+
+def _resolve_project_id(
+    home: Path | str, cwd: str | None, explicit: str | None
+) -> str:
+    """Project resolution ladder (Phase C2 FIX 1):
+
+    ``--project`` > Brain project registry (root containing cwd) >
+    ``SECOND_BRAIN_PROJECT`` env > ``"default"``. Wrong-project hard filter
+    stays downstream. Registry lookup is best-effort (fail open to next rung).
+    """
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+    home_path = Path(home)
+    if cwd:
+        try:
+            cwd_abs = os.path.abspath(cwd)
+            for proj in registry.list_projects(home_path):
+                root = proj.repo_path
+                if root:
+                    root_abs = os.path.abspath(root)
+                    try:
+                        if os.path.commonpath([cwd_abs, root_abs]) == root_abs:
+                            return proj.id
+                    except ValueError:
+                        continue  # different drive
+        except Exception:  # fail open: registry errors never break injection
+            pass
+    env_p = os.environ.get("SECOND_BRAIN_PROJECT")
+    if env_p and env_p.strip():
+        return env_p.strip()
+    return "default"
+
+
+def _search_or_fallback(home: Path | str, term: str, top_k: int) -> list[dict]:
+    """OR-fallback recall (Phase C2 FIX 2): when the primary AND query returns
+    zero candidates, union per-token matches (sorted token order, first-seen
+    wins). Every token search runs the SAME hard filters + ranking inside
+    semantic.search_memories; the union is capped at ``top_k``. Deterministic.
+    """
+    home_path = Path(home)
+    tokens = sorted(semantic._query_tokens(term))
+    seen: dict[str, dict] = {}
+    for token in tokens:
+        for row in semantic.search_memories(
+            home_path,
+            token,
+            project_id=None,
+            include_history=False,
+            top_k=top_k,
+            max_tokens=None,
+        ):
+            seen.setdefault(str(row.get("memory_id")), row)
+    return list(seen.values())[:top_k]
 
 
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
@@ -510,6 +564,7 @@ def prepare_injection(
             selected_ids=list(selected_ids) if selected_ids is not None else [],
         )
 
+    query_mode = "and"
     try:
         db.migrate(db_path(home))
         rows = semantic.search_memories(
@@ -520,12 +575,45 @@ def prepare_injection(
             top_k=_MAX_CANDIDATES,
             max_tokens=None,
         )
+        if not rows:
+            # FIX 2: AND returned zero -> OR-fallback union through the same
+            # hard filters + ranking (precision-first primary path unchanged).
+            query_mode = "or_fallback"
+            rows = _search_or_fallback(home, intent.task_text, _MAX_CANDIDATES)
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
+        _append_telemetry(
+            home,
+            intent.session_id,
+            "brain_retrieval_attempt",
+            {
+                "task_sha256": _task_sha256(intent.task_text),
+                "candidate_count": 0,
+                "recipient": intent.agent_id,
+                "role_profile": intent.role_profile,
+                "project_id": intent.project_id,
+                "query_mode": query_mode,
+            },
+        )
         return decision(NoInjectionReason.BRAIN_UNAVAILABLE)
 
+    _append_telemetry(
+        home,
+        intent.session_id,
+        "brain_retrieval_attempt",
+        {
+            "task_sha256": _task_sha256(intent.task_text),
+            "candidate_count": len(rows),
+            "recipient": intent.agent_id,
+            "role_profile": intent.role_profile,
+            "project_id": intent.project_id,
+            "query_mode": query_mode,
+        },
+    )
     candidate_ids = [str(r.get("memory_id")) for r in rows if r.get("memory_id")]
     if not rows:
+        # FIX 3: NO_RELEVANT_MEMORY fires only when BOTH query modes are empty;
+        # candidates that existed but were filtered get their specific reason.
         return decision(NoInjectionReason.NO_RELEVANT_MEMORY)
     valid = _valid_candidates(intent, rows)
     if not valid:
@@ -652,16 +740,23 @@ class BrainLifecycle:
         role_profile: str = "orchestrator",
         session_id: str | None = None,
         branch_id: str = "main",
+        cwd: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> BrainInjectionDecision:
-        """Shadow decision + ledger/telemetry record. Never raises."""
+        """Decision + ledger/telemetry record. Never raises.
+
+        ``cwd`` feeds project resolution (FIX 1): explicit project_id wins,
+        then a registered project whose root contains cwd, then env, then
+        "default". The retrieval-attempt telemetry (with query_mode) is
+        recorded inside the module pipeline."""
         del context  # reserved for 0D adapter integration
         effective_session = session_id or (
             self._session.host_session_id if self._session is not None else "anon"
         )
+        effective_project = _resolve_project_id(self._home, cwd, project_id)
         intent = RetrievalIntent(
             task_text=task,
-            project_id=project_id,
+            project_id=effective_project,
             agent_id=agent_id,
             role_profile=role_profile,
             session_id=effective_session,
@@ -669,18 +764,6 @@ class BrainLifecycle:
         )
         decision = prepare_injection(self._home, intent)
         self._last_delivery_ids = []
-        _append_telemetry(
-            self._home,
-            effective_session,
-            "brain_retrieval_attempt",
-            {
-                "task_sha256": _task_sha256(task),
-                "candidate_count": len(decision.candidate_ids),
-                "recipient": agent_id,
-                "role_profile": role_profile,
-                "project_id": project_id,
-            },
-        )
         if decision.decision is InjectionDecision.INJECT:
             packet_text = render_packet(decision)
             try:
