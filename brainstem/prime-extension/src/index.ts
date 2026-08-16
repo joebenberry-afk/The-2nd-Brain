@@ -276,11 +276,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     sessionId: string,
     kind: string,
     fields: Record<string, unknown>,
-    opts: { agentId?: string; parentEventId?: string; ignorable?: boolean } = {},
+    opts: { agentId?: string; parentEventId?: string; ignorable?: boolean; cwd?: string } = {},
   ): void => {
     mirrorFireAndForget({
       home: config.home ?? "",
       hostSessionId: sessionId,
+      cwd: opts.cwd,
       record: {
         kind,
         fields,
@@ -297,6 +298,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       },
     });
   };
+
+  /**
+   * Project attribution for mirror call sites (ledger-cwd-ordering-fix):
+   * every mirror that has a ctx hands its cwd to `ledger init` so the FIRST
+   * auto-init of a session — whichever event wins the per-process race —
+   * resolves project_id through the AutoInject ladder instead of ''.
+   */
+  const ctxCwd = (ctx: ExtensionContext): string | undefined =>
+    typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : undefined;
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
     // Phase 0C SHADOW: decide + record only; session_start carries no task
@@ -329,13 +339,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         provider: modelId.split("/")[0] ?? "unknown",
         host_agent_id: modelId,
       },
-      { agentId: modelId },
+      // Project attribution: session_started is the first mirrored event, so
+      // the auto-init of the session ledger receives the host cwd (when known)
+      // and `ledger init --cwd` resolves project_id via the AutoInject ladder.
+      { agentId: modelId, cwd: ctxCwd(ctx) },
     );
     // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
     try {
       const transcript = ctx.sessionManager?.getSessionFile?.();
       if (typeof transcript === "string" && transcript.length > 0) {
-        mirror(session, "host_artifact_ref", { kind: "transcript", path: transcript }, { ignorable: true });
+        mirror(
+          session,
+          "host_artifact_ref",
+          { kind: "transcript", path: transcript },
+          { ignorable: true, cwd: ctxCwd(ctx) },
+        );
       }
     } catch {
       // artifact reference is best-effort
@@ -345,7 +363,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         session,
         "host_artifact_ref",
         { kind: "telemetry", path: join(config.telemetryDir, `${session}.jsonl`) },
-        { ignorable: true },
+        { ignorable: true, cwd: ctxCwd(ctx) },
       );
     }
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
@@ -418,10 +436,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } else {
         void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
-      mirror(session, "user_task", {
-        task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
-        prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
-      });
+      mirror(
+        session,
+        "user_task",
+        {
+          task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
+          prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+        },
+        // ledger-cwd-ordering-fix: user_task is the FIRST mirror to reach the
+        // ledger in real runs (its init spawn wins the per-process race), so
+        // it MUST carry the cwd or project_id resolves to ''.
+        { cwd: ctxCwd(ctx) },
+      );
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
@@ -528,10 +554,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       session = resolveSessionId(ctx, anonSession);
       getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
-      mirror(session, "tool_requested", {
-        tool: event.toolName,
-        input_bytes: sensors.byteLength(JSON.stringify(event.input ?? {})),
-      });
+      mirror(
+        session,
+        "tool_requested",
+        {
+          tool: event.toolName,
+          input_bytes: sensors.byteLength(JSON.stringify(event.input ?? {})),
+        },
+        { cwd: ctxCwd(ctx) },
+      );
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const decision = orchestratorPolicyFor(modelId, event.toolName, loadOrchestratorGuardConfig());
       if (decision.block) {
@@ -571,16 +602,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // JSON.stringify), and non-strings keep exactly the single
   // serialization/fallback base telemetry already required. The precomputed
   // eligibility is passed to rtdShadowRecord so RTD never re-measures.
-  wire<ToolResultEvent>("tool_result", (event, _ctx, session) => {
+  wire<ToolResultEvent>("tool_result", (event, ctx, session) => {
     const eligibility = rtdEligibility(event.toolName, event.input);
     // ONE shared measurement (Phase 3 correction: no extra serialization for
     // ineligible results); the mirror reuses the same output_bytes.
     const measurement = measureContent(event.content, eligibility === "ok");
-    mirror(session, "tool_completed", {
-      tool: event.toolName,
-      result_bytes: measurement.outputBytes,
-      is_error: event.isError === true,
-    });
+    mirror(
+      session,
+      "tool_completed",
+      {
+        tool: event.toolName,
+        result_bytes: measurement.outputBytes,
+        is_error: event.isError === true,
+      },
+      { cwd: ctxCwd(ctx) },
+    );
     try {
       const shadow = rtdShadowRecord({
         session,
@@ -612,10 +648,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     } catch {
       usage = undefined;
     }
-    mirror(session, "turn_end", {
-      turn_index: event.turnIndex,
-      tool_result_count: Array.isArray(event.toolResults) ? event.toolResults.length : 0,
-    });
+    mirror(
+      session,
+      "turn_end",
+      {
+        turn_index: event.turnIndex,
+        tool_result_count: Array.isArray(event.toolResults) ? event.toolResults.length : 0,
+      },
+      { cwd: ctxCwd(ctx) },
+    );
     return sensors.turnEnd(session, event.turnIndex, usage, event.toolResults);
   });
 
@@ -624,10 +665,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // summary, or task-success signal — so any extraction would be fabrication.
   // Documented no-op; write-back happens through explicit `brainctl
   // autoinject writeback` (Python authority) and the Codex Stop trigger.
-  wire<AgentEndEvent>("agent_end", (event, _ctx, session) => {
-    mirror(session, "agent_ended", {
-      message_count: Array.isArray(event.messages) ? event.messages.length : 0,
-    });
+  wire<AgentEndEvent>("agent_end", (event, ctx, session) => {
+    mirror(
+      session,
+      "agent_ended",
+      {
+        message_count: Array.isArray(event.messages) ? event.messages.length : 0,
+      },
+      { cwd: ctxCwd(ctx) },
+    );
     return sensors.agentEnd(session, event.messages);
   });
 
@@ -641,11 +687,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
-      mirror(session, "compaction_started", {
-        branch_entries: Array.isArray(compactEvent.branchEntries)
-          ? compactEvent.branchEntries.length
-          : 0,
-      });
+      mirror(
+        session,
+        "compaction_started",
+        {
+          branch_entries: Array.isArray(compactEvent.branchEntries)
+            ? compactEvent.branchEntries.length
+            : 0,
+        },
+        { cwd: ctxCwd(ctx) },
+      );
       // measurement record first (every lifecycle event writes one record),
       // then the durability barrier decides whether compaction may proceed.
       getStore(session)?.append(
@@ -663,7 +714,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             reason: "pre-compaction checkpoint failed",
             detail: checkpoint.error ?? "integrity bad",
           },
-          { ignorable: true },
+          { ignorable: true, cwd: ctxCwd(ctx) },
         );
         getStore(session)?.append(
           mirrorExtensionError(session, `pre-compaction checkpoint failed: ${checkpoint.error ?? "integrity bad"}`),
@@ -681,8 +732,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return undefined;
   });
 
-  wire<SessionCompactEvent>("session_compact", (event, _ctx, session) => {
-    mirror(session, "compaction_completed", { from_extension: event.fromExtension === true });
+  wire<SessionCompactEvent>("session_compact", (event, ctx, session) => {
+    mirror(
+      session,
+      "compaction_completed",
+      { from_extension: event.fromExtension === true },
+      { cwd: ctxCwd(ctx) },
+    );
     // Compaction boundary: close the prior segment and open a new one
     // (plan §10.3) — fire-and-forget; failure only records an extension_error.
     runLedgerSegmentRollover({
@@ -701,8 +757,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   wire<SessionShutdownEvent>(
     "session_shutdown",
-    (event, _ctx, session) => {
-      mirror(session, "session_inactive", { reason: event.reason });
+    (event, ctx, session) => {
+      mirror(
+        session,
+        "session_inactive",
+        { reason: event.reason },
+        { cwd: ctxCwd(ctx) },
+      );
       return sensors.sessionShutdown(session, event.reason);
     },
     true, // final: sync write so the record survives worker teardown

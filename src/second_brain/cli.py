@@ -240,6 +240,13 @@ def _parser() -> argparse.ArgumentParser:
     lin = leds.add_parser("init", parents=[home_parent], help="initialize a session ledger")
     lin.add_argument("--session", dest="host_session_id", required=True, help="HOST session id")
     lin.add_argument("--project", dest="project_id", default=None)
+    lin.add_argument(
+        "--cwd",
+        default=None,
+        help="working directory for project resolution "
+        "(reuses the AutoInject ladder: explicit --project > registry root "
+        "containing cwd > SECOND_BRAIN_PROJECT env > 'default')",
+    )
     lin.add_argument("--host", default="prime")
     lin.add_argument(
         "--host-artifact",
@@ -2097,25 +2104,11 @@ def cmd_orchestration(args) -> int:
     return 0
 
 
-def sqlite_max_seq(store) -> int:
-    """Next expected seq from the open ledger (host mirrors are stateless)."""
-    import sqlite3 as _sqlite3
-
-    conn = store._conn
-    if conn is None:
-        return 0
-    try:
-        row = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
-        return int(row[0])
-    except _sqlite3.Error:
-        return 0
-
-
 def cmd_ledger(args) -> int:
     """P2 session ledger CLI (plan §9/§9.10/§14)."""
     import json as _json
 
-    from . import contracts, ledger
+    from . import autoinject, contracts, ledger
 
     home = _home(args)
     cmd = args.ledger_command
@@ -2131,6 +2124,17 @@ def cmd_ledger(args) -> int:
                 )
                 return 2
             artifacts.append({"kind": kind, "path": path})
+        # Project attribution: when --cwd is supplied, resolve project_id
+        # through the SAME ladder AutoInject uses (autoinject._resolve_project_id,
+        # src/second_brain/autoinject.py:157-193): explicit --project > registry
+        # root containing cwd > SECOND_BRAIN_PROJECT env > 'default'. With no
+        # --cwd, keep the historical behavior ('' unless --project given) so
+        # existing callers are unchanged.
+        project_id = (
+            autoinject._resolve_project_id(home, args.cwd, args.project_id)
+            if args.cwd
+            else (args.project_id or "")
+        )
         store = ledger.LedgerStore(home, args.host_session_id)
         store._init_host_artifacts = artifacts  # carried into the manifest at open
         with store.open(create=True):
@@ -2140,7 +2144,7 @@ def cmd_ledger(args) -> int:
                     internal_session_id=internal,
                     host=args.host,
                     host_session_id=args.host_session_id,
-                    project_id=args.project_id or "",
+                    project_id=project_id,
                     created_at=datetime.now(UTC).isoformat(),
                     status="active",
                     pinned=False,
@@ -2165,19 +2169,22 @@ def cmd_ledger(args) -> int:
             return 0
         events: list[contracts.BrainLifecycleEvent] = []
         with ledger.LedgerStore(home, args.host_session_id).open() as store:
-            row = sqlite_max_seq(store)
-            next_seq = row + 1
             for item in data:
                 if not isinstance(item, dict):
                     print(contracts.canonical_json({"error": "event entries must be objects"}))
                     return 0
+                # T-G6-F1: seq<=0 makes append_events assign the authoritative
+                # contiguous seq INSIDE its BEGIN IMMEDIATE transaction. The CLI
+                # must NOT pre-assign seqs here: a stale read outside the
+                # transaction races with concurrent appends (each mirror event
+                # spawns its own process) and skipped unknown-ignorable events
+                # would consume counter slots, both poisoning contiguity.
                 if (
                     "seq" not in item
                     or not isinstance(item.get("seq"), int)
                     or int(item.get("seq", 0)) <= 0
                 ):
-                    item["seq"] = next_seq  # host mirror: ledger assigns contiguous seq
-                next_seq += 1
+                    item["seq"] = 0  # ledger assigns; durable ledger is sequence authority
                 # host mirrors are stateless: the ledger derives its own ids
                 if not item.get("internal_session_id"):
                     item["internal_session_id"] = ledger.internal_session_id(

@@ -254,6 +254,7 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
     expect(record.decision).toBe("INJECT");
     expect(record.latency_ms).toBeGreaterThanOrEqual(0);
     expect(record.mode).toBe("shadow");
+    expect(record.model_visible).toBe(false);
     expect(record.result_patch).toBe(false);
   });
   it("spawn failure -> extension_error recorded, fail-open", async () => {
@@ -362,6 +363,7 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
     expect(record.kind).toBe("autoinject_shadow_decision");
     expect(record.decision).toBe("INJECT");
     expect(record.mode).toBe("advisory");
+    expect(record.model_visible).toBe(true);
     expect(record.result_patch).toBe(true);
   });
   it("NO_INJECTION -> undefined, no patch", async () => {
@@ -775,6 +777,7 @@ describe("sensor record kind", () => {
       delivery_id: null,
       packet_sha256: null,
       mode: "shadow",
+      model_visible: false,
       result_patch: false,
       emit_index: 1,
       cache_hit: false,
@@ -786,6 +789,7 @@ describe("sensor record kind", () => {
     expect(record.session).toBe("s1");
     expect(record.reason).toBe("NO_RELEVANT_MEMORY");
     expect(record.mode).toBe("shadow");
+    expect(record.model_visible).toBe(false);
     expect(record.result_patch).toBe(false);
     expect(record.emit_index).toBe(1);
     expect(record.cache_hit).toBe(false);

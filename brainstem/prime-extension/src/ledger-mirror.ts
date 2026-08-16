@@ -49,6 +49,9 @@ export interface MirrorOptions {
   record: MirrorRecord;
   python?: string;
   timeoutMs?: number;
+  /** Working directory for `ledger init` project attribution (reuses the
+   * AutoInject project-resolution ladder). Omitted when unknown. */
+  cwd?: string;
 }
 
 /**
@@ -127,6 +130,12 @@ export function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
     "--host",
     "prime",
   ];
+  // Project attribution: pass the caller's cwd through to `ledger init` so
+  // the ledger's project_id resolves through the same ladder AutoInject uses.
+  // Only when a real cwd is available — never garbage.
+  if (typeof options.cwd === "string" && options.cwd.length > 0) {
+    initArgs.push("--cwd", options.cwd);
+  }
   const run = (
     args: string[],
     input?: string,

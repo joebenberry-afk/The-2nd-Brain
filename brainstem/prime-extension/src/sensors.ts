@@ -505,6 +505,10 @@ export interface AutoInjectShadowDecisionRecord extends BaseRecord {
   packet_sha256: string | null;
   /** Resolved host mode at decision time (Phase C4 instrumentation). */
   mode: string | null;
+  /** True when this decision path is the model-visible custom-message
+   * injection path (advisory/active); false for shadow (decide+record only,
+   * never model-visible). Unambiguous visibility marker (SCHEMA.md). */
+  model_visible: boolean;
   /** True when the advisory/active path returned a custom_message patch. */
   result_patch: boolean;
   /** Emit ordinal for this (session, task) key (1 = the spawning emit). */
@@ -531,6 +535,7 @@ export function autoinjectShadowDecision(
     delivery_id: string | null;
     packet_sha256: string | null;
     mode: string | null;
+    model_visible: boolean;
     result_patch: boolean;
     emit_index: number;
     cache_hit: boolean;
@@ -550,6 +555,7 @@ export function autoinjectShadowDecision(
     delivery_id: fields.delivery_id,
     packet_sha256: fields.packet_sha256,
     mode: fields.mode,
+    model_visible: fields.model_visible,
     result_patch: fields.result_patch,
     emit_index: fields.emit_index,
     cache_hit: fields.cache_hit,

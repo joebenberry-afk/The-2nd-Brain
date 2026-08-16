@@ -782,6 +782,10 @@ class BrainLifecycle:
                 effective_session,
                 "brain_packet_delivered",
                 {
+                    # The Python pipeline only PREPARES deliveries; actual
+                    # model-visible injection happens via the host adapter's
+                    # custom-message path (shadow semantics, SCHEMA.md).
+                    "model_visible": False,
                     "packet_id": decision.packet_ref,
                     "item_count": len(decision.selected_ids),
                     "packet_tokens": decision.packet_token_size,
