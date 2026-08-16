@@ -199,3 +199,86 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
     expect(kinds).toContain("host_artifact_ref");
   });
 });
+
+
+describe("T-G4 compaction barrier + segment rollover wiring", () => {
+  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+  function loadFactory(): Map<string, Handler> {
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on(name: string, handler: Handler) {
+        handlers.set(name, handler);
+      },
+    } as unknown as ExtensionAPI;
+    factory(pi);
+    return handlers;
+  }
+
+  const ctx = {
+    cwd: "C:/work",
+    model: { id: "deepseek/deepseek-v4-flash" },
+    sessionManager: undefined,
+  } as unknown as ExtensionContext;
+
+  it("session_before_compact awaits the checkpoint and returns {cancel:true} on failure", async () => {
+    const { home } = await fakeHome();
+    process.env.SECOND_BRAIN_HOME = home;
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if (args.includes("checkpoint")) {
+        cb(new Error("checkpoint failed"));
+        return {} as never;
+      }
+      cb(null, "{}");
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    const result = await handlers.get("session_before_compact")!(
+      { preparation: {}, branchEntries: [] },
+      ctx,
+    );
+    expect(result).toEqual({ cancel: true }); // never compact on an unproven barrier
+  });
+
+  it("session_before_compact returns undefined when the checkpoint proves durability", async () => {
+    const { home } = await fakeHome();
+    process.env.SECOND_BRAIN_HOME = home;
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if (args.includes("checkpoint")) {
+        cb(null, '{"ok":true,"integrity":{"seq_contiguous":true}}');
+        return {} as never;
+      }
+      cb(null, "{}");
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    const result = await handlers.get("session_before_compact")!(
+      { preparation: {}, branchEntries: [] },
+      ctx,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("session_compact fires the segment rollover (ledger segment open --reason compact)", async () => {
+    const { home } = await fakeHome();
+    process.env.SECOND_BRAIN_HOME = home;
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      cb(null, "{}");
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    handlers.get("session_compact")!({ compactionEntry: {}, fromExtension: false }, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    const rolloverCall = execFileMock.mock.calls.find((c) =>
+      (c[1] as string[]).includes("segment"),
+    );
+    expect(rolloverCall).toBeDefined();
+    const args = rolloverCall?.[1] as string[];
+    expect(args).toContain("segment");
+    expect(args).toContain("open");
+    expect(args).toContain("--reason");
+    expect(args).toContain("compact");
+  });
+});

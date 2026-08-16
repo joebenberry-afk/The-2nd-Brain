@@ -267,6 +267,28 @@ def _parser() -> argparse.ArgumentParser:
     lse.add_argument("--segment", default=None)
     lse.add_argument("--agent", default=None)
     lse.add_argument("--event-type", dest="event_type", default=None)
+    lseg = leds.add_parser("segment", parents=[home_parent], help="segment lifecycle (plan §10.3)")
+    lsegs = lseg.add_subparsers(dest="segment_command", required=True)
+    sopen = lsegs.add_parser(
+        "open", parents=[home_parent], help="close prior active segment, open a new one"
+    )
+    sopen.add_argument("host_session_id")
+    sopen.add_argument("--reason", default="manual")
+    sclose = lsegs.add_parser("close", parents=[home_parent], help="close the active segment")
+    sclose.add_argument("host_session_id")
+    schk = lsegs.add_parser(
+        "checkpoint",
+        parents=[home_parent],
+        help="pre-compaction durability barrier (flush + integrity)",
+    )
+    schk.add_argument("host_session_id")
+    lrh = leds.add_parser("rehydrate", parents=[home_parent], help="rehydration levels 1-4 (§17.5)")
+    lrh.add_argument("host_session_id")
+    lrh.add_argument("--level", type=int, required=True, choices=[1, 2, 3, 4])
+    lrh.add_argument("--segment", default=None)
+    lrh.add_argument("--decision", default=None)
+    lrh.add_argument("--from-seq", dest="from_seq", type=int, default=None)
+    lrh.add_argument("--to-seq", dest="to_seq", type=int, default=None)
 
 
     art = sub.add_parser(
@@ -2147,6 +2169,32 @@ def cmd_ledger(args) -> int:
                 event_type=args.event_type,
             )
         print(contracts.canonical_json({"hits": rows}))
+        return 0
+    if cmd == "segment":
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            if args.segment_command == "open":
+                segment_id = store.open_segment(args.reason)
+                print(contracts.canonical_json({"opened": segment_id, "reason": args.reason}))
+                return 0
+            if args.segment_command == "close":
+                closed = store.close_segment()
+                print(contracts.canonical_json({"closed": closed}))
+                return 0
+            if args.segment_command == "checkpoint":
+                result = ledger.checkpoint_ledger(store)
+                print(contracts.canonical_json(result))
+                return 0 if result["ok"] else 1
+        return 2
+    if cmd == "rehydrate":
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            out = ledger.LedgerRehydrator(store).rehydrate(
+                args.level,
+                segment=args.segment,
+                decision=args.decision,
+                from_seq=args.from_seq,
+                to_seq=args.to_seq,
+            )
+        print(contracts.canonical_json(out))
         return 0
     return 2
 
