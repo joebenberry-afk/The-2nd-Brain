@@ -1,0 +1,50 @@
+{
+ "run_id": "e06-customer-sort-arm2-1",
+ "task": "e06-customer-sort",
+ "arm": "arm2",
+ "session": "01a00b3f-dbc6-7288-9e8f-68444b445f7f",
+ "economics": {
+  "assistant_usage_rows": 12,
+  "input_tokens": 16898,
+  "output_tokens": 7813,
+  "cache_read_tokens": 188032,
+  "cache_write_tokens": 0,
+  "total_tokens": 212743,
+  "cost_total": 0.005079849600000001,
+  "autoinject_packets": 3,
+  "autoinject_packet_tokens": 2623,
+  "tool_calls": {
+   "ipython": 12
+  },
+  "turns": 12,
+  "wall_ms": 81471
+ },
+ "judge": [
+  {
+   "command": "step 0: restore pristine oracle (copyFileSync fixture tests/test.js -> ./tests/test.js)",
+   "exit": 0
+  },
+  {
+   "command": "step 1: node tests/test.js",
+   "exit": 0
+  },
+  {
+   "command": "step 2: node -e git-status porcelain check (reject package.json/node_modules)",
+   "exit": 0
+  }
+ ],
+ "diff": {
+  "changed_files": [
+   "src/report.js"
+  ],
+  "added_lines": 1,
+  "deleted_lines": 1,
+  "new_files": []
+ },
+ "files_touched": 1,
+ "lc_decisions": [
+  "LC_DEP_REJECTED: sorted case-insensitively with a plain toLowerCase comparator in the existing sort \u2014 no dependency introduced, repo stays dependency-free",
+  "LC_REUSE: reused existing loadCustomers/buildReport pipeline and Array.prototype.sort (stable per ES2019+) instead of adding a sort utility"
+ ],
+ "acceptance": "PASS"
+}
