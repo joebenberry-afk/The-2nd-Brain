@@ -10,13 +10,20 @@ the SHADOW gate). Pipeline per §6.1:
 
 Fail-open (§6.8): every failure path degrades to
 NO_INJECTION(BRAIN_UNAVAILABLE) and never raises into the caller. Telemetry
-follows SCHEMA.md v2 privacy rules: counts/ids/hashes only — no task text,
+follows SCHEMA.md v2/v3 privacy rules: counts/ids/hashes only — no task text,
 no memory content, no credentials.
 
 Observability per §6.12: every decision records task identity (sha256, not
 text), candidates, selected IDs, reason, packet size, recipient, and source
 versions via `brain_retrieval_attempt` / `brain_no_injection` /
 `brain_packet_delivered` JSONL kinds.
+
+Visibility semantics (P3 §0A.8/§5.2, SCHEMA.md): `brain_packet_delivered`
+records are the Python PREPARED/delivery-ledger state — `model_visible` is
+always False and `delivery_prepared` is always True. This module cannot
+observe host insertion; the Prime host-side mode-aware
+`autoinject_shadow_decision.model_visible` event is the authoritative actual
+model-visibility signal.
 """
 
 from __future__ import annotations
@@ -785,7 +792,13 @@ class BrainLifecycle:
                     # The Python pipeline only PREPARES deliveries; actual
                     # model-visible injection happens via the host adapter's
                     # custom-message path (shadow semantics, SCHEMA.md).
+                    # P3 §0A.8/§5.2: delivery_prepared makes the
+                    # prepared/ledger semantics explicit; model_visible stays
+                    # False because Python cannot observe host insertion (the
+                    # host's autoinject_shadow_decision.model_visible is the
+                    # authoritative mode-aware visibility signal).
                     "model_visible": False,
+                    "delivery_prepared": True,
                     "packet_id": decision.packet_ref,
                     "item_count": len(decision.selected_ids),
                     "packet_tokens": decision.packet_token_size,

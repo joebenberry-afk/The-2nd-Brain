@@ -474,6 +474,49 @@ def _attempt_records(home: Path) -> list[dict]:
     return out
 
 
+def _packet_delivered_records(home: Path) -> list[dict]:
+    """brain_packet_delivered records for this brain's telemetry dir."""
+    import json as _json
+
+    tdir = home / "telemetry" / "agent-performance"
+    out = []
+    if not tdir.is_dir():
+        return out
+    for f in tdir.glob("*.jsonl"):
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = _json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("kind") == "brain_packet_delivered":
+                out.append(rec)
+    return out
+
+
+def test_packet_delivered_prepared_not_model_visible(brain_home) -> None:
+    """P3 §0A.8/§5.2: the Python event is the PREPARED/delivery-ledger state.
+
+    `delivery_prepared` is always true and `model_visible` stays false —
+    Python prepares/selects the packet and cannot observe host insertion;
+    the Prime host `autoinject_shadow_decision.model_visible` (mode-aware)
+    is the authoritative actual-model-visibility signal.
+    """
+    _seed_current(brain_home, "Visibility truth", "python prepares, host inserts")
+    d = _inject(brain_home, "visibility truth", session_id="s-vis1")
+    assert d.decision is InjectionDecision.INJECT
+    recs = [
+        r for r in _packet_delivered_records(brain_home) if r.get("session") == "s-vis1"
+    ]
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["model_visible"] is False
+    assert rec["delivery_prepared"] is True
+    assert rec["packet_id"] == d.packet_ref
+    assert isinstance(rec["canonical_packet_hash"], str) and len(rec["canonical_packet_hash"]) == 64
+
+
 def test_cwd_resolves_project_from_registry(brain_home, tmp_path) -> None:
     from second_brain import registry
 

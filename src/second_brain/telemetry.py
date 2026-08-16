@@ -27,6 +27,19 @@ KNOWN_KINDS = {
     "rtd_shadow",
     "extension_error",
     "orchestrator_policy_violation",
+    # P3-B economics kinds (SCHEMA.md): additive v3 records from the Prime
+    # extension (assistant_usage / provider_request_meta / provider_response_meta).
+    "assistant_usage",
+    "provider_request_meta",
+    "provider_response_meta",
+}
+# P3-B economics kinds carry v=3 (additive); every other kind stays v=2.
+# The version check is kind-aware so legacy records are never flagged and the
+# new records are still validated strictly.
+KIND_SCHEMA_VERSION = {
+    "assistant_usage": 3,
+    "provider_request_meta": 3,
+    "provider_response_meta": 3,
 }
 REQUIRED_FIELDS = ("v", "kind", "session")
 
@@ -71,11 +84,16 @@ def validate(home: Path) -> dict:
         for field in REQUIRED_FIELDS:
             if field not in rec:
                 issues.append(f"{fname}:{lineno}: missing required field {field!r}")
-        if isinstance(rec.get("v"), int) and rec["v"] != SCHEMA_VERSION:
-            issues.append(f"{fname}:{lineno}: schema v{rec['v']} != current {SCHEMA_VERSION}")
         kind = rec.get("kind")
         if kind not in KNOWN_KINDS:
             issues.append(f"{fname}:{lineno}: unknown kind {kind!r}")
+        expected_v = SCHEMA_VERSION
+        if isinstance(kind, str):
+            expected_v = KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION)
+        if isinstance(rec.get("v"), int) and rec["v"] != expected_v:
+            issues.append(
+                f"{fname}:{lineno}: schema v{rec['v']} != expected v{expected_v} for kind {kind!r}"
+            )
         if not isinstance(rec.get("ts"), str):
             issues.append(f"{fname}:{lineno}: ts missing or not a string")
     return {"files": len(seen_files), "records": n_records, "issues": issues}

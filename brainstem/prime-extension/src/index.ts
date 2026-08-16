@@ -26,8 +26,10 @@
  * src/sensors.ts (counts/sizes only; bash command text truncated to 500).
  */
 import type {
+  AfterProviderResponseEvent,
   AgentEndEvent,
   BeforeAgentStartEvent,
+  BeforeProviderRequestEvent,
   ContextEvent,
   ExtensionAPI,
   ExtensionContext,
@@ -505,6 +507,85 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<ContextEvent>("context", (event, _ctx, session) =>
     sensors.context(session, event.messages),
   );
+
+  // ---------------------------------------------------------------------------
+  // P3-B economics instrumentation (plan §5.1/§5.4/§5.5; schema v3 records).
+  // Privacy (plan §25): provider_request_meta / provider_response_meta persist
+  // keys, counts, sizes, and sha256 hashes ONLY — never payload text, tool
+  // output, or raw header values. All three handlers are fail-open and
+  // fire-and-forget like every other measurement handler. The two read-only
+  // hooks (before_provider_request / after_provider_response) are wired
+  // through `wire`, whose safeHandler returns undefined to the runtime, so the
+  // provider payload and the session are never modified.
+  // ---------------------------------------------------------------------------
+
+  // Monotonic per-extension request sequence (plan §5.4 request sequence).
+  let providerRequestSeq = 0;
+
+  wire<BeforeProviderRequestEvent>("before_provider_request", (event, ctx, session) => {
+    providerRequestSeq += 1;
+    const { provider, model } = sensors.splitProviderModel(
+      sensors.modelToString(ctx.model),
+    );
+    return sensors.providerRequestMeta(
+      session,
+      provider,
+      model,
+      providerRequestSeq,
+      event.payload,
+    );
+  });
+
+  wire<AfterProviderResponseEvent>("after_provider_response", (event, ctx, session) => {
+    const { provider, model } = sensors.splitProviderModel(
+      sensors.modelToString(ctx.model),
+    );
+    return sensors.providerResponseMeta(
+      session,
+      provider,
+      model,
+      event.status,
+      event.headers,
+    );
+  });
+
+  // message_end: capture per-assistant-message usage (plan §5.1). Registered
+  // directly (not via wire) because the runtime consumes the return value: the
+  // handler MUST return the finalized message unchanged ({ message }) — the
+  // host replaces the message in place and rejects role changes
+  // (agent-session.ts:3315); returning the same object is a provably safe
+  // no-op that keeps the original role.
+  pi.on("message_end", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      const message = event.message;
+      if (message != null && message.usage != null) {
+        const model =
+          typeof message.model === "string"
+            ? message.model
+            : (ctx.model?.id ?? null);
+        const provider =
+          typeof message.provider === "string"
+            ? message.provider
+            : (ctx.model?.provider ?? null);
+        const record = sensors.assistantUsage(
+          session,
+          provider,
+          model,
+          message.usage,
+        );
+        if (record) getStore(session)?.append(record);
+      }
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+    }
+    return { message: event.message };
+  });
 
   /**
    * Phase 14: run ONE bounded Brain recall for a substantial non-Sol prompt
