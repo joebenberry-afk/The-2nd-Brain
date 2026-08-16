@@ -233,6 +233,33 @@ def _parser() -> argparse.ArgumentParser:
     )
     orec.add_argument("--session", default=None, help="session id for the telemetry file name")
 
+    led = sub.add_parser(
+        "ledger", parents=[home_parent], help="P2 session ledger (plan §9/§9.10; Phase G)"
+    )
+    leds = led.add_subparsers(dest="ledger_command", required=True)
+    lin = leds.add_parser("init", parents=[home_parent], help="initialize a session ledger")
+    lin.add_argument("--session", dest="host_session_id", required=True, help="HOST session id")
+    lin.add_argument("--project", dest="project_id", default=None)
+    lin.add_argument("--host", default="prime")
+    lapp = leds.add_parser("append", parents=[home_parent], help="append events from JSON stdin")
+    lapp.add_argument("--session", dest="host_session_id", required=True)
+    lapp.add_argument(
+        "--stdin-json",
+        action="store_true",
+        help="read ONE event object or an array from stdin",
+    )
+    lver = leds.add_parser("verify", parents=[home_parent], help="fresh replay + integrity")
+    lver.add_argument("host_session_id")
+    lver.add_argument("--lineage", default=None, help="comma-separated event ids root->leaf")
+    lre = leds.add_parser("reindex", parents=[home_parent], help="rebuild the events FTS index")
+    lre.add_argument("host_session_id")
+    lse = leds.add_parser("search", parents=[home_parent], help="FTS search over events")
+    lse.add_argument("host_session_id")
+    lse.add_argument("--query", required=True)
+    lse.add_argument("--segment", default=None)
+    lse.add_argument("--agent", default=None)
+    lse.add_argument("--event-type", dest="event_type", default=None)
+
 
     art = sub.add_parser(
         "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
@@ -1969,6 +1996,97 @@ def cmd_orchestration(args) -> int:
     return 0
 
 
+def cmd_ledger(args) -> int:
+    """P2 session ledger CLI (plan §9/§9.10/§14)."""
+    import json as _json
+
+    from . import contracts, ledger
+
+    home = _home(args)
+    cmd = args.ledger_command
+    if cmd == "init":
+        with ledger.LedgerStore(home, args.host_session_id).open(create=True) as store:
+            internal = ledger.internal_session_id(args.host_session_id)
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=internal,
+                    host=args.host,
+                    host_session_id=args.host_session_id,
+                    project_id=args.project_id or "",
+                    created_at=datetime.now(UTC).isoformat(),
+                    status="active",
+                    pinned=False,
+                    schema_version=contracts.LEDGER_SCHEMA_VERSION,
+                )
+            )
+        print(contracts.canonical_json({"initialized": internal, "schema_version": 1}))
+        return 0
+    if cmd == "append":
+        if not args.stdin_json:
+            print(contracts.canonical_json({"error": "--stdin-json required"}))
+            return 2
+        try:
+            raw = sys.stdin.read()
+            data = _json.loads(raw) if raw.strip() else None
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            print(contracts.canonical_json({"error": "expected one event object or an array"}))
+            return 0
+        events: list[contracts.BrainLifecycleEvent] = []
+        for item in data:
+            if not isinstance(item, dict):
+                print(contracts.canonical_json({"error": "event entries must be objects"}))
+                return 0
+            parsed = contracts.BrainLifecycleEvent.from_dict(item)
+            if parsed is None:
+                continue  # unknown + ignorable -> skip
+            events.append(parsed)
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            seqs = store.append_events(events)
+        print(contracts.canonical_json({"appended": seqs}))
+        return 0
+    if cmd == "verify":
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            integrity = store.integrity()
+            lineage = args.lineage.split(",") if args.lineage else []
+            replay_error = ""
+            try:
+                projection = store.replay(lineage)
+                replay_ok = True
+            except BrainError as exc:
+                replay_ok = False
+                projection = None
+                replay_error = str(exc)
+        out = {
+            "integrity": integrity,
+            "replay_ok": replay_ok,
+            "events": len(projection.events) if projection else 0,
+        }
+        if not replay_ok:
+            out["replay_error"] = replay_error
+        print(contracts.canonical_json(out))
+        return 0 if replay_ok else 1
+    if cmd == "reindex":
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            result = store.reindex()
+        print(contracts.canonical_json(result))
+        return 0
+    if cmd == "search":
+        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+            rows = store.search(
+                args.query,
+                segment=args.segment,
+                agent=args.agent,
+                event_type=args.event_type,
+            )
+        print(contracts.canonical_json({"hits": rows}))
+        return 0
+    return 2
+
+
 def cmd_autoinject(args) -> int:
     from . import autoinject, contracts
 
@@ -2090,6 +2208,7 @@ def main(argv: list[str] | None = None) -> int:
         "context": cmd_context,
         "autoinject": cmd_autoinject,
         "orchestration": cmd_orchestration,
+        "ledger": cmd_ledger,
     }
     try:
         return handlers[args.command](args)
