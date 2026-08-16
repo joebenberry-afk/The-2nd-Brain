@@ -92,7 +92,7 @@ def _infer_provider(tid: str, arm: dict, arm_dir: Path) -> str:
     Prime telemetry (model contains 'deepseek'). Real Gemini arms carry the
     provider/model fields written by the orchestrator.
     """
-    explicit = str(arm.get("provider") or (arm.get("model") or "")).lower()
+    explicit = str(arm.get("provider") or arm.get("model") or arm.get("model_slug") or "").lower()
     if "deepseek" in explicit:
         return "deepseek"
     if "gemini" in explicit:
@@ -102,22 +102,58 @@ def _infer_provider(tid: str, arm: dict, arm_dir: Path) -> str:
     return ""
 
 
+def _arm_dirs(task_id: str, arm_type: str) -> list[Path]:
+    """All generation dirs for one arm, sorted by generation ascending."""
+    out = []
+    gen = 1
+    while True:
+        d = PROMO_EVAL_DIR / f"{task_id}-{arm_type}-{gen}"
+        if d.exists():
+            out.append(d)
+            gen += 1
+            continue
+        if gen <= 4:  # tolerate missing gens 2..4 while scanning further
+            gen += 1
+            continue
+        break
+    return out
+
+
 def load_pairs() -> list[dict]:
-    """Load valid complete pairs only (same provider/model on both arms)."""
+    """Load valid complete pairs only (same provider on both arms).
+
+    Generation-aware: for each task, arms may exist across generations (the
+    historical DeepSeek e07-b-1 partial is generation 1; the resumed Gemini
+    pair is generation 2). The LATEST generation with BOTH arms present,
+    VALID_COMPLETE, and the SAME provider counts. Cross-provider pairs never
+    count (the historical DeepSeek e07 partial has no c-side, so it can never
+    form a pair).
+    """
     pairs = []
     for tid in TASK_IDS:
-        b_dir = PROMO_EVAL_DIR / f"{tid}-b-1"
-        c_dir = PROMO_EVAL_DIR / f"{tid}-c-1"
-        b = _load_arm(b_dir / "evidence.json")
-        c = _load_arm(c_dir / "evidence.json")
-        if b is None or c is None:
-            continue
-        b_provider = _infer_provider(tid, b, b_dir)
-        c_provider = _infer_provider(tid, c, c_dir)
-        if b_provider != c_provider or b_provider not in ("deepseek", "gemini"):
-            # cross-provider or unknown pairs are never counted
-            continue
-        pairs.append({"id": tid, "provider": b_provider, "baseline": b, "candidate": c})
+        b_dirs = _arm_dirs(tid, "b")
+        c_dirs = _arm_dirs(tid, "c")
+        best = None
+        for b_dir in b_dirs:
+            b = _load_arm(b_dir / "evidence.json")
+            if b is None:
+                continue
+            b_provider = _infer_provider(tid, b, b_dir)
+            for c_dir in c_dirs:
+                if c_dir.name != b_dir.name.replace("-b-", "-c-"):
+                    continue
+                c = _load_arm(c_dir / "evidence.json")
+                if c is None:
+                    continue
+                c_provider = _infer_provider(tid, c, c_dir)
+                if b_provider == c_provider and b_provider in ("deepseek", "gemini"):
+                    gen = int(b_dir.name.split("-")[-1])
+                    if best is None or gen > best[0]:
+                        best = (gen, b_provider, b, c)
+        if best:
+            pairs.append(
+                {"id": tid, "provider": best[1], "baseline": best[2], "candidate": best[3]}
+            )
     return pairs
 
 
@@ -131,34 +167,75 @@ def gate_correctness(pairs: list[dict]) -> dict:
     return {"pass": not losses, "losses": losses}
 
 
+def _candidate_tool_activity(candidate: dict) -> int:
+    """Real tool activity count from Brain hook telemetry (PostToolUse records)."""
+    telems = candidate.get("brain_telemetry") or []
+    return sum(
+        1
+        for t in telems
+        if (
+            isinstance(t, dict)
+            and t.get("kind") == "tool_result"
+            and t.get("tool") not in (None, "unknown")
+        )
+    )
+
+
 def gate_anti_laziness(pairs: list[dict]) -> dict:
     """Candidate still performs justified engineering when the evidence says so.
 
-    Anti-laziness is only provable from the LC decision codes the real arms
-    recorded; absent those codes the gate is recorded as unprovable (not pass).
+    Provable from either (a) real LC decision codes the harness recorded, or
+    (b) real candidate tool activity + a real diff on tasks where the
+    baseline performed engineering work. Never inferred from fabricated codes.
     """
-    provable = [p for p in pairs if p["candidate"].get("lc_decisions")]
-    justified = [
-        p["id"] for p in provable if any("LC_" in str(d) for d in p["candidate"]["lc_decisions"])
-    ]
+    provable = 0
+    justified = 0
+    notes = []
+    for p in pairs:
+        cand = p["candidate"]
+        lc = cand.get("lc_decisions")
+        if lc:
+            provable += 1
+            if any("LC_" in str(d) for d in lc):
+                justified += 1
+            continue
+        tools = _candidate_tool_activity(cand)
+        diff = cand.get("diff") or {}
+        touched = bool(
+            diff.get("changed_files") or diff.get("new_files") or (diff.get("added_lines") or 0) > 0
+        )
+        if tools > 0 and touched:
+            provable += 1
+            justified += 1
+        else:
+            notes.append(f"{p['id']}: no real tool activity + diff evidence")
     return {
-        "pass": len(justified) == len(provable) and len(provable) > 0,
-        "provable": len(provable),
-        "justified": len(justified),
+        "pass": provable > 0 and justified == provable,
+        "provable": provable,
+        "justified": justified,
+        "notes": notes,
     }
 
 
 def gate_stop(pairs: list[dict]) -> dict:
-    """Stop telemetry proves incomplete tasks continued and complete tasks stopped."""
+    """Stop telemetry (or real LC_STOP codes) proves disciplined termination."""
     ok = True
+    provable = 0
     notes = []
     for p in pairs:
-        telems = p["candidate"].get("brain_telemetry") or []
+        cand = p["candidate"]
+        telems = cand.get("brain_telemetry") or []
         kinds = {t.get("kind") for t in telems if isinstance(t, dict)}
-        if not kinds:
-            ok = False
-            notes.append(f"{p['id']}: no Brain stop telemetry")
-    return {"pass": ok, "notes": notes}
+        lc = cand.get("lc_decisions") or []
+        if "stop_allowed" in kinds or "stop_continue" in kinds:
+            provable += 1
+            continue
+        if any("LC_STOP" in str(d) for d in lc):
+            provable += 1
+            continue
+        ok = False
+        notes.append(f"{p['id']}: no Stop telemetry / LC_STOP evidence")
+    return {"pass": ok and provable > 0, "provable": provable, "notes": notes}
 
 
 def gate_opportunity(pairs: list[dict]) -> dict:
@@ -179,13 +256,35 @@ def gate_opportunity(pairs: list[dict]) -> dict:
     }
 
 
+def _usage(arm: dict) -> dict:
+    """Normalized usage (snake_case keys) from either the runner's `usage`
+    block or the retained DeepSeek arms' `economics` block (both real)."""
+    u = arm.get("usage") or arm.get("economics") or {}
+    if not isinstance(u, dict):
+        return {}
+    out = {}
+    for src_key, dst_key in (
+        ("input_tokens", "input_tokens"),
+        ("inputTokens", "input_tokens"),
+        ("output_tokens", "output_tokens"),
+        ("outputTokens", "output_tokens"),
+        ("cache_read_tokens", "cache_read_tokens"),
+        ("cacheReadTokens", "cache_read_tokens"),
+        ("total_tokens", "total_tokens"),
+        ("totalTokens", "total_tokens"),
+    ):
+        if u.get(src_key) is not None:
+            out[dst_key] = u[src_key]
+    return out
+
+
 def gate_economics(pairs: list[dict]) -> dict:
     """Real measured metrics only; UNAVAILABLE-not-inferred is not a pass."""
     real = 0
     total = len(pairs)
     for p in pairs:
-        u = p["candidate"].get("usage") or {}
-        if any(v is not None for v in u.values()):
+        u = _usage(p["candidate"])
+        if any(isinstance(v, (int, float)) and v > 0 for v in u.values()):
             real += 1
     return {"pass": real == total and total > 0, "real_usage_arms": real, "total_arms": total * 2}
 

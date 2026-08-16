@@ -39,6 +39,8 @@ AGY_ENV = "P3_AGY_CMD"  # override for the agy executable path
 AGY_MODEL_ENV = "P3_AGY_MODEL"  # exact frozen model slug
 AGY_EFFORT_ENV = "P3_AGY_EFFORT"  # exact frozen effort
 AGY_TIMEOUT_ENV = "P3_AGY_TIMEOUT_S"  # per-arm timeout (default 1200s)
+AGY_PRINT_TIMEOUT_ENV = "P3_AGY_PRINT_TIMEOUT_S"  # agy --print-timeout (default 900s)
+AGY_SKIP_PERMISSIONS_ENV = "P3_AGY_SKIP_PERMISSIONS"  # "1" = pass --dangerously-skip-permissions
 
 # Frozen campaign order (plan §32). e01/e02/e03/e06 are retained genuine
 # DeepSeek/Prime pairs — the runner never re-executes them, only reconciles.
@@ -111,10 +113,12 @@ def run_acceptance(fixture_dir: Path, workdir: Path) -> list[dict]:
 
 
 def parse_agy_stream(text: str) -> dict:
-    """Extract conversationId + usage from `agy --output-format stream-json`.
+    """Extract conversation id + usage from `agy --output-format stream-json`.
 
-    Tolerant: any JSON line with a conversationId or usage object is
-    captured. Returns {} when nothing real is present (arm must be rejected).
+    The real CLI emits snake_case events: top-level `conversation_id` and
+    `usage` objects with `input_tokens`/`output_tokens`/`thinking_tokens`/
+    `cache_read_tokens`/`total_tokens` (camelCase variants tolerated too).
+    Returns {} when nothing real is present (arm must be rejected).
     """
     out: dict = {}
     for line in text.splitlines():
@@ -127,14 +131,89 @@ def parse_agy_stream(text: str) -> dict:
             continue
         if not isinstance(obj, dict):
             continue
-        if "conversationId" in obj:
-            out.setdefault("conversationId", obj["conversationId"])
+        for key in ("conversationId", "conversation_id"):
+            if obj.get(key):
+                out.setdefault("conversation_id", obj[key])
+        # The real CLI nests usage inside step_update / result objects.
         usage = obj.get("usage") or obj.get("usageMetadata") or {}
+        if not usage:
+            for nested in ("step_update", "result"):
+                inner = obj.get(nested)
+                if isinstance(inner, dict):
+                    usage = inner.get("usage") or inner.get("usageMetadata") or {}
+                    if usage:
+                        break
         if isinstance(usage, dict):
-            for key in ("inputTokens", "outputTokens", "cacheReadTokens", "totalTokens"):
-                if key in usage and out.get(key) is None:
-                    out[key] = usage[key]
+            for key in ("input_tokens", "outputTokens", "inputTokens"):
+                if usage.get(key) is not None and out.get("input_tokens") is None:
+                    out["input_tokens"] = usage[key]
+            for key in ("output_tokens", "outputTokens"):
+                if usage.get(key) is not None and out.get("output_tokens") is None:
+                    out["output_tokens"] = usage[key]
+            for key in ("cache_read_tokens", "cacheReadTokens"):
+                if usage.get(key) is not None and out.get("cache_read_tokens") is None:
+                    out["cache_read_tokens"] = usage[key]
+            for key in ("total_tokens", "totalTokens"):
+                if usage.get(key) is not None and out.get("total_tokens") is None:
+                    out["total_tokens"] = usage[key]
     return out
+
+
+def _arm_dir(task_id: str, arm_type: str, provider: str) -> Path:
+    """Next generation-aware arm dir, preserving other-provider evidence.
+
+    The historical DeepSeek e07-b-1 partial must never be overwritten, and a
+    pair's two arms must share the same generation: if EITHER arm's dir at a
+    generation holds evidence from a different provider, both arms skip that
+    generation (Gemini e07 pair lands in e07-b-2/e07-c-2).
+    """
+    sibling_type = "c" if arm_type == "b" else "b"
+    gen = 1
+    while True:
+        d = REPORTS_ROOT / f"{task_id}-{arm_type}-{gen}"
+        sibling = REPORTS_ROOT / f"{task_id}-{sibling_type}-{gen}"
+
+        def _occupied(p: Path) -> bool:
+            if not p.exists():
+                return False
+            ev = p / "evidence.json"
+            if not ev.is_file():
+                return False
+            try:
+                data = json.loads(ev.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            existing = str(data.get("provider") or data.get("model") or "").lower()
+            if not existing:
+                # old-schema arms: infer from the real telemetry model field
+                tfile = p / "telemetry.jsonl"
+                if tfile.is_file():
+                    for raw in tfile.read_text(encoding="utf-8", errors="replace").splitlines():
+                        try:
+                            rec = json.loads(raw)
+                        except ValueError:
+                            continue
+                        if isinstance(rec, dict) and rec.get("model"):
+                            existing = str(rec["model"]).lower()
+                            break
+            return existing not in ("", provider)
+
+        if _occupied(d) or _occupied(sibling):
+            gen += 1
+            continue
+        return d
+
+
+def _arm_done(d: Path) -> bool:
+    """True when the arm dir already holds a VALID_COMPLETE evidence record."""
+    ev = d / "evidence.json"
+    if not ev.is_file():
+        return False
+    try:
+        data = json.loads(ev.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return data.get("validity") == "VALID_COMPLETE"
 
 
 def validate_arm(arm: dict) -> list[str]:
@@ -145,7 +224,7 @@ def validate_arm(arm: dict) -> list[str]:
     if not arm.get("run_artifact_path"):
         problems.append("no model result artifact")
     usage = arm.get("usage") or {}
-    if not any(v is not None for v in usage.values()):
+    if not any(isinstance(v, (int, float)) and v > 0 for v in usage.values()):
         problems.append("usage is empty/absent (no real model execution evidence)")
     if not arm.get("model_slug"):
         problems.append("model slug missing")
@@ -157,6 +236,32 @@ def validate_arm(arm: dict) -> list[str]:
         problems.append("lean state missing/unresolved")
     if not arm.get("brain_telemetry"):
         problems.append("no Brain hook telemetry captured")
+    tool_records = [
+        t for t in arm.get("brain_telemetry", [])
+        if (
+            isinstance(t, dict)
+            and t.get("kind") == "tool_result"
+            and t.get("tool") not in (None, "unknown")
+        )
+    ]
+    if not tool_records:
+        problems.append("no real tool activity recorded in hook telemetry")
+    lean_telems = [
+        t for t in arm.get("lean_telemetry", [])
+        if isinstance(t, dict) and t.get("lean_decision") is not None
+    ]
+    if arm["lean_state"] == "ON":
+        if not any(t.get("lean_decision") == "inject" for t in lean_telems):
+            problems.append("Lean ON telemetry cannot prove kernel injection")
+        elif not any(
+            (t.get("lean_kernel_chars") or 0) >= 800
+            for t in lean_telems
+            if t.get("lean_decision") == "inject"
+        ):
+            problems.append("Lean ON kernel injection has no canonical kernel size proof")
+    else:
+        if any(t.get("lean_decision") == "inject" for t in lean_telems):
+            problems.append("Lean OFF telemetry cannot prove kernel omission (inject seen)")
     return problems
 
 
@@ -166,17 +271,24 @@ def invoke_agy(prompt_file: Path, workdir: Path, artifact_path: Path, arm: dict)
     model = os.environ[AGY_MODEL_ENV]
     effort = os.environ.get(AGY_EFFORT_ENV, "")
     timeout = int(os.environ.get(AGY_TIMEOUT_ENV, "1200"))
+    print_timeout = int(os.environ.get(AGY_PRINT_TIMEOUT_ENV, "900"))
     cmd = [
         agy,
+        "--add-dir",
+        str(workdir),
         "-p",
         prompt_file.read_text(encoding="utf-8"),
         "--output-format",
         "stream-json",
         "--model",
         model,
+        "--print-timeout",
+        f"{print_timeout}s",
     ]
     if effort:
         cmd += ["--effort", effort]
+    if os.environ.get(AGY_SKIP_PERMISSIONS_ENV, "").strip().lower() in ("1", "true", "yes"):
+        cmd += ["--dangerously-skip-permissions"]
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
@@ -231,9 +343,13 @@ def run_arm(task_id: str, slug: str, arm_type: str, provider: str, tmp_root: Pat
         "cost": "UNAVAILABLE-not-inferred",
     }
 
-    report_dir = REPORTS_ROOT / f"{task_id}-{arm_type}-1"
+    report_dir = _arm_dir(task_id, arm_type, provider)
     report_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = report_dir / "agy-stream.jsonl"
+    try:
+        arm["run_artifact_path"] = str(artifact_path.relative_to(REPO_ROOT))
+    except ValueError:
+        arm["run_artifact_path"] = str(artifact_path)
 
     started = time.time()
     exit_code, stdout = invoke_agy(prompt_file, workdir, artifact_path, arm)
@@ -241,12 +357,12 @@ def run_arm(task_id: str, slug: str, arm_type: str, provider: str, tmp_root: Pat
     arm["agy_exit"] = exit_code
 
     stream = parse_agy_stream(stdout)
-    arm["conversation_id"] = stream.get("conversationId", "")
+    arm["conversation_id"] = stream.get("conversation_id", "")
     arm["usage"] = {
-        "inputTokens": stream.get("inputTokens"),
-        "outputTokens": stream.get("outputTokens"),
-        "cacheReadTokens": stream.get("cacheReadTokens"),
-        "totalTokens": stream.get("totalTokens"),
+        "input_tokens": stream.get("input_tokens"),
+        "output_tokens": stream.get("output_tokens"),
+        "cache_read_tokens": stream.get("cache_read_tokens"),
+        "total_tokens": stream.get("total_tokens"),
     }
 
     # Deterministic acceptance oracle (post-run; pristine oracle restored).
@@ -257,7 +373,9 @@ def run_arm(task_id: str, slug: str, arm_type: str, provider: str, tmp_root: Pat
     numstat = run_cmd(["git", "diff", "--numstat", "HEAD"], cwd=workdir)
     nameonly = run_cmd(["git", "diff", "--name-only", "HEAD"], cwd=workdir)
     status = run_cmd(["git", "status", "--porcelain"], cwd=workdir)
-    arm["diff"]["changed_files"] = [f.strip() for f in nameonly.stdout.splitlines() if f.strip()]
+    arm["diff"]["changed_files"] = [
+        f.strip() for f in nameonly.stdout.splitlines() if f.strip()
+    ]
     arm["diff"]["new_files"] = [
         line.strip()[3:] for line in status.stdout.splitlines() if line.startswith("??")
     ]
@@ -297,10 +415,6 @@ def run_arm(task_id: str, slug: str, arm_type: str, provider: str, tmp_root: Pat
     rejections = validate_arm(arm)
     arm["validity"] = "REJECTED" if rejections else "VALID_COMPLETE"
     arm["rejections"] = rejections
-    try:
-        arm["run_artifact_path"] = str(artifact_path.relative_to(REPO_ROOT))
-    except ValueError:
-        arm["run_artifact_path"] = str(artifact_path)
     arm["finished_at"] = datetime.now(UTC).isoformat()
 
     (report_dir / "evidence.json").write_text(json.dumps(arm, indent=2), encoding="utf-8")
@@ -331,6 +445,9 @@ def main() -> int:
         "--preflight", action="store_true", help="check readiness and print the exact blocker"
     )
     ap.add_argument("--dry-run", action="store_true", help="show the next unfinished pair and exit")
+    ap.add_argument(
+        "--limit", type=int, default=0, help="max Gemini/Antigravity pairs to execute (0 = all)"
+    )
     args = ap.parse_args()
 
     ok, problems = preflight()
@@ -368,6 +485,7 @@ def main() -> int:
     tmp_root.mkdir(parents=True, exist_ok=True)
     try:
         completed = 0
+        executed = 0
         for tid, slug, provider, order in TASKS:
             if provider == "deepseek":
                 b = REPORTS_ROOT / f"{tid}-b-1" / "evidence.json"
@@ -376,19 +494,28 @@ def main() -> int:
                     completed += 1
                     print(f"[{tid}] retained DeepSeek pair OK")
                 continue
-            b_path = REPORTS_ROOT / f"{tid}-b-1" / "evidence.json"
-            c_path = REPORTS_ROOT / f"{tid}-c-1" / "evidence.json"
-            if b_path.exists() and c_path.exists():
+            if args.limit and executed >= args.limit:
+                print(f"--limit {args.limit} reached; remaining pairs deferred.")
+                break
+            b_dir = _arm_dir(tid, "b", "gemini")
+            c_dir = _arm_dir(tid, "c", "gemini")
+            if _arm_done(b_dir) and _arm_done(c_dir):
                 completed += 1
+                print(f"[{tid}] {slug} already complete ({b_dir.name}/{c_dir.name})")
                 continue
             print(f"[{tid}] {slug} -> EXECUTING order={order} ...")
             if order == "ON_FIRST":
-                run_arm(tid, slug, "c", "gemini", tmp_root)
-                run_arm(tid, slug, "b", "gemini", tmp_root)
+                if not _arm_done(c_dir):
+                    run_arm(tid, slug, "c", "gemini", tmp_root)
+                if not _arm_done(b_dir):
+                    run_arm(tid, slug, "b", "gemini", tmp_root)
             else:
-                run_arm(tid, slug, "b", "gemini", tmp_root)
-                run_arm(tid, slug, "c", "gemini", tmp_root)
+                if not _arm_done(b_dir):
+                    run_arm(tid, slug, "b", "gemini", tmp_root)
+                if not _arm_done(c_dir):
+                    run_arm(tid, slug, "c", "gemini", tmp_root)
             completed += 1
+            executed += 1
         print(f"Campaign progress: {completed}/14 pairs accounted.")
         return 0
     finally:
