@@ -106,3 +106,10 @@ driver_actions_total, driver_execution_attempts, blocked_execution_attempts,
 emergency_execution_actions, worker_tasks, worker_corrections,
 worker_verifications, fan_out_width, recursion_depth; delegation_purity
 computed and stored with each record.
+
+## 10. Stop behavior (plan §15.4)
+
+Once worker evidence + the Requirement Ledger prove completion and no
+material gate remains, STOP — do not spawn "one more" verifier or worker
+without a risk/evidence reason. (Wired into the driver contract:
+`src/driver-orchestrator.ts` `DRIVER_ORCHESTRATOR_CONTRACT`.)

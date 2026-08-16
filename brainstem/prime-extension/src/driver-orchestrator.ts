@@ -128,7 +128,9 @@ WORKER SELECTION: prefer the cheapest competent worker (deepseek-v4-flash or qwe
 
 WORKER TASK PACKET: every spawn gets a narrow objective, scope, constraints, required evidence, and a completion condition. Workers do NOT inherit the driver role and must NOT orchestrate.
 
-REVIEW: audit every worker result for evidence quality and contradictions; prefer one targeted correction over replacing a worker; own final integration and the final answer.`;
+REVIEW: audit every worker result for evidence quality and contradictions; prefer one targeted correction over replacing a worker; own final integration and the final answer.
+
+STOP: once worker evidence and the Requirement Ledger prove completion with no material gate remaining, STOP — never spawn "one more" verifier or worker without a risk/evidence reason.`;
 
 /**
  * Append the driver contract to a base system prompt. Returns undefined when
