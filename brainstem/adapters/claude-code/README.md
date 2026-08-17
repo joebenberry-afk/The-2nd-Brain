@@ -11,7 +11,7 @@ error -- the hook never breaks a Claude Code session.
 |-------------|----------------|
 | SessionStart | Registers host=`claude-code` in the existing telemetry-based session lifecycle (`autoinject.BrainLifecycle.start_session`). No memory retrieval, no context injection -- always returns `{}`. |
 | PreCompact   | Extracts a bounded resume packet (goal from the transcript's last user message, `custom_instructions` if the user ran `/compact <text>`, git branch/commit/changed-files) and writes it as one `compaction_started` ledger event, then runs `ledger.checkpoint_ledger` (the existing pre-compaction durability barrier). Deduplicated by content hash. Never blocks compaction. |
-| Stop         | Fires once per assistant turn (not once per session -- `SessionEnd` is Claude Code's real session-close event and is out of scope here). Records a lightweight `turn_end` telemetry record every time. Writes a `candidate` memory only when the assistant's last message contains the opt-in `<!--second-brain-candidate ...-->` marker (see `rules/second-brain-core.md`) with non-empty evidence. |
+| Stop         | Fires once per assistant turn (not once per session -- `SessionEnd` is Claude Code's real session-close event and is out of scope here). Records a lightweight `claude_code_stop_turn` telemetry record every time. Writes a `candidate` memory only when the assistant's last message contains the opt-in `<!--second-brain-candidate ...-->` marker (see `rules/second-brain-core.md`) with non-empty evidence. |
 
 ## Known limits (honest)
 
