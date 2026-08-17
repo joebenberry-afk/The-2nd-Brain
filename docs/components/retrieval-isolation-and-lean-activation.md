@@ -1,7 +1,7 @@
-# Retrieval Isolation & Lean Code Activation
+# Project Retrieval Isolation & Lean Code Activation
 
 ## Purpose
-Enforces strict project and campaign isolation in AutoInject retrieval, prevents cross-project context leakage, applies delta conservatism in mid-session turns, and activates the Lean Runtime Kernel via canonical configuration.
+Enforces strict project isolation in AutoInject retrieval, prevents cross-project context leakage, applies delta conservatism in mid-session turns, and activates the Lean Runtime Kernel via canonical configuration.
 
 ## Problem it solves
 1. Cross-project noise: unisolated queries or fallback ladders previously allowed memories from unrelated projects (e.g., Second Brain internals) to leak into external project sessions (e.g., SZ).
@@ -20,7 +20,8 @@ Enforces strict project and campaign isolation in AutoInject retrieval, prevents
 - Project isolation:
   - When `project_id` is resolved (e.g. `"sz"`), only memories matching `project_id == "sz"` or `scope == "global"` are eligible.
   - Wrong-project memories (`scope == "project"` and `project_id != intent.project_id`) are hard-filtered before scoring and ranking.
-  - Unresolved project identity (`None` or `"default"`) fails safe: project-local memories from other projects are suppressed; only explicitly global policies are eligible.
+  - Unresolved project identity (`None`, `"default"`, `"unknown"`) fails safe: ALL project-scoped memories are suppressed (including any tagged `project_id="default"`); only explicitly global policies (`scope == "global"`) are eligible.
+- Note on Campaign Affinity: The Second Brain schema natively supports `scope in ("global", "domain", "project", "model")`. Intra-project multi-campaign tagging and sub-project task affinity are not part of the current DB schema and are tracked as a separate follow-up.
 
 ### 2. Delta Strictness & Deduplication
 - Mid-session delta conservatism (`intent.is_delta = True` when `invocationNum > 1`):
@@ -34,8 +35,8 @@ Enforces strict project and campaign isolation in AutoInject retrieval, prevents
 - Role gate: injected only for code-capable roles (`driver`, `worker`).
 - Dedup marker: `[second-brain-lean-code-kernel]` prevents duplicate injection within turn context.
 
-### 4. Specialist Agents
-Permanent Second Brain specialist set defined for bounded delegation:
+### 4. Specialist Agents (Antigravity Harness)
+Specialist agents defined for bounded delegation operate at the Antigravity harness level (stored in the Antigravity user runtime directory `<appDataDir>/.agents/agents/<name>/agent.md`, not committed as repository code):
 - `brain_retrieval_specialist`: AutoInject retrieval, project isolation, ranking, delta filtering.
 - `lean_code_specialist`: Lean Runtime Kernel activation, minimum-sufficient-change rules, stop conditions.
 - `brain_memory_lifecycle_specialist`: Canonical memory state, update lifecycle, supersession.

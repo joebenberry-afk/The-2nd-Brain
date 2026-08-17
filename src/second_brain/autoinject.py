@@ -298,8 +298,8 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
     - wrong project (unless global scope);
     - superseded / archived / REJECTED never presented as current;
     - unverified write-back candidates (candidate status) require VERIFIED or TESTED;
-    - unresolved project identity ("default" / None) allows ONLY scope == "global"
-      or memories explicitly belonging to "default";
+    - unresolved project identity ("default" / None / "unknown") allows ONLY scope == "global"
+      (never injects project-scoped memories, even if tagged project_id="default");
     - delta strictness: mid-session delta requires current status and VERIFIED/TESTED grade.
     """
     out: list[dict] = []
@@ -322,9 +322,7 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
         if row_scope == "global":
             scope_ok = True
         elif intent.project_id and intent.project_id not in ("default", "unknown"):
-            scope_ok = (row_project == intent.project_id)
-        elif intent.project_id == "default":
-            scope_ok = (row_project == "default")
+            scope_ok = (row_scope == "project" and row_project == intent.project_id)
         else:
             scope_ok = False
 
