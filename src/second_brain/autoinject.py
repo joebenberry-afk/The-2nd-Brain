@@ -59,11 +59,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TARGET_TOKENS = 800
 DEFAULT_HARD_CAP_TOKENS = 2000
+DEFAULT_DELTA_TARGET_TOKENS = 400
+DEFAULT_DELTA_HARD_CAP_TOKENS = 1000
 _MAX_CANDIDATES = 10  # candidate ceiling for the shadow pipeline
 _TELEMETRY_V = 2
 _PACKET_CACHE_LIMIT = 64
 _ENV_TARGET = "SECOND_BRAIN_AUTOINJECT_TARGET_TOKENS"
 _ENV_CAP = "SECOND_BRAIN_AUTOINJECT_HARD_CAP_TOKENS"
+_ENV_DELTA_TARGET = "SECOND_BRAIN_AUTOINJECT_DELTA_TARGET_TOKENS"
+_ENV_DELTA_CAP = "SECOND_BRAIN_AUTOINJECT_DELTA_HARD_CAP_TOKENS"
 
 # Rendered packet cache: packet_id -> (rendered text, items). Shadow phase
 # keeps decisions deterministic without persisting packets to the canonical DB.
@@ -79,6 +83,8 @@ _PACKET_CACHE: dict[str, tuple[str, list[PacketItem]]] = {}
 class AutoInjectConfig:
     target_tokens: int
     hard_cap_tokens: int
+    delta_target_tokens: int = DEFAULT_DELTA_TARGET_TOKENS
+    delta_hard_cap_tokens: int = DEFAULT_DELTA_HARD_CAP_TOKENS
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -93,9 +99,12 @@ def _env_int(name: str, fallback: int) -> int:
 
 
 def load_config(home: Path | str) -> AutoInjectConfig:
-    """config/autoinject.toml [budget] with env override; fail open to defaults."""
+    """config/autoinject.toml [budget] and [delta_budget] with env override;
+    fail open to defaults."""
     target = DEFAULT_TARGET_TOKENS
     cap = DEFAULT_HARD_CAP_TOKENS
+    delta_target = DEFAULT_DELTA_TARGET_TOKENS
+    delta_cap = DEFAULT_DELTA_HARD_CAP_TOKENS
     path = Path(home) / "config" / "autoinject.toml"
     if path.is_file():
         try:
@@ -108,16 +117,36 @@ def load_config(home: Path | str) -> AutoInjectConfig:
                     target = raw_t
                 if isinstance(raw_c, int) and not isinstance(raw_c, bool) and raw_c > 0:
                     cap = raw_c
+            delta_budget = data.get("delta_budget") or {}
+            if isinstance(delta_budget, dict):
+                raw_dt = delta_budget.get("target_tokens")
+                raw_dc = delta_budget.get("hard_cap_tokens")
+                if isinstance(raw_dt, int) and not isinstance(raw_dt, bool) and raw_dt > 0:
+                    delta_target = raw_dt
+                if isinstance(raw_dc, int) and not isinstance(raw_dc, bool) and raw_dc > 0:
+                    delta_cap = raw_dc
         except (OSError, tomllib.TOMLDecodeError):
             logger.warning("config/autoinject.toml unreadable; using defaults (fail open)")
     target = _env_int(_ENV_TARGET, target)
     cap = _env_int(_ENV_CAP, cap)
+    delta_target = _env_int(_ENV_DELTA_TARGET, delta_target)
+    delta_cap = _env_int(_ENV_DELTA_CAP, delta_cap)
     if cap < 1:
         cap = DEFAULT_HARD_CAP_TOKENS
     if target < 1:
         target = DEFAULT_TARGET_TOKENS
     target = min(target, cap)
-    return AutoInjectConfig(target_tokens=target, hard_cap_tokens=cap)
+    if delta_cap < 1:
+        delta_cap = DEFAULT_DELTA_HARD_CAP_TOKENS
+    if delta_target < 1:
+        delta_target = DEFAULT_DELTA_TARGET_TOKENS
+    delta_target = min(delta_target, delta_cap)
+    return AutoInjectConfig(
+        target_tokens=target,
+        hard_cap_tokens=cap,
+        delta_target_tokens=delta_target,
+        delta_hard_cap_tokens=delta_cap,
+    )
 
 
 def token_estimate(text: str) -> int:
@@ -144,6 +173,7 @@ class RetrievalIntent:
     role_profile: str
     session_id: str
     branch_id: str = "main"
+    is_delta: bool = False
 
 
 def _now() -> str:
@@ -164,25 +194,35 @@ def _task_sha256(task: str) -> str:
 def _resolve_project_id(
     home: Path | str, cwd: str | None, explicit: str | None
 ) -> str:
-    """Project resolution ladder (Phase C2 FIX 1):
+    """Project resolution ladder:
 
-    ``--project`` > Brain project registry (root containing cwd) >
-    ``SECOND_BRAIN_PROJECT`` env > ``"default"``. Wrong-project hard filter
-    stays downstream. Registry lookup is best-effort (fail open to next rung).
+    1. explicit `--project` argument;
+    2. cwd-based detection if cwd is provided:
+       a. explicit `.brain/project.toml` manifest (registry.detect_explicit_id);
+       b. registered project whose repo_path contains cwd (registry.list_projects);
+       c. git remote match against registered projects (registry.detect_git_remote);
+    3. if cwd is absent/empty: check if brain home path is a registered project;
+    4. `SECOND_BRAIN_PROJECT` environment variable;
+    5. "default" (unresolved safe fallback).
+
+    Registry lookup is best-effort (fail open to next rung).
+    When cwd is explicitly provided, never silently falls back to brain home path.
     """
     if explicit is not None and str(explicit).strip():
         return str(explicit).strip()
     home_path = Path(home)
-    # Registry candidates: --cwd when given, else the Brain home path itself
-    # (Phase C3 FIX 2: sessions without a usable cwd still resolve the
-    # brain's own project before falling back to env/default).
-    candidates: list[str] = []
     if cwd and str(cwd).strip():
-        candidates.append(str(cwd).strip())
-    candidates.append(str(home_path))
-    for candidate in candidates:
+        cwd_str = str(cwd).strip()
+        # 2a. Manifest detection
         try:
-            cwd_abs = os.path.abspath(candidate)
+            manifest_id = registry.detect_explicit_id(cwd_str)
+            if manifest_id:
+                return manifest_id
+        except Exception:
+            pass
+        # 2b. Repo path match
+        try:
+            cwd_abs = os.path.abspath(cwd_str)
             for proj in registry.list_projects(home_path):
                 root = proj.repo_path
                 if root:
@@ -192,19 +232,50 @@ def _resolve_project_id(
                             return proj.id
                     except ValueError:
                         continue  # different drive
-        except Exception:  # fail open: registry errors never break injection
-            continue
+        except Exception:
+            pass
+        # 2c. Git remote match
+        try:
+            remote = registry.detect_git_remote(cwd_str)
+            if remote:
+                norm_rem = registry.remote_identity(remote)
+                for proj in registry.list_projects(home_path):
+                    if proj.git_remote and (
+                        proj.git_remote.strip().lower() == remote.strip().lower()
+                        or registry.remote_identity(proj.git_remote) == norm_rem
+                    ):
+                        return proj.id
+        except Exception:
+            pass
+    else:
+        # 3. If cwd is absent/empty: check if brain home path itself is registered
+        try:
+            home_abs = os.path.abspath(str(home_path))
+            for proj in registry.list_projects(home_path):
+                root = proj.repo_path
+                if root:
+                    root_abs = os.path.abspath(root)
+                    try:
+                        if os.path.commonpath([home_abs, root_abs]) == root_abs:
+                            return proj.id
+                    except ValueError:
+                        continue
+        except Exception:
+            pass
+
     env_p = os.environ.get("SECOND_BRAIN_PROJECT")
     if env_p and env_p.strip():
         return env_p.strip()
     return "default"
 
 
-def _search_or_fallback(home: Path | str, term: str, top_k: int) -> list[dict]:
-    """OR-fallback recall (Phase C2 FIX 2): when the primary AND query returns
-    zero candidates, union per-token matches (sorted token order, first-seen
-    wins). Every token search runs the SAME hard filters + ranking inside
-    semantic.search_memories; the union is capped at ``top_k``. Deterministic.
+def _search_or_fallback(
+    home: Path | str, term: str, top_k: int, project_id: str | None = None
+) -> list[dict]:
+    """OR-fallback recall: when the primary AND query returns zero candidates,
+    union per-token matches (sorted token order, first-seen wins). Every token
+    search runs the SAME hard filters + ranking inside semantic.search_memories;
+    the union is capped at ``top_k``. Deterministic.
     """
     home_path = Path(home)
     tokens = sorted(semantic._query_tokens(term))
@@ -213,7 +284,7 @@ def _search_or_fallback(home: Path | str, term: str, top_k: int) -> list[dict]:
         for row in semantic.search_memories(
             home_path,
             token,
-            project_id=None,
+            project_id=project_id,
             include_history=False,
             top_k=top_k,
             max_tokens=None,
@@ -223,10 +294,14 @@ def _search_or_fallback(home: Path | str, term: str, top_k: int) -> list[dict]:
 
 
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
-    """§6.3.1 hard filters: wrong project (unless global scope); superseded /
-    archived / REJECTED never presented as current (defensive re-check — the
-    shared search already excludes them); condition compatibility is
-    represented via status/scope, which the search filters enforce."""
+    """§6.3.1 hard filters:
+    - wrong project (unless global scope);
+    - superseded / archived / REJECTED never presented as current;
+    - unverified write-back candidates (candidate status) require VERIFIED or TESTED;
+    - unresolved project identity ("default" / None / "unknown") allows ONLY scope == "global"
+      (never injects project-scoped memories, even if tagged project_id="default");
+    - delta strictness: mid-session delta requires current status and VERIFIED/TESTED grade.
+    """
     out: list[dict] = []
     for row in rows:
         if row.get("status") in ("superseded", "archived"):
@@ -240,12 +315,28 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
             "TESTED",
         ):
             continue
-        if (
-            intent.project_id is None
-            or row.get("scope") == "global"
-            or row.get("project_id") == intent.project_id
-        ):
-            out.append(row)
+
+        row_scope = str(row.get("scope") or "project")
+        row_project = str(row.get("project_id") or "")
+
+        if row_scope == "global":
+            scope_ok = True
+        elif intent.project_id and intent.project_id not in ("default", "unknown"):
+            scope_ok = (row_scope == "project" and row_project == intent.project_id)
+        else:
+            scope_ok = False
+
+        if not scope_ok:
+            continue
+
+        # Delta strictness: delta injection requires current status and verified/tested grade
+        if intent.is_delta:
+            if row.get("status") != "current":
+                continue
+            if row.get("evidence_grade") not in ("VERIFIED", "TESTED"):
+                continue
+
+        out.append(row)
     return out
 
 
@@ -551,7 +642,7 @@ def prepare_injection(
     *,
     config: AutoInjectConfig | None = None,
 ) -> BrainInjectionDecision:
-    """SHADOW decision pipeline. NEVER raises: every failure degrades to
+    """Decision pipeline. NEVER raises: every failure degrades to
     NO_INJECTION(BRAIN_UNAVAILABLE) (§6.8). No model-visible mutation."""
     home = Path(home)
     cfg = config or load_config(home)
@@ -579,21 +670,45 @@ def prepare_injection(
         )
 
     query_mode = "and"
+    proj_filter = (
+        intent.project_id
+        if intent.project_id and intent.project_id not in ("default", "unknown")
+        else None
+    )
+    unscoped_candidates: list[dict] = []
     try:
         db.migrate(db_path(home))
+        # Primary search: project-scoped (matches exact project_id + global scope)
         rows = semantic.search_memories(
             home,
             intent.task_text,
-            project_id=None,  # project/global filtering happens in the gate below
+            project_id=proj_filter,
             include_history=False,
             top_k=_MAX_CANDIDATES,
             max_tokens=None,
         )
         if not rows:
-            # FIX 2: AND returned zero -> OR-fallback union through the same
-            # hard filters + ranking (precision-first primary path unchanged).
+            # OR-fallback within project scope
             query_mode = "or_fallback"
-            rows = _search_or_fallback(home, intent.task_text, _MAX_CANDIDATES)
+            rows = _search_or_fallback(
+                home, intent.task_text, _MAX_CANDIDATES, project_id=proj_filter
+            )
+
+        # If zero candidates found within scope, check if matches existed outside scope
+        # (to distinguish WRONG_PROJECT from NO_RELEVANT_MEMORY)
+        if not rows and proj_filter is not None:
+            unscoped_candidates = semantic.search_memories(
+                home,
+                intent.task_text,
+                project_id=None,
+                include_history=False,
+                top_k=_MAX_CANDIDATES,
+                max_tokens=None,
+            )
+            if not unscoped_candidates:
+                unscoped_candidates = _search_or_fallback(
+                    home, intent.task_text, _MAX_CANDIDATES, project_id=None
+                )
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
         _append_telemetry(
@@ -607,9 +722,16 @@ def prepare_injection(
                 "role_profile": intent.role_profile,
                 "project_id": intent.project_id,
                 "query_mode": query_mode,
+                "is_delta": intent.is_delta,
             },
         )
         return decision(NoInjectionReason.BRAIN_UNAVAILABLE)
+
+    candidate_ids = [
+        str(r.get("memory_id"))
+        for r in (rows if rows else unscoped_candidates)
+        if r.get("memory_id")
+    ]
 
     _append_telemetry(
         home,
@@ -617,18 +739,21 @@ def prepare_injection(
         "brain_retrieval_attempt",
         {
             "task_sha256": _task_sha256(intent.task_text),
-            "candidate_count": len(rows),
+            "candidate_count": len(rows) if rows else len(unscoped_candidates),
+            "eligible_count": len(rows),
             "recipient": intent.agent_id,
             "role_profile": intent.role_profile,
             "project_id": intent.project_id,
             "query_mode": query_mode,
+            "is_delta": intent.is_delta,
         },
     )
-    candidate_ids = [str(r.get("memory_id")) for r in rows if r.get("memory_id")]
+
     if not rows:
-        # FIX 3: NO_RELEVANT_MEMORY fires only when BOTH query modes are empty;
-        # candidates that existed but were filtered get their specific reason.
+        if unscoped_candidates:
+            return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
         return decision(NoInjectionReason.NO_RELEVANT_MEMORY)
+
     valid = _valid_candidates(intent, rows)
     if not valid:
         return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
@@ -668,7 +793,17 @@ def prepare_injection(
             selected_ids=[i.memory_id for i in fresh],
         )
 
-    fit = _fit_budget(fresh, intent.project_id, cfg)
+    # Budget gate: delta injection uses delta budget; startup uses base budget
+    active_budget = (
+        AutoInjectConfig(
+            target_tokens=cfg.delta_target_tokens,
+            hard_cap_tokens=cfg.delta_hard_cap_tokens,
+        )
+        if intent.is_delta
+        else cfg
+    )
+
+    fit = _fit_budget(fresh, intent.project_id, active_budget)
     if fit is None:
         return decision(
             NoInjectionReason.CONTEXT_PRESSURE,
@@ -755,13 +890,14 @@ class BrainLifecycle:
         session_id: str | None = None,
         branch_id: str = "main",
         cwd: str | None = None,
+        is_delta: bool = False,
         context: dict[str, Any] | None = None,
     ) -> BrainInjectionDecision:
         """Decision + ledger/telemetry record. Never raises.
 
-        ``cwd`` feeds project resolution (FIX 1): explicit project_id wins,
+        ``cwd`` feeds project resolution: explicit project_id wins,
         then a registered project whose root contains cwd, then env, then
-        "default". The retrieval-attempt telemetry (with query_mode) is
+        "default". The retrieval-attempt telemetry (with query_mode and is_delta) is
         recorded inside the module pipeline."""
         del context  # reserved for 0D adapter integration
         effective_session = session_id or (
@@ -775,6 +911,7 @@ class BrainLifecycle:
             role_profile=role_profile,
             session_id=effective_session,
             branch_id=branch_id,
+            is_delta=is_delta,
         )
         decision = prepare_injection(self._home, intent)
         self._last_delivery_ids = []
@@ -808,6 +945,9 @@ class BrainLifecycle:
                         if packet_text is not None
                         else None
                     ),
+                    "project_id": effective_project,
+                    "is_delta": is_delta,
+                    "selected_ids": decision.selected_ids,
                 },
             )
         else:
@@ -818,6 +958,8 @@ class BrainLifecycle:
                 {
                     "reason": decision.reason.value if decision.reason is not None else None,
                     "candidate_count": len(decision.candidate_ids),
+                    "project_id": effective_project,
+                    "is_delta": is_delta,
                 },
             )
         return decision

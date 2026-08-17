@@ -26,3 +26,9 @@ sweep = ["dead_skills", "overlap", "false_triggers", "never_used",
 max_active = 3      # ENFORCED — router.py resolves [router] max_active from this
                     # file per route() call (invalid/absent -> 3); CLI --max-active
                     # overrides it (Phase 13)
+
+# Lean Code Runtime Kernel activation (plan §11 / §24)
+# ENFORCED — lean_runtime.py reads [lean] eval per event (fallback inert)
+[lean]
+eval = "advisory"
+
