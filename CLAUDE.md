@@ -1,6 +1,7 @@
 # Claude Project Bootstrap
 
 @AGENTS.md
+@docs/integrations/claude/LEAN_CODE_KERNEL.md
 
 This repository **is** Second Brain — not a project consuming it. The
 Second Brain Client Contract in the global CLAUDE.md still applies (fail
