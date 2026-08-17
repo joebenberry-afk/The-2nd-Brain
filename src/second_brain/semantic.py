@@ -1479,7 +1479,7 @@ def _filter_sql(project_id: str | None, include_history: bool) -> tuple[str, lis
         # preserves history, so no superseded row is kept by default
         clauses.append("m.status NOT IN ('archived', 'superseded')")
     if project_id is not None:
-        clauses.append("m.project_id = ?")
+        clauses.append("(m.project_id = ? OR m.scope = 'global')")
         params.append(project_id)
     return " AND ".join(clauses), params
 
@@ -1491,7 +1491,9 @@ def _row_passes_filters(row: dict, *, project_id: str | None, include_history: b
     status = row.get("status")
     if status in ("archived", "superseded") and not include_history:
         return False
-    return project_id is None or row.get("project_id") == project_id
+    if project_id is not None:
+        return bool(row.get("project_id") == project_id or row.get("scope") == "global")
+    return True
 
 
 def _search_fts(

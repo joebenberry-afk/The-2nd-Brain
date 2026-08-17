@@ -2211,6 +2211,8 @@ def _cmd_antigravity_hook(home: Path) -> int:
 
     try:
         lifecycle = autoinject.BrainLifecycle(home, session)
+        invocation_num = int(hook_args.get("invocationNum") or 1)
+        is_delta = invocation_num > 1
         decision = lifecycle.prepare_injection(
             task,
             project_id=resolved_project,
@@ -2219,6 +2221,7 @@ def _cmd_antigravity_hook(home: Path) -> int:
             session_id=conversation_id,
             branch_id="main",
             cwd=str(cwd) if cwd else None,
+            is_delta=is_delta,
         )
         packet = autoinject.render_packet(decision)
         delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
@@ -2258,6 +2261,7 @@ def _cmd_antigravity_hook(home: Path) -> int:
             lean_dedup_hit=lean_outcome.dedup_hit,
             autoinject_mode=mode,
             model_visible=bool(ephemeral),
+            is_delta=is_delta,
         )
 
         if ephemeral is None:
