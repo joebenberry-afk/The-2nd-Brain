@@ -14,3 +14,7 @@ mode = "active"
 [budget]
 target_tokens = 800       # normal AutoInject target (~500-1000 per plan)
 hard_cap_tokens = 2000    # absolute hard max per injection (plan: <= 2000)
+
+[delta_budget]
+target_tokens = 400       # mid-session delta target budget
+hard_cap_tokens = 1000    # mid-session delta hard ceiling
