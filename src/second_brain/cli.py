@@ -2478,7 +2478,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
             autoinject._append_telemetry(
                 home,
                 session_id,
-                "turn_end",
+                "claude_code_stop_turn",
                 {"host": "claude-code", "project_id": resolved_project},
             )
 

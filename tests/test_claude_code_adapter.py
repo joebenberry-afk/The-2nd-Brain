@@ -235,7 +235,7 @@ def test_stop_records_turn_end_without_writing_memory(home: Path, git_project: P
         for line in telem.read_text(encoding="utf-8").splitlines()
         if line
     }
-    assert "turn_end" in kinds
+    assert "claude_code_stop_turn" in kinds
 
     from second_brain import semantic
 
