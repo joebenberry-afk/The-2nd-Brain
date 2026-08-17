@@ -252,6 +252,61 @@ def test_unresolved_project_identity_fails_safe_to_global_only(brain_home: Path)
     assert global_policy in dec_global.selected_ids
 
 
+def test_unresolved_project_default_memory_suppressed_and_global_policy_allowed(
+    brain_home: Path,
+) -> None:
+    """Adversarial: unresolved identity must be GLOBAL-ONLY.
+
+    A project-scoped memory tagged project_id='default' must NOT inject under an
+    unresolved project, while an explicit global policy with matching text CAN inject.
+    """
+    default_proj_mem = _add_memory(
+        brain_home,
+        "Fallback runtime config default",
+        "Default project local configuration for internal worker timeout",
+        project_id="default",
+        scope="project",
+    )
+    global_policy_mem = _add_memory(
+        brain_home,
+        "Global runtime config policy",
+        "Default project global configuration for internal worker timeout",
+        project_id=None,
+        scope="global",
+    )
+
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+
+    # Query with unresolved project identity matching both memories
+    decision = lifecycle.prepare_injection(
+        "default project configuration for internal worker timeout",
+        project_id=None,
+        cwd=None,
+        agent_id="driver",
+        session_id="sess-unres-default-gate",
+    )
+
+    assert decision.decision is InjectionDecision.INJECT
+    # Global policy MUST inject
+    assert global_policy_mem in decision.selected_ids
+    # Project-scoped memory with project_id='default' MUST NOT inject
+    assert default_proj_mem not in decision.selected_ids
+    assert decision.selected_ids == [global_policy_mem]
+
+    # Query matching ONLY the default project-scoped memory -> NO_INJECTION (WRONG_PROJECT)
+    dec_only_default = lifecycle.prepare_injection(
+        "fallback runtime config default local configuration",
+        project_id=None,
+        cwd=None,
+        agent_id="driver",
+        session_id="sess-unres-default-only",
+    )
+    assert dec_only_default.decision is InjectionDecision.NO_INJECTION
+    assert dec_only_default.reason is NoInjectionReason.WRONG_PROJECT
+    assert dec_only_default.selected_ids == []
+
+
+
 def test_delta_stricter_than_startup_budget_and_confidence(brain_home: Path) -> None:
     """Delta injection applies stricter token budgets and confidence thresholds than startup."""
     # OBSERVED grade memory (medium confidence)

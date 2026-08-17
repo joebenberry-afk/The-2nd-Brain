@@ -158,3 +158,59 @@ def test_controlled_comparison_lean_active_vs_off(
         assert lean_runtime.LEAN_KERNEL_MARKER not in ep_off
     else:
         assert out_off == {}
+
+
+def test_lean_telemetry_emission_active_vs_off(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifies that preinvocation telemetry captures Lean execution telemetry accurately."""
+    _seed_lean_skill(brain_home)
+    (brain_home / "config" / "autoinject.toml").write_text(
+        'schema_version = 1\n\n[autoinject]\nmode = "active"\n', encoding="utf-8"
+    )
+
+    conv_id = "conv-telem-lean-eval"
+    payload = {
+        "event": "PreInvocation",
+        "conversationId": conv_id,
+        "modelName": "gemini-3.7-flash-high",
+        "workspacePaths": [str(brain_home)],
+        "task": "Test task with Lean active",
+        "preInvocationHookArgs": {"invocationNum": 1, "initialNumSteps": 0},
+    }
+
+    # Turn 1: Lean active
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert cli._cmd_antigravity_hook(brain_home) == 0
+
+    # Turn 2: Lean disabled
+    monkeypatch.setenv("SECOND_BRAIN_LEAN", "off")
+    payload_off = dict(payload)
+    payload_off["conversationId"] = f"{conv_id}-off"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload_off)))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert cli._cmd_antigravity_hook(brain_home) == 0
+
+    hook_log = brain_home / "telemetry" / "agent-performance" / "antigravity-hooks.jsonl"
+    assert hook_log.is_file()
+
+    records = [json.loads(line) for line in hook_log.read_text(encoding="utf-8").splitlines()]
+    pre_on = next(r for r in records if r["kind"] == "preinvocation" and r["session"] == conv_id)
+    assert pre_on["lean_decision"] == "inject"
+    assert pre_on["lean_reason"] == "advisory"
+    assert pre_on["lean_mode"] == "advisory"
+    assert pre_on["lean_eval_source"] == "file"
+    assert pre_on["lean_kernel_chars"] > 0
+    assert pre_on["lean_dedup_hit"] is False
+
+    pre_off = next(
+        r for r in records if r["kind"] == "preinvocation" and r["session"] == f"{conv_id}-off"
+    )
+    assert pre_off["lean_decision"] == "omit"
+    assert pre_off["lean_reason"] == "off"
+    assert pre_off["lean_mode"] == "off"
+    assert pre_off["lean_eval_source"] == "env"
+    assert pre_off["lean_kernel_chars"] == 0
+
+

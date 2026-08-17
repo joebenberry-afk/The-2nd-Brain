@@ -533,20 +533,47 @@ def test_cwd_resolves_project_from_registry(brain_home, tmp_path) -> None:
     assert d.selected_ids  # matched the proj-x memory (wrong-project filter would block otherwise)
 
 
-def test_cwd_unregistered_falls_back_to_env_then_default(brain_home, tmp_path, monkeypatch) -> None:
-    _seed_current(brain_home, "Default rule", "default project rule", project_id="default")
-    # unregistered cwd + env fallback -> env project
-    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "default")
+def test_cwd_unregistered_falls_back_to_env_then_default(
+    brain_home, tmp_path, monkeypatch
+) -> None:
+    _seed_current(brain_home, "Env rule", "env project specific rule", project_id="env-proj")
+    _seed_current(
+        brain_home,
+        "Global fallback rule",
+        "global fallback policy rule",
+        project_id=None,
+        scope="global",
+    )
+    # 1. unregistered cwd + explicit env project -> resolves env-proj
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "env-proj")
     d = autoinject.BrainLifecycle(brain_home).prepare_injection(
-        "default project rule", agent_id="a1", session_id="s-cwd2", cwd=str(tmp_path / "elsewhere")
+        "env project specific rule",
+        agent_id="a1",
+        session_id="s-cwd2",
+        cwd=str(tmp_path / "elsewhere"),
     )
     assert d.decision is InjectionDecision.INJECT
-    monkeypatch.delenv("SECOND_BRAIN_PROJECT")
-    # no env -> "default" -> memory with project default matches
-    d2 = autoinject.BrainLifecycle(brain_home).prepare_injection(
-        "default project rule", agent_id="a1", session_id="s-cwd3", cwd=str(tmp_path / "elsewhere")
+    assert d.selected_ids
+
+    # 2. no env -> unresolved ("default") -> project-scoped memories blocked, global allowed
+    monkeypatch.delenv("SECOND_BRAIN_PROJECT", raising=False)
+    d_blocked = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "env project specific rule",
+        agent_id="a1",
+        session_id="s-cwd3",
+        cwd=str(tmp_path / "elsewhere"),
     )
-    assert d2.decision is InjectionDecision.INJECT
+    assert d_blocked.decision is InjectionDecision.NO_INJECTION
+    assert d_blocked.reason is NoInjectionReason.WRONG_PROJECT
+
+    d_global = autoinject.BrainLifecycle(brain_home).prepare_injection(
+        "global fallback policy rule",
+        agent_id="a1",
+        session_id="s-cwd4",
+        cwd=str(tmp_path / "elsewhere"),
+    )
+    assert d_global.decision is InjectionDecision.INJECT
+    assert d_global.selected_ids
 
 
 def test_or_fallback_recall_and_query_mode(brain_home) -> None:
