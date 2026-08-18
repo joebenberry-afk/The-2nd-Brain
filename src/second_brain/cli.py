@@ -7,6 +7,7 @@ backup, restore. Later phases add capture/recall/sleep/skills/... commands.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import re
@@ -210,6 +211,11 @@ def _parser() -> argparse.ArgumentParser:
         "antigravity-hook",
         parents=[home_parent],
         help="Antigravity hook adapter: lifecycle JSON on stdin -> JSON on stdout",
+    )
+    ais.add_parser(
+        "claude-code-hook",
+        parents=[home_parent],
+        help="Claude Code hook adapter: SessionStart/PreCompact/Stop JSON on stdin -> stdout",
     )
     awb = ais.add_parser(
         "writeback", parents=[home_parent], help="P0-G9 write-back: create an outcome candidate"
@@ -2276,6 +2282,257 @@ def _cmd_antigravity_hook(home: Path) -> int:
         return 0
 
 
+def _git_capture(cwd: object, args: list[str]) -> str | None:
+    """Best-effort `git <args>` in cwd. Never raises; empty/error -> None."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        out = result.stdout.strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _extract_candidate_marker(text: str) -> tuple[str, str, str] | None:
+    """Parse an opt-in `<!--second-brain-candidate ... -->` block.
+
+    Deterministic, no NLP: only fires when Claude itself explicitly emitted
+    the marker (see brainstem/adapters/claude-code/rules/second-brain-core.md).
+    Returns (title, observation, evidence) or None if absent/malformed.
+    """
+    m = re.search(r"<!--second-brain-candidate\s*(.*?)-->", text, re.S)
+    if not m:
+        return None
+    body = m.group(1)
+    fields: dict[str, str] = {}
+    for line in body.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() in ("title", "observation", "evidence"):
+            fields[key.strip()] = value.strip()
+    title = fields.get("title", "")
+    observation = fields.get("observation", "")
+    evidence = fields.get("evidence", "")
+    if not title or not observation:
+        return None
+    return title, observation, evidence
+
+
+def _cmd_claude_code_hook(home: Path) -> int:
+    """Claude Code native lifecycle hook adapter (P3a).
+
+    Reads ONE JSON object from stdin - Claude Code's own hook payload
+    shape: {session_id, cwd, hook_event_name, transcript_path,
+    last_assistant_message (Stop only), source (SessionStart only, one of
+    startup/resume/clear/compact/fork), trigger (PreCompact only, manual/
+    auto), custom_instructions (PreCompact only)}.
+
+    SessionStart: register the harness (host="claude-code") via the same
+    telemetry-based BrainLifecycle used by Antigravity/Codex - no ledger
+    write, no memory retrieval, no context injection. Always prints "{}".
+
+    PreCompact: writes a bounded resume snapshot (goal from the bounded
+    transcript tail, git branch/commit/changed files) as one
+    COMPACTION_STARTED ledger event, deduplicated by content hash, then
+    runs the existing pre-compaction durability barrier. Never blocks
+    compaction.
+
+    Stop: fires once per assistant turn (Claude Code's SessionEnd, not
+    Stop, is the real once-per-session event; out of scope for P3a).
+    Records a lightweight claude_code_stop_turn telemetry record every call. Writes a
+    candidate memory only when the assistant's last message carries the
+    opt-in `<!--second-brain-candidate-->` marker with non-empty evidence.
+
+    Fail-open: any error or malformed input -> "{}", exit 0. Claude Code
+    must never fail to start, compact, or finish a turn because the Brain
+    is unavailable.
+    """
+    import dataclasses
+    import json
+
+    from . import autoinject, contracts
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else None
+    except Exception:
+        payload = None
+    payload_dict = payload if isinstance(payload, dict) else {}
+
+    event = str(payload_dict.get("hook_event_name") or "SessionStart")
+    session_id = str(payload_dict.get("session_id") or "claude-anon")
+    cwd = payload_dict.get("cwd")
+
+    try:
+        resolved_project = autoinject._resolve_project_id(
+            home, str(cwd) if cwd else None, None
+        )
+    except Exception:
+        resolved_project = "default"
+
+    session = contracts.BrainSessionIdentity(
+        internal_session_id="is-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12],
+        host="claude-code",
+        host_session_id=session_id,
+        project_id=resolved_project,
+        created_at=datetime.now(UTC).isoformat(),
+        status="active",
+        pinned=False,
+        schema_version=1,
+    )
+
+    if event == "SessionStart":
+        # fail-open: telemetry is best-effort, never blocks startup
+        with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).start_session(session)
+        print("{}")
+        return 0
+
+    if event == "PreCompact":
+        from . import antigravity_transcript, ledger
+
+        with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).start_session(session)
+
+        transcript_path = payload_dict.get("transcript_path")
+        goal = None
+        if transcript_path:
+            try:
+                goal = antigravity_transcript.extract_latest_user_task(str(transcript_path))
+            except Exception:
+                goal = None
+        custom_instructions = payload_dict.get("custom_instructions")
+        if isinstance(custom_instructions, str) and custom_instructions.strip():
+            custom_instructions = custom_instructions.strip()[:500]
+        else:
+            custom_instructions = None
+
+        branch = commit = None
+        changed_files: list[str] = []
+        if cwd:
+            branch = _git_capture(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
+            commit = _git_capture(cwd, ["rev-parse", "HEAD"])
+            diff_stat = _git_capture(cwd, ["diff", "--name-only", "HEAD"])
+            if diff_stat:
+                changed_files = diff_stat.splitlines()[:20]
+
+        resume_packet = {
+            "goal": goal,
+            "custom_instructions": custom_instructions,
+            "project_id": resolved_project,
+            "cwd": str(cwd) if cwd else None,
+            "branch": branch,
+            "commit": commit,
+            "files_changed": changed_files,
+            "trigger": str(payload_dict.get("trigger") or "auto"),
+            # Fields the P3a spec asks for that a mechanical hook cannot
+            # honestly derive without model participation (no PreToolUse/
+            # PostToolUse in this pass, so nothing populates a Requirement
+            # Ledger during the turn). Left explicit and empty rather than
+            # fabricated - see brainstem/adapters/claude-code/README.md.
+            "decisions": [],
+            "blockers": [],
+            "open_questions": [],
+            "evidence_refs": [],
+            "tests_run": [],
+        }
+        content_hash = contracts.stable_content_hash(resume_packet)
+
+        try:
+            store = ledger.LedgerStore(home, session_id)
+            # Ledger primary keys are always ledger.internal_session_id() (full
+            # sha256 hex) - the "is-"+sha256[:12] scheme on `session` is the
+            # AutoInject/telemetry identity and is a different key. Reusing
+            # `session` here would create a second, mislabeled sessions row
+            # (see _ensure_session_row's host="prime" fallback) instead of the
+            # row appended events already FK-reference.
+            internal = ledger.internal_session_id(session_id)
+            with store.open(create=True):
+                # INSERT OR REPLACE is idempotent; ignore best-effort
+                with contextlib.suppress(Exception):
+                    store.create_session(dataclasses.replace(session, internal_session_id=internal))
+                existing = store.search(
+                    content_hash[:16], event_type="compaction_started", limit=1
+                )
+                if not existing:
+                    event_obj = contracts.BrainLifecycleEvent(
+                        seq=0,
+                        event_id=f"precompact-{content_hash[:16]}",
+                        internal_session_id=internal,
+                        agent_id="claude-code",
+                        event_type=contracts.LifecycleEventType.COMPACTION_STARTED,
+                        timestamp=datetime.now(UTC).isoformat(),
+                        surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
+                        ignorable=False,
+                        payload={**resume_packet, "content_sha256": content_hash},
+                    )
+                    store.append_events([event_obj])
+                ledger.checkpoint_ledger(store)
+        except Exception:
+            pass  # fail-open: never block compaction
+
+        print("{}")
+        return 0
+
+    if event == "Stop":
+        with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).start_session(session)
+        with contextlib.suppress(Exception):
+            autoinject._append_telemetry(
+                home,
+                session_id,
+                "claude_code_stop_turn",
+                {"host": "claude-code", "project_id": resolved_project},
+            )
+
+        last_message = payload_dict.get("last_assistant_message")
+        if isinstance(last_message, str) and last_message.strip():
+            candidate = _extract_candidate_marker(last_message)
+            if candidate is not None:
+                title, observation, evidence = candidate
+                if evidence.strip():  # empirical claims require evidence (never fabricate)
+                    try:
+                        lifecycle = autoinject.BrainLifecycle(home, session)
+                        content_key = hashlib.sha256(
+                            (title + observation + evidence).encode("utf-8")
+                        ).hexdigest()[:16]
+                        marker_path = (
+                            home
+                            / "telemetry"
+                            / "agent-performance"
+                            / "claude-code-candidates-seen.jsonl"
+                        )
+                        seen = set()
+                        if marker_path.exists():
+                            seen = {
+                                line.strip()
+                                for line in marker_path.read_text(encoding="utf-8").splitlines()
+                            }
+                        if content_key not in seen:
+                            lifecycle.writeback_candidate(
+                                session_id=session_id,
+                                project_id=resolved_project,
+                                title=title,
+                                observation=observation,
+                                evidence=[{"ref": evidence, "kind": "evidence"}],
+                            )
+                            marker_path.parent.mkdir(parents=True, exist_ok=True)
+                            with marker_path.open("a", encoding="utf-8") as f:
+                                f.write(content_key + "\n")
+                    except Exception:
+                        pass  # fail-open: candidate writeback never blocks Stop
+
+        print("{}")
+        return 0
+
+    print("{}")
+    return 0
+
+
 def _cmd_writeback(home: Path, args) -> int:
     """P0-G9 write-back: outcome candidate creation (fail-open JSON output)."""
     import json
@@ -2655,6 +2912,8 @@ def cmd_autoinject(args) -> int:
         return _cmd_codex_shadow(home)
     if args.autoinject_command == "antigravity-hook":
         return _cmd_antigravity_hook(home)
+    if args.autoinject_command == "claude-code-hook":
+        return _cmd_claude_code_hook(home)
     if args.autoinject_command == "writeback":
         return _cmd_writeback(home, args)
     if args.autoinject_command != "shadow":
