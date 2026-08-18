@@ -45,6 +45,57 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return make_brain(tmp_path / "brain", monkeypatch)
 
 
+def _telemetry_kinds(home: Path, session_id: str) -> list[str]:
+    telem = home / "telemetry" / "agent-performance" / f"{session_id}.jsonl"
+    if not telem.exists():
+        return []
+    return [
+        json.loads(line)["kind"] for line in telem.read_text(encoding="utf-8").splitlines() if line
+    ]
+
+
+def _telemetry_sessions(home: Path, session_id: str) -> set[str]:
+    telem = home / "telemetry" / "agent-performance" / f"{session_id}.jsonl"
+    return {
+        json.loads(line)["session"]
+        for line in telem.read_text(encoding="utf-8").splitlines()
+        if line
+    }
+
+
+def _session_start_payload(session_id: str, cwd: Path, source: str = "startup") -> str:
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "cwd": str(cwd),
+            "hook_event_name": "SessionStart",
+            "source": source,
+        }
+    )
+
+
+def _stop_payload(session_id: str, cwd: Path, message: str = "did some work") -> str:
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "cwd": str(cwd),
+            "hook_event_name": "Stop",
+            "last_assistant_message": message,
+        }
+    )
+
+
+def _precompact_payload(session_id: str, cwd: Path) -> str:
+    return json.dumps(
+        {
+            "session_id": session_id,
+            "cwd": str(cwd),
+            "hook_event_name": "PreCompact",
+            "trigger": "auto",
+        }
+    )
+
+
 def test_session_start_returns_empty_no_active_retrieval(home: Path, tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
@@ -216,7 +267,9 @@ def test_precompact_duplicate_invocation_is_deduplicated(
     assert len(rows) == 1  # not 2: idempotent on identical content
 
 
-def test_stop_records_turn_end_without_writing_memory(home: Path, git_project: Path) -> None:
+def test_stop_records_claude_code_stop_turn_without_writing_memory(
+    home: Path, git_project: Path
+) -> None:
     payload = json.dumps(
         {
             "session_id": "claude-sess-stop1",
@@ -231,9 +284,7 @@ def test_stop_records_turn_end_without_writing_memory(home: Path, git_project: P
 
     telem = home / "telemetry" / "agent-performance" / "claude-sess-stop1.jsonl"
     kinds = {
-        json.loads(line)["kind"]
-        for line in telem.read_text(encoding="utf-8").splitlines()
-        if line
+        json.loads(line)["kind"] for line in telem.read_text(encoding="utf-8").splitlines() if line
     }
     assert "claude_code_stop_turn" in kinds
 
@@ -318,3 +369,183 @@ def test_stop_duplicate_turn_does_not_duplicate_candidate(home: Path, git_projec
 
     memories = semantic.list_memories(home, scope="project")
     assert len(memories) == 1
+
+
+# --- P3a.1: SessionStart lifecycle dedup -----------------------------------
+# Claude Code fires SessionStart again on resume/clear/compact/fork, not just
+# real startup (source in {startup,resume,clear,compact,fork}), and Stop/
+# PreCompact each also call BrainLifecycle.start_session() as a side effect.
+# One logical Claude Code session must produce exactly one session_started
+# telemetry record, no matter how many hook invocations touch it.
+
+
+def test_startup_records_exactly_one_session_started(home: Path, git_project: Path) -> None:
+    sid = "claude-sess-dedup1"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project),
+        cwd=git_project,
+    )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+
+
+def test_repeated_startup_same_session_still_one(home: Path, git_project: Path) -> None:
+    sid = "claude-sess-dedup2"
+    for _ in range(3):
+        _run_cli(
+            home,
+            "autoinject",
+            "claude-code-hook",
+            stdin=_session_start_payload(sid, git_project),
+            cwd=git_project,
+        )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+
+
+def test_startup_stop_resume_same_brain_session(home: Path, git_project: Path) -> None:
+    sid = "claude-sess-dedup3"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project, "startup"),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_stop_payload(sid, git_project),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project, "resume"),
+        cwd=git_project,
+    )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1  # not re-created by Stop or resume
+    assert kinds.count("claude_code_stop_turn") == 1
+    assert _telemetry_sessions(home, sid) == {sid}  # every record belongs to the same session
+
+
+def test_startup_precompact_records_exactly_one_session_started(
+    home: Path, git_project: Path
+) -> None:
+    sid = "claude-sess-dedup4"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, git_project),
+        cwd=git_project,
+    )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+
+    from second_brain import ledger
+
+    with ledger.LedgerStore(home, sid).open() as store:
+        rows = store.search("compaction_started", event_type="compaction_started", limit=10)
+    assert len(rows) == 1  # PreCompact still attaches to/checkpoints the ledger normally
+
+
+def test_startup_precompact_resume_still_one_session_started(home: Path, git_project: Path) -> None:
+    sid = "claude-sess-dedup5"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project, "startup"),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, git_project),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project, "resume"),
+        cwd=git_project,
+    )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+
+
+def test_multiple_stop_turns_stay_in_same_active_session(home: Path, git_project: Path) -> None:
+    sid = "claude-sess-dedup6"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project),
+        cwd=git_project,
+    )
+    for _ in range(3):
+        _run_cli(
+            home,
+            "autoinject",
+            "claude-code-hook",
+            stdin=_stop_payload(sid, git_project),
+            cwd=git_project,
+        )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+    assert kinds.count("claude_code_stop_turn") == 3
+    assert _telemetry_sessions(home, sid) == {sid}
+
+
+def test_different_host_sessions_stay_distinct(home: Path, git_project: Path) -> None:
+    sid_a, sid_b = "claude-sess-dedupA", "claude-sess-dedupB"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid_a, git_project),
+        cwd=git_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid_b, git_project),
+        cwd=git_project,
+    )
+    assert _telemetry_kinds(home, sid_a).count("session_started") == 1
+    assert _telemetry_kinds(home, sid_b).count("session_started") == 1
+
+
+def test_session_dedup_check_fails_open_on_corrupt_telemetry_file(
+    home: Path, git_project: Path
+) -> None:
+    sid = "claude-sess-dedup7"
+    telem_dir = home / "telemetry" / "agent-performance"
+    telem_dir.mkdir(parents=True, exist_ok=True)
+    (telem_dir / f"{sid}.jsonl").write_text("not json\n{also not json\n", encoding="utf-8")
+    result = _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, git_project),
+        cwd=git_project,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout.strip() or "{}") == {}

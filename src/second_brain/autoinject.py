@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import logging
 import os
 import re
@@ -849,6 +850,30 @@ def _append_telemetry(home: Path | str, session: str, kind: str, extra: dict[str
         logger.warning("AutoInject telemetry append failed (ignored): %s", exc)
 
 
+def _has_session_started(home: Path | str, host_session_id: str) -> bool:
+    """Best-effort idempotency check: has a session_started record already
+    been appended for this host_session_id? Reuses the same per-session
+    telemetry file _append_telemetry writes to -- no separate registry.
+    Fails open (returns False, i.e. "allow the write") on any read error so
+    a corrupt/unreadable file never blocks lifecycle telemetry."""
+    try:
+        path = telemetry.telemetry_dir(Path(home)) / f"{_sanitize_stem(host_session_id)}.jsonl"
+        if not path.exists():
+            return False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("kind") == "session_started":
+                return True
+    except OSError:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # BrainLifecycle control adapter (§6.9).
 # ---------------------------------------------------------------------------
@@ -871,13 +896,20 @@ class BrainLifecycle:
         return list(self._last_delivery_ids)
 
     def start_session(self, identity: BrainSessionIdentity) -> BrainSessionIdentity:
+        """Idempotent per host_session_id: the first call for a given Claude
+        Code / harness session records session_started once; every later
+        call for the same host_session_id (repeat SessionStart on resume/
+        clear/compact/fork, or the start_session() side effect inside
+        PreCompact/Stop) attaches to that same identity without appending a
+        duplicate record."""
         self._session = identity
-        _append_telemetry(
-            self._home,
-            identity.host_session_id,
-            "session_started",
-            {"host": identity.host, "host_session_id": identity.host_session_id},
-        )
+        if not _has_session_started(self._home, identity.host_session_id):
+            _append_telemetry(
+                self._home,
+                identity.host_session_id,
+                "session_started",
+                {"host": identity.host, "host_session_id": identity.host_session_id},
+            )
         return identity
 
     def prepare_injection(

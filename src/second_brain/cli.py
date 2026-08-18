@@ -2343,7 +2343,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
 
     Stop: fires once per assistant turn (Claude Code's SessionEnd, not
     Stop, is the real once-per-session event; out of scope for P3a).
-    Records a lightweight turn_end telemetry record every call. Writes a
+    Records a lightweight claude_code_stop_turn telemetry record every call. Writes a
     candidate memory only when the assistant's last message carries the
     opt-in `<!--second-brain-candidate-->` marker with non-empty evidence.
 
