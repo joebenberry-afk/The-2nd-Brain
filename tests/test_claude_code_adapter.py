@@ -549,3 +549,197 @@ def test_session_dedup_check_fails_open_on_corrupt_telemetry_file(
     )
     assert result.returncode == 0
     assert json.loads(result.stdout.strip() or "{}") == {}
+
+
+# --- P3a.2: PreCompact -> Ledger session identity boundary ------------------
+# `LedgerStore.create_session()` and every other ledger primitive (events,
+# _ensure_session_row, session_dir) key sessions rows by
+# `ledger.internal_session_id()` (full sha256 hex). The Claude Code hook's
+# own `session` identity uses a different scheme ("is-"+sha256[:12], the
+# AutoInject/telemetry convention). Passing that mismatched identity into
+# `create_session()` silently created a second, orphaned `sessions` row via
+# `_ensure_session_row`'s host="prime" fallback. These tests prove the fix:
+# exactly one canonical ledger sessions row per Claude Code session, no
+# phantom prime row, and the compaction_started event FK-references it.
+
+
+@pytest.fixture
+def named_project(git_project: Path) -> Path:
+    brain_dir = git_project / ".brain"
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    (brain_dir / "project.toml").write_text('id = "second-brain"\n', encoding="utf-8")
+    return git_project
+
+
+def _sessions_rows(home: Path, session_id: str) -> list[dict]:
+    import sqlite3
+
+    from second_brain import ledger
+
+    dbfile = ledger.session_dir(home, session_id) / "ledger.sqlite"
+    conn = sqlite3.connect(f"file:{dbfile}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM sessions").fetchall()]
+    finally:
+        conn.close()
+
+
+def _events_rows(home: Path, session_id: str, event_type: str) -> list[dict]:
+    import sqlite3
+
+    from second_brain import ledger
+
+    dbfile = ledger.session_dir(home, session_id) / "ledger.sqlite"
+    conn = sqlite3.connect(f"file:{dbfile}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM events WHERE event_type = ?", (event_type,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def test_precompact_creates_exactly_one_canonical_ledger_session_row(
+    home: Path, named_project: Path
+) -> None:
+    from second_brain import ledger
+
+    sid = "claude-sess-p3a2-1"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, named_project),
+        cwd=named_project,
+    )
+    rows = _sessions_rows(home, sid)
+    assert len(rows) == 1  # no phantom second row
+    row = rows[0]
+    assert row["internal_session_id"] == ledger.internal_session_id(sid)
+    assert row["host"] == "claude-code"
+    assert row["project_id"] == "second-brain"
+    assert row["status"] == "active"
+    assert row["host"] != "prime"  # the phantom-row regression this fixes
+
+
+def test_precompact_creates_no_phantom_prime_row(home: Path, named_project: Path) -> None:
+    sid = "claude-sess-p3a2-2"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, named_project),
+        cwd=named_project,
+    )
+    rows = _sessions_rows(home, sid)
+    assert not any(r["host"] == "prime" for r in rows)
+
+
+def test_precompact_event_references_canonical_session_row(
+    home: Path, named_project: Path
+) -> None:
+    from second_brain import ledger
+
+    sid = "claude-sess-p3a2-3"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, named_project),
+        cwd=named_project,
+    )
+    session_rows = _sessions_rows(home, sid)
+    assert len(session_rows) == 1
+    event_rows = _events_rows(home, sid, "compaction_started")
+    assert len(event_rows) == 1
+    assert event_rows[0]["internal_session_id"] == session_rows[0]["internal_session_id"]
+    assert event_rows[0]["internal_session_id"] == ledger.internal_session_id(sid)
+
+
+def test_precompact_repeated_invocation_stays_one_session_row(
+    home: Path, named_project: Path
+) -> None:
+    sid = "claude-sess-p3a2-4"
+    payload = _precompact_payload(sid, named_project)
+    _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=named_project)
+    _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=named_project)
+    _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=named_project)
+    rows = _sessions_rows(home, sid)
+    assert len(rows) == 1  # INSERT OR REPLACE on the same canonical PK, not 3 rows
+    assert _events_rows(home, sid, "compaction_started") == _events_rows(
+        home, sid, "compaction_started"
+    )
+    assert len(_events_rows(home, sid, "compaction_started")) == 1  # content-hash dedup intact
+
+
+def test_precompact_fix_does_not_change_telemetry_identity_semantics(
+    home: Path, named_project: Path
+) -> None:
+    # SessionStart -> Stop -> PreCompact -> Stop: session_started stays
+    # singular and stop_turn count is unaffected by the ledger-identity fix.
+    sid = "claude-sess-p3a2-5"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_session_start_payload(sid, named_project),
+        cwd=named_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_stop_payload(sid, named_project),
+        cwd=named_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, named_project),
+        cwd=named_project,
+    )
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_stop_payload(sid, named_project),
+        cwd=named_project,
+    )
+    kinds = _telemetry_kinds(home, sid)
+    assert kinds.count("session_started") == 1
+    assert kinds.count("claude_code_stop_turn") == 2
+    assert _telemetry_sessions(home, sid) == {sid}
+
+
+def test_ledger_rehydration_still_works_after_identity_fix(
+    home: Path, named_project: Path
+) -> None:
+    sid = "claude-sess-p3a2-6"
+    _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload(sid, named_project),
+        cwd=named_project,
+    )
+    result = _run_cli(home, "ledger", "rehydrate", sid, "--level", "1")
+    assert result.returncode == 0
+    out = json.loads(result.stdout.strip())
+    assert out.get("level") == 1
+
+
+def test_precompact_brain_unavailable_fails_open(tmp_path: Path, git_project: Path) -> None:
+    missing_home = tmp_path / "does-not-exist"
+    result = _run_cli(
+        missing_home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=_precompact_payload("claude-sess-p3a2-7", git_project),
+        cwd=git_project,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout.strip() or "{}") == {}

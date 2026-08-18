@@ -2351,6 +2351,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
     must never fail to start, compact, or finish a turn because the Brain
     is unavailable.
     """
+    import dataclasses
     import json
 
     from . import autoinject, contracts
@@ -2443,15 +2444,21 @@ def _cmd_claude_code_hook(home: Path) -> int:
 
         try:
             store = ledger.LedgerStore(home, session_id)
+            # Ledger primary keys are always ledger.internal_session_id() (full
+            # sha256 hex) - the "is-"+sha256[:12] scheme on `session` is the
+            # AutoInject/telemetry identity and is a different key. Reusing
+            # `session` here would create a second, mislabeled sessions row
+            # (see _ensure_session_row's host="prime" fallback) instead of the
+            # row appended events already FK-reference.
+            internal = ledger.internal_session_id(session_id)
             with store.open(create=True):
                 # INSERT OR REPLACE is idempotent; ignore best-effort
                 with contextlib.suppress(Exception):
-                    store.create_session(session)
+                    store.create_session(dataclasses.replace(session, internal_session_id=internal))
                 existing = store.search(
                     content_hash[:16], event_type="compaction_started", limit=1
                 )
                 if not existing:
-                    internal = ledger.internal_session_id(session_id)
                     event_obj = contracts.BrainLifecycleEvent(
                         seq=0,
                         event_id=f"precompact-{content_hash[:16]}",
