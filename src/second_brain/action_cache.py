@@ -534,6 +534,17 @@ class ActionCacheStore:
             "tokens_saved_estimate": tokens_saved,
         }
 
+    def prune_expired(self) -> int:
+        """Prune entries whose expires_at is past the current time."""
+        now = _now()
+        conn = self._get_conn()
+        res = conn.execute(
+            "DELETE FROM action_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now,),
+        )
+        conn.commit()
+        return res.rowcount
+
     def clear(self) -> None:
         """Clear all entries."""
         conn = self._get_conn()
