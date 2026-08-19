@@ -1010,6 +1010,41 @@ def _parser() -> argparse.ArgumentParser:
     wp_status.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
     wp_status.add_argument("--json", action="store_true", help="output JSON")
 
+    # Phase R9: the "prepare" half of fresh-verifier plumbing already exists
+    # as `second_brain verify <session_id> <repo>` (verify.build_verifier_brief,
+    # Phase 7) — a real, working, backward-reconstruction brief builder. This
+    # command is only the missing "record" half: capture a real fresh
+    # session's raw response + provenance and parse its verdict. It cannot
+    # produce PASS/FAIL without a raw-response file that already exists. See
+    # outputs/reports/rc4/09-fresh-verifier.md.
+    fv = sub.add_parser(
+        "fresh-verifier",
+        parents=[home_parent],
+        help="record a real fresh verifier session's raw response and parse "
+        "its verdict (Phase R9) — pair with `second_brain verify` for the brief",
+    )
+    fvs = fv.add_subparsers(dest="fresh_verifier_command", required=True)
+
+    fv_record = fvs.add_parser(
+        "record",
+        parents=[home_parent],
+        help="parse the verdict from a real fresh session's raw response (never fabricated)",
+    )
+    fv_record.add_argument("--out", required=True, help="output directory for the evidence bundle")
+    fv_record.add_argument(
+        "--prompt-file", required=True, help="the brief/prompt the fresh session was actually given"
+    )
+    fv_record.add_argument(
+        "--raw-response", required=True, help="path to the fresh session's raw output"
+    )
+    fv_record.add_argument("--provider", default=None)
+    fv_record.add_argument("--model", default=None)
+    fv_record.add_argument("--host", default=None)
+    fv_record.add_argument("--session-id", default=None, help="omit if the host exposes none")
+    fv_record.add_argument("--input-tokens", type=int, default=None)
+    fv_record.add_argument("--output-tokens", type=int, default=None)
+    fv_record.add_argument("--json", action="store_true", help="output JSON")
+
     ds = sub.add_parser(
         "delta-sync",
         parents=[home_parent],
@@ -3851,6 +3886,82 @@ def cmd_worker_plane(args) -> int:
     return 2
 
 
+def cmd_fresh_verifier(args) -> int:
+    """
+    Phase R9: the "record" half of fresh-verifier plumbing. Pairs with the
+    existing `second_brain verify <session_id> <repo>`
+    (verify.build_verifier_brief, Phase 7) for the "prepare" half — that
+    already builds a real, deterministic, backward-reconstruction brief;
+    this command only ever parses a verdict from a raw-response file the
+    caller supplies, so it has no code path that can produce PASS/FAIL
+    without that file actually existing.
+    """
+    import json
+
+    from .fresh_verifier import VerifierProvenance, record_verifier_response
+
+    if args.fresh_verifier_command != "record":
+        return 2
+
+    out_dir = Path(args.out)
+    prompt_path = Path(args.prompt_file)
+    if not prompt_path.exists():
+        print(f"Error: prompt file not found: {prompt_path}", file=sys.stderr)
+        return 2
+    raw_response_path = Path(args.raw_response)
+    if not raw_response_path.exists():
+        print(f"Error: raw response file not found: {raw_response_path}", file=sys.stderr)
+        return 2
+
+    prompt = prompt_path.read_text(encoding="utf-8")
+    raw_response = raw_response_path.read_text(encoding="utf-8")
+    provenance = VerifierProvenance(
+        provider=args.provider,
+        model=args.model,
+        host=args.host,
+        session_id=args.session_id,
+        input_tokens=args.input_tokens,
+        output_tokens=args.output_tokens,
+    )
+    evidence = record_verifier_response(prompt, raw_response, provenance)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "raw-response.txt").write_text(raw_response, encoding="utf-8")
+    (out_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "provider": provenance.provider,
+                "model": provenance.model,
+                "host": provenance.host,
+                "session_id": provenance.session_id_dict(),
+                "prompt_file": str(prompt_path),
+                "captured_at": evidence.captured_at,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (out_dir / "usage.json").write_text(
+        json.dumps(provenance.usage_dict(), indent=2), encoding="utf-8"
+    )
+    (out_dir / "verdict.json").write_text(
+        json.dumps(evidence.verdict.to_dict(), indent=2), encoding="utf-8"
+    )
+
+    if args.json:
+        print(json.dumps(evidence.to_dict(), indent=2))
+    else:
+        print(f"Verdict: {evidence.verdict.verdict}")
+        if evidence.verdict.verdict == "UNPARSEABLE":
+            print(
+                "No 'Result: PASS|FAIL|PARTIAL' line found in the raw response — "
+                "recorded as UNPARSEABLE, not guessed.",
+                file=sys.stderr,
+            )
+        print(f"Evidence written to {out_dir}")
+    return 0
+
+
 def cmd_delta_sync(args) -> int:
     import json
 
@@ -4028,6 +4139,7 @@ def main(argv: list[str] | None = None) -> int:
         "vmem": cmd_vmem,
         "action-cache": cmd_action_cache,
         "worker-plane": cmd_worker_plane,
+        "fresh-verifier": cmd_fresh_verifier,
         "delta-sync": cmd_delta_sync,
         "cascade": cmd_cascade,
         "tool-set": cmd_tool_set,
