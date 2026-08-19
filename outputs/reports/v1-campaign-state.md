@@ -16,8 +16,8 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 | Phase 2 Observation Firewall (plan §5) | PASSED | outputs/reports/v1-phase2-observation-firewall.md, tests/test_firewall.py (18 tests pass) |
 | Phase 3 Context Virtual Memory (plan §6) | PASSED | outputs/reports/v1-phase3-context-virtual-memory.md, tests/test_vmem.py (9 tests pass) |
 | Phase 4 Action Cache (plan §7) | PASSED | outputs/reports/v1-phase4-action-cache.md, tests/test_action_cache.py (9 tests pass) |
-| Phase 5 Delta Sync (plan §8) | IN PROGRESS | Next phase |
-| Phase 6 Hybrid Retrieval (plan §9) | NOT STARTED | |
+| Phase 5 Delta Sync (plan §8) | PASSED | outputs/reports/v1-phase5-delta-sync.md, tests/test_delta_sync.py (8 tests pass) |
+| Phase 6 Hybrid Retrieval (plan §9) | IN PROGRESS | Next phase |
 | Phase 7 Tool Working Set (plan §10) | NOT STARTED | |
 | P0-P4 frozen roadmap (§11-§16) | NOT STARTED | |
 | Cross-harness (§17-§22) | NOT STARTED | |
@@ -31,12 +31,13 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 - D4: Observation Firewall implemented in src/second_brain/firewall.py with 8 core deterministic reducers and content-addressed backing store recovery.
 - D5: Context Virtual Memory implemented in src/second_brain/vmem.py with residency tracking, budget eviction, and compaction recovery.
 - D6: Proof-Carrying Action Cache implemented in src/second_brain/action_cache.py with cryptographic safety proofs and sub-millisecond replay.
+- D7: Delta Sync implemented in src/second_brain/delta_sync.py with structured diffs, hash verification, and zero token re-transmission.
 
 ## Open blockers
 - (none recorded)
 
 ## Next action
-- Phase 5: Implement Delta Sync & Compact Cache Invalidation (memory delta delivery, minimal update packets, supersession markers, and delta application).
+- Phase 6: Implement Hybrid Multi-Tier Retrieval & Cascade (sparse exact/lexical/FTS5 first, vector/semantic second, negative result cache, confidence gating).
 
 ## DRIVER-VERIFIED FACTS (Phase 0, spot-checked personally)
 - Campaign venv interpreter MUST be 3.13.7 (main worktree parity). A 3.11 venv manufactures a false failure in tests/test_attach.py (Path.read_text(newline=) is 3.13+). Rebuilt 2026-08-18.
