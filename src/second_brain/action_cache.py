@@ -33,6 +33,21 @@ from .errors import BrainError
 ACTION_CACHE_SCHEMA_VERSION = 1
 DEFAULT_CACHE_MAX_ENTRIES = 5000
 
+# Explicit allowlist of recognized verification predicate names (§7.4 fix;
+# RC3 finding F4). The old check was `proof.verification_predicate !=
+# "reject_always"`, which let ANY unrecognized predicate string pass as
+# valid. Steps 1-4 in validate_proof already verify hashes/env/git-tree
+# unconditionally; this predicate declares the proof's *kind* and must be
+# a name Brain recognizes, or validation fails closed.
+KNOWN_VERIFICATION_PREDICATES = frozenset(
+    {
+        "input_hashes_match",
+        "git_tree_unchanged",
+        "artifact_exists",
+        "deterministic_read",
+    }
+)
+
 
 class ActionType(StrEnum):
     FILE_READ = "FILE_READ"
@@ -340,8 +355,9 @@ class ActionCacheStore:
             if actual_tree != proof.git_tree_hash:
                 return False
 
-        # 5. Check verification predicate if custom
-        return proof.verification_predicate != "reject_always"
+        # 5. Verification predicate must be an explicitly recognized kind.
+        # Unknown/unrecognized predicate -> proof failure -> cache miss.
+        return proof.verification_predicate in KNOWN_VERIFICATION_PREDICATES
 
     def _get_git_tree_hash(self, target_dir: Path | str) -> str | None:
         """Read git tree hash for directory (fail-closed if tree cannot be verified)."""
