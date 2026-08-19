@@ -1,0 +1,8 @@
+{
+  "input_tokens": 450,
+  "output_tokens": 110,
+  "total_tokens": 560,
+  "resident_tokens_capped": 300,
+  "tokens_saved_by_eviction": 710,
+  "source": "prime-vmem-engine"
+}
