@@ -1,0 +1,8 @@
+{
+  "harness": "prime",
+  "level": "Level A",
+  "session_id": "sess-cross-prime-01",
+  "autoinject_decision": "NO_INJECTION",
+  "vmem_resident_tokens": 7,
+  "status": "PASSED"
+}

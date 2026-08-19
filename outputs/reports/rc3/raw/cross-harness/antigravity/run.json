@@ -1,0 +1,16 @@
+{
+  "harness": "antigravity",
+  "level": "Level A/B",
+  "session_id": "sess-cross-agy-01",
+  "hooks": [
+    "PreInvocation",
+    "PostToolUse",
+    "AutoInject",
+    "FirewallReducer",
+    "Handoff",
+    "Stop"
+  ],
+  "autoinject_decision": "NO_INJECTION",
+  "firewall_reduced_ratio": 0.0,
+  "status": "PASSED"
+}

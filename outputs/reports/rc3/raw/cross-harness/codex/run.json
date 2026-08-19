@@ -1,0 +1,14 @@
+{
+  "harness": "codex",
+  "level": "Level B",
+  "session_id": "sess-cross-codex-01",
+  "hooks": [
+    "Startup",
+    "ModelVisibleContext",
+    "Retrieval",
+    "Handoff",
+    "FailOpen"
+  ],
+  "autoinject_decision": "NO_INJECTION",
+  "status": "PASSED"
+}
