@@ -863,6 +863,57 @@ def _parser() -> argparse.ArgumentParser:
     )
     fw_kinds.add_argument("--json", action="store_true", help="machine-readable output")
 
+    vm = sub.add_parser(
+        "vmem",
+        parents=[home_parent],
+        help="Context Virtual Memory: session object paging & hot context (Phase 3)",
+    )
+    vms = vm.add_subparsers(dest="vmem_command", required=True)
+
+    vm_st = vms.add_parser(
+        "store", parents=[home_parent], help="store a transient session object"
+    )
+    vm_st.add_argument("session_id", help="host session ID")
+    vm_st.add_argument(
+        "kind",
+        help="object kind (e.g. WORKER_FINDING, TEST_EVIDENCE, DECISION, BLOCKER)",
+    )
+    vm_st.add_argument("title", help="object title")
+    vm_st.add_argument(
+        "content_path", nargs="?", default=None, help="file path or stdin if omitted"
+    )
+    vm_st.add_argument("--summary", default="", help="optional short summary")
+    vm_st.add_argument("--pinned", action="store_true", help="pin object to avoid eviction")
+    vm_st.add_argument("--json", action="store_true", help="output JSON")
+
+    vm_ls = vms.add_parser("list", parents=[home_parent], help="list session objects")
+    vm_ls.add_argument("session_id", help="host session ID")
+    vm_ls.add_argument(
+        "--state",
+        default=None,
+        help="filter by residency state (RESIDENT, EVICTED, etc.)",
+    )
+    vm_ls.add_argument("--kind", default=None, help="filter by kind")
+    vm_ls.add_argument("--json", action="store_true", help="output JSON")
+
+    vm_pg = vms.add_parser("page", parents=[home_parent], help="page-in (fault-in) an object by ID")
+    vm_pg.add_argument("session_id", help="host session ID")
+    vm_pg.add_argument("obj_id", help="object ID (e.g. obj-123456789abc)")
+    vm_pg.add_argument("--json", action="store_true", help="output JSON")
+
+    vm_hc = vms.add_parser("hot-context", parents=[home_parent], help="render minimal hot context")
+    vm_hc.add_argument("session_id", help="host session ID")
+    vm_hc.add_argument("--budget", type=int, default=1500, help="token budget")
+    vm_hc.add_argument("--json", action="store_true", help="output JSON")
+
+    vm_cp = vms.add_parser("compact-prep", parents=[home_parent], help="prepare for compaction")
+    vm_cp.add_argument("session_id", help="host session ID")
+    vm_cp.add_argument("--json", action="store_true", help="output JSON")
+
+    vm_cr = vms.add_parser("compact-resume", parents=[home_parent], help="resume after compaction")
+    vm_cr.add_argument("session_id", help="host session ID")
+    vm_cr.add_argument("--budget", type=int, default=1500, help="token budget")
+
     return p
 
 
@@ -3281,6 +3332,91 @@ def cmd_firewall(args) -> int:
     return 2
 
 
+def cmd_vmem(args) -> int:
+    import json
+
+    from . import vmem
+
+    home = _home(args)
+    store = vmem.VMemStore(home, args.session_id)
+
+    if args.vmem_command == "store":
+        if args.content_path:
+            content = Path(args.content_path).read_text(encoding="utf-8", errors="replace")
+        else:
+            content = sys.stdin.read()
+
+        obj = store.store_object(
+            kind=args.kind,
+            title=args.title,
+            content=content,
+            summary=args.summary,
+            pinned=args.pinned,
+        )
+        if args.json:
+            print(json.dumps(obj.to_dict(), indent=2))
+        else:
+            print(
+                f"Stored {obj.kind.value} object: {obj.obj_id} "
+                f"(title={obj.title!r}, state={obj.residency_state.value})"
+            )
+        return 0
+
+    if args.vmem_command == "list":
+        objs = store.list_objects(residency_state=args.state, kind=args.kind)
+        if args.json:
+            print(json.dumps([o.to_dict() for o in objs], indent=2))
+        else:
+            print(f"Context Virtual Memory objects ({len(objs)} items):")
+            for o in objs:
+                pinned_mark = " [PINNED]" if o.pinned else ""
+                print(
+                    f"  - {o.obj_id} [{o.residency_state.value}] {o.kind.value}: "
+                    f"{o.title} (~{o.token_estimate}t){pinned_mark}"
+                )
+        return 0
+
+    if args.vmem_command == "page":
+        try:
+            obj, content = store.fault_in(args.obj_id)
+            if args.json:
+                res = obj.to_dict()
+                res["content"] = content
+                print(json.dumps(res, indent=2))
+            else:
+                sys.stdout.write(content)
+            return 0
+        except BrainError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+
+    if args.vmem_command == "hot-context":
+        res = store.render_hot_context(max_tokens=args.budget)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(res["rendered_text"])
+        return 0
+
+    if args.vmem_command == "compact-prep":
+        res = store.prepare_compaction()
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(
+                f"Compaction prepared: {res['evicted_at_compaction']} items evicted, "
+                f"{res['pinned_preserved']} pinned preserved"
+            )
+        return 0
+
+    if args.vmem_command == "compact-resume":
+        res_text = store.resume_after_compaction(max_tokens=args.budget)
+        print(res_text)
+        return 0
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3307,6 +3443,7 @@ def main(argv: list[str] | None = None) -> int:
         "telemetry": cmd_telemetry,
         "governor": cmd_governor,
         "firewall": cmd_firewall,
+        "vmem": cmd_vmem,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
