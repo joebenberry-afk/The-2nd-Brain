@@ -1,0 +1,7 @@
+{
+  "input_tokens": 320,
+  "output_tokens": 85,
+  "total_tokens": 405,
+  "raw_tokens_avoided": 40,
+  "source": "prime-agent-runtime"
+}

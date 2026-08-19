@@ -1,0 +1,10 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\assas\Documents\The-Second-Brain-v1
+configfile: pyproject.toml
+plugins: hypothesis-6.165.10, cov-7.1.0
+collected 10 items
+
+tests\test_cli.py ..........                                             [100%]
+
+============================= 10 passed in 5.35s ==============================
