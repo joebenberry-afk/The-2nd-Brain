@@ -15,6 +15,7 @@ import os
 from datetime import UTC, datetime, timedelta
 
 from second_brain.action_cache import (
+    KNOWN_VERIFICATION_PREDICATES,
     ActionCacheStore,
     ActionProof,
     ActionType,
@@ -134,3 +135,71 @@ class TestActionCacheAdversarialSafetyProof:
         hit = store.query(entry.action_key)
         assert hit.hit is True
         assert hit.content == "main_content"
+
+    def test_unrecognized_verification_predicate_fails_closed(self, brain_home, tmp_path):
+        """RC3 F4: `!= "reject_always"` let ANY unrecognized predicate pass.
+        An unknown predicate name must now fail validation regardless of
+        matching hashes/env/git."""
+        store = ActionCacheStore(brain_home)
+        target = tmp_path / "unknown_predicate.py"
+        target.write_text("code", encoding="utf-8")
+
+        proof = ActionProof(
+            input_hashes={str(target): hash_file_content(target)},
+            verification_predicate="always_valid_definitely_not_fake",
+        )
+        entry = store.store_action(
+            action_type=ActionType.PURE_VERIFICATION,
+            target=str(target),
+            content="should_never_replay",
+            proof=proof,
+        )
+
+        hit = store.query(entry.action_key)
+        assert hit.hit is False
+        assert hit.reason == "proof_validation_failed"
+
+    def test_reject_always_literal_string_fails_closed(self, brain_home, tmp_path):
+        """The exact RC3 bypass string must still fail (it always did), but now
+        for the right reason: it's simply not in the allowlist."""
+        store = ActionCacheStore(brain_home)
+        target = tmp_path / "reject_always.py"
+        target.write_text("code", encoding="utf-8")
+
+        proof = ActionProof(
+            input_hashes={str(target): hash_file_content(target)},
+            verification_predicate="reject_always",
+        )
+        entry = store.store_action(
+            action_type=ActionType.PURE_VERIFICATION,
+            target=str(target),
+            content="should_never_replay",
+            proof=proof,
+        )
+
+        hit = store.query(entry.action_key)
+        assert hit.hit is False
+        assert hit.reason == "proof_validation_failed"
+
+    def test_known_predicate_still_hits(self, brain_home, tmp_path):
+        """Sanity check: the default/allowlisted predicate still permits a
+        legitimate hit when all other proof conditions hold."""
+        store = ActionCacheStore(brain_home)
+        target = tmp_path / "known_predicate.py"
+        target.write_text("code", encoding="utf-8")
+        assert "input_hashes_match" in KNOWN_VERIFICATION_PREDICATES
+
+        proof = ActionProof(
+            input_hashes={str(target): hash_file_content(target)},
+            verification_predicate="input_hashes_match",
+        )
+        entry = store.store_action(
+            action_type=ActionType.PURE_VERIFICATION,
+            target=str(target),
+            content="verified_ok",
+            proof=proof,
+        )
+
+        hit = store.query(entry.action_key)
+        assert hit.hit is True
+        assert hit.content == "verified_ok"
