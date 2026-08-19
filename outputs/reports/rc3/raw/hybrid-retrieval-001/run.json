@@ -1,0 +1,11 @@
+{
+  "run_id": "hybrid-retrieval-001",
+  "tier_0_exact_latency_ms": 2.1,
+  "tier_2_lexical_latency_ms": 3.84,
+  "negative_cached": true,
+  "autoinject_decision": "INJECT",
+  "selected_ids": [
+    "mem-33e8a5c1dfe7"
+  ],
+  "retrieval_verification": "PASSED"
+}

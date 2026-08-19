@@ -1,0 +1,7 @@
+{
+  "input_tokens": 180,
+  "output_tokens": 45,
+  "total_tokens": 225,
+  "vector_calls_avoided": 3,
+  "source": "hybrid-cascade-engine"
+}
