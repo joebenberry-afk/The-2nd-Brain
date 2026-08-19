@@ -382,6 +382,31 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         { ignorable: true, cwd: ctxCwd(ctx) },
       );
     }
+    // Phase R6: capture Prime's real tool surface. getAllTools/getActiveTools
+    // are declared on ExtensionAPI (prime.d.ts:306-309, "modelled for Phase J
+    // measurement, not consumed today") — this is the first place in the
+    // codebase that ever calls them. Read-only measurement; this pass never
+    // calls setActiveTools (see outputs/reports/rc4/06-tool-working-set-live.md
+    // for why: the Python Tool Working Set catalog's tool names — view_file,
+    // run_command, git_commit_and_sync, ... — don't match Prime's real tool
+    // names, and setActiveTools takes a REPLACEMENT list, so calling it with
+    // fictional names would strip Prime's actual tool exposure).
+    try {
+      const allTools = typeof pi.getAllTools === "function" ? pi.getAllTools() : undefined;
+      const activeTools =
+        typeof pi.getActiveTools === "function" ? pi.getActiveTools() : undefined;
+      if (allTools !== undefined || activeTools !== undefined) {
+        getStore(session)?.append(
+          sensors.primeToolSurface(
+            session,
+            Array.isArray(allTools) ? allTools.map((t) => t.name) : undefined,
+            activeTools,
+          ),
+        );
+      }
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    }
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 

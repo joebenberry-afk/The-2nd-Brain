@@ -456,6 +456,42 @@ describe("factory wiring (src/index.ts)", () => {
     expect(typeof records[0].ts).toBe("string");
   });
 
+  it("Phase R6: session_start captures the real tool surface when the host exposes getAllTools/getActiveTools", async () => {
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on: (name: string, handler: Handler): void => {
+        handlers.set(name, handler);
+      },
+      getAllTools: () => [{ name: "bash" }, { name: "edit" }, { name: "websearch" }],
+      getActiveTools: () => ["bash", "edit"],
+    } as unknown as ExtensionAPI;
+    factory(pi);
+    const ctx = makeCtx();
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    const records = await waitForLines(2);
+    expect(records[0]).toMatchObject({
+      kind: "prime_tool_surface",
+      session: "wiring-test",
+      all_tools_count: 3,
+      active_tools_count: 2,
+      all_tools: ["bash", "edit", "websearch"],
+      active_tools: ["bash", "edit"],
+    });
+    expect(records[1].kind).toBe("session_start");
+  });
+
+  it("Phase R6: session_start writes no tool-surface record when the host does not expose getAllTools/getActiveTools", async () => {
+    const handlers = loadFactory(); // default fake pi has no getAllTools/getActiveTools
+    const ctx = makeCtx();
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    const records = await waitForLines(1);
+    expect(records.map((r) => r.kind)).toEqual(["session_start"]); // no prime_tool_surface record
+  });
+
   it("registers no handlers when the env gate disables the extension", () => {
     process.env.SECOND_BRAIN_OBSERVABILITY = "off";
     const handlers = loadFactory();

@@ -20,6 +20,7 @@ Kinds:
 | kind | extra fields |
 |---|---|
 | session_start | reason, cwd, model |
+| prime_tool_surface | all_tools_count, active_tools_count, all_tools, active_tools (Phase R6; emitted alongside session_start only when the host exposes getAllTools/getActiveTools) |
 | before_agent_start | prompt_chars, role?, driver_contract_injected? |
 | turn_start | turn |
 | context | messages |
@@ -162,6 +163,18 @@ cancel compaction or alter model-visible context on failure — only the
 ledger checkpoint in `session_before_compact` may return `{cancel: true}`.
 See `outputs/reports/rc4/04-prime-vmem.md` for why this is bookkeeping only
 and not yet a `context`-event message replacement.
+
+## Phase R6 addition — Prime tool surface capture (2026-08-19)
+
+`prime_tool_surface` is read-only measurement: it calls `pi.getAllTools()`/
+`pi.getActiveTools()` (declared on `ExtensionAPI`,
+`brainstem/prime-extension/types/prime.d.ts:306-309`, "modelled for Phase J
+measurement, not consumed today" — this is the first place the codebase
+ever calls them) once per `session_start`, when the host exposes them.
+Never calls `setActiveTools` in this pass — see
+`outputs/reports/rc4/06-tool-working-set-live.md` for why: the Python Tool
+Working Set catalog's tool names don't match Prime's real tool names, and
+`setActiveTools` takes a replacement list.
 
 ## Phase P3-B addition — economics instrumentation (2026-08-16)
 

@@ -416,6 +416,30 @@ export function sessionCompact(session: string, fromExtension: unknown): Session
   }) as unknown as SessionCompactRecord;
 }
 
+export interface PrimeToolSurfaceRecord extends BaseRecord {
+  kind: "prime_tool_surface";
+  all_tools_count: number | null;
+  active_tools_count: number | null;
+  all_tools: string[] | null;
+  active_tools: string[] | null;
+}
+
+/** Phase R6: Prime's real tool surface (getAllTools/getActiveTools), captured
+ * once per session_start. Read-only — never used to call setActiveTools in
+ * this pass (see outputs/reports/rc4/06-tool-working-set-live.md). */
+export function primeToolSurface(
+  session: string,
+  allTools: string[] | undefined,
+  activeTools: string[] | undefined,
+): PrimeToolSurfaceRecord {
+  return base("prime_tool_surface", session, {
+    all_tools_count: allTools ? allTools.length : null,
+    active_tools_count: activeTools ? activeTools.length : null,
+    all_tools: allTools ?? null,
+    active_tools: activeTools ?? null,
+  }) as unknown as PrimeToolSurfaceRecord;
+}
+
 export interface VmemCompactPrepRecord extends BaseRecord {
   kind: "vmem_compact_prep";
   evicted_at_compaction: number | null;
