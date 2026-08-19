@@ -1,5 +1,6 @@
 """End-to-end CLI tests: run brainctl as a subprocess with a sanitized env."""
 
+import json
 import os
 import subprocess
 import sys
@@ -172,3 +173,67 @@ def test_memory_add_resolves_registered_project_from_cwd(tmp_path):
 
     rows = semantic.list_memories(home)
     assert rows[0]["project_id"] == "proj-x"
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def _git_repo_with_commit(repo: Path, filename: str, content: str) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / filename).write_text(content, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "init")
+
+
+def test_action_cache_search_hits_on_second_call_and_misses_after_a_commit(tmp_path):
+    """Phase R5: narrowest Brain-owned execution-bypass layer (Prime's
+    tool_call hook cannot itself skip execution — see
+    outputs/reports/rc4/02-prime-live-callgraph.md and
+    outputs/reports/rc4/05-action-cache-live.md)."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    repo = tmp_path / "repo"
+    _git_repo_with_commit(repo, "hello.py", "def hello():\n    return 'world'\n")
+
+    r1 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
+    assert r1.returncode == 0, r1.stderr
+    out1 = json.loads(r1.stdout)
+    assert out1["hit"] is False
+    assert "hello.py" in out1["content"]
+
+    r2 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
+    out2 = json.loads(r2.stdout)
+    assert out2["hit"] is True
+    assert out2["content"] == out1["content"]
+
+    # A new commit changes the git tree hash -> the proof no longer matches -> miss.
+    (repo / "hello.py").write_text("def hello():\n    return 'world2'\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "change")
+
+    r3 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
+    out3 = json.loads(r3.stdout)
+    assert out3["hit"] is False
+
+
+def test_action_cache_search_non_git_dir_never_caches(tmp_path):
+    """No git tree to gate on -> validate_proof would never re-check content,
+    so the search command must compute fresh every time rather than cache."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "note.txt").write_text("marker_value_xyz\n", encoding="utf-8")
+
+    r1 = run_cli(home, "action-cache", "search", "marker_value_xyz", "--path", str(plain), "--json")
+    assert r1.returncode == 0, r1.stderr
+    out1 = json.loads(r1.stdout)
+    assert out1["hit"] is False
+
+    r2 = run_cli(home, "action-cache", "search", "marker_value_xyz", "--path", str(plain), "--json")
+    out2 = json.loads(r2.stdout)
+    assert out2["hit"] is False
