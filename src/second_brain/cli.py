@@ -950,6 +950,23 @@ def _parser() -> argparse.ArgumentParser:
 
     acs.add_parser("clear", parents=[home_parent], help="clear entire action cache")
 
+    ac_search = acs.add_parser(
+        "search",
+        parents=[home_parent],
+        help="deterministic code search over git-tracked files, cached and "
+        "gated by git tree hash (Phase R5: narrowest Brain-owned execution-"
+        "bypass layer — Prime's tool_call hook cannot itself skip execution, "
+        "see outputs/reports/rc4/05-action-cache-live.md)",
+    )
+    ac_search.add_argument("pattern", help="regular expression to search for")
+    ac_search.add_argument(
+        "--path", default=None, help="directory to search (default: brain home)"
+    )
+    ac_search.add_argument(
+        "--max-matches", type=int, default=200, help="cap on returned matches"
+    )
+    ac_search.add_argument("--json", action="store_true", help="output JSON")
+
     ds = sub.add_parser(
         "delta-sync",
         parents=[home_parent],
@@ -3595,7 +3612,118 @@ def cmd_action_cache(args) -> int:
         print("Cleared action cache.")
         return 0
 
+    if args.action_cache_command == "search":
+        return _action_cache_search(store, home, args)
+
     return 2
+
+
+def _code_search_git_tracked(target_dir: Path, pattern: str, max_matches: int) -> str:
+    """
+    Deterministic search over git-tracked files only (§ CODE_SEARCH, Phase
+    R5). `git ls-files` output is deterministic for a fixed tree, so this is
+    a pure function of (target_dir's git tree, pattern, max_matches) —
+    exactly what the Action Cache's git_tree_hash proof gate requires.
+    """
+    import re
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "ls-files"],
+            cwd=str(target_dir),
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+        files = (
+            [target_dir / p for p in res.stdout.splitlines() if p.strip()]
+            if res.returncode == 0
+            else []
+        )
+    except Exception:
+        files = []
+
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return f"invalid pattern: {exc}"
+
+    matches: list[str] = []
+    for f in files:
+        if len(matches) >= max_matches:
+            break
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if regex.search(line):
+                matches.append(f"{f}:{lineno}:{line.strip()}")
+                if len(matches) >= max_matches:
+                    break
+
+    if not matches:
+        return f"0 matches for {pattern!r}"
+    return "\n".join(matches)
+
+
+def _action_cache_search(store, home: Path, args) -> int:
+    """
+    Narrowest Brain-owned execution-bypass layer (Phase R5): Prime's
+    tool_call hook cannot supply a result and skip execution
+    (ToolCallEventResult has no content field — confirmed in
+    outputs/reports/rc4/02-prime-live-callgraph.md), so this cache
+    integration lives BELOW Prime, as a Brain-owned CLI action a caller
+    invokes instead of running the search directly. A cache hit genuinely
+    skips re-running `_code_search_git_tracked` (real execution bypass);
+    a miss computes it once and stores it, gated by git_tree_hash so any
+    commit invalidates every cached search for that tree.
+    """
+    import json
+
+    from . import action_cache
+
+    target_dir = Path(args.path) if args.path else home
+    tree_hash = action_cache.git_tree_hash_for(target_dir)
+    if tree_hash is None:
+        # Not a git worktree (or `git` unavailable): validate_proof only
+        # checks git_tree_hash when it is non-None, so caching with no tree
+        # hash would never be invalidated by a real content change. Compute
+        # directly instead of caching an un-gated result.
+        content = _code_search_git_tracked(target_dir, args.pattern, args.max_matches)
+        was_hit, latency_ms = False, 0.0
+    else:
+        proof = action_cache.ActionProof(
+            git_tree_hash=tree_hash,
+            verification_predicate="git_tree_unchanged",
+        )
+        content, was_hit, latency_ms = store.get_or_execute(
+            action_type=action_cache.ActionType.CODE_SEARCH,
+            target=f"{target_dir}::{args.pattern}",
+            compute_fn=lambda: _code_search_git_tracked(target_dir, args.pattern, args.max_matches),
+            params={"pattern": args.pattern, "max_matches": args.max_matches},
+            proof=proof,
+            output_summary=f"code search for {args.pattern!r} in {target_dir}",
+            cwd=target_dir,
+        )
+    if args.json:
+        print(
+            json.dumps(
+                {"hit": was_hit, "latency_ms": round(latency_ms, 3), "content": content},
+                indent=2,
+            )
+        )
+    else:
+        sys.stdout.write(content)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
+        print(
+            f"[{'CACHE HIT' if was_hit else 'MISS (computed)'}, {latency_ms:.3f}ms]",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def cmd_delta_sync(args) -> int:

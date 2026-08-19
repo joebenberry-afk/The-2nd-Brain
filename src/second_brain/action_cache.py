@@ -90,6 +90,29 @@ def hash_file_content(path: Path | str) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+def git_tree_hash_for(target_dir: Path | str) -> str | None:
+    """Read the git tree hash for a directory (None if not a clean-checkable
+    git worktree). Shared by ActionCacheStore._get_git_tree_hash (proof
+    validation) and any caller building a git_tree_hash-gated ActionProof
+    (e.g. `second_brain action-cache search`, Phase R5)."""
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            cwd=str(target_dir),
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if res.returncode == 0:
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def compute_action_key(
     action_type: ActionType | str,
     target: str,
@@ -361,26 +384,20 @@ class ActionCacheStore:
 
     def _get_git_tree_hash(self, target_dir: Path | str) -> str | None:
         """Read git tree hash for directory (fail-closed if tree cannot be verified)."""
-        import subprocess
+        return git_tree_hash_for(target_dir)
 
-        try:
-            res = subprocess.run(
-                ["git", "rev-parse", "HEAD^{tree}"],
-                cwd=str(target_dir),
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if res.returncode == 0:
-                return res.stdout.strip()
-        except Exception:
-            pass
-        return None
-
-    def query(self, action_key: str) -> CacheHitResult:
+    def query(self, action_key: str, cwd: Path | str | None = None) -> CacheHitResult:
         """
         Query action cache by action_key and validate proof (§7.4).
+
+        `cwd` is the directory a git_tree_hash proof should be re-checked
+        against. Before this parameter existed, validate_proof() always fell
+        back to `self.home` (the BRAIN home) regardless of what directory the
+        entry's git_tree_hash was actually computed against — so any caller
+        proving a target outside the brain home (e.g. `action-cache search
+        --path <repo>`, Phase R5) could never validate its own proof and
+        every query was a silent, permanent miss. Callers using a
+        git_tree_hash proof MUST pass the same directory used to compute it.
         """
         t0 = time.perf_counter()
         conn = self._get_conn()
@@ -396,7 +413,7 @@ class ActionCacheStore:
         proof = ActionProof.from_dict(proof_data)
 
         # Validate proof
-        if not self.validate_proof(proof):
+        if not self.validate_proof(proof, cwd=cwd):
             # Proof failed -> invalidate entry
             self.invalidate_by_key(action_key)
             latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -459,10 +476,15 @@ class ActionCacheStore:
         proof: ActionProof | None = None,
         output_summary: str = "",
         ttl_seconds: int | None = None,
+        cwd: Path | str | None = None,
     ) -> tuple[str, bool, float]:
         """
         Execute or retrieve from cache.
         Returns (content, was_hit, latency_ms).
+
+        `cwd`: directory a git_tree_hash proof should be re-validated
+        against (see query()'s docstring). Required whenever `proof` sets
+        git_tree_hash to anything outside `self.home`.
         """
         act = (
             action_type
@@ -470,15 +492,23 @@ class ActionCacheStore:
             else ActionType(str(action_type).upper())
         )
         act_proof = proof or ActionProof()
+        # Must match store_action's key computation exactly (same six
+        # semantic-dependency fields), or a get_or_execute() lookup can never
+        # find what store_action() saved. Bug found via manual smoke test of
+        # Phase R5 `action-cache search`: this call omitted git_tree_hash and
+        # verification_predicate, so any proof using either (e.g. the
+        # git_tree_hash-gated CODE_SEARCH proof) was a permanent miss.
         action_key = compute_action_key(
             action_type=act,
             target=target,
             params=params,
             input_hashes=act_proof.input_hashes,
+            git_tree_hash=act_proof.git_tree_hash,
             env_fingerprint=act_proof.env_fingerprint,
+            verification_predicate=act_proof.verification_predicate,
         )
 
-        hit_res = self.query(action_key)
+        hit_res = self.query(action_key, cwd=cwd)
         if hit_res.hit and hit_res.content is not None:
             return hit_res.content, True, hit_res.latency_ms
 
