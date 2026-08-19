@@ -1,0 +1,5 @@
+{
+  "secrets_found": 0,
+  "path_traversal_blocked": true,
+  "command_sanitized": true
+}
