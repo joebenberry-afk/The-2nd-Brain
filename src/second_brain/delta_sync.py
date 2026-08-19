@@ -284,3 +284,77 @@ class DeltaSyncEngine:
 
         rendered = render_delta_sync_text(deltas)
         return deltas, rendered
+
+
+class DisclosureLevel(StrEnum):
+    REPO = "REPO"          # Level 0: Project name, module listing (~50 tokens)
+    MODULE = "MODULE"      # Level 1: Module overview, symbol signatures (~150 tokens)
+    SYMBOL = "SYMBOL"      # Level 2: Specific function/class signature + docstring (~300 tokens)
+    EXCERPT = "EXCERPT"    # Level 3: Targeted slice of relevant code (~600 tokens)
+    FULL = "FULL"          # Level 4: Full source file
+
+
+def progressive_disclose(
+    content: str,
+    level: DisclosureLevel | str = DisclosureLevel.SYMBOL,
+    *,
+    symbol_name: str | None = None,
+    max_lines: int = 40,
+) -> str:
+    """
+    Format content progressively to avoid premature full-file injection (Plan §4 R5).
+    """
+    lvl = level if isinstance(level, DisclosureLevel) else DisclosureLevel(str(level).upper())
+    lines = content.splitlines()
+
+    if lvl == DisclosureLevel.FULL:
+        return content
+
+    if lvl == DisclosureLevel.REPO:
+        return f"[Repository Overview: {len(lines)} lines total]"
+
+    if lvl == DisclosureLevel.MODULE:
+        # Extract import and def/class lines
+        symbols = [
+            ln.strip()
+            for ln in lines
+            if ln.strip().startswith(("def ", "class ", "export "))
+        ]
+        return f"Module Symbols ({len(symbols)} total):\n" + "\n".join(
+            f"  - {s[:80]}" for s in symbols[:20]
+        )
+
+    if lvl == DisclosureLevel.SYMBOL:
+        if symbol_name:
+            matched = []
+            capturing = False
+            for ln in lines:
+                if f"def {symbol_name}" in ln or f"class {symbol_name}" in ln:
+                    capturing = True
+                if capturing:
+                    matched.append(ln)
+                    if len(matched) >= max_lines:
+                        matched.append("    ... [remaining lines omitted]")
+                        break
+                    non_ident = (" ", "\t", "#", '"""', "'''")
+                    if len(matched) > 1 and ln and not ln.startswith(non_ident):
+                        break
+            if matched:
+                return "\n".join(matched)
+        # Fallback to first max_lines
+        suffix = (
+            f"\n... ({len(lines) - max_lines} lines omitted)"
+            if len(lines) > max_lines
+            else ""
+        )
+        return "\n".join(lines[:max_lines]) + suffix
+
+    if lvl == DisclosureLevel.EXCERPT:
+        suffix = (
+            f"\n... ({len(lines) - max_lines} lines omitted)"
+            if len(lines) > max_lines
+            else ""
+        )
+        return "\n".join(lines[:max_lines]) + suffix
+
+    return content
