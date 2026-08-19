@@ -29,6 +29,8 @@ Kinds:
 | agent_end | messages |
 | session_before_compact | branch_entries |
 | session_compact | from_extension |
+| vmem_compact_prep | evicted_at_compaction, pinned_preserved (Phase R3; null when the vmem call failed) |
+| vmem_hot_context | resident_count, evicted_count, resident_tokens (Phase R3; null when the vmem call failed) |
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason, original_chars?, visible_chars?, saved_chars?, artifact_ref?, command_class?, error_status?, distilled? (P3-F additive) |
 | lean_kernel | decision, reason, role, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; P3-D) |
@@ -147,6 +149,19 @@ additive"; the Python validator (`src/second_brain/telemetry.py`) requires no
 change (unknown/extra fields are ignored; only `v`, `kind`, `session`, `ts`
 are checked).
 
+
+## Phase R3 addition — VMem compaction-boundary bookkeeping (2026-08-19)
+
+`vmem_compact_prep` (emitted from `session_before_compact`, after the ledger
+checkpoint durability barrier succeeds) and `vmem_hot_context` (emitted from
+`session_compact`, fire-and-forget) are advisory bookkeeping records for
+Context Virtual Memory's own documented compaction-boundary integration
+point (`src/second_brain/vmem.py` §6.7). Both are gated behind
+`[vmem] enabled` in `config/context.toml` (default `false`) and never
+cancel compaction or alter model-visible context on failure — only the
+ledger checkpoint in `session_before_compact` may return `{cancel: true}`.
+See `outputs/reports/rc4/04-prime-vmem.md` for why this is bookkeeping only
+and not yet a `context`-event message replacement.
 
 ## Phase P3-B addition — economics instrumentation (2026-08-16)
 

@@ -30,7 +30,6 @@ import type {
   AgentEndEvent,
   BeforeAgentStartEvent,
   BeforeProviderRequestEvent,
-  ContextEvent,
   ExtensionAPI,
   ExtensionContext,
   PrimeEvent,
@@ -61,7 +60,7 @@ import {
   type RecallGateConfig,
 } from "./recall-gate";
 import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
-import { loadRtdConfig } from "./config";
+import { loadRtdConfig, loadVmemConfig } from "./config";
 import { join } from "node:path";
 import {
   cliRtdPreserver,
@@ -85,6 +84,7 @@ import {
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
+import { runVmemCompactPrep, runVmemHotContext } from "./vmem";
 import {
   createTelemetryDirEnsurer,
   sanitizeSessionStem,
@@ -556,9 +556,39 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     sensors.turnStart(session, event.turnIndex),
   );
 
-  wire<ContextEvent>("context", (event, _ctx, session) =>
-    sensors.context(session, event.messages),
-  );
+  // context: registered DIRECTLY (Phase R3 fix), NOT through wire(). The host
+  // applies this handler's return value as a real context replacement
+  // (ContextEventResult{messages}, prime.d.ts:249-251/294-298) — but
+  // wire()/safeHandler() (above) intentionally always returns `void` to the
+  // host regardless of what the mapper computes (see
+  // outputs/reports/rc4/02-prime-live-callgraph.md, "context" section: this
+  // was the confirmed structural reason VMem paging could never reach the
+  // host even once implemented). Telemetry stays unconditional and separate
+  // from any future mutation decision, exactly like before_agent_start /
+  // tool_result / session_before_compact below.
+  //
+  // No {messages} patch is returned yet. `event.messages` is typed
+  // `unknown[]` everywhere in this codebase (prime.d.ts, sensors.context
+  // above) because no live Prime session has ever captured the real message
+  // shape — synthesizing a replacement against a guessed shape risks
+  // corrupting every session's context, which the recovery plan's evidence
+  // rules forbid ("never fake it"). This handler is now CAPABLE of
+  // returning a patch; a live pilot must capture the real message shape
+  // before VMem-driven paging is implemented here.
+  pi.on("context", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      getStore(session)?.append(sensors.context(session, event.messages));
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+    }
+    return undefined;
+  });
 
   // ---------------------------------------------------------------------------
   // P3-B economics instrumentation (plan §5.1/§5.4/§5.5; schema v3 records).
@@ -871,6 +901,24 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         return { cancel: true };
       }
+      // Phase R3: VMem compaction-boundary bookkeeping (vmem.py §6.7 "Compaction
+      // barrier interaction" — its own documented integration point). Advisory
+      // only: never cancels compaction (the ledger checkpoint above is the sole
+      // durability barrier). Disabled by default ([vmem] enabled=false) until a
+      // live pilot proves this sound; see outputs/reports/rc4/02-prime-live-callgraph.md.
+      const vmemCfg = loadVmemConfig(config.home);
+      if (vmemCfg.enabled) {
+        const prep = await runVmemCompactPrep({ home: config.home ?? "", hostSessionId: session });
+        if (prep.ok) {
+          getStore(session)?.append(
+            sensors.vmemCompactPrep(session, prep.evictedAtCompaction, prep.pinnedPreserved),
+          );
+        } else {
+          getStore(session)?.append(
+            mirrorExtensionError(session, `vmem compact-prep failed: ${prep.error ?? "unknown"}`),
+          );
+        }
+      }
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -902,6 +950,32 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         }
       },
     });
+    // Phase R3: VMem hot-context render after the real compaction event —
+    // fire-and-forget (mirror is fire-and-forget style already used above),
+    // records what the resident/evicted working set looks like post-compact.
+    // Renders only; does not touch model-visible context (see context handler).
+    const vmemCfg = loadVmemConfig(config.home);
+    if (vmemCfg.enabled) {
+      runVmemHotContext({
+        home: config.home ?? "",
+        hostSessionId: session,
+        budgetTokens: vmemCfg.budgetTokens,
+      })
+        .then((hc) => {
+          if (hc.ok) {
+            getStore(session)?.append(
+              sensors.vmemHotContext(session, hc.residentCount, hc.evictedCount, hc.residentTokens),
+            );
+          } else {
+            getStore(session)?.append(
+              mirrorExtensionError(session, `vmem hot-context failed: ${hc.error ?? "unknown"}`),
+            );
+          }
+        })
+        .catch(() => {
+          // storage/subprocess failed too — measurement must not crash the session.
+        });
+    }
     return sensors.sessionCompact(session, event.fromExtension);
   });
 

@@ -205,3 +205,64 @@ export function loadRtdConfig(home: string | null): RtdFileConfig {
     return rtdConfigFromContextToml("");
   }
 }
+
+// ---------------------------------------------------------------------------
+// [vmem] config surface (Phase R3) — same tiny TOML-subset parser style as
+// [rtd]. Safe-by-default: enabled=false until a live pilot proves the
+// compaction-boundary bookkeeping is sound.
+// ---------------------------------------------------------------------------
+
+/** Default hot-context token budget (mirrors vmem.py DEFAULT_HOT_CONTEXT_BUDGET_TOKENS). */
+export const VMEM_DEFAULT_BUDGET_TOKENS = 1500;
+
+/** Resolved [vmem] configuration for the Prime extension (defaults safe). */
+export interface VmemFileConfig {
+  /** Master switch: compact-prep/hot-context calls happen only when true. */
+  enabled: boolean;
+  /** Hot working-set token budget passed to `vmem hot-context --budget`. */
+  budgetTokens: number;
+}
+
+/**
+ * Parse the `[vmem]` section of config/context.toml. Missing/invalid values
+ * fall back to the documented defaults. PURE, never throws, never reads fs.
+ */
+export function vmemConfigFromContextToml(text: string): VmemFileConfig {
+  let inVmem = false;
+  let enabled = false;
+  let budgetTokens = VMEM_DEFAULT_BUDGET_TOKENS;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inVmem = line.startsWith("[vmem]");
+      continue;
+    }
+    if (!inVmem || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    if (key === "enabled") {
+      const v = value.toLowerCase();
+      enabled = v === "true" || v === "1" || v === "yes";
+    } else if (key === "budget_tokens") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) budgetTokens = parsed;
+    }
+  }
+  return { enabled, budgetTokens };
+}
+
+/**
+ * Load the full [vmem] config from `<home>/config/context.toml`; missing or
+ * unreadable file returns the safe defaults (enabled=false). Never throws.
+ */
+export function loadVmemConfig(home: string | null): VmemFileConfig {
+  if (!home) return vmemConfigFromContextToml("");
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return vmemConfigFromContextToml(text);
+  } catch {
+    return vmemConfigFromContextToml("");
+  }
+}
