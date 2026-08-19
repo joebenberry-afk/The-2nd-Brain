@@ -328,16 +328,16 @@ def progressive_disclose(
         if symbol_name:
             matched = []
             capturing = False
+            non_ident = (" ", "\t", "#", '"""', "'''")
             for ln in lines:
                 if f"def {symbol_name}" in ln or f"class {symbol_name}" in ln:
                     capturing = True
+                elif capturing and len(matched) > 1 and ln and not ln.startswith(non_ident):
+                    break
                 if capturing:
                     matched.append(ln)
                     if len(matched) >= max_lines:
                         matched.append("    ... [remaining lines omitted]")
-                        break
-                    non_ident = (" ", "\t", "#", '"""', "'''")
-                    if len(matched) > 1 and ln and not ln.startswith(non_ident):
                         break
             if matched:
                 return "\n".join(matched)
