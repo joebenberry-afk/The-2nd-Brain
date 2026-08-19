@@ -18,8 +18,8 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 | Phase 4 Action Cache (plan §7) | PASSED | outputs/reports/v1-phase4-action-cache.md, tests/test_action_cache.py (9 tests pass) |
 | Phase 5 Delta Sync (plan §8) | PASSED | outputs/reports/v1-phase5-delta-sync.md, tests/test_delta_sync.py (8 tests pass) |
 | Phase 6 Hybrid Retrieval (plan §9) | PASSED | outputs/reports/v1-phase6-hybrid-retrieval.md, tests/test_hybrid_retrieval.py (7 tests pass) |
-| Phase 7 Tool Working Set (plan §10) | IN PROGRESS | Next phase |
-| P0-P4 frozen roadmap (§11-§16) | NOT STARTED | |
+| Phase 7 Tool Working Set (plan §10) | PASSED | outputs/reports/v1-phase7-tool-working-set.md, tests/test_tool_working_set.py (6 tests pass) |
+| P0-P4 frozen roadmap (§11-§16) | IN PROGRESS | Next phase |
 | Cross-harness (§17-§22) | NOT STARTED | |
 | Dogfooding (§23) / token benchmark (§24) | NOT STARTED | |
 | Production qualification (§28) | NOT STARTED | |
@@ -33,12 +33,13 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 - D6: Proof-Carrying Action Cache implemented in src/second_brain/action_cache.py with cryptographic safety proofs and sub-millisecond replay.
 - D7: Delta Sync implemented in src/second_brain/delta_sync.py with structured diffs, hash verification, and zero token re-transmission.
 - D8: Hybrid Retrieval & Cascade implemented in src/second_brain/hybrid_retrieval.py with Tiers 0-4 cascade, negative caching, and 80% short-circuiting.
+- D9: Tool Working Set implemented in src/second_brain/tool_working_set.py with Tier A core resident (≤500 tokens), schema compression, and idle pruning.
 
 ## Open blockers
 - (none recorded)
 
 ## Next action
-- Phase 7: Implement Dynamic Tool Working Set & Lazy Loading (tool definition pruning, role-based working set, lazy tool activation, token savings).
+- Frozen P0-P4 Roadmap Verification & Closure (§11-§16): Audit and verify the 37 priority roadmap items across P0 (Core Runtime & Safety), P1 (Memory & Learning), P2 (Adaptive Intelligence), P3 (Ecosystem & Harnesses), and P4 (Production Readiness).
 
 ## DRIVER-VERIFIED FACTS (Phase 0, spot-checked personally)
 - Campaign venv interpreter MUST be 3.13.7 (main worktree parity). A 3.11 venv manufactures a false failure in tests/test_attach.py (Path.read_text(newline=) is 3.13+). Rebuilt 2026-08-18.
