@@ -416,6 +416,45 @@ export function sessionCompact(session: string, fromExtension: unknown): Session
   }) as unknown as SessionCompactRecord;
 }
 
+export interface VmemCompactPrepRecord extends BaseRecord {
+  kind: "vmem_compact_prep";
+  evicted_at_compaction: number | null;
+  pinned_preserved: number | null;
+}
+
+/** Phase R3: VMem compact-prep bookkeeping ahead of a real compaction event. */
+export function vmemCompactPrep(
+  session: string,
+  evictedAtCompaction: number | undefined,
+  pinnedPreserved: number | undefined,
+): VmemCompactPrepRecord {
+  return base("vmem_compact_prep", session, {
+    evicted_at_compaction: typeof evictedAtCompaction === "number" ? evictedAtCompaction : null,
+    pinned_preserved: typeof pinnedPreserved === "number" ? pinnedPreserved : null,
+  }) as unknown as VmemCompactPrepRecord;
+}
+
+export interface VmemHotContextRecord extends BaseRecord {
+  kind: "vmem_hot_context";
+  resident_count: number | null;
+  evicted_count: number | null;
+  resident_tokens: number | null;
+}
+
+/** Phase R3: VMem hot-context render after a real compaction event. */
+export function vmemHotContext(
+  session: string,
+  residentCount: number | undefined,
+  evictedCount: number | undefined,
+  residentTokens: number | undefined,
+): VmemHotContextRecord {
+  return base("vmem_hot_context", session, {
+    resident_count: typeof residentCount === "number" ? residentCount : null,
+    evicted_count: typeof evictedCount === "number" ? evictedCount : null,
+    resident_tokens: typeof residentTokens === "number" ? residentTokens : null,
+  }) as unknown as VmemHotContextRecord;
+}
+
 export interface SessionShutdownRecord extends BaseRecord {
   kind: "session_shutdown";
   reason: string;

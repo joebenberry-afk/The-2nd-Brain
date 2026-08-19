@@ -3,12 +3,15 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  VMEM_DEFAULT_BUDGET_TOKENS,
   defaultBrainHome,
   loadConfig,
+  loadVmemConfig,
   observabilityDisabledByEnv,
   resolveBrainHome,
   rtdThresholdFromConfig,
   thresholdCharsFromContextToml,
+  vmemConfigFromContextToml,
 } from "../src/config";
 
 const ENV_KEYS = ["SECOND_BRAIN_OBSERVABILITY", "SECOND_BRAIN_HOME", "USERPROFILE", "HOME"] as const;
@@ -140,6 +143,79 @@ describe("rtdThresholdFromConfig (file read, never throws)", () => {
       await mkdir(join(home, "config"), { recursive: true });
       await writeFile(join(home, "config", "context.toml"), "[rtd]\nthreshold_chars = \"x\"\n", "utf8");
       expect(rtdThresholdFromConfig(home)).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("vmemConfigFromContextToml (Phase R3)", () => {
+  it("defaults to disabled with the default budget when [vmem] is absent", () => {
+    expect(vmemConfigFromContextToml("")).toEqual({
+      enabled: false,
+      budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS,
+    });
+    expect(vmemConfigFromContextToml("[rtd]\nenabled = true\n")).toEqual({
+      enabled: false,
+      budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS,
+    });
+  });
+
+  it("reads enabled and budget_tokens inside the [vmem] section", () => {
+    expect(
+      vmemConfigFromContextToml("[vmem]\nenabled = true\nbudget_tokens = 2500\n"),
+    ).toEqual({ enabled: true, budgetTokens: 2500 });
+  });
+
+  it("ignores other sections, other keys, and inline comments", () => {
+    const text = [
+      "[rtd]",
+      "enabled = true",
+      "budget_tokens = 999",
+      "",
+      "[vmem]",
+      "enabled = true  # live pilot only",
+      "budget_tokens = 3000",
+      "",
+      "[reserve]",
+      "budget_tokens = 42",
+    ].join("\n");
+    expect(vmemConfigFromContextToml(text)).toEqual({ enabled: true, budgetTokens: 3000 });
+  });
+
+  it("treats an invalid budget_tokens as absent (keeps the default)", () => {
+    expect(vmemConfigFromContextToml("[vmem]\nenabled = true\nbudget_tokens = -5\n")).toEqual({
+      enabled: true,
+      budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS,
+    });
+    expect(vmemConfigFromContextToml("[vmem]\nbudget_tokens = \"x\"\n")).toEqual({
+      enabled: false,
+      budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS,
+    });
+  });
+});
+
+describe("loadVmemConfig (file read, never throws)", () => {
+  it("reads <home>/config/context.toml [vmem] enabled/budget_tokens", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-vmem-"));
+    try {
+      await mkdir(join(home, "config"), { recursive: true });
+      await writeFile(
+        join(home, "config", "context.toml"),
+        "[vmem]\nenabled = true\nbudget_tokens = 4096\n",
+        "utf8",
+      );
+      expect(loadVmemConfig(home)).toEqual({ enabled: true, budgetTokens: 4096 });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns safe defaults for null home or missing file", async () => {
+    expect(loadVmemConfig(null)).toEqual({ enabled: false, budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS });
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-vmem-"));
+    try {
+      expect(loadVmemConfig(home)).toEqual({ enabled: false, budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS });
     } finally {
       await rm(home, { recursive: true, force: true });
     }

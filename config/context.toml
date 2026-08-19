@@ -53,6 +53,19 @@ max_distill_chars = 2000
 whitelist_tools = ["bash"]
 whitelist_commands = ["pytest", "git", "rg", "grep"]
 
+[vmem]
+# Context Virtual Memory compaction-boundary bookkeeping (Phase R3).
+# ENFORCED when enabled=true: brainstem/prime-extension/src/index.ts calls
+# `second_brain vmem compact-prep`/`hot-context` at session_before_compact/
+# session_compact (vmem.py §6.7 "Compaction barrier interaction" — VMem's
+# own documented integration point). Advisory only: never cancels
+# compaction, never touches model-visible context (see
+# outputs/reports/rc4/02-prime-live-callgraph.md for why the `context` event
+# itself is not yet wired to a message-level replacement).
+# Rollback = set back to false (no redeploy needed, per-event read).
+enabled = false
+budget_tokens = 1500
+
 [reserve]
 # Completion Reserve / Memory Budget Ceiling (v4.2 §95.1).
 # ENFORCED: retrieved_memory_pct_max is read at runtime by

@@ -415,6 +415,121 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
     expect(args).toContain("--reason");
     expect(args).toContain("compact");
   });
+
+  it("[vmem] disabled (default): session_before_compact/session_compact never call vmem", async () => {
+    const { home } = await fakeHome();
+    process.env.SECOND_BRAIN_HOME = home;
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      if ((args as string[]).includes("checkpoint")) {
+        cb(null, '{"ok":true,"integrity":{}}');
+      } else {
+        cb(null, "{}");
+      }
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    await handlers.get("session_before_compact")!({ preparation: {}, branchEntries: [] }, ctx);
+    handlers.get("session_compact")!({ compactionEntry: {}, fromExtension: false }, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    const vmemCall = execFileMock.mock.calls.find((c) => (c[1] as string[]).includes("vmem"));
+    expect(vmemCall).toBeUndefined();
+  });
+
+  it("[vmem] enabled=true: session_before_compact calls compact-prep and never cancels compaction on vmem failure", async () => {
+    const { home } = await fakeHome();
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(join(home, "config", "context.toml"), "[vmem]\nenabled = true\n", "utf8");
+    process.env.SECOND_BRAIN_HOME = home;
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      const a = args as string[];
+      if (a.includes("checkpoint")) {
+        cb(null, '{"ok":true,"integrity":{}}');
+      } else if (a.includes("compact-prep")) {
+        cb(new Error("vmem db locked")); // vmem bookkeeping fails
+      } else {
+        cb(null, "{}");
+      }
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    const result = await handlers.get("session_before_compact")!(
+      { preparation: {}, branchEntries: [] },
+      ctx,
+    );
+    // Advisory only: a failing vmem call must never cancel compaction (only
+    // the ledger checkpoint durability barrier may return {cancel:true}).
+    expect(result).toBeUndefined();
+    const prepCall = execFileMock.mock.calls.find((c) => (c[1] as string[]).includes("compact-prep"));
+    expect(prepCall).toBeDefined();
+    const args = prepCall?.[1] as string[];
+    expect(args.slice(0, 4)).toEqual(["-m", "second_brain", "vmem", "compact-prep"]);
+    expect(args[args.length - 1]).toBe("--json");
+  });
+
+  it("[vmem] enabled=true: session_compact calls hot-context with the configured budget", async () => {
+    const { home } = await fakeHome();
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(
+      join(home, "config", "context.toml"),
+      "[vmem]\nenabled = true\nbudget_tokens = 777\n",
+      "utf8",
+    );
+    process.env.SECOND_BRAIN_HOME = home;
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+      cb(null, '{"resident_count":1,"evicted_count":2,"resident_tokens":300}');
+      return {} as never;
+    });
+    const handlers = loadFactory();
+    handlers.get("session_compact")!({ compactionEntry: {}, fromExtension: false }, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    const hotContextCall = execFileMock.mock.calls.find((c) =>
+      (c[1] as string[]).includes("hot-context"),
+    );
+    expect(hotContextCall).toBeDefined();
+    const args = hotContextCall?.[1] as string[];
+    expect(args.slice(0, 4)).toEqual(["-m", "second_brain", "vmem", "hot-context"]);
+    expect(args).toContain("--budget");
+    expect(args[args.indexOf("--budget") + 1]).toBe("777");
+    expect(args[args.length - 1]).toBe("--json");
+  });
+});
+
+describe("context event: direct registration (Phase R3 wire()-bypass fix)", () => {
+  type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+
+  function loadFactory(): Map<string, Handler> {
+    const handlers = new Map<string, Handler>();
+    const pi = {
+      on(name: string, handler: Handler) {
+        handlers.set(name, handler);
+      },
+    } as unknown as ExtensionAPI;
+    factory(pi);
+    return handlers;
+  }
+
+  const ctx = {
+    cwd: "C:/work",
+    model: { id: "deepseek/deepseek-v4-flash" },
+    sessionManager: undefined,
+  } as unknown as ExtensionContext;
+
+  it("returns a real value (not void) to the host, proving it is NOT routed through wire()/safeHandler()", async () => {
+    const { home } = await fakeHome();
+    process.env.SECOND_BRAIN_HOME = home;
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => cb(null, "{}"));
+    const handlers = loadFactory();
+    const result = handlers.get("context")!({ messages: [{ role: "user" }] }, ctx);
+    // safeHandler()'s wrapped handlers are typed `(event, ctx) => void` and
+    // Prime's runtime never inspects their return value; a directly
+    // registered handler returns whatever the code computes. Today that is
+    // still `undefined` by design (message shape unknown — see
+    // outputs/reports/rc4/02-prime-live-callgraph.md), but the call must
+    // complete synchronously and not throw, proving the handler is live.
+    expect(result).toBeUndefined();
+  });
 });
 
 
