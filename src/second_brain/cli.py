@@ -985,6 +985,25 @@ def _parser() -> argparse.ArgumentParser:
     ds_sync.add_argument("--recipient", default="driver", help="recipient role (default: driver)")
     ds_sync.add_argument("--json", action="store_true", help="output JSON")
 
+    cas = sub.add_parser(
+        "cascade",
+        parents=[home_parent],
+        help="Hybrid Multi-Tier Retrieval & Cascade: Tiers 0-4 short-circuiting (Phase 6)",
+    )
+    cass = cas.add_subparsers(dest="cascade_command", required=True)
+
+    cas_q = cass.add_parser(
+        "query",
+        parents=[home_parent],
+        help="query memory via multi-tier cascade",
+    )
+    cas_q.add_argument("query_text", help="query string or memory ref")
+    cas_q.add_argument("--project", default=None, help="project scope ID")
+    cas_q.add_argument("--threshold", type=float, default=0.70, help="confidence threshold")
+    cas_q.add_argument("--json", action="store_true", help="output JSON")
+
+    cass.add_parser("clear-cache", parents=[home_parent], help="clear negative result cache")
+
     return p
 
 
@@ -3591,6 +3610,40 @@ def cmd_delta_sync(args) -> int:
     return 2
 
 
+def cmd_cascade(args) -> int:
+    import json
+
+    from . import hybrid_retrieval
+
+    home = _home(args)
+    retriever = hybrid_retrieval.HybridCascadeRetriever()
+
+    if args.cascade_command == "query":
+        res = retriever.retrieve(
+            home,
+            args.query_text,
+            project_id=args.project,
+            confidence_threshold=args.threshold,
+        )
+        if args.json:
+            print(json.dumps(res.to_dict(), indent=2))
+        else:
+            print(
+                f"Cascade Result: Tier {res.tier_resolved} | {res.decision} ({res.reason}) "
+                f"[{res.latency_ms:.3f}ms]"
+            )
+            for m in res.matches:
+                print(f"  - [{m.score:.2f}] {m.memory_id}: {m.title}")
+        return 0
+
+    if args.cascade_command == "clear-cache":
+        retriever.invalidate_negative_cache()
+        print("Cleared negative result cache.")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3620,6 +3673,7 @@ def main(argv: list[str] | None = None) -> int:
         "vmem": cmd_vmem,
         "action-cache": cmd_action_cache,
         "delta-sync": cmd_delta_sync,
+        "cascade": cmd_cascade,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
