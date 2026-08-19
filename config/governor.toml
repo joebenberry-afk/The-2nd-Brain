@@ -1,0 +1,33 @@
+# Token Governor Configuration (plan §4)
+# Phase 1: Token Governor & measurement-first foundation
+
+# Feature flags for token optimization mechanisms.
+# All flags default to true; override here or via environment variables.
+#
+# Resolution precedence (highest to lowest):
+# 1. Environment variable: SECOND_BRAIN_GOVERNOR_<KEY>=0/1
+# 2. This config file: [features] key = value
+# 3. Hardcoded default: true
+
+[features]
+# Brain core subsystems
+brain_core = true
+
+# Phase 1-3 retrieval and decision optimizations
+autoinject = true                  # Session memory injection
+observation_firewall = true        # Tool output reduction
+context_paging = true              # Virtual context memory
+
+# Phase 4-7 advanced optimizations
+action_cache = true                # Repeated task cache
+delta_sync = true                  # Incremental file reuse
+structural_retrieval = true        # Symbol/code structure lookup
+semantic_vectors = true            # Semantic search fallback
+
+# User experience optimizations
+tool_working_set = true            # Task-relevant tool activation
+skill_lazy_loading = true          # JIT skill instruction loading
+prompt_compression = true          # Prompt compression (if available)
+
+# Note: unknown keys in this file will cause resolution to fail.
+# Keep only documented feature names above.

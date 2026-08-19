@@ -1,0 +1,207 @@
+=== TEST INTEGRITY AUDIT SETUP ===
+
+=== LAST 200 COMMITS ===
+c61a251 Merge branch 'brain/claude-code-lifecycle-hooks-p3a' into main
+f9bf87e brain(memory): add candidate memory on Claude Stop per-turn semantics
+3e7b1e6 fix(claude): correct PreCompact ledger session identity (P3a.2)
+b31d08b fix(claude): make Claude Code SessionStart idempotent per host session
+8665098 docs(claude): fix stale turn_end reference in Stop hook description
+9b7c3f8 feat(claude): add hook launcher, rules, and install script
+a03252d feat(claude): add claude-code-hook CLI adapter (SessionStart/PreCompact/Stop)
+31eb09e brain(adapter): auto-load Lean Code Runtime Kernel into Claude bootstrap
+57507f5 feat(claude): add Second Brain Stage 0 bootstrap
+8dfc1f0 Merge branch 'gemini/brain-isolation-lean-activation' into main
+aaaeb8b brain(adapter): enforce global-only unresolved safety and clarify isolation scope
+d347382 brain(skill): activate Lean Code runtime kernel and add canary verification
+cc6f53f brain(memory): add retrieval isolation and adversarial regression test suite
+3d451a2 brain(adapter): enforce project retrieval isolation and mid-session delta filtering
+666bfe3 first commit
+bd7fc4a eval: record real P3 Lean promotion campaign — 14/14 pairs, 28/28 real arms, verdict HOLD SHADOW
+b5803f4 test: harden real campaign harness before execution
+1d08e14 docs: mark real Antigravity dogfood + STOP smoke gates passed in recovery report
+1318d75 fix: repair run-hook.ps1 syntax after diagnostic removal; note final clean smoke
+000376a test: record real Antigravity smoke evidence (autoinject + P3-H STOP)
+66213d4 fix: align Antigravity adapter with the live CLI hook contract
+3395fbd brain(memory): record Antigravity hook contract authority + P3 repair state
+a9d00d6 test: run P3 campaign through real Antigravity agents only
+612100d fix: align Antigravity adapter with live hook contracts
+b83d5cc eval: invalidate synthetic Gemini P3 campaign evidence and restore genuine state
+fcfdf8a brain(adapter): ensure deterministic driver system prompt return across consecutive turns to eliminate inter-turn cache busts
+8b8b517 test(brain): P3 checkpoint — restore shared skill-eval fixture + e06/e07 evidence
+d16c5aa test(brain): P3 promotion campaign — paired evidence in progress (e01-e03, e06-C done; paused for harness reload)
+75c479f test(brain): P3 promotion campaign — label-free arm template
+0578353 test(brain): P3 promotion campaign — frozen opportunity eval set + lean regressions
+7008da2 test(brain): P3-J final gate closure — verdict SHADOW-ONLY hold
+39b153d test(brain): P3 paused checkpoint — gate report WIP + router E501 fixes
+4d5a0ae fix(brain): P3-I dogfood — SIM105 suppress swap in ledger.py + dogfood report
+c65a980 test(brain): P3-H STOP/Requirement-Ledger dogfood + driver stop rule
+d37f51d feat(brain): P3-G risk-adaptive verification ladder wiring
+770fd9a fix(brain): P3-F RTD live proof + CRLF-exact artifact bytes
+666fbd3 feat(brain): P3-F recoverable bounded RTD substitution (bash+pytest/git/rg/grep)
+de0a647 test(brain): P3-E window-2 verdict PASS + mirror duplicate-tolerance fix
+3e64bc9 test(brain): P3-E re-run window evidence (34/34 acceptance PASS, valid pairs)
+97b9f26 fix(brain): ledger-mirror burst failures — first-init race + bounded retry
+7167b6a test(brain): P3-E window-1 analysis — gate FAIL (inconclusive), hold at candidate
+59113bd fix(brain): P3-E file-based Lean eval gate + exact porcelain snippet
+900c3b6 test(brain): P3-E candidate window evidence (17/17 acceptance PASS)
+9062752 test(brain): P3-E baseline window evidence (17/17 acceptance PASS)
+f31153b test(brain): P3-E paired-eval harness (17 fixtures, judges, protocol, arm template)
+032d31e feat(brain): P3-D lean runtime kernel adapter (shadow)
+d21bf87 feat(brain): P3-C lean-code candidate skill + 865-char runtime kernel
+26f9d45 feat(brain): P3-B provider token/cache economics instrumentation
+64e0661 chore(brain): P3-A live probe evidence (Phase A gate PASS) + retire probe
+6a2c7a0 chore(brain): P3-A reconcile Prime v0.7.2 capabilities + Brain reuse audit
+3278818 brain(adapter): promote AutoInject SHADOW -> ACTIVE (canary 13/13 gates pass)
+dca051e brain(adapter): repair P2 ledger mirror + project attribution (shadow baseline)
+74e9b0a fix(brain): prevent silent project-scope memory contamination + quarantine mis-scoped memory + reconcile P0-P2 truth
+fe3da62 brain(project): P0-P2 FINAL implementation report + upstream research-source map (Phase J proof package)
+d9ae0f1 brain(project): Phase E skills evaluation (none qualified - CLIs already deterministic) + Phase F harness refinement record + Phase H economics
+1967562 brain(project): P2 dogfood evidence + session-continuity gate (P2 PASS)
+500b4cd brain(core): dogfood fixes - mirror auto-init + seq auto-assign, decision-id matching, evidence normalization (T-G6-F1..F4)
+a1dce84 brain(adapter): G4 checkpoint barrier helpers in ledger-mirror + migration-chain test updates (G4/G5 remainder)
+2ccfce7 brain(core): P2 crash recovery + retention/purge - state machine, extraction-before-purge, secure containment, purge receipts (Phase G5)
+2eb2216 brain(core): P2 compaction barrier (cancel-on-failed-checkpoint), segments, continuation capsule, 4-level rehydration (Phase G4)
+04dfde2 brain(adapter): P2 host event mirror - 9 lifecycle event kinds, privacy-safe, Prime artifact references (Phase G2)
+331c2e0 brain(core): P2 session ledger substrate - WAL/FULL SQLite, append-only events, object refs, FTS5, replay/invariant checker, tool-crash states (Phase G1)
+9ad9b49 brain(project): P1 gate - sibling A2A ACK delivered (live-proven)
+dffff47 brain(project): P1 orchestration + cache gate report (P1 PASS, adaptive fan-out, honest UNAVAILABLE cache seams)
+411abf8 brain(project): P0 gate PASS after verifier root-cause fix (C10); verifier-cycle telemetry
+b013650 brain(adapter): C10 - config-file mode branch fix (verifier MEDIUM) + shadow-hit patch honesty; G1 in-context injection proven live
+f1a0c00 brain(policy): P1 driver/orchestration policy per amendment (adaptive fan-out, verifier role, orchestration telemetry CLI); finalize P0 gate PARTIAL verdict
+e29a897 brain(adapter): C9 emit-cache home fallback + message-flag invariant test (final P0 fix round)
+09a474b brain(project): resume-after-restart recipe (final G1 observation + Phase D/G plan)
+647175f brain(adapter): emit-stable AutoInject - file-backed session-scoped cache, deterministic message build, live-diagnosis fixes (Phase C5-C8)
+c97f2b8 brain(memory): seed genuine P0-P2 campaign truths (recursion cap, adaptive fan-out, driver allowance, decoy) for live dogfood
+186d20b brain(adapter): emit diagnostics - mode/result_patch in decision records; root-cause multi-emit last-wins (Phase C4)
+feda116 brain(adapter): return advisory message on ALL role paths + brain-home cwd fallback (Phase C3, live obs 2 fix)
+3f35bd1 brain(core): cwd-based project resolution + OR-fallback recall + honest NO_INJECTION reasons (Phase C2 live fixes)
+bc7c2ca brain(adapter): config-file AutoInject mode switch + P0 gate report (Phase C, live advisory control path)
+b8195a7 brain(project): amendment Phase B harness capability probe (recursion config-blocked RLM_MAX_DEPTH=1)
+6888286 brain(project): amendment Phase A gap matrix (Phase A audit deliverable)
+ead00bb brain(adapter): advisory/active low-authority injection Prime + Codex (Phase 0D)
+843c5bf brain(core): P0 ACTIVE-path enablement - role-scoped worker packets (G7), write-back candidates (G9/G10), advisory mode CLI (Phase 0D)
+113f092 brain(adapter): Codex hook adapter SHADOW (stdin-JSON codex-shadow CLI, reversible install, Phase 0C)
+1ea08bb brain(adapter): Prime extension SHADOW AutoInject adapter (Phase 0C, fail-open, no injection in shadow)
+87f1315 brain(core): P0 AutoInject pipeline (SHADOW) - retrieval intent, validity gate, delivery ledger, budget, BrainLifecycle adapter, CLI (Phase 0C)
+6c3a8cf brain(db): migration 0008 AutoInject delivery ledger (Phase 0C)
+9c88c70 brain(core): P0-P2 shared event/protocol contracts (Phase 0B, tests-first)
+5472937 brain(project): P0->P2 Phase 0A current-state audit (gate evidence)
+a94cba0 brain(adapter): driver orchestration contract (automatic driver role)
+1b0b2c9 docs: sync deployment/current-state docs with proven live rollout
+5b30f7b brain(project): live proof addendum — post-restart load verification
+557e57d brain(core): add restore byte-identity regression test (live-validation session)
+34a54af brain(project): live validation evidence (deployment + recall + census)
+42bf8a3 brain(core): fix transient Hypothesis deadline flake in migration property tests
+a2be626 docs: record live rollout baseline
+ea8c148 brain(project): reflect Phase 14 recall hook in proof package
+a8c6acb brain(adapter): default-off controlled Prime recall hook (Phase 14)
+147ecb2 brain(project): optimization proof package (v4.3)
+1b698cf brain(memory): contradiction surfacing, retrieval budget, config wiring
+8d2fe05 brain(skill): fix Windows mtime bump in router cache invalidation test (ns form)
+1c9b927 brain(memory): align lazy-migration test snapshots with committed 0007 index
+af10e11 brain(policy): commit forward-compatible backup test snapshot; add Sol acceptance mapping
+3848ec8 brain(adapter): wire context.toml rtd threshold_chars into RTD threshold ladder
+2ce8c0f brain(memory): retrieval FTS5 engine, hard filters, dedupe, ranking
+b5acf83 brain(policy): documentation truth pass (Phase 5)
+b4f0a47 brain(skill): cache skill routing metadata; wire router.max_active
+61c536a brain(adapter): enforce Sol minimal-orchestrator guard
+1f2c843 brain(adapter): prove and preserve telemetry hot-path fixes
+3fd5c5e brain(policy): SEC-04 fix validator-found read-side gap in frontier_status
+057d20d brain(core): close Phase L audit gaps; lint/type fixes
+fd714b0 brain(core): SEC-08 telemetry command secret leakage
+c0902d6 brain(project): SEC-07 proof task/workspace path escape
+1723648 brain(immune): SEC-05 arbitrary immune rollback target
+6204c52 brain(policy): SEC-04 frontier ID traversal and glob injection
+b122c69 brain(skill): SEC-03 skill/engram/promotion lifecycle path escape
+6101689 brain(core): SEC-02 project ID escape + unsafe purge; SEC-06 AGENTS.md injection
+8836f63 brain(core): SEC-01 backup manifest escape + unsafe restore
+4881654 brain(core): add shared security boundary (identifier validation + canonical path containment)
+82da065 brain(policy): record v4.3 proof verdict
+1bccbe6 brain(policy): ignore derived proof outputs
+1610328 brain(policy): add v4.3 proof harness
+06bf246 brain(policy): repair v4.3 proof blockers
+b0e5a35 brain(project): reconcile final verification - preserve E2 pre-fix artifact (reproducible)
+b49870d brain(project): project state checkpoint - build complete at milestone 24
+e8f1edb brain(project): milestone 24 - v4.2 self-hosting completion report + checklist evidence
+3f7bf47 brain(skill): experiment 5 - cross-model transfer (pro->flash transfers; skill global)
+e7fc25f brain(memory): experiment 4 - stale memory contradiction (repo wins, labile, superseded v2, history kept)
+478b0fb brain(verify): experiment 2 verifier brief artifact
+807728b brain(skill): experiment 3 - forged delivery-integration skill from real episodes
+20b4038 brain(policy): reconcile Phase 23 verifier findings (help-text lint, count 424)
+3c240db brain(skill): record the promoted skill move + its frontier approve review
+74034ca brain(policy): Phase 23 policy promotion - all-guards shadow->candidate->active
+d15a27c brain(policy): Phase 23 policy promotion - worker delivery baseline
+5a388e2 brain(immune): reconcile Phase 22 verifier NITs (unique tmp names, count 424)
+23b1532 brain(immune): Phase 22 immune system - guarded auto-rollback with trigger windows
+7844a12 brain(immune): Phase 22 immune system - worker delivery baseline
+2e87fff brain(policy): reconcile Phase 21 verifier findings (suffix change_id validation, count 409)
+c39c8b0 brain(policy): Phase 21 frontier memory - manual review gate for risky policy changes
+84335f4 brain(policy): Phase 21 frontier memory - worker delivery baseline
+a3bbe32 brain(skill): reconcile Phase 20 verifier NIT (test count 397)
+58f06c6 brain(skill): Phase 20 cross-model memory - model outcomes, transfer test, contamination guard
+2c833ab brain(skill): Phase 20 crossmodel.py re-delivery (parent-corrupted copy replaced)
+6b87f0e brain(db): Phase 20 migration + tests baseline (crossmodel.py re-delivery in flight)
+42d0f33 brain(skill): reconcile Phase 19 verifier NIT (test count 374)
+0453783 brain(project): project state checkpoint before context compaction (phases 0-19 gated)
+05e8b76 brain(skill): Phase 19 workflow engrams - detection + no-logic structural invariant
+883c3d9 brain(skill): reconcile Phase 18 verifier findings (audits path tests, counts, note)
+652bdbf brain(skill): counterfactual reports live under outputs/audits/ (not milestone reports)
+da26b17 brain(skill): Phase 18 credit assignment - explicit-only, no-auto-reward invariant, counterfactuals
+f5c173a brain(skill): reconcile Phase 17 verifier NITs (docstrings, recall digit, count 359)
+218b417 brain(skill): Phase 17 sparse skill router (shadow) with trigger-first scoring
+085f987 brain(skill): reconcile Phase 16 verifier NITs (count 350; fail-closed case default documented)
+d6fd2a4 brain(skill): Phase 16 skill forge - candidates with 4-gate shadow (first real skill)
+dabfb24 brain(memory): reconcile Phase 15 verifier NITs (count 340, WARM->COLD bias documented)
+0b9df30 brain(memory): Phase 15 reconsolidation - activation tracking, heat states, protected decay
+0e49262 brain(memory): reconcile Phase 14 verifier findings
+43bb2d7 brain(memory): track sleep reports (canonical consolidation records) + docstring format fix
+6ef579a brain(memory): Phase 14 sleep - replay queue, clustering, provenance-linked strengthening
+9c9e30f brain(core): reconcile Phase 13 verifier NITs (hindsight docstring, count 311)
+f7a6787 brain(db): lazy-migration v1-brain test covers plasticity tables (worker integration fix)
+1d1dd4d brain(core): Phase 13 plasticity - predictions/outcomes/errors/credit/hindsight (shadow)
+6285201 brain(core): Phase 12 cerebellum - workflow templates + early looping detection
+451ba0f brain(core): reconcile Phase 11 verifier NITs (guarded telemetry read, count 264)
+288b06e brain(core): Phase 11 metacognitive monitor (shadow) - 3-axis confidence + labeled eval
+8a8c4c9 brain(memory): reconcile Phase 10 verifier findings
+90f35ac brain(memory): lazy-migration test covers 0002+0003 (worker integration fix)
+1071302 brain(memory): Phase 10 semantic memory - grades, curation rules, versioned supersede
+5add7c6 brain(memory): Phase 9 verifier NITs - race-safe exclusive id claim, guarded connect, raw-byte annotate
+97a6533 brain(memory): Phase 9 episodic memory - immutable episodes, migration 0002, provenance
+34160c2 brain(core): drop dead task_text param (Phase 8 verifier NIT); milestone-08 addendum
+c4039c0 brain(core): Phase 8 environment steward + Phase 7 verifier reconciliations
+6a8f5bd brain(policy): Phase 9 episodic memory design + real dogfood episode candidates
+0656dc2 brain(core): milestone-07 accuracy (eval passed: mismatch REJECT, low-risk APPROVE) + gate label fix
+ed8c59b brain(core): Phase 7 accuracy - risk controller + intent verifier briefs
+0810e3c brain(core): reconcile Phase 6 verifier findings (honest scout promotion table + metrics)
+d278aa3 brain(policy): Phase 7 worker spec + project state update
+7a92f15 brain(core): v4.2 Stage-0 component docs (11 components + architecture index)
+32fed7a brain(core): wire verification.toml material gate (Scout bonus finding)
+db292d1 brain(core): milestone-06 scout (advisory) + v4.2 Project #1 rekey + reserve config
+e411898 brain(core): scout spawn fix - valid Windows named-pipe daemon socket (\\.\pipe\scout-<uuid>)
+dfe7cb2 brain(core): Phase 6 scout - evidence maps, deterministic pre-pass, isolated agent spawn
+e19184a brain(core): reconcile Phase 5 verifier findings
+eb69f6c brain(policy): Phase 7 accuracy design (risk controller + intent verifier + eval)
+de9e959 brain(policy): Phase 6 scout experiment protocol (baseline vs scout arms)
+16d2bbc brain(core): Phase 5 sensory gateway / RTD + Phase 4 verifier reconciliations
+7b3567d brain(adapter): Phase 5 RTD shadow trigger in the Prime extension
+28a38a9 brain(policy): Phase 5 RTD design: rtd_shadow telemetry kind + [rtd] config (shadow default)
+2fa314e brain(core): docs for Phase 4 completion; Phase 5 status
+7bc5ce4 brain(core): milestone-04 working set / JIT (first dogfooding report)
+4dbb1a1 brain(core): Phase 4 working set / JIT context (worker-built, parent-integrated)
+54111c4 brain(project): fix Phase 3 verifier findings (CRLF blocker, remote identity, leaf --home)
+5acbca1 brain(core): revert Phase 4 CLI wiring until its modules land (main must stay green)
+6e38d01 brain(core): durable component map + build decisions (pre-memory doctrine)
+2369e6c brain(core): changelog + project state for Phase 3 merge; Phase 4 CLI wiring
+5e9f61b brain(adapter): wiring-level tests for safeHandler invariants (verifier finding #3)
+2c7c01b brain(project): Phase 3 project integration (merged; gate closed)
+ed24c76 brain(project): milestone-03 test count fix (68); project state update
+9868b4a brain(adapter): reconcile Phase 2 verifier findings
+d641b9d brain(project): Phase 3 project integration - attach/detach/remove, manifest, AGENTS marker
+181b0c7 brain(core): milestone-02 observability report; project state + checklist update
+3d6d388 brain(adapter): Prime observability extension (Phase 2) + schema clarifications
+dc0e49d brain(core): fix restore WAL replay + reviewer findings; Phase 2 python/PS tooling
+b95d0fd brain(core): track canonical directory structure markers
+
+=== DELETED TESTS ===
+
+=== RENAMED TESTS ===

@@ -100,6 +100,27 @@ def test_expand_unknown_and_invalid(brain_home):
         artifacts.expand(brain_home, "")
 
 
+def test_expand_rejects_traversal_shaped_inputs(brain_home):
+    """Verify traversal-shaped and other malicious inputs are rejected."""
+    import pytest
+
+    from second_brain import artifacts
+    from second_brain.errors import BrainError
+
+    # Test traversal-shaped inputs (should all raise BrainError)
+    malicious_inputs = [
+        "../../../etc/passwd",  # Unix traversal
+        "..\\..\\..\\windows\\system32",  # Windows traversal
+        "../../",  # Directory traversal
+        "/etc/passwd",  # Absolute path
+        "..passwd",  # Traversal prefix
+    ]
+
+    for malicious_input in malicious_inputs:
+        with pytest.raises(BrainError, match="Unknown"):
+            artifacts.expand(brain_home, malicious_input)
+
+
 def test_store_twice_idempotent_then_collision(brain_home):
     text = "same content"
     first = artifacts.store_text(brain_home, text, "generic")

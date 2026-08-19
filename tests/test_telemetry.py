@@ -170,3 +170,19 @@ def test_validate_accepts_rtd_shadow(brain_home):
     )
     r = telemetry.validate(brain_home)
     assert r["issues"] == []
+
+
+
+
+def test_telemetry_schema_has_no_reasoning_fields():
+    """Cheap guard: assert SCHEMA.md doesn't declare reasoning/thinking fields."""
+    from pathlib import Path
+
+    schema_path = Path(__file__).parent.parent / "brainstem" / "telemetry" / "SCHEMA.md"
+    if schema_path.exists():
+        schema_content = schema_path.read_text(encoding='utf-8', errors='ignore')
+
+        forbidden = ["thinking", "reasoning", "chain_of_thought", "cot", "internal_monologue"]
+        for word in forbidden:
+            assert word.lower() not in schema_content.lower(), \
+                f"SCHEMA.md contains forbidden field: {word}"

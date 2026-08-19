@@ -1,0 +1,20 @@
+=== DOCTOR OUTPUT ===
+Brain home: C:\Users\assas\Documents\The-Second-Brain
+[PASS] brain home — C:\Users\assas\Documents\The-Second-Brain
+[PASS] brain marker
+[PASS] layout — 70 major roots present
+[PASS] config — all config files parse as TOML
+[PASS] version — 0.1.0
+[PASS] SECOND_BRAIN_HOME — C:\Users\assas\Documents\The-Second-Brain
+[WARN] python env — PYTHONHOME, UV_INTERNAL__PYTHONHOME set; this machine's PYTHONHOME is known to break python launches (SRE module mismatch). Run via brainctl.cmd / bootstrap.ps1 which sanitize the environment.
+[PASS] python — 3.11.15 at C:\Users\assas\Documents\The-Second-Brain-v1\.venv\Scripts\python.exe
+[PASS] sqlite3 — SQLite 3.50.4
+[PASS] git repo — git version 2.55.0.windows.3
+[PASS] database — journal_mode=wal, foreign_keys=1
+[PASS] migrations — current at version 9
+[WARN] tool:rg — not found on PATH
+[PASS] tool:ast-grep — ast-grep 0.45.1
+[WARN] tool:repowise — (no output)
+[PASS] tool:uv — uv 0.11.6 (65950801c 2026-04-09 x86_64-pc-windows-msvc)
+16 checks: 0 failed, 3 warnings
+Exit code: 0
