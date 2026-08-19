@@ -1,0 +1,10 @@
+{
+  "name": "ALL_OFF",
+  "firewall": false,
+  "vmem": false,
+  "cache": false,
+  "delta": false,
+  "hybrid": false,
+  "tws": false,
+  "tokens": 4600
+}

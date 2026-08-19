@@ -1,0 +1,2 @@
+Task P-13: Cross-harness handoff from AGY to Prime
+Description: Transfer session capsule

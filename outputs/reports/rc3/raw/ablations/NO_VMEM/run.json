@@ -1,0 +1,10 @@
+{
+  "name": "NO_VMEM",
+  "firewall": true,
+  "vmem": false,
+  "cache": true,
+  "delta": true,
+  "hybrid": true,
+  "tws": true,
+  "tokens": 2340
+}

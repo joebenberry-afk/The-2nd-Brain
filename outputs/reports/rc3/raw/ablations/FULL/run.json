@@ -1,0 +1,10 @@
+{
+  "name": "FULL",
+  "firewall": true,
+  "vmem": true,
+  "cache": true,
+  "delta": true,
+  "hybrid": true,
+  "tws": true,
+  "tokens": 1420
+}

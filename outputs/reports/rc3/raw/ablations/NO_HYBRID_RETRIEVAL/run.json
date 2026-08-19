@@ -1,0 +1,10 @@
+{
+  "name": "NO_HYBRID_RETRIEVAL",
+  "firewall": true,
+  "vmem": true,
+  "cache": true,
+  "delta": true,
+  "hybrid": false,
+  "tws": true,
+  "tokens": 2410
+}

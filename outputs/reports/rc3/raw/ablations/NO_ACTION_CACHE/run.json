@@ -1,0 +1,10 @@
+{
+  "name": "NO_ACTION_CACHE",
+  "firewall": true,
+  "vmem": true,
+  "cache": false,
+  "delta": true,
+  "hybrid": true,
+  "tws": true,
+  "tokens": 2120
+}

@@ -1,0 +1,8 @@
+{
+  "task_id": "P-04",
+  "workload_class": "STANDARD",
+  "name": "Unit test suite extension for edge cases",
+  "brain_mode": "on",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}

@@ -1,0 +1,2 @@
+Task P-12: Interrupted session recovery post-compaction
+Description: Resume from compaction barrier

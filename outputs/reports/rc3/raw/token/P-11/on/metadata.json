@@ -1,0 +1,8 @@
+{
+  "task_id": "P-11",
+  "workload_class": "HANDOFF",
+  "name": "Driver to worker subtask delegation and resume",
+  "brain_mode": "on",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}
