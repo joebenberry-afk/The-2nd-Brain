@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, registry, semantic, telemetry
+from . import db, hybrid_retrieval, registry, semantic, telemetry
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -73,6 +73,7 @@ _ENV_DELTA_CAP = "SECOND_BRAIN_AUTOINJECT_DELTA_HARD_CAP_TOKENS"
 # Rendered packet cache: packet_id -> (rendered text, items). Shadow phase
 # keeps decisions deterministic without persisting packets to the canonical DB.
 _PACKET_CACHE: dict[str, tuple[str, list[PacketItem]]] = {}
+_CASCADE = hybrid_retrieval.HybridCascadeRetriever()
 
 
 # ---------------------------------------------------------------------------
