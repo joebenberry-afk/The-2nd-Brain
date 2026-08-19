@@ -57,6 +57,7 @@ class RetrievalMatch:
     summary: str = ""
     body: str = ""
     confidence: float = 1.0
+    raw_row: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -126,6 +127,7 @@ class HybridCascadeRetriever:
         *,
         project_id: str | None = None,
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+        top_k: int = 10,
         vector_searcher: Callable[[str, str | None], list[dict[str, Any]]] | None = None,
     ) -> CascadeResult:
         """
@@ -186,6 +188,7 @@ class HybridCascadeRetriever:
                         tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
                         summary=row.get("summary", ""),
                         confidence=1.0,
+                        raw_row=dict(row),
                     )
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
@@ -209,7 +212,7 @@ class HybridCascadeRetriever:
                 home_path,
                 clean_q,
                 project_id=project_id,
-                top_k=5,
+                top_k=top_k,
             )
         except Exception:
             fts_matches = []
@@ -226,6 +229,7 @@ class HybridCascadeRetriever:
                         tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
                         summary=m.get("summary", ""),
                         confidence=best_score,
+                        raw_row=dict(m),
                     )
                     for m in fts_matches
                 ]

@@ -1,0 +1,60 @@
+{
+  "t0_exact": {
+    "query": "mem-33e8a5c1dfe7",
+    "project_id": "test-cascade-proj",
+    "tier_resolved": 0,
+    "decision": "INJECT",
+    "reason": "EXACT_REF_MATCH",
+    "vector_invoked": false,
+    "short_circuited": true,
+    "negative_cached": false,
+    "latency_ms": 2.097,
+    "match_count": 1,
+    "matches": [
+      {
+        "memory_id": "mem-33e8a5c1dfe7",
+        "title": "Hybrid Retrieval Concurrency Rule",
+        "score": 1.0,
+        "tier_resolved": 0,
+        "summary": null,
+        "confidence": 1.0
+      }
+    ]
+  },
+  "t2_lexical": {
+    "query": "database mutex WAL index",
+    "project_id": "test-cascade-proj",
+    "tier_resolved": 2,
+    "decision": "INJECT",
+    "reason": "LEXICAL_HIGH_CONFIDENCE",
+    "vector_invoked": false,
+    "short_circuited": true,
+    "negative_cached": false,
+    "latency_ms": 3.841,
+    "match_count": 1,
+    "matches": [
+      {
+        "memory_id": "mem-33e8a5c1dfe7",
+        "title": "Hybrid Retrieval Concurrency Rule",
+        "score": 0.85,
+        "tier_resolved": 2,
+        "summary": null,
+        "confidence": 0.85
+      }
+    ]
+  },
+  "negative_cache": {
+    "query": "completely unrelated non-existent query 9999",
+    "project_id": "test-cascade-proj",
+    "tier_resolved": 0,
+    "decision": "NO_INJECTION",
+    "reason": "NO_RELEVANT_MEMORY",
+    "vector_invoked": false,
+    "short_circuited": true,
+    "negative_cached": true,
+    "latency_ms": 0.012,
+    "match_count": 0,
+    "matches": []
+  },
+  "autoinject_packet_ref": "pkt-ce6654b83788df61"
+}

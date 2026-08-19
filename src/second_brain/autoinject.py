@@ -680,15 +680,22 @@ def prepare_injection(
     unscoped_candidates: list[dict] = []
     try:
         db.migrate(db_path(home))
-        # Primary search: project-scoped (matches exact project_id + global scope)
-        rows = semantic.search_memories(
+        # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
+        cascade_res = _CASCADE.retrieve(
             home,
             intent.task_text,
             project_id=proj_filter,
-            include_history=False,
             top_k=_MAX_CANDIDATES,
-            max_tokens=None,
         )
+        if cascade_res.matches:
+            rows = [
+                m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+                for m in cascade_res.matches
+            ]
+            query_mode = "and"
+        else:
+            rows = []
+
         if not rows:
             # OR-fallback within project scope
             query_mode = "or_fallback"
@@ -699,15 +706,18 @@ def prepare_injection(
         # If zero candidates found within scope, check if matches existed outside scope
         # (to distinguish WRONG_PROJECT from NO_RELEVANT_MEMORY)
         if not rows and proj_filter is not None:
-            unscoped_candidates = semantic.search_memories(
+            unscoped_cascade = _CASCADE.retrieve(
                 home,
                 intent.task_text,
                 project_id=None,
-                include_history=False,
                 top_k=_MAX_CANDIDATES,
-                max_tokens=None,
             )
-            if not unscoped_candidates:
+            if unscoped_cascade.matches:
+                unscoped_candidates = [
+                    m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+                    for m in unscoped_cascade.matches
+                ]
+            else:
                 unscoped_candidates = _search_or_fallback(
                     home, intent.task_text, _MAX_CANDIDATES, project_id=None
                 )
