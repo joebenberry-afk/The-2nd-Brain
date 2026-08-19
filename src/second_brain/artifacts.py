@@ -266,6 +266,16 @@ def expand(home: Path, hash_or_prefix: str) -> bytes:
     ):
         raise BrainError(f"Unknown artifact {hash_or_prefix!r}")
     _, meta_dir = _dirs(home)
+    if len(key) == HASH_LEN:
+        meta_path = meta_dir / f"{key}.json"
+        if not meta_path.exists():
+            raise BrainError(f"Unknown artifact {hash_or_prefix!r}")
+        blob_path = meta_dir.parent / "blobs" / f"{key}.bin"
+        try:
+            return blob_path.read_bytes()
+        except OSError as exc:
+            raise BrainError(f"Cannot read artifact blob {blob_path}: {exc}") from exc
+
     matches = sorted(
         meta.stem
         for meta in meta_dir.glob("*.json")

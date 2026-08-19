@@ -914,6 +914,42 @@ def _parser() -> argparse.ArgumentParser:
     vm_cr.add_argument("session_id", help="host session ID")
     vm_cr.add_argument("--budget", type=int, default=1500, help="token budget")
 
+    ac = sub.add_parser(
+        "action-cache",
+        parents=[home_parent],
+        help="Proof-Carrying Action Cache: pure action replay & safety proofs (Phase 4)",
+    )
+    acs = ac.add_subparsers(dest="action_cache_command", required=True)
+
+    ac_stats = acs.add_parser(
+        "stats", parents=[home_parent], help="show action cache statistics"
+    )
+    ac_stats.add_argument("--json", action="store_true", help="output JSON")
+
+    ac_get = acs.add_parser(
+        "get",
+        parents=[home_parent],
+        help="get and validate cached action by key",
+    )
+    ac_get.add_argument("action_key", help="deterministic action key hash")
+    ac_get.add_argument("--json", action="store_true", help="output JSON")
+
+    ac_inv = acs.add_parser(
+        "invalidate",
+        parents=[home_parent],
+        help="invalidate entries by path dependency",
+    )
+    ac_inv.add_argument("--path", default=None, help="target path that changed")
+    ac_inv.add_argument(
+        "--all",
+        dest="invalidate_all",
+        action="store_true",
+        help="invalidate all entries",
+    )
+    ac_inv.add_argument("--json", action="store_true", help="output JSON")
+
+    acs.add_parser("clear", parents=[home_parent], help="clear entire action cache")
+
     return p
 
 
@@ -3417,6 +3453,63 @@ def cmd_vmem(args) -> int:
     return 2
 
 
+def cmd_action_cache(args) -> int:
+    import json
+
+    from . import action_cache
+
+    home = _home(args)
+    store = action_cache.ActionCacheStore(home)
+
+    if args.action_cache_command == "stats":
+        stats = store.get_stats()
+        if args.json:
+            print(json.dumps(stats, indent=2))
+        else:
+            print("Action Cache Statistics:")
+            print(f"  Entries: {stats['total_entries']}")
+            print(f"  Hits: {stats['total_hits']}")
+            print(f"  Tokens Saved Estimate: {stats['tokens_saved_estimate']}")
+        return 0
+
+    if args.action_cache_command == "get":
+        res = store.query(args.action_key)
+        if args.json:
+            out = {
+                "hit": res.hit,
+                "reason": res.reason,
+                "latency_ms": round(res.latency_ms, 3),
+                "entry": res.entry.to_dict() if res.entry else None,
+            }
+            print(json.dumps(out, indent=2))
+        else:
+            if res.hit and res.content is not None:
+                print(f"[CACHE HIT] {args.action_key} ({res.latency_ms:.3f}ms)")
+                sys.stdout.write(res.content)
+            else:
+                print(f"[CACHE MISS] {args.action_key} ({res.reason})")
+        return 0
+
+    if args.action_cache_command == "invalidate":
+        if args.invalidate_all:
+            store.clear()
+            print("Cleared all action cache entries.")
+            return 0
+        if args.path:
+            count = store.invalidate_by_path(args.path)
+            print(f"Invalidated {count} entries depending on {args.path}")
+            return 0
+        print("Specify --path <path> or --all to invalidate.", file=sys.stderr)
+        return 2
+
+    if args.action_cache_command == "clear":
+        store.clear()
+        print("Cleared action cache.")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3444,6 +3537,7 @@ def main(argv: list[str] | None = None) -> int:
         "governor": cmd_governor,
         "firewall": cmd_firewall,
         "vmem": cmd_vmem,
+        "action-cache": cmd_action_cache,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
