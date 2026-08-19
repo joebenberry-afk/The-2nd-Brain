@@ -1,0 +1,96 @@
+[
+  {
+    "name": "view_file",
+    "description": "View file content at path with line slice.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "AbsolutePath"
+      ],
+      "properties": {
+        "AbsolutePath": {
+          "type": "string"
+        },
+        "StartLine": {
+          "type": "integer"
+        },
+        "EndLine": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "run_command",
+    "description": "Execute shell command in working directory.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "CommandLine",
+        "Cwd"
+      ],
+      "properties": {
+        "CommandLine": {
+          "type": "string"
+        },
+        "Cwd": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "replace_file_content",
+    "description": "Edit existing file by replacing contiguous target content.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "TargetFile",
+        "TargetContent",
+        "ReplacementContent",
+        "StartLine",
+        "EndLine"
+      ],
+      "properties": {
+        "TargetFile": {
+          "type": "string"
+        },
+        "TargetContent": {
+          "type": "string"
+        },
+        "ReplacementContent": {
+          "type": "string"
+        },
+        "StartLine": {
+          "type": "integer"
+        },
+        "EndLine": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "write_to_file",
+    "description": "Create new file or overwrite with code content.",
+    "parameters": {
+      "type": "object",
+      "required": [
+        "TargetFile",
+        "CodeContent",
+        "Overwrite"
+      ],
+      "properties": {
+        "TargetFile": {
+          "type": "string"
+        },
+        "CodeContent": {
+          "type": "string"
+        },
+        "Overwrite": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+]
