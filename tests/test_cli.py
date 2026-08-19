@@ -237,3 +237,48 @@ def test_action_cache_search_non_git_dir_never_caches(tmp_path):
     r2 = run_cli(home, "action-cache", "search", "marker_value_xyz", "--path", str(plain), "--json")
     out2 = json.loads(r2.stdout)
     assert out2["hit"] is False
+
+
+def test_worker_plane_ceiling_block_complete_respawn(tmp_path):
+    """Phase R7: the required proof scenario end to end — spawn 2 (allowed),
+    spawn a 3rd (blocked), complete one, spawn a new one (allowed again).
+    Prime has no extension hook for subagent spawn (see
+    outputs/reports/rc4/02-prime-live-callgraph.md), so this CLI command is
+    the actual enforcement surface (outputs/reports/rc4/07-worker-plane-live.md)."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    r1 = run_cli(home, "worker-plane", "spawn", "sess-1", "task1", "--max-workers", "2", "--json")
+    assert r1.returncode == 0, r1.stderr
+    w1 = json.loads(r1.stdout)
+    assert w1["spawned"] is True
+    worker1_id = w1["worker_id"]
+
+    r2 = run_cli(home, "worker-plane", "spawn", "sess-1", "task2", "--max-workers", "2", "--json")
+    assert r2.returncode == 0, r2.stderr
+    assert json.loads(r2.stdout)["spawned"] is True
+
+    r3 = run_cli(home, "worker-plane", "spawn", "sess-1", "task3", "--max-workers", "2", "--json")
+    assert r3.returncode == 2  # blocked: ceiling reached
+    out3 = json.loads(r3.stdout)
+    assert out3["spawned"] is False
+    assert "ceiling" in out3["error"].lower()
+
+    r_status = run_cli(home, "worker-plane", "status", "sess-1", "--max-workers", "2", "--json")
+    assert json.loads(r_status.stdout) == {"active_workers": 2, "max_concurrent_workers": 2}
+
+    r_complete = run_cli(
+        home, "worker-plane", "complete", "sess-1", worker1_id,
+        "--status", "COMPLETED", "--summary", "done", "--json",
+    )
+    assert r_complete.returncode == 0, r_complete.stderr
+    assert json.loads(r_complete.stdout) == {
+        "completed": True, "worker_id": worker1_id, "status": "COMPLETED",
+    }
+
+    r_status2 = run_cli(home, "worker-plane", "status", "sess-1", "--max-workers", "2", "--json")
+    assert json.loads(r_status2.stdout)["active_workers"] == 1
+
+    r4 = run_cli(home, "worker-plane", "spawn", "sess-1", "task4", "--max-workers", "2", "--json")
+    assert r4.returncode == 0, r4.stderr
+    assert json.loads(r4.stdout)["spawned"] is True
