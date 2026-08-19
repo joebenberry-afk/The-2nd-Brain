@@ -16,30 +16,36 @@ RC4 STATUS: REPAIR + GENUINE EVIDENCE COLLECTION
 
 ## Session scope note
 
-This RC4 pass was scoped, by explicit user decision, to **repo-only phases**
-that a single Claude Code session can perform directly: no paid model
-campaigns, no other-harness (Prime/Codex/AGY) live sessions. Those phases
-remain open — see [21-independent-handoff.md](21-independent-handoff.md) for
-what still requires genuine cross-harness execution before external
-qualification can proceed.
+This RC4 work was scoped, by explicit user decision, to **repo-local
+implementation** a single Claude Code session can perform directly: no
+paid model campaigns, no other-harness (Prime/Codex/AGY) live sessions.
+That scope is now complete — see
+[10-runtime-implementation-checkpoint.md](10-runtime-implementation-checkpoint.md)
+for the full checkpoint report (`RC4_RUNTIME_IMPLEMENTATION_COMPLETE —
+REAL PILOT REQUIRED`). `21-independent-handoff.md` is deferred to the end
+of the full RC4 process per plan §42 — it is not written until genuine
+cross-harness/paid evidence exists to hand off, which this checkpoint does
+not yet include.
 
-Completed this pass:
-- **Phase R0** — RC3 synthetic-evidence quarantine and disposition
-  ([01-rc3-evidence-disposition.md](01-rc3-evidence-disposition.md)).
-- **Phase R1** — actual Prime live call-graph audit from source, not RC3
-  report claims ([02-prime-live-callgraph.md](02-prime-live-callgraph.md)).
-- **Phase R4** — Action Cache proof-safety repair (explicit predicate
-  allowlist; unknown predicate now fails closed). See
-  [`src/second_brain/action_cache.py`](../../../src/second_brain/action_cache.py)
-  and the adversarial tests added to
-  [`tests/test_action_cache_safety_proof.py`](../../../tests/test_action_cache_safety_proof.py).
-  Verified: `pytest tests/test_action_cache_safety_proof.py tests/test_action_cache.py`
-  → 17 passed. `ruff check` and `pyright` clean on both files.
+Completed:
+- **R0** — RC3 synthetic-evidence quarantine ([01](01-rc3-evidence-disposition.md)).
+- **R1** — Prime live call-graph audit from source ([02](02-prime-live-callgraph.md)).
+- **R2** — RTD/Firewall reduction path confirmed live, no rebuild ([03](03-prime-rtd-firewall.md)).
+- **R3** — VMem compaction-boundary bookkeeping wired; `context` handler's
+  wire()-discards-return bug fixed ([04](04-prime-vmem.md)).
+- **R4** — Action Cache predicate allowlist, fail-closed on unknown predicate.
+- **R5** — `action-cache search`, narrowest Brain-owned execution-bypass
+  layer; two silent-cache-miss bugs found and fixed ([05](05-action-cache-live.md)).
+- **R6** — Prime's real tool surface captured (read-only); `setActiveTools`
+  deliberately deferred (fictional catalog mismatch) ([06](06-tool-working-set-live.md)).
+- **R7** — `worker-plane` CLI, the real concurrency-ceiling enforcement
+  surface Prime itself doesn't expose ([07](07-worker-plane-live.md)).
+- **R8** — Hybrid Retrieval cascade wiring verified against the plan
+  checklist, no rebuild; one honest capability gap documented ([08](08-hybrid-retrieval-validation.md)).
+- **R9** — Fresh-verifier "record" plumbing; never generates a verdict
+  itself ([09](09-fresh-verifier.md)).
 
-Not attempted this pass (require paid/cross-harness execution or additional
-scoped sessions): R2 (Firewall/RTD unification), R3 (VMem context
-integration — live proof), R5 (Action Cache Prime integration), R6 (Tool
-Working Set live control), R7 (Worker Plane live spawn control), R8 (Hybrid
-Retrieval verification), R9–R11 and everything in sections 18–29 of the
-recovery plan (token campaign, ablations, dogfood, failure injection,
-security, backup/restore, burn-in).
+Not attempted (require paid/cross-harness execution — R9–R11 "live proof"
+tier and everything in sections 18–29 of the recovery plan: token
+campaign, ablations, dogfood, failure injection, security, backup/restore,
+burn-in). See the checkpoint report for the exact first-pilot procedure.
