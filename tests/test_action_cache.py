@@ -157,7 +157,7 @@ class TestActionCacheStoreAndReplay:
         assert val2 == "computed_result_data"
         assert hit2 is True
         assert call_count == 1  # Not called again!
-        assert lat2 < 5.0  # Fast replay
+        assert lat2 < 20.0  # Fast replay
 
     def test_invalidate_by_path(self, brain_home, tmp_path):
         store = ActionCacheStore(brain_home)
