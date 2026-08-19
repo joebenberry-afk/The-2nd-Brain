@@ -817,6 +817,52 @@ def _parser() -> argparse.ArgumentParser:
     )
     gov_prof.add_argument("--json", action="store_true", help="machine-readable output")
 
+    fw = sub.add_parser(
+        "firewall",
+        parents=[home_parent],
+        help="Observation Firewall: tool output reduction & recovery (Phase 2)",
+    )
+    fws = fw.add_subparsers(dest="firewall_command", required=True)
+
+    fw_red = fws.add_parser(
+        "reduce",
+        parents=[home_parent],
+        help="reduce bulky tool output deterministically",
+    )
+    fw_red.add_argument(
+        "input_path", nargs="?", default=None, help="file path or stdin if omitted"
+    )
+    fw_red.add_argument(
+        "--kind",
+        default=None,
+        help="reducer kind (pytest, compiler, git, search, json, logs, build, doctor, generic)",
+    )
+    fw_red.add_argument(
+        "--command",
+        dest="exec_command",
+        default="",
+        help="command executed (for kind auto-detection)",
+    )
+    fw_red.add_argument("--tool", default="", help="tool name (e.g. bash, pytest)")
+    fw_red.add_argument("--session", default=None, help="session ID for artifact metadata")
+    fw_red.add_argument("--json", action="store_true", help="output full ReducerResult as JSON")
+
+    fw_exp = fws.add_parser(
+        "expand",
+        parents=[home_parent],
+        help="losslessly expand a reduced artifact",
+    )
+    fw_exp.add_argument(
+        "ref", help="artifact hash, prefix, or [brain-artifact:sha256:hash] handle"
+    )
+
+    fw_kinds = fws.add_parser(
+        "kinds",
+        parents=[home_parent],
+        help="list available deterministic reducer kinds",
+    )
+    fw_kinds.add_argument("--json", action="store_true", help="machine-readable output")
+
     return p
 
 
@@ -3185,6 +3231,56 @@ def cmd_governor(args) -> int:
     return 2
 
 
+def cmd_firewall(args) -> int:
+    import json
+
+    from . import firewall
+
+    home = _home(args)
+
+    if args.firewall_command == "reduce":
+        if args.input_path:
+            text = Path(args.input_path).read_text(encoding="utf-8", errors="replace")
+        else:
+            text = sys.stdin.read()
+
+        res = firewall.reduce_observation(
+            text,
+            kind=args.kind,
+            command=args.exec_command,
+            tool=args.tool,
+            session=args.session,
+            home=home,
+        )
+
+        if args.json:
+            print(json.dumps(res.to_dict(), indent=2))
+        else:
+            print(res.distilled_text)
+        return 0
+
+    if args.firewall_command == "expand":
+        try:
+            expanded = firewall.expand_observation(home, args.ref)
+            sys.stdout.write(expanded)
+            return 0
+        except BrainError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+
+    if args.firewall_command == "kinds":
+        kinds = sorted(firewall.REDUCER_MAP.keys())
+        if args.json:
+            print(json.dumps(kinds, indent=2))
+        else:
+            print("Available Observation Firewall Reducers:")
+            for k in kinds:
+                print(f"  - {k}")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3210,6 +3306,7 @@ def main(argv: list[str] | None = None) -> int:
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
         "governor": cmd_governor,
+        "firewall": cmd_firewall,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
