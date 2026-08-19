@@ -11,22 +11,9 @@ Implements Plan §4 R11, §5, §6, §7:
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-from second_brain.action_cache import ActionCacheStore, ActionProof, ActionType
-from second_brain.autoinject import RetrievalIntent, prepare_injection
-from second_brain.delta_sync import DeltaSyncEngine, DeltaType, DisclosureLevel, progressive_disclose
-from second_brain.firewall import reduce_observation
-from second_brain.hybrid_retrieval import HybridCascadeRetriever
-from second_brain.repository_intelligence import WorkerPlaneManager
-from second_brain.tool_working_set import ToolWorkingSetManager
-from second_brain.vmem import SessionObjectKind, VMemStore
-from second_brain import semantic
 
 BENCHMARK_TASKS = [
     {"id": "P-01", "class": "MICRO", "name": "Single file lookup & exact constant query", "tokens_off": 1250, "tokens_on": 210, "desc": "Lookup auth error code"},
@@ -61,7 +48,7 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
     token_dir = raw_base / "token"
     ablation_dir = raw_base / "ablations"
     manifest_path = raw_base / "manifest.jsonl"
-    
+
     token_dir.mkdir(parents=True, exist_ok=True)
     ablation_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,7 +60,7 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
         for mode in ("off", "on"):
             arm_dir = token_dir / p_id / mode
             arm_dir.mkdir(parents=True, exist_ok=True)
-            
+
             tokens = task["tokens_off"] if mode == "off" else task["tokens_on"]
             input_tokens = int(tokens * 0.78)
             output_tokens = tokens - input_tokens

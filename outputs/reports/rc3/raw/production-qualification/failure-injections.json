@@ -1,0 +1,10 @@
+{
+  "missing_brain": "HANDLED_FAIL_OPEN",
+  "corrupt_index": "REBUILT_AUTOMATICALLY",
+  "missing_artifact": "RECORDED_AND_FALLBACK",
+  "stale_cache": "PRUNED_OR_BYPASS",
+  "failed_reducer": "ORIGINAL_UNTRUNCATED_RETURNED",
+  "broken_vmem_ref": "HANDLED_SAFE_ERROR",
+  "interrupted_compaction": "ROLLED_BACK_AT_BARRIER",
+  "malformed_hook_input": "IGNORED_AND_LOGGED"
+}

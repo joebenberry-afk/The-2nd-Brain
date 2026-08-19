@@ -1,0 +1,13 @@
+[
+  {
+    "fingerprint_id": "fp-4f2aed60c5e9",
+    "category": "UNCOMPRESSED_PAYLOAD",
+    "impact_score": 4.5,
+    "occurrence_count": 7,
+    "description": "pytest output exceeding 6KB",
+    "mitigation": "Route through Observation Firewall",
+    "first_seen": "2026-08-19T05:26:50.049781+00:00",
+    "last_seen": "2026-08-19T05:27:58.127310+00:00",
+    "metadata": {}
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "healthy": true,
+  "db_ok": true,
+  "cache_pruned_count": 0,
+  "uncommitted_git_changes": true,
+  "issues": [],
+  "timestamp": "2026-08-19T05:27:58.073958+00:00",
+  "model_tokens_used": 0
+}

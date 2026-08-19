@@ -1,0 +1,20 @@
+{
+  "total_skills_tracked": 1,
+  "healthy_count": 1,
+  "degraded_count": 0,
+  "review_count": 0,
+  "degraded_skills": [],
+  "healthy_skills": [
+    {
+      "skill_name": "second-brain-recall",
+      "invocations": 13,
+      "total_tokens_invested": 1040,
+      "total_tokens_saved": 6500,
+      "net_tokens_saved": 5460,
+      "roi_ratio": 6.25,
+      "success_rate": 1.0,
+      "health": "HEALTHY",
+      "recommendation": "High value skill: promote to core resident catalog."
+    }
+  ]
+}
