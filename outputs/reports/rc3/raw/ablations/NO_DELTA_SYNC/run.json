@@ -1,0 +1,10 @@
+{
+  "name": "NO_DELTA_SYNC",
+  "firewall": true,
+  "vmem": true,
+  "cache": true,
+  "delta": false,
+  "hybrid": true,
+  "tws": true,
+  "tokens": 1980
+}

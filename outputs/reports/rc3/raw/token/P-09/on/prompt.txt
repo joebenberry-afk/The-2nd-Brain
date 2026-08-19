@@ -1,0 +1,2 @@
+Task P-09: Evaluating embedding model latency vs accuracy
+Description: Cascade tier benchmarks

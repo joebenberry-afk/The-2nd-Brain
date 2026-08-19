@@ -1,0 +1,8 @@
+{
+  "task_id": "P-05",
+  "workload_class": "DEEP",
+  "name": "Multi-file subsystem audit and synchronization",
+  "brain_mode": "off",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}

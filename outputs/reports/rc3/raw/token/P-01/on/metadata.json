@@ -1,0 +1,8 @@
+{
+  "task_id": "P-01",
+  "workload_class": "MICRO",
+  "name": "Single file lookup & exact constant query",
+  "brain_mode": "on",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}

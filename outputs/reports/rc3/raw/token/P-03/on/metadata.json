@@ -1,0 +1,8 @@
+{
+  "task_id": "P-03",
+  "workload_class": "STANDARD",
+  "name": "Refactoring module interface and updating calls",
+  "brain_mode": "on",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}

@@ -1,0 +1,10 @@
+{
+  "input_tokens": 1544,
+  "output_tokens": 436,
+  "cache_read_tokens": 0,
+  "cache_write_tokens": 0,
+  "total_tokens": 1980,
+  "cost": null,
+  "source": "prime-agent-runtime",
+  "source_run_id": "run-P-12-on-001"
+}

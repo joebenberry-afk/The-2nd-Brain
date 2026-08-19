@@ -1,0 +1,2 @@
+Task P-07: SQLite concurrency lock contention triage
+Description: Fix WAL busy timeout contention

@@ -1,0 +1,10 @@
+{
+  "name": "NO_FIREWALL",
+  "firewall": false,
+  "vmem": true,
+  "cache": true,
+  "delta": true,
+  "hybrid": true,
+  "tws": true,
+  "tokens": 2850
+}

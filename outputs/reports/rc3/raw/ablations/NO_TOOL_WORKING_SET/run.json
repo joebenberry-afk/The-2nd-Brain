@@ -1,0 +1,10 @@
+{
+  "name": "NO_TOOL_WORKING_SET",
+  "firewall": true,
+  "vmem": true,
+  "cache": true,
+  "delta": true,
+  "hybrid": true,
+  "tws": false,
+  "tokens": 2690
+}

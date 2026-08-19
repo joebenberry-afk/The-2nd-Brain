@@ -1,0 +1,8 @@
+{
+  "task_id": "P-08",
+  "workload_class": "DEBUG",
+  "name": "Resolving memory leakage during compaction",
+  "brain_mode": "off",
+  "model": "gemini-3.7-flash",
+  "harness": "prime-agent"
+}
