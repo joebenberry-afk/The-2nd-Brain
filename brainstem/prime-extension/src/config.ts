@@ -266,3 +266,111 @@ export function loadVmemConfig(home: string | null): VmemFileConfig {
     return vmemConfigFromContextToml("");
   }
 }
+
+// ---------------------------------------------------------------------------
+// [context_structure] config surface — same tiny TOML-subset parser style
+// as [vmem]/[rtd]. Safe-by-default: enabled=false. Gates ONLY the additional
+// privacy-safe structural sensor (sensors.contextStructure); the existing
+// unconditional `sensors.context` (messages.length) is never affected.
+// ---------------------------------------------------------------------------
+
+export interface ContextStructureFileConfig {
+  /** Master switch: contextStructure() is appended only when true. */
+  enabled: boolean;
+}
+
+/**
+ * Parse the `[context_structure]` section of config/context.toml.
+ * Missing/invalid values fall back to enabled=false. PURE, never throws,
+ * never reads fs.
+ */
+export function contextStructureConfigFromContextToml(text: string): ContextStructureFileConfig {
+  let inSection = false;
+  let enabled = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inSection = line.startsWith("[context_structure]");
+      continue;
+    }
+    if (!inSection || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    if (key === "enabled") {
+      const v = value.toLowerCase();
+      enabled = v === "true" || v === "1" || v === "yes";
+    }
+  }
+  return { enabled };
+}
+
+/**
+ * Load the full [context_structure] config from
+ * `<home>/config/context.toml`; missing or unreadable file returns the safe
+ * default (enabled=false). Never throws.
+ */
+export function loadContextStructureConfig(home: string | null): ContextStructureFileConfig {
+  if (!home) return contextStructureConfigFromContextToml("");
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return contextStructureConfigFromContextToml(text);
+  } catch {
+    return contextStructureConfigFromContextToml("");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// [vmem_admission] config surface — same tiny TOML-subset parser style.
+// Safe-by-default: enabled=false, INDEPENDENT of [vmem].enabled (compact-
+// prep/hot-context bookkeeping stays a separate toggle from admission calls
+// into VMem's session-object store via `vmem.ts` runVmemStore).
+// ---------------------------------------------------------------------------
+
+export interface VmemAdmissionFileConfig {
+  /** Master switch: admission calls (runVmemStore) happen only when true. */
+  enabled: boolean;
+}
+
+/**
+ * Parse the `[vmem_admission]` section of config/context.toml.
+ * Missing/invalid values fall back to enabled=false. PURE, never throws,
+ * never reads fs.
+ */
+export function vmemAdmissionConfigFromContextToml(text: string): VmemAdmissionFileConfig {
+  let inSection = false;
+  let enabled = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inSection = line.startsWith("[vmem_admission]");
+      continue;
+    }
+    if (!inSection || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    if (key === "enabled") {
+      const v = value.toLowerCase();
+      enabled = v === "true" || v === "1" || v === "yes";
+    }
+  }
+  return { enabled };
+}
+
+/**
+ * Load the full [vmem_admission] config from `<home>/config/context.toml`;
+ * missing or unreadable file returns the safe default (enabled=false).
+ * Never throws.
+ */
+export function loadVmemAdmissionConfig(home: string | null): VmemAdmissionFileConfig {
+  if (!home) return vmemAdmissionConfigFromContextToml("");
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return vmemAdmissionConfigFromContextToml(text);
+  } catch {
+    return vmemAdmissionConfigFromContextToml("");
+  }
+}

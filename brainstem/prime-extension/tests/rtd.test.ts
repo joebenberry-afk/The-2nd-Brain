@@ -9,6 +9,7 @@ import {
   distillText,
   parseThreshold,
   pytestEvidence,
+  resolveToolClass,
   rtdEligibility,
   rtdShadowRecord,
   runRtd,
@@ -40,9 +41,15 @@ describe("rtdEligibility (decided without touching content)", () => {
     expect(rtdEligibility("bash", { command: "  rg -n foo ." })).toBe("ok");
   });
 
-  it("rejects non-bash tools (reason tool) without reading any content", () => {
-    expect(rtdEligibility("ipython", { code: "print(1)" })).toBe("tool");
+  it("rejects tool names that map to no known canonical class (reason tool) without reading any content", () => {
     expect(rtdEligibility("edit", { path: "x.ts" })).toBe("tool");
+    expect(rtdEligibility("websearch", { query: "x" })).toBe("tool");
+  });
+
+  it("Phase C: a plain-Python ipython call (no %%bash header) is NOT eligible — reason command, not tool", () => {
+    // ipython DOES map to the canonical "bash" class (resolveToolClass), so
+    // this is a "command" rejection (no command found), never "tool".
+    expect(rtdEligibility("ipython", { code: "print(1)" })).toBe("command");
   });
 
   it("rejects commands outside the prefix list and exact first-token matches only", () => {
@@ -56,12 +63,77 @@ describe("rtdEligibility (decided without touching content)", () => {
   });
 });
 
+describe("resolveToolClass (Phase C: real host-tool normalization)", () => {
+  it("real bash tool: unchanged behavior, canonical class bash", () => {
+    expect(resolveToolClass("bash", { command: "pytest -q" })).toEqual({
+      toolClass: "bash",
+      command: "pytest -q",
+    });
+    expect(resolveToolClass("bash", {})).toEqual({ toolClass: "bash", command: undefined });
+  });
+
+  it("ipython with a %%bash header: extracts the next non-empty line as the command", () => {
+    expect(resolveToolClass("ipython", { code: "%%bash\npytest -q tests/" })).toEqual({
+      toolClass: "bash",
+      command: "pytest -q tests/",
+    });
+    // leading/trailing blank lines around the header and the command are tolerated
+    expect(resolveToolClass("ipython", { code: "\n  %%bash  \n\n  git status\n" })).toEqual({
+      toolClass: "bash",
+      command: "git status",
+    });
+  });
+
+  it("ipython plain Python (no %%bash header): tool class bash, no command", () => {
+    expect(resolveToolClass("ipython", { code: "print(1)\nx = 2" })).toEqual({ toolClass: "bash" });
+    expect(resolveToolClass("ipython", { code: "" })).toEqual({ toolClass: "bash" });
+    expect(resolveToolClass("ipython", {})).toEqual({ toolClass: "bash" });
+  });
+
+  it("unknown/unmapped tool names resolve to no canonical class", () => {
+    expect(resolveToolClass("edit", { path: "x.ts" })).toEqual({ toolClass: null });
+    expect(resolveToolClass(42, undefined)).toEqual({ toolClass: null });
+  });
+
+  it("rtdEligibility: ipython %%bash pytest at eligible size -> ok", () => {
+    const ev = { toolName: "ipython", input: { code: "%%bash\npytest -q tests/" } };
+    expect(rtdEligibility(ev.toolName, ev.input)).toBe("ok");
+    expect(shouldDistill(ev, 8000, M_BIG)).toEqual({ trigger: true, reason: "ok" });
+  });
+
+  it("rtdEligibility: ipython %%bash pytest BELOW threshold -> size", () => {
+    const ev = { toolName: "ipython", input: { code: "%%bash\npytest -q tests/" } };
+    expect(shouldDistill(ev, 8000, M_SMALL)).toEqual({ trigger: false, reason: "size" });
+  });
+
+  it("rtdEligibility: ipython %%bash curl (not a whitelisted command) -> command", () => {
+    expect(rtdEligibility("ipython", { code: "%%bash\ncurl https://example.com" })).toBe("command");
+  });
+
+  it("rtdEligibility: plain-Python ipython call (no %%bash header) -> command, not tool", () => {
+    expect(rtdEligibility("ipython", { code: "import os\nprint(os.getcwd())" })).toBe("command");
+  });
+
+  it("regression: the real bash tool path is unchanged end-to-end", () => {
+    expect(rtdEligibility("bash", { command: "pytest -q tests/" })).toBe("ok");
+    expect(shouldDistill(bashEvent("pytest -q tests/"), 8000, M_BIG)).toEqual({
+      trigger: true,
+      reason: "ok",
+    });
+    expect(shouldDistill(bashEvent("pytest -q tests/"), 8000, M_SMALL)).toEqual({
+      trigger: false,
+      reason: "size",
+    });
+  });
+});
+
 describe("shouldDistill", () => {
   it("eligibility is checked BEFORE the measurement is used: ineligible tool/command short-circuit even with a huge size", () => {
     const huge: ContentMeasurement = { serializedChars: 999_999, outputBytes: 999_999 };
+    // ipython maps to class "bash" but "x" has no %%bash header -> "command".
     expect(shouldDistill({ toolName: "ipython", input: { code: "x" } }, 8000, huge)).toEqual({
       trigger: false,
-      reason: "tool",
+      reason: "command",
     });
     expect(shouldDistill({ toolName: "edit", input: { path: "x" } }, 8000, huge)).toEqual({
       trigger: false,
@@ -434,13 +506,21 @@ describe("rtdConfigFromContextToml (plan §11.3 — documented fields become rea
     expect(invalid.maxDistillChars).toBe(2000);
   });
 
-  it("whitelists drive eligibility (config wins over fixed defaults)", () => {
+  it("whitelists drive eligibility (config wins over fixed defaults) — canonical classes only (Phase C)", () => {
+    // whitelist_tools stays about the canonical CLASS name ("bash"), not the
+    // real host tool name — resolveToolClass maps BOTH the real "bash" tool
+    // and "ipython" %%bash cells onto that same class.
     const cfg = rtdConfigFromContextToml(
-      '[rtd]\nwhitelist_tools = ["ipython"]\nwhitelist_commands = ["pytest"]\n',
+      '[rtd]\nwhitelist_tools = ["bash"]\nwhitelist_commands = ["pytest"]\n',
     );
-    expect(rtdEligibility("ipython", { command: "pytest -q" }, cfg)).toBe("ok");
-    expect(rtdEligibility("bash", { command: "pytest -q" }, cfg)).toBe("tool");
-    expect(rtdEligibility("ipython", { command: "git status" }, cfg)).toBe("command");
+    expect(rtdEligibility("bash", { command: "pytest -q" }, cfg)).toBe("ok");
+    expect(rtdEligibility("bash", { command: "git status" }, cfg)).toBe("command");
+    expect(rtdEligibility("ipython", { code: "%%bash\npytest -q" }, cfg)).toBe("ok");
+    expect(rtdEligibility("ipython", { code: "%%bash\ngit status" }, cfg)).toBe("command");
+    // A whitelist that excludes the "bash" class rejects BOTH real names.
+    const noBash = rtdConfigFromContextToml('[rtd]\nwhitelist_tools = ["nothing"]\n');
+    expect(rtdEligibility("bash", { command: "pytest -q" }, noBash)).toBe("tool");
+    expect(rtdEligibility("ipython", { code: "%%bash\npytest -q" }, noBash)).toBe("tool");
   });
 });
 

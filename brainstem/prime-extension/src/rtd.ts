@@ -65,16 +65,79 @@ export interface DistillDecision {
  * pytest/git/rg/grep — the proven bounded surface, plan §11.2). The first
  * whitespace-separated token only: `git status` matches, `gitx` must not.
  */
+export interface ResolvedToolCommand {
+  /** Canonical tool class recognized by `whitelist_tools` ("bash" today),
+   * or null when the real host tool name maps to no known class. */
+  toolClass: "bash" | null;
+  /** Extracted command text for the `whitelist_commands` prefix check, when
+   * this tool call's input shape actually carries one. */
+  command?: string;
+}
+
+/**
+ * Map a REAL host tool call (name + input) to the canonical tool class
+ * `whitelist_tools` is expressed in (plan §11.2 default ["bash"]). Pilot 1
+ * (outputs/reports/rc4/11-real-prime-pilot.md) found the real tool catalog
+ * in an RLM/IPython-orchestrated Prime session is a single `"ipython"` tool
+ * whose `{code}` input runs `%%bash\n<command>` cells for shell commands —
+ * `whitelist_tools: ["bash"]` never matched the literal name `"ipython"`,
+ * so RTD never fired. `whitelist_tools` config values stay canonical CLASS
+ * names ("bash") — this function is only the seam that decides which real
+ * tool names map to that class; it is not a change to whitelist semantics
+ * (adding "ipython" as a bare string would make RTD try to distill EVERY
+ * ipython call, including plain Python with no shell command at all, which
+ * is explicitly not eligible here).
+ */
+export function resolveToolClass(toolName: unknown, input: unknown): ResolvedToolCommand {
+  if (typeof toolName !== "string") return { toolClass: null };
+  const lower = toolName.toLowerCase();
+  if (lower === "bash") {
+    // Real bash tool: unchanged existing behavior.
+    return { toolClass: "bash", command: commandFromInput(input) };
+  }
+  if (lower === "ipython") {
+    const code =
+      input && typeof input === "object" ? (input as Record<string, unknown>).code : undefined;
+    if (typeof code !== "string") return { toolClass: "bash" }; // no code -> no command
+    const lines = code.split(/\r?\n/);
+    let i = 0;
+    while (i < lines.length && (lines[i] ?? "").trim() === "") i += 1;
+    if (i >= lines.length || (lines[i] ?? "").trim() !== "%%bash") {
+      return { toolClass: "bash" }; // plain Python cell: no %%bash header, no command
+    }
+    i += 1;
+    while (i < lines.length && (lines[i] ?? "").trim() === "") i += 1;
+    const candidate = i < lines.length ? (lines[i] ?? "").trim() : "";
+    return { toolClass: "bash", command: candidate.length > 0 ? candidate : undefined };
+  }
+  return { toolClass: null };
+}
+
+/**
+ * Tool/command eligibility for RTD — decided WITHOUT touching result content
+ * (Phase 3). Returns "tool" (real tool name maps to no whitelisted class),
+ * "command" (the resolved command is missing or outside the prefix list),
+ * or "ok" (eligible for the size check).
+ *
+ * P3-F: an optional `[rtd]` config supplies whitelist_tools/whitelist_commands
+ * (plan §11.3); when omitted the fixed P3 defaults apply (bash class +
+ * pytest/git/rg/grep — the proven bounded surface, plan §11.2). The first
+ * whitespace-separated token only: `git status` matches, `gitx` must not.
+ * `resolveToolClass` (above) maps the real host tool name/input to the
+ * canonical class BEFORE this whitelist check runs (Phase C host-tool
+ * normalization).
+ */
 export function rtdEligibility(
   toolName: unknown,
   input: unknown,
   cfg?: Pick<RtdFileConfig, "whitelistTools" | "whitelistCommands">,
 ): Extract<DistillReason, "tool" | "command" | "ok"> {
   const tools = cfg?.whitelistTools ?? ["bash"];
-  if (typeof toolName !== "string" || !tools.some((t) => t === toolName.toLowerCase())) {
+  const resolved = resolveToolClass(toolName, input);
+  if (resolved.toolClass === null || !tools.some((t) => t === resolved.toolClass)) {
     return "tool";
   }
-  const command = commandFromInput(input);
+  const command = resolved.command;
   if (!command) return "command";
   const firstToken = command.trim().split(/\s+/)[0] ?? "";
   const lower = firstToken.toLowerCase();
@@ -515,7 +578,12 @@ export async function runRtd(options: RtdSubstitutionOptions): Promise<RtdRunRes
   if (!decision.trigger) {
     return { record: null, patch: undefined };
   }
-  const commandClass = commandClassOf(options.input);
+  // Phase C: resolve command class through the same host-tool
+  // normalization used for eligibility, so a real ipython+%%bash pytest
+  // call reports command=pytest in the RTD block, not the bash fallback.
+  const commandClass =
+    resolveToolClass(options.tool, options.input).command?.trim().split(/\s+/)[0]?.toLowerCase() ??
+    "bash";
   const baseRecord = (distill?: RtdDistillDetail): RtdShadowRecord | null =>
     rtdShadowRecord({
       session: options.session,

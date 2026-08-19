@@ -305,6 +305,111 @@ export function context(session: string, messages: unknown): ContextRecord {
   }) as unknown as ContextRecord;
 }
 
+// ---------------------------------------------------------------------------
+// [context_structure] structural telemetry (privacy-safe schema capture,
+// gated by config/context.toml [context_structure] enabled=false by
+// default). Learns the real per-element SHAPE of Prime's `context` event
+// `messages` array WITHOUT ever storing prompt/tool text. Pilot 1
+// (outputs/reports/rc4/11-real-prime-pilot.md) confirmed `event.messages`
+// is a real Array but deliberately never captured the per-element shape.
+//
+// Privacy: only JS value types, an object's OWN top-level key NAMES
+// (Object.keys, never values), a short recognized role/kind TOKEN (never an
+// arbitrary string), and sizes/lengths ever leave this module. See
+// `RECOGNIZED_TOKEN_RE` below for the enum-like shape a role/kind token
+// must match; anything else is omitted, never stored verbatim.
+// ---------------------------------------------------------------------------
+
+/** Short enum-like token shape for role/type/kind fields (never free text). */
+export const RECOGNIZED_TOKEN_RE = /^[a-z_]{1,24}$/i;
+
+/** A string value ONLY when it matches the short recognized-token shape. */
+function recognizedToken(value: unknown): string | null {
+  return typeof value === "string" && RECOGNIZED_TOKEN_RE.test(value) ? value : null;
+}
+
+export interface ContextBlockShape {
+  /** `.type`/`.kind` field VALUE, only when it is itself a recognized token. */
+  kind: string | null;
+  /** Size proxy only: JSON.stringify(block).length (never the string itself). */
+  length: number;
+}
+
+/** Shape (never content) of one content block inside an element's content array. */
+function contextBlockShape(block: unknown): ContextBlockShape {
+  let length = 0;
+  try {
+    const serialized = JSON.stringify(block);
+    length = typeof serialized === "string" ? serialized.length : 0;
+  } catch {
+    length = 0;
+  }
+  let kind: string | null = null;
+  if (block !== null && typeof block === "object" && !Array.isArray(block)) {
+    const b = block as Record<string, unknown>;
+    kind = recognizedToken(b.type) ?? recognizedToken(b.kind);
+  }
+  return { kind, length };
+}
+
+export interface ContextElementShape {
+  /** typeof element (e.g. "object", "string", "undefined"). */
+  type: string;
+  /** Object.keys(element) — key NAMES only, never present for non-plain-objects. */
+  keys?: string[];
+  /** element.role, only when it is a recognized short token; omitted otherwise. */
+  role?: string;
+  /** typeof element.content (e.g. "array"/"string"/"object"/"undefined"). */
+  content_type: string;
+  /** element string length, ONLY when the whole element is a string. */
+  length?: number;
+  /** content array length, ONLY when element.content is an array. */
+  content_length?: number;
+  /** Per-block shapes, ONLY when element.content is an array. */
+  blocks?: ContextBlockShape[];
+}
+
+/** Structural (never content) shape of one `messages[i]` element. */
+function contextElementShape(element: unknown): ContextElementShape {
+  const type = typeof element;
+  if (type === "string") {
+    return { type, content_type: "undefined", length: (element as string).length };
+  }
+  if (element !== null && type === "object" && !Array.isArray(element)) {
+    const obj = element as Record<string, unknown>;
+    const shape: ContextElementShape = { type, keys: Object.keys(obj), content_type: typeof obj.content };
+    const role = recognizedToken(obj.role);
+    if (role !== null) shape.role = role;
+    if (Array.isArray(obj.content)) {
+      shape.content_length = obj.content.length;
+      shape.blocks = obj.content.map((block) => contextBlockShape(block));
+    }
+    return shape;
+  }
+  return { type, content_type: "undefined" };
+}
+
+export interface ContextStructureRecord extends BaseRecord {
+  kind: "context_structure";
+  count: number;
+  elements: ContextElementShape[];
+}
+
+/**
+ * Structural (privacy-safe) shape of the `context` event's `messages` array.
+ * Non-array input safely no-ops to `{count: 0, elements: []}` — same
+ * fallback as `context()` above. Never throws, never stores prompt/tool
+ * text, thinking text, or any field value beyond a short recognized token
+ * or a number.
+ */
+export function contextStructure(session: string, messages: unknown): ContextStructureRecord {
+  const arr = Array.isArray(messages) ? messages : [];
+  return base("context_structure", session, {
+    count: arr.length,
+    elements: arr.map((element) => contextElementShape(element)),
+  }) as unknown as ContextStructureRecord;
+}
+
 export interface ToolCallRecord extends BaseRecord {
   kind: "tool_call";
   tool: string;

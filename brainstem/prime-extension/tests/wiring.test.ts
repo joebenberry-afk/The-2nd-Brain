@@ -17,6 +17,11 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/ledger-mirror")>();
   return { ...actual, mirrorFireAndForget: mirrorFireAndForgetMock };
 });
+const runVmemStoreMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/vmem", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/vmem")>();
+  return { ...actual, runVmemStore: runVmemStoreMock };
+});
 
 /**
  * Wiring tests: exercise the REAL factory from src/index.ts through a fake
@@ -50,6 +55,8 @@ beforeEach(async () => {
   process.env.SECOND_BRAIN_HOME = tmp;
   recallRunMock.mockReset();
   mirrorFireAndForgetMock.mockReset();
+  runVmemStoreMock.mockReset();
+  runVmemStoreMock.mockResolvedValue({ ok: true, objId: "obj-test" });
 });
 
 afterEach(async () => {
@@ -154,6 +161,18 @@ function enableRtd(): void {
   writeFileSync(
     join(dir, "context.toml"),
     '[rtd]\nenabled = true\nthreshold_chars = 8000\nmax_distill_chars = 2000\nwhitelist_tools = ["bash"]\nwhitelist_commands = ["pytest", "git", "rg", "grep"]\n',
+    "utf8",
+  );
+}
+
+/** Write config/context.toml with BOTH [rtd] and [vmem_admission] enabled=true
+ * (Phase B activation switch, independent of the plain [vmem] toggle). */
+function enableRtdAndVmemAdmission(): void {
+  const dir = join(tmp, "config");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "context.toml"),
+    '[rtd]\nenabled = true\nthreshold_chars = 8000\nmax_distill_chars = 2000\nwhitelist_tools = ["bash"]\nwhitelist_commands = ["pytest", "git", "rg", "grep"]\n\n[vmem_admission]\nenabled = true\n',
     "utf8",
   );
 }
@@ -833,6 +852,74 @@ describe("Phase 3 RTD hot path (src/index.ts)", () => {
     expect(result!.output_bytes).toBe(500);
     expect(shadow!.size).toBe(502); // legacy JSON char length preserved
     expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase B: VMem admission wiring (src/index.ts vmemAdmit + [vmem_admission])
+// -------------------------------------------------------------------------
+
+describe("Phase B VMem admission (src/index.ts)", () => {
+  it("no-op when [vmem_admission] is absent (default OFF), even though RTD substitution fires", async () => {
+    enableRtd(); // [rtd] enabled, [vmem_admission] left absent/default false
+    const handlers = loadFactory({
+      rtdPreserver: {
+        preserve: async (raw) => ({
+          sha256: require("node:crypto").createHash("sha256").update(raw).digest("hex"),
+          handle: `[brain-artifact:sha256:${require("node:crypto").createHash("sha256").update(raw).digest("hex")}]`,
+        }),
+        verify: async (_sha256, raw) => raw === "x".repeat(9000),
+      },
+    });
+    const ctx = makeCtx();
+    await handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "vmem-admit-noop-1", input: { command: "pytest -q tests/" }, content: [{ type: "text", text: "x".repeat(9000) }], details: {}, isError: false },
+      ctx,
+    );
+    await waitForLines(2); // tool_result + rtd_shadow (distilled=true)
+    await settle();
+    expect(runVmemStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("no-op for the AutoInject/compaction call sites when the flag is absent", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    handlers.get("session_before_compact")!({ preparation: {}, branchEntries: [] }, ctx);
+    await settle();
+    expect(runVmemStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("fires the RTD-preserved-artifact admission ref when [vmem_admission].enabled=true", async () => {
+    enableRtdAndVmemAdmission();
+    const handlers = loadFactory({
+      rtdPreserver: {
+        preserve: async (raw) => ({
+          sha256: require("node:crypto").createHash("sha256").update(raw).digest("hex"),
+          handle: `[brain-artifact:sha256:${require("node:crypto").createHash("sha256").update(raw).digest("hex")}]`,
+        }),
+        verify: async (_sha256, raw) => raw === "x".repeat(9000),
+      },
+    });
+    const ctx = makeCtx();
+    await handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "vmem-admit-1", input: { command: "pytest -q tests/" }, content: [{ type: "text", text: "x".repeat(9000) }], details: {}, isError: false },
+      ctx,
+    );
+    await waitForLines(2);
+    await settle();
+    expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
+    const [call] = runVmemStoreMock.mock.calls[0] as [
+      { kind: string; title: string; content: string; hostSessionId: string },
+    ];
+    expect(call.kind).toBe("TOOL_OBSERVATION");
+    expect(call.title).toBe("rtd_artifact");
+    expect(call.hostSessionId).toBe("wiring-test");
+    // privacy: only ids/hashes/sizes — never the raw or distilled tool text.
+    expect(call.content).not.toContain("x".repeat(100));
+    const parsed = JSON.parse(call.content) as Record<string, unknown>;
+    expect(parsed.artifact_ref).toContain("brain-artifact:sha256:");
+    expect(typeof parsed.original_chars).toBe("number");
+    expect(parsed.command_class).toBe("pytest");
   });
 });
 
