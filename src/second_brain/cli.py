@@ -28,6 +28,7 @@ from . import (
     envsteward,
     episodes,
     frontier,
+    governor,
     immune,
     monitor,
     paths,
@@ -775,6 +776,46 @@ def _parser() -> argparse.ArgumentParser:
     trep.add_argument("--since", default=None, help="only records with ts >= value")
     trep.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     ts.add_parser("validate", help="validate telemetry records")
+
+
+
+    gov = sub.add_parser(
+        "governor",
+        parents=[home_parent],
+        help="token governor & ROI analysis (Phase 1)",
+    )
+    govs = gov.add_subparsers(dest="governor_command", required=True)
+
+    gov_rep = govs.add_parser("report", parents=[home_parent], help="per-session token report")
+    gov_rep.add_argument("--session", default=None, help="filter to one session ID")
+    gov_rep.add_argument("--since", default=None, help="ISO timestamp filter")
+    gov_rep.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_flags = govs.add_parser("flags", parents=[home_parent], help="show feature flags & sources")
+    gov_flags.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_cmp = govs.add_parser("compare", parents=[home_parent], help="ROI analysis: on vs off arm")
+    gov_cmp.add_argument("--on", required=True, help="session ID or glob for Brain ON")
+    gov_cmp.add_argument("--off", required=True, help="session ID or glob for Brain OFF")
+    gov_cmp.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_profs = govs.add_parser(
+        "profiles",
+        parents=[home_parent],
+        help="list ablation profiles (§4.2, §24.2)",
+    )
+    gov_profs.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_prof = govs.add_parser(
+        "profile",
+        parents=[home_parent],
+        help="show flags for an ablation profile",
+    )
+    gov_prof.add_argument("name", help="ablation profile name, e.g. A_BRAIN_OFF, I_FULL_V1")
+    gov_prof.add_argument(
+        "--env", action="store_true", help="output environment variable export format"
+    )
+    gov_prof.add_argument("--json", action="store_true", help="machine-readable output")
 
     return p
 
@@ -2976,6 +3017,174 @@ def cmd_telemetry(args) -> int:
     return 2
 
 
+
+def cmd_governor(args) -> int:
+    """Token Governor CLI: report, flags, compare."""
+    import fnmatch
+    import json
+
+    home = _home(args)
+
+    if args.governor_command == "report":
+        # Parse all sessions
+        sessions = governor.parse_telemetry(home)
+
+        # Filter by session ID if requested
+        if args.session:
+            sessions = [s for s in sessions if s.session_id == args.session]
+
+        if args.json:
+            # Output as JSON array of SessionTokens dicts
+            output = []
+            for session in sessions:
+                d = {
+                    'session_id': session.session_id,
+                    'provider': session.provider,
+                    'model': session.model,
+                    'input_tokens': session.input_tokens,
+                    'output_tokens': session.output_tokens,
+                    'cache_read_tokens': session.cache_read_tokens,
+                    'cache_write_tokens': session.cache_write_tokens,
+                    'total_tokens': session.total_tokens,
+                    'cost_total': session.cost_total,
+                    'cost_total_seen': session.cost_total_seen,
+                    'context_peak': session.context_peak,
+                    'model_turns': session.model_turns,
+                    'tool_calls': session.tool_calls,
+                    'tool_input_bytes': session.tool_input_bytes,
+                    'tool_output_bytes': session.tool_output_bytes,
+                    'brain_injected_tokens': session.brain_injected_tokens,
+                    'brain_packets_delivered': session.brain_packets_delivered,
+                    'brain_packets_shadow': session.brain_packets_shadow,
+                    'autoinject_cache_hits': session.autoinject_cache_hits,
+                    'autoinject_cache_misses': session.autoinject_cache_misses,
+                    'autoinject_cache_hit_rate': session.autoinject_cache_hit_rate,
+                    'lean_kernel_dedup_hits': session.lean_kernel_dedup_hits,
+                    'compactions': session.compactions,
+                    'role': session.role,
+                }
+                output.append(d)
+            print(json.dumps(output, indent=2, default=str))
+        else:
+            # Table output
+            print(
+                f"{'Session':<16} {'Provider':<10} {'Model':<20} {'Turns':<6} "
+                f"{'Input':<8} {'Output':<8} {'Total':<8} {'Context':<8}"
+            )
+            print("-" * 110)
+            for session in sessions:
+                s_id = session.session_id
+                prov = session.provider or '?'
+                mod = session.model or '?'
+                ctx = str(session.context_peak) if session.context_peak else '-'
+                print(
+                    f"{s_id:<16} {prov:<10} {mod:<20} {session.model_turns:<6} "
+                    f"{session.input_tokens:<8} {session.output_tokens:<8} "
+                    f"{session.total_tokens:<8} {ctx:<8}"
+                )
+
+        return 0
+
+    if args.governor_command == "flags":
+        # Show feature flags
+        try:
+            flags = governor.resolve_features(home)
+        except ValueError as e:
+            print(f"Error resolving flags: {e}", file=sys.stderr)
+            return 2
+
+        if args.json:
+            output = {}
+            for key, value in flags.items():
+                source = governor.feature_source(key, home)
+                output[key] = {'value': value, 'source': source}
+            print(json.dumps(output, indent=2))
+        else:
+            # Table output
+            print(f"{'Feature':<30} {'Value':<6} {'Source':<10}")
+            print("-" * 46)
+            for key, value in sorted(flags.items()):
+                source = governor.feature_source(key, home)
+                print(f"{key:<30} {value!s:<6} {source:<10}")
+
+        return 0
+
+    if args.governor_command == "compare":
+        # ROI analysis: compare on vs off arms
+        all_sessions = governor.parse_telemetry(home)
+
+        # Filter by glob patterns
+        on_sessions = []
+        off_sessions = []
+
+        for session in all_sessions:
+            if fnmatch.fnmatch(session.session_id, args.on):
+                on_sessions.append(session)
+            if fnmatch.fnmatch(session.session_id, args.off):
+                off_sessions.append(session)
+
+        # Classify ROI
+        verdict = governor.classify_roi(on_sessions, off_sessions)
+
+        if args.json:
+            output = {
+                'status': verdict.status,
+                'reason': verdict.reason,
+                'on_sessions': verdict.on_sessions,
+                'off_sessions': verdict.off_sessions,
+                'on_tokens': verdict.on_tokens,
+                'off_tokens': verdict.off_tokens,
+                'savings': verdict.savings,
+                'neutral_band': verdict.neutral_band,
+            }
+            print(json.dumps(output, indent=2))
+        else:
+            # Text output
+            print(f"ROI Verdict: {verdict.status}")
+            print(f"  Reason: {verdict.reason}")
+            print(f"  On arm: {verdict.on_sessions} sessions, {verdict.on_tokens} tokens")
+            print(f"  Off arm: {verdict.off_sessions} sessions, {verdict.off_tokens} tokens")
+            if verdict.savings is not None:
+                print(f"  Savings: {verdict.savings} tokens")
+
+    if args.governor_command == "profiles":
+        profiles = governor.ABLATION_PROFILES
+        if args.json:
+            print(json.dumps(profiles, indent=2))
+        else:
+            print(f"{'Profile':<25} {'Active Features'}")
+            print("-" * 75)
+            for pname, pflags in profiles.items():
+                active = [k for k, v in pflags.items() if v]
+                active_str = ", ".join(active) if active else "(none / all OFF)"
+                print(f"{pname:<25} {active_str}")
+        return 0
+
+    if args.governor_command == "profile":
+        try:
+            if args.env:
+                env_vars = governor.get_profile_env(args.name)
+                if args.json:
+                    print(json.dumps(env_vars, indent=2))
+                else:
+                    for ek, ev in env_vars.items():
+                        print(f"{ek}={ev}")
+            else:
+                profile = governor.get_ablation_profile(args.name)
+                if args.json:
+                    print(json.dumps(profile, indent=2))
+                else:
+                    print(f"Profile: {args.name}")
+                    for k, v in profile.items():
+                        print(f"  {k:<25} {v!s}")
+            return 0
+        except KeyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3000,6 +3209,7 @@ def main(argv: list[str] | None = None) -> int:
         "backup": cmd_backup,
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
+        "governor": cmd_governor,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,

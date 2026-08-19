@@ -1,0 +1,3 @@
+=== RUFF CHECK ===
+[1;32mAll checks passed![0m
+Exit code: 0

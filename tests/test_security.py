@@ -250,3 +250,81 @@ def test_safe_recursive_delete_refuses_forbidden_root(tmp_path: Path) -> None:
     inner.mkdir()
     with pytest.raises(ValueError, match="forbidden"):
         assert_safe_recursive_delete(inner, required_parent=tmp_path, forbidden_roots=[inner])
+
+
+def test_constitution_never_written_by_brain_commands(tmp_path):
+    """Filesystem invariant: no real CLI write path may touch constitution/.
+
+    Exercises a spread of genuinely write-heavy brainctl commands against a
+    throwaway Brain home and asserts every file under constitution/ is
+    byte-identical afterwards and that no new path appeared. Fails loudly if
+    a future change adds an automatic constitution writer.
+    """
+    import hashlib
+    import os
+    import subprocess
+    import sys
+
+    home = tmp_path / "brain"
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
+    env["SECOND_BRAIN_HOME"] = str(home)
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "second_brain", "--home", str(home), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+
+    assert run("init").returncode == 0
+
+    const = home / "constitution"
+    const.mkdir(parents=True, exist_ok=True)
+    (const / "INTEGRITY_SENTINEL.md").write_text("sentinel\n", encoding="utf-8")
+
+    def snapshot() -> dict[str, str]:
+        return {
+            str(p.relative_to(const)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(const.rglob("*"))
+            if p.is_file()
+        }
+
+    before = snapshot()
+    assert "INTEGRITY_SENTINEL.md" in before
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repo)], check=False, capture_output=True)
+
+    # Write-heavy real commands: registry, memory, ledger, artifacts, capsule,
+    # requirements, telemetry, plasticity, backup. Each mutates Brain state.
+    blob = tmp_path / "blob.txt"
+    blob.write_text("artifact payload\n", encoding="utf-8")
+
+    # Genuinely mutating commands only (registry, memory, capsule, requirement
+    # ledger, artifact store, session ledger, episode capture, backup).
+    write_commands: list[list[str]] = [
+        ["project", "add", str(repo)],
+        ["memory", "add", "--title", "t", "--body", "b"],
+        ["capsule", "init", "sess-const", "objective"],
+        ["requirements", "add", "sess-const", "a requirement"],
+        ["artifact", "store", "--kind", "generic", str(blob)],
+        ["ledger", "init", "--session", "sess-const"],
+        ["episodes", "create", "--session", "sess-const"],
+        ["backup"],
+    ]
+    succeeded = [" ".join(cmd[:2]) for cmd in write_commands if run(*cmd).returncode == 0]
+    assert len(succeeded) >= 6, (
+        f"too few mutating commands succeeded to make this meaningful: {succeeded}"
+    )
+
+    after = snapshot()
+    assert set(after) == set(before), (
+        f"constitution/ file set changed: added={set(after) - set(before)} "
+        f"removed={set(before) - set(after)}"
+    )
+    for name, digest in before.items():
+        assert after[name] == digest, f"constitution/{name} was modified by a Brain command"

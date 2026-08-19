@@ -1,6 +1,7 @@
 """Phase 6: SQLite FTS5 memory index (migration 0007, indexer, search parity)."""
 
 import sqlite3
+from typing import cast
 
 from second_brain import backup, db, paths, semantic
 
@@ -261,7 +262,7 @@ def test_fts_available_only_module_missing_is_permanent(brain_home, monkeypatch)
     monkeypatch.setattr(semantic, "_FTS_MODULE_OK", False)
 
     # transient error: False for this call, NOT cached -> next call retries
-    assert semantic._fts_available(StubConn("disk I/O error")) is False
+    assert semantic._fts_available(cast(sqlite3.Connection, StubConn("disk I/O error"))) is False
     assert semantic._FTS_MODULE_CHECKED is False
     assert semantic._FTS_MODULE_OK is False
 
@@ -275,7 +276,9 @@ def test_fts_available_only_module_missing_is_permanent(brain_home, monkeypatch)
     # module-missing error: cached permanently
     monkeypatch.setattr(semantic, "_FTS_MODULE_CHECKED", False)
     monkeypatch.setattr(semantic, "_FTS_MODULE_OK", False)
-    assert semantic._fts_available(StubConn("no such module: fts5")) is False
+    err_conn = cast(sqlite3.Connection, StubConn("no such module: fts5"))
+    assert semantic._fts_available(err_conn) is False
     assert semantic._FTS_MODULE_CHECKED is True
     assert semantic._FTS_MODULE_OK is False
-    assert semantic._fts_available(StubConn("disk I/O error")) is False  # cached miss
+    disk_conn = cast(sqlite3.Connection, StubConn("disk I/O error"))
+    assert semantic._fts_available(disk_conn) is False  # cached miss

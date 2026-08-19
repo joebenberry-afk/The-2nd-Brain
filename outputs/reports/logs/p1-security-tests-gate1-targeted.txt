@@ -1,0 +1,13 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\assas\Documents\The-Second-Brain-v1
+configfile: pyproject.toml
+plugins: hypothesis-6.165.10, cov-7.1.0
+collected 5 items
+
+tests\test_telemetry.py .                                                [ 20%]
+tests\test_security.py .                                                 [ 40%]
+tests\test_artifacts.py .                                                [ 60%]
+tests\test_promotion.py ..                                               [100%]
+
+============================== 5 passed in 1.00s ==============================

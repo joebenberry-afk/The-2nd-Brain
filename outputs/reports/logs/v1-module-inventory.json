@@ -1,0 +1,1415 @@
+{
+ "antigravity_transcript": {
+  "loc": 169,
+  "n_public": 1,
+  "public_symbols": [
+   "extract_latest_user_task"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_antigravity_transcript.py",
+    "test_funcs": 11
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 11
+ },
+ "artifacts": {
+  "loc": 316,
+  "n_public": 11,
+  "public_symbols": [
+   "make_handle",
+   "recover_hint",
+   "distill_pytest",
+   "distill_git",
+   "distill_generic",
+   "distill",
+   "store_text",
+   "store_file",
+   "store_bytes",
+   "expand",
+   "list_artifacts"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_artifacts.py",
+    "test_funcs": 25
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 25
+ },
+ "autoinject": {
+  "loc": 1140,
+  "n_public": 11,
+  "public_symbols": [
+   "AutoInjectConfig",
+   "load_config",
+   "token_estimate",
+   "RetrievalIntent",
+   "item_canonical_hash",
+   "insert_deliveries",
+   "render_packet",
+   "prepare_injection",
+   "BrainLifecycle",
+   "mode_from_autoinject_toml",
+   "resolve_autoinject_mode"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_autoinject_writeback.py",
+    "test_funcs": 5
+   },
+   {
+    "file": "test_retrieval_isolation.py",
+    "test_funcs": 12
+   }
+  ],
+  "n_test_files": 3,
+  "n_test_funcs": 38
+ },
+ "backup": {
+  "loc": 325,
+  "n_public": 6,
+  "public_symbols": [
+   "utcnow",
+   "sha256_file",
+   "create_backup",
+   "list_backups",
+   "load_manifest",
+   "restore_backup"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_backup.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_memory_index.py",
+    "test_funcs": 13
+   },
+   {
+    "file": "test_migrations_property.py",
+    "test_funcs": 2
+   }
+  ],
+  "n_test_files": 3,
+  "n_test_funcs": 34
+ },
+ "cerebellum": {
+  "loc": 313,
+  "n_public": 3,
+  "public_symbols": [
+   "assess_state",
+   "assess_workflow",
+   "eval_cerebellum"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_cerebellum.py",
+    "test_funcs": 15
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 15
+ },
+ "cli": {
+  "loc": 3044,
+  "n_public": 39,
+  "public_symbols": [
+   "cmd_init",
+   "cmd_doctor",
+   "cmd_status",
+   "cmd_project",
+   "cmd_artifact",
+   "cmd_risk",
+   "cmd_verify",
+   "cmd_env",
+   "cmd_processes",
+   "cmd_episodes",
+   "cmd_memory",
+   "cmd_metacog",
+   "cmd_cerebellum",
+   "cmd_plasticity",
+   "cmd_sleep",
+   "cmd_reconsolidation",
+   "cmd_skills",
+   "cmd_router",
+   "cmd_credit",
+   "cmd_promote",
+   "cmd_demote",
+   "cmd_promotions",
+   "cmd_immune",
+   "cmd_frontier",
+   "cmd_models",
+   "cmd_engrams",
+   "cmd_scout",
+   "cmd_capsule",
+   "cmd_requirements",
+   "cmd_read_ledger",
+   "cmd_context",
+   "cmd_orchestration",
+   "cmd_ledger",
+   "cmd_session",
+   "cmd_autoinject",
+   "cmd_telemetry",
+   "cmd_backup",
+   "cmd_restore",
+   "main"
+  ],
+  "imported_by_cli": false,
+  "imported_by_modules": [],
+  "tests": [
+   {
+    "file": "test_lean_canary.py",
+    "test_funcs": 6
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 6
+ },
+ "contracts": {
+  "loc": 708,
+  "n_public": 27,
+  "public_symbols": [
+   "InjectionDecision",
+   "NoInjectionReason",
+   "MemoryItemStatus",
+   "Confidence",
+   "LifecycleEventType",
+   "SurfaceVisibility",
+   "EpochReason",
+   "DivergenceCategory",
+   "ToolOutcome",
+   "ToolSignal",
+   "canonical_json",
+   "stable_content_hash",
+   "BrainSessionIdentity",
+   "AgentIdentity",
+   "TaskIdentity",
+   "BrainInjectionDecision",
+   "PacketItem",
+   "BrainPacket",
+   "BrainDeliveryRecord",
+   "is_already_delivered",
+   "BrainLifecycleEvent",
+   "RequestEpoch",
+   "RequestFingerprint",
+   "SessionSegment",
+   "ToolOutcomeState",
+   "LedgerHeader",
+   "read_ledger_header"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "cli",
+   "ledger"
+  ],
+  "tests": [
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_autoinject_writeback.py",
+    "test_funcs": 5
+   },
+   {
+    "file": "test_contracts.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_ledger.py",
+    "test_funcs": 37
+   },
+   {
+    "file": "test_retrieval_isolation.py",
+    "test_funcs": 12
+   }
+  ],
+  "n_test_files": 5,
+  "n_test_funcs": 91
+ },
+ "credit": {
+  "loc": 229,
+  "n_public": 4,
+  "public_symbols": [
+   "assign_credit",
+   "credit_report",
+   "counterfactual_eval",
+   "eval_skill_credit"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 9
+ },
+ "crossmodel": {
+  "loc": 281,
+  "n_public": 6,
+  "public_symbols": [
+   "task_hash",
+   "record_model",
+   "record_skill_outcome",
+   "model_skill_report",
+   "transfer_test",
+   "global_policy_stats"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_crossmodel.py",
+    "test_funcs": 12
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 12
+ },
+ "db": {
+  "loc": 121,
+  "n_public": 7,
+  "public_symbols": [
+   "connect",
+   "split_statements",
+   "migration_files",
+   "current_version",
+   "apply_migration",
+   "migrate",
+   "pending_migrations"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "backup",
+   "cli",
+   "credit",
+   "crossmodel",
+   "doctor",
+   "episodes",
+   "ledger",
+   "plasticity",
+   "promotion",
+   "reconsolidation",
+   "registry",
+   "semantic",
+   "sleep"
+  ],
+  "tests": [
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_backup.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_cli.py",
+    "test_funcs": 10
+   },
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_crossmodel.py",
+    "test_funcs": 12
+   },
+   {
+    "file": "test_db.py",
+    "test_funcs": 8
+   },
+   {
+    "file": "test_doctor.py",
+    "test_funcs": 8
+   },
+   {
+    "file": "test_episodes.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_ledger.py",
+    "test_funcs": 37
+   },
+   {
+    "file": "test_memory_index.py",
+    "test_funcs": 13
+   },
+   {
+    "file": "test_migrations_property.py",
+    "test_funcs": 2
+   },
+   {
+    "file": "test_plasticity.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_reconsolidation.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_registry.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_retrieval_filters.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 16,
+  "n_test_funcs": 226
+ },
+ "doctor": {
+  "loc": 220,
+  "n_public": 13,
+  "public_symbols": [
+   "Check",
+   "DoctorResult",
+   "check_home",
+   "check_layout",
+   "check_config",
+   "check_env",
+   "check_python",
+   "check_git",
+   "check_db",
+   "check_tools",
+   "check_version_file",
+   "run_doctor",
+   "format_result"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_doctor.py",
+    "test_funcs": 8
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 8
+ },
+ "engram": {
+  "loc": 233,
+  "n_public": 4,
+  "public_symbols": [
+   "detect_engrams",
+   "write_engram",
+   "validate_engram",
+   "list_engrams"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_engram.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 17
+ },
+ "envsteward": {
+  "loc": 374,
+  "n_public": 5,
+  "public_symbols": [
+   "snapshot",
+   "register_process",
+   "list_processes",
+   "verify_process",
+   "cleanup_owned"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_envsteward.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 17
+ },
+ "episodes": {
+  "loc": 400,
+  "n_public": 5,
+  "public_symbols": [
+   "create_episode",
+   "annotate_episode",
+   "list_episodes",
+   "show_episode",
+   "search_episodes"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "skillforge",
+   "sleep"
+  ],
+  "tests": [
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_engram.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_episodes.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_router.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_skillforge.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 6,
+  "n_test_funcs": 96
+ },
+ "errors": {
+  "loc": 18,
+  "n_public": 4,
+  "public_symbols": [
+   "BrainError",
+   "MigrationError",
+   "BackupError",
+   "DoctorError"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "artifacts",
+   "backup",
+   "cerebellum",
+   "cli",
+   "contracts",
+   "credit",
+   "crossmodel",
+   "db",
+   "engram",
+   "envsteward",
+   "episodes",
+   "frontier",
+   "immune",
+   "jit",
+   "ledger",
+   "plasticity",
+   "promotion",
+   "reconsolidation",
+   "registry",
+   "risk",
+   "router",
+   "scout",
+   "semantic",
+   "skillforge",
+   "sleep",
+   "verify",
+   "working_set"
+  ],
+  "tests": [
+   {
+    "file": "test_artifacts.py",
+    "test_funcs": 25
+   },
+   {
+    "file": "test_attach.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_backup.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_contracts.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_crossmodel.py",
+    "test_funcs": 12
+   },
+   {
+    "file": "test_db.py",
+    "test_funcs": 8
+   },
+   {
+    "file": "test_engram.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_envsteward.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_episodes.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_frontier.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_immune.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_jit.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_ledger.py",
+    "test_funcs": 37
+   },
+   {
+    "file": "test_plasticity.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_promotion.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_reconsolidation.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_registry.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_risk.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_router.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_scout.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_security.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_semantic.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_skillforge.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_verify.py",
+    "test_funcs": 22
+   },
+   {
+    "file": "test_working_set.py",
+    "test_funcs": 34
+   }
+  ],
+  "n_test_files": 27,
+  "n_test_funcs": 481
+ },
+ "frontier": {
+  "loc": 328,
+  "n_public": 6,
+  "public_symbols": [
+   "latest_review",
+   "frontier_review",
+   "frontier_status",
+   "require_review",
+   "gate_check",
+   "list_pending"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "immune",
+   "promotion"
+  ],
+  "tests": [
+   {
+    "file": "test_frontier.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_immune.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_promotion.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_skill_lifecycle.py",
+    "test_funcs": 2
+   }
+  ],
+  "n_test_files": 4,
+  "n_test_funcs": 56
+ },
+ "immune": {
+  "loc": 387,
+  "n_public": 8,
+  "public_symbols": [
+   "sha256_file",
+   "register_policy",
+   "register_trigger",
+   "read_metrics",
+   "ingest_metric",
+   "check_triggers",
+   "rollback",
+   "rollback_log"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "promotion"
+  ],
+  "tests": [
+   {
+    "file": "test_immune.py",
+    "test_funcs": 18
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 18
+ },
+ "jit": {
+  "loc": 215,
+  "n_public": 2,
+  "public_symbols": [
+   "make_slug",
+   "compile_context"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_jit.py",
+    "test_funcs": 15
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 15
+ },
+ "lean_runtime": {
+  "loc": 351,
+  "n_public": 9,
+  "public_symbols": [
+   "LeanRuntimeOutcome",
+   "reset_lean_kernel_cache",
+   "extract_runtime_kernel",
+   "resolve_lean_skill_file",
+   "load_lean_kernel",
+   "lean_eval_from_skills_toml",
+   "resolve_lean_eval",
+   "decide_lean_runtime",
+   "compose_lean_kernel_block"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_antigravity_adapter.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_lean_canary.py",
+    "test_funcs": 6
+   },
+   {
+    "file": "test_lean_runtime.py",
+    "test_funcs": 12
+   }
+  ],
+  "n_test_files": 3,
+  "n_test_funcs": 35
+ },
+ "ledger": {
+  "loc": 1701,
+  "n_public": 15,
+  "public_symbols": [
+   "load_retention_config",
+   "internal_session_id",
+   "session_dir",
+   "ProjectedContext",
+   "LedgerStore",
+   "replay_session",
+   "compare_projection",
+   "classify_tool_outcome",
+   "SegmentError",
+   "LedgerRehydrator",
+   "checkpoint_ledger",
+   "SessionLifecycleError",
+   "SessionLifecycle",
+   "list_sessions",
+   "select_oldest_inactive_unpinned"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_claude_code_adapter.py",
+    "test_funcs": 26
+   },
+   {
+    "file": "test_ledger.py",
+    "test_funcs": 37
+   }
+  ],
+  "n_test_files": 2,
+  "n_test_funcs": 63
+ },
+ "monitor": {
+  "loc": 324,
+  "n_public": 3,
+  "public_symbols": [
+   "assess_confidence",
+   "basic_heuristic",
+   "eval_monitor"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_monitor.py",
+    "test_funcs": 19
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 19
+ },
+ "paths": {
+  "loc": 137,
+  "n_public": 5,
+  "public_symbols": [
+   "default_home",
+   "resolve_home",
+   "ensure_layout",
+   "db_path",
+   "backups_dir"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "backup",
+   "cli",
+   "db",
+   "doctor",
+   "immune",
+   "lean_runtime",
+   "ledger",
+   "promotion",
+   "registry",
+   "router",
+   "skillforge"
+  ],
+  "tests": [
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_backup.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_memory_index.py",
+    "test_funcs": 13
+   },
+   {
+    "file": "test_migrations_property.py",
+    "test_funcs": 2
+   },
+   {
+    "file": "test_paths.py",
+    "test_funcs": 4
+   },
+   {
+    "file": "test_promotion.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_retrieval_filters.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_security.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_skill_lifecycle.py",
+    "test_funcs": 2
+   }
+  ],
+  "n_test_files": 9,
+  "n_test_funcs": 105
+ },
+ "plasticity": {
+  "loc": 381,
+  "n_public": 8,
+  "public_symbols": [
+   "record_prediction",
+   "record_outcome",
+   "record_prediction_error",
+   "record_credit",
+   "hindsight_relabel",
+   "utility_update",
+   "read_utility_log",
+   "replay"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "credit",
+   "sleep"
+  ],
+  "tests": [
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_plasticity.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_promotion.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_skill_lifecycle.py",
+    "test_funcs": 2
+   },
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 5,
+  "n_test_funcs": 62
+ },
+ "promotion": {
+  "loc": 321,
+  "n_public": 4,
+  "public_symbols": [
+   "promote",
+   "demote",
+   "promotion_status",
+   "is_active"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_promotion.py",
+    "test_funcs": 18
+   },
+   {
+    "file": "test_skill_lifecycle.py",
+    "test_funcs": 2
+   }
+  ],
+  "n_test_files": 2,
+  "n_test_funcs": 20
+ },
+ "reconsolidation": {
+  "loc": 232,
+  "n_public": 4,
+  "public_symbols": [
+   "record_retrieval",
+   "record_activation",
+   "apply_heat",
+   "decay_pass"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_reconsolidation.py",
+    "test_funcs": 11
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 11
+ },
+ "registry": {
+  "loc": 513,
+  "n_public": 17,
+  "public_symbols": [
+   "Project",
+   "utcnow",
+   "normalize_repo_path",
+   "path_hash",
+   "remote_identity",
+   "detect_git_remote",
+   "detect_explicit_id",
+   "row_to_project",
+   "add_project",
+   "list_projects",
+   "get_project",
+   "project_status",
+   "write_project_manifest",
+   "detect_repowise",
+   "attach_project",
+   "detach_project",
+   "remove_project"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "cli",
+   "jit",
+   "scout"
+  ],
+  "tests": [
+   {
+    "file": "test_attach.py",
+    "test_funcs": 19
+   },
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_cli.py",
+    "test_funcs": 10
+   },
+   {
+    "file": "test_jit.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_ledger.py",
+    "test_funcs": 37
+   },
+   {
+    "file": "test_registry.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_retrieval_isolation.py",
+    "test_funcs": 12
+   },
+   {
+    "file": "test_scout.py",
+    "test_funcs": 15
+   }
+  ],
+  "n_test_files": 8,
+  "n_test_funcs": 145
+ },
+ "risk": {
+  "loc": 202,
+  "n_public": 1,
+  "public_symbols": [
+   "assess_risk"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_risk.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_verify.py",
+    "test_funcs": 22
+   }
+  ],
+  "n_test_files": 2,
+  "n_test_funcs": 39
+ },
+ "router": {
+  "loc": 331,
+  "n_public": 3,
+  "public_symbols": [
+   "route",
+   "natural_baseline",
+   "eval_router"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "credit"
+  ],
+  "tests": [
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_router.py",
+    "test_funcs": 16
+   }
+  ],
+  "n_test_files": 2,
+  "n_test_funcs": 25
+ },
+ "scout": {
+  "loc": 403,
+  "n_public": 6,
+  "public_symbols": [
+   "make_slug",
+   "resolve_repo",
+   "deterministic_prepass",
+   "write_evidence_map",
+   "scout_command",
+   "run_scout"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_scout.py",
+    "test_funcs": 15
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 15
+ },
+ "semantic": {
+  "loc": 1592,
+  "n_public": 13,
+  "public_symbols": [
+   "index_memory",
+   "reindex_all",
+   "add_memory",
+   "curate",
+   "list_memories",
+   "show_memory",
+   "supersede",
+   "history",
+   "contradictions",
+   "RetrievalWeights",
+   "RetrievalConfig",
+   "load_retrieval_config",
+   "search_memories"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "cli",
+   "ledger",
+   "reconsolidation",
+   "sleep"
+  ],
+  "tests": [
+   {
+    "file": "test_antigravity_adapter.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_autoinject.py",
+    "test_funcs": 21
+   },
+   {
+    "file": "test_autoinject_codex.py",
+    "test_funcs": 5
+   },
+   {
+    "file": "test_autoinject_writeback.py",
+    "test_funcs": 5
+   },
+   {
+    "file": "test_claude_code_adapter.py",
+    "test_funcs": 26
+   },
+   {
+    "file": "test_cli.py",
+    "test_funcs": 10
+   },
+   {
+    "file": "test_memory_index.py",
+    "test_funcs": 13
+   },
+   {
+    "file": "test_reconsolidation.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_retrieval_budget.py",
+    "test_funcs": 8
+   },
+   {
+    "file": "test_retrieval_dedupe.py",
+    "test_funcs": 7
+   },
+   {
+    "file": "test_retrieval_filters.py",
+    "test_funcs": 11
+   },
+   {
+    "file": "test_retrieval_isolation.py",
+    "test_funcs": 12
+   },
+   {
+    "file": "test_retrieval_ranking.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_semantic.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 15,
+  "n_test_funcs": 189
+ },
+ "skillforge": {
+  "loc": 643,
+  "n_public": 15,
+  "public_symbols": [
+   "read_metadata",
+   "set_status",
+   "skill_path",
+   "artifact_binding",
+   "validate_execution_ready",
+   "audit_lifecycle",
+   "forge_candidate",
+   "validate_candidate",
+   "trigger_eval",
+   "workflow_eval",
+   "regression_eval",
+   "security_review",
+   "shadow_candidate",
+   "list_candidates",
+   "list_shadow"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli",
+   "frontier",
+   "promotion"
+  ],
+  "tests": [
+   {
+    "file": "test_credit.py",
+    "test_funcs": 9
+   },
+   {
+    "file": "test_engram.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_router.py",
+    "test_funcs": 16
+   },
+   {
+    "file": "test_skill_lifecycle.py",
+    "test_funcs": 2
+   },
+   {
+    "file": "test_skillforge.py",
+    "test_funcs": 21
+   }
+  ],
+  "n_test_files": 5,
+  "n_test_funcs": 65
+ },
+ "sleep": {
+  "loc": 299,
+  "n_public": 5,
+  "public_symbols": [
+   "replay_queue",
+   "cluster",
+   "strengthen_memories",
+   "utility_report",
+   "consolidate"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_sleep.py",
+    "test_funcs": 17
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 17
+ },
+ "telemetry": {
+  "loc": 193,
+  "n_public": 5,
+  "public_symbols": [
+   "telemetry_dir",
+   "iter_records",
+   "validate",
+   "report",
+   "format_report"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "autoinject",
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_retrieval_isolation.py",
+    "test_funcs": 12
+   },
+   {
+    "file": "test_telemetry.py",
+    "test_funcs": 10
+   }
+  ],
+  "n_test_files": 2,
+  "n_test_funcs": 22
+ },
+ "verify": {
+  "loc": 313,
+  "n_public": 5,
+  "public_symbols": [
+   "build_verifier_brief",
+   "ladder_from_toml",
+   "load_verification_ladder",
+   "expand_ladder_actions",
+   "verification_ladder_payload"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cli"
+  ],
+  "tests": [
+   {
+    "file": "test_verify.py",
+    "test_funcs": 22
+   }
+  ],
+  "n_test_files": 1,
+  "n_test_funcs": 22
+ },
+ "working_set": {
+  "loc": 462,
+  "n_public": 11,
+  "public_symbols": [
+   "session_dir",
+   "init_capsule",
+   "update_capsule",
+   "show_capsule",
+   "add_requirement",
+   "add_evidence",
+   "set_requirement_status",
+   "check_requirements",
+   "show_requirements",
+   "record_read",
+   "show_reads"
+  ],
+  "imported_by_cli": true,
+  "imported_by_modules": [
+   "cerebellum",
+   "cli",
+   "envsteward",
+   "jit",
+   "verify"
+  ],
+  "tests": [
+   {
+    "file": "test_antigravity_adapter.py",
+    "test_funcs": 17
+   },
+   {
+    "file": "test_cerebellum.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_jit.py",
+    "test_funcs": 15
+   },
+   {
+    "file": "test_verify.py",
+    "test_funcs": 22
+   },
+   {
+    "file": "test_working_set.py",
+    "test_funcs": 34
+   }
+  ],
+  "n_test_files": 5,
+  "n_test_funcs": 103
+ }
+}

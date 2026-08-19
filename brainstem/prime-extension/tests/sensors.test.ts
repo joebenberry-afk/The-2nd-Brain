@@ -570,4 +570,50 @@ describe("measureContent modes (Phase 3 correction)", () => {
     const m = sensors.measureContent("hello");
     expect(m).toEqual({ serializedChars: 7, outputBytes: 5 });
   });
+
+  it("no chain-of-thought / reasoning field ever reaches a telemetry record", () => {
+    // Structural guard: model reasoning must never be persisted. Every record
+    // builder that touches model-facing data is exercised with content that
+    // deliberately contains reasoning-shaped text, and no emitted key (at any
+    // nesting depth) may name a reasoning/thinking field.
+    // NB: `reason` alone is a legitimate lifecycle field (session_start.reason,
+    // session_shutdown.reason); the forbidden shapes are reasoning-content fields.
+    const forbiddenKey = /think|reasoning|chain[_-]?of[_-]?thought|\bcot\b|internal[_-]?monologue|scratchpad/i;
+
+    const records: unknown[] = [
+      sensors.sessionStart(SESSION, "startup", "/cwd", { id: "m", provider: "p" }),
+      sensors.beforeAgentStart(SESSION, "let me think step by step about this", "driver", true),
+      sensors.turnStart(SESSION, 1),
+      sensors.context(SESSION, [{ role: "assistant", content: "my reasoning was ..." }]),
+      sensors.toolCall(SESSION, "bash", "call-1", { command: "echo hi" }),
+      sensors.toolResult(SESSION, "bash", "call-1", false, 42),
+      sensors.turnEnd(SESSION, 1, { tokens: 10, contextWindow: 100, percent: 10 }, [1, 2]),
+      sensors.agentEnd(SESSION, [1, 2, 3]),
+      sensors.assistantUsage(SESSION, "p", "m", {
+        input: 1,
+        output: 2,
+        cacheRead: 3,
+        cacheWrite: 4,
+        totalTokens: 10,
+      }),
+    ];
+
+    const walk = (value: unknown, path: string): void => {
+      if (value === null || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        expect(key, `forbidden reasoning-shaped key at ${path}.${key}`).not.toMatch(forbiddenKey);
+        walk(child, `${path}.${key}`);
+      }
+    };
+
+    for (const record of records) {
+      expect(record).not.toBeNull();
+      walk(record, "record");
+    }
+
+    // The assistant's own text must never be carried verbatim: the context
+    // record keeps a count, not the message bodies.
+    const ctx = JSON.stringify(sensors.context(SESSION, [{ content: "my reasoning was ..." }]));
+    expect(ctx).not.toContain("my reasoning was");
+  });
 });
