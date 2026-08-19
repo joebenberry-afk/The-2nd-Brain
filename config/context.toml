@@ -66,6 +66,33 @@ whitelist_commands = ["pytest", "git", "rg", "grep"]
 enabled = false
 budget_tokens = 1500
 
+[vmem_admission]
+# VMem session-object admission (pilot-2 prep, RC4 amendment).
+# ENFORCED when enabled=true: brainstem/prime-extension/src/index.ts calls
+# `second_brain vmem store` (src/vmem.ts runVmemStore) with SMALL structured
+# reference objects the extension already computes at three real call
+# sites — AutoInject delivery (delivery_id/packet_tokens only), an
+# RTD-preserved artifact pointer (sha256/size metadata only, never raw or
+# distilled tool text), and the pre-compaction ledger checkpoint outcome.
+# Never the memory/prompt/tool text itself. INDEPENDENT of [vmem].enabled
+# (that toggle is compact-prep/hot-context bookkeeping only). Fail-open: a
+# failing admission call only records an extension_error, never blocks the
+# session. Rollback = set back to false (no redeploy needed, per-event read).
+enabled = false
+
+[context_structure]
+# Context structural telemetry (pilot-2 prep, RC4 amendment).
+# ENFORCED when enabled=true: brainstem/prime-extension/src/index.ts's
+# `context` handler additionally calls sensors.contextStructure(), which
+# records ONLY the per-element JS value type, an object's OWN top-level key
+# NAMES (never values), a short recognized role/kind TOKEN (never arbitrary
+# text), and sizes/lengths (never serialized text). NEVER prompt/tool
+# content, thinking text, or any unrecognized string. Additive to the
+# existing unconditional messages.length-only `context` record above; never
+# replaces it. Rollback = set back to false (no redeploy needed, per-event
+# read).
+enabled = false
+
 [reserve]
 # Completion Reserve / Memory Budget Ceiling (v4.2 §95.1).
 # ENFORCED: retrieved_memory_pct_max is read at runtime by

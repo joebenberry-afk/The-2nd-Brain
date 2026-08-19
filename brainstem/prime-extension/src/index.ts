@@ -60,7 +60,12 @@ import {
   type RecallGateConfig,
 } from "./recall-gate";
 import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
-import { loadRtdConfig, loadVmemConfig } from "./config";
+import {
+  loadContextStructureConfig,
+  loadRtdConfig,
+  loadVmemAdmissionConfig,
+  loadVmemConfig,
+} from "./config";
 import { join } from "node:path";
 import {
   cliRtdPreserver,
@@ -84,7 +89,7 @@ import {
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
-import { runVmemCompactPrep, runVmemHotContext } from "./vmem";
+import { runVmemCompactPrep, runVmemHotContext, runVmemStore } from "./vmem";
 import {
   createTelemetryDirEnsurer,
   sanitizeSessionStem,
@@ -324,6 +329,43 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const ctxCwd = (ctx: ExtensionContext): string | undefined =>
     typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : undefined;
 
+  /**
+   * Phase B: VMem admission — the SMALLEST automatic path that stores an
+   * ALREADY-COMPUTED, structured reference object (never raw prompt/tool
+   * content) into VMem's session-object store (`second_brain vmem store`).
+   * Gated behind [vmem_admission].enabled (default false, independent of
+   * [vmem].enabled's compact-prep/hot-context bookkeeping). Fire-and-forget
+   * and fail-open: a failing admission call only records an
+   * extension_error, never blocks or throws from the calling hook.
+   * `content` MUST already be a small structured object (ids/hashes/sizes
+   * only) — callers never pass transcript/tool text here.
+   */
+  const vmemAdmit = (
+    session: string,
+    kind: string,
+    title: string,
+    content: Record<string, unknown>,
+  ): void => {
+    if (!loadVmemAdmissionConfig(config.home).enabled) return;
+    runVmemStore({
+      home: config.home ?? "",
+      hostSessionId: session,
+      kind,
+      title,
+      content: sensors.safeJson(content),
+    })
+      .then((result) => {
+        if (!result.ok) {
+          getStore(session)?.append(
+            mirrorExtensionError(session, `vmem store failed: ${result.error ?? "unknown"}`),
+          );
+        }
+      })
+      .catch(() => {
+        // storage/subprocess failed too — admission must not crash the session.
+      });
+  };
+
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
@@ -391,6 +433,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // run_command, git_commit_and_sync, ... — don't match Prime's real tool
     // names, and setActiveTools takes a REPLACEMENT list, so calling it with
     // fictional names would strip Prime's actual tool exposure).
+    // Phase D (intentionally NOT implemented, per this pass's scope): stays
+    // dormant until a real main-agent session (not this RLM/IPython-tool-
+    // only shape) exposes a larger catalog — setActiveTools() takes a
+    // REPLACEMENT list, so calling it against the single-tool ["ipython"]
+    // catalog observed in pilot 1 would strip Prime's actual tool exposure.
     try {
       const allTools = typeof pi.getAllTools === "function" ? pi.getAllTools() : undefined;
       const activeTools =
@@ -474,6 +521,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
         aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
+        // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
+        // (delivery_id + packet_tokens) is the structured, non-transcript
+        // reference already computed by messageFromOutcome (autoinject.ts)
+        // — the packet TEXT itself (aiMessage.content) is never touched.
+        if (aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage) {
+          const details = (aiMessage as { details?: unknown }).details;
+          if (details !== null && typeof details === "object") {
+            vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", details as Record<string, unknown>);
+          }
+        }
       } else {
         void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
@@ -605,6 +662,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       session = resolveSessionId(ctx, anonSession);
       getStore(session)?.append(sensors.context(session, event.messages));
+      // Phase A: privacy-safe structural telemetry (config-gated, default
+      // OFF; see sensors.contextStructure). Additive to the unconditional
+      // .length-only record above — never replaces it.
+      if (loadContextStructureConfig(config.home).enabled) {
+        getStore(session)?.append(sensors.contextStructure(session, event.messages));
+      }
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -826,6 +889,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           cliRtdPreserver({ home: config.home ?? "", session }),
       });
       if (rtd.record) getStore(session)?.append(rtd.record);
+      // Phase B admission ref #2: RTD-preserved artifact. Only when RTD
+      // actually substituted (real preservation + verify already ran) —
+      // content is the artifact pointer/sha256/size metadata RTD already
+      // computed, never the raw or distilled tool text.
+      if (rtd.record?.distilled === true) {
+        vmemAdmit(session, "TOOL_OBSERVATION", "rtd_artifact", {
+          artifact_ref: rtd.record.artifact_ref,
+          original_chars: rtd.record.original_chars,
+          visible_chars: rtd.record.visible_chars,
+          saved_chars: rtd.record.saved_chars,
+          command_class: rtd.record.command_class,
+        });
+      }
       getStore(session)?.append(
         sensors.toolResult(
           session,
@@ -926,6 +1002,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         return { cancel: true };
       }
+      // Phase B admission ref #3: compaction-boundary checkpoint. Content is
+      // exactly the checkpoint outcome + branch_entries count already
+      // computed above (not new data collection) + a fixed reason string.
+      vmemAdmit(session, "DECISION", "pre_compaction_checkpoint", {
+        branch_entries: Array.isArray(compactEvent.branchEntries)
+          ? compactEvent.branchEntries.length
+          : 0,
+        checkpoint_ok: checkpoint.ok,
+        reason: "pre-compaction checkpoint",
+      });
       // Phase R3: VMem compaction-boundary bookkeeping (vmem.py §6.7 "Compaction
       // barrier interaction" — its own documented integration point). Advisory
       // only: never cancels compaction (the ledger checkpoint above is the sole

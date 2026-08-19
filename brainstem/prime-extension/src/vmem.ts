@@ -93,6 +93,82 @@ export function runVmemCompactPrep(options: {
   });
 }
 
+export interface VmemStoreOptions {
+  home: string;
+  hostSessionId: string;
+  /** SessionObjectKind (vmem.py): WORKER_FINDING | TEST_EVIDENCE |
+   * LOG_EXCERPT | TOOL_OBSERVATION | CODE_REGION | DECISION | BLOCKER |
+   * RESEARCH_RESULT | GENERIC. Invalid values fall back to GENERIC
+   * (store_object's own behavior — never rejected here). */
+  kind: string;
+  title: string;
+  /** Small structured text (ids/hashes/sizes only — never raw prompt, tool
+   * output, or memory text). Sent via stdin, never a CLI arg. */
+  content: string;
+  summary?: string;
+  pinned?: boolean;
+  python?: string;
+  timeoutMs?: number;
+}
+
+export interface VmemStoreResult {
+  ok: boolean;
+  objId?: string;
+  error?: string;
+}
+
+/** `second_brain vmem store <session> <kind> <title> --json` (content piped
+ * via stdin, same as `cliRtdPreserver`'s preserve()): admit an already-
+ * computed, structured reference object into VMem's session-object store
+ * (§6.7). Same fail-open subprocess pattern as runVmemCompactPrep/
+ * runVmemHotContext — any spawn/parse failure resolves `ok: false`, never
+ * throws, never blocks the caller. */
+export function runVmemStore(options: VmemStoreOptions): Promise<VmemStoreResult> {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) {
+    return Promise.resolve({ ok: false, error: "no brain venv (vmem store unavailable)" });
+  }
+  const args = [
+    "-m",
+    "second_brain",
+    "vmem",
+    "store",
+    options.hostSessionId,
+    options.kind,
+    options.title,
+    "--json",
+  ];
+  if (options.summary !== undefined) args.push("--summary", options.summary);
+  if (options.pinned) args.push("--pinned");
+  return new Promise((resolve) => {
+    const child = execFile(
+      python,
+      args,
+      {
+        cwd: options.home,
+        env: runEnv(options.home),
+        timeout: options.timeoutMs ?? VMEM_DEFAULT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve({ ok: false, error: error.message });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as { obj_id?: string };
+          resolve({ ok: true, objId: parsed.obj_id });
+        } catch {
+          resolve({ ok: false, error: "store returned unparsable output" });
+        }
+      },
+    );
+    child.stdin?.write(options.content);
+    child.stdin?.end();
+  });
+}
+
 export interface VmemHotContextResult {
   ok: boolean;
   residentCount?: number;
