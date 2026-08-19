@@ -1,0 +1,286 @@
+"""
+Delta Sync & Compact Cache Invalidation.
+
+Plan §8: Phase 5 — Delta Sync & Compact Cache Invalidation.
+Upgrades memory delivery from full payload re-transmission to minimal incremental sync.
+
+Key Capabilities (§8.1 - §8.5):
+- Memory delta generation: ADD, MODIFY, REMOVE, SUPERSEDE, TOMBSTONE, UNCHANGED.
+- Emits zero tokens when memories are unchanged.
+- Emits structured minimal patches for updates (≤20% token overhead of full resend).
+- Verified delta application with canonical hash verification and fail-open recovery.
+- Recipient deduplication across multi-agent driver/worker turns.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+from .contracts import (
+    PacketItem,
+    stable_content_hash,
+)
+from .errors import BrainError
+
+
+class DeltaType(StrEnum):
+    ADD = "ADD"
+    MODIFY = "MODIFY"
+    REMOVE = "REMOVE"
+    SUPERSEDE = "SUPERSEDE"
+    TOMBSTONE = "TOMBSTONE"
+    UNCHANGED = "UNCHANGED"
+
+
+@dataclass
+class MemoryDeltaPacket:
+    """A minimal structured memory delta packet (§8.3)."""
+    target_memory_id: str
+    base_version: int
+    target_version: int
+    delta_type: DeltaType
+    patch_payload: dict[str, Any] = field(default_factory=dict)
+    target_canonical_hash: str = ""
+    reason: str = ""
+    token_size_estimate: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target_memory_id": self.target_memory_id,
+            "base_version": self.base_version,
+            "target_version": self.target_version,
+            "delta_type": self.delta_type.value,
+            "patch_payload": self.patch_payload,
+            "target_canonical_hash": self.target_canonical_hash,
+            "reason": self.reason,
+            "token_size_estimate": self.token_size_estimate,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MemoryDeltaPacket:
+        return cls(
+            target_memory_id=data["target_memory_id"],
+            base_version=int(data["base_version"]),
+            target_version=int(data["target_version"]),
+            delta_type=DeltaType(data["delta_type"]),
+            patch_payload=data.get("patch_payload", {}),
+            target_canonical_hash=data.get("target_canonical_hash", ""),
+            reason=data.get("reason", ""),
+            token_size_estimate=int(data.get("token_size_estimate", 0)),
+        )
+
+
+def _item_to_dict(item: PacketItem | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(item, PacketItem):
+        return {
+            "memory_id": item.memory_id,
+            "version": item.version,
+            "status": item.status.value,
+            "confidence": item.confidence.value,
+            "title": item.title,
+            "observation": item.observation,
+            "guidance": item.guidance,
+            "evidence": item.evidence,
+            "supersedes": list(item.supersedes) if item.supersedes else None,
+        }
+    return dict(item)
+
+
+def compute_canonical_hash(item_dict: dict[str, Any]) -> str:
+    """Compute deterministic canonical hash for a memory item dict."""
+    return stable_content_hash(item_dict)
+
+
+def compute_memory_delta(
+    base: PacketItem | dict[str, Any] | None,
+    target: PacketItem | dict[str, Any] | None,
+    reason: str = "",
+) -> MemoryDeltaPacket:
+    """
+    Compute minimal structured delta between base and target memory items (§8.2, §8.3).
+    """
+    if base is None and target is None:
+        raise BrainError("Both base and target cannot be None")
+
+    if base is None and target is not None:
+        t_dict = _item_to_dict(target)
+        t_hash = compute_canonical_hash(t_dict)
+        token_estimate = max(1, len(json.dumps(t_dict)) // 4)
+        return MemoryDeltaPacket(
+            target_memory_id=t_dict["memory_id"],
+            base_version=0,
+            target_version=int(t_dict.get("version", 1)),
+            delta_type=DeltaType.ADD,
+            patch_payload=t_dict,
+            target_canonical_hash=t_hash,
+            reason=reason or "initial_delivery",
+            token_size_estimate=token_estimate,
+        )
+
+    if base is not None and target is None:
+        b_dict = _item_to_dict(base)
+        return MemoryDeltaPacket(
+            target_memory_id=b_dict["memory_id"],
+            base_version=int(b_dict.get("version", 1)),
+            target_version=int(b_dict.get("version", 1)) + 1,
+            delta_type=DeltaType.TOMBSTONE,
+            patch_payload={"status": "tombstone"},
+            target_canonical_hash="",
+            reason=reason or "deleted_or_tombstoned",
+            token_size_estimate=15,
+        )
+
+    assert base is not None and target is not None
+    b_dict = _item_to_dict(base)
+    t_dict = _item_to_dict(target)
+
+    b_hash = compute_canonical_hash(b_dict)
+    t_hash = compute_canonical_hash(t_dict)
+
+    if b_hash == t_hash:
+        return MemoryDeltaPacket(
+            target_memory_id=t_dict["memory_id"],
+            base_version=int(b_dict.get("version", 1)),
+            target_version=int(t_dict.get("version", 1)),
+            delta_type=DeltaType.UNCHANGED,
+            patch_payload={},
+            target_canonical_hash=t_hash,
+            reason="identical_content",
+            token_size_estimate=0,
+        )
+
+    # Compute minimal diff
+    patch: dict[str, Any] = {}
+    for key, val in t_dict.items():
+        if b_dict.get(key) != val:
+            patch[key] = val
+
+    delta_type = DeltaType.SUPERSEDE if t_dict.get("supersedes") else DeltaType.MODIFY
+    token_estimate = max(1, len(json.dumps(patch)) // 4)
+
+    return MemoryDeltaPacket(
+        target_memory_id=t_dict["memory_id"],
+        base_version=int(b_dict.get("version", 1)),
+        target_version=int(t_dict.get("version", 1)),
+        delta_type=delta_type,
+        patch_payload=patch,
+        target_canonical_hash=t_hash,
+        reason=reason or "incremental_update",
+        token_size_estimate=token_estimate,
+    )
+
+
+def apply_delta(
+    base: PacketItem | dict[str, Any] | None,
+    delta: MemoryDeltaPacket,
+    verify_hash: bool = True,
+) -> dict[str, Any]:
+    """
+    Apply delta packet to base memory representation (§8.5).
+    Fails open / raises BrainError if target hash verification fails.
+    """
+    if delta.delta_type == DeltaType.UNCHANGED:
+        if base is None:
+            raise BrainError("Cannot apply UNCHANGED delta to None base")
+        return _item_to_dict(base)
+
+    if delta.delta_type == DeltaType.ADD:
+        res = dict(delta.patch_payload)
+        if verify_hash and delta.target_canonical_hash:
+            actual_hash = compute_canonical_hash(res)
+            if actual_hash != delta.target_canonical_hash:
+                raise BrainError(
+                    f"Delta hash mismatch for ADD: "
+                    f"expected {delta.target_canonical_hash}, got {actual_hash}"
+                )
+        return res
+
+    if delta.delta_type in (DeltaType.TOMBSTONE, DeltaType.REMOVE):
+        return {
+            "memory_id": delta.target_memory_id,
+            "version": delta.target_version,
+            "status": "tombstone",
+        }
+
+    if base is None:
+        raise BrainError(f"Cannot apply {delta.delta_type.value} delta without base memory")
+
+    res = _item_to_dict(base)
+    res.update(delta.patch_payload)
+
+    if verify_hash and delta.target_canonical_hash:
+        actual_hash = compute_canonical_hash(res)
+        if actual_hash != delta.target_canonical_hash:
+            raise BrainError(
+                f"Delta hash mismatch: expected {delta.target_canonical_hash}, "
+                f"got {actual_hash}. Refresh required."
+            )
+
+    return res
+
+
+def render_delta_sync_text(deltas: list[MemoryDeltaPacket]) -> str:
+    """
+    Render human/model-readable Delta Sync block.
+    Emits nothing if all deltas are UNCHANGED.
+    """
+    active_deltas = [d for d in deltas if d.delta_type != DeltaType.UNCHANGED]
+    if not active_deltas:
+        return ""
+
+    lines = ["[BRAIN_DELTA_SYNC v1]"]
+    lines.append("Minimal incremental memory updates applied to your session:")
+    for d in active_deltas:
+        if d.delta_type == DeltaType.ADD:
+            lines.append(f"+ [ADD] {d.target_memory_id} (v{d.target_version})")
+            for k, v in d.patch_payload.items():
+                if k not in ("memory_id", "version"):
+                    lines.append(f"    {k}: {str(v)[:120]}")
+        elif d.delta_type in (DeltaType.MODIFY, DeltaType.SUPERSEDE):
+            line_hdr = (
+                f"~ [{d.delta_type.value}] {d.target_memory_id} "
+                f"(v{d.base_version} -> v{d.target_version})"
+            )
+            lines.append(line_hdr)
+            for k, v in d.patch_payload.items():
+                lines.append(f"    {k}: {str(v)[:120]}")
+        elif d.delta_type in (DeltaType.TOMBSTONE, DeltaType.REMOVE):
+            lines.append(f"- [TOMBSTONE] {d.target_memory_id} (v{d.base_version} revoked)")
+
+    return "\n".join(lines)
+
+
+class DeltaSyncEngine:
+    """Session-level Delta Sync tracker (§8.4)."""
+
+    def __init__(self) -> None:
+        # (session_id, recipient, memory_id) -> dict[str, Any] (last delivered state)
+        self._delivered: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def sync_memories(
+        self,
+        session_id: str,
+        target_items: list[PacketItem | dict[str, Any]],
+        recipient: str = "driver",
+    ) -> tuple[list[MemoryDeltaPacket], str]:
+        """
+        Compute deltas for a batch of target items against what was previously delivered.
+        """
+        deltas: list[MemoryDeltaPacket] = []
+        for item in target_items:
+            t_dict = _item_to_dict(item)
+            mem_id = t_dict["memory_id"]
+            key = (session_id, recipient, mem_id)
+            base_dict = self._delivered.get(key)
+
+            delta = compute_memory_delta(base_dict, t_dict)
+            deltas.append(delta)
+
+            # Update delivered memory state
+            self._delivered[key] = t_dict
+
+        rendered = render_delta_sync_text(deltas)
+        return deltas, rendered

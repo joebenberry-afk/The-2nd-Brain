@@ -950,6 +950,41 @@ def _parser() -> argparse.ArgumentParser:
 
     acs.add_parser("clear", parents=[home_parent], help="clear entire action cache")
 
+    ds = sub.add_parser(
+        "delta-sync",
+        parents=[home_parent],
+        help="Delta Sync: minimal incremental memory updates (Phase 5)",
+    )
+    dss = ds.add_subparsers(dest="delta_sync_command", required=True)
+
+    ds_diff = dss.add_parser(
+        "diff",
+        parents=[home_parent],
+        help="compute delta between two memory JSON files",
+    )
+    ds_diff.add_argument("base_file", help="path to base memory JSON file (or 'null' for new)")
+    ds_diff.add_argument("target_file", help="path to target memory JSON file")
+    ds_diff.add_argument("--json", action="store_true", help="output JSON")
+
+    ds_apply = dss.add_parser(
+        "apply",
+        parents=[home_parent],
+        help="apply a delta packet to a base memory JSON file",
+    )
+    ds_apply.add_argument("base_file", help="path to base memory JSON file")
+    ds_apply.add_argument("delta_file", help="path to delta packet JSON file")
+    ds_apply.add_argument("--json", action="store_true", help="output JSON")
+
+    ds_sync = dss.add_parser(
+        "sync",
+        parents=[home_parent],
+        help="sync memory list against session delivery state",
+    )
+    ds_sync.add_argument("session_id", help="host session ID")
+    ds_sync.add_argument("target_file", help="path to JSON list of target memories")
+    ds_sync.add_argument("--recipient", default="driver", help="recipient role (default: driver)")
+    ds_sync.add_argument("--json", action="store_true", help="output JSON")
+
     return p
 
 
@@ -3510,6 +3545,52 @@ def cmd_action_cache(args) -> int:
     return 2
 
 
+def cmd_delta_sync(args) -> int:
+    import json
+
+    from . import delta_sync
+
+    if args.delta_sync_command == "diff":
+        base_item = None
+        if args.base_file != "null":
+            base_item = json.loads(Path(args.base_file).read_text(encoding="utf-8"))
+        target_item = json.loads(Path(args.target_file).read_text(encoding="utf-8"))
+
+        delta = delta_sync.compute_memory_delta(base_item, target_item)
+        if args.json:
+            print(json.dumps(delta.to_dict(), indent=2))
+        else:
+            print(delta_sync.render_delta_sync_text([delta]))
+        return 0
+
+    if args.delta_sync_command == "apply":
+        base_item = json.loads(Path(args.base_file).read_text(encoding="utf-8"))
+        delta_dict = json.loads(Path(args.delta_file).read_text(encoding="utf-8"))
+        delta = delta_sync.MemoryDeltaPacket.from_dict(delta_dict)
+
+        try:
+            updated = delta_sync.apply_delta(base_item, delta)
+            print(json.dumps(updated, indent=2))
+            return 0
+        except BrainError as e:
+            print(f"Error applying delta: {e}", file=sys.stderr)
+            return 2
+
+    if args.delta_sync_command == "sync":
+        target_items = json.loads(Path(args.target_file).read_text(encoding="utf-8"))
+        engine = delta_sync.DeltaSyncEngine()
+        deltas, rendered = engine.sync_memories(
+            args.session_id, target_items, recipient=args.recipient
+        )
+        if args.json:
+            print(json.dumps([d.to_dict() for d in deltas], indent=2))
+        else:
+            print(rendered or "(all memories up to date)")
+        return 0
+
+    return 2
+
+
 def cmd_backup(args) -> int:
     home = _home(args)
     bdir = backup_mod.create_backup(home, note=args.note)
@@ -3538,6 +3619,7 @@ def main(argv: list[str] | None = None) -> int:
         "firewall": cmd_firewall,
         "vmem": cmd_vmem,
         "action-cache": cmd_action_cache,
+        "delta-sync": cmd_delta_sync,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,
