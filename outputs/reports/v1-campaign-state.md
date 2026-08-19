@@ -13,8 +13,8 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 |---|---|---|
 | Phase 0 audit (plan §2) | PASSED | outputs/reports/v1-roadmap-baseline.md, v1-existing-primitives-map.md, v1-test-integrity-audit.md |
 | Phase 1 Token Governor (plan §4) | PASSED | outputs/reports/v1-phase1-token-governor.md, tests/test_governor.py (33 tests pass) |
-| Phase 2 Observation Firewall (plan §5) | IN PROGRESS | Next phase |
-| Phase 3 Context Virtual Memory (plan §6) | NOT STARTED | |
+| Phase 2 Observation Firewall (plan §5) | PASSED | outputs/reports/v1-phase2-observation-firewall.md, tests/test_firewall.py (18 tests pass) |
+| Phase 3 Context Virtual Memory (plan §6) | IN PROGRESS | Next phase |
 | Phase 4 Action Cache (plan §7) | NOT STARTED | |
 | Phase 5 Delta Sync (plan §8) | NOT STARTED | |
 | Phase 6 Hybrid Retrieval (plan §9) | NOT STARTED | |
@@ -28,12 +28,13 @@ venv: .venv (python 3.11.15, deps installed 2026-08-18 campaign start)
 - D1: Reuse pre-existing worktree The-Second-Brain-v1 (branch brain/v1-token-efficient) rather than creating a new one; main worktree stays untouched.
 - D2: No Prime persistent goal created (prerequisite Prime 0.7.3 qualification unverified); campaign state kept in this file.
 - D3: Token Governor implemented in src/second_brain/governor.py with honest metrics, 11-feature switchboard, A-I ablation profiles, and ROI classification.
+- D4: Observation Firewall implemented in src/second_brain/firewall.py with 8 core deterministic reducers and content-addressed backing store recovery.
 
 ## Open blockers
 - (none recorded)
 
 ## Next action
-- Phase 2: Implement Observation Firewall (shared deterministic reducer registry + transient content-addressed backing store).
+- Phase 3: Implement Transient Indexed Session Memory -> Context Virtual Memory (context residency states, hot working set, context paging, admission/eviction, compaction recovery).
 
 ## DRIVER-VERIFIED FACTS (Phase 0, spot-checked personally)
 - Campaign venv interpreter MUST be 3.13.7 (main worktree parity). A 3.11 venv manufactures a false failure in tests/test_attach.py (Path.read_text(newline=) is 3.13+). Rebuilt 2026-08-18.
