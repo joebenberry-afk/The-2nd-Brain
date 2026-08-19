@@ -1,0 +1,12 @@
+[BRAIN_DELTA_SYNC v1]
+Minimal incremental memory updates applied to your session:
++ [ADD] mem-auth-spec (v1)
+    status: current
+    confidence: tested
+    title: Auth Specification Standard
+    observation: Initial auth headers and token parameters.
+Initial auth headers and token parameters.
+Initial auth headers and token par
+    guidance: Require bearer token on all private routes.
+    evidence: test_auth.py:22
+    supersedes: None
