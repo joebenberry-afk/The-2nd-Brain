@@ -282,3 +282,80 @@ def test_worker_plane_ceiling_block_complete_respawn(tmp_path):
     r4 = run_cli(home, "worker-plane", "spawn", "sess-1", "task4", "--max-workers", "2", "--json")
     assert r4.returncode == 0, r4.stderr
     assert json.loads(r4.stdout)["spawned"] is True
+
+
+def test_fresh_verifier_record_parses_real_verdict_never_fabricates(tmp_path):
+    """Phase R9: fresh-verifier record only ever parses a verdict from a raw
+    response file that already exists on disk — there is no code path that
+    can produce PASS/FAIL without it (see
+    outputs/reports/rc4/09-fresh-verifier.md)."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("## Requirement\nDo the thing.\n", encoding="utf-8")
+    raw_response_file = tmp_path / "raw_response.txt"
+    raw_response_file.write_text(
+        "Conclusion: implementation matches requirement\nResult: PASS\nConfidence: 0.9\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "evidence"
+
+    r = run_cli(
+        home, "fresh-verifier", "record",
+        "--out", str(out_dir),
+        "--prompt-file", str(prompt_file),
+        "--raw-response", str(raw_response_file),
+        "--provider", "anthropic",
+        "--model", "claude-sonnet-5",
+        "--host", "claude-code",
+        "--json",
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["verdict"] == {"verdict": "PASS", "confidence": 0.9}
+    assert out["provider"] == "anthropic"
+    assert out["session_id"] == {
+        "available": False, "reason": "host does not expose provider run ID"
+    }
+
+    written = (out_dir / "raw-response.txt").read_text(encoding="utf-8")
+    assert written == raw_response_file.read_text(encoding="utf-8")
+    verdict_json = json.loads((out_dir / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict_json == {"verdict": "PASS", "confidence": 0.9}
+
+
+def test_fresh_verifier_record_unparseable_response_never_guesses(tmp_path):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("prompt text", encoding="utf-8")
+    raw_response_file = tmp_path / "raw_response.txt"
+    raw_response_file.write_text("This response never states a clear result.", encoding="utf-8")
+
+    r = run_cli(
+        home, "fresh-verifier", "record",
+        "--out", str(tmp_path / "evidence"),
+        "--prompt-file", str(prompt_file),
+        "--raw-response", str(raw_response_file),
+        "--json",
+    )
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["verdict"] == {"verdict": "UNPARSEABLE", "confidence": None}
+
+
+def test_fresh_verifier_record_missing_raw_response_file_errors(tmp_path):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("prompt text", encoding="utf-8")
+
+    r = run_cli(
+        home, "fresh-verifier", "record",
+        "--out", str(tmp_path / "evidence"),
+        "--prompt-file", str(prompt_file),
+        "--raw-response", str(tmp_path / "does-not-exist.txt"),
+    )
+    assert r.returncode == 2
+    assert "not found" in r.stderr.lower()
