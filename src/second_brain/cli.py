@@ -967,6 +967,49 @@ def _parser() -> argparse.ArgumentParser:
     )
     ac_search.add_argument("--json", action="store_true", help="output JSON")
 
+    wp = sub.add_parser(
+        "worker-plane",
+        parents=[home_parent],
+        help="Driver/Worker Plane concurrency guard & packet broker (Phase R7: "
+        "the actual Brain-owned enforcement point — Prime exposes no "
+        "extension hook for subagent/worker spawn, see "
+        "outputs/reports/rc4/07-worker-plane-live.md)",
+    )
+    wps = wp.add_subparsers(dest="worker_plane_command", required=True)
+
+    wp_spawn = wps.add_parser(
+        "spawn", parents=[home_parent], help="spawn a worker if under the concurrency ceiling"
+    )
+    wp_spawn.add_argument("session_id", help="host session ID")
+    wp_spawn.add_argument("subtask", help="worker subtask description")
+    wp_spawn.add_argument("--target-files", nargs="*", default=None)
+    wp_spawn.add_argument("--relevant-symbols", nargs="*", default=None)
+    wp_spawn.add_argument("--context-capsule", default="")
+    wp_spawn.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
+    wp_spawn.add_argument("--json", action="store_true", help="output JSON")
+
+    wp_complete = wps.add_parser(
+        "complete", parents=[home_parent], help="record a worker's completion"
+    )
+    wp_complete.add_argument("session_id", help="host session ID")
+    wp_complete.add_argument("worker_id", help="worker ID returned by spawn")
+    wp_complete.add_argument(
+        "--status",
+        choices=["COMPLETED", "FAILED", "CANCELLED"],
+        default="COMPLETED",
+    )
+    wp_complete.add_argument("--summary", default="")
+    wp_complete.add_argument("--finding", dest="findings", action="append", default=[])
+    wp_complete.add_argument("--tokens-used", type=int, default=0)
+    wp_complete.add_argument("--json", action="store_true", help="output JSON")
+
+    wp_status = wps.add_parser(
+        "status", parents=[home_parent], help="show active worker count vs the ceiling"
+    )
+    wp_status.add_argument("session_id", help="host session ID")
+    wp_status.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
+    wp_status.add_argument("--json", action="store_true", help="output JSON")
+
     ds = sub.add_parser(
         "delta-sync",
         parents=[home_parent],
@@ -3726,6 +3769,88 @@ def _action_cache_search(store, home: Path, args) -> int:
     return 0
 
 
+def cmd_worker_plane(args) -> int:
+    """
+    Phase R7: the actual Brain-owned enforcement point for the worker
+    concurrency ceiling. Prime's extension API (brainstem/prime-extension/
+    types/prime.d.ts) exposes 11 lifecycle events and none of them is a
+    spawn/subagent event — confirmed by exhaustive enumeration of the
+    PrimeEvent union, see outputs/reports/rc4/02-prime-live-callgraph.md.
+    WorkerPlaneManager.spawn_worker() already enforces the ceiling
+    correctly (SQLite bookkeeping + a raised BrainError over the limit,
+    tests/test_repository_intelligence_live.py::
+    test_worker_concurrency_ceiling_enforcement); before this pass nothing
+    outside its own module ever called it. This CLI subcommand makes it a
+    real, invokable enforcement surface — the same "Brain-owned layer
+    below the host" pattern as R5's action-cache search.
+    """
+    import json
+
+    from .repository_intelligence import (
+        DEFAULT_MAX_WORKERS,
+        WorkerPlaneManager,
+        WorkerResultPacket,
+        WorkerStatus,
+    )
+
+    home = _home(args)
+    requested_max = getattr(args, "max_workers", None)
+    max_workers = requested_max if requested_max is not None else DEFAULT_MAX_WORKERS
+    plane = WorkerPlaneManager(home, args.session_id, max_concurrent_workers=max_workers)
+
+    if args.worker_plane_command == "spawn":
+        try:
+            packet = plane.spawn_worker(
+                args.subtask,
+                target_files=args.target_files,
+                relevant_symbols=args.relevant_symbols,
+                context_capsule=args.context_capsule,
+            )
+        except BrainError as e:
+            if args.json:
+                print(json.dumps({"spawned": False, "error": str(e)}))
+            else:
+                print(f"Error: {e}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps({"spawned": True, **packet.to_dict()}, indent=2))
+        else:
+            print(f"Spawned {packet.worker_id} (session={args.session_id})")
+        return 0
+
+    if args.worker_plane_command == "complete":
+        plane.complete_worker(
+            WorkerResultPacket(
+                worker_id=args.worker_id,
+                session_id=args.session_id,
+                status=WorkerStatus(args.status),
+                summary=args.summary,
+                findings=args.findings,
+                tokens_used=args.tokens_used,
+            )
+        )
+        if args.json:
+            out = {"completed": True, "worker_id": args.worker_id, "status": args.status}
+            print(json.dumps(out))
+        else:
+            print(f"Completed {args.worker_id}: {args.status}")
+        return 0
+
+    if args.worker_plane_command == "status":
+        active = plane.active_worker_count()
+        if args.json:
+            print(
+                json.dumps(
+                    {"active_workers": active, "max_concurrent_workers": max_workers}, indent=2
+                )
+            )
+        else:
+            print(f"Active workers: {active}/{max_workers}")
+        return 0
+
+    return 2
+
+
 def cmd_delta_sync(args) -> int:
     import json
 
@@ -3902,6 +4027,7 @@ def main(argv: list[str] | None = None) -> int:
         "firewall": cmd_firewall,
         "vmem": cmd_vmem,
         "action-cache": cmd_action_cache,
+        "worker-plane": cmd_worker_plane,
         "delta-sync": cmd_delta_sync,
         "cascade": cmd_cascade,
         "tool-set": cmd_tool_set,
