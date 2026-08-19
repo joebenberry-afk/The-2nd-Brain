@@ -1,0 +1,6 @@
+{
+  "event": "tool_result",
+  "toolName": "bash",
+  "toolCallId": "call_pytest_001",
+  "content": "[SECOND_BRAIN_FIREWALL:kind=pytest]\nSummary: pytest: 10 passed, 0 failed, 0 errors, 0 skipped\nKey Sections:\n  (none)\nRaw Artifact: [brain-artifact:sha256:c93e8a3af773a1fb9bb6a5dd0947214b1c0cf2b7df794cd9980f5dd64e0982e9] (442 bytes)\nFull output recoverable: /brain-expand c93e8a3af773"
+}
