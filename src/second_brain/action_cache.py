@@ -80,7 +80,9 @@ def compute_action_key(
     target: str,
     params: dict[str, Any] | None = None,
     input_hashes: dict[str, str] | None = None,
+    git_tree_hash: str | None = None,
     env_fingerprint: dict[str, str] | None = None,
+    verification_predicate: str = "input_hashes_match",
 ) -> str:
     """
     Construct a deterministic action key from all semantic dependencies (§7.2).
@@ -92,7 +94,9 @@ def compute_action_key(
         "target": target,
         "params": params or {},
         "input_hashes": input_hashes or {},
+        "git_tree_hash": git_tree_hash,
         "env_fingerprint": env_fingerprint or {},
+        "verification_predicate": verification_predicate,
     }
     raw = json.dumps(packet, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -247,7 +251,9 @@ class ActionCacheStore:
             target=target,
             params=params,
             input_hashes=act_proof.input_hashes,
+            git_tree_hash=act_proof.git_tree_hash,
             env_fingerprint=act_proof.env_fingerprint,
+            verification_predicate=act_proof.verification_predicate,
         )
 
         now = _now()
@@ -298,7 +304,7 @@ class ActionCacheStore:
 
         return entry
 
-    def validate_proof(self, proof: ActionProof) -> bool:
+    def validate_proof(self, proof: ActionProof, cwd: Path | str | None = None) -> bool:
         """
         Validate proof conditions before replaying a cached action (§7.4).
         """
@@ -328,7 +334,33 @@ class ActionCacheStore:
             if os.environ.get(env_key) != expected_val:
                 return False
 
-        return True
+        # 4. Check git tree hash if declared
+        if proof.git_tree_hash is not None:
+            actual_tree = self._get_git_tree_hash(cwd or self.home)
+            if actual_tree != proof.git_tree_hash:
+                return False
+
+        # 5. Check verification predicate if custom
+        return proof.verification_predicate != "reject_always"
+
+    def _get_git_tree_hash(self, target_dir: Path | str) -> str | None:
+        """Read git tree hash for directory (fail-closed if tree cannot be verified)."""
+        import subprocess
+
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=str(target_dir),
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if res.returncode == 0:
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
 
     def query(self, action_key: str) -> CacheHitResult:
         """

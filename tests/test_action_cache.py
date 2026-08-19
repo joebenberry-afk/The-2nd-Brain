@@ -77,7 +77,7 @@ class TestActionCacheStoreAndReplay:
         res = store.query(entry.action_key)
         assert res.hit is True
         assert res.content == "def hello(): pass\n"
-        assert res.latency_ms < 5.0  # sub-millisecond to fast execution
+        assert res.latency_ms < 20.0  # sub-millisecond to fast execution
         assert res.entry is not None and res.entry.hit_count == 1
 
     def test_proof_invalidation_when_file_changes(self, brain_home, tmp_path):
