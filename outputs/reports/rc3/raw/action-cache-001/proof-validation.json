@@ -1,0 +1,10 @@
+{
+  "proof_fields_validated": [
+    "git_tree_hash",
+    "input_hashes",
+    "env_fingerprint",
+    "ttl_seconds",
+    "verification_predicate"
+  ],
+  "fail_closed_on_corrupt_proof": true
+}
