@@ -186,6 +186,7 @@ function buildVmemPointerText(opts: {
   kind: string;
   correlationKey: string;
   correlationLabel: string;
+  hostSessionId: string;
 }): string {
   return [
     "[SECOND_BRAIN_VMEM]",
@@ -193,7 +194,7 @@ function buildVmemPointerText(opts: {
     `obj_id=${opts.objId}`,
     `${opts.correlationLabel}=${opts.correlationKey}`,
     "state=EVICTED",
-    `Recoverable (deterministic, no LLM): second_brain vmem resolve <session_id> ${opts.objId} --json`,
+    `Recoverable (deterministic, no LLM): second_brain vmem resolve ${opts.hostSessionId} ${opts.objId} --json`,
     "Request it only if the missing content is material to the current decision.",
   ].join("\n");
 }
@@ -410,6 +411,7 @@ export function pageContext(options: PageContextOptions): PageContextResult {
         kind: match.kind,
         correlationKey: candidate.correlationKey,
         correlationLabel: candidate.elementKind === "autoinject" ? "delivery_id" : "toolCallId",
+        hostSessionId: options.hostSessionId,
       });
       // toolResult content is an array of blocks in the real schema (Pilot
       // 2); custom (AutoInject) content is a plain string. Replace ONLY
