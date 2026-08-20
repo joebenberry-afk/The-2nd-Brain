@@ -1841,8 +1841,16 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     runVmemListSyncMock.mockReturnValue({
       ok: true,
       objects: [
-        { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
-        { objId: "obj-2", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-2" } },
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+        },
+        {
+          objId: "obj-2",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-2", packetArtifactRef: "art-2", packetSha256: "b".repeat(64) },
+        },
       ],
     });
     const handlers = loadFactory();

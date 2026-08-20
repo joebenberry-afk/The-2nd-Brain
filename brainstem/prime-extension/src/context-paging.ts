@@ -14,13 +14,25 @@
  *   1. `role === "custom"` elements where `customType ===
  *      AUTOINJECT_CUSTOM_TYPE` ("brain.autoinject.packet", autoinject.ts)
  *      AND `element.details.delivery_id` resolves to a real, currently-
- *      EVICTED RESEARCH_RESULT VMem object for this session.
+ *      EVICTED RESEARCH_RESULT VMem object for this session WHOSE metadata
+ *      ALSO contains a non-empty `packetArtifactRef` (or
+ *      `packet_artifact_ref`) AND a `packetSha256` (or `packet_sha256`)
+ *      that is a valid 64-character hex string — i.e. exact, durable,
+ *      already-preserved artifact proof, not merely a delivery id. A
+ *      delivery-only admission (index.ts's `before_agent_start` fail-open
+ *      path, `packetMetadata = undefined`, used when packet preservation
+ *      failed) correctly does NOT correlate here — it simply finds no
+ *      match, same as any other unmatched candidate (`vmem resolve` still
+ *      handles delivery-only reconstruction; that fallback is unaffected).
  *   2. `role === "toolResult"` elements (never `isError === true` — see
  *      below) where `element.toolCallId` resolves to a real, currently-
- *      EVICTED TOOL_OBSERVATION VMem object for this session, correlated
- *      via that object's `metadata.toolCallId` (Part C: `vmem list --json`
- *      returns `metadata` but never `content`, so this correlation would be
- *      impossible without the Part C metadata extension).
+ *      EVICTED TOOL_OBSERVATION VMem object for this session WHOSE metadata
+ *      ALSO contains a non-empty `artifactRef` (or `artifact_ref`) —
+ *      again, exact durable artifact proof, not merely a tool-call id —
+ *      correlated via that object's `metadata.toolCallId` (Part C: `vmem
+ *      list --json` returns `metadata` but never `content`, so this
+ *      correlation would be impossible without the Part C metadata
+ *      extension). A `toolCallId`-only object correctly finds no match.
  *
  * Never paged: `assistant`, `thinking`/`toolCall` blocks, `compactionSummary`,
  * `custom` with any other/missing `customType`, `toolResult` with
@@ -60,6 +72,19 @@ import { runVmemListSync, type VmemListedObject, type VmemListSyncResult } from 
  * no new tokenizer, matches the existing codebase convention. */
 function estimateTokens(value: unknown): number {
   return Math.max(1, Math.floor(serializedSize(value) / 4));
+}
+
+/** Structural check ONLY — a non-empty string, nothing more. */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Structural check ONLY — a well-formed 64-character hex string (the
+ * SHA-256 digest SHAPE). Does not read or hash any artifact; that real
+ * verification happens once, for real, in `vmem resolve`/`resolve_object`. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
+function isValidSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && SHA256_HEX_RE.test(value);
 }
 
 interface PageCandidate {
@@ -190,15 +215,32 @@ export function pageContext(options: PageContextOptions): PageContextResult {
       return { messages: undefined, pagedCount: 0, error: listed.error ?? "vmem list failed" };
     }
 
+    // Only correlate objects whose metadata proves an EXACT, durable,
+    // already-preserved backing exists (packet artifact + verified hash for
+    // AutoInject; tool-observation artifact for toolResult) — NOT merely
+    // that some identifier is present. Anything short of that is simply
+    // absent from these maps, which candidates then fail to match (the
+    // existing, unchanged "no-op / untouched" path).
     const byDeliveryId = new Map<string, VmemListedObject>();
     const byToolCallId = new Map<string, VmemListedObject>();
     for (const obj of listed.objects) {
       if (obj.kind === "RESEARCH_RESULT") {
-        const key = obj.metadata.deliveryId ?? obj.metadata.delivery_id;
-        if (typeof key === "string" && key.length > 0) byDeliveryId.set(key, obj);
+        const deliveryId = obj.metadata.deliveryId ?? obj.metadata.delivery_id;
+        const packetArtifactRef = obj.metadata.packetArtifactRef ?? obj.metadata.packet_artifact_ref;
+        const packetSha256 = obj.metadata.packetSha256 ?? obj.metadata.packet_sha256;
+        if (
+          isNonEmptyString(deliveryId) &&
+          isNonEmptyString(packetArtifactRef) &&
+          isValidSha256Hex(packetSha256)
+        ) {
+          byDeliveryId.set(deliveryId, obj);
+        }
       } else if (obj.kind === "TOOL_OBSERVATION") {
-        const key = obj.metadata.toolCallId ?? obj.metadata.tool_call_id;
-        if (typeof key === "string" && key.length > 0) byToolCallId.set(key, obj);
+        const toolCallId = obj.metadata.toolCallId ?? obj.metadata.tool_call_id;
+        const artifactRef = obj.metadata.artifactRef ?? obj.metadata.artifact_ref;
+        if (isNonEmptyString(toolCallId) && isNonEmptyString(artifactRef)) {
+          byToolCallId.set(toolCallId, obj);
+        }
       }
     }
 
