@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildRtdBlock,
+  cliArtifactPreserver,
   cliRtdPreserver,
   commandFromInput,
   distillText,
@@ -783,5 +784,26 @@ describe("cliRtdPreserver spawn contract (fail-open)", () => {
     const preserved = await preserver.preserve("raw");
     expect(preserved).toBeNull();
     expect(await preserver.verify("a".repeat(64), "raw")).toBe(false);
+  });
+});
+
+describe("cliArtifactPreserver (RC4 byte-exact recovery pass: shared preserve/verify factory)", () => {
+  it("no venv -> preservation fails (null/false), never throws, same fail-open contract as cliRtdPreserver", async () => {
+    const preserver = cliArtifactPreserver({
+      home: tmpdir(),
+      session: "s",
+      kind: "autoinject_packet",
+      tool: "autoinject",
+    });
+    const preserved = await preserver.preserve("raw packet text");
+    expect(preserved).toBeNull();
+    expect(await preserver.verify("a".repeat(64), "raw packet text")).toBe(false);
+  });
+
+  it("cliRtdPreserver is a thin kind=rtd_raw/tool=bash wrapper over cliArtifactPreserver (same shape, same fail-open behavior)", async () => {
+    const rtd = cliRtdPreserver({ home: tmpdir(), session: "s" });
+    const generic = cliArtifactPreserver({ home: tmpdir(), session: "s", kind: "rtd_raw", tool: "bash" });
+    expect(await rtd.preserve("raw")).toBe(await generic.preserve("raw"));
+    expect(await rtd.verify("a".repeat(64), "raw")).toBe(await generic.verify("a".repeat(64), "raw"));
   });
 });

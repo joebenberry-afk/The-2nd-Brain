@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import factory, { type ExtensionOptions } from "../src/index";
 import { createTelemetryDirEnsurer } from "../src/storage";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
+
+/** sha256 hex (test-local helper, same primitive as rtd.ts's own
+ * rtdSha256Hex) -- used to build a fake artifact preserver deterministically. */
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
 
 const recallRunMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/recall-gate", async (importOriginal) => {
@@ -22,6 +29,16 @@ const runVmemListSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/vmem", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/vmem")>();
   return { ...actual, runVmemStore: runVmemStoreMock, runVmemListSync: runVmemListSyncMock };
+});
+// RC4 byte-exact recovery pass Part A wiring tests: control the AutoInject
+// advisory/active outcome directly instead of spawning a real CLI process.
+// Only `runAdvisoryAutoInject` is overridden -- `loadAutoInjectHostConfig`
+// and `runShadowAutoInject` (the DEFAULT shadow-mode branch every other
+// before_agent_start test in this file exercises) stay real.
+const runAdvisoryAutoInjectMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/autoinject", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/autoinject")>();
+  return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
 });
 
 /**
@@ -43,6 +60,8 @@ const ENV_KEYS = [
   "SECOND_BRAIN_RECALL_MAX_ROWS",
   "SECOND_BRAIN_RECALL_MIN_CHARS",
   "SECOND_BRAIN_RECALL_TIMEOUT_MS",
+  "SECOND_BRAIN_AUTOINJECT_MODE",
+  "SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS",
 ] as const;
 const SAVED_ENV: Record<string, string | undefined> = {};
 let tmp: string;
@@ -60,6 +79,8 @@ beforeEach(async () => {
   runVmemStoreMock.mockResolvedValue({ ok: true, objId: "obj-test" });
   runVmemListSyncMock.mockReset();
   runVmemListSyncMock.mockReturnValue({ ok: true, objects: [] });
+  runAdvisoryAutoInjectMock.mockReset();
+  runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -179,6 +200,15 @@ function enableRtdAndVmemAdmission(): void {
     "utf8",
   );
 }
+
+/** Write config/context.toml with ONLY [vmem_admission] enabled=true (Part
+ * A AutoInject wiring tests -- RTD is irrelevant here). */
+function enableVmemAdmissionOnly(): void {
+  const dir = join(tmp, "config");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "context.toml"), "[vmem_admission]\nenabled = true\n", "utf8");
+}
+
 
 /** Write config/context.toml with [context_paging] enabled=true (Part B/E
  * activation switch), with small conservative overrides for deterministic
@@ -943,6 +973,112 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(typeof parsed.original_chars).toBe("number");
     expect(parsed.command_class).toBe("pytest");
   });
+
+  it("real AutoInject delivery: preserve-before-admit fires, richer packetArtifactRef/packetSha256 metadata included on success", async () => {
+    enableVmemAdmissionOnly();
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const packetText = "PACKET TEXT the model actually saw, verbatim.";
+    runAdvisoryAutoInjectMock.mockResolvedValue({
+      customType: "brain.autoinject.packet",
+      content: packetText,
+      display: true,
+      details: { delivery_id: "del-preserve-1", packet_tokens: 55 },
+    });
+    const handlers = loadFactory({
+      autoinjectPacketPreserver: {
+        preserve: async (raw) => ({ sha256: sha256Hex(raw), handle: `[brain-artifact:sha256:${sha256Hex(raw)}]` }),
+        verify: async (_sha256, raw) => raw === packetText,
+      },
+    });
+    const ctx = makeCtx();
+
+    await handlers.get("before_agent_start")!({ prompt: "do the research task" }, ctx);
+
+    expect(runAdvisoryAutoInjectMock).toHaveBeenCalledTimes(1);
+    expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
+    const [call] = runVmemStoreMock.mock.calls[0] as [
+      { kind: string; title: string; content: string; metadata?: Record<string, unknown> },
+    ];
+    expect(call.kind).toBe("RESEARCH_RESULT");
+    expect(call.title).toBe("autoinject_delivery");
+    // content: the EXISTING delivery-only shape, unchanged (provenance/fallback key).
+    const parsedContent = JSON.parse(call.content) as Record<string, unknown>;
+    expect(parsedContent.delivery_id).toBe("del-preserve-1");
+    // metadata: the RICHER shape -- existing fields kept, new artifact pointer added.
+    expect(call.metadata).toBeDefined();
+    expect(call.metadata?.delivery_id).toBe("del-preserve-1");
+    expect(call.metadata?.packet_tokens).toBe(55);
+    expect(call.metadata?.packetSha256).toBe(sha256Hex(packetText));
+    expect(call.metadata?.packetArtifactRef).toBe(`[brain-artifact:sha256:${sha256Hex(packetText)}]`);
+  });
+
+  it("real AutoInject delivery: preserve/verify failure -> admission still happens with the EXISTING delivery-only shape (fail-open, no packetArtifactRef)", async () => {
+    enableVmemAdmissionOnly();
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const packetText = "PACKET TEXT that fails to preserve.";
+    runAdvisoryAutoInjectMock.mockResolvedValue({
+      customType: "brain.autoinject.packet",
+      content: packetText,
+      display: true,
+      details: { delivery_id: "del-preserve-fail-1", packet_tokens: 12 },
+    });
+    const handlers = loadFactory({
+      autoinjectPacketPreserver: {
+        preserve: async () => null, // preservation failed -> RtdPreserver contract: null
+        verify: async () => false,
+      },
+    });
+    const ctx = makeCtx();
+
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the research task" }, ctx);
+
+    // The packet message itself is still returned to the host (never dropped).
+    expect((result as { message?: { content?: unknown } } | undefined)?.message?.content).toBe(packetText);
+    expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
+    const [call] = runVmemStoreMock.mock.calls[0] as [
+      { kind: string; title: string; content: string; metadata?: Record<string, unknown> },
+    ];
+    expect(call.kind).toBe("RESEARCH_RESULT");
+    const parsedContent = JSON.parse(call.content) as Record<string, unknown>;
+    expect(parsedContent.delivery_id).toBe("del-preserve-fail-1");
+    expect(call.metadata).toBeUndefined(); // no packetArtifactRef/packetSha256 on failure
+  });
+
+  it("real AutoInject delivery: preserver throwing unexpectedly is fail-open too -- admission still happens with the old shape", async () => {
+    enableVmemAdmissionOnly();
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const packetText = "PACKET TEXT whose preserver throws.";
+    runAdvisoryAutoInjectMock.mockResolvedValue({
+      customType: "brain.autoinject.packet",
+      content: packetText,
+      display: true,
+      details: { delivery_id: "del-preserve-throw-1", packet_tokens: 7 },
+    });
+    const handlers = loadFactory({
+      autoinjectPacketPreserver: {
+        preserve: async () => {
+          throw new Error("preserve boom");
+        },
+        verify: async () => false,
+      },
+    });
+    const ctx = makeCtx();
+
+    let threw = false;
+    let result: unknown;
+    try {
+      result = await handlers.get("before_agent_start")!({ prompt: "do the research task" }, ctx);
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false); // never throws, never blocks before_agent_start
+    expect((result as { message?: { content?: unknown } } | undefined)?.message?.content).toBe(packetText);
+    expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
+    const [call] = runVmemStoreMock.mock.calls[0] as [{ metadata?: Record<string, unknown> }];
+    expect(call.metadata).toBeUndefined();
+  });
+
 });
 
 // -------------------------------------------------------------------------

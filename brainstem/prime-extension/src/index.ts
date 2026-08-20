@@ -70,6 +70,7 @@ import {
 import { pageContext } from "./context-paging";
 import { join } from "node:path";
 import {
+  cliArtifactPreserver,
   cliRtdPreserver,
   parseThreshold,
   rtdEligibility,
@@ -243,6 +244,16 @@ export interface ExtensionOptions {
    * preserver simply disables substitution (original content returned).
    */
   rtdPreserver?: RtdPreserver;
+  /**
+   * RC4 byte-exact recovery pass Part A test seam: AutoInject packet
+   * preserver (kind="autoinject_packet", tool="autoinject"), same
+   * `RtdPreserver` shape as `rtdPreserver`. When omitted, the real CLI
+   * preserver (`cliArtifactPreserver`) is created per real AutoInject
+   * delivery against the brain home. Fail-open: a failing preserver simply
+   * omits the richer `packetArtifactRef`/`packetSha256` metadata (admission
+   * still happens with the existing delivery-only shape).
+   */
+  autoinjectPacketPreserver?: RtdPreserver;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -340,13 +351,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    * and fail-open: a failing admission call only records an
    * extension_error, never blocks or throws from the calling hook.
    * `content` MUST already be a small structured object (ids/hashes/sizes
-   * only) — callers never pass transcript/tool text here.
+   * only) — callers never pass transcript/tool text here. `metadata`
+   * (RC4 byte-exact recovery pass, Part A) is the SAME already-wired
+   * `--metadata <json>` CLI flag (`vmem.ts`'s `VmemStoreOptions.metadata`,
+   * previously unused by this call site) — small correlation/recovery keys
+   * only (e.g. `packetArtifactRef`/`packetSha256`), never raw text.
    */
   const vmemAdmit = (
     session: string,
     kind: string,
     title: string,
     content: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
   ): void => {
     if (!loadVmemAdmissionConfig(config.home).enabled) return;
     runVmemStore({
@@ -355,6 +371,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       kind,
       title,
       content: sensors.safeJson(content),
+      metadata,
     })
       .then((result) => {
         if (!result.ok) {
@@ -526,11 +543,51 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
         // (delivery_id + packet_tokens) is the structured, non-transcript
         // reference already computed by messageFromOutcome (autoinject.ts)
-        // — the packet TEXT itself (aiMessage.content) is never touched.
+        // â€” the packet TEXT itself (aiMessage.content) is never sent to
+        // telemetry. RC4 byte-exact recovery pass Part A: BEFORE admitting,
+        // preserve the EXACT packet text through the same preserve->verify
+        // machinery RTD uses for raw tool output (`cliArtifactPreserver`,
+        // kind="autoinject_packet", tool="autoinject"), so a LATER context-
+        // paging fault-in can recover byte-exactly what the model actually
+        // saw even if the underlying memory is superseded afterward. Fully
+        // fail-open: any preserve/verify failure (or exception) falls back
+        // to the EXISTING delivery-only admission shape unchanged; admission
+        // itself, and the packet message returned to the host, are never
+        // affected.
         if (aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage) {
           const details = (aiMessage as { details?: unknown }).details;
           if (details !== null && typeof details === "object") {
-            vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", details as Record<string, unknown>);
+            const detailsObj = details as Record<string, unknown>;
+            const packetText = (aiMessage as { content?: unknown }).content;
+            let packetMetadata: Record<string, unknown> | undefined;
+            if (typeof packetText === "string" && packetText.length > 0) {
+              try {
+                const preserver =
+                  options.autoinjectPacketPreserver ??
+                  cliArtifactPreserver({
+                    home: config.home ?? "",
+                    session,
+                    kind: "autoinject_packet",
+                    tool: "autoinject",
+                  });
+                const preserved = await preserver.preserve(packetText);
+                if (preserved !== null) {
+                  const verified = await preserver.verify(preserved.sha256, packetText);
+                  if (verified) {
+                    packetMetadata = {
+                      ...detailsObj,
+                      packetArtifactRef: preserved.handle,
+                      packetSha256: preserved.sha256,
+                    };
+                  }
+                }
+              } catch {
+                // preserve/verify failed unexpectedly -> fail open, admit
+                // with the existing delivery-only shape below (no metadata).
+                packetMetadata = undefined;
+              }
+            }
+            vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", detailsObj, packetMetadata);
           }
         }
       } else {

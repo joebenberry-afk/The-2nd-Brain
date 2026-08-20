@@ -27,7 +27,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, contracts, db, ledger, semantic, working_set
+from . import artifacts, contracts, db, ledger, working_set
 from .errors import BrainError
 from .paths import db_path as _control_db_path
 
@@ -615,21 +615,134 @@ def _delivery_rows_for_packet(
         conn.close()
 
 
-def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str) -> dict[str, Any]:
-    """RESEARCH_RESULT (Part D §2, extended by the RC4 safety pass Part 2):
-    delivery_id -> `deliveries` -> every sibling delivery row sharing the
-    SAME packet (an AutoInject packet can carry multiple selected memories,
-    one `deliveries` row each) -> each row's `memories` row (same
-    `SELECT * FROM memories WHERE memory_id = ?` pattern already used by
-    reconsolidation.py/semantic.py, reused here via semantic.show_memory)
-    -> a compact, deterministic reconstruction of the COMPLETE packet. Need
-    not be byte-identical to the original packet text (memory content is
-    itself durable/versioned).
+def _show_memory_at_version(home: Path, memory_id: str, version: int) -> dict[str, Any]:
+    """Delivered-version-aware counterpart to `semantic.show_memory` (RC4
+    byte-exact recovery pass, Part A fallback path): resolves memory title/
+    body AS THEY WERE AT `version`, not whatever the CURRENT row says. Reuses
+    the existing `memory_versions` table exactly as `semantic.history()`
+    already reads it -- no new memory-versioning subsystem. Returns the
+    CURRENT row's data (unchanged) when `version == current_version`;
+    otherwise reads the archived `memory_versions` row for `title`/
+    `body_path` and loads THAT file. Other row fields (status,
+    evidence_grade, scope, summary, current_version) are not versioned by
+    `memory_versions` and are returned from the current row unchanged -- only
+    `title`/`body` reflect the delivered version, same as `current_version`
+    in the caller's item dict is deliberately kept distinct from
+    `delivered_version`. Raises the same `BrainError` semantics
+    `semantic.show_memory` already uses on a missing/corrupt file."""
+    conn = db.connect(_control_db_path(home), readonly=True)
+    try:
+        row = conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
+        if row is None:
+            raise BrainError(f"Unknown memory {memory_id!r}")
+        row = dict(row)
+        current_version = row["current_version"]
+        if version == current_version:
+            body_path = row["body_path"]
+            resolved_row = row
+        else:
+            vrow = conn.execute(
+                "SELECT * FROM memory_versions WHERE memory_id = ? AND version = ?",
+                (memory_id, version),
+            ).fetchone()
+            if vrow is None:
+                raise BrainError(f"No archived version {version} for memory {memory_id!r}")
+            vrow = dict(vrow)
+            body_path = vrow["body_path"]
+            resolved_row = dict(row)
+            resolved_row["title"] = vrow["title"]  # the DELIVERED version's title
+    finally:
+        conn.close()
 
-    Partial-failure semantics: if ANY member of the packet fails to resolve
-    (missing memory row, etc.) the WHOLE resolution fails clearly
-    (`ok: False`) rather than silently returning an incomplete set —
-    consistent with Part 1's no-lossy-partial-success requirement."""
+    path = Path(home) / body_path if body_path else None
+    if path is None or not path.exists():
+        raise BrainError(f"Memory file missing for {memory_id!r} v{version}: {path}")
+    body = path.read_text(encoding="utf-8")
+    if not body.startswith("---\n") or "\n---" not in body:
+        raise BrainError(f"Corrupt memory file {path}: missing frontmatter")
+    return {"row": resolved_row, "path": str(path), "body": body}
+
+
+def _resolve_research_result_from_artifact(
+    packet_artifact_ref: str, packet_sha256: str, obj: SessionObject, home: Path
+) -> dict[str, Any]:
+    """PRIMARY path (RC4 byte-exact AutoInject recovery pass, Part A): the
+    exact packet bytes the model actually saw were preserved AT ADMISSION
+    TIME (TS `cliArtifactPreserver`, kind="autoinject_packet" -- the same
+    preserve-then-verify machinery RTD already uses for raw tool output).
+    Resolve via the SAME content-addressed artifact store
+    `_resolve_tool_observation` already reads (`artifacts.expand`),
+    sha256-verify the loaded bytes match `packetSha256` EXACTLY (same
+    discipline as `VMemStore._verify_and_load`'s own hash check), and return
+    that byte-exact text. No `semantic.show_memory`/DB lookup on this path at
+    all -- current/superseded memory state is irrelevant once the packet
+    itself is preserved."""
+    match = _ARTIFACT_HANDLE_RE.search(packet_artifact_ref)
+    sha_or_prefix = match.group(1) if match else packet_artifact_ref.strip()
+    try:
+        raw = artifacts.expand(home, sha_or_prefix)
+    except BrainError as exc:
+        return {"ok": False, "error": str(exc)}
+    actual_sha = hashlib.sha256(raw).hexdigest()
+    if actual_sha != packet_sha256:
+        return {
+            "ok": False,
+            "error": (
+                f"AutoInject packet artifact corrupt: expected sha256 "
+                f"{packet_sha256}, got {actual_sha}"
+            ),
+        }
+    try:
+        content_text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return {"ok": False, "error": f"packet artifact is not valid UTF-8 text: {exc}"}
+    delivery_id = obj.metadata.get("deliveryId") or obj.metadata.get("delivery_id")
+    return {
+        "ok": True,
+        "resolution": "packet_artifact",
+        "packet_artifact_ref": packet_artifact_ref,
+        "packet_sha256": packet_sha256,
+        "delivery_id": delivery_id,
+        "content": content_text,
+        "byte_exact": True,
+    }
+
+
+def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str) -> dict[str, Any]:
+    """RESEARCH_RESULT (Part D Â§2, extended by the RC4 safety pass Part 2,
+    then made byte-exact by the RC4 byte-exact recovery pass Part A).
+
+    PRIMARY path: when admission preserved the EXACT packet bytes the model
+    saw (`obj.metadata["packetArtifactRef"]`/`["packetSha256"]`), resolve
+    those bytes directly through the content-addressed artifact store --
+    byte-exact, independent of current/superseded memory state
+    (`_resolve_research_result_from_artifact`).
+
+    FALLBACK path (older, pre-this-pass VMem objects with no
+    packetArtifactRef): delivery_id -> `deliveries` -> every sibling
+    delivery row sharing the SAME packet (an AutoInject packet can carry
+    multiple selected memories, one `deliveries` row each) -> each row's
+    DELIVERED version specifically (`_show_memory_at_version`, not whatever
+    `semantic.show_memory` currently returns) -> a compact, deterministic
+    reconstruction of the COMPLETE packet.
+
+    Partial-failure semantics (fallback path): if ANY member of the packet
+    fails to resolve (missing memory row, missing archived version, etc.)
+    the WHOLE resolution fails clearly (`ok: False`) rather than silently
+    returning an incomplete set -- consistent with Part 1's
+    no-lossy-partial-success requirement."""
+    packet_artifact_ref = obj.metadata.get("packetArtifactRef") or obj.metadata.get(
+        "packet_artifact_ref"
+    )
+    packet_sha256 = obj.metadata.get("packetSha256") or obj.metadata.get("packet_sha256")
+    if (
+        isinstance(packet_artifact_ref, str)
+        and packet_artifact_ref
+        and isinstance(packet_sha256, str)
+        and packet_sha256
+    ):
+        return _resolve_research_result_from_artifact(packet_artifact_ref, packet_sha256, obj, home)
+
     delivery_id = obj.metadata.get("deliveryId") or obj.metadata.get("delivery_id")
     if not isinstance(delivery_id, str) or not delivery_id:
         try:
@@ -656,14 +769,15 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
     items: list[dict[str, Any]] = []
     for row in packet_rows:
         member_memory_id = row["memory_id"]
+        delivered_version = row["memory_version"]
         try:
-            shown = semantic.show_memory(home, member_memory_id)
+            shown = _show_memory_at_version(home, member_memory_id, delivered_version)
         except BrainError as exc:
             return {
                 "ok": False,
                 "error": (
                     f"packet member unresolvable (delivery {row['delivery_id']}, "
-                    f"memory {member_memory_id}): {exc}"
+                    f"memory {member_memory_id} v{delivered_version}): {exc}"
                 ),
             }
         mrow = shown["row"]
@@ -671,7 +785,7 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
             {
                 "delivery_id": row["delivery_id"],
                 "memory_id": member_memory_id,
-                "delivered_version": row["memory_version"],
+                "delivered_version": delivered_version,
                 "current_version": mrow.get("current_version"),
                 "title": mrow.get("title"),
                 "status": mrow.get("status"),
@@ -800,8 +914,17 @@ def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, 
 
     try:
         obj = store._mutate_fault_in(obj)
-    except BrainError as exc:
-        return {"ok": False, "error": str(exc)}
+    except (BrainError, sqlite3.Error, OSError) as exc:
+        # RC4 byte-exact recovery pass Part B: the ONE DB write itself can
+        # still fail (SQLite busy/locked, disk I/O error) even though every
+        # read-only resolution step above already succeeded. That must not
+        # be reported as a completed fault-in -- SQLite statement-level
+        # atomicity plus `_mutate_fault_in`'s own `with sqlite3.connect(...)`
+        # context manager already guarantee no partial row mutation occurs
+        # on this exception; this handler's only job is to CATCH it and
+        # report a structured failure instead of letting it propagate
+        # (`resolve_object` documents itself as "never raises").
+        return {"ok": False, "error": f"fault-in DB write failed: {exc}"}
 
     result["obj"] = obj.to_dict()
     result["obj_id"] = obj.obj_id
