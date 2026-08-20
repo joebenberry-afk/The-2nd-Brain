@@ -651,4 +651,75 @@ describe("Part B/E: contextPaging (privacy-safe paging-count telemetry)", () => 
     expect(sensors.contextPaging(SESSION, "two" as unknown as number).paged_count).toBe(0);
     expect(sensors.contextPaging(SESSION, undefined as unknown as number).paged_count).toBe(0);
   });
+
+  it("omitting details (existing call shape) leaves every Defect B additive field null", () => {
+    const record = sensors.contextPaging(SESSION, 1);
+    expect(record.candidate_count).toBeNull();
+    expect(record.eligible_count).toBeNull();
+    expect(record.pressure_estimated_tokens).toBeNull();
+    expect(record.resident_budget).toBeNull();
+    expect(record.requested_page_count).toBeNull();
+    expect(record.claimed_page_count).toBeNull();
+    expect(record.estimated_tokens_before).toBeNull();
+    expect(record.estimated_tokens_after).toBeNull();
+    expect(record.estimated_tokens_removed).toBeNull();
+    expect(record.object_kinds).toBeNull();
+    expect(record.state_before).toBeNull();
+    expect(record.state_after).toBeNull();
+  });
+
+  it("Defect B: populates every additive field from details, computes estimated_tokens_removed as before-after", () => {
+    const record = sensors.contextPaging(SESSION, 2, {
+      candidateCount: 3,
+      eligibleCount: 2,
+      pressureEstimatedTokens: 150,
+      residentBudget: 100,
+      requestedPageCount: 2,
+      claimedPageCount: 2,
+      estimatedTokensBefore: 120,
+      estimatedTokensAfter: 40,
+      objectKinds: ["RESEARCH_RESULT", "TOOL_OBSERVATION"],
+      stateBefore: ["RESIDENT", "FAULTED_IN"],
+      stateAfter: ["EVICTED"],
+    });
+    expect(record.candidate_count).toBe(3);
+    expect(record.eligible_count).toBe(2);
+    expect(record.pressure_estimated_tokens).toBe(150);
+    expect(record.resident_budget).toBe(100);
+    expect(record.requested_page_count).toBe(2);
+    expect(record.claimed_page_count).toBe(2);
+    expect(record.estimated_tokens_before).toBe(120);
+    expect(record.estimated_tokens_after).toBe(40);
+    expect(record.estimated_tokens_removed).toBe(80);
+    expect(record.object_kinds).toEqual(["RESEARCH_RESULT", "TOOL_OBSERVATION"]);
+    expect(record.state_before).toEqual(["RESIDENT", "FAULTED_IN"]);
+    expect(record.state_after).toEqual(["EVICTED"]);
+  });
+
+  it("estimated_tokens_removed never goes negative (clamped at 0)", () => {
+    const record = sensors.contextPaging(SESSION, 1, {
+      estimatedTokensBefore: 10,
+      estimatedTokensAfter: 50, // pathological but must not produce a negative "removed"
+    });
+    expect(record.estimated_tokens_removed).toBe(0);
+  });
+
+  it("object_kinds/state_before/state_after are recognized tokens only — an unrecognized token is dropped, never free text", () => {
+    const record = sensors.contextPaging(SESSION, 1, {
+      objectKinds: ["RESEARCH_RESULT", "not a token; has spaces"],
+      stateBefore: ["RESIDENT"],
+      stateAfter: ["EVICTED"],
+    });
+    expect(record.object_kinds).toEqual(["RESEARCH_RESULT"]);
+  });
+
+  it("no obj_id/delivery_id/tool_call_id/content ever appears on the record surface", () => {
+    const record = sensors.contextPaging(SESSION, 1, {
+      candidateCount: 1,
+      objectKinds: ["RESEARCH_RESULT"],
+    }) as unknown as Record<string, unknown>;
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain("obj-");
+    expect(serialized).not.toContain("del-");
+  });
 });

@@ -1,15 +1,25 @@
 /**
- * Part B/E (RC4 pass): the first conservative Context Virtual Memory pager.
- * `pageContext` is synchronous, fail-open, and NEVER throws (Part E). These
- * tests exercise it directly against the REAL captured schema (Pilot 2,
- * outputs/reports/rc4/12-real-prime-pilot-2.md), with a fake `listEvicted`
- * seam so no real subprocess is spawned.
+ * Part B/E (RC4 pass) + Defect B (RC4 proactive-paging-repair pass):
+ * `pageContext` is synchronous, fail-open, and NEVER throws (Part E).
+ * These tests exercise it directly against the REAL captured schema
+ * (Pilot 2, outputs/reports/rc4/12-real-prime-pilot-2.md), with fake
+ * `listPrePage`/`claimPages` seams so no real subprocess is spawned.
+ *
+ * Defect B fix under test: `pageContext` now queries PRE-PAGE residency
+ * states (RESIDENT, optionally FAULTED_IN — never EVICTED, never PINNED)
+ * and performs its OWN claim (RESIDENT/FAULTED_IN -> EVICTED) before any
+ * replacement patch is ever constructed — see context-paging.ts's module
+ * docstring for the exact 8-step ordering this file verifies.
  */
 import { describe, expect, it } from "vitest";
 import { pageContext, type PageContextOptions } from "../src/context-paging";
 import { AUTOINJECT_CUSTOM_TYPE } from "../src/autoinject";
 import type { ContextPagingFileConfig } from "../src/config";
-import type { VmemListedObject, VmemListSyncResult } from "../src/vmem";
+import type {
+  VmemClaimPagesResult,
+  VmemListPrePageSyncResult,
+  VmemPrePageObject,
+} from "../src/vmem";
 
 const ENABLED_CFG: ContextPagingFileConfig = {
   enabled: true,
@@ -55,8 +65,29 @@ function assistantMessage(): unknown {
   };
 }
 
-function fakeList(objects: VmemListedObject[], ok = true, error?: string) {
-  return (): VmemListSyncResult => (ok ? { ok: true, objects } : { ok: false, error });
+/** Default a pre-page VMem object fixture: RESIDENT, unpinned, unless overridden. */
+function prePageObj(
+  overrides: Partial<VmemPrePageObject> & Pick<VmemPrePageObject, "objId" | "kind" | "metadata">,
+): VmemPrePageObject {
+  return { residencyState: "RESIDENT", pinned: false, ...overrides };
+}
+
+function fakeListPrePage(objects: VmemPrePageObject[], ok = true, error?: string) {
+  return (): VmemListPrePageSyncResult => (ok ? { ok: true, objects } : { ok: false, error });
+}
+
+/** Default claim seam: confirms EVERY requested candidate (auto-approve) —
+ * most tests only care about the list-side correlation; tests that
+ * specifically exercise claim semantics override this. */
+function autoClaim() {
+  return (opts: { candidates: Array<{ objId: string; kind: string }> }): VmemClaimPagesResult => ({
+    ok: true,
+    claimedObjIds: opts.candidates.map((c) => c.objId),
+  });
+}
+
+function fakeClaim(claimedObjIds: string[], ok = true, error?: string) {
+  return (): VmemClaimPagesResult => (ok ? { ok: true, claimedObjIds } : { ok: false, error });
 }
 
 function baseOptions(overrides: Partial<PageContextOptions> = {}): PageContextOptions {
@@ -65,7 +96,8 @@ function baseOptions(overrides: Partial<PageContextOptions> = {}): PageContextOp
     hostSessionId: "sess-paging-1",
     messages: [],
     cfg: ENABLED_CFG,
-    listEvicted: fakeList([]),
+    listPrePage: fakeListPrePage([]),
+    claimPages: autoClaim(),
     ...overrides,
   };
 }
@@ -74,9 +106,17 @@ describe("pageContext — disabled / zero-mutation baselines", () => {
   it("disabled config -> always undefined, even with eligible-looking input", () => {
     const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
-      baseOptions({ messages, cfg: { ...ENABLED_CFG, enabled: false }, listEvicted: fakeList([
-        { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
-      ]) }),
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, enabled: false },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+      }),
     );
     expect(result).toEqual({ messages: undefined, pagedCount: 0 });
   });
@@ -98,7 +138,7 @@ describe("pageContext — disabled / zero-mutation baselines", () => {
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: () => {
+        listPrePage: () => {
           called = true;
           return { ok: true, objects: [] };
         },
@@ -108,35 +148,47 @@ describe("pageContext — disabled / zero-mutation baselines", () => {
     expect(called).toBe(false); // budget never exceeded -> vmem list never invoked
   });
 
-  it("eligible elements exist but none match an EVICTED object -> undefined (zero mutation)", () => {
+  it("eligible elements exist but none correlate to a claimable object -> undefined (zero mutation)", () => {
     const messages = [
       autoinjectMessage("del-unmatched"),
       assistantMessage(),
       assistantMessage(),
       assistantMessage(),
     ];
-    const result = pageContext(baseOptions({ messages, listEvicted: fakeList([]) }));
+    const result = pageContext(baseOptions({ messages, listPrePage: fakeListPrePage([]) }));
     expect(result).toEqual({ messages: undefined, pagedCount: 0 });
   });
 });
 
-describe("pageContext — eligibility classes (only the two real captured classes page)", () => {
-  it("pages an AutoInject custom message whose delivery_id resolves to a fully artifact-backed EVICTED RESEARCH_RESULT", () => {
+describe("pageContext — Defect B: successful proactive page (the claim, end-to-end)", () => {
+  it("pages an AutoInject custom message: RESIDENT + fully artifact-backed object + over budget -> claim invoked, confirmed, replaced", () => {
     const original = autoinjectMessage("del-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCallCount = 0;
+    let claimedCandidates: Array<{ objId: string; kind: string }> = [];
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: fakeList([
-          {
+        listPrePage: fakeListPrePage([
+          prePageObj({
             objId: "obj-research-1",
             kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
             metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
-          },
+          }),
         ]),
+        claimPages: (opts) => {
+          claimCallCount += 1;
+          claimedCandidates = opts.candidates;
+          return { ok: true, claimedObjIds: ["obj-research-1"] };
+        },
       }),
     );
+    expect(claimCallCount).toBe(1); // ONE claim call per context event
+    expect(claimedCandidates).toEqual([{ objId: "obj-research-1", kind: "RESEARCH_RESULT" }]);
     expect(result.pagedCount).toBe(1);
+    expect(result.claimedPageCount).toBe(1);
+    expect(result.requestedPageCount).toBe(1);
     expect(result.messages).toBeDefined();
     const patched = result.messages as Array<Record<string, unknown>>;
     // Identity fields kept EXACTLY as provided.
@@ -158,14 +210,19 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(patched[3]).toBe(messages[3]);
   });
 
-  it("pages a toolResult whose toolCallId resolves to an artifact-backed EVICTED TOOL_OBSERVATION", () => {
+  it("pages a toolResult: FAULTED_IN + artifact-backed object (evict_to_budget's own precedent) -> claimed and replaced", () => {
     const original = toolResultMessage("call-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: fakeList([
-          { objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1", artifactRef: "art-tool-1" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-tool-1",
+            kind: "TOOL_OBSERVATION",
+            residencyState: "FAULTED_IN",
+            metadata: { toolCallId: "call-1", artifactRef: "art-tool-1" },
+          }),
         ]),
       }),
     );
@@ -188,14 +245,214 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(blocks[0]?.text).not.toContain("y".repeat(200));
   });
 
+  it("telemetry fields: candidate/eligible/requested/claimed counts and token before/after are populated correctly", () => {
+    const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+      }),
+    );
+    expect(result.candidateCount).toBe(1);
+    expect(result.eligibleCount).toBe(1);
+    expect(result.requestedPageCount).toBe(1);
+    expect(result.claimedPageCount).toBe(1);
+    expect(result.pressureEstimatedTokens).toBeGreaterThan(0);
+    expect(result.residentBudget).toBe(ENABLED_CFG.residentTokenBudget);
+    expect(result.estimatedTokensBefore).toBeGreaterThan(0);
+    expect(result.estimatedTokensAfter).toBeGreaterThan(0);
+    expect(result.objectKinds).toEqual(["RESEARCH_RESULT"]);
+    expect(result.stateBefore).toEqual(["RESIDENT"]);
+    expect(result.stateAfter).toEqual(["EVICTED"]);
+  });
+});
+
+describe("pageContext — Defect B: claim/state-transition failure -> no replacement", () => {
+  it("claim seam reports the object was NOT claimed (lost a race) -> no context replacement, original messages untouched", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim([]), // claim call succeeded but confirmed NOTHING
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(messages[0]).toBe(original); // byte-for-byte untouched
+  });
+
+  it("the claim subprocess call itself fails -> fail-open, no replacement, error surfaced", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim([], false, "simulated claim-pages subprocess failure"),
+      }),
+    );
+    expect(result.messages).toBeUndefined();
+    expect(result.pagedCount).toBe(0);
+    expect(result.error).toBe("simulated claim-pages subprocess failure");
+    expect(messages[0]).toBe(original); // byte-for-byte untouched
+  });
+
+  it("a throwing claimPages seam is caught: fail-open, no replacement, no throw out of pageContext", () => {
+    const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    expect(result.messages).toBeUndefined();
+    expect(result.pagedCount).toBe(0);
+    expect(result.error).toBe("boom");
+  });
+
+  it("claim confirms only SOME of the requested candidates: only those are replaced, the rest untouched", () => {
+    const msgA = autoinjectMessage("del-a");
+    const msgB = autoinjectMessage("del-b");
+    const messages = [msgA, msgB, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-a",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-a", packetArtifactRef: "art-a", packetSha256: "a".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-b",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-b", packetArtifactRef: "art-b", packetSha256: "b".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim(["obj-a"]), // obj-b lost the race
+      }),
+    );
+    expect(result.requestedPageCount).toBe(2);
+    expect(result.claimedPageCount).toBe(1);
+    expect(result.pagedCount).toBe(1);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(typeof patched[0]?.content).toBe("string");
+    expect((patched[0]?.content as string)).toContain("obj-a");
+    expect(patched[1]).toBe(msgB); // untouched — its claim was not confirmed
+  });
+});
+
+describe("pageContext — Defect B: candidate object state gates (only RESIDENT/FAULTED_IN, never PINNED)", () => {
+  it("an already-EVICTED candidate object is not correlated (never sent to the claim call, no replacement)", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCalled = false;
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: () => {
+          claimCalled = true;
+          return { ok: true, claimedObjIds: [] };
+        },
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(claimCalled).toBe(false); // no correlated candidate -> claim call never invoked
+  });
+
+  it.each(["STORED", "SUPERSEDED", "PURGED"])(
+    "a %s candidate object is not correlated -> no replacement",
+    (state) => {
+      const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
+      const result = pageContext(
+        baseOptions({
+          messages,
+          listPrePage: fakeListPrePage([
+            prePageObj({
+              objId: "obj-research-1",
+              kind: "RESEARCH_RESULT",
+              residencyState: state,
+              metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+            }),
+          ]),
+        }),
+      );
+      expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    },
+  );
+
+  it("a PINNED candidate object (even if RESIDENT) is never claimable -> no replacement", () => {
+    const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCalled = false;
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            pinned: true,
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: () => {
+          claimCalled = true;
+          return { ok: true, claimedObjIds: [] };
+        },
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(claimCalled).toBe(false);
+  });
+});
+
+describe("pageContext — eligibility classes (only the two real captured classes page)", () => {
   it("AutoInject object with deliveryId ONLY (no packetArtifactRef/packetSha256) -> NOT pageable (core regression fix)", () => {
     const original = autoinjectMessage("del-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: fakeList([
-          { objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } }),
         ]),
       }),
     );
@@ -219,7 +476,7 @@ describe("pageContext — eligibility classes (only the two real captured classe
       const result = pageContext(
         baseOptions({
           messages,
-          listEvicted: fakeList([{ objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata }]),
+          listPrePage: fakeListPrePage([prePageObj({ objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata })]),
         }),
       );
       expect(result.pagedCount).toBe(0);
@@ -234,8 +491,8 @@ describe("pageContext — eligibility classes (only the two real captured classe
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: fakeList([
-          { objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } }),
         ]),
       }),
     );
@@ -244,57 +501,35 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(messages[0]).toBe(original); // untouched
   });
 
-  it("mixed candidates in one context event: only fully-backed candidates are replaced, under-proven ones untouched", () => {
+  it("mixed proof in one context event: only the fully-backed candidate is ever a claim candidate at all", () => {
     const fullyBackedAutoinject = autoinjectMessage("del-full");
-    const deliveryOnlyAutoinject = autoinjectMessage("del-partial");
-    const fullyBackedToolResult = toolResultMessage("call-full");
-    const toolCallIdOnlyToolResult = toolResultMessage("call-partial");
-    const untouchedAssistant = assistantMessage();
-    const messages = [
-      fullyBackedAutoinject,
-      deliveryOnlyAutoinject,
-      fullyBackedToolResult,
-      toolCallIdOnlyToolResult,
-      untouchedAssistant,
-      assistantMessage(),
-      assistantMessage(),
-    ];
+    const underProvenAutoinject = autoinjectMessage("del-partial");
+    const messages = [fullyBackedAutoinject, underProvenAutoinject, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimedCandidates: Array<{ objId: string; kind: string }> = [];
     const result = pageContext(
       baseOptions({
         messages,
-        cfg: { ...ENABLED_CFG, pinRecentMessages: 2 },
-        listEvicted: fakeList([
-          {
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
             objId: "obj-research-full",
             kind: "RESEARCH_RESULT",
             metadata: { deliveryId: "del-full", packetArtifactRef: "art-full", packetSha256: "c".repeat(64) },
-          },
-          { objId: "obj-research-partial", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-partial" } },
-          {
-            objId: "obj-tool-full",
-            kind: "TOOL_OBSERVATION",
-            metadata: { toolCallId: "call-full", artifactRef: "art-tool-full" },
-          },
-          { objId: "obj-tool-partial", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-partial" } },
+          }),
+          prePageObj({ objId: "obj-research-partial", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-partial" } }),
         ]),
+        claimPages: (opts) => {
+          claimedCandidates = opts.candidates;
+          return { ok: true, claimedObjIds: opts.candidates.map((c) => c.objId) };
+        },
       }),
     );
-    expect(result.pagedCount).toBe(2);
+    // Only the fully-backed candidate is EVER sent to the claim call.
+    expect(claimedCandidates).toEqual([{ objId: "obj-research-full", kind: "RESEARCH_RESULT" }]);
+    expect(result.pagedCount).toBe(1);
     const patched = result.messages as Array<Record<string, unknown>>;
-    expect(patched).toBeDefined();
-    // Fully-backed candidates: replaced.
-    expect(typeof patched[0]?.content).toBe("string");
     expect((patched[0]?.content as string)).toContain("obj-research-full");
-    expect(Array.isArray(patched[2]?.content)).toBe(true);
-    const toolBlocks = patched[2]?.content as Array<{ type: string; text: string }>;
-    expect(toolBlocks[0]?.text).toContain("obj-tool-full");
-    // Under-proven candidates: byte-for-byte identical to their originals.
-    expect(patched[1]).toBe(deliveryOnlyAutoinject);
-    expect(patched[3]).toBe(toolCallIdOnlyToolResult);
-    // Every other (non-candidate) element also untouched.
-    expect(patched[4]).toBe(untouchedAssistant);
-    expect(patched[5]).toBe(messages[5]);
-    expect(patched[6]).toBe(messages[6]);
+    expect(patched[1]).toBe(underProvenAutoinject); // untouched
   });
 
   it("never pages a toolResult with isError === true", () => {
@@ -302,8 +537,8 @@ describe("pageContext — eligibility classes (only the two real captured classe
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: fakeList([
-          { objId: "obj-tool-err", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-err" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-tool-err", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-err" } }),
         ]),
       }),
     );
@@ -332,8 +567,8 @@ describe("pageContext — eligibility classes (only the two real captured classe
       baseOptions({
         messages,
         cfg: { ...ENABLED_CFG, pinRecentMessages: 4 },
-        listEvicted: fakeList([
-          { objId: "obj-x", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-should-not-match" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-x", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-should-not-match" } }),
         ]),
       }),
     );
@@ -349,32 +584,38 @@ describe("pageContext — Part E guardrails", () => {
       baseOptions({
         messages,
         cfg: { ...ENABLED_CFG, pinRecentMessages: 2 }, // last 2 elements pinned: indices [2,3]
-        listEvicted: fakeList([
-          { objId: "obj-pinned", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-pinned" } },
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-pinned", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-pinned" } }),
         ]),
       }),
     );
     expect(result).toEqual({ messages: undefined, pagedCount: 0 });
   });
 
-  it("resident_token_budget respected: below budget -> undefined, vmem list never called", () => {
-    let called = false;
+  it("resident_token_budget respected: below budget -> undefined, vmem list AND claim never called", () => {
+    let listCalled = false;
+    let claimCalled = false;
     const messages = [autoinjectMessage("del-1", "tiny"), assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
         cfg: { ...ENABLED_CFG, residentTokenBudget: 999999 },
-        listEvicted: () => {
-          called = true;
+        listPrePage: () => {
+          listCalled = true;
           return { ok: true, objects: [] };
+        },
+        claimPages: () => {
+          claimCalled = true;
+          return { ok: true, claimedObjIds: [] };
         },
       }),
     );
     expect(result).toEqual({ messages: undefined, pagedCount: 0 });
-    expect(called).toBe(false);
+    expect(listCalled).toBe(false);
+    expect(claimCalled).toBe(false);
   });
 
-  it("max_pages_per_context_event cap respected: more eligible than the cap -> only the cap's worth replaced", () => {
+  it("max_pages_per_context_event cap respected: only the capped number are ever requested/claimed/replaced", () => {
     const messages = [
       autoinjectMessage("del-1"),
       autoinjectMessage("del-2"),
@@ -383,23 +624,31 @@ describe("pageContext — Part E guardrails", () => {
       assistantMessage(),
       assistantMessage(),
     ];
-    const artifactBacked = (deliveryId: string, objId: string) => ({
-      objId,
-      kind: "RESEARCH_RESULT",
-      metadata: { deliveryId, packetArtifactRef: `art-${deliveryId}`, packetSha256: "b".repeat(64) },
-    });
+    const artifactBacked = (deliveryId: string, objId: string) =>
+      prePageObj({
+        objId,
+        kind: "RESEARCH_RESULT",
+        metadata: { deliveryId, packetArtifactRef: `art-${deliveryId}`, packetSha256: "b".repeat(64) },
+      });
+    let claimedCandidates: Array<{ objId: string; kind: string }> = [];
     const result = pageContext(
       baseOptions({
         messages,
         cfg: { ...ENABLED_CFG, maxPagesPerContextEvent: 2, pinRecentMessages: 2 },
-        listEvicted: fakeList([
+        listPrePage: fakeListPrePage([
           artifactBacked("del-1", "obj-1"),
           artifactBacked("del-2", "obj-2"),
           artifactBacked("del-3", "obj-3"),
           artifactBacked("del-4", "obj-4"),
         ]),
+        claimPages: (opts) => {
+          claimedCandidates = opts.candidates;
+          return { ok: true, claimedObjIds: opts.candidates.map((c) => c.objId) };
+        },
       }),
     );
+    expect(claimedCandidates).toHaveLength(2); // never more than the cap requested
+    expect(result.requestedPageCount).toBe(2);
     expect(result.pagedCount).toBe(2);
     const patched = result.messages as Array<Record<string, unknown>>;
     expect(typeof patched[0]?.content).toBe("string");
@@ -414,19 +663,19 @@ describe("pageContext — Part E guardrails", () => {
   it("fail-open on a simulated vmem-list failure: undefined + error, never throws", () => {
     const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
-      baseOptions({ messages, listEvicted: fakeList([], false, "simulated vmem list failure") }),
+      baseOptions({ messages, listPrePage: fakeListPrePage([], false, "simulated vmem list failure") }),
     );
     expect(result.messages).toBeUndefined();
     expect(result.pagedCount).toBe(0);
     expect(result.error).toBe("simulated vmem list failure");
   });
 
-  it("fail-open on a throwing listEvicted seam: undefined + error, never throws out of pageContext", () => {
+  it("fail-open on a throwing listPrePage seam: undefined + error, never throws out of pageContext", () => {
     const messages = [autoinjectMessage("del-1"), assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
-        listEvicted: () => {
+        listPrePage: () => {
           throw new Error("boom");
         },
       }),
@@ -438,7 +687,7 @@ describe("pageContext — Part E guardrails", () => {
 
   it("zero mutation guardrail: never constructs an identical-looking patch when nothing was paged", () => {
     const messages = [assistantMessage(), assistantMessage(), assistantMessage()];
-    const result = pageContext(baseOptions({ messages, listEvicted: fakeList([]) }));
+    const result = pageContext(baseOptions({ messages, listPrePage: fakeListPrePage([]) }));
     expect(result.messages).toBeUndefined();
   });
 });

@@ -308,15 +308,83 @@ export function context(session: string, messages: unknown): ContextRecord {
 export interface ContextPagingRecord extends BaseRecord {
   kind: "context_paging";
   paged_count: number;
+  // Defect B (RC4 proactive-paging-repair pass) additive fields — counts/
+  // kinds/state-labels/local deterministic estimates only, NEVER content,
+  // NEVER an obj_id/delivery_id/tool_call_id. null when not supplied
+  // (matches every other additive-field sensor in this file).
+  candidate_count: number | null;
+  eligible_count: number | null;
+  pressure_estimated_tokens: number | null;
+  resident_budget: number | null;
+  requested_page_count: number | null;
+  claimed_page_count: number | null;
+  estimated_tokens_before: number | null;
+  estimated_tokens_after: number | null;
+  estimated_tokens_removed: number | null;
+  object_kinds: string[] | null;
+  state_before: string[] | null;
+  state_after: string[] | null;
 }
 
-/** Part B/E: privacy-safe telemetry for a successful paging patch — a
- * count only, never which elements, never any content. Appended ONLY when
- * `pageContext` actually returned a patch (zero-mutation calls append
- * nothing here, matching context_structure's additive-only convention). */
-export function contextPaging(session: string, pagedCount: unknown): ContextPagingRecord {
+/** Defect B additive detail (context-paging.ts `PageContextResult`'s
+ * telemetry fields, camelCase source -> snake_case record). */
+export interface ContextPagingDetails {
+  candidateCount?: number;
+  eligibleCount?: number;
+  pressureEstimatedTokens?: number;
+  residentBudget?: number;
+  requestedPageCount?: number;
+  claimedPageCount?: number;
+  estimatedTokensBefore?: number;
+  estimatedTokensAfter?: number;
+  objectKinds?: string[];
+  stateBefore?: string[];
+  stateAfter?: string[];
+}
+
+/** Part B/E (extended by the Defect B proactive-paging-repair pass):
+ * privacy-safe telemetry for a successful paging patch. `details` is
+ * OPTIONAL and additive — omitting it (existing call shape) still records
+ * `paged_count` exactly as before. Appended ONLY when `pageContext`
+ * actually returned a patch (zero-mutation calls append nothing here,
+ * matching context_structure's additive-only convention). Object kinds and
+ * residency-state labels are short recognized tokens only (`recognizedToken`
+ * — same privacy discipline as `vmemFaultIn`'s `obj_kind`); estimated token
+ * counts are the SAME local ~4-chars/token estimate already used for the
+ * resident_token_budget check — never a real provider usage figure, and
+ * never presented as a savings claim (see `estimated_tokens_removed`,
+ * simply `before - after` for the elements actually paged). No obj_id/
+ * delivery_id/tool_call_id/content ever appears here. */
+export function contextPaging(
+  session: string,
+  pagedCount: unknown,
+  details?: ContextPagingDetails,
+): ContextPagingRecord {
+  const before = details?.estimatedTokensBefore;
+  const after = details?.estimatedTokensAfter;
+  const removed =
+    typeof before === "number" && typeof after === "number" ? Math.max(0, before - after) : null;
+  const tokens = (values: unknown): string[] | null =>
+    Array.isArray(values)
+      ? values.map((v) => recognizedToken(v)).filter((v): v is string => v !== null)
+      : null;
   return base("context_paging", session, {
     paged_count: typeof pagedCount === "number" ? pagedCount : 0,
+    candidate_count: typeof details?.candidateCount === "number" ? details.candidateCount : null,
+    eligible_count: typeof details?.eligibleCount === "number" ? details.eligibleCount : null,
+    pressure_estimated_tokens:
+      typeof details?.pressureEstimatedTokens === "number" ? details.pressureEstimatedTokens : null,
+    resident_budget: typeof details?.residentBudget === "number" ? details.residentBudget : null,
+    requested_page_count:
+      typeof details?.requestedPageCount === "number" ? details.requestedPageCount : null,
+    claimed_page_count:
+      typeof details?.claimedPageCount === "number" ? details.claimedPageCount : null,
+    estimated_tokens_before: typeof before === "number" ? before : null,
+    estimated_tokens_after: typeof after === "number" ? after : null,
+    estimated_tokens_removed: removed,
+    object_kinds: tokens(details?.objectKinds),
+    state_before: tokens(details?.stateBefore),
+    state_after: tokens(details?.stateAfter),
   }) as unknown as ContextPagingRecord;
 }
 

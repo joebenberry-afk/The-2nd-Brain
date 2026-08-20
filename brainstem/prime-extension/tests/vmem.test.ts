@@ -16,8 +16,10 @@ vi.mock("node:child_process", () => ({
 }));
 
 import {
+  runVmemClaimPagesSync,
   runVmemCompactPrep,
   runVmemHotContext,
+  runVmemListPrePageSync,
   runVmemListSync,
   runVmemResolve,
   runVmemStore,
@@ -379,6 +381,169 @@ describe("runVmemListSync (Part B/C — the only synchronous subprocess call)", 
     execFileSyncMock.mockImplementation(() => JSON.stringify({ not: "an array" }));
     const bad2 = runVmemListSync({ home, hostSessionId: "sess-1" });
     expect(bad2).toEqual({ ok: false, error: "list returned non-array output" });
+  });
+});
+
+describe("runVmemListPrePageSync (Defect B — RC4 proactive-paging-repair pass)", () => {
+  it("spawns env-clean `vmem list <session> --json` (sync, NO --state filter) and parses residency_state/pinned", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    let capturedEnv: Record<string, string | undefined> = {};
+    execFileSyncMock.mockImplementation((_py, args, opts) => {
+      capturedArgs = args as string[];
+      capturedEnv = (opts as { env: Record<string, string | undefined> }).env;
+      return JSON.stringify([
+        {
+          obj_id: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1" },
+          residency_state: "RESIDENT",
+          pinned: false,
+        },
+        {
+          obj_id: "obj-2",
+          kind: "TOOL_OBSERVATION",
+          metadata: { toolCallId: "call-1" },
+          residency_state: "FAULTED_IN",
+          pinned: true,
+        },
+      ]);
+    });
+
+    const result = runVmemListPrePageSync({ home, hostSessionId: "sess-1" });
+
+    expect(capturedArgs).toEqual(["-m", "second_brain", "vmem", "list", "sess-1", "--json"]);
+    expect(capturedEnv.SECOND_BRAIN_HOME).toBe(home);
+    expect(capturedEnv.PYTHONHOME).toBeUndefined();
+    expect(capturedEnv.PYTHONPATH).toBeUndefined();
+    expect(result).toEqual({
+      ok: true,
+      objects: [
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1" },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+        {
+          objId: "obj-2",
+          kind: "TOOL_OBSERVATION",
+          metadata: { toolCallId: "call-1" },
+          residencyState: "FAULTED_IN",
+          pinned: true,
+        },
+      ],
+    });
+  });
+
+  it("missing residency_state/pinned default to empty-string/false, never crash", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() =>
+      JSON.stringify([{ obj_id: "obj-1", kind: "RESEARCH_RESULT", metadata: {} }]),
+    );
+    const result = runVmemListPrePageSync({ home, hostSessionId: "sess-1" });
+    expect(result.ok).toBe(true);
+    expect(result.objects).toEqual([
+      { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: {}, residencyState: "", pinned: false },
+    ]);
+  });
+
+  it("fails open (ok:false) when no venv exists, never throws", async () => {
+    const result = runVmemListPrePageSync({ home: "H:/no-such-home", hostSessionId: "sess-1" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no brain venv/);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("fails open on subprocess error and on unparsable/non-array stdout, never throws", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("Command timed out");
+    });
+    expect(runVmemListPrePageSync({ home, hostSessionId: "sess-1" })).toEqual({
+      ok: false,
+      error: "Command timed out",
+    });
+
+    execFileSyncMock.mockImplementation(() => "not json");
+    expect(runVmemListPrePageSync({ home, hostSessionId: "sess-1" }).ok).toBe(false);
+
+    execFileSyncMock.mockImplementation(() => JSON.stringify({ not: "an array" }));
+    expect(runVmemListPrePageSync({ home, hostSessionId: "sess-1" })).toEqual({
+      ok: false,
+      error: "list returned non-array output",
+    });
+  });
+});
+
+describe("runVmemClaimPagesSync (Defect B — the ONE claim call per context event)", () => {
+  it("spawns env-clean `vmem claim-pages <session> --json`, sends candidates via stdin JSON, and parses the claimed obj_id list", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    let capturedEnv: Record<string, string | undefined> = {};
+    let capturedInput: string | undefined;
+    execFileSyncMock.mockImplementation((_py, args, opts) => {
+      capturedArgs = args as string[];
+      capturedEnv = (opts as { env: Record<string, string | undefined> }).env;
+      capturedInput = (opts as { input?: string }).input;
+      return JSON.stringify(["obj-1"]);
+    });
+
+    const result = runVmemClaimPagesSync({
+      home,
+      hostSessionId: "sess-1",
+      candidates: [
+        { objId: "obj-1", kind: "RESEARCH_RESULT" },
+        { objId: "obj-2", kind: "TOOL_OBSERVATION" },
+      ],
+    });
+
+    expect(capturedArgs).toEqual(["-m", "second_brain", "vmem", "claim-pages", "sess-1", "--json"]);
+    expect(capturedEnv.SECOND_BRAIN_HOME).toBe(home);
+    expect(capturedEnv.PYTHONHOME).toBeUndefined();
+    expect(capturedEnv.PYTHONPATH).toBeUndefined();
+    expect(JSON.parse(capturedInput ?? "{}")).toEqual({
+      candidates: [
+        { obj_id: "obj-1", kind: "RESEARCH_RESULT" },
+        { obj_id: "obj-2", kind: "TOOL_OBSERVATION" },
+      ],
+    });
+    expect(result).toEqual({ ok: true, claimedObjIds: ["obj-1"] });
+  });
+
+  it("empty claimedObjIds (claim confirmed nothing) is a valid, non-error result", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() => JSON.stringify([]));
+    const result = runVmemClaimPagesSync({ home, hostSessionId: "sess-1", candidates: [{ objId: "obj-1", kind: "RESEARCH_RESULT" }] });
+    expect(result).toEqual({ ok: true, claimedObjIds: [] });
+  });
+
+  it("fails open (ok:false) when no venv exists, never throws", async () => {
+    const result = runVmemClaimPagesSync({ home: "H:/no-such-home", hostSessionId: "sess-1", candidates: [] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no brain venv/);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("fails open on subprocess error and on unparsable/non-array stdout, never throws", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("Command timed out");
+    });
+    expect(
+      runVmemClaimPagesSync({ home, hostSessionId: "sess-1", candidates: [{ objId: "obj-1", kind: "RESEARCH_RESULT" }] }),
+    ).toEqual({ ok: false, error: "Command timed out" });
+
+    execFileSyncMock.mockImplementation(() => "not json");
+    expect(
+      runVmemClaimPagesSync({ home, hostSessionId: "sess-1", candidates: [{ objId: "obj-1", kind: "RESEARCH_RESULT" }] }).ok,
+    ).toBe(false);
+
+    execFileSyncMock.mockImplementation(() => JSON.stringify({ not: "an array" }));
+    expect(
+      runVmemClaimPagesSync({ home, hostSessionId: "sess-1", candidates: [{ objId: "obj-1", kind: "RESEARCH_RESULT" }] }),
+    ).toEqual({ ok: false, error: "claim-pages returned non-array output" });
   });
 });
 

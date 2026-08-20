@@ -761,7 +761,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             mirrorExtensionError(session, `context paging failed: ${paged.error}`),
           );
         } else if (paged.messages !== undefined) {
-          getStore(session)?.append(sensors.contextPaging(session, paged.pagedCount));
+          getStore(session)?.append(
+            sensors.contextPaging(session, paged.pagedCount, {
+              candidateCount: paged.candidateCount,
+              eligibleCount: paged.eligibleCount,
+              pressureEstimatedTokens: paged.pressureEstimatedTokens,
+              residentBudget: paged.residentBudget,
+              requestedPageCount: paged.requestedPageCount,
+              claimedPageCount: paged.claimedPageCount,
+              estimatedTokensBefore: paged.estimatedTokensBefore,
+              estimatedTokensAfter: paged.estimatedTokensAfter,
+              objectKinds: paged.objectKinds,
+              stateBefore: paged.stateBefore,
+              stateAfter: paged.stateAfter,
+            }),
+          );
           return { messages: paged.messages };
         }
       }

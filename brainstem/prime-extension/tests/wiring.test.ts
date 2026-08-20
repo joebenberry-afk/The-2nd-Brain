@@ -26,9 +26,23 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
 });
 const runVmemStoreMock = vi.hoisted(() => vi.fn());
 const runVmemListSyncMock = vi.hoisted(() => vi.fn());
+// Defect B (RC4 proactive-paging-repair pass): the real factory's context
+// handler now calls `runVmemListPrePageSync` (pre-page correlation) and
+// `runVmemClaimPagesSync` (the claim) instead of `runVmemListSync`
+// (EVICTED-only) — see context-paging.ts. `runVmemListSync` itself is left
+// mocked/unused by these wiring tests below (kept only so unrelated tests
+// importing this module surface stay unaffected).
+const runVmemListPrePageSyncMock = vi.hoisted(() => vi.fn());
+const runVmemClaimPagesSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/vmem", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/vmem")>();
-  return { ...actual, runVmemStore: runVmemStoreMock, runVmemListSync: runVmemListSyncMock };
+  return {
+    ...actual,
+    runVmemStore: runVmemStoreMock,
+    runVmemListSync: runVmemListSyncMock,
+    runVmemListPrePageSync: runVmemListPrePageSyncMock,
+    runVmemClaimPagesSync: runVmemClaimPagesSyncMock,
+  };
 });
 // RC4 byte-exact recovery pass Part A wiring tests: control the AutoInject
 // advisory/active outcome directly instead of spawning a real CLI process.
@@ -79,6 +93,18 @@ beforeEach(async () => {
   runVmemStoreMock.mockResolvedValue({ ok: true, objId: "obj-test" });
   runVmemListSyncMock.mockReset();
   runVmemListSyncMock.mockReturnValue({ ok: true, objects: [] });
+  runVmemListPrePageSyncMock.mockReset();
+  runVmemListPrePageSyncMock.mockReturnValue({ ok: true, objects: [] });
+  runVmemClaimPagesSyncMock.mockReset();
+  // Default: auto-approve every requested candidate (most tests only care
+  // about the list-side correlation) — tests exercising claim semantics
+  // specifically override this.
+  runVmemClaimPagesSyncMock.mockImplementation(
+    (opts: { candidates: Array<{ objId: string; kind: string }> }) => ({
+      ok: true,
+      claimedObjIds: opts.candidates.map((c) => c.objId),
+    }),
+  );
   runAdvisoryAutoInjectMock.mockReset();
   runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
 });
@@ -1800,23 +1826,40 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
   }
 
   it("paging disabled (no [context_paging] section) -> always undefined even with eligible-looking input", async () => {
-    runVmemListSyncMock.mockReturnValue({
+    runVmemListPrePageSyncMock.mockReturnValue({
       ok: true,
-      objects: [{ objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } }],
+      objects: [
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1" },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+      ],
     });
     const handlers = loadFactory();
     const ctx = makeCtx();
     const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg(), assistantMsg()];
     const result = handlers.get("context")!({ type: "context", messages }, ctx);
     expect(result).toBeUndefined();
-    expect(runVmemListSyncMock).not.toHaveBeenCalled();
+    expect(runVmemListPrePageSyncMock).not.toHaveBeenCalled();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
   });
 
   it("current-turn pin window respected: an eligible element inside the pin window is never paged", async () => {
     enableContextPaging({ pinRecentMessages: 3, residentTokenBudget: 1 });
-    runVmemListSyncMock.mockReturnValue({
+    runVmemListPrePageSyncMock.mockReturnValue({
       ok: true,
-      objects: [{ objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } }],
+      objects: [
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1" },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+      ],
     });
     const handlers = loadFactory();
     const ctx = makeCtx();
@@ -1826,30 +1869,35 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     expect(result).toBeUndefined();
   });
 
-  it("budget respected: below budget -> undefined, vmem list never called", async () => {
+  it("budget respected: below budget -> undefined, vmem list AND claim never called", async () => {
     enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 999999 });
     const handlers = loadFactory();
     const ctx = makeCtx();
     const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
     const result = handlers.get("context")!({ type: "context", messages }, ctx);
     expect(result).toBeUndefined();
-    expect(runVmemListSyncMock).not.toHaveBeenCalled();
+    expect(runVmemListPrePageSyncMock).not.toHaveBeenCalled();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
   });
 
-  it("max-pages cap respected: more eligible than the cap -> only the cap's worth replaced, patch actually returned", async () => {
+  it("max-pages cap respected: more eligible than the cap -> only the cap's worth requested/claimed/replaced, patch actually returned", async () => {
     enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1, maxPagesPerContextEvent: 1 });
-    runVmemListSyncMock.mockReturnValue({
+    runVmemListPrePageSyncMock.mockReturnValue({
       ok: true,
       objects: [
         {
           objId: "obj-1",
           kind: "RESEARCH_RESULT",
           metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          residencyState: "RESIDENT",
+          pinned: false,
         },
         {
           objId: "obj-2",
           kind: "RESEARCH_RESULT",
           metadata: { deliveryId: "del-2", packetArtifactRef: "art-2", packetSha256: "b".repeat(64) },
+          residencyState: "RESIDENT",
+          pinned: false,
         },
       ],
     });
@@ -1867,15 +1915,21 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
       (m, i) => typeof m.content === "string" && (m.content as string).includes("[SECOND_BRAIN_VMEM]") && i < 2,
     ).length;
     expect(replacedCount).toBe(1);
+    // The claim call itself was also capped -- never more than 1 candidate.
+    expect(runVmemClaimPagesSyncMock).toHaveBeenCalledTimes(1);
+    const claimArgs = runVmemClaimPagesSyncMock.mock.calls[0]?.[0] as { candidates: unknown[] };
+    expect(claimArgs.candidates).toHaveLength(1);
 
     const records = await waitForLines(1);
     const paging = records.find((r) => r.kind === "context_paging");
     expect(paging?.paged_count).toBe(1);
+    expect(paging?.requested_page_count).toBe(1);
+    expect(paging?.claimed_page_count).toBe(1);
   });
 
   it("fail-open on a simulated vmem-list failure: undefined + extension_error, never throws", async () => {
     enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
-    runVmemListSyncMock.mockReturnValue({ ok: false, error: "simulated vmem list failure" });
+    runVmemListPrePageSyncMock.mockReturnValue({ ok: false, error: "simulated vmem list failure" });
     const handlers = loadFactory();
     const ctx = makeCtx();
     const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
@@ -1889,6 +1943,7 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     }
     expect(threw).toBe(false);
     expect(result).toBeUndefined();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
 
     const records = await waitForLines(1);
     const errRec = records.find((r) => r.kind === "extension_error");
@@ -1896,9 +1951,9 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     expect(String(errRec?.error)).toContain("simulated vmem list failure");
   });
 
-  it("fail-open on a throwing runVmemListSync mock: undefined + extension_error, never throws", async () => {
+  it("fail-open on a throwing runVmemListPrePageSync mock: undefined + extension_error, never throws", async () => {
     enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
-    runVmemListSyncMock.mockImplementation(() => {
+    runVmemListPrePageSyncMock.mockImplementation(() => {
       throw new Error("mock boom");
     });
     const handlers = loadFactory();
@@ -1920,13 +1975,63 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     expect(errRec).toBeDefined();
   });
 
-  it("zero mutation when no eligible cold items exist: enabled + over budget but no EVICTED match -> undefined", async () => {
+  it("fail-open on a simulated claim-pages failure: undefined + extension_error, original messages untouched", async () => {
     enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
-    runVmemListSyncMock.mockReturnValue({ ok: true, objects: [] });
+    runVmemListPrePageSyncMock.mockReturnValue({
+      ok: true,
+      objects: [
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+      ],
+    });
+    runVmemClaimPagesSyncMock.mockReturnValue({ ok: false, error: "simulated claim-pages failure" });
     const handlers = loadFactory();
     const ctx = makeCtx();
     const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
     const result = handlers.get("context")!({ type: "context", messages }, ctx);
     expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    const errRec = records.find((r) => r.kind === "extension_error");
+    expect(errRec).toBeDefined();
+    expect(String(errRec?.error)).toContain("simulated claim-pages failure");
+  });
+
+  it("claim confirms nothing (lost a race): undefined, no replacement, no context_paging record", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListPrePageSyncMock.mockReturnValue({
+      ok: true,
+      objects: [
+        {
+          objId: "obj-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+      ],
+    });
+    runVmemClaimPagesSyncMock.mockReturnValue({ ok: true, claimedObjIds: [] });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+  });
+
+  it("zero mutation when no eligible cold items exist: enabled + over budget but no claimable match -> undefined", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListPrePageSyncMock.mockReturnValue({ ok: true, objects: [] });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
   });
 });
