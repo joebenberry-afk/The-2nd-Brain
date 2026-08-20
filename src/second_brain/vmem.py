@@ -17,6 +17,7 @@ Residency States (§6.3):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import re
 import sqlite3
@@ -334,15 +335,38 @@ class VMemStore:
             metadata=json.loads(r["metadata_json"] or "{}"),
         )
 
-    def fault_in(self, obj_id: str) -> tuple[SessionObject, str]:
-        """
-        Page an evicted or stored object back into active context (§6.5).
-        Transitions state to FAULTED_IN, updates access counters, and returns raw content.
+    def _verify_and_load(self, obj_id: str) -> tuple[SessionObject, str]:
+        """Read-only verify+load step (RC4 Part D safety pass): confirm the
+        object exists and its OWN stored VMem backing artifact is present and
+        intact. Raises `BrainError` on any failure. Performs NO DB write —
+        callers must not assume any mutation has happened after this returns.
+
+        Hash-verifies the loaded bytes against `obj.content_sha256` (belt and
+        braces on top of `artifacts.expand`'s own path-by-hash lookup) so
+        silent on-disk bit-rot of this object's own backing blob is caught
+        here, at verify time, rather than surfacing later as a confusing
+        downstream JSON/decode error.
         """
         obj = self.get_object(obj_id)
         if not obj:
             raise BrainError(f"Session object not found: {obj_id}")
 
+        raw_bytes = artifacts.expand(self.home, obj.content_sha256)
+        actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_sha != obj.content_sha256:
+            raise BrainError(
+                f"VMem backing artifact corrupt for {obj_id}: expected sha256 "
+                f"{obj.content_sha256}, got {actual_sha}"
+            )
+        content = raw_bytes.decode("utf-8", errors="replace")
+        return obj, content
+
+    def _mutate_fault_in(self, obj: SessionObject) -> SessionObject:
+        """The ONE DB write of the fault-in path (RC4 Part D safety pass):
+        residency EVICTED->FAULTED_IN (unchanged otherwise), access_count++,
+        priority_score boosted. Callers must only invoke this AFTER every
+        read-only verification/resolution step for the requested recovery
+        has already succeeded — this method itself does not verify anything."""
         now = _now()
         new_state = (
             ResidencyState.FAULTED_IN
@@ -359,7 +383,7 @@ class VMemStore:
                 SET residency_state = ?, access_count = ?, last_accessed_at = ?, priority_score = ?
                 WHERE internal_session_id = ? AND obj_id = ?
                 """,
-                (new_state.value, new_count, now, new_priority, self.internal_id, obj_id),
+                (new_state.value, new_count, now, new_priority, self.internal_id, obj.obj_id),
             )
             conn.commit()
 
@@ -367,9 +391,20 @@ class VMemStore:
         obj.access_count = new_count
         obj.last_accessed_at = now
         obj.priority_score = new_priority
+        return obj
 
-        raw_bytes = artifacts.expand(self.home, obj.content_sha256)
-        content = raw_bytes.decode("utf-8", errors="replace")
+    def fault_in(self, obj_id: str) -> tuple[SessionObject, str]:
+        """
+        Page an evicted or stored object back into active context (§6.5).
+        Transitions state to FAULTED_IN, updates access counters, and returns
+        raw content. EXISTING external contract preserved unchanged for the
+        `page` CLI: verify+load (read-only), then mutate, then return. This
+        simple caller has no deeper resolution step, so verify-then-mutate is
+        already safe/correct for it (see `resolve_object` for the version
+        used where a deeper durable-source resolution must succeed FIRST).
+        """
+        obj, content = self._verify_and_load(obj_id)
+        obj = self._mutate_fault_in(obj)
         return obj, content
 
     def evict_to_budget(
@@ -535,11 +570,15 @@ _ARTIFACT_HANDLE_RE = re.compile(r"\[brain-artifact:sha256:([0-9a-f]{64})\]")
 def _delivery_row(home: Path, delivery_id: str) -> dict[str, Any] | None:
     """Read one row from the existing, durable `deliveries` table (control DB
     `db/brain.sqlite`) — the same table/DB `autoinject.py`'s own
-    `_delivered_keys` already reads. Read-only; never mutates deliveries."""
+    `_delivered_keys` already reads. Read-only; never mutates deliveries.
+    Includes `packet_id`/`root_session_id`/`branch_id` so callers can find
+    every OTHER delivery row belonging to the same originally-selected
+    AutoInject packet (see `_delivery_rows_for_packet`)."""
     conn = db.connect(_control_db_path(home), readonly=True)
     try:
         row = conn.execute(
-            "SELECT delivery_id, memory_id, memory_version FROM deliveries WHERE delivery_id = ?",
+            "SELECT delivery_id, memory_id, memory_version, packet_id, "
+            "root_session_id, branch_id FROM deliveries WHERE delivery_id = ?",
             (delivery_id,),
         ).fetchone()
         return dict(row) if row is not None else None
@@ -547,12 +586,50 @@ def _delivery_row(home: Path, delivery_id: str) -> dict[str, Any] | None:
         conn.close()
 
 
+def _delivery_rows_for_packet(
+    home: Path, packet_id: str, root_session_id: str, branch_id: str
+) -> list[dict[str, Any]]:
+    """The COMPLETE membership set of one originally-selected AutoInject
+    packet (Part 2 of the RC4 safety pass): every `deliveries` row sharing
+    the same `packet_id`, scoped defensively by `root_session_id`+
+    `branch_id` (cheap extra safety — all three columns already live on the
+    single delivery row `_resolve_research_result` starts from). Read-only.
+
+    Ordered by `rowid` ascending: `deliveries` is an ordinary rowid table
+    (its TEXT `delivery_id` PRIMARY KEY does not alias `rowid`, unlike an
+    INTEGER PRIMARY KEY would), rows for one packet are inserted together in
+    a single transaction by `autoinject.insert_deliveries` and are never
+    deleted, so ascending `rowid` reliably reconstructs the original
+    insertion/selection order of the packet without adding a new column."""
+    conn = db.connect(_control_db_path(home), readonly=True)
+    try:
+        rows = conn.execute(
+            "SELECT delivery_id, memory_id, memory_version, packet_id, "
+            "root_session_id, branch_id FROM deliveries "
+            "WHERE packet_id = ? AND root_session_id = ? AND branch_id = ? "
+            "ORDER BY rowid ASC",
+            (packet_id, root_session_id, branch_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str) -> dict[str, Any]:
-    """RESEARCH_RESULT (Part D §2): delivery_id -> `deliveries` -> `memories`
-    (same `SELECT * FROM memories WHERE memory_id = ?` pattern already used
-    by reconsolidation.py/semantic.py, reused here via semantic.show_memory)
-    -> a compact, deterministic reconstruction. Need not be byte-identical to
-    the original packet text (memory content is itself durable/versioned)."""
+    """RESEARCH_RESULT (Part D §2, extended by the RC4 safety pass Part 2):
+    delivery_id -> `deliveries` -> every sibling delivery row sharing the
+    SAME packet (an AutoInject packet can carry multiple selected memories,
+    one `deliveries` row each) -> each row's `memories` row (same
+    `SELECT * FROM memories WHERE memory_id = ?` pattern already used by
+    reconsolidation.py/semantic.py, reused here via semantic.show_memory)
+    -> a compact, deterministic reconstruction of the COMPLETE packet. Need
+    not be byte-identical to the original packet text (memory content is
+    itself durable/versioned).
+
+    Partial-failure semantics: if ANY member of the packet fails to resolve
+    (missing memory row, etc.) the WHOLE resolution fails clearly
+    (`ok: False`) rather than silently returning an incomplete set —
+    consistent with Part 1's no-lossy-partial-success requirement."""
     delivery_id = obj.metadata.get("deliveryId") or obj.metadata.get("delivery_id")
     if not isinstance(delivery_id, str) or not delivery_id:
         try:
@@ -568,33 +645,62 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
     if delivery is None:
         return {"ok": False, "error": f"delivery not found: {delivery_id}"}
 
-    memory_id = delivery["memory_id"]
-    try:
-        shown = semantic.show_memory(home, memory_id)
-    except BrainError as exc:
-        return {"ok": False, "error": str(exc)}
-
-    row = shown["row"]
-    rendering = contracts.canonical_json(
-        {
-            "delivery_id": delivery_id,
-            "memory_id": memory_id,
-            "delivered_version": delivery["memory_version"],
-            "current_version": row.get("current_version"),
-            "title": row.get("title"),
-            "status": row.get("status"),
-            "evidence_grade": row.get("evidence_grade"),
-            "scope": row.get("scope"),
-            "summary": row.get("summary"),
-            "body": shown["body"],
-        }
+    packet_rows = _delivery_rows_for_packet(
+        home, delivery["packet_id"], delivery["root_session_id"], delivery["branch_id"]
     )
+    if not packet_rows:
+        # Defensive fallback only: `delivery` itself always qualifies for its
+        # own packet scope, so this should be unreachable in practice.
+        packet_rows = [delivery]
+
+    items: list[dict[str, Any]] = []
+    for row in packet_rows:
+        member_memory_id = row["memory_id"]
+        try:
+            shown = semantic.show_memory(home, member_memory_id)
+        except BrainError as exc:
+            return {
+                "ok": False,
+                "error": (
+                    f"packet member unresolvable (delivery {row['delivery_id']}, "
+                    f"memory {member_memory_id}): {exc}"
+                ),
+            }
+        mrow = shown["row"]
+        items.append(
+            {
+                "delivery_id": row["delivery_id"],
+                "memory_id": member_memory_id,
+                "delivered_version": row["memory_version"],
+                "current_version": mrow.get("current_version"),
+                "title": mrow.get("title"),
+                "status": mrow.get("status"),
+                "evidence_grade": mrow.get("evidence_grade"),
+                "scope": mrow.get("scope"),
+                "summary": mrow.get("summary"),
+                "body": shown["body"],
+            }
+        )
+
+    if len(items) == 1:
+        only = items[0]
+        return {
+            "ok": True,
+            "resolution": "memory",
+            "delivery_id": only["delivery_id"],
+            "memory_id": only["memory_id"],
+            "content": contracts.canonical_json(only),
+        }
+
     return {
         "ok": True,
-        "resolution": "memory",
+        "resolution": "memory_set",
         "delivery_id": delivery_id,
-        "memory_id": memory_id,
-        "content": rendering,
+        "packet_id": delivery["packet_id"],
+        "memory_ids": [it["memory_id"] for it in items],
+        "delivery_ids": [it["delivery_id"] for it in items],
+        "item_count": len(items),
+        "content": contracts.canonical_json({"packet_id": delivery["packet_id"], "items": items}),
     }
 
 
@@ -638,27 +744,42 @@ def _resolve_tool_observation(
 
 
 def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, Any]:
-    """Explicit fault-in + durable backing resolution (Part D, RC4 pass).
+    """Explicit fault-in + durable backing resolution (Part D, extended by
+    the RC4 safety pass to be TRANSACTIONAL w.r.t. recovery).
 
-    1. Faults the object in via the existing, real, tested
-       `VMemStore.fault_in` (verifies existence, EVICTED->FAULTED_IN,
-       bumps access_count/priority) — reused unchanged.
-    2. Based on `obj.kind`, resolves further through the EXISTING durable
-       backing sources (Part C): RESEARCH_RESULT -> deliveries+memories;
-       TOOL_OBSERVATION -> the content-addressed artifact store (byte-exact);
-       anything else -> the raw stored content unchanged (no special
-       resolution attempted).
-    3. Fails open and clearly: ANY missing/corrupt backing reference
-       (unknown obj_id, delivery not found, memory row missing, artifact
-       hash not found, metadata unparsable) returns `{"ok": False, "error":
-       "..."}` — this function never raises.
+    Ordering is deliberate and load-bearing — the residency/access/priority
+    DB write must be the LAST thing that happens, and only if EVERYTHING
+    before it succeeded:
+
+    1. Read-only verify+load (`VMemStore._verify_and_load`): confirm the
+       object exists and its OWN small stored VMem backing artifact loads
+       and hash-verifies. Raises `BrainError` on failure; no DB write.
+    2. Read-only deeper resolution based on `obj.kind` through the EXISTING
+       durable backing sources (Part C): RESEARCH_RESULT -> deliveries+
+       memories (now resolving the COMPLETE originally-selected packet, not
+       just one memory — RC4 safety pass Part 2); TOOL_OBSERVATION -> the
+       content-addressed artifact store (byte-exact); anything else -> the
+       raw stored content unchanged (no special resolution attempted). This
+       step reports `{"ok": False, "error": ...}` on any failure — it never
+       raises.
+    3. ONLY if step 2 reported `ok: True`: perform the ONE DB write
+       (`VMemStore._mutate_fault_in` — the same residency EVICTED-
+       >FAULTED_IN transition, access_count bump, and priority boost
+       `fault_in` has always done) and merge the updated object into the
+       response.
+
+    On ANY failure at steps 1-2: NO DB write happens at all — residency
+    state, access_count, and priority_score are byte-for-byte unchanged from
+    before the call; returns `{"ok": False, "error": "..."}`. This function
+    never raises (VMemStore's own lower-level methods may still raise
+    `BrainError`, same as always — this is what catches it).
 
     No LLM summarizer anywhere in this path — deterministic resolution only.
     """
     home = Path(home)
     try:
         store = VMemStore(home, session_id)
-        obj, stored_content = store.fault_in(obj_id)
+        obj, stored_content = store._verify_and_load(obj_id)
     except BrainError as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -671,6 +792,16 @@ def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, 
         # TOOL_OBSERVATION) — no special resolution attempted, but the CLI
         # must not crash on it: pass the raw stored content through.
         result = {"ok": True, "resolution": "raw", "content": stored_content}
+
+    if not result.get("ok"):
+        # Zero mutation: the deeper resolution failed, so the residency/
+        # access/priority DB write never happens.
+        return result
+
+    try:
+        obj = store._mutate_fault_in(obj)
+    except BrainError as exc:
+        return {"ok": False, "error": str(exc)}
 
     result["obj"] = obj.to_dict()
     result["obj_id"] = obj.obj_id

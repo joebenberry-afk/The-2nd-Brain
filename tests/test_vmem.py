@@ -31,13 +31,24 @@ def _run_vmem_cli(args: list[str], brain_home) -> subprocess.CompletedProcess:
 
 
 def _insert_delivery_row(
-    brain_home, delivery_id: str, memory_id: str, memory_version: int = 1
+    brain_home,
+    delivery_id: str,
+    memory_id: str,
+    memory_version: int = 1,
+    *,
+    packet_id: str = "pkt-test",
+    root_session_id: str = "sess-resolve",
+    branch_id: str = "main",
 ) -> None:
     """Insert one row into the real, durable `deliveries` table (control DB
     `db/brain.sqlite`) — same table `autoinject.insert_deliveries` writes and
     `_delivered_keys` reads. Direct SQL here mirrors that existing schema
     exactly (no new table/abstraction) so the test does not need to drive
-    the full retrieval/injection pipeline just to produce one row."""
+    the full retrieval/injection pipeline just to produce one row.
+
+    `packet_id`/`root_session_id`/`branch_id` are overridable (defaulting to
+    the original single-row test shape) so multi-item-packet tests can
+    insert several rows that legitimately share one packet scope."""
     conn = db.connect(db_path(brain_home))
     try:
         conn.execute(
@@ -47,13 +58,13 @@ def _insert_delivery_row(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             (
                 delivery_id,
-                "sess-resolve",
-                "sess-resolve",
-                "main",
+                root_session_id,
+                root_session_id,
+                branch_id,
                 memory_id,
                 memory_version,
                 "test-canonical-hash",
-                "pkt-test",
+                packet_id,
                 f"ev-{delivery_id}",
                 "2026-01-01T00:00:00Z",
             ),
@@ -614,3 +625,343 @@ class TestVMemResolve:
         assert res.returncode != 0
         assert "Error" in res.stderr
         assert "Traceback" not in res.stderr  # never an unhandled exception
+
+
+
+def _snapshot(store: VMemStore, obj_id: str):
+    """(residency_state, access_count, priority_score) for byte-for-byte
+    unchanged-on-failure assertions. `None` if the object does not exist."""
+    obj = store.get_object(obj_id)
+    if obj is None:
+        return None
+    return (obj.residency_state, obj.access_count, obj.priority_score)
+
+
+class TestVMemFaultInTransactional:
+    """RC4 safety pass Part 1: `resolve_object` must be transactional w.r.t.
+    recovery. On ANY failure (unknown object, missing/corrupt own backing
+    artifact, missing delivery, missing memory, missing RTD artifact) NO DB
+    write happens — residency_state/access_count/priority_score are
+    byte-for-byte unchanged. The one DB write only happens after every
+    read-only verification/resolution step has already succeeded."""
+
+    def test_unknown_object_is_structured_failure_with_zero_mutation(self, brain_home):
+        store = VMemStore(brain_home, "sess-tx-unknown")
+        assert store.get_object("obj-neverexisted00") is None
+
+        result = resolve_object(brain_home, "sess-tx-unknown", "obj-neverexisted00")
+
+        assert result["ok"] is False
+        assert "error" in result
+        assert store.get_object("obj-neverexisted00") is None
+
+    def test_missing_own_backing_artifact_is_structured_failure_with_zero_mutation(
+        self, brain_home
+    ):
+        store = VMemStore(brain_home, "sess-tx-missing-own")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-irrelevant"}),
+            metadata={"deliveryId": "del-irrelevant"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        # Remove the object's OWN tiny stored VMem backing artifact out from
+        # under it (both meta and blob, matching "deleted... artifact file").
+        meta_path = (
+            brain_home / "state" / "artifacts" / "meta" / f"{obj.content_sha256}.json"
+        )
+        assert meta_path.exists()
+        meta_path.unlink()
+
+        result = resolve_object(brain_home, "sess-tx-missing-own", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "error" in result
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
+
+    def test_corrupt_own_backing_artifact_is_structured_failure_with_zero_mutation(
+        self, brain_home
+    ):
+        store = VMemStore(brain_home, "sess-tx-corrupt-own")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-irrelevant"}),
+            metadata={"deliveryId": "del-irrelevant"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        # Corrupt the bytes in place: the blob file at the hash-named path
+        # keeps existing, but its content no longer matches the sha256 the
+        # stored VMem row records — a bit-rot / out-from-under-it scenario.
+        blob_path = (
+            brain_home / "state" / "artifacts" / "blobs" / f"{obj.content_sha256}.bin"
+        )
+        assert blob_path.exists()
+        blob_path.write_bytes(b"corrupted bytes that do not match the recorded hash")
+
+        result = resolve_object(brain_home, "sess-tx-corrupt-own", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "error" in result
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
+
+    def test_missing_delivery_is_structured_failure_with_zero_mutation(self, brain_home):
+        store = VMemStore(brain_home, "sess-tx-missing-delivery")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-does-not-exist-tx"}),
+            metadata={"deliveryId": "del-does-not-exist-tx"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        result = resolve_object(brain_home, "sess-tx-missing-delivery", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "del-does-not-exist-tx" in result["error"]
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
+
+    def test_missing_memory_is_structured_failure_with_zero_mutation(self, brain_home):
+        _insert_delivery_row(brain_home, "del-tx-missing-memory", "mem-doesnotexisttx00")
+        store = VMemStore(brain_home, "sess-tx-missing-memory")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-tx-missing-memory"}),
+            metadata={"deliveryId": "del-tx-missing-memory"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        result = resolve_object(brain_home, "sess-tx-missing-memory", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "error" in result
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
+
+    def test_missing_rtd_artifact_is_structured_failure_with_zero_mutation(self, brain_home):
+        store = VMemStore(brain_home, "sess-tx-missing-rtd")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content=json.dumps(
+                {"artifact_ref": "[brain-artifact:sha256:" + "b" * 64 + "]"}
+            ),
+            metadata={"toolCallId": "call-tx-missing-rtd"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        result = resolve_object(brain_home, "sess-tx-missing-rtd", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "error" in result
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
+
+    def test_successful_research_result_fault_in_mutates_exactly_once(self, brain_home):
+        memory_id = semantic.add_memory(
+            brain_home, "TX Success Memory", "TX success body text.", scope="global"
+        )
+        _insert_delivery_row(brain_home, "del-tx-success-1", memory_id)
+        store = VMemStore(brain_home, "sess-tx-success-research")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-tx-success-1"}),
+            metadata={"deliveryId": "del-tx-success-1"},
+        )
+        store.evict_to_budget(max_tokens=0)
+        before = _snapshot(store, obj.obj_id)
+        assert before is not None
+        assert before[0] == ResidencyState.EVICTED
+
+        result = resolve_object(brain_home, "sess-tx-success-research", obj.obj_id)
+
+        assert result["ok"] is True
+        assert result["resolution"] == "memory"
+        assert result["memory_id"] == memory_id
+        after = _snapshot(store, obj.obj_id)
+        assert after is not None
+        assert after[0] == ResidencyState.FAULTED_IN
+        assert after[1] == before[1] + 1  # access_count incremented exactly once
+        assert after[2] == before[2] + 5.0  # priority boosted exactly once
+
+    def test_successful_tool_observation_fault_in_mutates_exactly_once_byte_exact(
+        self, brain_home
+    ):
+        from second_brain import artifacts
+
+        raw_text = "TX success tool observation byte-exact content\n"
+        info = artifacts.store_text(brain_home, raw_text, kind="rtd_raw", tool="bash")
+        store = VMemStore(brain_home, "sess-tx-success-tool")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content=json.dumps({"artifact_ref": info["handle"]}),
+            metadata={"toolCallId": "call-tx-success-1"},
+        )
+        store.evict_to_budget(max_tokens=0)
+        before = _snapshot(store, obj.obj_id)
+        assert before is not None
+        assert before[0] == ResidencyState.EVICTED
+
+        result = resolve_object(brain_home, "sess-tx-success-tool", obj.obj_id)
+
+        assert result["ok"] is True
+        assert result["byte_exact"] is True
+        assert result["content"] == raw_text
+        after = _snapshot(store, obj.obj_id)
+        assert after is not None
+        assert after[0] == ResidencyState.FAULTED_IN
+        assert after[1] == before[1] + 1
+        assert after[2] == before[2] + 5.0
+
+    def test_repeated_successful_fault_in_keeps_working_and_keeps_incrementing(
+        self, brain_home
+    ):
+        memory_id = semantic.add_memory(
+            brain_home, "TX Repeat Memory", "TX repeat body text.", scope="global"
+        )
+        _insert_delivery_row(brain_home, "del-tx-repeat-1", memory_id)
+        store = VMemStore(brain_home, "sess-tx-repeat")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-tx-repeat-1"}),
+            metadata={"deliveryId": "del-tx-repeat-1"},
+        )
+        store.evict_to_budget(max_tokens=0)
+
+        first = resolve_object(brain_home, "sess-tx-repeat", obj.obj_id)
+        assert first["ok"] is True
+        after_first = store.get_object(obj.obj_id)
+        assert after_first is not None
+        assert after_first.residency_state == ResidencyState.FAULTED_IN
+        assert after_first.access_count == 2
+
+        # Second call on an object already FAULTED_IN: no crash, state stays
+        # FAULTED_IN (unchanged, not reset), access_count keeps incrementing.
+        second = resolve_object(brain_home, "sess-tx-repeat", obj.obj_id)
+        assert second["ok"] is True
+        after_second = store.get_object(obj.obj_id)
+        assert after_second is not None
+        assert after_second.residency_state == ResidencyState.FAULTED_IN
+        assert after_second.access_count == 3
+
+
+class TestVMemMultiItemPacketResolution:
+    """RC4 safety pass Part 2: an AutoInject delivery can carry MULTIPLE
+    selected memories (one `deliveries` row per item, same `packet_id`).
+    `_resolve_research_result` must recover the COMPLETE packet from the one
+    delivery_id captured at VMem admission time, not just that one item."""
+
+    def test_four_item_packet_reconstructs_all_members_not_just_first(self, brain_home):
+        packet_id = "pkt-four-item-tx"
+        root_session_id = "sess-tx-packet"
+        branch_id = "main"
+
+        memory_ids = []
+        for i in range(4):
+            mid = semantic.add_memory(
+                brain_home,
+                f"Packet Member Memory {i}",
+                f"Unique packet member body text {i}.",
+                scope="global",
+            )
+            memory_ids.append(mid)
+
+        delivery_ids = [f"del-tx-packet-{i}" for i in range(4)]
+        for did, mid in zip(delivery_ids, memory_ids, strict=True):
+            _insert_delivery_row(
+                brain_home,
+                did,
+                mid,
+                packet_id=packet_id,
+                root_session_id=root_session_id,
+                branch_id=branch_id,
+            )
+
+        # VMem admission shape: only the FIRST delivery_id of the packet is
+        # captured on the stored object (matches `lifecycle.last_delivery_ids[0]`
+        # at the real CLI call sites).
+        store = VMemStore(brain_home, "sess-tx-packet")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": delivery_ids[0]}),
+            metadata={"deliveryId": delivery_ids[0]},
+        )
+        store.evict_to_budget(max_tokens=0)
+
+        result = resolve_object(brain_home, "sess-tx-packet", obj.obj_id)
+
+        assert result["ok"] is True
+        assert result["resolution"] == "memory_set"
+        assert result["item_count"] == 4
+        assert set(result["memory_ids"]) == set(memory_ids)
+        assert set(result["delivery_ids"]) == set(delivery_ids)
+
+        parsed = json.loads(result["content"])
+        assert parsed["packet_id"] == packet_id
+        assert len(parsed["items"]) == 4
+        # Deterministic order (rowid / insertion order), not just membership.
+        assert [it["memory_id"] for it in parsed["items"]] == memory_ids
+        assert [it["delivery_id"] for it in parsed["items"]] == delivery_ids
+        for i, it in enumerate(parsed["items"]):
+            assert f"Unique packet member body text {i}." in it["body"]
+
+        # Recovery mutated residency exactly once, same as the single-item path.
+        after = store.get_object(obj.obj_id)
+        assert after is not None
+        assert after.residency_state == ResidencyState.FAULTED_IN
+
+    def test_packet_with_one_unresolvable_member_fails_whole_resolution_no_partial(
+        self, brain_home
+    ):
+        packet_id = "pkt-partial-fail-tx"
+        root_session_id = "sess-tx-packet-partial"
+        branch_id = "main"
+
+        good_memory_id = semantic.add_memory(
+            brain_home, "Partial Packet Good Memory", "Good body.", scope="global"
+        )
+        _insert_delivery_row(
+            brain_home,
+            "del-tx-partial-good",
+            good_memory_id,
+            packet_id=packet_id,
+            root_session_id=root_session_id,
+            branch_id=branch_id,
+        )
+        _insert_delivery_row(
+            brain_home,
+            "del-tx-partial-bad",
+            "mem-doesnotexistpartial",
+            packet_id=packet_id,
+            root_session_id=root_session_id,
+            branch_id=branch_id,
+        )
+
+        store = VMemStore(brain_home, "sess-tx-packet-partial")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-tx-partial-good"}),
+            metadata={"deliveryId": "del-tx-partial-good"},
+        )
+        before = _snapshot(store, obj.obj_id)
+
+        result = resolve_object(brain_home, "sess-tx-packet-partial", obj.obj_id)
+
+        # Simplest safe option: any unresolvable member fails the WHOLE
+        # fault-in for this object — no silent partial/incomplete set.
+        assert result["ok"] is False
+        assert "error" in result
+        after = _snapshot(store, obj.obj_id)
+        assert after == before
