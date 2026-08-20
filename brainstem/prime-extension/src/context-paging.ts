@@ -113,6 +113,52 @@
  * returns `{ messages: undefined, error: <the error> }` so the caller can
  * record an `extension_error` telemetry record; this module itself never
  * throws.
+
+ * ---------------------------------------------------------------------
+ * RC4 CVM closure repair (Repair B) — already-EVICTED reprojection:
+ *
+ * Pilot 4 (outputs/reports/rc4/14-real-prime-pilot-4.md) found that even
+ * though the claim above patches the LIVE outgoing provider request,
+ * Prime's OWN persisted transcript can still hold the original full
+ * message. A later resume/reconstruction can therefore present
+ * `event.messages` containing the FULL original content for an object
+ * whose VMem state is ALREADY `EVICTED` (claimed on an earlier `context`
+ * event in the same session, or evicted by compact-prep). The single
+ * `runVmemListPrePageSync` call already returns objects across every
+ * residency state — this module simply also accepts `EVICTED` (alongside
+ * `RESIDENT`/`FAULTED_IN`) when building the correlation maps, still
+ * requiring unpinned + the SAME unweakened metadata-proof gates, and
+ * carries each matched object's `residencyState` forward.
+ *
+ * Two paging paths result from one correlated/selected candidate set
+ * (bounded together by `max_pages_per_context_event`):
+ *   Path A — newly claimed (unchanged): RESIDENT/FAULTED_IN candidates are
+ *     sent to ONE `claim-pages` call; only objIds it confirms are
+ *     pointerized. Exactly as before this repair.
+ *   Path B — already-evicted reprojection (new): EVICTED candidates are
+ *     NEVER sent to the claim call (no claim call is made for them, and
+ *     if the ONLY selected candidates are EVICTED, the claim call is
+ *     never invoked AT ALL this event) and perform ZERO DB mutation —
+ *     they are proof-backed and already EVICTED, so they are pointerized
+ *     directly with the SAME deterministic pointer text.
+ *
+ * Claim-failure / mixed-event design decision (documented, tested):
+ * if the ONE claim call for the RESIDENT/FAULTED_IN group fails (or
+ * throws), that failure is caught LOCALLY (not by this function's
+ * top-level fail-open catch) so it can never suppress Path B — EVICTED
+ * reprojection candidates in the SAME event are still pointerized
+ * independently, since reprojection performs no subprocess call and needs
+ * no claim at all. A pure RESIDENT/FAULTED_IN-only event whose claim call
+ * fails still returns the ORIGINAL fully fail-open shape (`messages:
+ * undefined`, `error` set) — unaffected, exactly as before this repair.
+ *
+ * Double-wrap guard: an element whose `content` (plain string for
+ * `custom`, or `content[0].text` for `toolResult` — same shapes
+ * `buildVmemPointerText`'s output already takes) starts with the EXACT
+ * literal `"[SECOND_BRAIN_VMEM]"` is NOT a candidate at all (`candidateFor`
+ * returns `null` before any other check) — an already-pointerized message
+ * is never reprojected/replaced again on a later event.
+ * ---------------------------------------------------------------------
  */
 import { AUTOINJECT_CUSTOM_TYPE } from "./autoinject";
 import type { ContextPagingFileConfig } from "./config";
@@ -150,14 +196,40 @@ interface PageCandidate {
   correlationKey: string;
 }
 
+/** The exact, literal first line `buildVmemPointerText` always produces.
+ * Repair B double-wrap guard: an element whose content already starts with
+ * this is a PREVIOUSLY paged message, never a fresh candidate. */
+const VMEM_POINTER_PREFIX = "[SECOND_BRAIN_VMEM]";
+
+/** Narrow, O(1)-ish exact-prefix check ONLY — never a broad scan of
+ * arbitrary content. Checks the SAME two shapes `buildVmemPointerText`'s
+ * output already takes: a plain string (`custom`/AutoInject) or an array
+ * whose first block carries `.text` (`toolResult`). Any other shape is
+ * simply not already-pointerized. */
+function isAlreadyPointerized(content: unknown): boolean {
+  if (typeof content === "string") return content.startsWith(VMEM_POINTER_PREFIX);
+  if (Array.isArray(content) && content.length > 0) {
+    const first = content[0];
+    if (first !== null && typeof first === "object" && !Array.isArray(first)) {
+      const text = (first as Record<string, unknown>).text;
+      if (typeof text === "string") return text.startsWith(VMEM_POINTER_PREFIX);
+    }
+  }
+  return false;
+}
+
 /** Structural check ONLY (no VMem call yet) — is this element even the
  * right shape to be a paging candidate, and does it carry a correlation
- * key? Mirrors Pilot 2's real captured schema exactly (Part A of this doc). */
+ * key? Mirrors Pilot 2's real captured schema exactly (Part A of this doc).
+ * Repair B: the double-wrap guard runs FIRST, before any other check, so
+ * an already-pointerized message never even reaches the residency-state
+ * split / claim / reprojection decision. */
 function candidateFor(element: unknown): PageCandidate | null {
   if (element === null || typeof element !== "object" || Array.isArray(element)) return null;
   const obj = element as Record<string, unknown>;
 
   if (obj.role === "custom" && obj.customType === AUTOINJECT_CUSTOM_TYPE) {
+    if (isAlreadyPointerized(obj.content)) return null;
     const details = obj.details;
     if (details !== null && typeof details === "object" && !Array.isArray(details)) {
       const deliveryId = (details as Record<string, unknown>).delivery_id;
@@ -169,6 +241,7 @@ function candidateFor(element: unknown): PageCandidate | null {
   }
 
   if (obj.role === "toolResult" && obj.isError !== true) {
+    if (isAlreadyPointerized(obj.content)) return null;
     const toolCallId = obj.toolCallId;
     if (typeof toolCallId === "string" && toolCallId.length > 0) {
       return { index: -1, elementKind: "toolResult", correlationKey: toolCallId };
@@ -252,11 +325,19 @@ export interface PageContextResult {
   /** The configured `resident_token_budget` this decision was checked
    * against. */
   residentBudget?: number;
-  /** Candidates actually sent to the claim call (step 5, bounded by
-   * `max_pages_per_context_event`). */
+  /** Path A ONLY: candidates actually sent to the claim call (step 5,
+   * bounded by `max_pages_per_context_event`) — reprojections (Path B)
+   * were never "requested" to claim, so this is never inflated by them. */
   requestedPageCount?: number;
-  /** Candidates the claim call actually confirmed (step 6). */
+  /** Path A ONLY: candidates the claim call actually confirmed (step 6). */
   claimedPageCount?: number;
+  /** Repair B: objects actually transitioned RESIDENT/FAULTED_IN ->
+   * EVICTED this event (Path A's real state-transition count — the same
+   * real count `claimedPageCount` already meant). */
+  newlyClaimedCount?: number;
+  /** Repair B: already-EVICTED, proof-backed objects pointerized this
+   * event via reprojection (Path B) — ZERO DB writes, no claim call. */
+  reprojectedPageCount?: number;
   /** Estimated tokens of the ORIGINAL content of the elements actually
    * replaced (same ~4-chars/token estimate as the budget check). */
   estimatedTokensBefore?: number;
@@ -265,10 +346,13 @@ export interface PageContextResult {
   estimatedTokensAfter?: number;
   /** Distinct VMem object kinds actually paged this event. */
   objectKinds?: string[];
-  /** Distinct pre-claim residency states of the objects actually paged. */
+  /** Distinct pre-page residency states of the objects actually paged
+   * (RESIDENT/FAULTED_IN for Path A, EVICTED for Path B). */
   stateBefore?: string[];
-  /** Post-claim residency state(s) of the objects actually paged (always
-   * `["EVICTED"]` for any object this function reports as paged). */
+  /** Post-page residency state label(s) of the objects actually paged:
+   * `"EVICTED"` for a real Path A state transition, `"EVICTED_REPROJECTED"`
+   * for a Path B no-op relabel (already EVICTED, no state change, no DB
+   * write — just pointerized again). */
   stateAfter?: string[];
 }
 
@@ -332,7 +416,17 @@ export function pageContext(options: PageContextOptions): PageContextResult {
     const byToolCallId = new Map<string, VmemPrePageObject>();
     for (const obj of listed.objects) {
       if (obj.pinned) continue; // never PINNED
-      if (obj.residencyState !== "RESIDENT" && obj.residencyState !== "FAULTED_IN") continue;
+      // Repair B: PRE-PAGE states (RESIDENT/FAULTED_IN, Path A) PLUS
+      // already-EVICTED (Path B reprojection) are all correlation
+      // candidates now — everything else (STORED/SUPERSEDED/PURGED/etc.)
+      // still falls through untouched, unweakened.
+      if (
+        obj.residencyState !== "RESIDENT" &&
+        obj.residencyState !== "FAULTED_IN" &&
+        obj.residencyState !== "EVICTED"
+      ) {
+        continue;
+      }
       if (obj.kind === "RESEARCH_RESULT") {
         const deliveryId = obj.metadata.deliveryId ?? obj.metadata.delivery_id;
         const packetArtifactRef = obj.metadata.packetArtifactRef ?? obj.metadata.packet_artifact_ref;
@@ -367,43 +461,82 @@ export function pageContext(options: PageContextOptions): PageContextResult {
     if (correlated.length === 0) return noop;
 
     // Step 5: bounded, deterministic selection — up to
-    // max_pages_per_context_event, in message-index order.
+    // max_pages_per_context_event, in message-index order. Both Path A
+    // (RESIDENT/FAULTED_IN) and Path B (already-EVICTED) candidates share
+    // this SAME bound, combined, exactly as any other candidate would.
     const selected = correlated.slice(0, options.cfg.maxPagesPerContextEvent);
 
-    // Step 6 (Defect B): the ONE claim call — the ONLY mutation attempt
-    // this function ever makes, reached only because step 5 selected >=1
-    // candidate. NOTHING is constructed before this returns a confirmed
-    // success list (the single most important ordering rule here).
-    const claimFn = options.claimPages ?? runVmemClaimPagesSync;
-    const claimResult = claimFn({
-      home: options.home,
-      hostSessionId: options.hostSessionId,
-      candidates: selected.map((s) => ({ objId: s.match.objId, kind: s.match.kind })),
-      python: options.python,
-      timeoutMs: options.timeoutMs,
-    });
-    if (!claimResult.ok || claimResult.claimedObjIds === undefined) {
-      // Part E fail-open: a failed/errored claim call never mutates messages.
-      return {
-        messages: undefined,
-        pagedCount: 0,
-        error: claimResult.error ?? "vmem claim-pages failed",
-      };
-    }
-    const claimedSet = new Set(claimResult.claimedObjIds);
-    if (claimedSet.size === 0) return noop; // claim call succeeded but confirmed nothing
+    // Repair B split: Path A (needs a real claim) vs Path B (already
+    // EVICTED, proof-backed, reprojected directly — no claim, no DB write).
+    const residentGroup = selected.filter(
+      (s) => s.match.residencyState === "RESIDENT" || s.match.residencyState === "FAULTED_IN",
+    );
+    const evictedGroup = selected.filter((s) => s.match.residencyState === "EVICTED");
 
-    // Step 7: build the replacement patch ONLY for confirmed-claimed
-    // obj_ids. A candidate whose claim did not succeed (lost a race, wrong
-    // state, unknown object) is left completely untouched.
+    // Step 6 (Defect B, Path A only): the ONE claim call — the ONLY
+    // mutation attempt this function ever makes, reached only when the
+    // RESIDENT/FAULTED_IN group is non-empty. NOTHING for this group is
+    // constructed before this returns a confirmed success list (the single
+    // most important ordering rule here, unchanged from before this pass).
+    // No claim call is EVER made for an object that is already EVICTED —
+    // when `residentGroup` is empty (e.g. an all-reprojection event), this
+    // call is skipped entirely.
+    //
+    // Repair B claim-failure design decision (documented + tested, see
+    // module docstring): a failed/thrown claim call is caught LOCALLY here
+    // (not by this function's top-level fail-open catch) so it can never
+    // suppress Path B — EVICTED reprojection candidates in the SAME event
+    // are still pointerized independently, since reprojection performs no
+    // subprocess call and needs no claim at all. If `evictedGroup` is also
+    // empty (a pure RESIDENT/FAULTED_IN event), the ORIGINAL fully
+    // fail-open shape is preserved below, byte-for-byte.
+    let claimedSet = new Set<string>();
+    let claimError: string | undefined;
+    if (residentGroup.length > 0) {
+      const claimFn = options.claimPages ?? runVmemClaimPagesSync;
+      let claimResult: VmemClaimPagesResult;
+      try {
+        claimResult = claimFn({
+          home: options.home,
+          hostSessionId: options.hostSessionId,
+          candidates: residentGroup.map((s) => ({ objId: s.match.objId, kind: s.match.kind })),
+          python: options.python,
+          timeoutMs: options.timeoutMs,
+        });
+      } catch (error) {
+        claimResult = { ok: false, error: error instanceof Error ? error.message : "vmem claim-pages failed" };
+      }
+      if (claimResult.ok && claimResult.claimedObjIds !== undefined) {
+        claimedSet = new Set(claimResult.claimedObjIds);
+      } else {
+        claimError = claimResult.error ?? "vmem claim-pages failed";
+      }
+    }
+
+    if (claimError !== undefined && evictedGroup.length === 0) {
+      // Pure Path A failure, nothing to reproject: Part E fail-open,
+      // UNCHANGED from before this pass.
+      return { messages: undefined, pagedCount: 0, error: claimError };
+    }
+
+    // Step 7: build the replacement patch.
+    //   - Path A: ONLY for confirmed-claimed obj_ids. A candidate whose
+    //     claim did not succeed (lost a race, wrong state, unknown object,
+    //     or the claim call itself failed) is left completely untouched.
+    //   - Path B: EVERY selected EVICTED candidate — already proof-backed,
+    //     already EVICTED, nothing further to verify at the state-machine
+    //     level, zero DB mutation.
     let patched: unknown[] | undefined;
-    let pagedCount = 0;
+    let newlyClaimedCount = 0;
+    let reprojectedCount = 0;
     const kindsPaged = new Set<string>();
     const statesBeforePaged = new Set<string>();
+    const statesAfterPaged = new Set<string>();
     let tokensBefore = 0;
     let tokensAfter = 0;
     for (const { candidate, match } of selected) {
-      if (!claimedSet.has(match.objId)) continue;
+      const isReprojection = match.residencyState === "EVICTED";
+      if (!isReprojection && !claimedSet.has(match.objId)) continue;
 
       const original = messages[candidate.index] as Record<string, unknown>;
       const pointerText = buildVmemPointerText({
@@ -425,28 +558,45 @@ export function pageContext(options: PageContextOptions): PageContextResult {
       tokensAfter += estimateTokens(replacement);
       kindsPaged.add(match.kind);
       if (match.residencyState) statesBeforePaged.add(match.residencyState);
+      statesAfterPaged.add(isReprojection ? "EVICTED_REPROJECTED" : "EVICTED");
 
       if (patched === undefined) patched = messages.slice();
       patched[candidate.index] = replacement;
-      pagedCount += 1;
+      if (isReprojection) reprojectedCount += 1;
+      else newlyClaimedCount += 1;
     }
 
-    if (patched === undefined) return noop; // selected candidates existed, but the claim confirmed none
-    return {
+    if (patched === undefined) {
+      // Selected candidates existed, but neither path actually replaced
+      // anything (claim confirmed none, and no reprojection candidates).
+      if (claimError !== undefined) return { messages: undefined, pagedCount: 0, error: claimError };
+      return noop;
+    }
+    const pagedCount = newlyClaimedCount + reprojectedCount;
+    const result: PageContextResult = {
       messages: patched,
       pagedCount,
       candidateCount: candidates.length,
       eligibleCount: correlated.length,
       pressureEstimatedTokens: estimatedTotal,
       residentBudget: options.cfg.residentTokenBudget,
-      requestedPageCount: selected.length,
+      requestedPageCount: residentGroup.length,
       claimedPageCount: claimedSet.size,
+      newlyClaimedCount,
+      reprojectedPageCount: reprojectedCount,
       estimatedTokensBefore: tokensBefore,
       estimatedTokensAfter: tokensAfter,
       objectKinds: [...kindsPaged],
       stateBefore: [...statesBeforePaged],
-      stateAfter: ["EVICTED"],
+      stateAfter: [...statesAfterPaged],
     };
+    // Partial-success case: the RESIDENT/FAULTED_IN claim call failed but
+    // one or more EVICTED reprojection candidates in the SAME event were
+    // still pointerized independently (see the claim-failure design
+    // decision above) — surface the claim error for observability without
+    // ever treating this as a full no-op.
+    if (claimError !== undefined) result.error = claimError;
+    return result;
   } catch (error) {
     // Part E fail-open: never throw from this module.
     return {

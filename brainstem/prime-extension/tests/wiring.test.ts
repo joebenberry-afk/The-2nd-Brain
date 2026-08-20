@@ -987,7 +987,7 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     await settle();
     expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
     const [call] = runVmemStoreMock.mock.calls[0] as [
-      { kind: string; title: string; content: string; hostSessionId: string },
+      { kind: string; title: string; content: string; hostSessionId: string; metadata?: Record<string, unknown> },
     ];
     expect(call.kind).toBe("TOOL_OBSERVATION");
     expect(call.title).toBe("rtd_artifact");
@@ -998,6 +998,39 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(parsed.artifact_ref).toContain("brain-artifact:sha256:");
     expect(typeof parsed.original_chars).toBe("number");
     expect(parsed.command_class).toBe("pytest");
+    // RC4 CVM closure repair (Repair A): the 5th `metadata` argument is now
+    // populated with the REAL event.toolCallId and the REAL, already-
+    // verified rtd.record.artifact_ref — this is what lets context-paging.ts's
+    // `byToolCallId` correlation map find this object (Pilot 4's exact gap).
+    expect(call.metadata).toBeDefined();
+    expect(call.metadata?.toolCallId).toBe("vmem-admit-1");
+    expect(call.metadata?.artifactRef).toBe(parsed.artifact_ref);
+    // metadata never carries raw/distilled tool text either.
+    expect(JSON.stringify(call.metadata)).not.toContain("x".repeat(100));
+  });
+
+  it("does NOT fire the RTD-preserved-artifact admission ref for a NON-distilled RTD result (regression: content below threshold never calls vmemAdmit for TOOL_OBSERVATION)", async () => {
+    enableRtdAndVmemAdmission();
+    const handlers = loadFactory({
+      rtdPreserver: {
+        preserve: async (raw) => ({
+          sha256: require("node:crypto").createHash("sha256").update(raw).digest("hex"),
+          handle: `[brain-artifact:sha256:${require("node:crypto").createHash("sha256").update(raw).digest("hex")}]`,
+        }),
+        verify: async (_sha256, raw) => raw === "small output",
+      },
+    });
+    const ctx = makeCtx();
+    // Well below the RTD threshold -> shouldDistill returns trigger:false,
+    // rtd.record.distilled is never true -> the existing gate (unweakened
+    // by this pass) must still prevent any vmemAdmit call.
+    await handlers.get("tool_result")!(
+      { toolName: "bash", toolCallId: "vmem-admit-no-distill-1", input: { command: "pytest -q tests/" }, content: [{ type: "text", text: "small output" }], details: {}, isError: false },
+      ctx,
+    );
+    await waitForLines(1); // tool_result only — content is far too small to trigger rtd_shadow's distill path
+    await settle();
+    expect(runVmemStoreMock).not.toHaveBeenCalled();
   });
 
   it("real AutoInject delivery: preserve-before-admit fires, richer packetArtifactRef/packetSha256 metadata included on success", async () => {
@@ -2032,6 +2065,104 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
     const result = handlers.get("context")!({ type: "context", messages }, ctx);
     expect(result).toBeUndefined();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
+  });
+
+  function toolResultMsg(toolCallId: string, content = "z".repeat(500)): unknown {
+    return {
+      role: "toolResult",
+      toolCallId,
+      toolName: "ipython",
+      content: [{ type: "text", text: content }],
+      details: { some: "detail" },
+      isError: false,
+      timestamp: "2026-01-01T00:00:02Z",
+    };
+  }
+
+  it("RC4 CVM closure repair (Repair A closure, end-to-end): an RTD-backed toolResult whose VMem object metadata carries BOTH toolCallId and artifactRef is now a real live paging candidate — claimed and pointerized through the real factory, mirroring the AutoInject success shape", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListPrePageSyncMock.mockReturnValue({
+      ok: true,
+      objects: [
+        {
+          objId: "obj-rtd-1",
+          kind: "TOOL_OBSERVATION",
+          metadata: { toolCallId: "call-rtd-1", artifactRef: "art-rtd-1" },
+          residencyState: "RESIDENT",
+          pinned: false,
+        },
+      ],
+    });
+    runVmemClaimPagesSyncMock.mockReturnValue({ ok: true, claimedObjIds: ["obj-rtd-1"] });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [toolResultMsg("call-rtd-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx) as
+      | { messages?: unknown[] }
+      | undefined;
+    expect(result).toBeDefined();
+    const patched = result!.messages as Array<Record<string, unknown>>;
+    expect(Array.isArray(patched[0]?.content)).toBe(true);
+    const blocks = patched[0]?.content as Array<{ type: string; text: string }>;
+    expect(blocks[0]?.text).toContain("[SECOND_BRAIN_VMEM]");
+    expect(blocks[0]?.text).toContain("obj-rtd-1");
+    expect(runVmemClaimPagesSyncMock).toHaveBeenCalledTimes(1);
+    const claimArgs = runVmemClaimPagesSyncMock.mock.calls[0]?.[0] as { candidates: Array<{ objId: string }> };
+    expect(claimArgs.candidates).toEqual([{ objId: "obj-rtd-1", kind: "TOOL_OBSERVATION" }]);
+
+    const records = await waitForLines(1);
+    const paging = records.find((r) => r.kind === "context_paging");
+    expect(paging?.paged_count).toBe(1);
+    expect(paging?.newly_claimed_count).toBe(1);
+    expect(paging?.reprojected_page_count).toBe(0);
+  });
+
+  it("Repair B (real factory, end-to-end): an already-EVICTED, proof-backed AutoInject object correlates to a reconstructed full-text live message -> NO claim call is made -> reprojected via the real 'context' handler; telemetry counts route correctly", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListPrePageSyncMock.mockReturnValue({
+      ok: true,
+      objects: [
+        {
+          objId: "obj-evicted-wiring-1",
+          kind: "RESEARCH_RESULT",
+          metadata: { deliveryId: "del-evicted-1", packetArtifactRef: "art-evicted-1", packetSha256: "a".repeat(64) },
+          residencyState: "EVICTED",
+          pinned: false,
+        },
+      ],
+    });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-evicted-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx) as
+      | { messages?: unknown[] }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled(); // Path B: no claim call for an already-EVICTED object
+    const patched = result!.messages as Array<Record<string, unknown>>;
+    expect(typeof patched[0]?.content).toBe("string");
+    expect((patched[0]?.content as string)).toContain("[SECOND_BRAIN_VMEM]");
+
+    const records = await waitForLines(1);
+    const paging = records.find((r) => r.kind === "context_paging");
+    expect(paging?.paged_count).toBe(1);
+    expect(paging?.newly_claimed_count).toBe(0);
+    expect(paging?.reprojected_page_count).toBe(1);
+  });
+
+  it("Repair B double-wrap guard (real factory): a live message whose content already starts with [SECOND_BRAIN_VMEM] is never re-paged, never mutated, vmem list not even consulted for it in isolation", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListPrePageSyncMock.mockReturnValue({ ok: true, objects: [] });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const alreadyPointerized = autoinjectMsg("del-already-paged");
+    (alreadyPointerized as Record<string, unknown>).content =
+      "[SECOND_BRAIN_VMEM]\nkind=RESEARCH_RESULT\nobj_id=obj-x\ndelivery_id=del-already-paged\nstate=EVICTED\n...";
+    const messages = [alreadyPointerized, assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+    expect(runVmemListPrePageSyncMock).not.toHaveBeenCalled();
     expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
   });
 });
