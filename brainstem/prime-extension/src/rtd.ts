@@ -36,6 +36,89 @@ import type { RtdFileConfig } from "./config";
 import { resolveBrainHome, rtdThresholdFromConfig } from "./config";
 export const RTD_COMMAND_PREFIXES = ["pytest", "git", "rg", "grep"] as const;
 
+/** Canonical command classes `resolveCommandClass` can resolve a leading
+ * command segment to. Kept identical to `RTD_COMMAND_PREFIXES`'s member
+ * values so `whitelist_commands` config semantics are unchanged. */
+export type CommandClass = "pytest" | "git" | "rg" | "grep";
+
+/** Shell metacharacters/operators that terminate the LEADING command
+ * segment (Part A adversarial requirement: nothing after a chain/redirect
+ * is ever inspected). Order-independent; first match wins. */
+const SHELL_CHAIN_RE = /&&|\|\||[;|<>`]|\$\(/;
+
+/** Cut `command` at the first shell metacharacter/operator, keeping only
+ * the leading segment. No match -> the whole string is the leading segment. */
+function leadingCommandSegment(command: string): string {
+  const match = SHELL_CHAIN_RE.exec(command);
+  return match ? command.slice(0, match.index) : command;
+}
+
+/** Tokenize a leading command segment, respecting a single leading quoted
+ * token (Windows absolute paths: `"C:\\...\\python.exe" -m pytest`).
+ * Only the FIRST token is quote-aware; the rest is a plain whitespace
+ * split (adequate for the fixed-position `-m`/`pytest` check below). */
+function tokenizeLeadingSegment(segment: string): string[] {
+  const trimmed = segment.trimStart();
+  if (trimmed.length === 0) return [];
+  const quoteChar = trimmed[0];
+  if (quoteChar === '"' || quoteChar === "'") {
+    const closeAt = trimmed.indexOf(quoteChar, 1);
+    if (closeAt !== -1) {
+      const first = trimmed.slice(1, closeAt);
+      const rest = trimmed.slice(closeAt + 1).trim();
+      const restTokens = rest.length > 0 ? rest.split(/\s+/) : [];
+      return [first, ...restTokens];
+    }
+    // Unterminated quote: fall through to a defensive plain split so this
+    // never throws or hangs; still fully deterministic.
+  }
+  return trimmed.split(/\s+/).filter((t) => t.length > 0);
+}
+
+/** Path basename of a command token, lower-cased, with a trailing `.exe`
+ * stripped (case-insensitive). Handles both `/` and `\` separators. */
+function commandBasename(token: string): string {
+  const normalized = token.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  const base = (parts[parts.length - 1] ?? token).toLowerCase();
+  return base.endsWith(".exe") ? base.slice(0, -4) : base;
+}
+
+/**
+ * Deterministic canonical-command resolver (Part A, RC4 pass). Resolves the
+ * LEADING command segment of a raw shell command string to one of the fixed
+ * canonical classes RTD recognizes, or null when ineligible. Token-exact
+ * comparisons only — never substring/`.includes()` matching against the raw
+ * command string, so a benign later occurrence of a class name (e.g. inside
+ * a quoted `-k` argument, or after a `&&`) never flips the decision either
+ * way.
+ *
+ * Rules (in order):
+ *   1. bin0 === "pytest" -> "pytest" (direct/quoted-absolute pytest[.exe]).
+ *   2. bin0 in {python, python3, py} AND token[1] === "-m" AND
+ *      token[2] === "pytest" (exact tokens; not "-mpytest", not "-m
+ *      unittest") -> "pytest". No other `-m <module>` is recognized.
+ *   3. bin0 === "git" -> "git", bin0 === "rg" -> "rg", bin0 === "grep" ->
+ *      "grep".
+ *   4. anything else -> null.
+ */
+export function resolveCommandClass(command: string): CommandClass | null {
+  if (typeof command !== "string" || command.trim().length === 0) return null;
+  const leading = leadingCommandSegment(command);
+  const tokens = tokenizeLeadingSegment(leading);
+  if (tokens.length === 0) return null;
+  const bin0 = commandBasename(tokens[0] ?? "");
+  if (bin0 === "pytest") return "pytest";
+  if (bin0 === "python" || bin0 === "python3" || bin0 === "py") {
+    if (tokens[1] === "-m" && tokens[2] === "pytest") return "pytest";
+    return null;
+  }
+  if (bin0 === "git") return "git";
+  if (bin0 === "rg") return "rg";
+  if (bin0 === "grep") return "grep";
+  return null;
+}
+
 /**
  * Default size threshold when neither SECOND_BRAIN_RTD_THRESHOLD nor
  * context.toml [rtd] threshold_chars provides a value.
@@ -139,10 +222,14 @@ export function rtdEligibility(
   }
   const command = resolved.command;
   if (!command) return "command";
-  const firstToken = command.trim().split(/\s+/)[0] ?? "";
-  const lower = firstToken.toLowerCase();
+  // Part A: canonical-class resolution (leading segment only, single quoted
+  // first token, exact `-m pytest` recognition) replaces the old bare
+  // first-whitespace-token literal check, which never matched a quoted
+  // absolute interpreter path (e.g. this repo's own mandated venv-python
+  // invocation) nor `python -m pytest`.
+  const commandClass = resolveCommandClass(command);
   const commands = cfg?.whitelistCommands ?? RTD_COMMAND_PREFIXES;
-  if (!commands.some((prefix) => prefix === lower)) {
+  if (commandClass === null || !commands.some((prefix) => prefix === commandClass)) {
     return "command";
   }
   return "ok";
@@ -581,9 +668,12 @@ export async function runRtd(options: RtdSubstitutionOptions): Promise<RtdRunRes
   // Phase C: resolve command class through the same host-tool
   // normalization used for eligibility, so a real ipython+%%bash pytest
   // call reports command=pytest in the RTD block, not the bash fallback.
+  // Part A: use the same canonical-class resolver as eligibility (not a
+  // bare first-token split), so e.g. a quoted absolute venv-python `-m
+  // pytest` invocation still reports command=pytest (and therefore still
+  // gets pytest failure-evidence extraction), not command=python.
   const commandClass =
-    resolveToolClass(options.tool, options.input).command?.trim().split(/\s+/)[0]?.toLowerCase() ??
-    "bash";
+    resolveCommandClass(resolveToolClass(options.tool, options.input).command ?? "") ?? "bash";
   const baseRecord = (distill?: RtdDistillDetail): RtdShadowRecord | null =>
     rtdShadowRecord({
       session: options.session,

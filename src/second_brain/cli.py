@@ -884,6 +884,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     vm_st.add_argument("--summary", default="", help="optional short summary")
     vm_st.add_argument("--pinned", action="store_true", help="pin object to avoid eviction")
+    vm_st.add_argument(
+        "--metadata",
+        default=None,
+        help="JSON object merged into the stored object's metadata (e.g. "
+        '\'{"toolCallId": "..."}\' or \'{"deliveryId": "..."}\'); '
+        "threads into VMemStore.store_object's existing metadata field",
+    )
     vm_st.add_argument("--json", action="store_true", help="output JSON")
 
     vm_ls = vms.add_parser("list", parents=[home_parent], help="list session objects")
@@ -900,6 +907,20 @@ def _parser() -> argparse.ArgumentParser:
     vm_pg.add_argument("session_id", help="host session ID")
     vm_pg.add_argument("obj_id", help="object ID (e.g. obj-123456789abc)")
     vm_pg.add_argument("--json", action="store_true", help="output JSON")
+
+    # Part D (RC4 pass): additive, does NOT change `page`'s existing contract
+    # above. `resolve` fault-in's the object via the same VMemStore.fault_in
+    # AND then resolves it through its durable backing source (deliveries+
+    # memories for RESEARCH_RESULT, the artifact store for TOOL_OBSERVATION,
+    # raw passthrough otherwise) — see vmem.resolve_object.
+    vm_rs = vms.add_parser(
+        "resolve",
+        parents=[home_parent],
+        help="fault-in an object AND resolve it through its durable backing source",
+    )
+    vm_rs.add_argument("session_id", help="host session ID")
+    vm_rs.add_argument("obj_id", help="object ID (e.g. obj-123456789abc)")
+    vm_rs.add_argument("--json", action="store_true", help="output JSON")
 
     vm_hc = vms.add_parser("hot-context", parents=[home_parent], help="render minimal hot context")
     vm_hc.add_argument("session_id", help="host session ID")
@@ -3565,12 +3586,24 @@ def cmd_vmem(args) -> int:
         else:
             content = sys.stdin.read()
 
+        metadata = None
+        if args.metadata:
+            try:
+                metadata = json.loads(args.metadata)
+            except json.JSONDecodeError as exc:
+                print(f"Error: --metadata must be valid JSON: {exc}", file=sys.stderr)
+                return 2
+            if not isinstance(metadata, dict):
+                print("Error: --metadata must be a JSON object", file=sys.stderr)
+                return 2
+
         obj = store.store_object(
             kind=args.kind,
             title=args.title,
             content=content,
             summary=args.summary,
             pinned=args.pinned,
+            metadata=metadata,
         )
         if args.json:
             print(json.dumps(obj.to_dict(), indent=2))
@@ -3608,6 +3641,21 @@ def cmd_vmem(args) -> int:
         except BrainError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
+
+    if args.vmem_command == "resolve":
+        # Part D: additive, does not reuse/alter the `page` branch above.
+        # resolve_object() never raises (fails open with {"ok": False,
+        # "error": ...}) — this branch only decides how to present that
+        # result, it never needs its own BrainError handling.
+        result = vmem.resolve_object(home, args.session_id, args.obj_id)
+        if args.json:
+            print(json.dumps(result, indent=2))
+            return 0 if result.get("ok") else 1
+        if not result.get("ok"):
+            print(f"Error: {result.get('error', 'resolve failed')}", file=sys.stderr)
+            return 2
+        sys.stdout.write(str(result.get("content", "")))
+        return 0
 
     if args.vmem_command == "hot-context":
         res = store.render_hot_context(max_tokens=args.budget)

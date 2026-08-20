@@ -9,12 +9,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+const execFileSyncMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
+  execFileSync: execFileSyncMock,
+}));
 
-import { runVmemCompactPrep, runVmemHotContext, runVmemStore } from "../src/vmem";
+import {
+  runVmemCompactPrep,
+  runVmemHotContext,
+  runVmemListSync,
+  runVmemResolve,
+  runVmemStore,
+} from "../src/vmem";
 
 beforeEach(() => {
   execFileMock.mockReset();
+  execFileSyncMock.mockReset();
 });
 
 afterEach(() => {
@@ -144,6 +155,44 @@ describe("runVmemStore", () => {
     ]);
   });
 
+  it("Part C: passes --metadata <json> when provided (correlation keys only)", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      capturedArgs = args as string[];
+      cb(null, JSON.stringify({ obj_id: "obj-meta" }));
+      return { stdin: { write: () => {}, end: () => {} } };
+    });
+
+    await runVmemStore({
+      home,
+      hostSessionId: "sess-5",
+      kind: "TOOL_OBSERVATION",
+      title: "rtd_artifact",
+      content: "{}",
+      metadata: { toolCallId: "call-abc" },
+    });
+
+    expect(capturedArgs).toEqual([
+      "-m", "second_brain", "vmem", "store", "sess-5", "TOOL_OBSERVATION", "rtd_artifact",
+      "--json", "--metadata", JSON.stringify({ toolCallId: "call-abc" }),
+    ]);
+  });
+
+  it("Part C: omits --metadata entirely when not provided (absent flag, unchanged default)", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      capturedArgs = args as string[];
+      cb(null, JSON.stringify({ obj_id: "obj-nometa" }));
+      return { stdin: { write: () => {}, end: () => {} } };
+    });
+
+    await runVmemStore({ home, hostSessionId: "sess-6", kind: "GENERIC", title: "t", content: "c" });
+
+    expect(capturedArgs).not.toContain("--metadata");
+  });
+
   it("fails open (ok:false) when no venv exists", async () => {
     const result = await runVmemStore({
       home: "H:/no-such-home",
@@ -241,5 +290,147 @@ describe("runVmemHotContext", () => {
     fakeSpawn({ error: new Error("boom") });
     const result = await runVmemHotContext({ home, hostSessionId: "sess-2", budgetTokens: 1500 });
     expect(result).toEqual({ ok: false, error: "boom" });
+  });
+});
+
+describe("runVmemListSync (Part B/C — the only synchronous subprocess call)", () => {
+  it("spawns env-clean `vmem list <session> --state <state> --json` (sync) and parses objects", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    let capturedEnv: Record<string, string | undefined> = {};
+    execFileSyncMock.mockImplementation((_py, args, opts) => {
+      capturedArgs = args as string[];
+      capturedEnv = (opts as { env: Record<string, string | undefined> }).env;
+      return JSON.stringify([
+        { obj_id: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+        { obj_id: "obj-2", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } },
+      ]);
+    });
+
+    const result = runVmemListSync({ home, hostSessionId: "sess-1", state: "EVICTED" });
+
+    expect(capturedArgs).toEqual([
+      "-m", "second_brain", "vmem", "list", "sess-1", "--json", "--state", "EVICTED",
+    ]);
+    expect(capturedEnv.SECOND_BRAIN_HOME).toBe(home);
+    expect(capturedEnv.PYTHONHOME).toBeUndefined();
+    expect(capturedEnv.PYTHONPATH).toBeUndefined();
+    expect(result).toEqual({
+      ok: true,
+      objects: [
+        { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+        { objId: "obj-2", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } },
+      ],
+    });
+  });
+
+  it("omits --state when not provided", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    execFileSyncMock.mockImplementation((_py, args) => {
+      capturedArgs = args as string[];
+      return "[]";
+    });
+    runVmemListSync({ home, hostSessionId: "sess-2" });
+    expect(capturedArgs).toEqual(["-m", "second_brain", "vmem", "list", "sess-2", "--json"]);
+  });
+
+  it("objects missing obj_id/kind are dropped; missing/non-object metadata defaults to {}", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() =>
+      JSON.stringify([
+        { obj_id: "obj-1", kind: "RESEARCH_RESULT" }, // no metadata -> {}
+        { obj_id: "obj-2", kind: "GENERIC", metadata: ["not", "an", "object"] }, // -> {}
+        { kind: "GENERIC", metadata: {} }, // missing obj_id -> dropped
+        { obj_id: "obj-4" }, // missing kind -> dropped
+        "not even an object", // dropped
+      ]),
+    );
+    const result = runVmemListSync({ home, hostSessionId: "sess-3" });
+    expect(result.ok).toBe(true);
+    expect(result.objects).toEqual([
+      { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: {} },
+      { objId: "obj-2", kind: "GENERIC", metadata: {} },
+    ]);
+  });
+
+  it("fails open (ok:false) when no venv exists, never throws", async () => {
+    const result = runVmemListSync({ home: "H:/no-such-home", hostSessionId: "sess-1" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no brain venv/);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("fails open on subprocess error (e.g. timeout), never throws", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("Command timed out");
+    });
+    const result = runVmemListSync({ home, hostSessionId: "sess-1" });
+    expect(result).toEqual({ ok: false, error: "Command timed out" });
+  });
+
+  it("fails open on unparsable/non-array stdout, never throws", async () => {
+    const { home } = await fakeHome();
+    execFileSyncMock.mockImplementation(() => "not json");
+    const bad1 = runVmemListSync({ home, hostSessionId: "sess-1" });
+    expect(bad1.ok).toBe(false);
+
+    execFileSyncMock.mockImplementation(() => JSON.stringify({ not: "an array" }));
+    const bad2 = runVmemListSync({ home, hostSessionId: "sess-1" });
+    expect(bad2).toEqual({ ok: false, error: "list returned non-array output" });
+  });
+});
+
+describe("runVmemResolve (Part D — explicit fault-in bridge, exported/tested, not auto-wired)", () => {
+  it("spawns env-clean `vmem resolve <session> <obj_id> --json` and parses a success result", async () => {
+    const { home } = await fakeHome();
+    let capturedArgs: string[] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      capturedArgs = args as string[];
+      cb(null, JSON.stringify({ ok: true, content: "resolved text", resolution: "artifact" }));
+    });
+
+    const result = await runVmemResolve({ home, hostSessionId: "sess-1", objId: "obj-1" });
+
+    expect(capturedArgs).toEqual(["-m", "second_brain", "vmem", "resolve", "sess-1", "obj-1", "--json"]);
+    expect(result).toEqual({ ok: true, content: "resolved text", resolution: "artifact", error: undefined });
+  });
+
+  it("parses a structured {ok:false} result even when the CLI exits non-zero", async () => {
+    const { home } = await fakeHome();
+    const exitError = Object.assign(new Error("Command failed"), { code: 1 });
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+      cb(exitError, JSON.stringify({ ok: false, error: "delivery not found: del-x" }));
+    });
+
+    const result = await runVmemResolve({ home, hostSessionId: "sess-1", objId: "obj-1" });
+    expect(result).toEqual({ ok: false, content: undefined, resolution: undefined, error: "delivery not found: del-x" });
+  });
+
+  it("fails open (ok:false) when no venv exists, never throws", async () => {
+    const result = await runVmemResolve({ home: "H:/no-such-home", hostSessionId: "sess-1", objId: "obj-1" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no brain venv/);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("fails open on subprocess error with unparsable stdout, never throws", async () => {
+    const { home } = await fakeHome();
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+      cb(new Error("spawn failed"), "");
+    });
+    const result = await runVmemResolve({ home, hostSessionId: "sess-1", objId: "obj-1" });
+    expect(result).toEqual({ ok: false, error: "spawn failed" });
+  });
+
+  it("fails open on completely unparsable stdout with no spawn error, never throws", async () => {
+    const { home } = await fakeHome();
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+      cb(null, "not json at all");
+    });
+    const result = await runVmemResolve({ home, hostSessionId: "sess-1", objId: "obj-1" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/unparsable/);
   });
 });

@@ -617,3 +617,38 @@ describe("measureContent modes (Phase 3 correction)", () => {
     expect(ctx).not.toContain("my reasoning was");
   });
 });
+
+describe("Part D: vmemFaultIn (privacy-safe fault-in telemetry)", () => {
+  it("records kind, resolution, and ok as a bool only — never obj_id/content", () => {
+    const record = sensors.vmemFaultIn(SESSION, "TOOL_OBSERVATION", "artifact", true);
+    expectBase(record, "vmem_fault_in");
+    expect(record.obj_kind).toBe("TOOL_OBSERVATION");
+    expect(record.resolution).toBe("artifact");
+    expect(record.ok).toBe(true);
+  });
+
+  it("coerces non-token obj_kind/resolution to null, non-true ok to false", () => {
+    const record = sensors.vmemFaultIn(SESSION, "this is not a short enum-like token at all", 42, "yes");
+    expect(record.obj_kind).toBeNull();
+    expect(record.resolution).toBeNull();
+    expect(record.ok).toBe(false);
+  });
+
+  it("only emits the four documented fields (v/ts/kind/session inherited via base + obj_kind/resolution/ok) — no extra surface for accidental content leakage", () => {
+    const record = sensors.vmemFaultIn(SESSION, "RESEARCH_RESULT", "memory", true);
+    expect(Object.keys(record).sort()).toEqual(["kind", "obj_kind", "ok", "resolution", "session", "ts", "v"]);
+  });
+});
+
+describe("Part B/E: contextPaging (privacy-safe paging-count telemetry)", () => {
+  it("records paged_count only — a count, never which elements or content", () => {
+    const record = sensors.contextPaging(SESSION, 2);
+    expectBase(record, "context_paging");
+    expect(record.paged_count).toBe(2);
+  });
+
+  it("coerces a non-number pagedCount to 0", () => {
+    expect(sensors.contextPaging(SESSION, "two" as unknown as number).paged_count).toBe(0);
+    expect(sensors.contextPaging(SESSION, undefined as unknown as number).paged_count).toBe(0);
+  });
+});

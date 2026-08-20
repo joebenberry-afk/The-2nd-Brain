@@ -374,3 +374,85 @@ export function loadVmemAdmissionConfig(home: string | null): VmemAdmissionFileC
     return vmemAdmissionConfigFromContextToml("");
   }
 }
+
+// ---------------------------------------------------------------------------
+// [context_paging] config surface (Part B/E, RC4 pass) — same tiny
+// TOML-subset parser style. Safe-by-default: enabled=false, INDEPENDENT of
+// [vmem]/[vmem_admission]/[context_structure] (all four may need to be true
+// for paging to have anything to page, but paging itself needs its own
+// top-level switch — see context-paging.ts).
+// ---------------------------------------------------------------------------
+
+/** Default: never page any of the last N live `event.messages` elements. */
+export const CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES = 6;
+/** Default: page nothing until eligible OLD content estimate exceeds this. */
+export const CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET = 4000;
+/** Default: hard cap on elements replaced in a single `context` call. */
+export const CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT = 3;
+
+/** Resolved [context_paging] configuration (defaults safe/conservative). */
+export interface ContextPagingFileConfig {
+  /** Master switch: pageContext() only ever returns a patch when true. */
+  enabled: boolean;
+  /** Never page any of the LAST N elements of event.messages (current-turn pin). */
+  pinRecentMessages: number;
+  /** Page nothing until estimated eligible OLD content exceeds this (tokens). */
+  residentTokenBudget: number;
+  /** Hard cap on how many elements may be replaced in one `context` call. */
+  maxPagesPerContextEvent: number;
+}
+
+/**
+ * Parse the `[context_paging]` section of config/context.toml.
+ * Missing/invalid values fall back to the documented conservative defaults
+ * (enabled=false). PURE, never throws, never reads fs.
+ */
+export function contextPagingConfigFromContextToml(text: string): ContextPagingFileConfig {
+  let inSection = false;
+  let enabled = false;
+  let pinRecentMessages = CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES;
+  let residentTokenBudget = CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET;
+  let maxPagesPerContextEvent = CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inSection = line.startsWith("[context_paging]");
+      continue;
+    }
+    if (!inSection || line === "" || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).split("#")[0].trim();
+    if (key === "enabled") {
+      const v = value.toLowerCase();
+      enabled = v === "true" || v === "1" || v === "yes";
+    } else if (key === "pin_recent_messages") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) pinRecentMessages = parsed;
+    } else if (key === "resident_token_budget") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) residentTokenBudget = parsed;
+    } else if (key === "max_pages_per_context_event") {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed) && parsed >= 0) maxPagesPerContextEvent = parsed;
+    }
+  }
+  return { enabled, pinRecentMessages, residentTokenBudget, maxPagesPerContextEvent };
+}
+
+/**
+ * Load the full [context_paging] config from `<home>/config/context.toml`;
+ * missing or unreadable file returns the safe defaults (enabled=false).
+ * Never throws.
+ */
+export function loadContextPagingConfig(home: string | null): ContextPagingFileConfig {
+  if (!home) return contextPagingConfigFromContextToml("");
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return contextPagingConfigFromContextToml(text);
+  } catch {
+    return contextPagingConfigFromContextToml("");
+  }
+}
+

@@ -3,9 +3,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT,
+  CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES,
+  CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET,
   VMEM_DEFAULT_BUDGET_TOKENS,
+  contextPagingConfigFromContextToml,
   defaultBrainHome,
   loadConfig,
+  loadContextPagingConfig,
   loadVmemConfig,
   observabilityDisabledByEnv,
   resolveBrainHome,
@@ -216,6 +221,86 @@ describe("loadVmemConfig (file read, never throws)", () => {
     const home = await mkdtemp(join(tmpdir(), "sb-cfg-vmem-"));
     try {
       expect(loadVmemConfig(home)).toEqual({ enabled: false, budgetTokens: VMEM_DEFAULT_BUDGET_TOKENS });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("contextPagingConfigFromContextToml (Part B/E — conservative defaults)", () => {
+  it("defaults are safe (enabled=false) when the section is absent", () => {
+    expect(contextPagingConfigFromContextToml("[vmem]\nenabled = true\n")).toEqual({
+      enabled: false,
+      pinRecentMessages: CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES,
+      residentTokenBudget: CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET,
+      maxPagesPerContextEvent: CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT,
+    });
+  });
+
+  it("parses enabled/pin_recent_messages/resident_token_budget/max_pages_per_context_event", () => {
+    const cfg = contextPagingConfigFromContextToml(
+      "[context_paging]\nenabled = true\npin_recent_messages = 10\n" +
+        "resident_token_budget = 999\nmax_pages_per_context_event = 7\n",
+    );
+    expect(cfg).toEqual({
+      enabled: true,
+      pinRecentMessages: 10,
+      residentTokenBudget: 999,
+      maxPagesPerContextEvent: 7,
+    });
+  });
+
+  it("invalid values fall back to the documented defaults", () => {
+    const cfg = contextPagingConfigFromContextToml(
+      "[context_paging]\nenabled = banana\npin_recent_messages = -1\n" +
+        'resident_token_budget = "nope"\nmax_pages_per_context_event = -5\n',
+    );
+    expect(cfg).toEqual({
+      enabled: false,
+      pinRecentMessages: CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES,
+      residentTokenBudget: CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET,
+      maxPagesPerContextEvent: CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT,
+    });
+  });
+});
+
+describe("loadContextPagingConfig (file read, never throws)", () => {
+  it("reads <home>/config/context.toml [context_paging]", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-ctxpaging-"));
+    try {
+      await mkdir(join(home, "config"), { recursive: true });
+      await writeFile(
+        join(home, "config", "context.toml"),
+        "[context_paging]\nenabled = true\npin_recent_messages = 8\n" +
+          "resident_token_budget = 2000\nmax_pages_per_context_event = 2\n",
+        "utf8",
+      );
+      expect(loadContextPagingConfig(home)).toEqual({
+        enabled: true,
+        pinRecentMessages: 8,
+        residentTokenBudget: 2000,
+        maxPagesPerContextEvent: 2,
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns safe defaults for null home or missing file", async () => {
+    expect(loadContextPagingConfig(null)).toEqual({
+      enabled: false,
+      pinRecentMessages: CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES,
+      residentTokenBudget: CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET,
+      maxPagesPerContextEvent: CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT,
+    });
+    const home = await mkdtemp(join(tmpdir(), "sb-cfg-ctxpaging-"));
+    try {
+      expect(loadContextPagingConfig(home)).toEqual({
+        enabled: false,
+        pinRecentMessages: CONTEXT_PAGING_DEFAULT_PIN_RECENT_MESSAGES,
+        residentTokenBudget: CONTEXT_PAGING_DEFAULT_RESIDENT_TOKEN_BUDGET,
+        maxPagesPerContextEvent: CONTEXT_PAGING_DEFAULT_MAX_PAGES_PER_EVENT,
+      });
     } finally {
       await rm(home, { recursive: true, force: true });
     }
