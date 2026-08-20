@@ -7,12 +7,60 @@ import sys
 
 import pytest
 
+from second_brain import db, semantic
 from second_brain.errors import BrainError
+from second_brain.paths import db_path
 from second_brain.vmem import (
     ResidencyState,
     SessionObjectKind,
     VMemStore,
+    resolve_object,
 )
+
+_CLEAN_ENV = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
+
+
+def _run_vmem_cli(args: list[str], brain_home) -> subprocess.CompletedProcess:
+    """Small DRY helper matching TestVMemCLI's existing subprocess pattern."""
+    return subprocess.run(
+        [sys.executable, "-m", "second_brain", "vmem", *args, "--home", str(brain_home)],
+        capture_output=True,
+        text=True,
+        env=_CLEAN_ENV,
+    )
+
+
+def _insert_delivery_row(
+    brain_home, delivery_id: str, memory_id: str, memory_version: int = 1
+) -> None:
+    """Insert one row into the real, durable `deliveries` table (control DB
+    `db/brain.sqlite`) — same table `autoinject.insert_deliveries` writes and
+    `_delivered_keys` reads. Direct SQL here mirrors that existing schema
+    exactly (no new table/abstraction) so the test does not need to drive
+    the full retrieval/injection pipeline just to produce one row."""
+    conn = db.connect(db_path(brain_home))
+    try:
+        conn.execute(
+            "INSERT INTO deliveries (delivery_id, root_session_id, agent_session_id, "
+            "branch_id, memory_id, memory_version, canonical_hash, packet_id, "
+            "delivered_event_id, delivered_at, superseded_by_delivery_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (
+                delivery_id,
+                "sess-resolve",
+                "sess-resolve",
+                "main",
+                memory_id,
+                memory_version,
+                "test-canonical-hash",
+                "pkt-test",
+                f"ev-{delivery_id}",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class TestVMemStorageAndResidency:
@@ -277,3 +325,292 @@ class TestVMemCLI:
         )
         assert page_res.returncode == 0
         assert "Discovered cache optimization via CLI" in page_res.stdout
+
+
+class TestVMemStoreMetadata:
+    """Part C: `--metadata` flag threads into VMemStore.store_object's
+    existing (previously unused-by-any-caller) `metadata` field."""
+
+    def test_metadata_roundtrips_through_store_and_list(self, brain_home):
+        store = VMemStore(brain_home, "sess-meta-1")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content="artifact pointer payload",
+            metadata={"toolCallId": "call-abc123"},
+        )
+        assert obj.metadata == {"toolCallId": "call-abc123"}
+
+        fetched = store.get_object(obj.obj_id)
+        assert fetched is not None
+        assert fetched.metadata == {"toolCallId": "call-abc123"}
+
+        listed = store.list_objects(kind=SessionObjectKind.TOOL_OBSERVATION)
+        assert len(listed) == 1
+        assert listed[0].metadata == {"toolCallId": "call-abc123"}
+
+    def test_absent_metadata_defaults_to_empty_dict(self, brain_home):
+        store = VMemStore(brain_home, "sess-meta-2")
+        obj = store.store_object(
+            kind=SessionObjectKind.GENERIC, title="no-metadata", content="plain"
+        )
+        assert obj.metadata == {}
+        refetched_default = store.get_object(obj.obj_id)
+        assert refetched_default is not None
+        assert refetched_default.metadata == {}
+
+    def test_cli_metadata_flag_roundtrips_through_store_and_list(self, brain_home, tmp_path):
+        content_file = tmp_path / "obs.txt"
+        content_file.write_text("cli metadata roundtrip content", encoding="utf-8")
+        store_res = _run_vmem_cli(
+            [
+                "store",
+                "sess-meta-cli",
+                "TOOL_OBSERVATION",
+                "rtd_artifact",
+                str(content_file),
+                "--metadata",
+                '{"toolCallId": "call-xyz"}',
+                "--json",
+            ],
+            brain_home,
+        )
+        assert store_res.returncode == 0, store_res.stderr
+        data = json.loads(store_res.stdout)
+        assert data["metadata"] == {"toolCallId": "call-xyz"}
+
+        list_res = _run_vmem_cli(["list", "sess-meta-cli", "--json"], brain_home)
+        assert list_res.returncode == 0
+        items = json.loads(list_res.stdout)
+        assert items[0]["metadata"] == {"toolCallId": "call-xyz"}
+
+    def test_cli_metadata_flag_absent_defaults_to_empty_dict(self, brain_home, tmp_path):
+        content_file = tmp_path / "obs2.txt"
+        content_file.write_text("no metadata here", encoding="utf-8")
+        store_res = _run_vmem_cli(
+            ["store", "sess-meta-cli-2", "GENERIC", "plain", str(content_file), "--json"],
+            brain_home,
+        )
+        assert store_res.returncode == 0, store_res.stderr
+        data = json.loads(store_res.stdout)
+        assert data["metadata"] == {}
+
+    def test_cli_metadata_flag_rejects_invalid_json(self, brain_home, tmp_path):
+        content_file = tmp_path / "obs3.txt"
+        content_file.write_text("x", encoding="utf-8")
+        store_res = _run_vmem_cli(
+            [
+                "store",
+                "sess-meta-cli-3",
+                "GENERIC",
+                "plain",
+                str(content_file),
+                "--metadata",
+                "not-json",
+                "--json",
+            ],
+            brain_home,
+        )
+        assert store_res.returncode != 0
+        assert "metadata" in store_res.stderr.lower()
+
+    def test_cli_metadata_flag_rejects_non_object_json(self, brain_home, tmp_path):
+        content_file = tmp_path / "obs4.txt"
+        content_file.write_text("x", encoding="utf-8")
+        store_res = _run_vmem_cli(
+            [
+                "store",
+                "sess-meta-cli-4",
+                "GENERIC",
+                "plain",
+                str(content_file),
+                "--metadata",
+                "[1, 2, 3]",
+                "--json",
+            ],
+            brain_home,
+        )
+        assert store_res.returncode != 0
+        assert "metadata" in store_res.stderr.lower()
+
+
+class TestVMemResolve:
+    """Part D: `vmem resolve` — explicit fault-in + durable backing
+    resolution (RESEARCH_RESULT -> deliveries+memories, TOOL_OBSERVATION ->
+    content-addressed artifact store, anything else -> raw passthrough).
+    Fails open and clearly on any missing/corrupt backing reference."""
+
+    def test_research_result_resolves_real_delivery_to_real_memory_content(self, brain_home):
+        memory_id = semantic.add_memory(
+            brain_home,
+            "Resolve Test Memory",
+            "Body text for the vmem resolve test.",
+            scope="global",
+        )
+        _insert_delivery_row(brain_home, "del-resolve-1", memory_id)
+
+        store = VMemStore(brain_home, "sess-resolve")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-resolve-1", "packet_tokens": 12}),
+            metadata={"deliveryId": "del-resolve-1"},
+        )
+        # Evict so this is a real EVICTED->fault-in cycle, not just RESIDENT.
+        store.evict_to_budget(max_tokens=0)
+        evicted = store.get_object(obj.obj_id)
+        assert evicted is not None
+        assert evicted.residency_state == ResidencyState.EVICTED
+
+        result = resolve_object(brain_home, "sess-resolve", obj.obj_id)
+        assert result["ok"] is True
+        assert result["resolution"] == "memory"
+        assert result["memory_id"] == memory_id
+        assert "Resolve Test Memory" in result["content"]
+        assert "Body text for the vmem resolve test." in result["content"]
+
+        # Fault-in transitioned residency (existing, reused fault_in()).
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.FAULTED_IN
+
+    def test_research_result_missing_delivery_is_structured_failure_not_a_crash(self, brain_home):
+        store = VMemStore(brain_home, "sess-resolve-2")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-does-not-exist"}),
+            metadata={"deliveryId": "del-does-not-exist"},
+        )
+        result = resolve_object(brain_home, "sess-resolve-2", obj.obj_id)
+        assert result["ok"] is False
+        assert "del-does-not-exist" in result["error"]
+
+    def test_tool_observation_resolves_byte_exact_via_artifact_store(self, brain_home):
+        from second_brain import artifacts
+
+        raw_text = "line one\nline two with éè unicode\n"
+        info = artifacts.store_text(brain_home, raw_text, kind="rtd_raw", tool="bash")
+
+        store = VMemStore(brain_home, "sess-resolve-3")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content=json.dumps({"artifact_ref": info["handle"], "command_class": "pytest"}),
+            metadata={"toolCallId": "call-1"},
+        )
+        store.evict_to_budget(max_tokens=0)
+
+        result = resolve_object(brain_home, "sess-resolve-3", obj.obj_id)
+        assert result["ok"] is True
+        assert result["resolution"] == "artifact"
+        assert result["byte_exact"] is True
+        assert result["content"] == raw_text  # BYTE-EXACT (round-tripped as text)
+
+    def test_tool_observation_missing_artifact_is_structured_failure_not_a_crash(self, brain_home):
+        store = VMemStore(brain_home, "sess-resolve-4")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content=json.dumps({"artifact_ref": "[brain-artifact:sha256:" + "a" * 64 + "]"}),
+            metadata={"toolCallId": "call-2"},
+        )
+        result = resolve_object(brain_home, "sess-resolve-4", obj.obj_id)
+        assert result["ok"] is False
+        assert "error" in result
+
+    def test_unparsable_metadata_and_content_is_structured_failure_not_a_crash(self, brain_home):
+        store = VMemStore(brain_home, "sess-resolve-5")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content="not json at all",
+        )
+        result = resolve_object(brain_home, "sess-resolve-5", obj.obj_id)
+        assert result["ok"] is False
+        assert "delivery_id" in result["error"]
+
+    def test_unknown_kind_is_raw_passthrough_not_a_crash(self, brain_home):
+        store = VMemStore(brain_home, "sess-resolve-6")
+        obj = store.store_object(
+            kind=SessionObjectKind.GENERIC,
+            title="scratch note",
+            content="plain unresolved content",
+        )
+        result = resolve_object(brain_home, "sess-resolve-6", obj.obj_id)
+        assert result["ok"] is True
+        assert result["resolution"] == "raw"
+        assert result["content"] == "plain unresolved content"
+
+    def test_unknown_obj_id_is_structured_failure_not_a_crash(self, brain_home):
+        result = resolve_object(brain_home, "sess-resolve-7", "obj-doesnotexist000")
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_page_subcommand_contract_is_unchanged(self, brain_home, tmp_path):
+        """Additive-only guardrail: `resolve` must not alter `page`'s
+        existing behavior/contract."""
+        content_file = tmp_path / "page.txt"
+        content_file.write_text("page contract unchanged", encoding="utf-8")
+        store_res = _run_vmem_cli(
+            ["store", "sess-page-1", "GENERIC", "plain", str(content_file), "--json"],
+            brain_home,
+        )
+        obj_id = json.loads(store_res.stdout)["obj_id"]
+        page_res = _run_vmem_cli(["page", "sess-page-1", obj_id], brain_home)
+        assert page_res.returncode == 0
+        assert page_res.stdout == "page contract unchanged"
+
+    def test_cli_resolve_research_result_json_mode(self, brain_home):
+        memory_id = semantic.add_memory(
+            brain_home, "CLI Resolve Memory", "CLI resolve body text.", scope="global"
+        )
+        _insert_delivery_row(brain_home, "del-cli-1", memory_id)
+        store = VMemStore(brain_home, "sess-resolve-cli-1")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-cli-1"}),
+            metadata={"deliveryId": "del-cli-1"},
+        )
+        res = _run_vmem_cli(["resolve", "sess-resolve-cli-1", obj.obj_id, "--json"], brain_home)
+        assert res.returncode == 0, res.stderr
+        data = json.loads(res.stdout)
+        assert data["ok"] is True
+        assert "CLI Resolve Memory" in data["content"]
+
+    def test_cli_resolve_tool_observation_text_mode_byte_exact(self, brain_home):
+        from second_brain import artifacts
+
+        raw_text = "byte exact CLI recovery text\nsecond line\n"
+        info = artifacts.store_text(brain_home, raw_text, kind="rtd_raw", tool="bash")
+        store = VMemStore(brain_home, "sess-resolve-cli-2")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="rtd_artifact",
+            content=json.dumps({"artifact_ref": info["handle"]}),
+            metadata={"toolCallId": "call-cli-2"},
+        )
+        res = _run_vmem_cli(["resolve", "sess-resolve-cli-2", obj.obj_id], brain_home)
+        assert res.returncode == 0, res.stderr
+        assert res.stdout == raw_text
+
+    def test_cli_resolve_failure_json_mode_structured_nonzero_exit(self, brain_home):
+        store = VMemStore(brain_home, "sess-resolve-cli-3")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-missing-cli"}),
+            metadata={"deliveryId": "del-missing-cli"},
+        )
+        res = _run_vmem_cli(["resolve", "sess-resolve-cli-3", obj.obj_id, "--json"], brain_home)
+        assert res.returncode != 0
+        data = json.loads(res.stdout)
+        assert data["ok"] is False
+        assert "error" in data
+
+    def test_cli_resolve_failure_text_mode_stderr_nonzero_exit_never_crashes(self, brain_home):
+        res = _run_vmem_cli(["resolve", "sess-resolve-cli-4", "obj-nope000000"], brain_home)
+        assert res.returncode != 0
+        assert "Error" in res.stderr
+        assert "Traceback" not in res.stderr  # never an unhandled exception

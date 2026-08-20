@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,8 +26,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, ledger, working_set
+from . import artifacts, contracts, db, ledger, semantic, working_set
 from .errors import BrainError
+from .paths import db_path as _control_db_path
 
 DEFAULT_HOT_CONTEXT_BUDGET_TOKENS = 1500
 MAX_REF_TABLE_ENTRIES = 25
@@ -525,3 +527,152 @@ class VMemStore:
         """
         hot_context = self.render_hot_context(max_tokens=max_tokens)
         return hot_context["rendered_text"]
+
+
+_ARTIFACT_HANDLE_RE = re.compile(r"\[brain-artifact:sha256:([0-9a-f]{64})\]")
+
+
+def _delivery_row(home: Path, delivery_id: str) -> dict[str, Any] | None:
+    """Read one row from the existing, durable `deliveries` table (control DB
+    `db/brain.sqlite`) — the same table/DB `autoinject.py`'s own
+    `_delivered_keys` already reads. Read-only; never mutates deliveries."""
+    conn = db.connect(_control_db_path(home), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT delivery_id, memory_id, memory_version FROM deliveries WHERE delivery_id = ?",
+            (delivery_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str) -> dict[str, Any]:
+    """RESEARCH_RESULT (Part D §2): delivery_id -> `deliveries` -> `memories`
+    (same `SELECT * FROM memories WHERE memory_id = ?` pattern already used
+    by reconsolidation.py/semantic.py, reused here via semantic.show_memory)
+    -> a compact, deterministic reconstruction. Need not be byte-identical to
+    the original packet text (memory content is itself durable/versioned)."""
+    delivery_id = obj.metadata.get("deliveryId") or obj.metadata.get("delivery_id")
+    if not isinstance(delivery_id, str) or not delivery_id:
+        try:
+            parsed = json.loads(stored_content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            delivery_id = parsed.get("delivery_id")
+    if not isinstance(delivery_id, str) or not delivery_id:
+        return {"ok": False, "error": "no resolvable delivery_id for this RESEARCH_RESULT object"}
+
+    delivery = _delivery_row(home, delivery_id)
+    if delivery is None:
+        return {"ok": False, "error": f"delivery not found: {delivery_id}"}
+
+    memory_id = delivery["memory_id"]
+    try:
+        shown = semantic.show_memory(home, memory_id)
+    except BrainError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    row = shown["row"]
+    rendering = contracts.canonical_json(
+        {
+            "delivery_id": delivery_id,
+            "memory_id": memory_id,
+            "delivered_version": delivery["memory_version"],
+            "current_version": row.get("current_version"),
+            "title": row.get("title"),
+            "status": row.get("status"),
+            "evidence_grade": row.get("evidence_grade"),
+            "scope": row.get("scope"),
+            "summary": row.get("summary"),
+            "body": shown["body"],
+        }
+    )
+    return {
+        "ok": True,
+        "resolution": "memory",
+        "delivery_id": delivery_id,
+        "memory_id": memory_id,
+        "content": rendering,
+    }
+
+
+def _resolve_tool_observation(
+    home: Path, obj: SessionObject, stored_content: str
+) -> dict[str, Any]:
+    """TOOL_OBSERVATION (Part D §2): artifact_ref -> the existing content-
+    addressed artifact store (`artifacts.expand`, the same read RTD's own
+    `/brain-expand` recovery path already uses) -> the BYTE-EXACT original
+    content. Decoded as UTF-8 here for the JSON/text CLI surface; RTD only
+    ever preserves text-only tool output (`textFromContent` in rtd.ts never
+    distills binary/image blocks), so real artifacts are always valid text."""
+    artifact_ref = obj.metadata.get("artifactRef") or obj.metadata.get("artifact_ref")
+    if not isinstance(artifact_ref, str) or not artifact_ref:
+        try:
+            parsed = json.loads(stored_content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            artifact_ref = parsed.get("artifact_ref")
+    if not isinstance(artifact_ref, str) or not artifact_ref:
+        return {"ok": False, "error": "no resolvable artifact_ref for this TOOL_OBSERVATION object"}
+
+    match = _ARTIFACT_HANDLE_RE.search(artifact_ref)
+    sha_or_prefix = match.group(1) if match else artifact_ref.strip()
+    try:
+        raw = artifacts.expand(home, sha_or_prefix)
+    except BrainError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return {"ok": False, "error": f"artifact content is not valid UTF-8 text: {exc}"}
+    return {
+        "ok": True,
+        "resolution": "artifact",
+        "artifact_ref": artifact_ref,
+        "content": text,
+        "byte_exact": True,
+    }
+
+
+def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, Any]:
+    """Explicit fault-in + durable backing resolution (Part D, RC4 pass).
+
+    1. Faults the object in via the existing, real, tested
+       `VMemStore.fault_in` (verifies existence, EVICTED->FAULTED_IN,
+       bumps access_count/priority) — reused unchanged.
+    2. Based on `obj.kind`, resolves further through the EXISTING durable
+       backing sources (Part C): RESEARCH_RESULT -> deliveries+memories;
+       TOOL_OBSERVATION -> the content-addressed artifact store (byte-exact);
+       anything else -> the raw stored content unchanged (no special
+       resolution attempted).
+    3. Fails open and clearly: ANY missing/corrupt backing reference
+       (unknown obj_id, delivery not found, memory row missing, artifact
+       hash not found, metadata unparsable) returns `{"ok": False, "error":
+       "..."}` — this function never raises.
+
+    No LLM summarizer anywhere in this path — deterministic resolution only.
+    """
+    home = Path(home)
+    try:
+        store = VMemStore(home, session_id)
+        obj, stored_content = store.fault_in(obj_id)
+    except BrainError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if obj.kind == SessionObjectKind.RESEARCH_RESULT:
+        result = _resolve_research_result(home, obj, stored_content)
+    elif obj.kind == SessionObjectKind.TOOL_OBSERVATION:
+        result = _resolve_tool_observation(home, obj, stored_content)
+    else:
+        # Not in scope for paging (Part B only pages RESEARCH_RESULT /
+        # TOOL_OBSERVATION) — no special resolution attempted, but the CLI
+        # must not crash on it: pass the raw stored content through.
+        result = {"ok": True, "resolution": "raw", "content": stored_content}
+
+    result["obj"] = obj.to_dict()
+    result["obj_id"] = obj.obj_id
+    result["kind"] = obj.kind.value
+    return result

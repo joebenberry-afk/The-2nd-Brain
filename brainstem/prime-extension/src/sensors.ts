@@ -305,6 +305,21 @@ export function context(session: string, messages: unknown): ContextRecord {
   }) as unknown as ContextRecord;
 }
 
+export interface ContextPagingRecord extends BaseRecord {
+  kind: "context_paging";
+  paged_count: number;
+}
+
+/** Part B/E: privacy-safe telemetry for a successful paging patch — a
+ * count only, never which elements, never any content. Appended ONLY when
+ * `pageContext` actually returned a patch (zero-mutation calls append
+ * nothing here, matching context_structure's additive-only convention). */
+export function contextPaging(session: string, pagedCount: unknown): ContextPagingRecord {
+  return base("context_paging", session, {
+    paged_count: typeof pagedCount === "number" ? pagedCount : 0,
+  }) as unknown as ContextPagingRecord;
+}
+
 // ---------------------------------------------------------------------------
 // [context_structure] structural telemetry (privacy-safe schema capture,
 // gated by config/context.toml [context_structure] enabled=false by
@@ -582,6 +597,31 @@ export function vmemHotContext(
     evicted_count: typeof evictedCount === "number" ? evictedCount : null,
     resident_tokens: typeof residentTokens === "number" ? residentTokens : null,
   }) as unknown as VmemHotContextRecord;
+}
+
+export interface VmemFaultInRecord extends BaseRecord {
+  kind: "vmem_fault_in";
+  /** SessionObjectKind (short enum token) or null — never obj_id, never content. */
+  obj_kind: string | null;
+  /** "memory" | "artifact" | "raw" | null — vmem.resolve_object's resolution path. */
+  resolution: string | null;
+  ok: boolean;
+}
+
+/** Part D: explicit fault-in telemetry (runVmemResolve call sites). Counts/
+ * kind/ok only, same privacy-safe style as vmemCompactPrep/vmemHotContext —
+ * never the resolved content, obj_id, delivery_id, or artifact_ref. */
+export function vmemFaultIn(
+  session: string,
+  objKind: unknown,
+  resolution: unknown,
+  ok: unknown,
+): VmemFaultInRecord {
+  return base("vmem_fault_in", session, {
+    obj_kind: recognizedToken(objKind),
+    resolution: recognizedToken(resolution),
+    ok: ok === true,
+  }) as unknown as VmemFaultInRecord;
 }
 
 export interface SessionShutdownRecord extends BaseRecord {

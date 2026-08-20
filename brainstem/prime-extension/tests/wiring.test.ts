@@ -18,9 +18,10 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
   return { ...actual, mirrorFireAndForget: mirrorFireAndForgetMock };
 });
 const runVmemStoreMock = vi.hoisted(() => vi.fn());
+const runVmemListSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/vmem", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/vmem")>();
-  return { ...actual, runVmemStore: runVmemStoreMock };
+  return { ...actual, runVmemStore: runVmemStoreMock, runVmemListSync: runVmemListSyncMock };
 });
 
 /**
@@ -57,6 +58,8 @@ beforeEach(async () => {
   mirrorFireAndForgetMock.mockReset();
   runVmemStoreMock.mockReset();
   runVmemStoreMock.mockResolvedValue({ ok: true, objId: "obj-test" });
+  runVmemListSyncMock.mockReset();
+  runVmemListSyncMock.mockReturnValue({ ok: true, objects: [] });
 });
 
 afterEach(async () => {
@@ -173,6 +176,25 @@ function enableRtdAndVmemAdmission(): void {
   writeFileSync(
     join(dir, "context.toml"),
     '[rtd]\nenabled = true\nthreshold_chars = 8000\nmax_distill_chars = 2000\nwhitelist_tools = ["bash"]\nwhitelist_commands = ["pytest", "git", "rg", "grep"]\n\n[vmem_admission]\nenabled = true\n',
+    "utf8",
+  );
+}
+
+/** Write config/context.toml with [context_paging] enabled=true (Part B/E
+ * activation switch), with small conservative overrides for deterministic
+ * wiring tests. */
+function enableContextPaging(
+  opts: { pinRecentMessages?: number; residentTokenBudget?: number; maxPagesPerContextEvent?: number } = {},
+): void {
+  const dir = join(tmp, "config");
+  mkdirSync(dir, { recursive: true });
+  const pin = opts.pinRecentMessages ?? 2;
+  const budget = opts.residentTokenBudget ?? 1;
+  const maxPages = opts.maxPagesPerContextEvent ?? 3;
+  writeFileSync(
+    join(dir, "context.toml"),
+    `[context_paging]\nenabled = true\npin_recent_messages = ${pin}\n` +
+      `resident_token_budget = ${budget}\nmax_pages_per_context_event = ${maxPages}\n`,
     "utf8",
   );
 }
@@ -1610,5 +1632,157 @@ describe("P3-B economics wiring", () => {
     const records = await waitForLines(1);
     expect(records[0].kind).toBe("extension_error");
     expect(records[0].error).toBe("usage boom");
+  });
+});
+
+describe("Part B/E: context paging wiring (real factory, [context_paging])", () => {
+  const AUTOINJECT_CUSTOM_TYPE = "brain.autoinject.packet";
+
+  function autoinjectMsg(deliveryId: string): unknown {
+    return {
+      role: "custom",
+      customType: AUTOINJECT_CUSTOM_TYPE,
+      content: "x".repeat(500),
+      display: true,
+      details: { delivery_id: deliveryId, packet_tokens: 100 },
+      timestamp: "2026-01-01T00:00:00Z",
+    };
+  }
+
+  function assistantMsg(): unknown {
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: "y".repeat(500) }],
+      api: "messages",
+      provider: "anthropic",
+      model: "claude",
+      usage: {},
+      stopReason: "end_turn",
+      timestamp: "2026-01-01T00:00:01Z",
+      responseId: "resp-1",
+    };
+  }
+
+  it("paging disabled (no [context_paging] section) -> always undefined even with eligible-looking input", async () => {
+    runVmemListSyncMock.mockReturnValue({
+      ok: true,
+      objects: [{ objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } }],
+    });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+    expect(runVmemListSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("current-turn pin window respected: an eligible element inside the pin window is never paged", async () => {
+    enableContextPaging({ pinRecentMessages: 3, residentTokenBudget: 1 });
+    runVmemListSyncMock.mockReturnValue({
+      ok: true,
+      objects: [{ objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } }],
+    });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    // Only 3 messages total, pin window is 3 -> pinFrom <= 0 -> nothing eligible.
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+  });
+
+  it("budget respected: below budget -> undefined, vmem list never called", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 999999 });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+    expect(runVmemListSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("max-pages cap respected: more eligible than the cap -> only the cap's worth replaced, patch actually returned", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1, maxPagesPerContextEvent: 1 });
+    runVmemListSyncMock.mockReturnValue({
+      ok: true,
+      objects: [
+        { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+        { objId: "obj-2", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-2" } },
+      ],
+    });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), autoinjectMsg("del-2"), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx) as
+      | { messages?: unknown[] }
+      | undefined;
+    expect(result).toBeDefined();
+    const patched = result!.messages as Array<Record<string, unknown>>;
+    expect(patched).toHaveLength(3);
+    // Exactly one of the two eligible elements was replaced (the cap = 1).
+    const replacedCount = patched.filter(
+      (m, i) => typeof m.content === "string" && (m.content as string).includes("[SECOND_BRAIN_VMEM]") && i < 2,
+    ).length;
+    expect(replacedCount).toBe(1);
+
+    const records = await waitForLines(1);
+    const paging = records.find((r) => r.kind === "context_paging");
+    expect(paging?.paged_count).toBe(1);
+  });
+
+  it("fail-open on a simulated vmem-list failure: undefined + extension_error, never throws", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListSyncMock.mockReturnValue({ ok: false, error: "simulated vmem list failure" });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+
+    let threw = false;
+    let result: unknown;
+    try {
+      result = handlers.get("context")!({ type: "context", messages }, ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    const errRec = records.find((r) => r.kind === "extension_error");
+    expect(errRec).toBeDefined();
+    expect(String(errRec?.error)).toContain("simulated vmem list failure");
+  });
+
+  it("fail-open on a throwing runVmemListSync mock: undefined + extension_error, never throws", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListSyncMock.mockImplementation(() => {
+      throw new Error("mock boom");
+    });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+
+    let threw = false;
+    let result: unknown;
+    try {
+      result = handlers.get("context")!({ type: "context", messages }, ctx);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toBeUndefined();
+
+    const records = await waitForLines(1);
+    const errRec = records.find((r) => r.kind === "extension_error");
+    expect(errRec).toBeDefined();
+  });
+
+  it("zero mutation when no eligible cold items exist: enabled + over budget but no EVICTED match -> undefined", async () => {
+    enableContextPaging({ pinRecentMessages: 1, residentTokenBudget: 1 });
+    runVmemListSyncMock.mockReturnValue({ ok: true, objects: [] });
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const messages = [autoinjectMsg("del-1"), assistantMsg(), assistantMsg()];
+    const result = handlers.get("context")!({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
   });
 });

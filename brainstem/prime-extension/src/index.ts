@@ -61,11 +61,13 @@ import {
 } from "./recall-gate";
 import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
 import {
+  loadContextPagingConfig,
   loadContextStructureConfig,
   loadRtdConfig,
   loadVmemAdmissionConfig,
   loadVmemConfig,
 } from "./config";
+import { pageContext } from "./context-paging";
 import { join } from "node:path";
 import {
   cliRtdPreserver,
@@ -649,14 +651,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // from any future mutation decision, exactly like before_agent_start /
   // tool_result / session_before_compact below.
   //
-  // No {messages} patch is returned yet. `event.messages` is typed
-  // `unknown[]` everywhere in this codebase (prime.d.ts, sensors.context
-  // above) because no live Prime session has ever captured the real message
-  // shape — synthesizing a replacement against a guessed shape risks
-  // corrupting every session's context, which the recovery plan's evidence
-  // rules forbid ("never fake it"). This handler is now CAPABLE of
-  // returning a patch; a live pilot must capture the real message shape
-  // before VMem-driven paging is implemented here.
+  // Part B (RC4 pass): pilot 2 (outputs/reports/rc4/12-real-prime-pilot-2.md
+  // "Observed context message schema") captured the REAL `event.messages`
+  // element shape for the first time — no more guessing. A bounded
+  // `{messages}` replacement patch is now implemented in context-paging.ts
+  // (`pageContext`), gated behind `[context_paging] enabled=false` by
+  // default (config/context.toml) and INDEPENDENT of [vmem]/
+  // [vmem_admission]/[context_structure]. Only two element classes are ever
+  // eligible for paging (see context-paging.ts's module docstring for the
+  // exact rules); everything else — including the entire current-turn pin
+  // window — passes through completely untouched, and the whole path is
+  // fail-open (Part E): any error returns the original messages unchanged
+  // and records an extension_error, never throws. NOTE: per
+  // types/prime.d.ts, this handler's real host contract is SYNCHRONOUS
+  // (`ContextEventResult | undefined`, no `Promise` variant, unlike
+  // before_agent_start) — `pageContext` and its one VMem correlation query
+  // are synchronous for that reason (see vmem.ts `runVmemListSync`).
   pi.on("context", (event, ctx) => {
     let session = "unknown";
     try {
@@ -669,6 +679,38 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(sensors.contextStructure(session, event.messages));
       }
     } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — measurement must not crash the session.
+      }
+    }
+    // Part B/E (RC4 pass): [context_paging] enabled=false by default — see
+    // config/context.toml. `pageContext` is synchronous and NEVER throws
+    // (Part E fail-open); it only ever returns a patch for the two eligible
+    // classes documented in context-paging.ts, bounded by the current-turn
+    // pin window, the resident token budget, and the per-event page cap.
+    try {
+      const pagingCfg = loadContextPagingConfig(config.home);
+      if (pagingCfg.enabled && Array.isArray(event.messages)) {
+        const paged = pageContext({
+          home: config.home ?? "",
+          hostSessionId: session,
+          messages: event.messages,
+          cfg: pagingCfg,
+        });
+        if (paged.error !== undefined) {
+          getStore(session)?.append(
+            mirrorExtensionError(session, `context paging failed: ${paged.error}`),
+          );
+        } else if (paged.messages !== undefined) {
+          getStore(session)?.append(sensors.contextPaging(session, paged.pagedCount));
+          return { messages: paged.messages };
+        }
+      }
+    } catch (error) {
+      // Part E fail-open: this try/catch must never let a paging failure
+      // reach the host — same discipline as every other handler here.
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
       } catch {

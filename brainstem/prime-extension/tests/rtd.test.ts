@@ -9,6 +9,7 @@ import {
   distillText,
   parseThreshold,
   pytestEvidence,
+  resolveCommandClass,
   resolveToolClass,
   rtdEligibility,
   rtdShadowRecord,
@@ -60,6 +61,108 @@ describe("rtdEligibility (decided without touching content)", () => {
     expect(rtdEligibility("bash", { command: "" })).toBe("command");
     expect(rtdEligibility("bash", {})).toBe("command");
     expect(rtdEligibility("bash", undefined)).toBe("command");
+  });
+});
+
+describe("resolveCommandClass (Part A: canonical-command resolver, RC4 pass)", () => {
+  it("real pilot-2 case: quoted absolute venv-python path + -m pytest", () => {
+    const cmd =
+      '"C:\\Users\\assas\\Documents\\The-Second-Brain\\.venv\\Scripts\\python.exe" -m pytest -vv';
+    expect(resolveCommandClass(cmd)).toBe("pytest");
+  });
+
+  it("unquoted python[.exe] -m pytest variants", () => {
+    expect(resolveCommandClass("python -m pytest tests/")).toBe("pytest");
+    expect(resolveCommandClass("python.exe -m pytest tests/")).toBe("pytest");
+    expect(resolveCommandClass("python3 -m pytest")).toBe("pytest");
+    expect(resolveCommandClass("py -m pytest")).toBe("pytest");
+    expect(resolveCommandClass("PYTHON -m pytest")).toBe("pytest"); // case-insensitive bin0
+  });
+
+  it("a genuine pytest invocation resolves via bin0, not via any substring occurrence of the word pytest", () => {
+    expect(resolveCommandClass('pytest -k "something with pytest in the arg" -v')).toBe("pytest");
+  });
+
+  it("the word pytest appearing in an unrelated command's argument does not make it eligible", () => {
+    expect(resolveCommandClass('echo "run pytest now"')).toBeNull();
+  });
+
+  it("arbitrary python -m <module> is NOT classified as pytest", () => {
+    expect(resolveCommandClass("python -m unittest")).toBeNull();
+    expect(resolveCommandClass("python -m anything_else")).toBeNull();
+  });
+
+  it("malformed -mpytest (single token, no space) is not recognized", () => {
+    expect(resolveCommandClass("python -mpytest")).toBeNull();
+  });
+
+  it("shell chaining: only the LEADING segment is ever inspected, in both directions", () => {
+    expect(resolveCommandClass("pytest -v && rm -rf /tmp/x")).toBe("pytest");
+    expect(resolveCommandClass("rm -rf /tmp/x && pytest -v")).toBeNull();
+    expect(resolveCommandClass("pytest -v; rm -rf /tmp/x")).toBe("pytest");
+    expect(resolveCommandClass("pytest -v | tee out.log")).toBe("pytest");
+    expect(resolveCommandClass("pytest -v > out.log")).toBe("pytest");
+    expect(resolveCommandClass("echo hi && pytest -v")).toBeNull();
+  });
+
+  it("direct git/rg/grep classification is unchanged", () => {
+    expect(resolveCommandClass("git status")).toBe("git");
+    expect(resolveCommandClass("rg pattern src/")).toBe("rg");
+    expect(resolveCommandClass("grep -rn foo")).toBe("grep");
+  });
+
+  it("empty/whitespace-only/unrecognized commands resolve to null", () => {
+    expect(resolveCommandClass("")).toBeNull();
+    expect(resolveCommandClass("   ")).toBeNull();
+    expect(resolveCommandClass("ls -la")).toBeNull();
+    expect(resolveCommandClass("node script.js")).toBeNull();
+  });
+});
+
+describe("rtdEligibility (Part A: real pilot-2 command-classification fix)", () => {
+  it("quoted absolute Windows venv-python path + -m pytest is eligible at size, ineligible-by-size below it", () => {
+    const cmd =
+      '"C:\\Users\\assas\\Documents\\The-Second-Brain\\.venv\\Scripts\\python.exe" -m pytest -vv';
+    expect(rtdEligibility("bash", { command: cmd })).toBe("ok");
+    expect(shouldDistill(bashEvent(cmd), 8000, M_BIG)).toEqual({ trigger: true, reason: "ok" });
+    expect(shouldDistill(bashEvent(cmd), 8000, M_SMALL)).toEqual({ trigger: false, reason: "size" });
+  });
+
+  it("python -m pytest / python.exe -m pytest (unquoted) are eligible", () => {
+    expect(rtdEligibility("bash", { command: "python -m pytest tests/" })).toBe("ok");
+    expect(rtdEligibility("bash", { command: "python.exe -m pytest tests/" })).toBe("ok");
+  });
+
+  it("pytest -k with the word pytest inside the arg is eligible via bin0, not substring", () => {
+    expect(
+      rtdEligibility("bash", { command: 'pytest -k "something with pytest in the arg" -v' }),
+    ).toBe("ok");
+  });
+
+  it("echo with the word pytest in the arg is ineligible (command) — bin0 is echo", () => {
+    expect(rtdEligibility("bash", { command: 'echo "run pytest now"' })).toBe("command");
+  });
+
+  it("python -m unittest / python -m anything_else are ineligible (command)", () => {
+    expect(rtdEligibility("bash", { command: "python -m unittest" })).toBe("command");
+    expect(rtdEligibility("bash", { command: "python -m anything_else" })).toBe("command");
+  });
+
+  it("malformed python -mpytest (single token) is ineligible (command)", () => {
+    expect(rtdEligibility("bash", { command: "python -mpytest" })).toBe("command");
+  });
+
+  it("shell chaining cannot smuggle in or block eligibility from the wrong segment", () => {
+    expect(rtdEligibility("bash", { command: "pytest -v && rm -rf /tmp/x" })).toBe("ok");
+    expect(rtdEligibility("bash", { command: "rm -rf /tmp/x && pytest -v" })).toBe("command");
+  });
+
+  it("regression: plain-Python ipython cell (no %%bash header) still resolves via resolveToolClass, reason command", () => {
+    expect(rtdEligibility("ipython", { code: "print(1)" })).toBe("command");
+  });
+
+  it("regression: real bash tool with a plain git status is still eligible (git), unchanged", () => {
+    expect(rtdEligibility("bash", { command: "git status" })).toBe("ok");
   });
 });
 
