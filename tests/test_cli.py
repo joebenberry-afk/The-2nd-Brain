@@ -14,7 +14,9 @@ def _env():
     return env
 
 
-def run_cli(home: Path, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+def run_cli(
+    home: Path, *args: str, cwd: Path | None = None, stdin: str | None = None
+) -> subprocess.CompletedProcess:
     home.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],
@@ -23,6 +25,7 @@ def run_cli(home: Path, *args: str, cwd: Path | None = None) -> subprocess.Compl
         env=_env(),
         cwd=cwd or home,
         timeout=120,
+        input=stdin,
     )
 
 
@@ -359,3 +362,63 @@ def test_fresh_verifier_record_missing_raw_response_file_errors(tmp_path):
     )
     assert r.returncode == 2
     assert "not found" in r.stderr.lower()
+
+
+def test_vmem_claim_pages_cli_end_to_end(tmp_path):
+    """Defect B (RC4 proactive-paging-repair pass): `second_brain vmem
+    claim-pages <session> [--json]` reads a small bounded JSON payload from
+    stdin and prints exactly the obj_ids actually claimed."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    content_file = tmp_path / "finding.txt"
+    content_file.write_text("proactive paging target", encoding="utf-8")
+    store_res = run_cli(
+        home, "vmem", "store", "sess-claim-cli", "RESEARCH_RESULT", "Claim target",
+        str(content_file), "--json",
+    )
+    assert store_res.returncode == 0, store_res.stderr
+    obj_id = json.loads(store_res.stdout)["obj_id"]
+
+    claim_res = run_cli(
+        home, "vmem", "claim-pages", "sess-claim-cli", "--json",
+        stdin=json.dumps({"candidates": [{"obj_id": obj_id, "kind": "RESEARCH_RESULT"}]}),
+    )
+    assert claim_res.returncode == 0, claim_res.stderr
+    assert json.loads(claim_res.stdout) == [obj_id]
+
+    list_res = run_cli(home, "vmem", "list", "sess-claim-cli", "--json")
+    assert list_res.returncode == 0
+    items = json.loads(list_res.stdout)
+    assert items[0]["obj_id"] == obj_id
+    assert items[0]["residency_state"] == "EVICTED"
+
+
+def test_vmem_claim_pages_cli_second_claim_of_same_object_is_not_claimed_again(tmp_path):
+    """CAS regression at the CLI layer: a second `claim-pages` request for
+    an already-EVICTED object reports it as NOT claimed -- deterministic,
+    safe, idempotent, no error."""
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    content_file = tmp_path / "finding.txt"
+    content_file.write_text("race target", encoding="utf-8")
+    store_res = run_cli(
+        home, "vmem", "store", "sess-claim-cli-race", "RESEARCH_RESULT", "Race target",
+        str(content_file), "--json",
+    )
+    obj_id = json.loads(store_res.stdout)["obj_id"]
+    payload = json.dumps({"candidates": [{"obj_id": obj_id, "kind": "RESEARCH_RESULT"}]})
+
+    first = run_cli(home, "vmem", "claim-pages", "sess-claim-cli-race", "--json", stdin=payload)
+    second = run_cli(home, "vmem", "claim-pages", "sess-claim-cli-race", "--json", stdin=payload)
+    assert json.loads(first.stdout) == [obj_id]
+    assert json.loads(second.stdout) == []
+
+
+def test_vmem_claim_pages_cli_malformed_stdin_errors_cleanly(tmp_path):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    r = run_cli(home, "vmem", "claim-pages", "sess-claim-cli-bad", stdin="not json at all")
+    assert r.returncode == 2
+    assert "JSON" in r.stderr

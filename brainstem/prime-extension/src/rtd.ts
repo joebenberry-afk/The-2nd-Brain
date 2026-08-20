@@ -189,7 +189,34 @@ export function resolveToolClass(toolName: unknown, input: unknown): ResolvedToo
       return { toolClass: "bash" }; // plain Python cell: no %%bash header, no command
     }
     i += 1;
-    while (i < lines.length && (lines[i] ?? "").trim() === "") i += 1;
+    // RC4 proactive-paging-repair, Defect A: a real multi-statement %%bash
+    // cell on this machine routinely prefixes the real target command with
+    // a documented environment-workaround prelude (AGENTS.md: `unset
+    // PYTHONHOME` / `unset PYTHONPATH`). The OLD code only ever looked at
+    // the first non-empty line after the header, so it read `unset
+    // PYTHONHOME` as "the command" and never reached the real invocation
+    // two lines later (Pilot 3's exact, reproduced root cause).
+    //
+    // Narrow, deterministic "approved-prelude grammar" (NOT arbitrary
+    // scanning, NOT a substring/`.includes()` search for a known command
+    // name anywhere in the cell): skip blank lines, comment-only lines
+    // (trimmed content starts with `#`), and EXACT, case-sensitive matches
+    // of a tiny fixed allowlist of prelude statements — any mix, any
+    // order, any count — until the FIRST line that is none of those. That
+    // line, and only that line, becomes "the command" fed to the existing
+    // canonical resolver. An unrecognized statement before the real target
+    // command is never skipped past looking for a later match — it simply
+    // becomes "the command" itself (and fails closed via the existing
+    // resolver, exactly like today for `echo hello` or `rm something`).
+    const APPROVED_BASH_PRELUDE_LINES = new Set<string>(["unset PYTHONHOME", "unset PYTHONPATH"]);
+    while (i < lines.length) {
+      const trimmedLine = (lines[i] ?? "").trim();
+      if (trimmedLine === "" || trimmedLine.startsWith("#") || APPROVED_BASH_PRELUDE_LINES.has(trimmedLine)) {
+        i += 1;
+        continue;
+      }
+      break;
+    }
     const candidate = i < lines.length ? (lines[i] ?? "").trim() : "";
     return { toolClass: "bash", command: candidate.length > 0 ? candidate : undefined };
   }

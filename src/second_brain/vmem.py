@@ -407,6 +407,87 @@ class VMemStore:
         obj = self._mutate_fault_in(obj)
         return obj, content
 
+    def claim_pages(self, requests: list[dict[str, Any]]) -> list[str]:
+        """
+        Proactive (pre-compaction) paging claim (RC4 proactive-paging-repair
+        pass, Defect B). Prime's own context-paging pass
+        (`context-paging.ts` `pageContext`, TS side) needs to be able to
+        cause the RESIDENT/FAULTED_IN -> EVICTED transition ITSELF, before a
+        real compaction event ever runs `prepare_compaction()` — Pilot 3
+        (outputs/reports/rc4/13-real-prime-pilot-3.md) found that objects
+        only ever became EVICTED at the SAME moment Prime's own compaction
+        removed the corresponding live message from context entirely, so a
+        pager that only ever looked for already-EVICTED objects could never
+        find a real match.
+
+        For EACH requested `{"obj_id": ..., "kind": ...}` dict (malformed
+        entries -- missing/non-string obj_id or kind -- are silently
+        skipped: never claimed, never an error; this is a small, bounded,
+        internal claim primitive, not a public-input validator), performs
+        ONE atomic, single-statement compare-and-set UPDATE scoped to
+        `internal_session_id` AND `obj_id` AND `kind` (a kind mismatch --
+        the request's kind does not match the object's ACTUAL stored kind
+        -- never claims anything) AND `residency_state IN ('RESIDENT',
+        'FAULTED_IN')` AND `pinned = 0`.
+
+        The UPDATE's own WHERE clause -- never a prior `list_objects()`
+        result -- is the single source of truth for whether the object was
+        STILL claimable at the moment of the write, checked via the
+        statement's own affected-row count (`cursor.rowcount`). This makes
+        the method correct under concurrent/racing claims for the same
+        obj_id: SQLite serializes writers at the connection/file level, so
+        only the FIRST UPDATE that actually matches wins; every later
+        UPDATE attempting the same obj_id then finds the row already
+        EVICTED, its WHERE clause no longer matches, and `rowcount` is 0 --
+        deterministic, safe, idempotent, no error either way.
+
+        Reuses the EXISTING `session_vmem` table/connection pattern already
+        used by `evict_to_budget`/`prepare_compaction`/`_mutate_fault_in` --
+        no new table, no new subsystem.
+
+        Returns exactly the obj_ids ACTUALLY transitioned to EVICTED by
+        THIS call, in request order.
+        """
+        claimed: list[str] = []
+        if not requests:
+            return claimed
+
+        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+            for req in requests:
+                obj_id = req.get("obj_id") if isinstance(req, dict) else None
+                kind = req.get("kind") if isinstance(req, dict) else None
+                if (
+                    not isinstance(obj_id, str)
+                    or not obj_id
+                    or not isinstance(kind, str)
+                    or not kind
+                ):
+                    continue
+                cur = conn.execute(
+                    """
+                    UPDATE session_vmem
+                    SET residency_state = ?
+                    WHERE internal_session_id = ?
+                      AND obj_id = ?
+                      AND kind = ?
+                      AND residency_state IN (?, ?)
+                      AND pinned = 0
+                    """,
+                    (
+                        ResidencyState.EVICTED.value,
+                        self.internal_id,
+                        obj_id,
+                        kind,
+                        ResidencyState.RESIDENT.value,
+                        ResidencyState.FAULTED_IN.value,
+                    ),
+                )
+                if cur.rowcount == 1:
+                    claimed.append(obj_id)
+            conn.commit()
+
+        return claimed
+
     def evict_to_budget(
         self,
         max_tokens: int = DEFAULT_HOT_CONTEXT_BUDGET_TOKENS,

@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -21,13 +22,16 @@ from second_brain.vmem import (
 _CLEAN_ENV = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
 
 
-def _run_vmem_cli(args: list[str], brain_home) -> subprocess.CompletedProcess:
+def _run_vmem_cli(
+    args: list[str], brain_home, stdin: str | None = None
+) -> subprocess.CompletedProcess:
     """Small DRY helper matching TestVMemCLI's existing subprocess pattern."""
     return subprocess.run(
         [sys.executable, "-m", "second_brain", "vmem", *args, "--home", str(brain_home)],
         capture_output=True,
         text=True,
         env=_CLEAN_ENV,
+        input=stdin,
     )
 
 
@@ -206,6 +210,192 @@ class TestEvictionAndContextPaging:
             store.fault_in("obj-nonexistent123")
 
 
+class TestVMemClaimPages:
+    """Defect B (RC4 proactive-paging-repair pass): VMemStore.claim_pages --
+    the atomic compare-and-set primitive proactive (pre-compaction) paging
+    uses to cause the RESIDENT/FAULTED_IN -> EVICTED transition itself,
+    before a real compaction event ever runs prepare_compaction()."""
+
+    def test_claim_pages_transitions_resident_to_evicted(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-1")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Claimable",
+            content="claim me",
+            pinned=False,
+        )
+        assert obj.residency_state == ResidencyState.RESIDENT
+
+        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
+
+        assert claimed == [obj.obj_id]
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.EVICTED
+
+    def test_claim_pages_faulted_in_object_is_claimable(self, brain_home):
+        """Matches evict_to_budget's own existing precedent of treating
+        FAULTED_IN as evictable too (documented policy choice, tested)."""
+        store = VMemStore(brain_home, "sess-claim-2")
+        obj = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="Faulted back in",
+            content="content",
+            pinned=False,
+        )
+        store.evict_to_budget(max_tokens=0)  # force EVICTED
+        store.fault_in(obj.obj_id)  # EVICTED -> FAULTED_IN
+        faulted = store.get_object(obj.obj_id)
+        assert faulted is not None and faulted.residency_state == ResidencyState.FAULTED_IN
+
+        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "TOOL_OBSERVATION"}])
+
+        assert claimed == [obj.obj_id]
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None and refetched.residency_state == ResidencyState.EVICTED
+
+    def test_claim_pages_pinned_object_never_claimed(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-3")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Pinned",
+            content="content",
+            pinned=True,
+        )
+        assert obj.residency_state == ResidencyState.RESIDENT
+
+        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
+
+        assert claimed == []
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.RESIDENT  # unchanged
+
+    def test_claim_pages_kind_mismatch_never_claims(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-4")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Wrong kind claim attempt",
+            content="content",
+            pinned=False,
+        )
+
+        # The request's kind does not match the object's ACTUAL stored kind.
+        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "TOOL_OBSERVATION"}])
+
+        assert claimed == []
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.RESIDENT  # unchanged
+
+    @pytest.mark.parametrize("state", ["STORED", "SUPERSEDED", "PURGED"])
+    def test_claim_pages_non_pre_page_states_never_claimed(self, brain_home, state):
+        store = VMemStore(brain_home, "sess-claim-5")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Not pre-page",
+            content="content",
+            pinned=False,
+        )
+        with sqlite3.connect(store._dbfile) as conn:
+            conn.execute(
+                "UPDATE session_vmem SET residency_state = ? WHERE obj_id = ?", (state, obj.obj_id)
+            )
+            conn.commit()
+
+        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
+
+        assert claimed == []
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state.value == state  # unchanged
+
+    def test_claim_pages_already_evicted_is_idempotent_no_error(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-6")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Already evicted",
+            content="content",
+            pinned=False,
+        )
+        first = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
+        assert first == [obj.obj_id]
+
+        # Requesting an already-EVICTED object again: deterministic, safe,
+        # idempotent -- not claimed again, no error.
+        second = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
+        assert second == []
+        refetched = store.get_object(obj.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.EVICTED
+
+    def test_claim_pages_malformed_requests_silently_skipped(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-7")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Real object",
+            content="content",
+            pinned=False,
+        )
+        malformed_requests: list[dict[str, Any]] = [
+            {"obj_id": "", "kind": "RESEARCH_RESULT"},  # empty obj_id
+            {"kind": "RESEARCH_RESULT"},  # missing obj_id
+            {"obj_id": "obj-nonexistent"},  # missing kind
+            {"obj_id": 123, "kind": "RESEARCH_RESULT"},  # non-string obj_id
+            {"obj_id": obj.obj_id, "kind": None},  # non-string kind
+            "not even a dict",  # type: ignore[list-item]  # malformed entry entirely
+            {"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"},  # the one real, valid request
+        ]
+        claimed = store.claim_pages(malformed_requests)
+        assert claimed == [obj.obj_id]
+
+    def test_claim_pages_empty_requests_returns_empty(self, brain_home):
+        store = VMemStore(brain_home, "sess-claim-8")
+        assert store.claim_pages([]) == []
+
+    def test_claim_pages_concurrency_cas_only_one_caller_wins(self, brain_home):
+        """CAS guarantee (sequential proxy for real concurrency, per this
+        campaign's testing precedent): two calls racing to claim the SAME
+        obj_id -- only the first ever actually wins; the second's own
+        UPDATE WHERE clause finds the row already EVICTED and reports it as
+        NOT claimed, deterministically, with no error."""
+        store = VMemStore(brain_home, "sess-claim-9")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Race target",
+            content="content",
+            pinned=False,
+        )
+        req = [{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}]
+
+        first_result = store.claim_pages(req)
+        second_result = store.claim_pages(req)
+
+        assert first_result == [obj.obj_id]
+        assert second_result == []  # lost the race -- current DB state is authoritative
+
+    def test_claim_pages_session_isolation(self, brain_home):
+        """An object belonging to a DIFFERENT session must never be
+        claimable by another session's claim_pages call, and its state
+        must remain unchanged."""
+        store_a = VMemStore(brain_home, "sess-claim-session-a")
+        store_b = VMemStore(brain_home, "sess-claim-session-b")
+        obj_a = store_a.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Session A object",
+            content="content",
+            pinned=False,
+        )
+
+        # Attempt to claim session A's object through session B's store.
+        claimed_by_b = store_b.claim_pages([{"obj_id": obj_a.obj_id, "kind": "RESEARCH_RESULT"}])
+
+        assert claimed_by_b == []
+        refetched = store_a.get_object(obj_a.obj_id)
+        assert refetched is not None
+        assert refetched.residency_state == ResidencyState.RESIDENT  # unchanged
+
+
 class TestHotContextAndCompaction:
     """Tests for hot working set rendering and compaction recovery barriers (§6.4, §6.7)."""
 
@@ -261,6 +451,59 @@ class TestHotContextAndCompaction:
         assert "[SECOND_BRAIN_HOT_CONTEXT]" in resume_text
         assert "Pinned Core Decision" in resume_text
         assert "Temporary Scratch" in resume_text  # Referenced in cold table
+
+    def test_compaction_barrier_safe_with_already_proactively_evicted_object(self, brain_home):
+        """Defect B regression: prepare_compaction() remains safe/idempotent
+        when some objects were already proactively EVICTED (via
+        claim_pages) before a real compaction event runs. An already-
+        EVICTED object simply falls outside prepare_compaction()'s own
+        `residency_state in (RESIDENT, FAULTED_IN)` filter -- it is not
+        double-counted, and no error occurs."""
+        store = VMemStore(brain_home, "sess-vmem-compaction-with-claim")
+
+        pinned = store.store_object(
+            kind=SessionObjectKind.DECISION,
+            title="Pinned",
+            content="Survives compaction",
+            pinned=True,
+        )
+        proactively_claimed = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Already proactively paged",
+            content="Paged before compaction",
+            pinned=False,
+        )
+        still_resident = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Still resident at compaction time",
+            content="Evicted at compaction",
+            pinned=False,
+        )
+
+        # Proactive claim happens BEFORE compaction (Defect B fix).
+        claimed = store.claim_pages(
+            [{"obj_id": proactively_claimed.obj_id, "kind": "RESEARCH_RESULT"}]
+        )
+        assert claimed == [proactively_claimed.obj_id]
+        claimed_obj = store.get_object(proactively_claimed.obj_id)
+        assert claimed_obj is not None and claimed_obj.residency_state == ResidencyState.EVICTED
+
+        # Real compaction now runs -- must count only the OTHER still-
+        # RESIDENT object, not the one already proactively evicted, and
+        # must not error.
+        prep = store.prepare_compaction()
+        assert prep["evicted_at_compaction"] == 1  # only `still_resident`
+        assert prep["pinned_preserved"] == 1
+
+        pinned_after = store.get_object(pinned.obj_id)
+        claimed_after = store.get_object(proactively_claimed.obj_id)
+        resident_after = store.get_object(still_resident.obj_id)
+        assert pinned_after is not None
+        assert pinned_after.residency_state == ResidencyState.RESIDENT
+        assert claimed_after is not None
+        assert claimed_after.residency_state == ResidencyState.EVICTED
+        assert resident_after is not None
+        assert resident_after.residency_state == ResidencyState.EVICTED
 
 
 class TestVMemCLI:
@@ -337,6 +580,65 @@ class TestVMemCLI:
         )
         assert page_res.returncode == 0
         assert "Discovered cache optimization via CLI" in page_res.stdout
+
+    def test_vmem_cli_claim_pages_end_to_end(self, brain_home):
+        """Defect B (RC4 proactive-paging-repair pass): the `claim-pages`
+        CLI subcommand reads {"candidates": [...]} from stdin, calls
+        VMemStore.claim_pages, and prints the JSON list of obj_ids
+        actually claimed."""
+        store = VMemStore(brain_home, "sess-cli-claim-1")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="CLI claim target",
+            content="claim me via CLI",
+            pinned=False,
+        )
+        assert obj.residency_state == ResidencyState.RESIDENT
+
+        payload = json.dumps(
+            {"candidates": [{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}]}
+        )
+        claim_res = _run_vmem_cli(
+            ["claim-pages", "sess-cli-claim-1", "--json"], brain_home, stdin=payload
+        )
+        assert claim_res.returncode == 0, claim_res.stderr
+        claimed = json.loads(claim_res.stdout)
+        assert claimed == [obj.obj_id]
+
+        # Real DB state check: the object transitioned to EVICTED.
+        list_res = _run_vmem_cli(["list", "sess-cli-claim-1", "--json"], brain_home)
+        assert list_res.returncode == 0
+        items = json.loads(list_res.stdout)
+        assert items[0]["obj_id"] == obj.obj_id
+        assert items[0]["residency_state"] == "EVICTED"
+
+    def test_vmem_cli_claim_pages_non_json_stdin_errors_cleanly(self, brain_home):
+        res = _run_vmem_cli(
+            ["claim-pages", "sess-cli-claim-2", "--json"], brain_home, stdin="not json"
+        )
+        assert res.returncode == 2
+        assert "must be valid JSON" in res.stderr
+
+    def test_vmem_cli_claim_pages_missing_candidates_key_errors_cleanly(self, brain_home):
+        res = _run_vmem_cli(
+            ["claim-pages", "sess-cli-claim-3", "--json"], brain_home, stdin=json.dumps({})
+        )
+        assert res.returncode == 2
+        assert "candidates" in res.stderr
+
+    def test_vmem_cli_claim_pages_non_json_mode_text_summary(self, brain_home):
+        store = VMemStore(brain_home, "sess-cli-claim-4")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Text mode claim",
+            content="claim me",
+            pinned=False,
+        )
+        payload = json.dumps({"candidates": [{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}]})
+        res = _run_vmem_cli(["claim-pages", "sess-cli-claim-4"], brain_home, stdin=payload)
+        assert res.returncode == 0
+        assert "Claimed 1 of 1" in res.stdout
+        assert obj.obj_id in res.stdout
 
 
 class TestVMemStoreMetadata:

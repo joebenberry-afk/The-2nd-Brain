@@ -229,6 +229,139 @@ describe("resolveToolClass (Phase C: real host-tool normalization)", () => {
       reason: "size",
     });
   });
+
+  // -------------------------------------------------------------------------
+  // RC4 proactive-paging-repair, Defect A: approved-prelude grammar for
+  // multi-statement %%bash cells (Pilot 3's real, reproduced root cause).
+  // -------------------------------------------------------------------------
+  describe("Defect A: multi-statement %%bash prelude grammar", () => {
+    it("regression: single-statement %%bash pytest is unchanged", () => {
+      expect(resolveToolClass("ipython", { code: "%%bash\npytest -vv" })).toEqual({
+        toolClass: "bash",
+        command: "pytest -vv",
+      });
+      expect(rtdEligibility("ipython", { code: "%%bash\npytest -vv" })).toBe("ok");
+    });
+
+    it("real Pilot 3 case: unset PYTHONHOME/PYTHONPATH prelude then unquoted python -m pytest -> eligible", () => {
+      const code = "%%bash\nunset PYTHONHOME\nunset PYTHONPATH\npython -m pytest -vv";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "python -m pytest -vv",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("ok");
+      expect(shouldDistill({ toolName: "ipython", input: { code } }, 8000, M_BIG)).toEqual({
+        trigger: true,
+        reason: "ok",
+      });
+    });
+
+    it("blank lines + a comment line + prelude + a QUOTED absolute path with spaces -> eligible", () => {
+      const code = [
+        "%%bash",
+        "",
+        "# environment setup",
+        "unset PYTHONHOME",
+        "",
+        "unset PYTHONPATH",
+        '"C:\\path with spaces\\.venv\\Scripts\\python.exe" -m pytest -vv',
+      ].join("\n");
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: '"C:\\path with spaces\\.venv\\Scripts\\python.exe" -m pytest -vv',
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("ok");
+    });
+
+    it("an unrecognized first real line (echo p) is NOT skipped past — ineligible, reason command — even though pytest appears on the next line", () => {
+      const code = "%%bash\necho p\npytest";
+      expect(resolveToolClass("ipython", { code })).toEqual({ toolClass: "bash", command: "echo p" });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("same principle with a different unknown prelude (echo setup) -> ineligible, reason command", () => {
+      const code = "%%bash\necho setup\npytest";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "echo setup",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("regression: python -m <non-pytest module> is a recognized shape but not -m pytest -> ineligible", () => {
+      const code = "%%bash\npython -m arbitrary_module";
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("unset of an UNAPPROVED variable name is not in the allowlist -> ineligible", () => {
+      const code = "%%bash\nunset SOMETHING_ELSE\npytest";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "unset SOMETHING_ELSE",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("regression: shell chaining — eligible via the leading segment, ineligible when the leading segment is not a known command", () => {
+      expect(rtdEligibility("ipython", { code: "%%bash\npytest -v && rm -rf /tmp/x" })).toBe("ok");
+      expect(rtdEligibility("ipython", { code: "%%bash\nrm -rf /tmp/x && pytest -v" })).toBe(
+        "command",
+      );
+    });
+
+    it("malformed/unterminated quoting in the path -> ineligible, no crash", () => {
+      const code = '%%bash\n"C:\\unterminated path\\python.exe -m pytest -vv';
+      expect(() => resolveToolClass("ipython", { code })).not.toThrow();
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("regression: malformed -m (python -mpytest, single token) -> ineligible", () => {
+      const code = "%%bash\npython -mpytest";
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("regression: a plain IPython Python cell (no %%bash header) -> ineligible, reason command", () => {
+      const code = "print('hello')\nx = 1 + 1";
+      expect(resolveToolClass("ipython", { code })).toEqual({ toolClass: "bash" });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("a comment line containing the word 'pytest' before an UNAPPROVED command -> ineligible (comment transparent, does not rescue an unrecognized command)", () => {
+      const code = "%%bash\n# run pytest here\ncurl example.com";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "curl example.com",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("a comment line before a REAL eligible pytest command -> comments are transparent, still eligible", () => {
+      const code = "%%bash\n# run pytest here\npytest -vv";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "pytest -vv",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("ok");
+    });
+
+    it("an argument containing the word 'pytest' on an otherwise-ineligible command -> ineligible via bin0, not substring", () => {
+      const code = '%%bash\necho "not pytest"';
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: 'echo "not pytest"',
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+
+    it("core anti-scanning regression: an unknown prelude command (curl) before a real pytest line is never skipped past -> ineligible", () => {
+      const code = "%%bash\ncurl example.com\npytest";
+      expect(resolveToolClass("ipython", { code })).toEqual({
+        toolClass: "bash",
+        command: "curl example.com",
+      });
+      expect(rtdEligibility("ipython", { code })).toBe("command");
+    });
+  });
 });
 
 describe("shouldDistill", () => {

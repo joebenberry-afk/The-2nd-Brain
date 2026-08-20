@@ -339,6 +339,143 @@ export function runVmemListSync(options: {
 
 
 // ---------------------------------------------------------------------------
+// Defect B (RC4 proactive-paging-repair pass): pre-page correlation query +
+// the claim call. Pilot 3 found VMem objects only ever became EVICTED via
+// `prepare_compaction()`, at the SAME real compaction event that removed
+// the corresponding old live message from `event.messages` entirely — so a
+// paging pass that only ever looked for already-EVICTED objects could
+// never find a real match. `context-paging.ts`'s `pageContext` now causes
+// the RESIDENT/FAULTED_IN -> EVICTED transition itself, BEFORE Prime's own
+// compaction ever runs, via these two bridge functions. Same synchronous,
+// short-timeout-bounded pattern as `runVmemListSync` above (the real
+// `context` host contract has no async variant).
+// ---------------------------------------------------------------------------
+
+/** A `vmem list` object additionally carrying `residency_state`/`pinned`
+ * (already present in the CLI's `to_dict()` JSON, simply not previously
+ * read). Deliberately a SEPARATE type/function from `VmemListedObject`/
+ * `runVmemListSync` above — rather than extending that function's return
+ * shape — so the EXISTING `runVmemListSync` contract/tests (which target
+ * EVICTED objects only) stay byte-for-byte unchanged. */
+export interface VmemPrePageObject extends VmemListedObject {
+  residencyState: string;
+  pinned: boolean;
+}
+
+export interface VmemListPrePageSyncResult {
+  ok: boolean;
+  objects?: VmemPrePageObject[];
+  error?: string;
+}
+
+/** `second_brain vmem list <session> --json` (synchronous, NO `--state`
+ * filter — every residency state for this session, in ONE bounded call).
+ * The Defect B pre-page correlation query: callers filter client-side to
+ * PRE-PAGE states (RESIDENT, optionally FAULTED_IN) and exclude PINNED
+ * objects — see `context-paging.ts`. Fail-open: any spawn/parse/timeout
+ * failure resolves `{ok: false, error}`, never throws. */
+export function runVmemListPrePageSync(options: {
+  home: string;
+  hostSessionId: string;
+  python?: string;
+  timeoutMs?: number;
+}): VmemListPrePageSyncResult {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) {
+    return { ok: false, error: "no brain venv (vmem list unavailable)" };
+  }
+  const args = ["-m", "second_brain", "vmem", "list", options.hostSessionId, "--json"];
+  try {
+    const stdout = execFileSync(python, args, {
+      cwd: options.home,
+      env: runEnv(options.home),
+      timeout: options.timeoutMs ?? VMEM_LIST_SYNC_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf8",
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) {
+      return { ok: false, error: "list returned non-array output" };
+    }
+    const objects: VmemPrePageObject[] = [];
+    for (const item of parsed) {
+      if (item === null || typeof item !== "object") continue;
+      const rec = item as Record<string, unknown>;
+      if (typeof rec.obj_id !== "string" || typeof rec.kind !== "string") continue;
+      const metadata =
+        rec.metadata !== null && typeof rec.metadata === "object" && !Array.isArray(rec.metadata)
+          ? (rec.metadata as Record<string, unknown>)
+          : {};
+      const residencyState = typeof rec.residency_state === "string" ? rec.residency_state : "";
+      const pinned = rec.pinned === true;
+      objects.push({ objId: rec.obj_id, kind: rec.kind, metadata, residencyState, pinned });
+    }
+    return { ok: true, objects };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "vmem list failed" };
+  }
+}
+
+export interface VmemClaimPagesResult {
+  ok: boolean;
+  claimedObjIds?: string[];
+  error?: string;
+}
+
+/** `second_brain vmem claim-pages <session> --json` (synchronous, stdin
+ * JSON `{"candidates":[{"obj_id":..., "kind":...}, ...]}`): atomically
+ * attempt to transition EXACTLY the given obj_ids from their current
+ * pre-page residency state (RESIDENT/FAULTED_IN, unpinned) to EVICTED, and
+ * return which ones ACTUALLY succeeded — the compare-and-set winner list
+ * (see `VMemStore.claim_pages`, vmem.py). This is "the claim" —
+ * `context-paging.ts` calls this AT MOST ONCE per `context` event, only
+ * once selected candidates exist, and never constructs a replacement patch
+ * before this call returns. Fail-open: any spawn/parse/timeout failure
+ * resolves `{ok: false, error}`, never throws. */
+export function runVmemClaimPagesSync(options: {
+  home: string;
+  hostSessionId: string;
+  candidates: Array<{ objId: string; kind: string }>;
+  python?: string;
+  timeoutMs?: number;
+}): VmemClaimPagesResult {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) {
+    return { ok: false, error: "no brain venv (vmem claim-pages unavailable)" };
+  }
+  const args = ["-m", "second_brain", "vmem", "claim-pages", options.hostSessionId, "--json"];
+  let payload: string;
+  try {
+    payload = JSON.stringify({
+      candidates: options.candidates.map((c) => ({ obj_id: c.objId, kind: c.kind })),
+    });
+  } catch {
+    return { ok: false, error: "unserializable claim-pages candidates" };
+  }
+  try {
+    const stdout = execFileSync(python, args, {
+      cwd: options.home,
+      env: runEnv(options.home),
+      timeout: options.timeoutMs ?? VMEM_LIST_SYNC_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf8",
+      input: payload,
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) {
+      return { ok: false, error: "claim-pages returned non-array output" };
+    }
+    const claimedObjIds = parsed.filter((item): item is string => typeof item === "string");
+    return { ok: true, claimedObjIds };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "vmem claim-pages failed" };
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // Part D (RC4 pass): explicit fault-in bridge. `second_brain vmem resolve`
 // (src/second_brain/cli.py / vmem.py resolve_object) does the real work —
 // fault_in() + durable backing resolution (deliveries+memories for

@@ -927,6 +927,22 @@ def _parser() -> argparse.ArgumentParser:
     vm_hc.add_argument("--budget", type=int, default=1500, help="token budget")
     vm_hc.add_argument("--json", action="store_true", help="output JSON")
 
+    # Defect B (RC4 proactive-paging-repair pass): additive, does not reuse/
+    # alter `compact-prep`/`page`/`resolve` above. `claim-pages` atomically
+    # attempts to transition a small, bounded set of caller-specified
+    # objects from a pre-page residency state (RESIDENT/FAULTED_IN,
+    # unpinned) to EVICTED -- the proactive counterpart to
+    # `prepare_compaction`'s compaction-triggered eviction -- see
+    # VMemStore.claim_pages. Bounded, fast, deterministic: no LLM, no
+    # retrieval, no free text.
+    vm_cl = vms.add_parser(
+        "claim-pages",
+        parents=[home_parent],
+        help="atomically claim a bounded set of pre-page objects for proactive paging (-> EVICTED)",
+    )
+    vm_cl.add_argument("session_id", help="host session ID")
+    vm_cl.add_argument("--json", action="store_true", help="output JSON")
+
     vm_cp = vms.add_parser("compact-prep", parents=[home_parent], help="prepare for compaction")
     vm_cp.add_argument("session_id", help="host session ID")
     vm_cp.add_argument("--json", action="store_true", help="output JSON")
@@ -3655,6 +3671,33 @@ def cmd_vmem(args) -> int:
             print(f"Error: {result.get('error', 'resolve failed')}", file=sys.stderr)
             return 2
         sys.stdout.write(str(result.get("content", "")))
+        return 0
+
+    if args.vmem_command == "claim-pages":
+        # Defect B (RC4 proactive-paging-repair pass): reads a small
+        # bounded JSON payload from stdin -- {"candidates": [{"obj_id":
+        # ..., "kind": ...}, ...]} -- calls VMemStore.claim_pages, and
+        # prints exactly the obj_ids actually claimed. Bounded, fast, no
+        # LLM, no retrieval, no free text.
+        try:
+            raw_stdin = sys.stdin.read()
+            payload = json.loads(raw_stdin) if raw_stdin.strip() else {}
+        except json.JSONDecodeError as exc:
+            print(f"Error: stdin must be valid JSON: {exc}", file=sys.stderr)
+            return 2
+        candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(candidates, list):
+            print(
+                "Error: payload must be a JSON object with a 'candidates' array",
+                file=sys.stderr,
+            )
+            return 2
+        claimed = store.claim_pages(candidates)
+        if args.json:
+            print(json.dumps(claimed, indent=2))
+        else:
+            claimed_desc = ", ".join(claimed) if claimed else "(none)"
+            print(f"Claimed {len(claimed)} of {len(candidates)} requested objects: {claimed_desc}")
         return 0
 
     if args.vmem_command == "hot-context":
