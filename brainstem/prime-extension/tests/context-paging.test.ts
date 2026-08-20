@@ -121,14 +121,18 @@ describe("pageContext — disabled / zero-mutation baselines", () => {
 });
 
 describe("pageContext — eligibility classes (only the two real captured classes page)", () => {
-  it("pages an AutoInject custom message whose delivery_id resolves to an EVICTED RESEARCH_RESULT", () => {
+  it("pages an AutoInject custom message whose delivery_id resolves to a fully artifact-backed EVICTED RESEARCH_RESULT", () => {
     const original = autoinjectMessage("del-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
         listEvicted: fakeList([
-          { objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+          {
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          },
         ]),
       }),
     );
@@ -154,14 +158,14 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(patched[3]).toBe(messages[3]);
   });
 
-  it("pages a toolResult whose toolCallId resolves to an EVICTED TOOL_OBSERVATION", () => {
+  it("pages a toolResult whose toolCallId resolves to an artifact-backed EVICTED TOOL_OBSERVATION", () => {
     const original = toolResultMessage("call-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(
       baseOptions({
         messages,
         listEvicted: fakeList([
-          { objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } },
+          { objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1", artifactRef: "art-tool-1" } },
         ]),
       }),
     );
@@ -182,6 +186,115 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(blocks[0]?.text).toContain("obj-tool-1");
     expect(blocks[0]?.text).toContain("call-1");
     expect(blocks[0]?.text).not.toContain("y".repeat(200));
+  });
+
+  it("AutoInject object with deliveryId ONLY (no packetArtifactRef/packetSha256) -> NOT pageable (core regression fix)", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listEvicted: fakeList([
+          { objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
+        ]),
+      }),
+    );
+    expect(result.pagedCount).toBe(0);
+    expect(result.messages).toBeUndefined();
+    expect(messages[0]).toBe(original); // untouched
+  });
+
+  it("AutoInject object with deliveryId + packetArtifactRef but a MALFORMED packetSha256 -> NOT pageable", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const malformedCases = [
+      "a".repeat(63), // wrong length (too short)
+      "a".repeat(65), // wrong length (too long)
+      "z".repeat(64), // non-hex characters
+      undefined, // missing entirely
+    ];
+    for (const packetSha256 of malformedCases) {
+      const metadata: Record<string, unknown> = { deliveryId: "del-1", packetArtifactRef: "art-1" };
+      if (packetSha256 !== undefined) metadata.packetSha256 = packetSha256;
+      const result = pageContext(
+        baseOptions({
+          messages,
+          listEvicted: fakeList([{ objId: "obj-research-1", kind: "RESEARCH_RESULT", metadata }]),
+        }),
+      );
+      expect(result.pagedCount).toBe(0);
+      expect(result.messages).toBeUndefined();
+    }
+    expect(messages[0]).toBe(original); // untouched
+  });
+
+  it("Tool observation object with toolCallId ONLY (no artifactRef) -> NOT pageable", () => {
+    const original = toolResultMessage("call-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listEvicted: fakeList([
+          { objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-1" } },
+        ]),
+      }),
+    );
+    expect(result.pagedCount).toBe(0);
+    expect(result.messages).toBeUndefined();
+    expect(messages[0]).toBe(original); // untouched
+  });
+
+  it("mixed candidates in one context event: only fully-backed candidates are replaced, under-proven ones untouched", () => {
+    const fullyBackedAutoinject = autoinjectMessage("del-full");
+    const deliveryOnlyAutoinject = autoinjectMessage("del-partial");
+    const fullyBackedToolResult = toolResultMessage("call-full");
+    const toolCallIdOnlyToolResult = toolResultMessage("call-partial");
+    const untouchedAssistant = assistantMessage();
+    const messages = [
+      fullyBackedAutoinject,
+      deliveryOnlyAutoinject,
+      fullyBackedToolResult,
+      toolCallIdOnlyToolResult,
+      untouchedAssistant,
+      assistantMessage(),
+      assistantMessage(),
+    ];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 2 },
+        listEvicted: fakeList([
+          {
+            objId: "obj-research-full",
+            kind: "RESEARCH_RESULT",
+            metadata: { deliveryId: "del-full", packetArtifactRef: "art-full", packetSha256: "c".repeat(64) },
+          },
+          { objId: "obj-research-partial", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-partial" } },
+          {
+            objId: "obj-tool-full",
+            kind: "TOOL_OBSERVATION",
+            metadata: { toolCallId: "call-full", artifactRef: "art-tool-full" },
+          },
+          { objId: "obj-tool-partial", kind: "TOOL_OBSERVATION", metadata: { toolCallId: "call-partial" } },
+        ]),
+      }),
+    );
+    expect(result.pagedCount).toBe(2);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(patched).toBeDefined();
+    // Fully-backed candidates: replaced.
+    expect(typeof patched[0]?.content).toBe("string");
+    expect((patched[0]?.content as string)).toContain("obj-research-full");
+    expect(Array.isArray(patched[2]?.content)).toBe(true);
+    const toolBlocks = patched[2]?.content as Array<{ type: string; text: string }>;
+    expect(toolBlocks[0]?.text).toContain("obj-tool-full");
+    // Under-proven candidates: byte-for-byte identical to their originals.
+    expect(patched[1]).toBe(deliveryOnlyAutoinject);
+    expect(patched[3]).toBe(toolCallIdOnlyToolResult);
+    // Every other (non-candidate) element also untouched.
+    expect(patched[4]).toBe(untouchedAssistant);
+    expect(patched[5]).toBe(messages[5]);
+    expect(patched[6]).toBe(messages[6]);
   });
 
   it("never pages a toolResult with isError === true", () => {
@@ -270,15 +383,20 @@ describe("pageContext — Part E guardrails", () => {
       assistantMessage(),
       assistantMessage(),
     ];
+    const artifactBacked = (deliveryId: string, objId: string) => ({
+      objId,
+      kind: "RESEARCH_RESULT",
+      metadata: { deliveryId, packetArtifactRef: `art-${deliveryId}`, packetSha256: "b".repeat(64) },
+    });
     const result = pageContext(
       baseOptions({
         messages,
         cfg: { ...ENABLED_CFG, maxPagesPerContextEvent: 2, pinRecentMessages: 2 },
         listEvicted: fakeList([
-          { objId: "obj-1", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-1" } },
-          { objId: "obj-2", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-2" } },
-          { objId: "obj-3", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-3" } },
-          { objId: "obj-4", kind: "RESEARCH_RESULT", metadata: { deliveryId: "del-4" } },
+          artifactBacked("del-1", "obj-1"),
+          artifactBacked("del-2", "obj-2"),
+          artifactBacked("del-3", "obj-3"),
+          artifactBacked("del-4", "obj-4"),
         ]),
       }),
     );
