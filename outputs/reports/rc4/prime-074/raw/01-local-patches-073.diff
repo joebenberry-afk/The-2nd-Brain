@@ -1,0 +1,58 @@
+diff --git a/packages/coding-agent/src/core/kernel/bootstrap.ts b/packages/coding-agent/src/core/kernel/bootstrap.ts
+index 9b12b4b41..284f60343 100644
+--- a/packages/coding-agent/src/core/kernel/bootstrap.ts
++++ b/packages/coding-agent/src/core/kernel/bootstrap.ts
+@@ -376,6 +376,7 @@ function run(command: string, args: string[], options: { stdio?: "ignore" | "inh
+ 		const child = spawn(command, args, {
+ 			env: process.env,
+ 			stdio: options.stdio ?? "ignore",
++			windowsHide: process.platform === "win32",
+ 		});
+ 		child.on("error", reject);
+ 		child.on("exit", (code, signal) => {
+@@ -718,6 +719,10 @@ async function hashRuntimeSource(sourceDir: string): Promise<string> {
+ 	return `sha256:${hash.digest("hex")}`;
+ }
+ 
++function kernelPythonPath(venv: string): string {
++	return process.platform === "win32" ? path.join(venv, "Scripts", "python.exe") : path.join(venv, "bin", "python");
++}
++
+ async function bootstrapVenv(
+ 	venv: string,
+ 	pythonSkills: readonly BootstrapPythonSkill[],
+@@ -725,7 +730,7 @@ async function bootstrapVenv(
+ ): Promise<void> {
+ 	await mkdir(path.dirname(venv), { recursive: true });
+ 	const uv = await ensureUv(options);
+-	const python = path.join(venv, "bin", "python");
++	const python = kernelPythonPath(venv);
+ 	const sourceDir = await resolveRuntimeSourceDir();
+ 	const runtimeRequirement = sourceDir ?? RUNTIME_REQUIREMENT;
+ 	const runtimeIdentity = await resolveRuntimeIdentity();
+@@ -886,7 +891,7 @@ async function ensureKernelPythonUncached(
+ 	}
+ 
+ 	const venv = await resolveWritableKernelVenvDir();
+-	const python = path.join(venv, "bin", "python");
++	const python = kernelPythonPath(venv);
+ 	const runtimeIdentity = await resolveRuntimeIdentity();
+ 	if (await kernelReady(python, venv, runtimeIdentity, pythonSkills)) return python;
+ 
+diff --git a/packages/coding-agent/src/core/session-lease.ts b/packages/coding-agent/src/core/session-lease.ts
+index 6c4e2975c..c37d12dfb 100644
+--- a/packages/coding-agent/src/core/session-lease.ts
++++ b/packages/coding-agent/src/core/session-lease.ts
+@@ -265,7 +265,11 @@ export function acquireSessionLease(
+ 			} catch (error) {
+ 				rmSync(candidateDirectory, { recursive: true, force: true });
+ 				const code = (error as NodeJS.ErrnoException).code;
+-				if (code !== "EEXIST" && code !== "ENOTEMPTY") {
++				const existingLeaseConflict =
++					code === "EEXIST" ||
++					code === "ENOTEMPTY" ||
++					(process.platform === "win32" && code === "EPERM" && existsSync(directory));
++				if (!existingLeaseConflict) {
+ 					throw error;
+ 				}
+ 				const existingOwner = readLeaseOwner(directory);
