@@ -430,16 +430,23 @@ export function rtdSha256Hex(text: string): string {
 }
 
 /**
- * Real preservation via the existing CLI: `second_brain artifact store
- * --kind rtd_raw --tool bash --session <sid> --no-distill` (content-addressed
- * blob + meta, atomic) then `artifact expand <sha256>` byte-compared against
- * the raw text (plan §11.4 "verify the reference is recoverable"). Any
- * spawn/parse/mismatch failure => null/false (fail-open: caller returns the
- * original content unchanged). No venv => not a runtime => fail open.
+ * Shared preservation factory (RC4 byte-exact recovery pass, Part A): both
+ * `cliRtdPreserver` (kind="rtd_raw", tool="bash") and the AutoInject packet
+ * preserver (kind="autoinject_packet", tool="autoinject", index.ts) call
+ * this SAME preserve->verify machinery -- there is exactly ONE
+ * preserve/verify subprocess implementation in the extension. Real
+ * preservation via the existing CLI: `second_brain artifact store --kind
+ * <kind> --tool <tool> --session <sid> --no-distill` (content-addressed
+ * blob + meta, atomic) then `artifact expand <sha256>` byte-compared
+ * against the raw text (plan §11.4 "verify the reference is recoverable").
+ * Any spawn/parse/mismatch failure => null/false (fail-open: caller keeps
+ * the original content unchanged). No venv => not a runtime => fail open.
  */
-export function cliRtdPreserver(opts: {
+export function cliArtifactPreserver(opts: {
   home: string;
   session: string;
+  kind: string;
+  tool: string;
   python?: string;
   timeoutMs?: number;
 }): RtdPreserver {
@@ -454,7 +461,7 @@ export function cliRtdPreserver(opts: {
   ): Promise<{ error?: string; stdout: string }> =>
     new Promise((resolve) => {
       if (!existsSync(python)) {
-        resolve({ error: "no brain venv (RTD artifact store unavailable)", stdout: "" });
+        resolve({ error: "no brain venv (artifact store unavailable)", stdout: "" });
         return;
       }
       const child = execFile(
@@ -483,9 +490,9 @@ export function cliRtdPreserver(opts: {
           "artifact",
           "store",
           "--kind",
-          "rtd_raw",
+          opts.kind,
           "--tool",
-          "bash",
+          opts.tool,
           "--session",
           opts.session,
           "--no-distill",
@@ -508,6 +515,20 @@ export function cliRtdPreserver(opts: {
     },
   };
 }
+
+/**
+ * RTD-specific wrapper over the shared `cliArtifactPreserver` factory
+ * (kind="rtd_raw", tool="bash") -- RTD's own call sites are unchanged.
+ */
+export function cliRtdPreserver(opts: {
+  home: string;
+  session: string;
+  python?: string;
+  timeoutMs?: number;
+}): RtdPreserver {
+  return cliArtifactPreserver({ ...opts, kind: "rtd_raw", tool: "bash" });
+}
+
 
 /** Command class of an eligible bash command (first token). */
 export function commandClassOf(input: unknown): string {

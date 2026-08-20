@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 
@@ -965,3 +966,216 @@ class TestVMemMultiItemPacketResolution:
         assert "error" in result
         after = _snapshot(store, obj.obj_id)
         assert after == before
+
+
+class TestVMemByteExactAutoInjectRecovery:
+    """RC4 byte-exact AutoInject recovery pass (Part A): the packet-artifact
+    PRIMARY path returns EXACTLY what the model saw at delivery time,
+    independent of later supersession; the FALLBACK path (no artifact) now
+    resolves each packet member's DELIVERED version specifically instead of
+    silently returning newer current content."""
+
+    def test_artifact_preserved_packet_survives_supersede_byte_exact(self, brain_home):
+        from second_brain import artifacts
+
+        memory_id = semantic.add_memory(
+            brain_home,
+            "Byte-Exact Packet Memory",
+            "Version 1 body text for the byte-exact packet test.",
+            scope="global",
+        )
+        _insert_delivery_row(brain_home, "del-byteexact-1", memory_id)
+
+        # Seed the EXACT v1 packet text the model actually saw, the same way
+        # the real TS `cliArtifactPreserver` (kind="autoinject_packet",
+        # tool="autoinject") would at admission time.
+        packet_text = json.dumps(
+            {
+                "delivery_id": "del-byteexact-1",
+                "packet_tokens": 42,
+                "note": "This is the EXACT v1 packet text the model saw.",
+            }
+        )
+        preserved = artifacts.store_text(
+            brain_home, packet_text, kind="autoinject_packet", tool="autoinject"
+        )
+
+        store = VMemStore(brain_home, "sess-byteexact")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-byteexact-1", "packet_tokens": 42}),
+            metadata={
+                "deliveryId": "del-byteexact-1",
+                "packetArtifactRef": preserved["handle"],
+                "packetSha256": preserved["hash"],
+            },
+        )
+        store.evict_to_budget(max_tokens=0)
+
+        # Supersede the memory AFTER delivery -- the recovered packet must
+        # NOT pick up this newer content.
+        semantic.supersede(
+            brain_home,
+            memory_id,
+            new_body="Version 2 body text -- MUST NOT appear in recovery.",
+            change_note="v2 for byte-exact test",
+        )
+
+        result = resolve_object(brain_home, "sess-byteexact", obj.obj_id)
+
+        assert result["ok"] is True
+        assert result["resolution"] == "packet_artifact"
+        assert result["byte_exact"] is True
+        assert result["content"] == packet_text  # BYTE-EXACT v1, not v2
+        assert "Version 2" not in result["content"]
+
+        after = store.get_object(obj.obj_id)
+        assert after is not None
+        assert after.residency_state == ResidencyState.FAULTED_IN
+
+    def test_fallback_no_artifact_resolves_delivered_version_not_current(self, brain_home):
+        memory_id = semantic.add_memory(
+            brain_home,
+            "Fallback Delivered Version Memory",
+            "Version 1 body for the fallback-path delivered-version test.",
+            scope="global",
+        )
+        _insert_delivery_row(brain_home, "del-fallback-1", memory_id, memory_version=1)
+
+        store = VMemStore(brain_home, "sess-fallback")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-fallback-1", "packet_tokens": 10}),
+            metadata={"deliveryId": "del-fallback-1"},  # NO packetArtifactRef -> fallback path
+        )
+        store.evict_to_budget(max_tokens=0)
+
+        semantic.supersede(
+            brain_home,
+            memory_id,
+            new_title="Fallback Delivered Version Memory V2",
+            new_body="Version 2 body -- MUST NOT be what fault-in returns.",
+            change_note="v2 for fallback test",
+        )
+
+        result = resolve_object(brain_home, "sess-fallback", obj.obj_id)
+
+        assert result["ok"] is True
+        assert result["resolution"] == "memory"
+        parsed = json.loads(result["content"])
+        assert parsed["delivered_version"] == 1
+        assert parsed["current_version"] == 2  # true current, reported distinctly
+        assert "Version 1 body" in parsed["body"]
+        assert "Version 2 body" not in parsed["body"]
+        assert parsed["title"] == "Fallback Delivered Version Memory"  # v1 title, not v2's
+
+    def test_four_item_packet_artifact_path_and_fallback_path_both_complete(self, brain_home):
+        packet_id = "pkt-four-item-byteexact"
+        root_session_id = "sess-byteexact-packet"
+        branch_id = "main"
+
+        memory_ids = []
+        for i in range(4):
+            mid = semantic.add_memory(
+                brain_home,
+                f"Byte-Exact Packet Member {i}",
+                f"Byte-exact packet member body text {i}.",
+                scope="global",
+            )
+            memory_ids.append(mid)
+
+        delivery_ids = [f"del-byteexact-packet-{i}" for i in range(4)]
+        for did, mid in zip(delivery_ids, memory_ids, strict=True):
+            _insert_delivery_row(
+                brain_home,
+                did,
+                mid,
+                packet_id=packet_id,
+                root_session_id=root_session_id,
+                branch_id=branch_id,
+            )
+
+        # -- Fallback path (unchanged multi-item behavior, no artifact) --
+        store = VMemStore(brain_home, root_session_id)
+        fallback_obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": delivery_ids[0]}),
+            metadata={"deliveryId": delivery_ids[0]},
+        )
+        store.evict_to_budget(max_tokens=0)
+        fallback_result = resolve_object(brain_home, root_session_id, fallback_obj.obj_id)
+        assert fallback_result["ok"] is True
+        assert fallback_result["resolution"] == "memory_set"
+        assert fallback_result["item_count"] == 4
+        assert set(fallback_result["memory_ids"]) == set(memory_ids)
+
+        # -- Artifact-preserved path (new): seed the exact packet bytes --
+        from second_brain import artifacts
+
+        packet_text = json.dumps({"packet_id": packet_id, "note": "byte-exact 4-item packet"})
+        preserved = artifacts.store_text(
+            brain_home, packet_text, kind="autoinject_packet", tool="autoinject"
+        )
+        artifact_obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            # Distinct content from `fallback_obj` above (obj_id is
+            # content-hash-derived and re-storing IDENTICAL content only
+            # bumps the EXISTING row's access_count -- it does not update
+            # metadata_json) so this is genuinely a second, separate object.
+            content=json.dumps({"delivery_id": delivery_ids[0], "variant": "artifact"}),
+            metadata={
+                "deliveryId": delivery_ids[0],
+                "packetArtifactRef": preserved["handle"],
+                "packetSha256": preserved["hash"],
+            },
+        )
+        store.evict_to_budget(max_tokens=0)
+        artifact_result = resolve_object(brain_home, root_session_id, artifact_obj.obj_id)
+        assert artifact_result["ok"] is True
+        assert artifact_result["resolution"] == "packet_artifact"
+        assert artifact_result["content"] == packet_text
+
+
+class TestVMemFaultInDbWriteFailOpen:
+    """RC4 byte-exact recovery pass Part B: `resolve_object`'s final DB
+    write (`VMemStore._mutate_fault_in`) must itself be fail-open. A failure
+    THERE (SQLite busy/locked, disk I/O) must not propagate as an unhandled
+    exception, and must not be reported as a successful fault-in -- the
+    object's residency/access_count/priority_score stay exactly what they
+    were before the call."""
+
+    def test_mutate_fault_in_db_write_failure_is_structured_failure_zero_mutation(
+        self, brain_home, monkeypatch
+    ):
+        memory_id = semantic.add_memory(
+            brain_home, "DB Write Failure Memory", "Body text.", scope="global"
+        )
+        _insert_delivery_row(brain_home, "del-dbfail-1", memory_id)
+        store = VMemStore(brain_home, "sess-dbfail")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="autoinject_delivery",
+            content=json.dumps({"delivery_id": "del-dbfail-1"}),
+            metadata={"deliveryId": "del-dbfail-1"},
+        )
+        store.evict_to_budget(max_tokens=0)
+        before = _snapshot(store, obj.obj_id)
+        assert before is not None
+        assert before[0] == ResidencyState.EVICTED
+
+        def _boom(self, obj):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(VMemStore, "_mutate_fault_in", _boom)
+
+        result = resolve_object(brain_home, "sess-dbfail", obj.obj_id)
+
+        assert result["ok"] is False
+        assert "error" in result
+
+        after = _snapshot(store, obj.obj_id)
+        assert after == before  # zero mutation despite a fully-succeeded read-only resolution
