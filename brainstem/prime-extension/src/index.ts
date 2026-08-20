@@ -756,11 +756,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           messages: event.messages,
           cfg: pagingCfg,
         });
-        if (paged.error !== undefined) {
-          getStore(session)?.append(
-            mirrorExtensionError(session, `context paging failed: ${paged.error}`),
-          );
-        } else if (paged.messages !== undefined) {
+        // RC4 CVM closure repair (Repair B): a claim-subprocess failure for
+        // the RESIDENT/FAULTED_IN group no longer forces the WHOLE event to
+        // discard its patch — `paged.messages` can be defined (Path B
+        // reprojection succeeded independently) AT THE SAME TIME as
+        // `paged.error` (the Path A claim call failed). Apply the patch
+        // whenever one exists, and separately/additionally record the
+        // extension_error for observability. A pure fail-open call (no
+        // patch at all) still records ONLY the extension_error, unchanged.
+        if (paged.messages !== undefined) {
           getStore(session)?.append(
             sensors.contextPaging(session, paged.pagedCount, {
               candidateCount: paged.candidateCount,
@@ -769,6 +773,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               residentBudget: paged.residentBudget,
               requestedPageCount: paged.requestedPageCount,
               claimedPageCount: paged.claimedPageCount,
+              newlyClaimedCount: paged.newlyClaimedCount,
+              reprojectedPageCount: paged.reprojectedPageCount,
               estimatedTokensBefore: paged.estimatedTokensBefore,
               estimatedTokensAfter: paged.estimatedTokensAfter,
               objectKinds: paged.objectKinds,
@@ -776,7 +782,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               stateAfter: paged.stateAfter,
             }),
           );
+          if (paged.error !== undefined) {
+            getStore(session)?.append(
+              mirrorExtensionError(session, `context paging partial failure: ${paged.error}`),
+            );
+          }
           return { messages: paged.messages };
+        } else if (paged.error !== undefined) {
+          getStore(session)?.append(
+            mirrorExtensionError(session, `context paging failed: ${paged.error}`),
+          );
         }
       }
     } catch (error) {
@@ -1006,14 +1021,34 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // actually substituted (real preservation + verify already ran) —
       // content is the artifact pointer/sha256/size metadata RTD already
       // computed, never the raw or distilled tool text.
+      // RC4 CVM closure repair (Repair A): the 5th `metadata` argument was
+      // previously omitted here (unlike the AutoInject admission call site
+      // below), so this object's `metadata_json` was always `{}` and could
+      // never correlate in context-paging.ts's `byToolCallId` map — an
+      // RTD-backed object could structurally never become a paging
+      // candidate (Pilot 4, outputs/reports/rc4/14-real-prime-pilot-4.md).
+      // `toolCallId`/`artifactRef` are the SAME real, already-verified
+      // values already used above (`event.toolCallId`, in scope from this
+      // handler's signature; `rtd.record.artifact_ref`, identical to the
+      // artifact_ref already placed in `content`) — no new identity, no
+      // raw/distilled tool text, same existing gate, unweakened.
       if (rtd.record?.distilled === true) {
-        vmemAdmit(session, "TOOL_OBSERVATION", "rtd_artifact", {
-          artifact_ref: rtd.record.artifact_ref,
-          original_chars: rtd.record.original_chars,
-          visible_chars: rtd.record.visible_chars,
-          saved_chars: rtd.record.saved_chars,
-          command_class: rtd.record.command_class,
-        });
+        vmemAdmit(
+          session,
+          "TOOL_OBSERVATION",
+          "rtd_artifact",
+          {
+            artifact_ref: rtd.record.artifact_ref,
+            original_chars: rtd.record.original_chars,
+            visible_chars: rtd.record.visible_chars,
+            saved_chars: rtd.record.saved_chars,
+            command_class: rtd.record.command_class,
+          },
+          {
+            toolCallId: event.toolCallId,
+            artifactRef: rtd.record.artifact_ref,
+          },
+        );
       }
       getStore(session)?.append(
         sensors.toolResult(

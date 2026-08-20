@@ -309,6 +309,10 @@ describe("pageContext — Defect B: successful proactive page (the claim, end-to
     expect(result.eligibleCount).toBe(1);
     expect(result.requestedPageCount).toBe(1);
     expect(result.claimedPageCount).toBe(1);
+    // Repair B additive counters: this is a PURE Path A (newly claimed) event.
+    expect(result.newlyClaimedCount).toBe(1);
+    expect(result.reprojectedPageCount).toBe(0);
+    expect(result.pagedCount).toBe(1); // total = newlyClaimed(1) + reprojected(0)
     expect(result.pressureEstimatedTokens).toBeGreaterThan(0);
     expect(result.residentBudget).toBe(ENABLED_CFG.residentTokenBudget);
     expect(result.estimatedTokensBefore).toBeGreaterThan(0);
@@ -418,7 +422,7 @@ describe("pageContext — Defect B: claim/state-transition failure -> no replace
 });
 
 describe("pageContext — Defect B: candidate object state gates (only RESIDENT/FAULTED_IN, never PINNED)", () => {
-  it("an already-EVICTED candidate object is not correlated (never sent to the claim call, no replacement)", () => {
+  it("Repair B: an already-EVICTED, proof-backed candidate object IS now correlated and reprojected WITHOUT any claim call (see the dedicated 'Repair B' describe block below for the full suite)", () => {
     const original = autoinjectMessage("del-1");
     const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
     let claimCalled = false;
@@ -439,8 +443,13 @@ describe("pageContext — Defect B: candidate object state gates (only RESIDENT/
         },
       }),
     );
-    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
-    expect(claimCalled).toBe(false); // no correlated candidate -> claim call never invoked
+    expect(claimCalled).toBe(false); // Path B: no claim call is ever made for an already-EVICTED object
+    expect(result.pagedCount).toBe(1);
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.newlyClaimedCount).toBe(0);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(typeof patched[0]?.content).toBe("string");
+    expect((patched[0]?.content as string)).toContain("[SECOND_BRAIN_VMEM]");
   });
 
   it.each(["STORED", "SUPERSEDED", "PURGED"])(
@@ -545,6 +554,22 @@ describe("pageContext — eligibility classes (only the two real captured classe
     expect(result.pagedCount).toBe(0);
     expect(result.messages).toBeUndefined();
     expect(messages[0]).toBe(original); // untouched
+  });
+
+  it("Tool observation object with artifactRef ONLY (no toolCallId) -> NOT pageable (Repair A closure regression: the strict 'both required' gate is unchanged)", () => {
+    const original = toolResultMessage("call-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({ objId: "obj-tool-1", kind: "TOOL_OBSERVATION", metadata: { artifactRef: "art-tool-1" } }),
+        ]),
+      }),
+    );
+    expect(result.pagedCount).toBe(0);
+    expect(result.messages).toBeUndefined();
+    expect(messages[0]).toBe(original); // untouched — no correlation key means the byToolCallId map never gets an entry
   });
 
   it("mixed proof in one context event: only the fully-backed candidate is ever a claim candidate at all", () => {
@@ -735,5 +760,305 @@ describe("pageContext — Part E guardrails", () => {
     const messages = [assistantMessage(), assistantMessage(), assistantMessage()];
     const result = pageContext(baseOptions({ messages, listPrePage: fakeListPrePage([]) }));
     expect(result.messages).toBeUndefined();
+  });
+});
+
+describe("pageContext — Repair B: already-EVICTED reprojection (RC4 CVM closure repair)", () => {
+  it("B: already-EVICTED reconstructed AutoInject packet is reprojected without any claim call", () => {
+    const reconstructed = autoinjectMessage("del-evicted-1", "FULL ORIGINAL PACKET TEXT ".repeat(50));
+    const messages = [reconstructed, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCalled = false;
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-evicted-1",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-evicted-1", packetArtifactRef: "art-evicted-1", packetSha256: "e".repeat(64) },
+          }),
+        ]),
+        claimPages: () => {
+          claimCalled = true;
+          return { ok: true, claimedObjIds: [] };
+        },
+      }),
+    );
+    expect(claimCalled).toBe(false); // Path B: no claim call for an already-EVICTED object
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.newlyClaimedCount).toBe(0);
+    expect(result.pagedCount).toBe(1);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(typeof patched[0]?.content).toBe("string");
+    expect((patched[0]?.content as string)).toContain("[SECOND_BRAIN_VMEM]");
+    expect((patched[0]?.content as string)).not.toContain("FULL ORIGINAL PACKET TEXT");
+    expect(result.stateBefore).toEqual(["EVICTED"]);
+    expect(result.stateAfter).toEqual(["EVICTED_REPROJECTED"]);
+  });
+
+  it("C: already-EVICTED reconstructed RTD toolResult is reprojected without any claim call", () => {
+    const reconstructed = toolResultMessage("call-evicted-1", false, "FULL ORIGINAL TOOL OUTPUT ".repeat(50));
+    const messages = [reconstructed, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCalled = false;
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-tool-evicted-1",
+            kind: "TOOL_OBSERVATION",
+            residencyState: "EVICTED",
+            metadata: { toolCallId: "call-evicted-1", artifactRef: "art-tool-evicted-1" },
+          }),
+        ]),
+        claimPages: () => {
+          claimCalled = true;
+          return { ok: true, claimedObjIds: [] };
+        },
+      }),
+    );
+    expect(claimCalled).toBe(false);
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.newlyClaimedCount).toBe(0);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(Array.isArray(patched[0]?.content)).toBe(true);
+    const blocks = patched[0]?.content as Array<{ type: string; text: string }>;
+    expect(blocks[0]?.text).toContain("[SECOND_BRAIN_VMEM]");
+    expect(blocks[0]?.text).not.toContain("FULL ORIGINAL TOOL OUTPUT");
+  });
+
+  it("D: an already-pointerized message (content already starts with [SECOND_BRAIN_VMEM]) is never re-candidated, never mutated, never double counted", () => {
+    const alreadyPointerized = autoinjectMessage(
+      "del-1",
+      [
+        "[SECOND_BRAIN_VMEM]",
+        "kind=RESEARCH_RESULT",
+        "obj_id=obj-research-1",
+        "delivery_id=del-1",
+        "state=EVICTED",
+        "Recoverable (deterministic, no LLM): second_brain vmem resolve sess-paging-1 obj-research-1 --json",
+      ].join("\n"),
+    );
+    const messages = [alreadyPointerized, assistantMessage(), assistantMessage(), assistantMessage()];
+    let listCalled = false;
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: () => {
+          listCalled = true;
+          return {
+            ok: true,
+            objects: [
+              prePageObj({
+                objId: "obj-research-1",
+                kind: "RESEARCH_RESULT",
+                residencyState: "EVICTED",
+                metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+              }),
+            ],
+          };
+        },
+      }),
+    );
+    // The double-wrap guard rejects this element in candidateFor -> zero structural
+    // candidates -> budget check short-circuits before the vmem-list call is ever made.
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(listCalled).toBe(false);
+    expect(messages[0]).toBe(alreadyPointerized); // byte-for-byte untouched
+  });
+
+  it("E: an under-proven EVICTED object (missing artifact proof metadata) is untouched, same as the existing under-proven RESIDENT case", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-1" }, // missing packetArtifactRef/packetSha256
+          }),
+        ]),
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(messages[0]).toBe(original);
+  });
+
+  it("F: wrong session — listPrePage is inherently session-scoped (real CLI: `vmem list <session>`); an object returned for a DIFFERENT session query never authorizes a replacement for THIS session's message", () => {
+    const sessionAObjects = [
+      prePageObj({
+        objId: "obj-a",
+        kind: "RESEARCH_RESULT",
+        residencyState: "EVICTED",
+        metadata: { deliveryId: "del-1", packetArtifactRef: "art-a", packetSha256: "a".repeat(64) },
+      }),
+    ];
+    let calledWithSession: string | undefined;
+    const listPrePage = (opts: { hostSessionId: string }): VmemListPrePageSyncResult => {
+      calledWithSession = opts.hostSessionId;
+      // Simulates the real `second_brain vmem list <session>` CLI: only ever returns
+      // objects belonging to the QUERIED session.
+      return opts.hostSessionId === "session-a" ? { ok: true, objects: sessionAObjects } : { ok: true, objects: [] };
+    };
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(baseOptions({ hostSessionId: "session-b", messages, listPrePage }));
+    expect(calledWithSession).toBe("session-b");
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+    expect(messages[0]).toBe(original);
+  });
+
+  it("G: current-turn pin window: a proof-backed EVICTED candidate whose live message is inside the pin window is untouched (same pin-window rule applies to both paths)", () => {
+    const pinnedReconstructed = autoinjectMessage("del-pinned-evicted");
+    const messages = [assistantMessage(), assistantMessage(), pinnedReconstructed, assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 2 }, // last 2 elements pinned: indices [2,3]
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-pinned",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-pinned-evicted", packetArtifactRef: "art-pinned", packetSha256: "f".repeat(64) },
+          }),
+        ]),
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0 });
+  });
+
+  it("H: mixed event — one RESIDENT (Path A) + one already-EVICTED reconstructed (Path B) in the SAME context event: exactly one claim call, containing ONLY the RESIDENT object's id; both end up pointerized; counts correct", () => {
+    const residentMsg = autoinjectMessage("del-resident");
+    const evictedMsg = autoinjectMessage("del-evicted");
+    const messages = [residentMsg, evictedMsg, assistantMessage(), assistantMessage(), assistantMessage()];
+    let claimCallCount = 0;
+    let claimedCandidates: Array<{ objId: string; kind: string }> = [];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-resident",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-resident", packetArtifactRef: "art-resident", packetSha256: "1".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-evicted",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-evicted", packetArtifactRef: "art-evicted", packetSha256: "2".repeat(64) },
+          }),
+        ]),
+        claimPages: (opts) => {
+          claimCallCount += 1;
+          claimedCandidates = opts.candidates;
+          return { ok: true, claimedObjIds: opts.candidates.map((c) => c.objId) };
+        },
+      }),
+    );
+    expect(claimCallCount).toBe(1); // ONE claim call for the whole event
+    expect(claimedCandidates).toEqual([{ objId: "obj-resident", kind: "RESEARCH_RESULT" }]); // ONLY the RESIDENT id
+    expect(result.newlyClaimedCount).toBe(1);
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.pagedCount).toBe(2);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect((patched[0]?.content as string)).toContain("obj-resident");
+    expect((patched[1]?.content as string)).toContain("obj-evicted");
+  });
+
+  it("I-1: claim subprocess failure in a mixed event — EVICTED reprojection candidates still get pointerized independently (documented design decision); the RESIDENT candidate stays untouched; the claim error is surfaced", () => {
+    const residentMsg = autoinjectMessage("del-resident-fail");
+    const evictedMsg = autoinjectMessage("del-evicted-fail");
+    const messages = [residentMsg, evictedMsg, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-resident-fail",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-resident-fail", packetArtifactRef: "art-r", packetSha256: "3".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-evicted-fail",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-evicted-fail", packetArtifactRef: "art-e", packetSha256: "4".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim([], false, "simulated claim-pages subprocess failure (mixed event)"),
+      }),
+    );
+    expect(result.newlyClaimedCount).toBe(0);
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.pagedCount).toBe(1);
+    expect(result.error).toBe("simulated claim-pages subprocess failure (mixed event)");
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(patched[0]).toBe(residentMsg); // untouched: the claim call for this group failed
+    expect((patched[1]?.content as string)).toContain("obj-evicted-fail"); // reprojected independently
+  });
+
+  it("I-1b: claim subprocess failure with ONLY RESIDENT candidates (no EVICTED in the event) still returns the ORIGINAL fully fail-open shape, unaffected by this repair", () => {
+    const original = autoinjectMessage("del-1");
+    const messages = [original, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-1",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-1", packetArtifactRef: "art-1", packetSha256: "a".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim([], false, "simulated claim-pages subprocess failure"),
+      }),
+    );
+    expect(result).toEqual({ messages: undefined, pagedCount: 0, error: "simulated claim-pages subprocess failure" });
+    expect(messages[0]).toBe(original);
+  });
+
+  it("I-2: claim call succeeds overall but a SPECIFIC RESIDENT candidate loses the CAS race — that candidate stays untouched, unaffected by an EVICTED reprojection candidate in the same event", () => {
+    const residentMsg = autoinjectMessage("del-resident-cas");
+    const evictedMsg = autoinjectMessage("del-evicted-cas");
+    const messages = [residentMsg, evictedMsg, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-resident-cas",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-resident-cas", packetArtifactRef: "art-r2", packetSha256: "5".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-evicted-cas",
+            kind: "RESEARCH_RESULT",
+            residencyState: "EVICTED",
+            metadata: { deliveryId: "del-evicted-cas", packetArtifactRef: "art-e2", packetSha256: "6".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim([]), // claim call succeeded (ok:true) but confirmed NOTHING
+      }),
+    );
+    expect(result.newlyClaimedCount).toBe(0);
+    expect(result.reprojectedPageCount).toBe(1);
+    expect(result.pagedCount).toBe(1);
+    expect(result.error).toBeUndefined(); // claim call itself succeeded; just confirmed nothing
+    const patched = result.messages as Array<Record<string, unknown>>;
+    expect(patched[0]).toBe(residentMsg); // untouched: lost the CAS race
+    expect((patched[1]?.content as string)).toContain("obj-evicted-cas");
   });
 });

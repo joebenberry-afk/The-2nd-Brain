@@ -38,6 +38,22 @@ export function safeJson(value: unknown): string {
   }
 }
 
+/**
+ * Count-only, never-throws occurrence counter for an exact literal
+ * substring in an already-serialized string. RC4 CVM closure repair:
+ * `providerRequestMeta` reuses this against the SAME serialized payload
+ * string it already computes `request_bytes` from — counts only, the
+ * marker text and surrounding content are never stored or logged.
+ */
+export function countOccurrences(haystack: string, marker: string): number {
+  if (marker.length === 0) return 0;
+  try {
+    return haystack.split(marker).length - 1;
+  } catch {
+    return 0;
+  }
+}
+
 /** Truncate a string to at most `max` characters. */
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max);
@@ -318,6 +334,14 @@ export interface ContextPagingRecord extends BaseRecord {
   resident_budget: number | null;
   requested_page_count: number | null;
   claimed_page_count: number | null;
+  // RC4 CVM closure repair (Repair B) additive fields: `newly_claimed_count`
+  // is Path A's real state-transition count (the SAME real count
+  // `claimed_page_count` already meant); `reprojected_page_count` is Path
+  // B's already-EVICTED, zero-DB-write pointerization count this event.
+  // `paged_count` above continues to mean "total replacements this event"
+  // = newly_claimed_count + reprojected_page_count.
+  newly_claimed_count: number | null;
+  reprojected_page_count: number | null;
   estimated_tokens_before: number | null;
   estimated_tokens_after: number | null;
   estimated_tokens_removed: number | null;
@@ -335,6 +359,8 @@ export interface ContextPagingDetails {
   residentBudget?: number;
   requestedPageCount?: number;
   claimedPageCount?: number;
+  newlyClaimedCount?: number;
+  reprojectedPageCount?: number;
   estimatedTokensBefore?: number;
   estimatedTokensAfter?: number;
   objectKinds?: string[];
@@ -379,6 +405,10 @@ export function contextPaging(
       typeof details?.requestedPageCount === "number" ? details.requestedPageCount : null,
     claimed_page_count:
       typeof details?.claimedPageCount === "number" ? details.claimedPageCount : null,
+    newly_claimed_count:
+      typeof details?.newlyClaimedCount === "number" ? details.newlyClaimedCount : null,
+    reprojected_page_count:
+      typeof details?.reprojectedPageCount === "number" ? details.reprojectedPageCount : null,
     estimated_tokens_before: typeof before === "number" ? before : null,
     estimated_tokens_after: typeof after === "number" ? after : null,
     estimated_tokens_removed: removed,
@@ -1008,6 +1038,17 @@ export interface ProviderRequestMetaRecord extends BaseRecord {
   system_prefix_sha?: string;
   /** sha256 of the serialized tool surface; absent when the payload has no tools. */
   tool_surface_sha?: string;
+  /**
+   * RC4 CVM closure repair: a COUNT ONLY of the exact literal substring
+   * `"[SECOND_BRAIN_VMEM]"` in the already-serialized outgoing payload —
+   * proves the live provider request actually contained one or more real
+   * VMem pointers, without ever storing the pointer text, surrounding
+   * content, or the payload itself. Reuses the SAME serialized string
+   * `request_bytes` already computes (no second `JSON.stringify`).
+   */
+  vmem_pointer_count: number;
+  /** Same technique, counting `"[SECOND_BRAIN_RTD]"` occurrences. */
+  rtd_pointer_count: number;
 }
 
 /**
@@ -1034,13 +1075,20 @@ export function providerRequestMeta(
       : {};
   const keys = Object.keys(obj).sort();
   const messages = Array.isArray(obj.messages) ? (obj.messages as unknown[]) : [];
+  // RC4 CVM closure repair: serialize ONCE, reuse the SAME string for both
+  // request_bytes (via byteLength's string branch, which never re-serializes)
+  // and the pointer-marker counts below — never a second JSON.stringify of
+  // the payload, counts only, never the string itself stored/logged.
+  const serializedPayload = safeJson(obj);
   const extra: Record<string, unknown> = {
     provider,
     model,
     request_seq: requestSeq,
-    request_bytes: byteLength(obj),
+    request_bytes: byteLength(serializedPayload),
     message_count: messages.length,
     payload_keys: keys,
+    vmem_pointer_count: countOccurrences(serializedPayload, "[SECOND_BRAIN_VMEM]"),
+    rtd_pointer_count: countOccurrences(serializedPayload, "[SECOND_BRAIN_RTD]"),
   };
   let prefix = messages;
   for (let i = messages.length - 1; i >= 0; i -= 1) {

@@ -287,6 +287,94 @@ describe("sensors: P3-B economics records (schema v3)", () => {
     expect(record.request_bytes).toBeGreaterThan(0);
   });
 
+  describe("provider_request_meta: RC4 CVM closure repair pointer-marker counts (content-private, counts only)", () => {
+    it("zero pointers: no [SECOND_BRAIN_VMEM]/[SECOND_BRAIN_RTD] marker anywhere -> both counts 0 (existing behavior unchanged)", () => {
+      const payload = {
+        messages: [
+          { role: "system", content: "ordinary system prompt" },
+          { role: "user", content: "ordinary task text" },
+        ],
+      };
+      const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, payload);
+      expect(record.vmem_pointer_count).toBe(0);
+      expect(record.rtd_pointer_count).toBe(0);
+      // existing fields remain intact and correct alongside the new counters.
+      expect(record.request_bytes).toBe(new TextEncoder().encode(JSON.stringify(payload)).length);
+      expect(record.message_count).toBe(2);
+      expect(record.payload_keys).toEqual(["messages"]);
+    });
+
+    it("exactly one VMem pointer -> vmem_pointer_count 1", () => {
+      const payload = {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: [{ type: "text", text: "[SECOND_BRAIN_VMEM]\nkind=TOOL_OBSERVATION\nobj_id=obj-1" }],
+          },
+          { role: "user", content: "task" },
+        ],
+      };
+      const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, payload);
+      expect(record.vmem_pointer_count).toBe(1);
+      expect(record.rtd_pointer_count).toBe(0);
+    });
+
+    it("multiple VMem pointers (and a distinct RTD marker) -> both counted independently", () => {
+      const payload = {
+        messages: [
+          { role: "custom", customType: "brain.autoinject.packet", content: "[SECOND_BRAIN_VMEM]\nkind=RESEARCH_RESULT" },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: [{ type: "text", text: "[SECOND_BRAIN_VMEM]\nkind=TOOL_OBSERVATION" }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-2",
+            content: [{ type: "text", text: "[SECOND_BRAIN_RTD]\ncommand=pytest" }],
+          },
+        ],
+      };
+      const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, payload);
+      expect(record.vmem_pointer_count).toBe(2);
+      expect(record.rtd_pointer_count).toBe(1);
+    });
+
+    it("malformed/unusual payload shape (messages not an array; a non-string content field) -> counter never throws, existing fields stay intact and correct", () => {
+      const payload = {
+        messages: "not-an-array-at-all",
+        tools: [{ type: "function", name: "bash" }],
+        extra: { nested: { deeply: [1, 2, { content: 42 }] } },
+      };
+      let threw = false;
+      let record: ReturnType<typeof sensors.providerRequestMeta> | undefined;
+      try {
+        record = sensors.providerRequestMeta(SESSION, "p", "m", 5, payload);
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(false);
+      expect(record).toBeDefined();
+      expect(record!.vmem_pointer_count).toBe(0);
+      expect(record!.rtd_pointer_count).toBe(0);
+      expect(record!.message_count).toBe(0); // messages is not an array -> defensive 0, unchanged existing behavior
+      expect(record!.request_bytes).toBe(new TextEncoder().encode(JSON.stringify(payload)).length);
+      expect(record!.payload_keys).toEqual(["extra", "messages", "tools"]);
+    });
+
+    it("a real [SECOND_BRAIN_VMEM] marker embedded deep in a non-string field never breaks counting or leaks into any other field", () => {
+      const payload = {
+        messages: [],
+        weird: { a: { b: { c: "[SECOND_BRAIN_VMEM]\nkind=X" } } },
+      };
+      const record = sensors.providerRequestMeta(SESSION, "p", "m", 1, payload);
+      expect(record.vmem_pointer_count).toBe(1);
+      const text = JSON.stringify(record);
+      expect(text).not.toContain("SECOND_BRAIN_VMEM"); // the record itself never stores the marker text
+    });
+  });
+
   it("provider_response_meta keeps status and allowlisted cache/rate-limit headers only", () => {
     const record = sensors.providerResponseMeta(SESSION, "deepseek", "m", 200, {
       "x-ratelimit-remaining": "42",
@@ -660,6 +748,8 @@ describe("Part B/E: contextPaging (privacy-safe paging-count telemetry)", () => 
     expect(record.resident_budget).toBeNull();
     expect(record.requested_page_count).toBeNull();
     expect(record.claimed_page_count).toBeNull();
+    expect(record.newly_claimed_count).toBeNull();
+    expect(record.reprojected_page_count).toBeNull();
     expect(record.estimated_tokens_before).toBeNull();
     expect(record.estimated_tokens_after).toBeNull();
     expect(record.estimated_tokens_removed).toBeNull();
@@ -694,6 +784,28 @@ describe("Part B/E: contextPaging (privacy-safe paging-count telemetry)", () => 
     expect(record.object_kinds).toEqual(["RESEARCH_RESULT", "TOOL_OBSERVATION"]);
     expect(record.state_before).toEqual(["RESIDENT", "FAULTED_IN"]);
     expect(record.state_after).toEqual(["EVICTED"]);
+  });
+
+  it("RC4 CVM closure repair (Repair B): populates newly_claimed_count/reprojected_page_count additively; paged_count keeps meaning 'total replacements' covering both paths", () => {
+    const record = sensors.contextPaging(SESSION, 2, {
+      candidateCount: 2,
+      eligibleCount: 2,
+      requestedPageCount: 1, // Path A ONLY — the reprojected candidate was never "requested" to claim
+      claimedPageCount: 1,
+      newlyClaimedCount: 1,
+      reprojectedPageCount: 1,
+      objectKinds: ["RESEARCH_RESULT"],
+      stateBefore: ["RESIDENT", "EVICTED"],
+      stateAfter: ["EVICTED", "EVICTED_REPROJECTED"],
+    });
+    expect(record.paged_count).toBe(2);
+    expect(record.newly_claimed_count).toBe(1);
+    expect(record.reprojected_page_count).toBe(1);
+    expect(record.requested_page_count).toBe(1);
+    // EVICTED_REPROJECTED is a well-formed recognized token (letters/underscore
+    // only, <=24 chars) -- it survives the SAME allowlist filter as every
+    // other kind/state label, never dropped as free text.
+    expect(record.state_after).toEqual(["EVICTED", "EVICTED_REPROJECTED"]);
   });
 
   it("estimated_tokens_removed never goes negative (clamped at 0)", () => {
