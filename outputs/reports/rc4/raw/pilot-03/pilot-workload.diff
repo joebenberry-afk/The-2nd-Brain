@@ -1,0 +1,69 @@
+diff --git a/tests/test_vmem.py b/tests/test_vmem.py
+index bdf75ab..2b4aed1 100644
+--- a/tests/test_vmem.py
++++ b/tests/test_vmem.py
+@@ -15,6 +15,8 @@ from second_brain.vmem import (
+     ResidencyState,
+     SessionObjectKind,
+     VMemStore,
++    _compute_base_priority,
++    _estimate_tokens,
+     resolve_object,
+ )
+ 
+@@ -75,6 +77,55 @@ def _insert_delivery_row(
+         conn.close()
+ 
+ 
++class TestTokenEstimateAndBasePriority:
++    """Direct unit tests for the small pure helpers `_estimate_tokens` and
++    `_compute_base_priority` (Plan §6) — previously exercised only
++    indirectly via `VMemStore.store`."""
++
++    def test_estimate_tokens_four_chars_per_token(self) -> None:
++        assert _estimate_tokens("abcd") == 1
++        assert _estimate_tokens("abcdefgh") == 2
++        assert _estimate_tokens("abcdefghi") == 2  # floor division, 9 // 4 == 2
++
++    def test_estimate_tokens_empty_or_short_floors_to_one(self) -> None:
++        # Deterministic floor: never zero, even for empty/very short input.
++        assert _estimate_tokens("") == 1
++        assert _estimate_tokens("a") == 1
++        assert _estimate_tokens("abc") == 1
++
++    def test_compute_base_priority_pinned_always_wins(self) -> None:
++        # Pinned overrides kind entirely, including low-priority kinds.
++        for kind in SessionObjectKind:
++            assert _compute_base_priority(kind, pinned=True) == 1000.0
++
++    def test_compute_base_priority_decision_and_blocker_are_high(self) -> None:
++        assert _compute_base_priority(SessionObjectKind.DECISION, pinned=False) == 100.0
++        assert _compute_base_priority(SessionObjectKind.BLOCKER, pinned=False) == 100.0
++
++    def test_compute_base_priority_mid_tier_kinds(self) -> None:
++        mid_tier = (
++            SessionObjectKind.WORKER_FINDING,
++            SessionObjectKind.TEST_EVIDENCE,
++            SessionObjectKind.CODE_REGION,
++            SessionObjectKind.RESEARCH_RESULT,
++        )
++        for kind in mid_tier:
++            assert _compute_base_priority(kind, pinned=False) == 50.0
++
++    def test_compute_base_priority_other_kinds_default_low(self) -> None:
++        high_and_mid = {
++            SessionObjectKind.DECISION,
++            SessionObjectKind.BLOCKER,
++            SessionObjectKind.WORKER_FINDING,
++            SessionObjectKind.TEST_EVIDENCE,
++            SessionObjectKind.CODE_REGION,
++            SessionObjectKind.RESEARCH_RESULT,
++        }
++        for kind in SessionObjectKind:
++            if kind not in high_and_mid:
++                assert _compute_base_priority(kind, pinned=False) == 10.0
++
++
+ class TestVMemStorageAndResidency:
+     """Tests for object storage, kind assignment, and residency state transitions."""
+ 
