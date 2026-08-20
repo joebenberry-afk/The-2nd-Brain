@@ -204,6 +204,9 @@ describe("pageContext — Defect B: successful proactive page (the claim, end-to
     expect(content).toContain("obj-research-1");
     expect(content).toContain("del-1");
     expect(content).not.toContain("x".repeat(200)); // original packet text never leaks
+    // Recovery pointer carries the REAL host session id, not a placeholder.
+    expect(content).toContain("second_brain vmem resolve sess-paging-1 obj-research-1 --json");
+    expect(content).not.toContain("<session_id>");
     // Every other element byte-for-byte identical.
     expect(patched[1]).toBe(messages[1]);
     expect(patched[2]).toBe(messages[2]);
@@ -243,6 +246,49 @@ describe("pageContext — Defect B: successful proactive page (the claim, end-to
     expect(blocks[0]?.text).toContain("obj-tool-1");
     expect(blocks[0]?.text).toContain("call-1");
     expect(blocks[0]?.text).not.toContain("y".repeat(200));
+    // Recovery pointer carries the REAL host session id, not a placeholder.
+    expect(blocks[0]?.text).toContain("second_brain vmem resolve sess-paging-1 obj-tool-1 --json");
+    expect(blocks[0]?.text).not.toContain("<session_id>");
+  });
+
+  it("recovery pointer threads the ACTUAL hostSessionId end-to-end for both paging classes (distinct fixture value, not the shared default)", () => {
+    const distinctSessionId = "sess-recovery-distinct-9f3e";
+    const autoinjectOriginal = autoinjectMessage("del-2");
+    const toolOriginal = toolResultMessage("call-2");
+    const messages = [autoinjectOriginal, toolOriginal, assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        hostSessionId: distinctSessionId,
+        messages,
+        cfg: { ...ENABLED_CFG, maxPagesPerContextEvent: 3 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-research-2",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-2", packetArtifactRef: "art-2", packetSha256: "b".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-tool-2",
+            kind: "TOOL_OBSERVATION",
+            residencyState: "FAULTED_IN",
+            metadata: { toolCallId: "call-2", artifactRef: "art-tool-2" },
+          }),
+        ]),
+      }),
+    );
+    expect(result.pagedCount).toBe(2);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    const autoinjectContent = patched[0]?.content as string;
+    expect(autoinjectContent).toContain(
+      `second_brain vmem resolve ${distinctSessionId} obj-research-2 --json`,
+    );
+    expect(autoinjectContent).not.toContain("<session_id>");
+    const toolBlocks = patched[1]?.content as Array<{ type: string; text: string }>;
+    expect(toolBlocks[0]?.text).toContain(
+      `second_brain vmem resolve ${distinctSessionId} obj-tool-2 --json`,
+    );
+    expect(toolBlocks[0]?.text).not.toContain("<session_id>");
   });
 
   it("telemetry fields: candidate/eligible/requested/claimed counts and token before/after are populated correctly", () => {
