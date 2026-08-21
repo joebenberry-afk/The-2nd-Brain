@@ -1,0 +1,16 @@
+Task complete and verified against host-observable evidence:
+
+- Child `sub-a44bbe1d` (`trivial-math-child`) was spawned, computed 17*19=323 with real Python, and replied via `agent_message.send` with the exact reply payload `323`.
+- `await rlm.list_subagents()` showed the child with `status='error'` (terminal/no-longer-active) after the reply was delivered.
+- Cleanup performed: `await rlm.delete_subagent(handle.rlm_child_id)`; confirmed by `await rlm.list_subagents()` returning `[]`.
+
+Final report:
+
+PARENT_PID=44152
+CHILD_ID=sub-a44bbe1d
+CHILD_NAME=trivial-math-child
+RESULT=323
+CHILD_EXIT_STATUS=Observed status='error' (terminal) in list_subagents right after reply; confirmed no longer active
+CLEANUP=Called await rlm.delete_subagent(handle.rlm_child_id); list_subagents() now returns [] confirming removal
+
+No further blockers; work is complete and evidence preserved in kernel output above.
