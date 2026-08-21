@@ -1,0 +1,8 @@
+Cleanup confirmed via explicit `rlm.delete_subagent(subs[0])` call, status remains `completed`.
+
+PARENT_PID=35884
+CHILD_ID=sub-243a98f2
+CHILD_NAME=trivial-math-child-2
+RESULT=667
+CHILD_EXIT_STATUS=completed (confirmed via rlm.list_subagents() status field before and after cleanup)
+CLEANUP=Explicitly called await rlm.delete_subagent(subs[0]) after observing status='completed'; call succeeded and returned the subagent record.
