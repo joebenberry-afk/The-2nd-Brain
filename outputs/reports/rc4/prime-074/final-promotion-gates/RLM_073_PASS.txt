@@ -72,3 +72,23 @@ orphans. No reprovision-collision EPERM occurred at any point (steady-state venv
 kernel already "ready" throughout, matching the RLM_ENVIRONMENT_MATRIX.md prediction).
 
 PHASE I: PASS
+
+
+## Addendum: daemon stderr baseline (added after user flagged console output)
+
+The external daemon's own log (raw/073-daemon-full-stderr.log,
+agentdir-073/logs/prime-eperm-gate-073-final.ca654808.log) was reviewed in full after
+the user reported observing errors in the daemon's console during this phase. Exact
+counts across all 3 attempts:
+
+- `Supervisor command ack_result failed: EPERM: operation not permitted, fsync`
+  (CommandRecoveryJournal.compact() -> fsyncSync() on a directory file descriptor,
+  which Windows does not support -- non-fatal, caught, logged): 24 occurrences.
+- `failed to persist RLM subagent display entry: EPERM ... rename ...`: 1 occurrence.
+- `Idle eviction sweep failed: Timed out draining daemon mutations for idle eviction`:
+  1 occurrence.
+- No other/new error signatures.
+
+None of these caused any of the 3 spawn/task/result/cleanup cycles to fail; all 3
+completed successfully with correct results despite these non-fatal, logged warnings.
+This is the baseline compared against v0.7.4 in STDERR_COMPARISON_073_VS_074.md.
