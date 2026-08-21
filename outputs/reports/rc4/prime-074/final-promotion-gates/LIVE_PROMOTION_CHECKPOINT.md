@@ -167,3 +167,21 @@ Roll back immediately (do not attempt a speculative production fix) if ANY of:
   (RLM_074_PASS.txt, PRIME_AB_074.txt) that cannot be immediately, confidently
   attributed to a known, already-documented, non-blocking cause (e.g. the fsync-on-
   directory EPERM class, which is expected and non-fatal).
+
+## Discovery-context discrepancy: root cause confirmed and documented
+
+External PowerShell's `os.homedir()` resolution did not match this session's live
+`PRIME_AGENT_CODING_AGENT_DIR` (`C:\Users\assas\.prime\agent`), causing
+`findAllTrackedWorkers()` (the only functional Windows discovery path, since
+`scanListeningDaemons()`/`scanSocketDir()` are hardcoded to return `[]` on win32 --
+see `packages/coding-agent/src/cli/daemon-ps.ts` lines ~177-242) to look in the wrong
+directory and find nothing. Explicitly setting `$env:PRIME_AGENT_CODING_AGENT_DIR`
+before invoking any `prime-agent` discovery/lifecycle command resolves it -- confirmed
+live: external PowerShell with the explicit env var now sees socket
+`\\.\pipe\prime-agent-daemon`, PID 30012, version 0.7.3, status current, 2 sessions,
+matching this session's own view exactly.
+
+This is a real, additional Windows-specific finding in Prime's own daemon discovery
+code (a genuine second gap distinct from RLM_ROOT_CAUSE.md), worth carrying forward as
+a known operational note for any future external/scripted daemon lifecycle command on
+this machine: always pass `PRIME_AGENT_CODING_AGENT_DIR` explicitly.
