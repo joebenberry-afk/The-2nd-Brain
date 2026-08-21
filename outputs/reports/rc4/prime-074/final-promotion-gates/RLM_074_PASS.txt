@@ -1,0 +1,88 @@
+RLM_074_PASS.txt
+
+Real driver -> external isolated daemon -> RLM child -> real task -> result -> clean
+exit, 3/3 consecutive fresh spawns, isolated patched v0.7.4 candidate.
+
+## Setup
+
+- Worktree: C:\Users\assas\.prime\agent\prime-upgrade-worktrees\prime-074, commit
+  af0b8e00b9f704e834787fd321065ca78281f2aa (v0.7.4), exactly the 2 already-qualified
+  Windows patches applied, no 3rd (candidate) patch applied.
+- Isolated agent/config dir: C:\Users\assas\.prime-eperm-repro\agentdir-074 (own
+  auth/models/settings, own sessions/session-artifacts/daemon-workers/rlm-ledger).
+- Isolated kernel venv: C:\Users\assas\.prime-eperm-repro\venvB (freshly rebuilt clean
+  via bootstrap-cli.ts before this phase).
+- Isolated daemon socket: \\.\pipe\prime-eperm-gate-074-final, started by the user in a
+  plain external PowerShell window (outside any Prime session), independently verified
+  by this session as a genuine v0.7.4 daemon via a direct DaemonClient handshake:
+  `appVersion: "0.7.4"`, `buildId: "release-0.7.4"`,
+  `entrypointPath: ...prime-upgrade-worktrees\prime-074\...\cli.ts`,
+  `supervisorPid: 25092` (matches the independently queried live process list).
+- This session connected purely as a CLIENT; no new listening socket was created by
+  this session. C:\Tools\prime-agent (live) was not started, stopped, restarted, or
+  modified at any point. The isolated v0.7.3 daemon (Phase I) had already been shut
+  down by the user before this phase started (independently confirmed: no process
+  referencing throwaway-073/eperm-gate-073-final remained).
+
+## Attempt 1
+
+- Real child `sub-8a1372ae` ("trivial-math-child-074-1"), task 41*43.
+- Ledger: spawn at 04:53:27.096Z, delete at 04:55:05.131Z.
+- Driver's final report: PARENT_PID=46540, CHILD_ID=sub-8a1372ae, RESULT=1763
+  (41*43=1763, correct), CHILD_EXIT_STATUS=completed, CLEANUP=explicit
+  rlm.delete_subagent() call, list_subagents() empty afterward.
+
+## Attempt 2
+
+- Real child `sub-dac14608` ("trivial-math-child-074-2"), task 47*53.
+- Ledger: spawn at 04:55:34.926Z, delete at 04:55:47.114Z.
+- Driver's final report: PARENT_PID=45016, CHILD_ID=sub-dac14608, RESULT=2491
+  (47*53=2491, correct), CHILD_EXIT_STATUS=completed (status confirmed via the
+  rlm.delete_subagent() return value), CLEANUP=confirmed.
+
+## Attempt 3
+
+- Real child `sub-2a75f75f` ("trivial-math-child-074-3"), task 59*61.
+- Ledger: spawn at 04:56:13.489Z, delete at 04:57:50.946Z.
+- Driver's final report: PARENT_PID=46400, CHILD_ID=sub-2a75f75f, RESULT=3599
+  (59*61=3599, correct), CHILD_EXIT_STATUS=completed, CLEANUP=confirmed,
+  list_subagents() empty afterward.
+
+## Post-run process check
+
+`Get-CimInstance Win32_Process` after all 3 attempts shows exactly one process
+referencing this isolated setup: the external v0.7.4 daemon itself (PID 25092, the
+user's own PowerShell window, still running). No orphaned child/kernel processes
+remain.
+
+## Daemon stderr: NOT error-free, but NOT a regression -- see STDERR_COMPARISON_073_VS_074.md
+
+Per explicit instruction, the daemon's own stderr/log was captured in full for this
+entire phase (raw/074-daemon-full-stderr.log) and compared signature-by-signature
+against the v0.7.3 baseline (raw/073-daemon-full-stderr.log). Summary:
+
+- `Supervisor command ack_result failed: EPERM: operation not permitted, fsync`
+  (CommandRecoveryJournal.compact() calling fsyncSync() on a directory handle, which
+  Windows does not support -- non-fatal): 12 occurrences (v0.7.3: 24). Lower, not
+  higher.
+- `failed to persist RLM subagent display entry: EPERM ... rename ...`: 0 occurrences
+  (v0.7.3: 1). Did not recur.
+- `Idle eviction sweep failed: Timed out draining daemon mutations for idle eviction`:
+  1 occurrence (v0.7.3: 1). Identical.
+- No new/different error signature appeared.
+
+`command-recovery-journal.ts` (source of the dominant fsync-EPERM signature) is
+byte-for-byte identical between the two worktrees -- this is mechanically the same
+pre-existing Windows-portability defect in both versions' shared daemon-supervisor
+code, not a 0.7.4 regression. Full detail in STDERR_COMPARISON_073_VS_074.md.
+
+## Result
+
+3/3 consecutive fresh real RLM child spawns succeeded: correct results, real
+independently-verifiable ledger spawn/delete pairs, clean process-level exit with no
+orphans, real daemon identity independently verified. No reprovision-collision EPERM
+occurred at any point. Non-fatal, pre-existing, common-code filesystem/journal
+warnings occurred at a rate no worse than the v0.7.3 baseline, with zero new failure
+signatures.
+
+PHASE J: PASS
