@@ -1,0 +1,37 @@
+PRIME_AB_073.txt
+
+Fresh flaky-test A/B run, isolated patched v0.7.3, non-live, this campaign pass.
+
+Worktree: C:\Users\assas\.prime-074-compat\throwaway-073 (commit
+61131b2d195ba7a67a4ce8ac60bb10cecae07b67, exactly the 2 already-qualified Windows
+patches, confirmed via git status --short before the run). Command:
+node_modules\.bin\vitest.cmd --run from packages/coding-agent. Run to completion, no
+retries, no edits, no additional patches, live install untouched.
+
+Exit code: 1
+
+Vitest summary (verbatim):
+ Test Files  63 failed | 252 passed | 8 skipped (323)
+      Tests  323 failed | 3868 passed | 61 skipped (4252)
+     Errors  14 errors
+   Duration  261.89s
+
+Full log: raw/ab-073-vitest-full.log (copied from
+C:\Users\assas\.prime-eperm-repro\logs\ab-073-vitest-full.log)
+Full worker report: PRIME_AB_073_WORKER_REPORT.md (323 individual failures, file, test
+name, category, first error line)
+
+Notable: this run was executed as a nested RLM subagent under this session's own live
+daemon (RLM_DEPTH=1, RLM_MAX_DEPTH=1 ambient env), which leaked into the spawned vitest
+child process and caused ~54-59 test failures whose fixtures assume a deeper RLM
+recursion allowance than the ambient env provides. This is a property of *how this
+qualification pass executed the suite* (nested under an already-depth-1 session), not a
+Prime code defect, and is addressed in PRIME_AB_COMPARISON.md since it affects the
+0.7.4 run identically.
+
+Also notable: 3 real occurrences of the already-documented RLM_ROOT_CAUSE.md defect
+(`Failed to set up the Python kernel runtime. EPERM: operation not permitted, unlink
+'C:\Users\assas\.prime\agent\kernel-venv\Scripts\python.exe'`) -- Prime's own
+`kernel-bootstrap.test.ts` defaults to the shared live kernel-venv path (no isolation
+override in the test harness), and collided with this session's own long-lived live
+kernel holding that exact file open, exactly matching the documented mechanism.
