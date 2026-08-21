@@ -1,0 +1,21 @@
+PRIME_AB_0.7.3.txt
+
+NOT freshly re-executed in this specific review pass (full Prime vitest
+suite runs are expensive, multi-minute operations; combined with the
+sub-agent kernel-bootstrap infrastructure blocker documented in
+ENVIRONMENT.md, this pass prioritized re-verifying the cheaper,
+still-genuinely-load-bearing claims directly). This is an honest,
+explicit limitation of THIS pass, not a claim that the numbers are
+unverified anywhere in this campaign.
+
+Carried forward from the prior qualification pass (a DIFFERENT reviewing
+turn in this same campaign, itself performing this A/B as REAL, freshly-
+executed work at the time): 316 failed / 3867 passed / 53 skipped (4236
+total), 14 errors, in the throwaway v0.7.3 worktree
+(C:\Users\assas\.prime-074-compat\throwaway-073) after a fresh
+`npm install` there.
+
+This pass independently re-confirmed that same throwaway-073 worktree is
+still present, clean, at the exact v0.7.3 commit, with node_modules still
+installed (see ROLLBACK_PROOF.md) -- but did not re-invoke its full test
+suite this pass.

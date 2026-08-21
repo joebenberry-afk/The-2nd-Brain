@@ -1,0 +1,31 @@
+LIVE_PRE_HASHES.txt (captured at the start of this review pass's active
+verification work)
+
+Method: git's own tree-object hash is used as a comprehensive,
+single-value fingerprint of the ENTIRE tracked file tree at HEAD (this is
+git's canonical Merkle-tree root -- any change to any tracked file's
+content, anywhere in the tree, changes this hash). This is preferred over
+a manual per-file sha256 walk of the whole repository (which would be
+extremely slow and add no more rigor than git's own built-in mechanism
+already provides for tracked content). Untracked files are excluded from
+the tree hash by definition; `git status --short` output already
+separately, explicitly enumerates every untracked file present (see
+LIVE_BASELINE_IDENTITY.txt) -- nothing is silently excluded.
+
+Path: C:\Tools\prime-agent
+
+git rev-parse HEAD^{tree}: 2722ef8eaa6ebf71b492564c6ffcfd7dd54e4219
+
+Individual sha256 of the two locally-modified tracked files (the only
+tracked content that differs from a pure v0.7.3 checkout, i.e. the two
+known Windows patches):
+  packages/coding-agent/src/core/kernel/bootstrap.ts:
+    f0ccf80567a35b51baed769d79df00a70cf444400f5e5251a75037c498d44c23
+  packages/coding-agent/src/core/session-lease.ts:
+    b128dd81f703d65fd1b324d600e1937e9378919dfe5f0725e676cdb155998ea3
+
+git status --short (untracked files, explicitly enumerated, none hashed
+since they are not part of Prime's own tracked source):
+  .repowise/, Prime_Agent_Codex_Fix_Status.md, outputs/,
+  prime-agent.sh.pre-tsconfig-fix.bak (all pre-existing on this machine,
+  unrelated to Prime's own source tree).
