@@ -1,0 +1,24 @@
+LIVE_BASELINE_IDENTITY.txt (freshly re-captured this review pass)
+
+Path: C:\Tools\prime-agent
+
+git status --short:
+ M packages/coding-agent/src/core/kernel/bootstrap.ts
+ M packages/coding-agent/src/core/session-lease.ts
+?? .repowise/
+?? Prime_Agent_Codex_Fix_Status.md
+?? outputs/
+?? prime-agent.sh.pre-tsconfig-fix.bak
+
+git rev-parse HEAD: 61131b2d195ba7a67a4ce8ac60bb10cecae07b67
+git describe --tags --always --dirty: v0.7.3-dirty
+current branch: (detached checkout at the v0.7.3 tag commit; no named local branch)
+applied local patch state: exactly the two known Windows patches
+(bootstrap.ts +9/-2, session-lease.ts +6/-1), matches
+outputs/reports/rc4/prime-074/raw/01-local-patches-073.diff exactly.
+
+This is the SAME installation actively serving the daemon that executed
+this entire external review pass (PRIME_AGENT_LAUNCHER_PATH points here).
+Untracked files (.repowise/, Prime_Agent_Codex_Fix_Status.md, outputs/,
+prime-agent.sh.pre-tsconfig-fix.bak) are pre-existing, unrelated
+housekeeping artifacts on this machine, not created by this review.

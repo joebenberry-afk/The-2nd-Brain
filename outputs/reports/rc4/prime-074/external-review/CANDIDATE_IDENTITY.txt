@@ -1,0 +1,22 @@
+CANDIDATE_IDENTITY.txt (freshly re-captured this review pass)
+
+Path: C:\Users\assas\.prime\agent\prime-upgrade-worktrees\prime-074
+(isolated, detached git worktree, separate from the live install)
+
+git rev-parse HEAD: af0b8e00b9f704e834787fd321065ca78281f2aa
+git describe --tags --always --dirty: v0.7.4-dirty (dirty = the same 2
+  local Windows patches applied on top, intentional)
+git rev-parse v0.7.4 (independently cross-checked): af0b8e00b9f704e834787fd321065ca78281f2aa
+  -- IDENTICAL to HEAD. The tag genuinely resolves to this exact commit;
+  this is not "looks like 0.7.4", it is a verified, byte-exact match.
+git status --short:
+ M packages/coding-agent/src/core/kernel/bootstrap.ts
+ M packages/coding-agent/src/core/session-lease.ts
+(same two patches as the live 0.7.3 baseline, same diff stat: +9/-2 and
++6/-1 respectively)
+
+Isolation confirmed: this worktree is a physically separate directory
+tree from C:\Tools\prime-agent, on a separate detached HEAD, sharing
+only the underlying .git object database (a standard, safe git-worktree
+property -- no working-tree files are shared). No write path exists from
+this candidate into the live installation's working tree.
