@@ -1,12 +1,12 @@
 # Task 4 report: archive-first retirement and restore
 
 ## Status
-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, and source-removal recovery deadlock.
+Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, and partial-deletion risk.
 
 ## Files
 - `src/second_brain/gardener.py`
   - Persists archive destination, retirement reason, and production-safety evidence in authorized records.
-  - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then removes the source lifecycle entry.
+  - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then atomically moves the source into a quarantine location outside lifecycle directories.
   - Cleans incomplete archive output on pre-mutation failures and preserves the source artifact.
   - Restores verified archives to the previous lifecycle directory without overwriting an existing artifact.
   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval.
@@ -15,13 +15,13 @@ Complete. Implemented archive-first `archive_retire` execution and verified rest
   - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
 
 ## Tests
-- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **44 passed**
+- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **45 passed**
 - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
 
 ## Commit
-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`
+`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; atomic recovery fix commit pending
 
 ## Concerns
 - No project-wide suites, formatters, or linters were run per Task 4 scope.
-- Source mutation uses removal only after the archive and retirement record are durable; the archive remains the reversible copy.
+- Source mutation uses an atomic same-volume quarantine move after the archive and retirement record are durable; simulated partial-delete behavior cannot affect the source path, and restore remains byte-identical.
 - Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
