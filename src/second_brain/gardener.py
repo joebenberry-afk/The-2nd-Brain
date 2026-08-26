@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -1357,8 +1358,9 @@ class SkillGardener:
         approval = required_ref(approval_ref, "approval")
         non_regression = required_ref(non_regression_ref, "non-regression")
         rollback = required_ref(rollback_ref, "rollback")
+        production_safety_ref: str | None = None
         if action == "archive_retire" and production_active:
-            required_ref(
+            production_safety_ref = required_ref(
                 recommendation.get("production_safety_ref")
                 or recommendation.get("production_safety_approval_ref")
                 or recommendation.get("production_safety_approval"),
@@ -1522,11 +1524,61 @@ class SkillGardener:
         if replacement_record is not None:
             record["replacement"] = replacement_record
 
+        if action == "archive_retire":
+            record["archive_destination"] = str(archive_ref)[:_MAX_REFERENCE_LENGTH]
+            record["retirement_reason"] = str(
+                recommendation.get("retirement_reason")
+                or recommendation.get("reason")
+                or "authorized maintenance retirement"
+            )[:_MAX_REFERENCE_LENGTH]
+            if production_safety_ref is not None:
+                record["production_safety_ref"] = production_safety_ref
         directory = self.home / "state" / "maintenance" / "authorizations"
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / f"{authorization_id}.json"
         temporary = target.with_suffix(".tmp")
         try:
+            temporary.write_text(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+
+            temporary.replace(target)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise BrainError(f"could not persist maintenance authorization: {exc}") from exc
+        return record
+
+    @staticmethod
+    def _tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | None]]:
+        if not root.is_dir() or root.is_symlink():
+            raise BrainError(f"skill artifact directory is unavailable: {root}")
+        snapshot: dict[str, tuple[str, bytes | None]] = {"": ("dir", None)}
+        try:
+            entries = sorted(root.rglob("*"))
+            for path in entries:
+                relative = path.relative_to(root).as_posix()
+                if path.is_symlink():
+                    raise BrainError(f"skill artifact contains symlink: {relative}")
+                if path.is_dir():
+                    snapshot[relative] = ("dir", None)
+                elif path.is_file():
+                    snapshot[relative] = ("file", path.read_bytes())
+                else:
+                    raise BrainError(f"unsupported skill artifact entry: {relative}")
+        except OSError as exc:
+            raise BrainError(f"could not read skill artifact: {exc}") from exc
+        return snapshot
+
+    def _persist_retirement_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        directory = self.home / "state" / "maintenance" / "retirements"
+        target = directory / f"{record['retirement_record_id']}.json"
+        temporary = target.with_suffix(".tmp")
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
             temporary.write_text(
                 json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
                 encoding="utf-8",
@@ -1537,5 +1589,266 @@ class SkillGardener:
                 temporary.unlink()
             except OSError:
                 pass
-            raise BrainError(f"could not persist maintenance authorization: {exc}") from exc
+            raise BrainError(f"could not persist retirement record: {exc}") from exc
         return record
+
+    def _load_current_authorization(self, authorization: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(authorization, dict):
+            raise BrainError("authorization must be a dict")
+        authorization_id = authorization.get("authorization_id")
+        if not isinstance(authorization_id, str) or not authorization_id:
+            raise BrainError("invalid authorization record ID")
+        path = self.home / "state" / "maintenance" / "authorizations" / (
+            f"{authorization_id}.json"
+        )
+        stored = _read_json_object(path)
+        if not stored or stored.get("authorization_id") != authorization_id:
+            raise BrainError("authorization record is unavailable")
+        for key in (
+            "skill_name",
+            "skill_version",
+            "content_hash",
+            "lifecycle_state",
+            "action_recommended",
+            "action_authorized",
+            "action_executed",
+            "owner",
+            "approval_ref",
+            "non_regression_ref",
+            "rollback_ref",
+            "archive_destination",
+            "production_safety_ref",
+        ):
+            if key in stored and stored.get(key) != authorization.get(key):
+                raise BrainError("authorization record is stale")
+        if stored.get("action_authorized") is not True or stored.get("action_executed") is True:
+            raise BrainError("authorization is not current")
+        return stored
+
+    def _archive_root(self, archive_destination: str) -> Path:
+        if archive_destination.startswith("archive:") or "://" in archive_destination:
+            return self.home / "state" / "maintenance" / "archives"
+        root = Path(archive_destination)
+        return root if root.is_absolute() else self.home / root
+
+    def execute_maintenance(self, authorization: dict[str, Any]) -> dict[str, Any]:
+        """Execute an already-authorized archive retirement or delegate it."""
+        if (
+            isinstance(authorization, dict)
+            and authorization.get("action_recommended") == "archive_retire"
+            and authorization.get("lifecycle_state") == "active"
+            and not authorization.get("production_safety_ref")
+        ):
+            raise BrainError("production safety approval is required")
+        authorization = self._load_current_authorization(authorization)
+        action = authorization.get("action_recommended")
+        if action != "archive_retire":
+            authority = authorization.get("authority")
+            return {
+                "authorization_id": authorization["authorization_id"],
+                "skill_name": authorization["skill_name"],
+                "skill_version": authorization["skill_version"],
+                "action_recommended": action,
+                "action_authorized": True,
+                "action_executed": False,
+                "delegated_to": authority,
+            }
+
+        name = authorization.get("skill_name")
+        version = authorization.get("skill_version")
+        expected_hash = authorization.get("content_hash")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (name, version, expected_hash)
+        ):
+            raise BrainError("archive authorization identity is incomplete")
+        if not isinstance(authorization.get("owner"), str) or not authorization["owner"]:
+            raise BrainError("archive owner evidence is required")
+        for key in ("approval_ref", "non_regression_ref", "rollback_ref"):
+            if not isinstance(authorization.get(key), str) or not authorization[key]:
+                raise BrainError(f"{key} evidence is required")
+
+        source_file = skillforge.skill_path(self.home, name)
+        if source_file is None:
+            raise BrainError(f"current skill {name!r} is unavailable")
+        source_dir = source_file.parent
+        try:
+            metadata = skillforge.read_metadata(source_file)
+            current_hash = skillforge.lifecycle_content_hash(source_file)
+        except (OSError, UnicodeError, BrainError) as exc:
+            raise BrainError("current skill evidence is unavailable") from exc
+        if current_hash != expected_hash or metadata.get("version") != version:
+            raise BrainError("stale current skill identity")
+        current_state = next(
+            (
+                level
+                for level, relative in paths.SKILL_LEVEL_DIRS.items()
+                if source_dir.parent == self.home / relative
+            ),
+            None,
+        )
+        if current_state is None or current_state != authorization.get("lifecycle_state"):
+            raise BrainError("stale current lifecycle state")
+        if current_state == "active" and not authorization.get("production_safety_ref"):
+            raise BrainError("production safety approval is required")
+
+        archive_destination = authorization.get("archive_destination")
+        if not isinstance(archive_destination, str) or not archive_destination.strip():
+            raise BrainError("archive destination is required")
+        retirement_id = "retirement-" + hashlib.sha256(
+            f"{authorization['authorization_id']}|{time.time_ns()}".encode()
+        ).hexdigest()[:16]
+        archive_root = self._archive_root(archive_destination.strip())
+        archive_parent = archive_root / retirement_id
+        final_dir = archive_parent / name
+        staging_dir = archive_root / f".{retirement_id}.staging"
+        try:
+            source_resolved = source_dir.resolve()
+            archive_resolved = archive_root.resolve()
+            if archive_resolved == source_resolved or source_resolved.is_relative_to(
+                archive_resolved
+            ):
+                raise BrainError("archive destination overlaps source skill")
+        except OSError as exc:
+            raise BrainError(f"archive destination is unavailable: {exc}") from exc
+        if staging_dir.exists() or final_dir.exists():
+            raise BrainError("archive destination already exists")
+
+        persisted = False
+        try:
+            archive_root.mkdir(parents=True, exist_ok=True)
+            archive_parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source_dir, staging_dir)
+            source_snapshot = self._tree_snapshot(source_dir)
+            staging_snapshot = self._tree_snapshot(staging_dir)
+            if source_snapshot != staging_snapshot:
+                raise BrainError("archived bytes do not match source")
+            if skillforge.lifecycle_content_hash(staging_dir / "SKILL.md") != expected_hash:
+                raise BrainError("archived SKILL.md hash mismatch")
+            staging_dir.rename(final_dir)
+            if skillforge.lifecycle_content_hash(final_dir / "SKILL.md") != expected_hash:
+                raise BrainError("archived SKILL.md hash mismatch")
+            record: dict[str, Any] = {
+                "retirement_record_id": retirement_id,
+                "skill_name": name[:_MAX_REFERENCE_LENGTH],
+                "skill_version": version[:_MAX_REFERENCE_LENGTH],
+                "content_hash": expected_hash,
+                "owner": authorization["owner"][:_MAX_REFERENCE_LENGTH],
+                "retirement_reason": str(
+                    authorization.get("retirement_reason")
+                    or "authorized maintenance retirement"
+                )[:_MAX_REFERENCE_LENGTH],
+                "issue_ids": _bounded_refs(authorization.get("issue_ids")),
+                "evidence_refs": _bounded_refs(authorization.get("evidence_refs")),
+                "previous_lifecycle_state": current_state,
+                "archive_location": str(final_dir / "SKILL.md"),
+                "archive_reference": archive_destination[:_MAX_REFERENCE_LENGTH],
+                "rollback_ref": authorization["rollback_ref"][:_MAX_REFERENCE_LENGTH],
+                "restore_reference": retirement_id,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            replacement = authorization.get("replacement")
+            if isinstance(replacement, dict):
+                record["replacement"] = {
+                    key: str(replacement[key])[:_MAX_REFERENCE_LENGTH]
+                    for key in ("skill_name", "skill_version")
+                    if isinstance(replacement.get(key), str)
+                }
+            if isinstance(authorization.get("production_safety_ref"), str):
+                record["production_safety_ref"] = authorization["production_safety_ref"][
+                    :_MAX_REFERENCE_LENGTH
+                ]
+            self._persist_retirement_record(record)
+            persisted = True
+            shutil.rmtree(source_dir)
+            return {
+                **record,
+                "action_recommended": "archive_retire",
+                "action_authorized": True,
+                "action_executed": True,
+            }
+        except BrainError:
+            if not persisted:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(final_dir, ignore_errors=True)
+                shutil.rmtree(archive_parent, ignore_errors=True)
+            raise
+        except (OSError, UnicodeError) as exc:
+            if not persisted:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(final_dir, ignore_errors=True)
+                shutil.rmtree(archive_parent, ignore_errors=True)
+            raise BrainError(f"archive retirement failed: {exc}") from exc
+
+    def restore_retirement(self, retirement_record_id: str) -> dict[str, Any]:
+        """Restore one verified retirement without overwriting a lifecycle artifact."""
+        if (
+            not isinstance(retirement_record_id, str)
+            or not retirement_record_id
+            or Path(retirement_record_id).name != retirement_record_id
+        ):
+            raise BrainError("invalid retirement record ID")
+        record_path = (
+            self.home
+            / "state"
+            / "maintenance"
+            / "retirements"
+            / f"{retirement_record_id}.json"
+        )
+        record = _read_json_object(record_path)
+        if record.get("retirement_record_id") != retirement_record_id:
+            raise BrainError("retirement record is unavailable")
+        name = record.get("skill_name")
+        version = record.get("skill_version")
+        expected_hash = record.get("content_hash")
+        previous_state = record.get("previous_lifecycle_state")
+        archive_location = record.get("archive_location")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (name, version, expected_hash, archive_location)
+        ) or previous_state not in paths.SKILL_LEVEL_DIRS:
+            raise BrainError("retirement record is incomplete")
+        archive_file = Path(archive_location)
+        archive_dir = archive_file.parent
+        try:
+            archive_snapshot = self._tree_snapshot(archive_dir)
+            if archive_file.name != "SKILL.md":
+                raise BrainError("retirement archive is invalid")
+            metadata = skillforge.read_metadata(archive_file)
+            if metadata.get("name") not in {None, name} or metadata.get("version") != version:
+                raise BrainError("retirement archive identity mismatch")
+            if skillforge.lifecycle_content_hash(archive_file) != expected_hash:
+                raise BrainError("retirement archive hash mismatch")
+        except (OSError, UnicodeError, BrainError) as exc:
+            if isinstance(exc, BrainError):
+                raise
+            raise BrainError(f"retirement archive is unavailable: {exc}") from exc
+
+        target = self.home / paths.SKILL_LEVEL_DIRS[previous_state] / name
+        if target.exists():
+            raise BrainError("skill artifact already exists at restore location")
+        staging = target.parent / f".{retirement_record_id}.restore"
+        if staging.exists():
+            raise BrainError("restore staging destination already exists")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(archive_dir, staging)
+            if self._tree_snapshot(staging) != archive_snapshot:
+                raise BrainError("restored bytes do not match archive")
+            if skillforge.lifecycle_content_hash(staging / "SKILL.md") != expected_hash:
+                raise BrainError("restored SKILL.md hash mismatch")
+            staging.rename(target)
+        except BrainError:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        except (OSError, UnicodeError) as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise BrainError(f"retirement restore failed: {exc}") from exc
+        return {
+            "retirement_record_id": retirement_record_id,
+            "skill_name": name,
+            "skill_version": version,
+            "content_hash": expected_hash,
+            "restored_path": str(target),
+            "action_executed": True,
+        }
