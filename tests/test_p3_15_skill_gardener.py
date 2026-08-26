@@ -123,3 +123,15 @@ def test_observe_portfolio_does_not_mutate_lifecycle_or_promotion_state(brain_ho
     gardener.observe_portfolio()
 
     assert _lifecycle_snapshot(brain_home) == before
+
+
+def test_observe_portfolio_bounds_binding_state_metadata(brain_home):
+    directory = _make_skill(brain_home, "oversized-binding", "candidate")
+    (directory / "candidate-binding.json").write_text(
+        json.dumps({"evaluation_state": "x" * 10_000}),
+        encoding="utf-8",
+    )
+
+    result = SkillGardener(brain_home).observe_portfolio()
+
+    assert len(result["skills"][0]["binding_state"]["evaluation_state"]) <= 256
