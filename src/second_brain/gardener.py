@@ -47,6 +47,17 @@ from .radar import ImprovementRadar
 _MAX_EVIDENCE_REFS = 32
 _MAX_REFERENCE_LENGTH = 256
 _MAX_AUDIT_FINDINGS = 32
+_MAINTENANCE_ACTIONS = {
+    "keep",
+    "repair",
+    "merge",
+    "narrow",
+    "demote",
+    "hide",
+    "supersede",
+    "archive_retire",
+    "no_action",
+}
 _ISSUE_TYPES = {
     "evidence_stale": "stale",
     "dead_skill": "broken",
@@ -403,6 +414,8 @@ def _issue_record(
         "evidence_refs": _bounded_refs(evidence_refs),
         "measurement_state": measurement_state,
     }
+    if isinstance(item.get("content_hash"), str):
+        issue["content_hash"] = item["content_hash"]
     if replacement_ref is not None:
         issue["replacement_ref"] = replacement_ref
     return issue
@@ -1089,20 +1102,31 @@ class SkillGardener:
             name = issue["skill_name"]
             issue_ids_by_skill.setdefault(name, []).append(issue["issue_id"])
             issue_refs_by_skill.setdefault(name, []).extend(issue["evidence_refs"])
-        recommendations = [
-            {
-                "skill_name": item["skill_name"],
-                "skill_version": item["skill_version"],
-                "lifecycle_state": item["lifecycle_state"],
-                "recommendation": "keep",
-                "issue_ids": issue_ids_by_skill.get(item["skill_name"], []),
+        recommendations: list[dict[str, Any]] = []
+        for item in skills:
+            name = item["skill_name"]
+            item_issues = [issue for issue in issues if issue["skill_name"] == name]
+            source: dict[str, Any] = {
+                **item,
+                "issue_ids": issue_ids_by_skill.get(name, []),
                 "evidence_refs": _bounded_refs(
-                    item["evidence_refs"],
-                    issue_refs_by_skill.get(item["skill_name"], []),
+                    item["evidence_refs"], issue_refs_by_skill.get(name, [])
                 ),
             }
-            for item in skills
-        ]
+            if item_issues:
+                # Preserve all issue IDs/refs while selecting one deterministic
+                # condition to map to the bounded action vocabulary.
+                selected = sorted(
+                    item_issues, key=lambda issue: issue["issue_id"]
+                )[0]
+                source.update(selected)
+                source["issue_ids"] = issue_ids_by_skill.get(name, [])
+                source["evidence_refs"] = _bounded_refs(
+                    item["evidence_refs"], issue_refs_by_skill.get(name, [])
+                )
+            recommendation = self.recommend_maintenance(source)
+            recommendation["recommendation"] = recommendation["action_recommended"]
+            recommendations.append(recommendation)
         return {
             "skills": skills,
             "issues": issues,
@@ -1139,3 +1163,345 @@ class SkillGardener:
             "degraded_skills": [d.to_dict() for d in degraded],
             "healthy_skills": [h.to_dict() for h in healthy],
         }
+
+    def recommend_maintenance(self, observation: dict[str, Any]) -> dict[str, Any]:
+        """Return one bounded, inert recommendation from observed evidence."""
+        if not isinstance(observation, dict):
+            raise BrainError("observation must be a dict")
+
+        source: dict[str, Any] = observation
+        if not source.get("issue_id"):
+            issues = observation.get("issues")
+            if isinstance(issues, list) and issues:
+                candidates = [item for item in issues if isinstance(item, dict)]
+                if candidates:
+                    source = dict(
+                        min(
+                            candidates,
+                            key=lambda item: (
+                                0
+                                if item.get("condition_code") == "measured_negative"
+                                else 1,
+                                str(item.get("issue_id", "")),
+                            ),
+                        )
+                    )
+                    source["issue_ids"] = [
+                        item["issue_id"]
+                        for item in candidates
+                        if isinstance(item.get("issue_id"), str)
+                    ]
+                    source["evidence_refs"] = _bounded_refs(
+                        *(item.get("evidence_refs") for item in candidates)
+                    )
+            elif isinstance(observation.get("issue"), dict):
+                source = observation["issue"]
+            elif isinstance(observation.get("recommendations"), list) and observation[
+                "recommendations"
+            ]:
+                source = observation["recommendations"][0]
+            elif isinstance(observation.get("skills"), list) and observation["skills"]:
+                source = observation["skills"][0]
+        if not isinstance(source, dict):
+            raise BrainError("observation must contain a bounded issue record")
+
+        name = source.get("skill_name")
+        version = source.get("skill_version")
+        if not isinstance(name, str) or not name.strip():
+            raise BrainError("observation.skill_name must be a non-empty string")
+        if not isinstance(version, str) or not version.strip():
+            raise BrainError("observation.skill_version must be a non-empty string")
+        condition = source.get("condition_code")
+        issue_type = source.get("issue_type")
+        action = "keep"
+        if condition == "measured_negative" or issue_type == "negative_roi":
+            action = (
+                "repair"
+                if source.get("measurement_state") == MeasurementState.MEASURED.value
+                else "no_action"
+            )
+        elif condition in {"exact_duplicate", "capability_overlap"} or issue_type == "duplicate":
+            action = "merge"
+        elif condition == "superseded" or issue_type == "superseded":
+            action = "supersede"
+        elif condition == "scope_too_broad":
+            action = "narrow"
+        elif condition == "measured_zero_use" or issue_type == "unused":
+            action = "no_action"
+        elif condition == "dead_skill":
+            action = "archive_retire"
+        elif condition in {
+            "evidence_stale",
+            "false_trigger",
+            "scope_too_narrow",
+            "model_specific_quirk",
+        } or issue_type in {"stale", "broken"}:
+            action = "repair"
+
+        issue_id = source.get("issue_id")
+        issue_ids = _bounded_refs(source.get("issue_ids"))
+        if isinstance(issue_id, str) and issue_id.strip():
+            issue_ids = _bounded_refs(issue_ids, [issue_id])
+        evidence_refs = _bounded_refs(source.get("evidence_refs"))
+        result: dict[str, Any] = {
+            "skill_name": name[:_MAX_REFERENCE_LENGTH],
+            "skill_version": version[:_MAX_REFERENCE_LENGTH],
+            "content_hash": (
+                source.get("content_hash")
+                if isinstance(source.get("content_hash"), str)
+                else source.get("skill_content_hash")
+            ),
+            "lifecycle_state": str(source.get("lifecycle_state", ""))[
+                :_MAX_REFERENCE_LENGTH
+            ],
+            "evidence_detected": bool(evidence_refs),
+            "action_recommended": action,
+            "action_authorized": False,
+            "action_executed": False,
+            "issue_ids": issue_ids,
+            "evidence_refs": evidence_refs,
+        }
+        replacement_ref = source.get("replacement_ref")
+        if isinstance(replacement_ref, dict):
+            result["replacement_ref"] = {
+                key: str(replacement_ref[key])[:_MAX_REFERENCE_LENGTH]
+                for key in ("skill_name", "skill_version", "capability_hash")
+                if isinstance(replacement_ref.get(key), str)
+            }
+        if action in {"repair", "narrow", "hide"}:
+            target = {
+                "skill_name": result["skill_name"],
+                "skill_version": result["skill_version"],
+            }
+            if isinstance(result["content_hash"], str):
+                target["content_hash"] = result["content_hash"]
+            result["reversible_target"] = target
+        return result
+
+    def authorize_maintenance(
+        self,
+        recommendation: dict[str, Any],
+        *,
+        actor: str,
+        approval_ref: str,
+        non_regression_ref: str,
+        rollback_ref: str,
+        replacement: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Authorize one recommendation after revalidating current evidence.
+
+        Authorization persists a bounded record only. It never edits a skill,
+        invokes promotion, changes routing, or performs archive/retire work.
+        """
+        if not isinstance(recommendation, dict):
+            raise BrainError("recommendation must be a dict")
+        if recommendation.get("action_authorized") is True:
+            raise BrainError("recommendation is already authorized")
+        action = recommendation.get("action_recommended")
+        if action not in _MAINTENANCE_ACTIONS:
+            raise BrainError("unknown maintenance action")
+        name = recommendation.get("skill_name")
+        version = recommendation.get("skill_version")
+        expected_hash = recommendation.get("content_hash") or recommendation.get(
+            "skill_content_hash"
+        )
+        if not isinstance(name, str) or not name.strip():
+            raise BrainError("skill_name must be a non-empty string")
+        if not isinstance(version, str) or not version.strip():
+            raise BrainError("skill_version must be a non-empty string")
+        if not isinstance(expected_hash, str) or not expected_hash.strip():
+            raise BrainError("current skill hash is required")
+
+        skill_path = skillforge.skill_path(self.home, name)
+        if skill_path is None:
+            raise BrainError(f"current skill {name!r} is unavailable")
+        try:
+            current_hash = skillforge.lifecycle_content_hash(skill_path)
+            metadata = skillforge.read_metadata(skill_path)
+        except (OSError, UnicodeError, BrainError) as exc:
+            raise BrainError("current skill evidence is unavailable") from exc
+        if current_hash != expected_hash:
+            raise BrainError("stale current skill hash")
+        current_version = metadata.get("version")
+        if not isinstance(current_version, str) or current_version != version:
+            raise BrainError("stale current skill version")
+        current_state = metadata.get("status")
+        if current_state not in paths.SKILL_LEVEL_DIRS:
+            current_state = next(
+                (
+                    level
+                    for level, relative in paths.SKILL_LEVEL_DIRS.items()
+                    if skill_path.parent.parent == self.home / relative
+                ),
+                None,
+            )
+        if current_state not in paths.SKILL_LEVEL_DIRS:
+            raise BrainError("current lifecycle state is unavailable")
+        def required_ref(value: object, label: str) -> str:
+            if not isinstance(value, str) or not value.strip():
+                raise BrainError(f"{label} evidence is required")
+            if len(value.strip()) > _MAX_REFERENCE_LENGTH:
+                raise BrainError(f"{label} evidence is too long")
+            return value.strip()
+
+        actor_value = required_ref(actor, "owner/actor")
+        approval = required_ref(approval_ref, "approval")
+        non_regression = required_ref(non_regression_ref, "non-regression")
+        rollback = required_ref(rollback_ref, "rollback")
+
+        if action == "archive_retire" and current_state == "active":
+            required_ref(
+                recommendation.get("production_safety_ref")
+                or recommendation.get("production_safety_approval_ref")
+                or recommendation.get("production_safety_approval"),
+                "production safety",
+            )
+
+        binding = _read_json_object(skill_path.parent / "candidate-binding.json")
+        owner = binding.get("owner")
+        if not isinstance(owner, str) or not owner.strip():
+            raise BrainError("owner governance evidence is required")
+        if owner.strip() != actor_value:
+            raise BrainError("actor is not the recorded owner")
+
+        issue_ids = _bounded_refs(recommendation.get("issue_ids"))
+        evidence_refs = _bounded_refs(recommendation.get("evidence_refs"))
+        if not evidence_refs:
+            raise BrainError("issue evidence is required")
+        current_observation = self.observe_portfolio()
+        current_issues = {
+            issue.get("issue_id"): issue
+            for issue in current_observation.get("issues", [])
+            if isinstance(issue, dict) and isinstance(issue.get("issue_id"), str)
+        }
+        if action not in {"keep", "no_action"} and not issue_ids:
+            raise BrainError("issue IDs are required for maintenance")
+        for issue_id in issue_ids:
+            issue = current_issues.get(issue_id)
+            if issue is None or issue.get("skill_name") != name:
+                raise BrainError("issue evidence is missing or stale")
+            current_refs = set(_bounded_refs(issue.get("evidence_refs")))
+            if not current_refs.intersection(evidence_refs):
+                raise BrainError("issue evidence is missing or stale")
+            if issue.get("content_hash") not in {None, current_hash}:
+                raise BrainError("issue evidence is stale")
+
+        issue_codes = {
+            current_issues[issue_id].get("condition_code")
+            for issue_id in issue_ids
+            if issue_id in current_issues
+        }
+        if action == "archive_retire":
+            if "measured_negative" in issue_codes:
+                raise BrainError("negative ROI is review-only")
+            archive_ref = (
+                recommendation.get("archive_ref")
+                or recommendation.get("archive_destination")
+                or recommendation.get("archive_location")
+            )
+            required_ref(archive_ref, "archive destination")
+
+        replacement_record: dict[str, str] | None = None
+        replacement_value = replacement or recommendation.get("replacement_ref")
+        if action in {"merge", "supersede"}:
+            if not isinstance(replacement_value, dict):
+                raise BrainError("verified survivor/replacement skill is required")
+            replacement_name = replacement_value.get("skill_name") or replacement_value.get(
+                "name"
+            )
+            replacement_version = replacement_value.get("skill_version") or replacement_value.get(
+                "version"
+            )
+            replacement_capability = replacement_value.get(
+                "capability_hash"
+            ) or replacement_value.get("normalized_capability_hash")
+            if not all(
+                isinstance(value, str) and value.strip()
+                for value in (replacement_name, replacement_version, replacement_capability)
+            ):
+                raise BrainError("verified survivor/replacement skill is required")
+            replacement_path = skillforge.skill_path(self.home, replacement_name)
+            if replacement_path is None:
+                raise BrainError("verified survivor skill is unavailable")
+            replacement_metadata = skillforge.read_metadata(replacement_path)
+            replacement_binding = _read_json_object(
+                replacement_path.parent / "candidate-binding.json"
+            )
+            replacement_evaluation = _read_json_object(
+                replacement_path.parent / "evaluation.json"
+            )
+            replacement_identity = _capability_identity(
+                replacement_path, replacement_binding, replacement_evaluation
+            )
+            if (
+                replacement_metadata.get("version") != replacement_version
+                or replacement_identity != replacement_capability
+            ):
+                raise BrainError("replacement capability evidence is stale")
+            replacement_record = {
+                "skill_name": replacement_name[:_MAX_REFERENCE_LENGTH],
+                "skill_version": replacement_version[:_MAX_REFERENCE_LENGTH],
+                "capability_hash": replacement_capability[:_MAX_REFERENCE_LENGTH],
+            }
+
+        if action in {"repair", "narrow", "hide"}:
+            target = recommendation.get("reversible_target")
+            if not isinstance(target, dict):
+                raise BrainError("reversible target is required")
+            if target.get("skill_name") != name or target.get("content_hash") != current_hash:
+                raise BrainError("reversible target is stale")
+
+        authority = {
+            "keep": "record-only",
+            "no_action": "record-only",
+            "repair": "skill-development/evaluation",
+            "narrow": "skill-development/evaluation",
+            "merge": "skill-lifecycle/content",
+            "supersede": "skill-lifecycle/content",
+            "demote": "promotion.demote",
+            "hide": "lifecycle-visibility/routing",
+            "archive_retire": "gardener.archive_retire",
+        }[action]
+        created_at = datetime.now(UTC).isoformat()
+        authorization_id = "authorization-" + hashlib.sha256(
+            f"{name}|{current_hash}|{action}|{created_at}|{time.time_ns()}".encode()
+        ).hexdigest()[:16]
+        record: dict[str, Any] = {
+            "authorization_id": authorization_id,
+            "skill_name": name[:_MAX_REFERENCE_LENGTH],
+            "skill_version": version[:_MAX_REFERENCE_LENGTH],
+            "content_hash": current_hash,
+            "lifecycle_state": current_state,
+            "issue_ids": issue_ids[:_MAX_EVIDENCE_REFS],
+            "evidence_refs": evidence_refs[:_MAX_EVIDENCE_REFS],
+            "action_recommended": action,
+            "action_authorized": True,
+            "action_executed": False,
+            "authority": authority,
+            "actor": actor_value,
+            "owner": owner.strip()[:_MAX_REFERENCE_LENGTH],
+            "approval_ref": approval,
+            "non_regression_ref": non_regression,
+            "rollback_ref": rollback,
+            "created_at": created_at,
+        }
+        if replacement_record is not None:
+            record["replacement"] = replacement_record
+
+        directory = self.home / "state" / "maintenance" / "authorizations"
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{authorization_id}.json"
+        temporary = target.with_suffix(".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(target)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise BrainError(f"could not persist maintenance authorization: {exc}") from exc
+        return record
