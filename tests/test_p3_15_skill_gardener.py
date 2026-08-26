@@ -9,7 +9,7 @@ import pytest
 
 from second_brain import paths, skillforge
 from second_brain.errors import BrainError
-from second_brain.gardener import SkillGardener, SkillROILedger
+from second_brain.gardener import MeasurementState, SkillGardener, SkillROILedger
 
 
 def _make_skill(home: Path, name: str, level: str) -> Path:
@@ -164,9 +164,14 @@ def test_malformed_counterfactual_json_is_unavailable(brain_home):
         ),
         encoding="utf-8",
     )
-    result = SkillGardener(brain_home).observe_portfolio()
+    gardener = SkillGardener(brain_home)
+    result = gardener.observe_portfolio()
+    composed = gardener.ledger.record_from_evidence(brain_home, "bad-cf")
     skill = next(item for item in result["skills"] if item["skill_name"] == "bad-cf")
     assert skill["roi_summary"]["invocations"] == 0
+    assert composed["measurement_state"] == MeasurementState.UNAVAILABLE.value
+    assert composed["measured_tokens_saved"] is None
+    assert composed["comparison"] == "inconclusive"
     assert not any(
         issue["skill_name"] == "bad-cf" and issue["condition_code"] == "measured_negative"
         for issue in result["issues"]
