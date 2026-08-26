@@ -11,7 +11,6 @@ from second_brain.errors import BrainError
 from second_brain.gardener import SkillGardener
 
 
-
 def _make_skill(home: Path, name: str, level: str) -> Path:
     directory = home / paths.SKILL_LEVEL_DIRS[level] / name
     directory.mkdir(parents=True)
@@ -143,9 +142,7 @@ def test_observe_portfolio_bounds_binding_state_metadata(brain_home):
 
 
 def _write_binding(directory: Path, payload: dict) -> None:
-    (directory / "candidate-binding.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -193,14 +190,10 @@ def test_condition_codes_are_differentiated(brain_home, condition_code, issue_ty
         _write_binding(directory, {})
         evaluation = {
             "evaluation_id": "negative-eval",
-            "candidate_content_sha256": skillforge.lifecycle_content_hash(
-                directory / "SKILL.md"
-            ),
+            "candidate_content_sha256": skillforge.lifecycle_content_hash(directory / "SKILL.md"),
             "roi": {"net_tokens_saved": -1},
         }
-        (directory / "evaluation.json").write_text(
-            json.dumps(evaluation), encoding="utf-8"
-        )
+        (directory / "evaluation.json").write_text(json.dumps(evaluation), encoding="utf-8")
     else:
         _write_binding(
             directory,
@@ -208,9 +201,7 @@ def test_condition_codes_are_differentiated(brain_home, condition_code, issue_ty
         )
 
     result = SkillGardener(brain_home).observe_portfolio()
-    matches = [
-        issue for issue in result["issues"] if issue["condition_code"] == condition_code
-    ]
+    matches = [issue for issue in result["issues"] if issue["condition_code"] == condition_code]
     assert matches
     assert all(issue["issue_type"] == issue_type for issue in matches)
 
@@ -250,14 +241,12 @@ def test_estimated_or_unavailable_roi_is_not_negative(brain_home):
 
     result = SkillGardener(brain_home).observe_portfolio()
 
-    assert not any(
-        i["condition_code"] == "measured_negative" for i in result["issues"]
-    )
+    assert not any(i["condition_code"] == "measured_negative" for i in result["issues"])
 
 
 def test_exact_duplicate_is_not_capability_overlap(brain_home):
     first = _make_skill(brain_home, "same-one", "shadow")
-    second = _make_skill(brain_home, "same-two", "shadow")
+    _make_skill(brain_home, "same-two", "shadow")
     _write_binding(
         first,
         {
@@ -284,6 +273,7 @@ def test_exact_duplicate_is_not_capability_overlap(brain_home):
         for i in issues
     )
 
+
 def test_superseded_requires_replacement_capability_evidence(brain_home):
     replacement = _make_skill(brain_home, "new-skill", "shadow")
     _write_binding(replacement, {"capability_hash": "cap-new"})
@@ -301,15 +291,14 @@ def test_superseded_requires_replacement_capability_evidence(brain_home):
     )
 
     result = SkillGardener(brain_home).observe_portfolio()
-    superseded = [
-        i for i in result["issues"] if i["condition_code"] == "superseded"
-    ]
+    superseded = [i for i in result["issues"] if i["condition_code"] == "superseded"]
 
     assert superseded
     assert superseded[0]["issue_type"] == "superseded"
     assert superseded[0]["replacement_ref"]["skill_name"] == "new-skill"
     assert superseded[0]["evidence_refs"]
-    
+
+
 def test_superseded_accepts_nested_normalized_capability_hash(brain_home):
     replacement = _make_skill(brain_home, "nested-replacement", "shadow")
     _write_binding(replacement, {"capability_hash": "cap-nested"})
@@ -328,8 +317,7 @@ def test_superseded_accepts_nested_normalized_capability_hash(brain_home):
     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
 
     assert any(
-        i["skill_name"] == "nested-old" and i["condition_code"] == "superseded"
-        for i in issues
+        i["skill_name"] == "nested-old" and i["condition_code"] == "superseded" for i in issues
     )
 
 
@@ -368,14 +356,14 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
 
     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
     assert not any(
-        i["skill_name"] == "stale-ref" and i["condition_code"] == "false_trigger"
-        for i in issues
+        i["skill_name"] == "stale-ref" and i["condition_code"] == "false_trigger" for i in issues
     )
 
     for code in ("evidence_stale", "false_trigger", "superseded"):
         matched = [i for i in issues if i["condition_code"] == code]
         assert matched
         assert all(len(ref) <= 256 for i in matched for ref in i["evidence_refs"])
+
 
 def test_negative_roi_recommends_review_only():
     recommendation = SkillGardener(Path(".")).recommend_maintenance(
@@ -434,7 +422,7 @@ def test_authorization_refuses_missing_gate_evidence(brain_home):
         if issue["skill_name"] == "gated"
     )
     recommendation = SkillGardener(brain_home).recommend_maintenance(observation)
-    with pytest.raises(BrainError, match="approval|non-regression|rollback"):
+    with pytest.raises(BrainError, match=r"approval|non-regression|rollback"):
         SkillGardener(brain_home).authorize_maintenance(
             recommendation,
             actor="owner-1",
@@ -457,7 +445,7 @@ def test_authorization_refuses_stale_skill_hash(brain_home):
     )
     recommendation = SkillGardener(brain_home).recommend_maintenance(observation)
     recommendation["content_hash"] = "0" * 64
-    with pytest.raises(BrainError, match="hash|stale"):
+    with pytest.raises(BrainError, match=r"hash|stale"):
         SkillGardener(brain_home).authorize_maintenance(
             recommendation,
             actor="owner-1",
@@ -481,7 +469,7 @@ def test_duplicate_authorization_requires_verified_survivor(brain_home):
         }
     )
     assert recommendation["action_recommended"] == "merge"
-    with pytest.raises(BrainError, match="survivor|replacement|skill"):
+    with pytest.raises(BrainError, match=r"survivor|replacement|skill"):
         SkillGardener(brain_home).authorize_maintenance(
             recommendation,
             actor="owner-1",
@@ -502,7 +490,7 @@ def test_active_retirement_requires_production_safety_evidence(brain_home):
         "issue_ids": ["active-auth:dead_skill"],
         "evidence_refs": ["audit:active-auth:cannot execute"],
     }
-    with pytest.raises(BrainError, match="production|safety"):
+    with pytest.raises(BrainError, match=r"production|safety"):
         SkillGardener(brain_home).authorize_maintenance(
             recommendation,
             actor="owner-1",
@@ -650,14 +638,13 @@ def test_merge_rejects_self_survivor(brain_home):
 
 def test_merge_rejects_unbound_stale_survivor_artifact(brain_home):
     source = _make_skill(brain_home, "merge-source", "shadow")
-    survivor = _make_skill(brain_home, "merge-survivor", "shadow")
+    _make_skill(brain_home, "merge-survivor", "shadow")
     _write_binding(source, {"owner": "owner-1"})
     gardener = SkillGardener(brain_home)
     issue = next(
         issue
         for issue in gardener.observe_portfolio()["issues"]
-        if issue["skill_name"] == "merge-source"
-        and issue["condition_code"] == "exact_duplicate"
+        if issue["skill_name"] == "merge-source" and issue["condition_code"] == "exact_duplicate"
     )
     recommendation = gardener.recommend_maintenance(issue)
     replacement = {
@@ -687,9 +674,7 @@ def test_merge_authorization_delegates_content_lifecycle(brain_home):
         if issue["skill_name"] == "merge-source-valid"
         and issue["condition_code"] == "exact_duplicate"
     )
-    capability_ref = next(
-        ref for ref in issue["evidence_refs"] if ref.startswith("capability:")
-    )
+    capability_ref = next(ref for ref in issue["evidence_refs"] if ref.startswith("capability:"))
     recommendation = gardener.recommend_maintenance(issue)
     result = gardener.authorize_maintenance(
         recommendation,
@@ -705,6 +690,7 @@ def test_merge_authorization_delegates_content_lifecycle(brain_home):
     )
     assert result["authority"] == "skill-lifecycle/content"
     assert result["action_executed"] is False
+
 
 def _authorized_retirement(
     brain_home: Path,
@@ -730,9 +716,7 @@ def _authorized_retirement(
     gardener = SkillGardener(brain_home)
     observation = gardener.observe_portfolio()
     issue_ids = [
-        issue["issue_id"]
-        for issue in observation["issues"]
-        if issue["skill_name"] == name
+        issue["issue_id"] for issue in observation["issues"] if issue["skill_name"] == name
     ]
     evidence_refs = [
         ref
@@ -748,9 +732,7 @@ def _authorized_retirement(
         "action_recommended": "archive_retire",
         "issue_ids": issue_ids,
         "evidence_refs": evidence_refs,
-        "archive_destination": str(
-            archive_destination or (brain_home / "archive")
-        ),
+        "archive_destination": str(archive_destination or (brain_home / "archive")),
     }
     if level == "active":
         recommendation["production_safety_ref"] = "production-safety:1"
@@ -763,7 +745,9 @@ def _authorized_retirement(
     )
 
 
-def test_archive_retirement_orders_copy_verify_record_before_source_mutation(brain_home, monkeypatch):
+def test_archive_retirement_orders_copy_verify_record_before_source_mutation(
+    brain_home, monkeypatch
+):
     source = _make_skill(brain_home, "ordered", "shadow")
     original = (source / "SKILL.md").read_bytes()
     authorization = _authorized_retirement(brain_home, "ordered")
@@ -818,8 +802,9 @@ def test_archive_copy_failure_preserves_source_and_cleans_staging(brain_home, mo
 
     def fail_copy(*args, **kwargs):
         raise OSError("copy failed")
+
     monkeypatch.setattr("second_brain.gardener.shutil.copytree", fail_copy)
-    with pytest.raises(BrainError, match="archive|copy"):
+    with pytest.raises(BrainError, match=r"archive|copy"):
         SkillGardener(brain_home).execute_maintenance(authorization)
 
     assert source.exists()
@@ -846,6 +831,7 @@ def test_retirement_record_failure_preserves_source(brain_home, monkeypatch):
     if archive_root.exists():
         assert not list(archive_root.rglob("*"))
 
+
 def test_archive_hash_mismatch_preserves_source(brain_home, monkeypatch):
     source = _make_skill(brain_home, "hash-fails", "shadow")
     original = (source / "SKILL.md").read_bytes()
@@ -853,19 +839,19 @@ def test_archive_hash_mismatch_preserves_source(brain_home, monkeypatch):
     original_hash = skillforge.lifecycle_content_hash
 
     def mismatched_hash(path):
-        if (
-            path.parent.name.startswith(".retirement")
-            or path.parent.parent.name.startswith("retirement")
+        if path.parent.name.startswith(".retirement") or path.parent.parent.name.startswith(
+            "retirement"
         ):
             return "0" * 64
         return original_hash(path)
-    monkeypatch.setattr(
-        "second_brain.gardener.skillforge.lifecycle_content_hash", mismatched_hash
-    )
-    with pytest.raises(BrainError, match="hash|verif"):
+
+    monkeypatch.setattr("second_brain.gardener.skillforge.lifecycle_content_hash", mismatched_hash)
+    with pytest.raises(BrainError, match=r"hash|verif"):
         SkillGardener(brain_home).execute_maintenance(authorization)
     assert source.exists()
     assert (source / "SKILL.md").read_bytes() == original
+
+
 def test_archive_destination_inside_source_preserves_source(brain_home):
     source = _make_skill(brain_home, "overlap", "shadow")
     authorization = _authorized_retirement(
@@ -885,11 +871,11 @@ def test_archive_destination_inside_source_preserves_source(brain_home):
         if path.is_file()
     } == before
     assert not (source / "nested").exists()
+
+
 def test_archive_destination_quarantine_root_is_rejected(brain_home):
     source = _make_skill(brain_home, "quarantine-collision", "shadow")
-    quarantine_root = (
-        brain_home / "state" / "maintenance" / "retirement-quarantine"
-    )
+    quarantine_root = brain_home / "state" / "maintenance" / "retirement-quarantine"
     authorization = _authorized_retirement(
         brain_home, "quarantine-collision", archive_destination=quarantine_root
     )
@@ -906,8 +892,6 @@ def test_archive_destination_quarantine_root_is_rejected(brain_home):
         if path.is_file()
     } == before
     assert not quarantine_root.exists()
-
-
 
 
 def test_restore_returns_byte_identical_artifact_and_refuses_overwrite(brain_home):
@@ -930,14 +914,16 @@ def test_restore_returns_byte_identical_artifact_and_refuses_overwrite(brain_hom
     with pytest.raises(BrainError, match="already exists"):
         gardener.restore_retirement(result["retirement_record_id"])
 
+
 def test_executed_authorization_cannot_be_replayed_after_restore(brain_home):
     gardener = SkillGardener(brain_home)
     authorization = _authorized_retirement(brain_home, "replay")
     result = gardener.execute_maintenance(authorization)
     restored = gardener.restore_retirement(result["retirement_record_id"])
     shutil.rmtree(restored["restored_path"])
-    with pytest.raises(BrainError, match="authorization|stale|current"):
+    with pytest.raises(BrainError, match=r"authorization|stale|current"):
         gardener.execute_maintenance(authorization)
+
 
 def test_source_removal_failure_leaves_authorization_retryable(brain_home, monkeypatch):
     source = _make_skill(brain_home, "remove-fails", "shadow")
@@ -955,7 +941,7 @@ def test_source_removal_failure_leaves_authorization_retryable(brain_home, monke
         return real_rename(path, target)
 
     monkeypatch.setattr(Path, "rename", fail_source)
-    with pytest.raises(BrainError, match="source removal|remove"):
+    with pytest.raises(BrainError, match=r"source removal|remove"):
         SkillGardener(brain_home).execute_maintenance(authorization)
     assert source.exists()
     assert {
@@ -976,6 +962,7 @@ def test_source_removal_failure_leaves_authorization_retryable(brain_home, monke
     monkeypatch.setattr(Path, "rename", real_rename)
     result = SkillGardener(brain_home).execute_maintenance(authorization)
     assert result["action_executed"] is True
+
 
 def test_atomic_source_mutation_survives_partial_delete_scenario(brain_home, monkeypatch):
     source = _make_skill(brain_home, "atomic-remove", "shadow")
@@ -1029,15 +1016,28 @@ def test_restore_requires_complete_retirement_record(brain_home):
 def test_active_retirement_execution_requires_production_safety_approval(brain_home):
     authorization = _authorized_retirement(brain_home, "active-unsafe", "active")
     authorization.pop("production_safety_ref", None)
-    with pytest.raises(BrainError, match="production|safety"):
+    with pytest.raises(BrainError, match=r"production|safety"):
         SkillGardener(brain_home).execute_maintenance(authorization)
 
 
 def test_delegated_execution_returns_metadata_without_mutating(brain_home):
     source = _make_skill(brain_home, "delegate-exec", "shadow")
-    _write_binding(source, {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": ["eval:delegate"]}}})
+    _write_binding(
+        source,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {
+                "false_trigger": {
+                    "detected": True,
+                    "evidence_refs": ["eval:delegate"],
+                }
+            },
+        },
+    )
     gardener = SkillGardener(brain_home)
-    issue = next(i for i in gardener.observe_portfolio()["issues"] if i["skill_name"] == "delegate-exec")
+    issue = next(
+        i for i in gardener.observe_portfolio()["issues"] if i["skill_name"] == "delegate-exec"
+    )
     recommendation = gardener.recommend_maintenance(issue)
     authorization = gardener.authorize_maintenance(
         recommendation,

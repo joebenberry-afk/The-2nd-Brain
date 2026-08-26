@@ -29,6 +29,7 @@ Capabilities:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -74,7 +75,6 @@ _ISSUE_TYPES = {
 }
 
 
-
 def _bounded_refs(*values: object) -> list[str]:
     """Return only short, string evidence references from persisted metadata."""
     refs: list[str] = []
@@ -98,6 +98,7 @@ def _read_json_object(path: Path) -> dict[str, Any]:
         return {}
     return value if isinstance(value, dict) else {}
 
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS skill_roi_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,6 +117,8 @@ CREATE TABLE IF NOT EXISTS skill_roi_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_name ON skill_roi_ledger (skill_name);
 """
+
+
 def _evidence_refs(value: object, fallback: str) -> list[str]:
     """Extract only bounded refs from one explicit evidence payload."""
     refs: list[object] = []
@@ -228,9 +231,7 @@ def _replacement_evidence(
                 continue
             name = value.get("skill_name") or value.get("name") or value.get("id")
             version = value.get("version") or value.get("skill_version")
-            capability = value.get("capability_hash") or value.get(
-                "normalized_capability_hash"
-            )
+            capability = value.get("capability_hash") or value.get("normalized_capability_hash")
             cap_evidence = value.get("capability_evidence")
             if not isinstance(capability, str) and isinstance(cap_evidence, dict):
                 for cap_key in ("normalized_hash", "capability_hash", "content_hash"):
@@ -252,9 +253,7 @@ def _replacement_evidence(
                     "skill_version": version[:_MAX_REFERENCE_LENGTH],
                     "capability_hash": capability[:_MAX_REFERENCE_LENGTH],
                 }
-                return replacement, _evidence_refs(
-                    value, f"{label}:{key}:{name}:{version}"
-                )
+                return replacement, _evidence_refs(value, f"{label}:{key}:{name}:{version}")
     return None, []
 
 
@@ -274,11 +273,21 @@ def _stale_evidence(
             "artifact_sha256",
         ):
             value = source.get(key)
-            if isinstance(value, str) and value and isinstance(current_hash, str) and value != current_hash:
+            if (
+                isinstance(value, str)
+                and value
+                and isinstance(current_hash, str)
+                and value != current_hash
+            ):
                 refs.append(f"{label}:{key}")
         for key in ("candidate_version", "skill_version", "artifact_version"):
             value = source.get(key)
-            if isinstance(value, str) and value and isinstance(current_version, str) and value != current_version:
+            if (
+                isinstance(value, str)
+                and value
+                and isinstance(current_version, str)
+                and value != current_version
+            ):
                 refs.append(f"{label}:{key}")
         freshness = source.get("freshness")
         if isinstance(freshness, dict) and freshness.get("ok") is False:
@@ -311,10 +320,11 @@ def _telemetry_usage(home: Path) -> dict[str, list[str]]:
         if not isinstance(record, dict):
             continue
         name = record.get("skill_name")
-        if (
-            isinstance(name, str)
-            and record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}
-        ):
+        if isinstance(name, str) and record.get("kind") in {
+            "skill_invocation",
+            "skill_use",
+            "skill_selected",
+        }:
             refs = usage.setdefault(name, [])
             if len(refs) < _MAX_EVIDENCE_REFS:
                 refs.append(f"telemetry:{file_name}")
@@ -385,14 +395,17 @@ def _measured_roi(
         return MeasurementState.MEASURED, measured, _bounded_refs([ref] if ref else [])
     measured, ref, candidate_ref = _measured_from_evaluation(home, name, version)
     if measured is not None:
-        return MeasurementState.MEASURED, measured, _bounded_refs(
-            [ref, f"candidate:{candidate_ref}"] if ref else []
+        return (
+            MeasurementState.MEASURED,
+            measured,
+            _bounded_refs([ref, f"candidate:{candidate_ref}"] if ref else []),
         )
     if isinstance(item.get("content_hash"), str):
         measured, refs = _ledger_measured_roi(home, name, item["content_hash"])
         if measured is not None:
             return MeasurementState.MEASURED, measured, refs
     return MeasurementState.UNAVAILABLE, None, []
+
 
 def _issue_record(
     item: dict[str, Any],
@@ -458,9 +471,7 @@ def _classify_portfolio(
         stale_refs = _bounded_refs(stale_refs)
         if stale_refs:
             issues.append(
-                _issue_record(
-                    item, "evidence_stale", stale_refs, reason_codes=["evidence_stale"]
-                )
+                _issue_record(item, "evidence_stale", stale_refs, reason_codes=["evidence_stale"])
             )
         dead = item.get("content_hash") is None or any(
             re.search(
@@ -478,9 +489,7 @@ def _classify_portfolio(
                 refs.append(f"skill:{name}:SKILL.md")
             issues.append(_issue_record(item, "dead_skill", refs))
 
-        usage_state, usage_refs = _usage_state(
-            home, name, binding, evaluation, telemetry_usage
-        )
+        usage_state, usage_refs = _usage_state(home, name, binding, evaluation, telemetry_usage)
         item["usage_state"] = usage_state
         item["usage_evidence_refs"] = _bounded_refs(usage_refs)
         if usage_state == "zero":
@@ -508,7 +517,6 @@ def _classify_portfolio(
                 )
             )
 
-
         if not stale_refs:
             for code in (
                 "dead_skill",
@@ -518,9 +526,7 @@ def _classify_portfolio(
                 "scope_too_narrow",
                 "model_specific_quirk",
             ):
-                detected, refs, value = _explicit_condition(
-                    binding, evaluation, code, name
-                )
+                detected, refs, value = _explicit_condition(binding, evaluation, code, name)
                 if not detected:
                     continue
                 if code == "dead_skill" and item.get("content_hash") is None:
@@ -530,9 +536,7 @@ def _classify_portfolio(
                     if not isinstance(value, dict):
                         continue
                     target_name = (
-                        value.get("with")
-                        or value.get("skill_name")
-                        or value.get("skill_id")
+                        value.get("with") or value.get("skill_name") or value.get("skill_id")
                     )
                     if (
                         not isinstance(target_name, str)
@@ -544,9 +548,7 @@ def _classify_portfolio(
                     suffix = f":{target_name[:_MAX_REFERENCE_LENGTH]}"
                 issues.append(_issue_record(item, code, refs, suffix=suffix))
 
-            replacement, replacement_refs = _replacement_evidence(
-                binding, evaluation, name
-            )
+            replacement, replacement_refs = _replacement_evidence(binding, evaluation, name)
             if replacement is not None:
                 target_name = replacement["skill_name"]
                 target = next(
@@ -555,9 +557,7 @@ def _classify_portfolio(
                 )
                 target_evidence = evidence.get(target_name)
                 target_identity = (
-                    _capability_identity(
-                        target_evidence[2], target_evidence[0], target_evidence[1]
-                    )
+                    _capability_identity(target_evidence[2], target_evidence[0], target_evidence[1])
                     if target_evidence is not None
                     else None
                 )
@@ -590,6 +590,7 @@ def _classify_portfolio(
     for issue in issues:
         unique.setdefault(issue["issue_id"], issue)
     return list(unique.values())
+
 
 class SkillHealth(StrEnum):
     HEALTHY = "HEALTHY"  # ROI > 0, Success rate >= 80%
@@ -1007,6 +1008,7 @@ class SkillGardener:
     def __init__(self, home: Path | str) -> None:
         self.home = Path(home)
         self.ledger = SkillROILedger(self.home)
+
     def observe_portfolio(self) -> dict[str, Any]:
         """Compose a bounded, read-only observation of lifecycle skills.
 
@@ -1029,8 +1031,7 @@ class SkillGardener:
                 findings = entry.get("issues", [])
                 if isinstance(findings, list):
                     audit_by_identity[(name, level)] = [
-                        str(item)[:_MAX_REFERENCE_LENGTH]
-                        for item in findings[:_MAX_AUDIT_FINDINGS]
+                        str(item)[:_MAX_REFERENCE_LENGTH] for item in findings[:_MAX_AUDIT_FINDINGS]
                     ]
 
         skills: list[dict[str, Any]] = []
@@ -1060,14 +1061,10 @@ class SkillGardener:
                 source_type = binding.get("source_type")
                 source_ref = binding.get("source_ref")
                 if isinstance(source_type, str) and isinstance(source_ref, str):
-                    evidence_refs = _bounded_refs(
-                        evidence_refs, [f"{source_type}:{source_ref}"]
-                    )
+                    evidence_refs = _bounded_refs(evidence_refs, [f"{source_type}:{source_ref}"])
                 evaluation_id = evaluation.get("evaluation_id")
                 if isinstance(evaluation_id, str) and evaluation_id:
-                    evidence_refs = _bounded_refs(
-                        evidence_refs, [f"evaluation:{evaluation_id}"]
-                    )
+                    evidence_refs = _bounded_refs(evidence_refs, [f"evaluation:{evaluation_id}"])
                 audit_findings = audit_by_identity.get((skill_dir.name, level), [])
                 roi_summary = self.ledger.get_summary(skill_dir.name).to_dict()
                 lifecycle_state = metadata.get("status") or level
@@ -1146,13 +1143,10 @@ class SkillGardener:
                 "records_inspected": len(skills) + len(audit_entries)
                 if isinstance(audit_entries, list)
                 else len(skills),
-                "local_processing_time_ms": round(
-                    (time.perf_counter() - started) * 1000, 3
-                ),
+                "local_processing_time_ms": round((time.perf_counter() - started) * 1000, 3),
                 "maintenance_work_performed": 0,
             },
         }
-
 
     def audit_portfolio(self) -> dict[str, Any]:
         """
@@ -1205,9 +1199,10 @@ class SkillGardener:
                     )
             elif isinstance(observation.get("issue"), dict):
                 source = observation["issue"]
-            elif isinstance(observation.get("recommendations"), list) and observation[
-                "recommendations"
-            ]:
+            elif (
+                isinstance(observation.get("recommendations"), list)
+                and observation["recommendations"]
+            ):
                 source = observation["recommendations"][0]
             elif isinstance(observation.get("skills"), list) and observation["skills"]:
                 source = observation["skills"][0]
@@ -1260,9 +1255,7 @@ class SkillGardener:
                 if isinstance(source.get("content_hash"), str)
                 else source.get("skill_content_hash")
             ),
-            "lifecycle_state": str(source.get("lifecycle_state", ""))[
-                :_MAX_REFERENCE_LENGTH
-            ],
+            "lifecycle_state": str(source.get("lifecycle_state", ""))[:_MAX_REFERENCE_LENGTH],
             "evidence_detected": bool(evidence_refs),
             "action_recommended": action,
             "action_authorized": False,
@@ -1347,6 +1340,7 @@ class SkillGardener:
             raise BrainError("current lifecycle state is unavailable")
         current_state = located_state
         production_active = declared_state == "active" or located_state == "active"
+
         def required_ref(value: object, label: str) -> str:
             if not isinstance(value, str) or not value.strip():
                 raise BrainError(f"{label} evidence is required")
@@ -1389,8 +1383,7 @@ class SkillGardener:
         current_skill_issue_ids = {
             issue_id
             for issue_id, issue in current_issues.items()
-            if issue.get("skill_name") == name
-            and issue.get("content_hash") in {None, current_hash}
+            if issue.get("skill_name") == name and issue.get("content_hash") in {None, current_hash}
         }
         if action == "archive_retire" and set(issue_ids) != current_skill_issue_ids:
             raise BrainError("archive authorization requires the complete current issue set")
@@ -1426,9 +1419,7 @@ class SkillGardener:
         if action in {"merge", "supersede"}:
             if not isinstance(replacement_value, dict):
                 raise BrainError("verified survivor/replacement skill is required")
-            replacement_name = replacement_value.get("skill_name") or replacement_value.get(
-                "name"
-            )
+            replacement_name = replacement_value.get("skill_name") or replacement_value.get("name")
             replacement_version = replacement_value.get("skill_version") or replacement_value.get(
                 "version"
             )
@@ -1459,9 +1450,7 @@ class SkillGardener:
             replacement_binding = _read_json_object(
                 replacement_path.parent / "candidate-binding.json"
             )
-            replacement_evaluation = _read_json_object(
-                replacement_path.parent / "evaluation.json"
-            )
+            replacement_evaluation = _read_json_object(replacement_path.parent / "evaluation.json")
             if isinstance(replacement_content_hash, str):
                 if replacement_content_hash != replacement_current_hash:
                     raise BrainError("replacement artifact hash is stale")
@@ -1499,9 +1488,12 @@ class SkillGardener:
             "archive_retire": "gardener.archive_retire",
         }[action]
         created_at = datetime.now(UTC).isoformat()
-        authorization_id = "authorization-" + hashlib.sha256(
-            f"{name}|{current_hash}|{action}|{created_at}|{time.time_ns()}".encode()
-        ).hexdigest()[:16]
+        authorization_id = (
+            "authorization-"
+            + hashlib.sha256(
+                f"{name}|{current_hash}|{action}|{created_at}|{time.time_ns()}".encode()
+            ).hexdigest()[:16]
+        )
         record: dict[str, Any] = {
             "authorization_id": authorization_id,
             "skill_name": name[:_MAX_REFERENCE_LENGTH],
@@ -1545,10 +1537,8 @@ class SkillGardener:
 
             temporary.replace(target)
         except OSError as exc:
-            try:
+            with contextlib.suppress(OSError):
                 temporary.unlink()
-            except OSError:
-                pass
             raise BrainError(f"could not persist maintenance authorization: {exc}") from exc
         return record
 
@@ -1585,12 +1575,11 @@ class SkillGardener:
             )
             temporary.replace(target)
         except OSError as exc:
-            try:
+            with contextlib.suppress(OSError):
                 temporary.unlink()
-            except OSError:
-                pass
             raise BrainError(f"could not persist retirement record: {exc}") from exc
         return record
+
     def _persist_authorization_state(
         self,
         authorization: dict[str, Any],
@@ -1614,10 +1603,8 @@ class SkillGardener:
             )
             temporary.replace(target)
         except OSError as exc:
-            try:
+            with contextlib.suppress(OSError):
                 temporary.unlink()
-            except OSError:
-                pass
             raise BrainError(f"could not persist authorization execution: {exc}") from exc
 
     def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
@@ -1629,16 +1616,13 @@ class SkillGardener:
     def _reset_authorization(self, authorization: dict[str, Any]) -> None:
         self._persist_authorization_state(authorization, executed=False)
 
-
     def _load_current_authorization(self, authorization: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(authorization, dict):
             raise BrainError("authorization must be a dict")
         authorization_id = authorization.get("authorization_id")
         if not isinstance(authorization_id, str) or not authorization_id:
             raise BrainError("invalid authorization record ID")
-        path = self.home / "state" / "maintenance" / "authorizations" / (
-            f"{authorization_id}.json"
-        )
+        path = self.home / "state" / "maintenance" / "authorizations" / (f"{authorization_id}.json")
         stored = _read_json_object(path)
         if not stored or stored.get("authorization_id") != authorization_id:
             raise BrainError("authorization record is unavailable")
@@ -1700,8 +1684,7 @@ class SkillGardener:
         version = authorization.get("skill_version")
         expected_hash = authorization.get("content_hash")
         if not all(
-            isinstance(value, str) and value.strip()
-            for value in (name, version, expected_hash)
+            isinstance(value, str) and value.strip() for value in (name, version, expected_hash)
         ):
             raise BrainError("archive authorization identity is incomplete")
         if not isinstance(authorization.get("owner"), str) or not authorization["owner"]:
@@ -1737,9 +1720,12 @@ class SkillGardener:
         archive_destination = authorization.get("archive_destination")
         if not isinstance(archive_destination, str) or not archive_destination.strip():
             raise BrainError("archive destination is required")
-        retirement_id = "retirement-" + hashlib.sha256(
-            f"{authorization['authorization_id']}|{time.time_ns()}".encode()
-        ).hexdigest()[:16]
+        retirement_id = (
+            "retirement-"
+            + hashlib.sha256(
+                f"{authorization['authorization_id']}|{time.time_ns()}".encode()
+            ).hexdigest()[:16]
+        )
         archive_root = self._archive_root(archive_destination.strip())
         archive_parent = archive_root / retirement_id
         final_dir = archive_parent / name
@@ -1765,18 +1751,10 @@ class SkillGardener:
         source_mutation_started = False
         preserve_retirement_artifacts = False
         retirement_record_path = (
-            self.home
-            / "state"
-            / "maintenance"
-            / "retirements"
-            / f"{retirement_id}.json"
+            self.home / "state" / "maintenance" / "retirements" / f"{retirement_id}.json"
         )
         quarantine_parent = (
-            self.home
-            / "state"
-            / "maintenance"
-            / "retirement-quarantine"
-            / retirement_id
+            self.home / "state" / "maintenance" / "retirement-quarantine" / retirement_id
         )
         quarantine_dir = quarantine_parent / name
         try:
@@ -1799,8 +1777,7 @@ class SkillGardener:
                 "content_hash": expected_hash,
                 "owner": authorization["owner"][:_MAX_REFERENCE_LENGTH],
                 "retirement_reason": str(
-                    authorization.get("retirement_reason")
-                    or "authorized maintenance retirement"
+                    authorization.get("retirement_reason") or "authorized maintenance retirement"
                 )[:_MAX_REFERENCE_LENGTH],
                 "issue_ids": _bounded_refs(authorization.get("issue_ids")),
                 "evidence_refs": _bounded_refs(authorization.get("evidence_refs")),
@@ -1851,10 +1828,8 @@ class SkillGardener:
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)
                 if persisted:
-                    try:
+                    with contextlib.suppress(OSError):
                         retirement_record_path.unlink()
-                    except OSError:
-                        pass
             raise
         except (OSError, UnicodeError) as exc:
             if not source_mutation_started and not preserve_retirement_artifacts:
@@ -1862,10 +1837,8 @@ class SkillGardener:
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)
                 if persisted:
-                    try:
+                    with contextlib.suppress(OSError):
                         retirement_record_path.unlink()
-                    except OSError:
-                        pass
             raise BrainError(f"archive retirement failed: {exc}") from exc
 
     def restore_retirement(self, retirement_record_id: str) -> dict[str, Any]:
@@ -1877,11 +1850,7 @@ class SkillGardener:
         ):
             raise BrainError("invalid retirement record ID")
         record_path = (
-            self.home
-            / "state"
-            / "maintenance"
-            / "retirements"
-            / f"{retirement_record_id}.json"
+            self.home / "state" / "maintenance" / "retirements" / f"{retirement_record_id}.json"
         )
         record = _read_json_object(record_path)
         if record.get("retirement_record_id") != retirement_record_id:
