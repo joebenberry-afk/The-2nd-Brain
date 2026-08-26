@@ -544,3 +544,132 @@ def test_delegated_authorization_does_not_mutate(brain_home):
     )
     assert json.loads(persisted.read_text(encoding="utf-8")) == result
     assert _lifecycle_snapshot(brain_home) == before
+
+
+def test_negative_roi_precedes_retirement_issue_in_observation():
+    recommendation = SkillGardener(Path(".")).recommend_maintenance(
+        {
+            "issues": [
+                {
+                    "issue_id": "skill:dead_skill",
+                    "issue_type": "broken",
+                    "condition_code": "dead_skill",
+                    "skill_name": "skill",
+                    "skill_version": "1",
+                    "content_hash": "a" * 64,
+                    "lifecycle_state": "shadow",
+                    "evidence_refs": ["audit:dead"],
+                },
+                {
+                    "issue_id": "skill:measured_negative",
+                    "issue_type": "negative_roi",
+                    "condition_code": "measured_negative",
+                    "skill_name": "skill",
+                    "skill_version": "1",
+                    "content_hash": "a" * 64,
+                    "lifecycle_state": "shadow",
+                    "measurement_state": "measured",
+                    "evidence_refs": ["ledger:negative"],
+                },
+            ]
+        }
+    )
+    assert recommendation["action_recommended"] == "repair"
+
+
+def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
+    directory = _make_skill(brain_home, "archive-gated", "shadow")
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "usage": {"invocations": 0, "measured": True, "evidence_refs": ["usage:1"]},
+            "condition_evidence": {
+                "false_trigger": {"detected": True, "evidence_refs": ["eval:1"]}
+            },
+        },
+    )
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        issue
+        for issue in gardener.observe_portfolio()["issues"]
+        if issue["skill_name"] == "archive-gated" and issue["condition_code"] == "false_trigger"
+    )
+    recommendation = {
+        "skill_name": "archive-gated",
+        "skill_version": issue["skill_version"],
+        "content_hash": issue["content_hash"],
+        "lifecycle_state": "shadow",
+        "action_recommended": "archive_retire",
+        "issue_ids": [issue["issue_id"]],
+        "evidence_refs": issue["evidence_refs"],
+        "archive_destination": "archive:archive-gated",
+    }
+    with pytest.raises(BrainError, match="complete current issue set"):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
+def test_merge_rejects_self_survivor(brain_home):
+    directory = _make_skill(brain_home, "self-merge", "shadow")
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {"false_trigger": {"detected": True}},
+        },
+    )
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        issue
+        for issue in gardener.observe_portfolio()["issues"]
+        if issue["skill_name"] == "self-merge"
+    )
+    recommendation = gardener.recommend_maintenance(issue)
+    recommendation["action_recommended"] = "merge"
+    recommendation["replacement_ref"] = {
+        "skill_name": "self-merge",
+        "skill_version": "1",
+        "capability_hash": "self",
+    }
+    with pytest.raises(BrainError, match="differ"):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
+def test_merge_rejects_unbound_stale_survivor_artifact(brain_home):
+    source = _make_skill(brain_home, "merge-source", "shadow")
+    survivor = _make_skill(brain_home, "merge-survivor", "shadow")
+    _write_binding(source, {"owner": "owner-1"})
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        issue
+        for issue in gardener.observe_portfolio()["issues"]
+        if issue["skill_name"] == "merge-source"
+        and issue["condition_code"] == "exact_duplicate"
+    )
+    recommendation = gardener.recommend_maintenance(issue)
+    replacement = {
+        "skill_name": "merge-survivor",
+        "skill_version": "1",
+        "capability_hash": "not-bound-to-current-artifact",
+    }
+    with pytest.raises(BrainError, match="capability"):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+            replacement=replacement,
+        )

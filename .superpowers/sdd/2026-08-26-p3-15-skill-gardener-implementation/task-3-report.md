@@ -23,3 +23,14 @@ Result: **28 passed**.
 ## Concerns
 - `execute_maintenance()` and `restore_retirement()` are intentionally deferred to Task 4.
 - Authorization consumes explicit bounded evidence references and persisted candidate owner evidence; execution of delegated authorities remains outside Gardener as required by the action-authority table.
+
+## Review fixes
+- Prioritized measured-negative issues across mixed findings so recommendations remain review-only.
+- Archive authorization now requires the complete current issue set for the current skill/hash.
+- Rejected self-survivors and required replacement capability to bind to a current artifact hash or recomputed normalized identity.
+- Corrected merge/supersede delegation metadata to the existing lifecycle/promotion primitive.
+- Derived lifecycle state from the resolved directory and require production-safety evidence whenever path or frontmatter indicates active.
+
+Focused test result after fixes: **32 passed**.
+
+Additional implementation commit: `PENDING`.
