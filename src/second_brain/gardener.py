@@ -298,6 +298,17 @@ def _stale_evidence(
     return _bounded_refs(refs)
 
 
+def _positive_version(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
 def _promotion_evidence_refs(
     home: Path, skill_name: str, skill_version: str | None = None
 ) -> list[str]:
@@ -312,7 +323,13 @@ def _promotion_evidence_refs(
         owner = data.get("owner")
         from_level = data.get("from_level")
         to_level = data.get("to_level")
-        resulting_version = data.get("resulting_version") or data.get("version")
+        resulting_version = data.get("resulting_version")
+        if resulting_version is None:
+            resulting_version = data.get("version")
+        result_version_number = _positive_version(resulting_version)
+        expected_version_number = (
+            _positive_version(skill_version) if skill_version is not None else None
+        )
         if (
             not isinstance(owner, str)
             or not owner.strip()
@@ -322,9 +339,14 @@ def _promotion_evidence_refs(
             or to_level not in paths.SKILL_LEVEL_DIRS
             or data.get("rollback_clear") is not True
             or not isinstance(data.get("guards"), dict)
-            or not isinstance(resulting_version, str)
-            or not resulting_version.strip()
-            or (skill_version is not None and resulting_version != skill_version)
+            or result_version_number is None
+            or (
+                skill_version is not None
+                and (
+                    expected_version_number is None
+                    or result_version_number != expected_version_number
+                )
+            )
         ):
             continue
         refs.append(f"promotion:{path.name}")
@@ -1507,6 +1529,12 @@ class SkillGardener:
             if issue.get("content_hash") not in {None, current_hash}:
                 raise BrainError("issue evidence is stale")
 
+        if action not in {"keep", "no_action"} and any(
+            current_issues[issue_id].get("condition_code") == "evidence_stale"
+            for issue_id in issue_ids
+            if issue_id in current_issues
+        ):
+            raise BrainError("stale evidence cannot authorize maintenance")
         issue_codes = {
             current_issues[issue_id].get("condition_code")
             for issue_id in issue_ids
