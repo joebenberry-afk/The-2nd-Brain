@@ -673,3 +673,34 @@ def test_merge_rejects_unbound_stale_survivor_artifact(brain_home):
             rollback_ref="rollback:1",
             replacement=replacement,
         )
+
+
+def test_merge_authorization_delegates_content_lifecycle(brain_home):
+    source = _make_skill(brain_home, "merge-source-valid", "shadow")
+    _make_skill(brain_home, "merge-survivor-valid", "shadow")
+    _write_binding(source, {"owner": "owner-1"})
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        issue
+        for issue in gardener.observe_portfolio()["issues"]
+        if issue["skill_name"] == "merge-source-valid"
+        and issue["condition_code"] == "exact_duplicate"
+    )
+    capability_ref = next(
+        ref for ref in issue["evidence_refs"] if ref.startswith("capability:")
+    )
+    recommendation = gardener.recommend_maintenance(issue)
+    result = gardener.authorize_maintenance(
+        recommendation,
+        actor="owner-1",
+        approval_ref="approval:1",
+        non_regression_ref="verification:1",
+        rollback_ref="rollback:1",
+        replacement={
+            "skill_name": "merge-survivor-valid",
+            "skill_version": "1",
+            "capability_hash": capability_ref.removeprefix("capability:"),
+        },
+    )
+    assert result["authority"] == "skill-lifecycle/content"
+    assert result["action_executed"] is False

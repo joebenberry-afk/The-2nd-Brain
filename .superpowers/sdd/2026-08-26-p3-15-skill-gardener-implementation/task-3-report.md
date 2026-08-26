@@ -34,3 +34,10 @@ Result: **28 passed**.
 Focused test result after fixes: **32 passed**.
 
 Additional implementation commit: `cd08377 fix(gardener): close authorization review gaps`.
+
+## Final authority correction
+- `merge` delegates to the existing `skill-lifecycle/content` path.
+- `supersede` delegates to the existing `lifecycle/promotion` primitive.
+- Added a focused successful merge authorization assertion; no delegated action executes.
+
+Focused test result after correction: **33 passed**.
