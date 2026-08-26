@@ -146,7 +146,19 @@ def _explicit_condition(
     for fallback, value in values:
         detected = value is True
         if isinstance(value, dict):
-            detected = any(value.get(key) is True for key in ("detected", "present", "material"))
+            detected = any(
+                value.get(key) is True
+                for key in (
+                    "detected",
+                    "present",
+                    "material",
+                    "failed",
+                    "false_positive",
+                    "outside_scope",
+                    "missed",
+                    "divergent",
+                )
+            )
         elif isinstance(value, list):
             detected = bool(value)
         if detected:
