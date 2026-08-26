@@ -94,7 +94,7 @@ def _read_json_object(path: Path) -> dict[str, Any]:
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -293,19 +293,41 @@ def _stale_evidence(
                 refs.append(f"{label}:{key}")
         freshness = source.get("freshness")
         if isinstance(freshness, dict) and freshness.get("ok") is False:
-            refs.extend(_evidence_refs(freshness, f"{label}:freshness"))
+            freshness_refs = _evidence_refs(freshness, f"{label}:freshness")
+            refs.extend(freshness_refs or [f"{label}:freshness"])
     return _bounded_refs(refs)
 
 
-def _promotion_evidence_refs(home: Path, skill_name: str) -> list[str]:
+def _promotion_evidence_refs(
+    home: Path, skill_name: str, skill_version: str | None = None
+) -> list[str]:
     directory = home / "state" / "promotions"
     if not directory.is_dir():
         return []
     refs: list[str] = []
     for path in sorted(directory.glob("*.json")):
         data = _read_json_object(path)
-        if data.get("skill_name") == skill_name:
-            refs.append(f"promotion:{path.name}")
+        if data.get("skill_name") != skill_name:
+            continue
+        owner = data.get("owner")
+        from_level = data.get("from_level")
+        to_level = data.get("to_level")
+        resulting_version = data.get("resulting_version") or data.get("version")
+        if (
+            not isinstance(owner, str)
+            or not owner.strip()
+            or not isinstance(from_level, str)
+            or from_level not in paths.SKILL_LEVEL_DIRS
+            or not isinstance(to_level, str)
+            or to_level not in paths.SKILL_LEVEL_DIRS
+            or data.get("rollback_clear") is not True
+            or not isinstance(data.get("guards"), dict)
+            or not isinstance(resulting_version, str)
+            or not resulting_version.strip()
+            or (skill_version is not None and resulting_version != skill_version)
+        ):
+            continue
+        refs.append(f"promotion:{path.name}")
     return refs[:_MAX_EVIDENCE_REFS]
 
 
@@ -724,7 +746,7 @@ def _measured_from_counterfactual_result(
     for path in sorted(directory.glob(f"{skill_name}-*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):
             continue
@@ -743,7 +765,7 @@ def _measured_from_counterfactual_result(
             continue
         with_total = with_tokens.get("total")
         without_total = without_tokens.get("total")
-        if not isinstance(with_total, int) or not isinstance(without_total, int):
+        if type(with_total) is not int or type(without_total) is not int:
             continue
         matches.append((str(data.get("created_at") or ""), path, data))
     if not matches:
@@ -1143,7 +1165,7 @@ class SkillGardener:
                         pass
                 evidence_refs = _bounded_refs(
                     evidence_refs,
-                    _promotion_evidence_refs(self.home, skill_dir.name),
+                    _promotion_evidence_refs(self.home, skill_dir.name, metadata.get("version")),
                     _counterfactual_evidence_refs(self.home, skill_dir.name, content_hash),
                 )
                 audit_findings = audit_by_identity.get((skill_dir.name, level), [])
@@ -1456,8 +1478,10 @@ class SkillGardener:
         evidence_refs = _bounded_refs(recommendation.get("evidence_refs"))
         if not evidence_refs:
             raise BrainError("issue evidence is required")
-        if action == "demote" and not any(ref.startswith("promotion:") for ref in evidence_refs):
-            raise BrainError("promotion governance evidence is required")
+        if action == "demote":
+            canonical_refs = _promotion_evidence_refs(self.home, name, version)
+            if not any(ref in canonical_refs for ref in evidence_refs):
+                raise BrainError("canonical promotion governance evidence is required")
         current_observation = self.observe_portfolio()
         current_issues = {
             issue.get("issue_id"): issue
