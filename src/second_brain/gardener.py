@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -39,13 +40,28 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import paths, skillforge
+from . import paths, skillforge, telemetry
 from .errors import BrainError
 from .radar import ImprovementRadar
 
 _MAX_EVIDENCE_REFS = 32
 _MAX_REFERENCE_LENGTH = 256
 _MAX_AUDIT_FINDINGS = 32
+_ISSUE_TYPES = {
+    "evidence_stale": "stale",
+    "dead_skill": "broken",
+    "capability_overlap": "duplicate",
+    "false_trigger": "broken",
+    "measured_zero_use": "unused",
+    "measured_negative": "negative_roi",
+    "exact_duplicate": "duplicate",
+    "scope_too_broad": "broken",
+    "scope_too_narrow": "broken",
+    "model_specific_quirk": "broken",
+    "superseded": "superseded",
+    "usage_unavailable": "unused",
+}
+
 
 
 def _bounded_refs(*values: object) -> list[str]:
@@ -89,7 +105,372 @@ CREATE TABLE IF NOT EXISTS skill_roi_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_name ON skill_roi_ledger (skill_name);
 """
+def _evidence_refs(value: object, fallback: str) -> list[str]:
+    """Extract only bounded refs from one explicit evidence payload."""
+    refs: list[object] = []
+    if isinstance(value, dict):
+        for key in ("evidence_refs", "evidence", "refs"):
+            candidate = value.get(key)
+            if isinstance(candidate, list):
+                refs.extend(candidate)
+            elif isinstance(candidate, str):
+                refs.append(candidate)
+    return _bounded_refs(refs, [fallback])
 
+
+def _explicit_condition(
+    binding: dict[str, Any], evaluation: dict[str, Any], code: str, skill_name: str
+) -> tuple[bool, list[str], object | None]:
+    """Read a condition only when persisted evidence names that condition."""
+    values: list[tuple[str, object]] = []
+    for label, source in (("binding", binding), ("evaluation", evaluation)):
+        if not isinstance(source, dict):
+            continue
+        for container_name in (
+            "condition_evidence",
+            "issue_evidence",
+            "classification",
+            "gardener_evidence",
+            "conditions",
+        ):
+            container = source.get(container_name)
+            if isinstance(container, dict) and code in container:
+                values.append((f"{label}:{container_name}:{code}", container[code]))
+        direct = source.get(code)
+        if direct is not None:
+            values.append((f"{label}:{code}", direct))
+        codes = source.get("condition_codes")
+        if isinstance(codes, list) and code in codes:
+            values.append((f"{label}:condition_codes:{code}", {"detected": True}))
+
+    for fallback, value in values:
+        detected = value is True
+        if isinstance(value, dict):
+            detected = any(value.get(key) is True for key in ("detected", "present", "material"))
+        elif isinstance(value, list):
+            detected = bool(value)
+        if detected:
+            return True, _evidence_refs(value, f"skill:{skill_name}:{fallback}"), value
+    return False, [], None
+
+
+def _normalized_capability_hash(path: Path) -> str | None:
+    """Hash body/capability content while ignoring lifecycle identity fields."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        try:
+            end = lines.index("---", 1)
+        except ValueError:
+            end = -1
+        if end >= 0:
+            lines = [
+                line
+                for line in lines[end + 1 :]
+                if not re.match(r"^\s*(name|status|version)\s*:", line, re.I)
+            ]
+    normalized = "\n".join(" ".join(line.split()) for line in lines if line.strip()).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else None
+
+
+def _capability_identity(
+    path: Path, binding: dict[str, Any], evaluation: dict[str, Any]
+) -> str | None:
+    for source in (binding, evaluation):
+        for key in ("normalized_capability_hash", "capability_hash", "content_identity"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if isinstance(value, str) and value:
+                return value
+        evidence = source.get("capability_evidence") if isinstance(source, dict) else None
+        if isinstance(evidence, dict):
+            for key in ("normalized_hash", "capability_hash", "content_hash"):
+                value = evidence.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    return _normalized_capability_hash(path)
+
+
+def _replacement_evidence(
+    binding: dict[str, Any], evaluation: dict[str, Any], skill_name: str
+) -> tuple[dict[str, str] | None, list[str]]:
+    for label, source in (("binding", binding), ("evaluation", evaluation)):
+        if not isinstance(source, dict):
+            continue
+        for key in ("replacement_ref", "replacement", "superseded_by"):
+            value = source.get(key)
+            if not isinstance(value, dict):
+                continue
+            name = value.get("skill_name") or value.get("name") or value.get("id")
+            version = value.get("version") or value.get("skill_version")
+            capability = value.get("capability_hash") or value.get("normalized_capability_hash")
+            cap_evidence = value.get("capability_evidence")
+            if (
+                isinstance(name, str)
+                and name
+                and name != skill_name
+                and isinstance(version, str)
+                and version
+                and (
+                    isinstance(capability, str)
+                    or (isinstance(cap_evidence, (dict, list)) and bool(cap_evidence))
+                )
+            ):
+                replacement = {
+                    "skill_name": name[:_MAX_REFERENCE_LENGTH],
+                    "skill_version": version[:_MAX_REFERENCE_LENGTH],
+                }
+                if isinstance(capability, str):
+                    replacement["capability_hash"] = capability[:_MAX_REFERENCE_LENGTH]
+                return replacement, _evidence_refs(
+                    value, f"{label}:{key}:{name}:{version}"
+                )
+    return None, []
+
+
+def _stale_evidence(
+    item: dict[str, Any], binding: dict[str, Any], evaluation: dict[str, Any]
+) -> list[str]:
+    current_hash = item.get("content_hash")
+    current_version = item.get("skill_version")
+    refs: list[str] = []
+    for label, source in (("binding", binding), ("evaluation", evaluation)):
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "candidate_content_sha256",
+            "content_hash",
+            "skill_content_hash",
+            "artifact_sha256",
+        ):
+            value = source.get(key)
+            if isinstance(value, str) and value and isinstance(current_hash, str) and value != current_hash:
+                refs.append(f"{label}:{key}")
+        for key in ("candidate_version", "skill_version", "artifact_version"):
+            value = source.get(key)
+            if isinstance(value, str) and value and isinstance(current_version, str) and value != current_version:
+                refs.append(f"{label}:{key}")
+        freshness = source.get("freshness")
+        if isinstance(freshness, dict) and freshness.get("ok") is False:
+            refs.extend(_evidence_refs(freshness, f"{label}:freshness"))
+    return _bounded_refs(refs)
+
+
+def _ledger_usage(home: Path, skill_name: str) -> tuple[bool, list[str]]:
+    """Return measured usage evidence without creating or changing state."""
+    dbfile = home / "state" / "skills" / "skill_roi.sqlite"
+    if not dbfile.is_file():
+        return False, []
+    try:
+        with sqlite3.connect(dbfile, timeout=1.0) as conn:
+            rows = conn.execute(
+                "SELECT id, measurement_state FROM skill_roi_ledger "
+                "WHERE skill_name = ? ORDER BY id LIMIT 32",
+                (skill_name,),
+            ).fetchall()
+    except sqlite3.Error:
+        return False, []
+    measured = [row for row in rows if row[1] == MeasurementState.MEASURED.value]
+    return bool(measured), [f"ledger:{row[0]}" for row in measured]
+
+
+def _usage_state(
+    home: Path, skill_name: str, binding: dict[str, Any], evaluation: dict[str, Any]
+) -> tuple[str, list[str]]:
+    for label, source in (("binding", binding), ("evaluation", evaluation)):
+        if not isinstance(source, dict):
+            continue
+        for key in ("usage", "usage_telemetry", "telemetry"):
+            usage = source.get(key)
+            if not isinstance(usage, dict):
+                continue
+            count = usage.get("invocations", usage.get("invocation_count", usage.get("uses")))
+            measured = usage.get("measured") is True or isinstance(usage.get("window"), str)
+            if isinstance(count, int) and count >= 0 and measured:
+                refs = _evidence_refs(usage, f"{label}:{key}:{skill_name}")
+                return ("zero" if count == 0 else "used"), refs
+    used, refs = _ledger_usage(home, skill_name)
+    if used:
+        return "used", refs
+    for file_name, _, record in telemetry.iter_records(home):
+        if not isinstance(record, dict) or record.get("skill_name") != skill_name:
+            continue
+        if record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}:
+            return "used", [f"telemetry:{file_name}"]
+    return "unknown", [f"usage_unavailable:{skill_name}"]
+
+
+def _measured_roi(
+    home: Path, item: dict[str, Any]
+) -> tuple[MeasurementState, int | None, list[str]]:
+    name = str(item["skill_name"])
+    version = str(item.get("content_hash") or item["skill_version"])
+    measured, ref = _measured_from_counterfactual_result(home, name, version)
+    if measured is not None:
+        return MeasurementState.MEASURED, measured, _bounded_refs([ref] if ref else [])
+    measured, ref, candidate_ref = _measured_from_evaluation(home, name, version)
+    if measured is not None:
+        return MeasurementState.MEASURED, measured, _bounded_refs(
+            [ref, f"candidate:{candidate_ref}"] if ref else []
+        )
+    summary = item.get("roi_summary")
+    if isinstance(summary, dict) and isinstance(summary.get("invocations"), int):
+        if summary["invocations"] > 0 and isinstance(summary.get("net_tokens_saved"), int):
+            return MeasurementState.MEASURED, summary["net_tokens_saved"], []
+    return MeasurementState.UNAVAILABLE, None, []
+
+def _issue_record(
+    item: dict[str, Any],
+    condition_code: str,
+    evidence_refs: list[str],
+    *,
+    measurement_state: str = "unavailable",
+    reason_codes: list[str] | None = None,
+    replacement_ref: dict[str, str] | None = None,
+    suffix: str = "",
+) -> dict[str, Any]:
+    issue: dict[str, Any] = {
+        "issue_id": f"{item['skill_name']}:{condition_code}{suffix}",
+        "issue_type": _ISSUE_TYPES[condition_code],
+        "condition_code": condition_code,
+        "skill_name": item["skill_name"],
+        "skill_version": item["skill_version"],
+        "lifecycle_state": item["lifecycle_state"],
+        "reason_codes": reason_codes or [condition_code],
+        "evidence_refs": _bounded_refs(evidence_refs),
+        "measurement_state": measurement_state,
+    }
+    if replacement_ref is not None:
+        issue["replacement_ref"] = replacement_ref
+    return issue
+
+
+def _classify_portfolio(
+    home: Path,
+    skills: list[dict[str, Any]],
+    evidence: dict[str, tuple[dict[str, Any], dict[str, Any], Path]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    identities: dict[str, list[dict[str, Any]]] = {}
+    for item in skills:
+        name = str(item["skill_name"])
+        binding, evaluation, path = evidence[name]
+        stale_refs = _stale_evidence(item, binding, evaluation)
+        audit_refs = [
+            f"audit:{name}:{finding}"
+            for finding in item.get("audit_findings", [])
+            if isinstance(finding, str)
+        ]
+        if stale_refs:
+            issues.append(
+                _issue_record(
+                    item, "evidence_stale", stale_refs, reason_codes=["evidence_stale"]
+                )
+            )
+        if item.get("content_hash") is None or any(
+            re.search(r"missing\s+skill\.md|missing\s+promotion|cannot\s+execute|execution|corrupt|missing\s+section|empty|placeholder|tbd|todo", finding, re.I)
+            for finding in item.get("audit_findings", [])
+            if isinstance(finding, str)
+        ):
+            refs = [ref for ref in audit_refs if ref]
+            if item.get("content_hash") is None:
+                refs.append(f"skill:{name}:SKILL.md")
+            issues.append(_issue_record(item, "dead_skill", refs))
+
+        usage_state, usage_refs = _usage_state(home, name, binding, evaluation)
+        audit_stale_refs = [
+            ref
+            for ref in audit_refs
+            if re.search(r"frontmatter\s+status|freshness|stale", ref, re.I)
+        ]
+        if audit_stale_refs:
+            issues.append(
+                _issue_record(
+                    item, "evidence_stale", audit_stale_refs, reason_codes=["evidence_stale"]
+                )
+            )
+        if usage_state == "zero":
+            issues.append(
+                _issue_record(
+                    item,
+                    "measured_zero_use",
+                    usage_refs,
+                    measurement_state=MeasurementState.MEASURED.value,
+                )
+            )
+        elif usage_state == "unknown":
+            issues.append(
+                _issue_record(
+                    item,
+                    "usage_unavailable",
+                    usage_refs,
+                    reason_codes=["usage_unavailable"],
+                )
+            )
+
+        measurement_state, measured_roi, roi_refs = _measured_roi(home, item)
+        if measurement_state == MeasurementState.MEASURED and measured_roi is not None and measured_roi < 0:
+            issues.append(
+                _issue_record(
+                    item,
+                    "measured_negative",
+                    roi_refs or [f"roi:{name}"],
+                    measurement_state=measurement_state.value,
+                )
+            )
+
+        for code in (
+            "dead_skill",
+            "capability_overlap",
+            "false_trigger",
+            "scope_too_broad",
+            "scope_too_narrow",
+            "model_specific_quirk",
+        ):
+            detected, refs, value = _explicit_condition(binding, evaluation, code, name)
+            if not detected:
+                continue
+            # A lifecycle failure already emitted above is still represented
+            # separately when explicit evidence names dead_skill.
+            if code == "dead_skill" and item.get("content_hash") is None:
+                continue
+            suffix = ""
+            if code == "capability_overlap" and isinstance(value, dict):
+                target = value.get("with") or value.get("skill_name") or value.get("skill_id")
+                if not isinstance(target, str) or not target or target == name:
+                    continue
+                material = value.get("material")
+                if material is not True:
+                    continue
+                suffix = f":{target[:_MAX_REFERENCE_LENGTH]}"
+            issues.append(_issue_record(item, code, refs))
+
+        replacement, replacement_refs = _replacement_evidence(binding, evaluation, name)
+        if replacement is not None:
+            issues.append(
+                _issue_record(
+                    item,
+                    "superseded",
+                    replacement_refs,
+                    replacement_ref=replacement,
+                )
+            )
+        identity = _capability_identity(path, binding, evaluation)
+        if identity:
+            identities.setdefault(identity, []).append(item)
+
+    for identity, members in identities.items():
+        if len(members) < 2:
+            continue
+        refs = [f"capability:{identity[:_MAX_REFERENCE_LENGTH]}"]
+        for item in members:
+            issues.append(_issue_record(item, "exact_duplicate", refs))
+    unique: dict[str, dict[str, Any]] = {}
+    for issue in issues:
+        unique.setdefault(issue["issue_id"], issue)
+    return list(unique.values())
 
 class SkillHealth(StrEnum):
     HEALTHY = "HEALTHY"  # ROI > 0, Success rate >= 80%
@@ -512,8 +893,8 @@ class SkillGardener:
 
         This intentionally reads existing evidence instead of calling
         ``record_from_evidence``: observation must not create or update ROI
-        rows, lifecycle artifacts, or promotion records.
         """
+        evidence_by_skill: dict[str, tuple[dict[str, Any], dict[str, Any], Path]] = {}
         started = time.perf_counter()
         lifecycle_audit = skillforge.audit_lifecycle(self.home)
         audit_entries = lifecycle_audit.get("skills", [])
@@ -556,6 +937,7 @@ class SkillGardener:
                 binding = _read_json_object(binding_path)
                 evaluation = _read_json_object(evaluation_path)
                 evidence_refs = _bounded_refs(binding.get("evidence_refs"))
+                evidence_by_skill[skill_dir.name] = (binding, evaluation, path)
                 source_type = binding.get("source_type")
                 source_ref = binding.get("source_ref")
                 if isinstance(source_type, str) and isinstance(source_ref, str):
@@ -595,17 +977,24 @@ class SkillGardener:
                     }
                 )
 
-        # Task 1 establishes the issue boundary; differentiated condition
-        # classifiers are deliberately left for the next implementation slice.
-        issues: list[dict[str, Any]] = []
+        issues = _classify_portfolio(self.home, skills, evidence_by_skill)
+        issue_ids_by_skill: dict[str, list[str]] = {}
+        issue_refs_by_skill: dict[str, list[str]] = {}
+        for issue in issues:
+            name = issue["skill_name"]
+            issue_ids_by_skill.setdefault(name, []).append(issue["issue_id"])
+            issue_refs_by_skill.setdefault(name, []).extend(issue["evidence_refs"])
         recommendations = [
             {
                 "skill_name": item["skill_name"],
                 "skill_version": item["skill_version"],
                 "lifecycle_state": item["lifecycle_state"],
                 "recommendation": "keep",
-                "issue_ids": [],
-                "evidence_refs": list(item["evidence_refs"]),
+                "issue_ids": issue_ids_by_skill.get(item["skill_name"], []),
+                "evidence_refs": _bounded_refs(
+                    item["evidence_refs"],
+                    issue_refs_by_skill.get(item["skill_name"], []),
+                ),
             }
             for item in skills
         ]
