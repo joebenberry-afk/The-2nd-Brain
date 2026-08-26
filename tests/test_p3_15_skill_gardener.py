@@ -2,13 +2,14 @@
 
 import json
 import shutil
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from second_brain import paths, skillforge
 from second_brain.errors import BrainError
-from second_brain.gardener import SkillGardener
+from second_brain.gardener import SkillGardener, SkillROILedger
 
 
 def _make_skill(home: Path, name: str, level: str) -> Path:
@@ -34,6 +35,30 @@ def _make_skill(home: Path, name: str, level: str) -> Path:
         encoding="utf-8",
     )
     return directory
+
+
+def test_legacy_roi_ledger_schema_migrates_additively(brain_home):
+    dbfile = brain_home / "state" / "skills" / "skill_roi.sqlite"
+    dbfile.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(dbfile) as conn:
+        conn.execute(
+            "CREATE TABLE skill_roi_ledger ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "skill_name TEXT NOT NULL, session_id TEXT NOT NULL,"
+            "skill_version TEXT, tokens_invested INTEGER NOT NULL,"
+            "tokens_saved INTEGER NOT NULL, success INTEGER NOT NULL,"
+            "created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO skill_roi_ledger "
+            "(skill_name, session_id, skill_version, tokens_invested, "
+            "tokens_saved, success, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("legacy", "session", "1", 10, 4, 1, "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    summary = SkillROILedger(brain_home).get_summary("legacy")
+    assert summary.total_tokens_saved == 4
+    assert summary.net_tokens_saved == -6
 
 
 def _lifecycle_snapshot(home: Path) -> dict[str, bytes]:
@@ -142,6 +167,16 @@ def test_observe_portfolio_bounds_binding_state_metadata(brain_home):
 
 
 def _write_binding(directory: Path, payload: dict) -> None:
+    payload = json.loads(json.dumps(payload))
+    conditions = payload.get("condition_evidence")
+    if isinstance(conditions, dict):
+        for code, evidence in conditions.items():
+            if (
+                isinstance(evidence, dict)
+                and evidence.get("detected") is True
+                and not evidence.get("evidence_refs")
+            ):
+                evidence["evidence_refs"] = [f"fixture:{code}"]
     (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -204,6 +239,43 @@ def test_condition_codes_are_differentiated(brain_home, condition_code, issue_ty
     matches = [issue for issue in result["issues"] if issue["condition_code"] == condition_code]
     assert matches
     assert all(issue["issue_type"] == issue_type for issue in matches)
+
+
+def test_marker_only_condition_cannot_authorize_archive(brain_home):
+    directory = _make_skill(brain_home, "marker-only", "shadow")
+    (directory / "candidate-binding.json").write_text(
+        json.dumps(
+            {
+                "owner": "owner-1",
+                "condition_evidence": {"dead_skill": {"detected": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gardener = SkillGardener(brain_home)
+    observation = gardener.observe_portfolio()
+    assert not any(
+        issue["skill_name"] == "marker-only" and issue["condition_code"] == "dead_skill"
+        for issue in observation["issues"]
+    )
+    recommendation = {
+        "skill_name": "marker-only",
+        "skill_version": "1",
+        "content_hash": skillforge.lifecycle_content_hash(directory / "SKILL.md"),
+        "lifecycle_state": "shadow",
+        "action_recommended": "archive_retire",
+        "issue_ids": ["marker-only:dead_skill"],
+        "evidence_refs": ["synthetic:marker"],
+        "archive_destination": str(brain_home / "archive"),
+    }
+    with pytest.raises(BrainError):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
 
 
 def test_missing_usage_is_unavailable_not_measured_zero(brain_home):
@@ -964,9 +1036,32 @@ def test_source_removal_failure_leaves_authorization_retryable(brain_home, monke
     assert result["action_executed"] is True
 
 
+def test_post_mutation_marker_failure_recovers_via_retirement_record(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "marker-fails", "shadow")
+    authorization = _authorized_retirement(brain_home, "marker-fails")
+    original = (source / "SKILL.md").read_bytes()
+    gardener = SkillGardener(brain_home)
+
+    def fail_marker(authorization):
+        raise BrainError("marker persistence failed")
+
+    monkeypatch.setattr(gardener, "_mark_authorization_executed", fail_marker)
+    with pytest.raises(BrainError, match="marker"):
+        gardener.execute_maintenance(authorization)
+    assert not source.exists()
+    restored = gardener.restore_retirement(
+        next(
+            path.stem
+            for path in (brain_home / "state" / "maintenance" / "retirements").glob("*.json")
+        )
+    )
+    assert Path(restored["restored_path"], "SKILL.md").read_bytes() == original
+
+
 def test_atomic_source_mutation_survives_partial_delete_scenario(brain_home, monkeypatch):
     source = _make_skill(brain_home, "atomic-remove", "shadow")
     authorization = _authorized_retirement(brain_home, "atomic-remove")
+
     original_files = {
         path.relative_to(source).as_posix(): path.read_bytes()
         for path in source.rglob("*")
