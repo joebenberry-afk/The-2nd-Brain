@@ -22,6 +22,7 @@ Complete. Implemented archive-first `archive_retire` execution and verified rest
 `216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`
 
 ## Concerns
-- No project-wide suites, formatters, or linters were run per Task 4 scope.
+- Focused `ruff format` applied to the two changed Python files; focused `ruff check` passed with no findings.
+- Project-wide suites remain intentionally skipped per Task 4 scope.
 - Source mutation uses an atomic same-volume quarantine move after the archive and retirement record are durable; simulated partial-delete behavior cannot affect the source path, and restore remains byte-identical.
 - Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
