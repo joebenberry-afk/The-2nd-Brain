@@ -167,6 +167,34 @@ def test_malformed_counterfactual_json_is_unavailable(brain_home):
     result = SkillGardener(brain_home).observe_portfolio()
     skill = next(item for item in result["skills"] if item["skill_name"] == "bad-cf")
     assert skill["roi_summary"]["invocations"] == 0
+    assert not any(
+        issue["skill_name"] == "bad-cf" and issue["condition_code"] == "measured_negative"
+        for issue in result["issues"]
+    )
+
+
+def test_stale_freshness_blocks_authorization(brain_home):
+    directory = _make_skill(brain_home, "stale-freshness", "shadow")
+    _write_binding(
+        directory,
+        {"owner": "owner-1", "freshness": {"ok": False}},
+    )
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        item
+        for item in gardener.observe_portfolio()["issues"]
+        if item["skill_name"] == "stale-freshness" and item["condition_code"] == "evidence_stale"
+    )
+    assert issue["evidence_refs"]
+    recommendation = gardener.recommend_maintenance(issue)
+    with pytest.raises(BrainError, match=r"stale"):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
 
 
 def test_demotion_requires_canonical_promotion_record(brain_home):
@@ -200,6 +228,53 @@ def test_demotion_requires_canonical_promotion_record(brain_home):
             non_regression_ref="verification:1",
             rollback_ref="rollback:1",
         )
+
+
+def test_demotion_accepts_valid_canonical_promotion_record(brain_home):
+    directory = _make_skill(brain_home, "demote-valid", "active")
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {
+                "false_trigger": {
+                    "detected": True,
+                    "evidence_refs": ["issue:demote-valid"],
+                }
+            },
+        },
+    )
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True)
+    record = {
+        "promotion_id": "promotion-valid",
+        "skill_name": "demote-valid",
+        "from_level": "active",
+        "to_level": "shadow",
+        "owner": "owner-1",
+        "resulting_version": 1,
+        "guards": {"evidence": True},
+        "rollback_clear": True,
+    }
+    record_path = promotions / "promotion-valid.json"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        item
+        for item in gardener.observe_portfolio()["issues"]
+        if item["skill_name"] == "demote-valid"
+    )
+    recommendation = gardener.recommend_maintenance(issue)
+    recommendation["action_recommended"] = "demote"
+    recommendation["evidence_refs"].append("promotion:promotion-valid.json")
+    authorized = gardener.authorize_maintenance(
+        recommendation,
+        actor="owner-1",
+        approval_ref="approval:1",
+        non_regression_ref="verification:1",
+        rollback_ref="rollback:1",
+    )
+    assert authorized["authority"] == "promotion.demote"
 
 
 def test_observe_portfolio_does_not_mutate_lifecycle_or_promotion_state(brain_home):
