@@ -33,4 +33,4 @@ Result: **28 passed**.
 
 Focused test result after fixes: **32 passed**.
 
-Additional implementation commit: `PENDING`.
+Additional implementation commit: `cd08377 fix(gardener): close authorization review gaps`.
