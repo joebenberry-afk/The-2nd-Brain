@@ -1,7 +1,7 @@
 # Task 4 report: archive-first retirement and restore
 
 ## Status
-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, and incomplete retirement-record restore gaps.
+Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, and source-removal recovery deadlock.
 
 ## Files
 - `src/second_brain/gardener.py`
@@ -12,16 +12,16 @@ Complete. Implemented archive-first `archive_retire` execution and verified rest
   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval.
   - Delegates all non-archive actions without content or lifecycle mutation.
 - `tests/test_p3_15_skill_gardener.py`
-  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, active safety gating, and delegated non-mutation.
+  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
 
 ## Tests
-- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **43 passed**
+- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **44 passed**
 - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
 
 ## Commit
-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`
+`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`
 
 ## Concerns
 - No project-wide suites, formatters, or linters were run per Task 4 scope.
 - Source mutation uses removal only after the archive and retirement record are durable; the archive remains the reversible copy.
-- Consumed authorizations are durably marked before source mutation, preventing replay even after restoration/recreation.
+- Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
