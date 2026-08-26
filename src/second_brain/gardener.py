@@ -59,7 +59,6 @@ _ISSUE_TYPES = {
     "scope_too_narrow": "broken",
     "model_specific_quirk": "broken",
     "superseded": "superseded",
-    "usage_unavailable": "unused",
 }
 
 
@@ -288,8 +287,29 @@ def _ledger_usage(home: Path, skill_name: str) -> tuple[bool, list[str]]:
     return bool(measured), [f"ledger:{row[0]}" for row in measured]
 
 
+def _telemetry_usage(home: Path) -> dict[str, list[str]]:
+    """Collect bounded per-skill usage evidence in one telemetry pass."""
+    usage: dict[str, list[str]] = {}
+    for file_name, _, record in telemetry.iter_records(home):
+        if not isinstance(record, dict):
+            continue
+        name = record.get("skill_name")
+        if (
+            isinstance(name, str)
+            and record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}
+        ):
+            refs = usage.setdefault(name, [])
+            if len(refs) < _MAX_EVIDENCE_REFS:
+                refs.append(f"telemetry:{file_name}")
+    return usage
+
+
 def _usage_state(
-    home: Path, skill_name: str, binding: dict[str, Any], evaluation: dict[str, Any]
+    home: Path,
+    skill_name: str,
+    binding: dict[str, Any],
+    evaluation: dict[str, Any],
+    telemetry_usage: dict[str, list[str]],
 ) -> tuple[str, list[str]]:
     for label, source in (("binding", binding), ("evaluation", evaluation)):
         if not isinstance(source, dict):
@@ -306,12 +326,36 @@ def _usage_state(
     used, refs = _ledger_usage(home, skill_name)
     if used:
         return "used", refs
-    for file_name, _, record in telemetry.iter_records(home):
-        if not isinstance(record, dict) or record.get("skill_name") != skill_name:
-            continue
-        if record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}:
-            return "used", [f"telemetry:{file_name}"]
+    if skill_name in telemetry_usage:
+        return "used", telemetry_usage[skill_name]
     return "unknown", [f"usage_unavailable:{skill_name}"]
+
+
+def _ledger_measured_roi(
+    home: Path, skill_name: str, content_hash: str
+) -> tuple[int | None, list[str]]:
+    dbfile = home / "state" / "skills" / "skill_roi.sqlite"
+    if not dbfile.is_file():
+        return None, []
+    try:
+        with sqlite3.connect(dbfile, timeout=1.0) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(tokens_saved), 0), "
+                "COALESCE(SUM(tokens_invested), 0) "
+                "FROM skill_roi_ledger WHERE skill_name = ? AND skill_version = ? "
+                "AND measurement_state = ?",
+                (skill_name, content_hash, MeasurementState.MEASURED.value),
+            ).fetchone()
+            refs = conn.execute(
+                "SELECT id FROM skill_roi_ledger WHERE skill_name = ? "
+                "AND skill_version = ? AND measurement_state = ? ORDER BY id LIMIT 32",
+                (skill_name, content_hash, MeasurementState.MEASURED.value),
+            ).fetchall()
+    except sqlite3.Error:
+        return None, []
+    if not row or not row[0]:
+        return None, []
+    return int(row[1]) - int(row[2]), [f"ledger:{int(ref[0])}" for ref in refs]
 
 
 def _measured_roi(
@@ -327,10 +371,10 @@ def _measured_roi(
         return MeasurementState.MEASURED, measured, _bounded_refs(
             [ref, f"candidate:{candidate_ref}"] if ref else []
         )
-    summary = item.get("roi_summary")
-    if isinstance(summary, dict) and isinstance(summary.get("invocations"), int):
-        if summary["invocations"] > 0 and isinstance(summary.get("net_tokens_saved"), int):
-            return MeasurementState.MEASURED, summary["net_tokens_saved"], []
+    if isinstance(item.get("content_hash"), str):
+        measured, refs = _ledger_measured_roi(home, name, item["content_hash"])
+        if measured is not None:
+            return MeasurementState.MEASURED, measured, refs
     return MeasurementState.UNAVAILABLE, None, []
 
 def _issue_record(
@@ -366,43 +410,60 @@ def _classify_portfolio(
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     identities: dict[str, list[dict[str, Any]]] = {}
+    telemetry_usage = _telemetry_usage(home)
+    required_sections = {
+        "Purpose",
+        "Positive Triggers",
+        "Negative Triggers",
+        "Inputs",
+        "Procedure",
+        "Tools",
+        "Safety",
+        "Verification",
+        "Output",
+        "References",
+    }
     for item in skills:
         name = str(item["skill_name"])
         binding, evaluation, path = evidence[name]
-        stale_refs = _stale_evidence(item, binding, evaluation)
-        audit_refs = [
-            f"audit:{name}:{finding}"
-            for finding in item.get("audit_findings", [])
-            if isinstance(finding, str)
+        audit_findings = [
+            finding for finding in item.get("audit_findings", []) if isinstance(finding, str)
         ]
+        audit_refs = [f"audit:{name}:{finding}" for finding in audit_findings]
+        stale_refs = _stale_evidence(item, binding, evaluation)
+        stale_refs.extend(
+            ref
+            for ref in audit_refs
+            if re.search(r"frontmatter\s+status|freshness|stale", ref, re.I)
+        )
+        stale_refs = _bounded_refs(stale_refs)
         if stale_refs:
             issues.append(
                 _issue_record(
                     item, "evidence_stale", stale_refs, reason_codes=["evidence_stale"]
                 )
             )
-        if item.get("content_hash") is None or any(
-            re.search(r"missing\s+skill\.md|missing\s+promotion|cannot\s+execute|execution|corrupt|missing\s+section|empty|placeholder|tbd|todo", finding, re.I)
-            for finding in item.get("audit_findings", [])
-            if isinstance(finding, str)
-        ):
-            refs = [ref for ref in audit_refs if ref]
+        dead = item.get("content_hash") is None or any(
+            re.search(
+                r"missing\s+skill\.md|missing\s+promotion|cannot\s+execute|execution|"
+                r"corrupt|missing\s+section|empty|placeholder|tbd|todo",
+                finding,
+                re.I,
+            )
+            or finding.strip() in required_sections
+            for finding in audit_findings
+        )
+        if dead:
+            refs = list(audit_refs)
             if item.get("content_hash") is None:
                 refs.append(f"skill:{name}:SKILL.md")
             issues.append(_issue_record(item, "dead_skill", refs))
 
-        usage_state, usage_refs = _usage_state(home, name, binding, evaluation)
-        audit_stale_refs = [
-            ref
-            for ref in audit_refs
-            if re.search(r"frontmatter\s+status|freshness|stale", ref, re.I)
-        ]
-        if audit_stale_refs:
-            issues.append(
-                _issue_record(
-                    item, "evidence_stale", audit_stale_refs, reason_codes=["evidence_stale"]
-                )
-            )
+        usage_state, usage_refs = _usage_state(
+            home, name, binding, evaluation, telemetry_usage
+        )
+        item["usage_state"] = usage_state
+        item["usage_evidence_refs"] = _bounded_refs(usage_refs)
         if usage_state == "zero":
             issues.append(
                 _issue_record(
@@ -412,18 +473,13 @@ def _classify_portfolio(
                     measurement_state=MeasurementState.MEASURED.value,
                 )
             )
-        elif usage_state == "unknown":
-            issues.append(
-                _issue_record(
-                    item,
-                    "usage_unavailable",
-                    usage_refs,
-                    reason_codes=["usage_unavailable"],
-                )
-            )
 
         measurement_state, measured_roi, roi_refs = _measured_roi(home, item)
-        if measurement_state == MeasurementState.MEASURED and measured_roi is not None and measured_roi < 0:
+        if (
+            measurement_state == MeasurementState.MEASURED
+            and measured_roi is not None
+            and measured_roi < 0
+        ):
             issues.append(
                 _issue_record(
                     item,
@@ -433,42 +489,74 @@ def _classify_portfolio(
                 )
             )
 
-        for code in (
-            "dead_skill",
-            "capability_overlap",
-            "false_trigger",
-            "scope_too_broad",
-            "scope_too_narrow",
-            "model_specific_quirk",
-        ):
-            detected, refs, value = _explicit_condition(binding, evaluation, code, name)
-            if not detected:
-                continue
-            # A lifecycle failure already emitted above is still represented
-            # separately when explicit evidence names dead_skill.
-            if code == "dead_skill" and item.get("content_hash") is None:
-                continue
-            suffix = ""
-            if code == "capability_overlap" and isinstance(value, dict):
-                target = value.get("with") or value.get("skill_name") or value.get("skill_id")
-                if not isinstance(target, str) or not target or target == name:
-                    continue
-                material = value.get("material")
-                if material is not True:
-                    continue
-                suffix = f":{target[:_MAX_REFERENCE_LENGTH]}"
-            issues.append(_issue_record(item, code, refs))
 
-        replacement, replacement_refs = _replacement_evidence(binding, evaluation, name)
-        if replacement is not None:
-            issues.append(
-                _issue_record(
-                    item,
-                    "superseded",
-                    replacement_refs,
-                    replacement_ref=replacement,
+        if not stale_refs:
+            for code in (
+                "dead_skill",
+                "capability_overlap",
+                "false_trigger",
+                "scope_too_broad",
+                "scope_too_narrow",
+                "model_specific_quirk",
+            ):
+                detected, refs, value = _explicit_condition(
+                    binding, evaluation, code, name
                 )
+                if not detected:
+                    continue
+                if code == "dead_skill" and item.get("content_hash") is None:
+                    continue
+                suffix = ""
+                if code == "capability_overlap":
+                    if not isinstance(value, dict):
+                        continue
+                    target_name = (
+                        value.get("with")
+                        or value.get("skill_name")
+                        or value.get("skill_id")
+                    )
+                    if (
+                        not isinstance(target_name, str)
+                        or not target_name
+                        or target_name == name
+                        or value.get("material") is not True
+                    ):
+                        continue
+                    suffix = f":{target_name[:_MAX_REFERENCE_LENGTH]}"
+                issues.append(_issue_record(item, code, refs, suffix=suffix))
+
+            replacement, replacement_refs = _replacement_evidence(
+                binding, evaluation, name
             )
+            if replacement is not None:
+                target_name = replacement["skill_name"]
+                target = next(
+                    (candidate for candidate in skills if candidate["skill_name"] == target_name),
+                    None,
+                )
+                target_evidence = evidence.get(target_name)
+                target_identity = (
+                    _capability_identity(
+                        target_evidence[2], target_evidence[0], target_evidence[1]
+                    )
+                    if target_evidence is not None
+                    else None
+                )
+                if (
+                    target is not None
+                    and target.get("content_hash") is not None
+                    and target.get("lifecycle_state") in paths.SKILL_LEVEL_DIRS
+                    and replacement.get("skill_version") == target.get("skill_version")
+                    and replacement.get("capability_hash") == target_identity
+                ):
+                    issues.append(
+                        _issue_record(
+                            item,
+                            "superseded",
+                            replacement_refs,
+                            replacement_ref=replacement,
+                        )
+                    )
         identity = _capability_identity(path, binding, evaluation)
         if identity:
             identities.setdefault(identity, []).append(item)
