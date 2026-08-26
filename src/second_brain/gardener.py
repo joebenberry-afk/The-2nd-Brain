@@ -139,14 +139,6 @@ _BROKEN_CONDITION_CODES = {
     "scope_too_narrow",
     "model_specific_quirk",
 }
-_CONCRETE_EVIDENCE_PREFIXES = (
-    "audit:",
-    "evaluation:",
-    "eval:",
-    "runtime:",
-    "verification:",
-    "telemetry:",
-)
 
 
 def _explicit_condition(
@@ -201,7 +193,6 @@ def _explicit_condition(
             refs = _evidence_refs(value, fallback)
             if refs and code in _BROKEN_CONDITION_CODES:
                 verifiable: list[str] = []
-                evidence_id = value.get("evidence_id") if isinstance(value, dict) else None
                 for ref in refs:
                     if ref.startswith("audit:"):
                         expected = f"audit:{skill_name}:"
@@ -216,10 +207,6 @@ def _explicit_condition(
                         evaluation_id = evaluation.get("evaluation_id")
                         bound_hash = evaluation.get("candidate_content_sha256")
                         if identifier == evaluation_id and bound_hash == current_hash:
-                            verifiable.append(ref)
-                    elif ref.startswith(("runtime:", "verification:", "telemetry:")):
-                        _, _, identifier = ref.partition(":")
-                        if isinstance(evidence_id, str) and identifier == evidence_id:
                             verifiable.append(ref)
                 if len(verifiable) != len(refs):
                     continue
