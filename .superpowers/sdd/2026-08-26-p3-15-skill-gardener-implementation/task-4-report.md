@@ -1,7 +1,7 @@
 # Task 4 report: archive-first retirement and restore
 
 ## Status
-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, partial-deletion risk, and quarantine-root destination collision.
+Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, partial-deletion risk, quarantine-root destination collision, focused lint issues, and focused type-check issues.
 
 ## Files
 - `src/second_brain/gardener.py`
@@ -19,10 +19,11 @@ Complete. Implemented archive-first `archive_retire` execution and verified rest
 - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
 
 ## Commit
-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`
+`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`
 
 ## Concerns
 - Focused `ruff format` applied to the two changed Python files; focused `ruff check` passed with no findings.
+- Focused `pyright` passed with 0 errors, 0 warnings, and 0 informations.
 - Project-wide suites remain intentionally skipped per Task 4 scope.
 - Source mutation uses an atomic same-volume quarantine move after the archive and retirement record are durable; simulated partial-delete behavior cannot affect the source path, and restore remains byte-identical.
 - Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
