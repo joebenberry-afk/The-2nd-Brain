@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_skill_name ON skill_roi_ledger (skill_name);
 
 
 def _evidence_refs(value: object, fallback: str) -> list[str]:
-    """Extract only bounded refs from one explicit evidence payload."""
+    """Extract only concrete bounded refs from one explicit evidence payload."""
     refs: list[object] = []
     if isinstance(value, dict):
         for key in ("evidence_refs", "evidence", "refs"):
@@ -129,7 +129,7 @@ def _evidence_refs(value: object, fallback: str) -> list[str]:
                 refs.extend(candidate)
             elif isinstance(candidate, str):
                 refs.append(candidate)
-    return _bounded_refs(refs, [fallback])
+    return _bounded_refs(refs)
 
 
 def _explicit_condition(
@@ -176,7 +176,9 @@ def _explicit_condition(
         elif isinstance(value, list):
             detected = bool(value)
         if detected:
-            return True, _evidence_refs(value, f"skill:{skill_name}:{fallback}"), value
+            refs = _evidence_refs(value, fallback)
+            if refs:
+                return True, refs, value
     return False, [], None
 
 
@@ -295,6 +297,39 @@ def _stale_evidence(
     return _bounded_refs(refs)
 
 
+def _promotion_evidence_refs(home: Path, skill_name: str) -> list[str]:
+    directory = home / "state" / "promotions"
+    if not directory.is_dir():
+        return []
+    refs: list[str] = []
+    for path in sorted(directory.glob("*.json")):
+        data = _read_json_object(path)
+        if data.get("skill_name") == skill_name:
+            refs.append(f"promotion:{path.name}")
+    return refs[:_MAX_EVIDENCE_REFS]
+
+
+def _counterfactual_evidence_refs(
+    home: Path, skill_name: str, content_hash: str | None
+) -> list[str]:
+    if not isinstance(content_hash, str):
+        return []
+    directory = home / "outputs" / "audits" / "counterfactual" / "skill"
+    if not directory.is_dir():
+        return []
+    refs: list[str] = []
+    for path in sorted(directory.glob(f"{skill_name}-*.json")):
+        data = _read_json_object(path)
+        intervention = data.get("intervention")
+        if (
+            isinstance(intervention, dict)
+            and intervention.get("id") == skill_name
+            and intervention.get("hash") == content_hash
+        ):
+            refs.append(f"counterfactual:{path.name}")
+    return refs[:_MAX_EVIDENCE_REFS]
+
+
 def _ledger_usage(home: Path, skill_name: str) -> tuple[bool, list[str]]:
     """Return measured usage evidence without creating or changing state."""
     dbfile = home / "state" / "skills" / "skill_roi.sqlite"
@@ -349,6 +384,8 @@ def _usage_state(
             measured = usage.get("measured") is True or isinstance(usage.get("window"), str)
             if isinstance(count, int) and count >= 0 and measured:
                 refs = _evidence_refs(usage, f"{label}:{key}:{skill_name}")
+                if not refs and isinstance(usage.get("window"), str):
+                    refs = [f"{label}:{key}:{usage['window']}"][:_MAX_EVIDENCE_REFS]
                 return ("zero" if count == 0 else "used"), refs
     used, refs = _ledger_usage(home, skill_name)
     if used:
@@ -689,18 +726,34 @@ def _measured_from_counterfactual_result(
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not isinstance(data, dict):
+            continue
         intervention = data.get("intervention")
         if not isinstance(intervention, dict):
             continue
         if intervention.get("id") != skill_name or intervention.get("hash") != skill_version:
             continue  # different skill or a different (stale) version
+        with_arm = data.get("with_arm")
+        without_arm = data.get("without_arm")
+        if not isinstance(with_arm, dict) or not isinstance(without_arm, dict):
+            continue
+        with_tokens = with_arm.get("tokens")
+        without_tokens = without_arm.get("tokens")
+        if not isinstance(with_tokens, dict) or not isinstance(without_tokens, dict):
+            continue
+        with_total = with_tokens.get("total")
+        without_total = without_tokens.get("total")
+        if not isinstance(with_total, int) or not isinstance(without_total, int):
+            continue
         matches.append((str(data.get("created_at") or ""), path, data))
     if not matches:
         return None, None
     matches.sort(key=lambda item: item[0])
     _, path, data = matches[-1]
-    with_total = data["with_arm"]["tokens"]["total"]
-    without_total = data["without_arm"]["tokens"]["total"]
+    with_arm = data["with_arm"]
+    without_arm = data["without_arm"]
+    with_total = with_arm["tokens"]["total"]
+    without_total = without_arm["tokens"]["total"]
     return without_total - with_total, f"counterfactual:{path.name}"
 
 
@@ -784,6 +837,19 @@ class SkillROILedger:
     def _init_db(self) -> None:
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.executescript(_SCHEMA)
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(skill_roi_ledger)").fetchall()
+            }
+            additions = {
+                "measurement_state": "TEXT NOT NULL DEFAULT 'measured'",
+                "estimated_tokens_saved": "INTEGER",
+                "estimate_evidence_ref": "TEXT",
+                "measured_evidence_ref": "TEXT",
+                "candidate_evaluation_ref": "TEXT",
+            }
+            for name, definition in additions.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE skill_roi_ledger ADD COLUMN {name} {definition}")
             conn.commit()
 
     def record_usage(
@@ -1018,6 +1084,7 @@ class SkillGardener:
         evidence_by_skill: dict[str, tuple[dict[str, Any], dict[str, Any], Path]] = {}
         started = time.perf_counter()
         lifecycle_audit = skillforge.audit_lifecycle(self.home)
+        radar = ImprovementRadar(self.home)
         audit_entries = lifecycle_audit.get("skills", [])
         audit_by_identity: dict[tuple[str, str], list[str]] = {}
         if isinstance(audit_entries, list):
@@ -1065,6 +1132,20 @@ class SkillGardener:
                 evaluation_id = evaluation.get("evaluation_id")
                 if isinstance(evaluation_id, str) and evaluation_id:
                     evidence_refs = _bounded_refs(evidence_refs, [f"evaluation:{evaluation_id}"])
+                radar_id = binding.get("source_radar_candidate_id") or (
+                    binding.get("source_ref") if binding.get("source_type") == "radar" else None
+                )
+                if isinstance(radar_id, str) and radar_id:
+                    try:
+                        if isinstance(radar.get_candidate(radar_id), dict):
+                            evidence_refs = _bounded_refs(evidence_refs, [f"radar:{radar_id}"])
+                    except BrainError:
+                        pass
+                evidence_refs = _bounded_refs(
+                    evidence_refs,
+                    _promotion_evidence_refs(self.home, skill_dir.name),
+                    _counterfactual_evidence_refs(self.home, skill_dir.name, content_hash),
+                )
                 audit_findings = audit_by_identity.get((skill_dir.name, level), [])
                 roi_summary = self.ledger.get_summary(skill_dir.name).to_dict()
                 lifecycle_state = metadata.get("status") or level
@@ -1177,25 +1258,26 @@ class SkillGardener:
             if isinstance(issues, list) and issues:
                 candidates = [item for item in issues if isinstance(item, dict)]
                 if candidates:
-                    source = dict(
-                        min(
-                            candidates,
-                            key=lambda item: (
-                                0
-                                if item.get("condition_code") == "measured_negative"
-                                or item.get("issue_type") == "negative_roi"
-                                else 1,
-                                str(item.get("issue_id", "")),
-                            ),
-                        )
+                    selected = min(
+                        candidates,
+                        key=lambda item: (
+                            0
+                            if item.get("condition_code") == "measured_negative"
+                            or item.get("issue_type") == "negative_roi"
+                            else 1,
+                            str(item.get("issue_id", "")),
+                        ),
                     )
+                    source = dict(selected)
+                    selected_name = selected.get("skill_name")
+                    scoped = [
+                        item for item in candidates if item.get("skill_name") == selected_name
+                    ]
                     source["issue_ids"] = [
-                        item["issue_id"]
-                        for item in candidates
-                        if isinstance(item.get("issue_id"), str)
+                        item["issue_id"] for item in scoped if isinstance(item.get("issue_id"), str)
                     ]
                     source["evidence_refs"] = _bounded_refs(
-                        *(item.get("evidence_refs") for item in candidates)
+                        *(item.get("evidence_refs") for item in scoped)
                     )
             elif isinstance(observation.get("issue"), dict):
                 source = observation["issue"]
@@ -1374,6 +1456,8 @@ class SkillGardener:
         evidence_refs = _bounded_refs(recommendation.get("evidence_refs"))
         if not evidence_refs:
             raise BrainError("issue evidence is required")
+        if action == "demote" and not any(ref.startswith("promotion:") for ref in evidence_refs):
+            raise BrainError("promotion governance evidence is required")
         current_observation = self.observe_portfolio()
         current_issues = {
             issue.get("issue_id"): issue
