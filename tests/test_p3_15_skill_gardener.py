@@ -1020,6 +1020,25 @@ def test_active_retirement_execution_requires_production_safety_approval(brain_h
         SkillGardener(brain_home).execute_maintenance(authorization)
 
 
+def test_execute_rejects_missing_authorization_gate_fields(brain_home):
+    gardener = SkillGardener(brain_home)
+    authorization = _authorized_retirement(brain_home, "missing-gate")
+    auth_path = (
+        brain_home
+        / "state"
+        / "maintenance"
+        / "authorizations"
+        / f"{authorization['authorization_id']}.json"
+    )
+    persisted = json.loads(auth_path.read_text(encoding="utf-8"))
+    persisted.pop("approval_ref")
+    auth_path.write_text(json.dumps(persisted), encoding="utf-8")
+    with pytest.raises(BrainError, match=r"approval"):
+        gardener.execute_maintenance(authorization)
+    assert (
+        brain_home / paths.SKILL_LEVEL_DIRS["shadow"] / "missing-gate"
+    ).exists()
+
 def test_delegated_execution_returns_metadata_without_mutating(brain_home):
     source = _make_skill(brain_home, "delegate-exec", "shadow")
     _write_binding(

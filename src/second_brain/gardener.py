@@ -1700,6 +1700,12 @@ class SkillGardener:
         owner_value = authorization.get("owner")
         if not isinstance(owner_value, str) or not owner_value:
             raise BrainError("archive owner evidence is required")
+        approval_value = authorization.get("approval_ref")
+        if not isinstance(approval_value, str) or not approval_value:
+            raise BrainError("approval evidence is required")
+        non_regression_value = authorization.get("non_regression_ref")
+        if not isinstance(non_regression_value, str) or not non_regression_value:
+            raise BrainError("non-regression evidence is required")
         rollback_value = authorization.get("rollback_ref")
         if not isinstance(rollback_value, str) or not rollback_value:
             raise BrainError("rollback evidence is required")
