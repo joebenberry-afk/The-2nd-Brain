@@ -75,10 +75,29 @@ measurement_state
 replacement_ref (when applicable)
 ```
 
-The exact issue types are `stale`, `unused`, `duplicate`, `broken`,
-`superseded`, and `negative_roi`.
+The high-level `issue_type` remains exactly six values. Every finding also
+carries a deterministic `condition_code`; semantically distinct frozen
+conditions are never silently collapsed:
 
-Rules:
+| Frozen condition | `issue_type` | `condition_code` | Detection evidence |
+|---|---|---|---|
+| stale | `stale` | `evidence_stale` | Current skill content/version/environment identity does not match bound evidence, or an existing freshness check fails. |
+| dead skill | `broken` | `dead_skill` | Lifecycle artifact is missing/invalid or concrete current runtime evidence shows the skill cannot execute. |
+| overlap | `duplicate` | `capability_overlap` | Verified required-capability/behavior overlap exists; names or descriptions alone never qualify. |
+| false triggers | `broken` | `false_trigger` | Current trigger evaluation evidence shows a trigger fires for a task outside the skill capability. |
+| never-used | `unused` | `measured_zero_use` | Actual usage telemetry proves zero invocations in the evaluated window. Missing telemetry uses `usage_unavailable`, never this code. |
+| negative ROI | `negative_roi` | `measured_negative` | P3.14 measured ROI is negative; estimated-only/unavailable/inconclusive values cannot qualify. |
+| duplicate skill | `duplicate` | `exact_duplicate` | Exact normalized capability/content identity is shared by distinct skill IDs, with survivor verification still required before action. |
+| too broad | `broken` | `scope_too_broad` | Trigger/selection evidence shows the skill activates beyond its declared capability scope. |
+| too narrow | `broken` | `scope_too_narrow` | Required-capability evidence shows the skill fails to activate for an in-scope task. |
+| model-specific quirks | `broken` | `model_specific_quirk` | Model-scoped runtime/evaluation evidence shows materially divergent behavior tied to a model identity. |
+
+`dead_skill`, `false_trigger`, `scope_too_broad`, `scope_too_narrow`, and
+`model_specific_quirk` use `issue_type=broken` only as the mechanical
+high-level bucket; their condition codes remain independently queryable and
+testable. `overlap` uses `capability_overlap`, while `duplicate skill` uses
+`exact_duplicate`; they are not equivalent. `never-used` maps to
+`measured_zero_use`, while absent usage remains `usage_unavailable`.
 
 - `stale`: current content/version/evidence identity mismatch or an existing
   deterministic freshness failure. Stale alone does not imply uselessness.
@@ -94,6 +113,10 @@ Rules:
 - `negative_roi`: only from P3.14 measured ROI with negative measured value.
   `estimated_only`, `unavailable`, and inconclusive results cannot become
   `negative_roi`.
+
+Each condition code has dedicated focused verification coverage. A test must
+prove both the source evidence and the code/action classification; a generic
+`DEGRADED` assertion is insufficient.
 
 Multiple issue types may coexist on one skill; they are never collapsed into
 `DEGRADED`.
@@ -125,6 +148,28 @@ execution: absent
 ```
 
 A negative-ROI observation defaults to `repair` or `no_action`, not retire.
+
+### 3a. Action authority
+
+Gardener observes, classifies, recommends, and authorizes. It does not become
+a second skill editor or promotion engine. The authority table is:
+
+| Recommendation | Authority / behavior |
+|---|---|
+| `keep` | Gardener records evidence and disposition only; no mutation. |
+| `no_action` | Gardener records evidence and disposition only; no mutation. |
+| `repair` | Gardener emits an authorized maintenance task; the existing skill-development/evaluation path performs content changes. |
+| `narrow` | Gardener emits an authorized maintenance task; the existing skill-development/evaluation path edits and re-evaluates the skill. |
+| `merge` | Gardener requires a verified survivor; the existing skill lifecycle/content path performs the merge and subsequent evaluation. No silent deletion. |
+| `demote` | Existing `promotion.demote()` authority performs the lower-level lifecycle move after Gardener authorization and P3.12 evidence checks. |
+| `hide` | Existing lifecycle visibility/routing primitive performs the visibility change after explicit authorization; Gardener does not invent a second hidden registry. |
+| `supersede` | Existing lifecycle/promotion primitive records the verified replacement identity/version and deactivates the old capability only after replacement verification. |
+| `archive_retire` | Gardener's archive-first retirement path performs the reversible artifact/archive mutation after all retirement gates pass. |
+
+The table is normative for implementation and tests: only
+`archive_retire` owns the archive/retirement mutation; content-editing actions
+delegate to the existing development/evaluation path; `demote` delegates to
+`promotion.demote()`; observations and recommendations never mutate.
 
 ### 4. Maintenance authorization
 
@@ -161,8 +206,20 @@ No audit or recommendation authorizes itself.
 ### 5. Archive-first lifecycle action
 
 `SkillGardener.execute_maintenance()` accepts only a current authorization
-record. Retirement first copies/moves the complete skill artifact into the
-existing `skills/retired` area and writes a retirement record containing:
+record. Retirement is strictly archive-first and ordered:
+
+```text
+copy the complete skill artifact to archive staging/final destination
+→ verify archived bytes and content hash
+→ persist the retirement record
+→ only then disable/remove the source lifecycle entry
+```
+
+Any failure before source mutation leaves the original skill unchanged. A
+failed copy, archive verification, or retirement-record write must clean up
+only incomplete archive staging and must not alter the source.
+
+The retirement record contains:
 
 ```text
 retirement_record_id
