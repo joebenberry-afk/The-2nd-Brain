@@ -132,6 +132,23 @@ def _evidence_refs(value: object, fallback: str) -> list[str]:
     return _bounded_refs(refs)
 
 
+_BROKEN_CONDITION_CODES = {
+    "dead_skill",
+    "false_trigger",
+    "scope_too_broad",
+    "scope_too_narrow",
+    "model_specific_quirk",
+}
+_CONCRETE_EVIDENCE_PREFIXES = (
+    "audit:",
+    "evaluation:",
+    "eval:",
+    "runtime:",
+    "verification:",
+    "telemetry:",
+)
+
+
 def _explicit_condition(
     binding: dict[str, Any], evaluation: dict[str, Any], code: str, skill_name: str
 ) -> tuple[bool, list[str], object | None]:
@@ -177,7 +194,10 @@ def _explicit_condition(
             detected = bool(value)
         if detected:
             refs = _evidence_refs(value, fallback)
-            if refs:
+            if refs and (
+                code not in _BROKEN_CONDITION_CODES
+                or any(ref.startswith(_CONCRETE_EVIDENCE_PREFIXES) for ref in refs)
+            ):
                 return True, refs, value
     return False, [], None
 

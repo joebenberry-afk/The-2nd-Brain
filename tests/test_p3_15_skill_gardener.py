@@ -211,7 +211,7 @@ def test_demotion_requires_canonical_promotion_record(brain_home):
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["issue:demote"],
+                    "evidence_refs": ["verification:demote"],
                 }
             },
         },
@@ -314,7 +314,7 @@ def _write_binding(directory: Path, payload: dict) -> None:
                 and evidence.get("detected") is True
                 and not evidence.get("evidence_refs")
             ):
-                evidence["evidence_refs"] = [f"fixture:{code}"]
+                evidence["evidence_refs"] = [f"verification:fixture:{code}"]
     (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -414,6 +414,28 @@ def test_marker_only_condition_cannot_authorize_archive(brain_home):
             non_regression_ref="verification:1",
             rollback_ref="rollback:1",
         )
+
+
+def test_arbitrary_condition_reference_cannot_emit_broken_issue(brain_home):
+    directory = _make_skill(brain_home, "arbitrary-ref", "shadow")
+    (directory / "candidate-binding.json").write_text(
+        json.dumps(
+            {
+                "condition_evidence": {
+                    "false_trigger": {
+                        "detected": True,
+                        "evidence_refs": ["arbitrary:marker"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+    assert not any(
+        issue["skill_name"] == "arbitrary-ref" and issue["condition_code"] == "false_trigger"
+        for issue in issues
+    )
 
 
 def test_missing_usage_is_unavailable_not_measured_zero(brain_home):
@@ -548,7 +570,10 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
         broken,
         {
             "condition_evidence": {
-                "false_trigger": {"detected": True, "evidence_refs": ["y" * 10_000]}
+                "false_trigger": {
+                    "detected": True,
+                    "evidence_refs": ["verification:" + "y" * 10_000],
+                }
             }
         },
     )
