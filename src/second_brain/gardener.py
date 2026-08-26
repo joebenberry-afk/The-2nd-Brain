@@ -580,7 +580,7 @@ class SkillGardener:
                         "binding_present": binding_path.is_file(),
                         "evaluation_present": evaluation_path.is_file(),
                         "binding_state": {
-                            key: binding[key]
+                            key: binding[key][:_MAX_REFERENCE_LENGTH]
                             for key in (
                                 "lifecycle_state",
                                 "evaluation_state",
