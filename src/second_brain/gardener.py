@@ -1760,6 +1760,7 @@ class SkillGardener:
 
         persisted = False
         source_mutation_started = False
+        preserve_retirement_artifacts = False
         retirement_record_path = (
             self.home
             / "state"
@@ -1767,6 +1768,14 @@ class SkillGardener:
             / "retirements"
             / f"{retirement_id}.json"
         )
+        quarantine_parent = (
+            self.home
+            / "state"
+            / "maintenance"
+            / "retirement-quarantine"
+            / retirement_id
+        )
+        quarantine_dir = quarantine_parent / name
         try:
             archive_root.mkdir(parents=True, exist_ok=True)
             archive_parent.mkdir(parents=True, exist_ok=True)
@@ -1815,11 +1824,16 @@ class SkillGardener:
             self._mark_authorization_in_progress(authorization)
             source_mutation_started = True
             try:
-                shutil.rmtree(source_dir)
+                quarantine_parent.mkdir(parents=True, exist_ok=True)
+                if quarantine_dir.exists():
+                    raise OSError("source quarantine destination already exists")
+                source_dir.rename(quarantine_dir)
             except (OSError, UnicodeError) as exc:
                 if source_dir.exists():
                     self._reset_authorization(authorization)
                     source_mutation_started = False
+                else:
+                    preserve_retirement_artifacts = True
                 raise BrainError(f"archive source removal failed: {exc}") from exc
             self._mark_authorization_executed(authorization)
             return {
@@ -1829,7 +1843,7 @@ class SkillGardener:
                 "action_executed": True,
             }
         except BrainError:
-            if not source_mutation_started:
+            if not source_mutation_started and not preserve_retirement_artifacts:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)
@@ -1840,7 +1854,7 @@ class SkillGardener:
                         pass
             raise
         except (OSError, UnicodeError) as exc:
-            if not source_mutation_started:
+            if not source_mutation_started and not preserve_retirement_artifacts:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)

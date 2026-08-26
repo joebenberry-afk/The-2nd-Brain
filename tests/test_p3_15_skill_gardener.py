@@ -925,14 +925,14 @@ def test_source_removal_failure_leaves_authorization_retryable(brain_home, monke
         for path in source.rglob("*")
         if path.is_file()
     }
-    real_rmtree = shutil.rmtree
+    real_rename = Path.rename
 
-    def fail_source(path, *args, **kwargs):
-        if Path(path) == source:
+    def fail_source(path, target):
+        if path == source:
             raise OSError("remove failed")
-        return real_rmtree(path, *args, **kwargs)
+        return real_rename(path, target)
 
-    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", fail_source)
+    monkeypatch.setattr(Path, "rename", fail_source)
     with pytest.raises(BrainError, match="source removal|remove"):
         SkillGardener(brain_home).execute_maintenance(authorization)
     assert source.exists()
@@ -951,9 +951,40 @@ def test_source_removal_failure_leaves_authorization_retryable(brain_home, monke
     recovered = json.loads(auth_path.read_text(encoding="utf-8"))
     assert recovered["action_executed"] is False
     assert "execution_state" not in recovered
-    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", real_rmtree)
+    monkeypatch.setattr(Path, "rename", real_rename)
     result = SkillGardener(brain_home).execute_maintenance(authorization)
     assert result["action_executed"] is True
+
+def test_atomic_source_mutation_survives_partial_delete_scenario(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "atomic-remove", "shadow")
+    authorization = _authorized_retirement(brain_home, "atomic-remove")
+    original_files = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    real_rmtree = shutil.rmtree
+    partial_delete_called = False
+
+    def partial_delete(path, *args, **kwargs):
+        nonlocal partial_delete_called
+        if Path(path) == source:
+            partial_delete_called = True
+            (source / "SKILL.md").unlink()
+            raise OSError("partial delete")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", partial_delete)
+    gardener = SkillGardener(brain_home)
+    result = gardener.execute_maintenance(authorization)
+    assert partial_delete_called is False
+    restored = gardener.restore_retirement(result["retirement_record_id"])
+    restored_root = Path(restored["restored_path"])
+    assert {
+        path.relative_to(restored_root).as_posix(): path.read_bytes()
+        for path in restored_root.rglob("*")
+        if path.is_file()
+    } == original_files
 
 
 def test_restore_requires_complete_retirement_record(brain_home):
