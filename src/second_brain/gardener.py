@@ -1490,7 +1490,7 @@ class SkillGardener:
             "no_action": "record-only",
             "repair": "skill-development/evaluation",
             "narrow": "skill-development/evaluation",
-            "merge": "lifecycle/promotion",
+            "merge": "skill-lifecycle/content",
             "supersede": "lifecycle/promotion",
             "demote": "promotion.demote",
             "hide": "lifecycle-visibility/routing",
