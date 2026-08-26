@@ -302,9 +302,15 @@ def _positive_version(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str) and value.strip().isdigit():
-        parsed = int(value.strip())
+        return value if value > 0 and len(str(value)) <= 20 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or len(text) > 20 or not text.isascii() or not text.isdigit():
+            return None
+        try:
+            parsed = int(text)
+        except ValueError:
+            return None
         return parsed if parsed > 0 else None
     return None
 
