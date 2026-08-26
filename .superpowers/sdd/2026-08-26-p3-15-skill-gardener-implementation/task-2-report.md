@@ -32,3 +32,11 @@ Complete. `SkillGardener.observe_portfolio()` now composes bounded, read-only ev
 
 ## Fix-round commit
 - `da942d7 fix(gardener): harden evidence classification`
+
+## Re-review fix
+- `_replacement_evidence()` now extracts `normalized_hash`, `capability_hash`, or `content_hash` from nested `capability_evidence` and only returns verifiable capability identity.
+- Added focused regression coverage for nested normalized replacement capability proof.
+- Focused tests: **20 passed**.
+
+## Re-review fix commit
+- `1364998 fix(gardener): verify nested capability proofs`
