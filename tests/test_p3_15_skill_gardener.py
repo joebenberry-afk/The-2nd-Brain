@@ -704,3 +704,206 @@ def test_merge_authorization_delegates_content_lifecycle(brain_home):
     )
     assert result["authority"] == "skill-lifecycle/content"
     assert result["action_executed"] is False
+
+def _authorized_retirement(brain_home: Path, name: str, level: str = "shadow") -> dict:
+    directory = brain_home / paths.SKILL_LEVEL_DIRS[level] / name
+    if not directory.exists():
+        directory = _make_skill(brain_home, name, level)
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {
+                "dead_skill": {
+                    "detected": True,
+                    "evidence_refs": [f"audit:{name}:dead"],
+                }
+            },
+        },
+    )
+    gardener = SkillGardener(brain_home)
+    observation = gardener.observe_portfolio()
+    issue_ids = [
+        issue["issue_id"]
+        for issue in observation["issues"]
+        if issue["skill_name"] == name
+    ]
+    evidence_refs = [
+        ref
+        for issue in observation["issues"]
+        if issue["skill_name"] == name
+        for ref in issue["evidence_refs"]
+    ]
+    recommendation = {
+        "skill_name": name,
+        "skill_version": "1",
+        "content_hash": skillforge.lifecycle_content_hash(directory / "SKILL.md"),
+        "lifecycle_state": level,
+        "action_recommended": "archive_retire",
+        "issue_ids": issue_ids,
+        "evidence_refs": evidence_refs,
+        "archive_destination": str(brain_home / "archive"),
+    }
+    if level == "active":
+        recommendation["production_safety_ref"] = "production-safety:1"
+    return gardener.authorize_maintenance(
+        recommendation,
+        actor="owner-1",
+        approval_ref="approval:1",
+        non_regression_ref="verification:1",
+        rollback_ref="rollback:1",
+    )
+
+
+def test_archive_retirement_orders_copy_verify_record_before_source_mutation(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "ordered", "shadow")
+    original = (source / "SKILL.md").read_bytes()
+    authorization = _authorized_retirement(brain_home, "ordered")
+    gardener = SkillGardener(brain_home)
+    events: list[str] = []
+    original_persist = gardener._persist_retirement_record
+
+    def persist(record):
+        events.append("record")
+        assert source.exists()
+        assert Path(record["archive_location"]).read_bytes() == original
+        return original_persist(record)
+
+    monkeypatch.setattr(gardener, "_persist_retirement_record", persist)
+    result = gardener.execute_maintenance(authorization)
+    assert events == ["record"]
+    assert not source.exists()
+    archive = Path(result["archive_location"])
+    assert archive.read_bytes() == original
+    assert result["action_executed"] is True
+    persisted = (
+        brain_home
+        / "state"
+        / "maintenance"
+        / "retirements"
+        / f"{result['retirement_record_id']}.json"
+    )
+    assert persisted.is_file()
+    record = json.loads(persisted.read_text(encoding="utf-8"))
+    assert {
+        "retirement_record_id",
+        "skill_name",
+        "skill_version",
+        "content_hash",
+        "owner",
+        "retirement_reason",
+        "issue_ids",
+        "evidence_refs",
+        "previous_lifecycle_state",
+        "archive_location",
+        "archive_reference",
+        "rollback_ref",
+        "restore_reference",
+        "timestamp",
+    } <= record.keys()
+
+
+def test_archive_copy_failure_preserves_source_and_cleans_staging(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "copy-fails", "shadow")
+    original = (source / "SKILL.md").read_bytes()
+    authorization = _authorized_retirement(brain_home, "copy-fails")
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("copy failed")
+    monkeypatch.setattr("second_brain.gardener.shutil.copytree", fail_copy)
+    with pytest.raises(BrainError, match="archive|copy"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+
+    assert source.exists()
+    assert (source / "SKILL.md").read_bytes() == original
+    archive_root = brain_home / "archive"
+    if archive_root.exists():
+        assert not list(archive_root.rglob("*"))
+
+
+def test_retirement_record_failure_preserves_source(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "record-fails", "shadow")
+    original = (source / "SKILL.md").read_bytes()
+    authorization = _authorized_retirement(brain_home, "record-fails")
+
+    def fail_record(self, record):
+        raise BrainError("record failed")
+
+    monkeypatch.setattr(SkillGardener, "_persist_retirement_record", fail_record)
+    with pytest.raises(BrainError, match="record"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+    assert source.exists()
+    assert (source / "SKILL.md").read_bytes() == original
+    archive_root = brain_home / "archive"
+    if archive_root.exists():
+        assert not list(archive_root.rglob("*"))
+
+def test_archive_hash_mismatch_preserves_source(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "hash-fails", "shadow")
+    original = (source / "SKILL.md").read_bytes()
+    authorization = _authorized_retirement(brain_home, "hash-fails")
+    original_hash = skillforge.lifecycle_content_hash
+
+    def mismatched_hash(path):
+        if (
+            path.parent.name.startswith(".retirement")
+            or path.parent.parent.name.startswith("retirement")
+        ):
+            return "0" * 64
+        return original_hash(path)
+    monkeypatch.setattr(
+        "second_brain.gardener.skillforge.lifecycle_content_hash", mismatched_hash
+    )
+    with pytest.raises(BrainError, match="hash|verif"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+    assert source.exists()
+    assert (source / "SKILL.md").read_bytes() == original
+
+
+def test_restore_returns_byte_identical_artifact_and_refuses_overwrite(brain_home):
+    source = _make_skill(brain_home, "restore-me", "shadow")
+    authorization = _authorized_retirement(brain_home, "restore-me")
+    original_files = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    gardener = SkillGardener(brain_home)
+    result = gardener.execute_maintenance(authorization)
+    restored = gardener.restore_retirement(result["retirement_record_id"])
+    restored_root = Path(restored["restored_path"])
+    assert {
+        path.relative_to(restored_root).as_posix(): path.read_bytes()
+        for path in restored_root.rglob("*")
+        if path.is_file()
+    } == original_files
+    with pytest.raises(BrainError, match="already exists"):
+        gardener.restore_retirement(result["retirement_record_id"])
+
+
+def test_active_retirement_execution_requires_production_safety_approval(brain_home):
+    authorization = _authorized_retirement(brain_home, "active-unsafe", "active")
+    authorization.pop("production_safety_ref", None)
+    with pytest.raises(BrainError, match="production|safety"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+
+
+def test_delegated_execution_returns_metadata_without_mutating(brain_home):
+    source = _make_skill(brain_home, "delegate-exec", "shadow")
+    _write_binding(source, {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": ["eval:delegate"]}}})
+    gardener = SkillGardener(brain_home)
+    issue = next(i for i in gardener.observe_portfolio()["issues"] if i["skill_name"] == "delegate-exec")
+    recommendation = gardener.recommend_maintenance(issue)
+    authorization = gardener.authorize_maintenance(
+        recommendation,
+        actor="owner-1",
+        approval_ref="approval:1",
+        non_regression_ref="verification:1",
+        rollback_ref="rollback:1",
+    )
+    before = _lifecycle_snapshot(brain_home)
+    result = gardener.execute_maintenance(authorization)
+    assert result["action_recommended"] == "repair"
+    assert result["action_executed"] is False
+    assert result["delegated_to"] == "skill-development/evaluation"
+    assert _lifecycle_snapshot(brain_home) == before
