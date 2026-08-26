@@ -18,6 +18,7 @@ Complete. `SkillGardener.observe_portfolio()` now composes bounded, read-only ev
 
 ## Commit
 - `0087ba0 feat(gardener): classify portfolio conditions`
+- `dcb6580 fix(gardener): accept explicit failure markers`
 
 ## Concerns
 - Model/scope/trigger findings require explicit persisted evidence fields; arbitrary or unknown values are ignored conservatively.
