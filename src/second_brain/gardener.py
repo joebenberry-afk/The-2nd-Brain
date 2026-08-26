@@ -1404,6 +1404,7 @@ class SkillGardener:
             for issue_id in issue_ids
             if issue_id in current_issues
         }
+        archive_ref = ""
         if action == "archive_retire":
             if "measured_negative" in issue_codes:
                 raise BrainError("negative ROI is review-only")
@@ -1423,16 +1424,20 @@ class SkillGardener:
             replacement_version = replacement_value.get("skill_version") or replacement_value.get(
                 "version"
             )
-            if replacement_name == name:
-                raise BrainError("survivor/replacement must differ from current skill")
             replacement_capability = replacement_value.get(
                 "capability_hash"
             ) or replacement_value.get("normalized_capability_hash")
-            if not all(
-                isinstance(value, str) and value.strip()
-                for value in (replacement_name, replacement_version, replacement_capability)
+            if (
+                not isinstance(replacement_name, str)
+                or not replacement_name.strip()
+                or not isinstance(replacement_version, str)
+                or not replacement_version.strip()
+                or not isinstance(replacement_capability, str)
+                or not replacement_capability.strip()
             ):
                 raise BrainError("verified survivor/replacement skill is required")
+            if replacement_name == name:
+                raise BrainError("survivor/replacement must differ from current skill")
             replacement_path = skillforge.skill_path(self.home, replacement_name)
             if replacement_path is None:
                 raise BrainError("verified survivor skill is unavailable")
@@ -1683,15 +1688,21 @@ class SkillGardener:
         name = authorization.get("skill_name")
         version = authorization.get("skill_version")
         expected_hash = authorization.get("content_hash")
-        if not all(
-            isinstance(value, str) and value.strip() for value in (name, version, expected_hash)
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(version, str)
+            or not version.strip()
+            or not isinstance(expected_hash, str)
+            or not expected_hash.strip()
         ):
             raise BrainError("archive authorization identity is incomplete")
-        if not isinstance(authorization.get("owner"), str) or not authorization["owner"]:
+        owner_value = authorization.get("owner")
+        if not isinstance(owner_value, str) or not owner_value:
             raise BrainError("archive owner evidence is required")
-        for key in ("approval_ref", "non_regression_ref", "rollback_ref"):
-            if not isinstance(authorization.get(key), str) or not authorization[key]:
-                raise BrainError(f"{key} evidence is required")
+        rollback_value = authorization.get("rollback_ref")
+        if not isinstance(rollback_value, str) or not rollback_value:
+            raise BrainError("rollback evidence is required")
 
         source_file = skillforge.skill_path(self.home, name)
         if source_file is None:
@@ -1775,7 +1786,7 @@ class SkillGardener:
                 "skill_name": name[:_MAX_REFERENCE_LENGTH],
                 "skill_version": version[:_MAX_REFERENCE_LENGTH],
                 "content_hash": expected_hash,
-                "owner": authorization["owner"][:_MAX_REFERENCE_LENGTH],
+                "owner": owner_value[:_MAX_REFERENCE_LENGTH],
                 "retirement_reason": str(
                     authorization.get("retirement_reason") or "authorized maintenance retirement"
                 )[:_MAX_REFERENCE_LENGTH],
@@ -1784,7 +1795,7 @@ class SkillGardener:
                 "previous_lifecycle_state": current_state,
                 "archive_location": str(final_dir / "SKILL.md"),
                 "archive_reference": archive_destination[:_MAX_REFERENCE_LENGTH],
-                "rollback_ref": authorization["rollback_ref"][:_MAX_REFERENCE_LENGTH],
+                "rollback_ref": rollback_value[:_MAX_REFERENCE_LENGTH],
                 "restore_reference": retirement_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
@@ -1890,6 +1901,14 @@ class SkillGardener:
             )
         ):
             raise BrainError("retirement replacement record is incomplete")
+        if (
+            not isinstance(name, str)
+            or not isinstance(version, str)
+            or not isinstance(expected_hash, str)
+            or not isinstance(archive_location, str)
+            or not isinstance(previous_state, str)
+        ):
+            raise BrainError("retirement record is incomplete")
         archive_file = Path(archive_location)
         archive_dir = archive_file.parent
         try:
