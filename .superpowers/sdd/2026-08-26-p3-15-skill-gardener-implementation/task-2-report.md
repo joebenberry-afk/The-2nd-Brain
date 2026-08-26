@@ -20,7 +20,15 @@ Complete. `SkillGardener.observe_portfolio()` now composes bounded, read-only ev
 - `0087ba0 feat(gardener): classify portfolio conditions`
 - `dcb6580 fix(gardener): accept explicit failure markers`
 
+## Reviewer fixes
+- Unknown usage is now skill-level bounded evidence (`usage_state=unknown`, `usage_evidence_refs`), not an `unused` issue.
+- Capability overlap requires a dict with a distinct target and `material=true`; supersession requires an existing surviving replacement with matching current capability identity/version.
+- Negative ROI ledger fallback is content-hash bound with bounded ledger refs; stale identities suppress current trigger/scope/model/replacement findings; audit bare missing-section titles are recognized.
+- Telemetry usage is collected once per observation, and duplicate tests assert the peer has no capability-overlap issue.
+
 ## Concerns
 - Model/scope/trigger findings require explicit persisted evidence fields; arbitrary or unknown values are ignored conservatively.
-- `usage_unavailable` is represented as an `unused`-bucket evidence issue with `reason_codes=["usage_unavailable"]`, never as measured zero use.
 - Authorization, maintenance execution, and P3.16/Lean behavior remain out of scope.
+
+## Fix-round commit
+- `da942d7 fix(gardener): harden evidence classification`
