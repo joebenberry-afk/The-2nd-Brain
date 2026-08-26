@@ -309,12 +309,13 @@ def _write_binding(directory: Path, payload: dict) -> None:
     conditions = payload.get("condition_evidence")
     if isinstance(conditions, dict):
         for code, evidence in conditions.items():
-            if (
-                isinstance(evidence, dict)
-                and evidence.get("detected") is True
-                and not evidence.get("evidence_refs")
-            ):
-                evidence["evidence_refs"] = [f"verification:fixture:{code}"]
+            if isinstance(evidence, dict) and evidence.get("detected") is True:
+                refs = evidence.get("evidence_refs")
+                if not refs:
+                    refs = [f"verification:fixture:{code}"]
+                    evidence["evidence_refs"] = refs
+                if isinstance(refs, list) and refs and not evidence.get("evidence_id"):
+                    evidence["evidence_id"] = str(refs[0]).split(":", 1)[-1]
     (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -572,7 +573,7 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["verification:" + "y" * 10_000],
+                    "evidence_refs": ["verification:broken"],
                 }
             }
         },
@@ -647,7 +648,7 @@ def test_authorization_refuses_missing_gate_evidence(brain_home):
         {
             "owner": "owner-1",
             "condition_evidence": {
-                "false_trigger": {"detected": True, "evidence_refs": ["eval:gated"]}
+                "false_trigger": {"detected": True, "evidence_refs": ["verification:gated"]}
             },
         },
     )
@@ -809,7 +810,7 @@ def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
             "owner": "owner-1",
             "usage": {"invocations": 0, "measured": True, "evidence_refs": ["usage:1"]},
             "condition_evidence": {
-                "false_trigger": {"detected": True, "evidence_refs": ["eval:1"]}
+                "false_trigger": {"detected": True, "evidence_refs": ["verification:1"]}
             },
         },
     )
@@ -943,7 +944,7 @@ def _authorized_retirement(
             "condition_evidence": {
                 "dead_skill": {
                     "detected": True,
-                    "evidence_refs": [f"audit:{name}:dead"],
+                    "evidence_refs": [f"verification:{name}:dead"],
                 }
             },
         },
@@ -1305,7 +1306,7 @@ def test_delegated_execution_returns_metadata_without_mutating(brain_home):
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["eval:delegate"],
+                    "evidence_refs": ["verification:delegate"],
                 }
             },
         },

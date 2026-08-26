@@ -150,9 +150,14 @@ _CONCRETE_EVIDENCE_PREFIXES = (
 
 
 def _explicit_condition(
-    binding: dict[str, Any], evaluation: dict[str, Any], code: str, skill_name: str
+    binding: dict[str, Any],
+    evaluation: dict[str, Any],
+    code: str,
+    skill_name: str,
+    *,
+    audit_findings: list[str] | None = None,
+    current_hash: str | None = None,
 ) -> tuple[bool, list[str], object | None]:
-    """Read a condition only when persisted evidence names that condition."""
     values: list[tuple[str, object]] = []
     for label, source in (("binding", binding), ("evaluation", evaluation)):
         if not isinstance(source, dict):
@@ -194,10 +199,31 @@ def _explicit_condition(
             detected = bool(value)
         if detected:
             refs = _evidence_refs(value, fallback)
-            if refs and (
-                code not in _BROKEN_CONDITION_CODES
-                or any(ref.startswith(_CONCRETE_EVIDENCE_PREFIXES) for ref in refs)
-            ):
+            if refs and code in _BROKEN_CONDITION_CODES:
+                verifiable: list[str] = []
+                evidence_id = value.get("evidence_id") if isinstance(value, dict) else None
+                for ref in refs:
+                    if ref.startswith("audit:"):
+                        expected = f"audit:{skill_name}:"
+                        if (
+                            audit_findings
+                            and ref.startswith(expected)
+                            and ref.removeprefix(expected) in audit_findings
+                        ):
+                            verifiable.append(ref)
+                    elif ref.startswith(("evaluation:", "eval:")):
+                        _, _, identifier = ref.partition(":")
+                        evaluation_id = evaluation.get("evaluation_id")
+                        bound_hash = evaluation.get("candidate_content_sha256")
+                        if identifier == evaluation_id and bound_hash == current_hash:
+                            verifiable.append(ref)
+                    elif ref.startswith(("runtime:", "verification:", "telemetry:")):
+                        _, _, identifier = ref.partition(":")
+                        if isinstance(evidence_id, str) and identifier == evidence_id:
+                            verifiable.append(ref)
+                if len(verifiable) != len(refs):
+                    continue
+            if refs:
                 return True, refs, value
     return False, [], None
 
@@ -633,7 +659,14 @@ def _classify_portfolio(
                 "scope_too_narrow",
                 "model_specific_quirk",
             ):
-                detected, refs, value = _explicit_condition(binding, evaluation, code, name)
+                detected, refs, value = _explicit_condition(
+                    binding,
+                    evaluation,
+                    code,
+                    name,
+                    audit_findings=audit_findings,
+                    current_hash=item.get("content_hash"),
+                )
                 if not detected:
                     continue
                 if code == "dead_skill" and item.get("content_hash") is None:
