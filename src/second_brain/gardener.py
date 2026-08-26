@@ -1591,6 +1591,25 @@ class SkillGardener:
                 pass
             raise BrainError(f"could not persist retirement record: {exc}") from exc
         return record
+    def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
+        directory = self.home / "state" / "maintenance" / "authorizations"
+        target = directory / f"{authorization['authorization_id']}.json"
+        temporary = target.with_suffix(".tmp")
+        updated = dict(authorization)
+        updated["action_executed"] = True
+        try:
+            temporary.write_text(
+                json.dumps(updated, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(target)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise BrainError(f"could not persist authorization execution: {exc}") from exc
+
 
     def _load_current_authorization(self, authorization: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(authorization, dict):
@@ -1705,8 +1724,10 @@ class SkillGardener:
         try:
             source_resolved = source_dir.resolve()
             archive_resolved = archive_root.resolve()
-            if archive_resolved == source_resolved or source_resolved.is_relative_to(
-                archive_resolved
+            if (
+                archive_resolved == source_resolved
+                or source_resolved.is_relative_to(archive_resolved)
+                or archive_resolved.is_relative_to(source_resolved)
             ):
                 raise BrainError("archive destination overlaps source skill")
         except OSError as exc:
@@ -1715,6 +1736,14 @@ class SkillGardener:
             raise BrainError("archive destination already exists")
 
         persisted = False
+        source_mutation_started = False
+        retirement_record_path = (
+            self.home
+            / "state"
+            / "maintenance"
+            / "retirements"
+            / f"{retirement_id}.json"
+        )
         try:
             archive_root.mkdir(parents=True, exist_ok=True)
             archive_parent.mkdir(parents=True, exist_ok=True)
@@ -1760,6 +1789,8 @@ class SkillGardener:
                 ]
             self._persist_retirement_record(record)
             persisted = True
+            self._mark_authorization_executed(authorization)
+            source_mutation_started = True
             shutil.rmtree(source_dir)
             return {
                 **record,
@@ -1768,16 +1799,26 @@ class SkillGardener:
                 "action_executed": True,
             }
         except BrainError:
-            if not persisted:
+            if not source_mutation_started:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)
+                if persisted:
+                    try:
+                        retirement_record_path.unlink()
+                    except OSError:
+                        pass
             raise
         except (OSError, UnicodeError) as exc:
-            if not persisted:
+            if not source_mutation_started:
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 shutil.rmtree(final_dir, ignore_errors=True)
                 shutil.rmtree(archive_parent, ignore_errors=True)
+                if persisted:
+                    try:
+                        retirement_record_path.unlink()
+                    except OSError:
+                        pass
             raise BrainError(f"archive retirement failed: {exc}") from exc
 
     def restore_retirement(self, retirement_record_id: str) -> dict[str, Any]:
@@ -1803,11 +1844,36 @@ class SkillGardener:
         expected_hash = record.get("content_hash")
         previous_state = record.get("previous_lifecycle_state")
         archive_location = record.get("archive_location")
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (name, version, expected_hash, archive_location)
-        ) or previous_state not in paths.SKILL_LEVEL_DIRS:
+        required_fields = (
+            name,
+            version,
+            expected_hash,
+            archive_location,
+            record.get("owner"),
+            record.get("retirement_reason"),
+            record.get("archive_reference"),
+            record.get("rollback_ref"),
+            record.get("restore_reference"),
+            record.get("timestamp"),
+        )
+        if (
+            not all(isinstance(value, str) and value.strip() for value in required_fields)
+            or previous_state not in paths.SKILL_LEVEL_DIRS
+            or not isinstance(record.get("issue_ids"), list)
+            or not _bounded_refs(record.get("issue_ids"))
+            or not isinstance(record.get("evidence_refs"), list)
+            or not _bounded_refs(record.get("evidence_refs"))
+        ):
             raise BrainError("retirement record is incomplete")
+        replacement = record.get("replacement")
+        if replacement is not None and (
+            not isinstance(replacement, dict)
+            or not all(
+                isinstance(replacement.get(key), str) and replacement[key].strip()
+                for key in ("skill_name", "skill_version")
+            )
+        ):
+            raise BrainError("retirement replacement record is incomplete")
         archive_file = Path(archive_location)
         archive_dir = archive_file.parent
         try:
