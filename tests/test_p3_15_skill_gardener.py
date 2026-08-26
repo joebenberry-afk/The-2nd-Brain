@@ -204,6 +204,7 @@ def test_stale_freshness_blocks_authorization(brain_home):
 
 def test_demotion_requires_canonical_promotion_record(brain_home):
     directory = _make_skill(brain_home, "demote-gated", "shadow")
+    ref = _bind_evaluation(directory, "demote-gated-eval")
     _write_binding(
         directory,
         {
@@ -211,7 +212,7 @@ def test_demotion_requires_canonical_promotion_record(brain_home):
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["verification:demote"],
+                    "evidence_refs": [ref],
                 }
             },
         },
@@ -319,6 +320,17 @@ def _write_binding(directory: Path, payload: dict) -> None:
     (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _bind_evaluation(directory: Path, evaluation_id: str) -> str:
+    """Persist a genuine evaluation record bound to the skill's current content
+    hash and return the matching `evaluation:` evidence ref."""
+    evaluation = {
+        "evaluation_id": evaluation_id,
+        "candidate_content_sha256": skillforge.lifecycle_content_hash(directory / "SKILL.md"),
+    }
+    (directory / "evaluation.json").write_text(json.dumps(evaluation), encoding="utf-8")
+    return f"evaluation:{evaluation_id}"
+
+
 @pytest.mark.parametrize(
     ("condition_code", "issue_type"),
     [
@@ -335,15 +347,18 @@ def _write_binding(directory: Path, payload: dict) -> None:
     ],
 )
 def test_condition_codes_are_differentiated(brain_home, condition_code, issue_type):
-    directory = _make_skill(brain_home, f"condition-{condition_code}", "shadow")
+    level = "active" if condition_code == "dead_skill" else "shadow"
+    directory = _make_skill(brain_home, f"condition-{condition_code}", level)
     if condition_code == "exact_duplicate":
         _make_skill(brain_home, "condition-exact-duplicate-peer", "shadow")
     if condition_code == "evidence_stale":
         _write_binding(directory, {"candidate_content_sha256": "stale"})
     elif condition_code == "dead_skill":
-        _write_binding(
-            directory,
-            {"condition_evidence": {"dead_skill": {"detected": True}}},
+        skill_md = directory / "SKILL.md"
+        text = skill_md.read_text(encoding="utf-8")
+        assert "# Purpose\n\n- verified content\n\n" in text
+        skill_md.write_text(
+            text.replace("# Purpose\n\n- verified content\n\n", "", 1), encoding="utf-8"
         )
     elif condition_code == "capability_overlap":
         _write_binding(
@@ -369,9 +384,10 @@ def test_condition_codes_are_differentiated(brain_home, condition_code, issue_ty
         }
         (directory / "evaluation.json").write_text(json.dumps(evaluation), encoding="utf-8")
     else:
+        ref = _bind_evaluation(directory, f"{condition_code}-eval")
         _write_binding(
             directory,
-            {"condition_evidence": {condition_code: {"detected": True}}},
+            {"condition_evidence": {condition_code: {"detected": True, "evidence_refs": [ref]}}},
         )
 
     result = SkillGardener(brain_home).observe_portfolio()
@@ -435,6 +451,60 @@ def test_arbitrary_condition_reference_cannot_emit_broken_issue(brain_home):
     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
     assert not any(
         issue["skill_name"] == "arbitrary-ref" and issue["condition_code"] == "false_trigger"
+        for issue in issues
+    )
+
+
+def test_self_declared_evidence_id_cannot_bind_runtime_reference(brain_home):
+    directory = _make_skill(brain_home, "self-declared-marker", "shadow")
+    (directory / "candidate-binding.json").write_text(
+        json.dumps(
+            {
+                "condition_evidence": {
+                    "false_trigger": {
+                        "detected": True,
+                        "evidence_refs": ["verification:self-declared-1"],
+                        "evidence_id": "self-declared-1",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+    assert not any(
+        issue["skill_name"] == "self-declared-marker" and issue["condition_code"] == "false_trigger"
+        for issue in issues
+    )
+
+
+def test_mixed_real_and_fabricated_evidence_refs_fail_closed(brain_home):
+    directory = _make_skill(brain_home, "mixed-ref", "active")
+    skill_md = directory / "SKILL.md"
+    text = skill_md.read_text(encoding="utf-8")
+    assert "# Purpose\n\n- verified content\n\n" in text
+    stripped = text.replace("# Purpose\n\n- verified content\n\n", "", 1)
+    skill_md.write_text(stripped, encoding="utf-8")
+    (directory / "candidate-binding.json").write_text(
+        json.dumps(
+            {
+                "condition_evidence": {
+                    "false_trigger": {
+                        "detected": True,
+                        "evidence_refs": [
+                            "audit:mixed-ref:Purpose",
+                            "verification:fabricated-1",
+                        ],
+                        "evidence_id": "fabricated-1",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+    assert not any(
+        issue["skill_name"] == "mixed-ref" and issue["condition_code"] == "false_trigger"
         for issue in issues
     )
 
@@ -567,13 +637,14 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
             "condition_evidence": {"false_trigger": {"detected": True}},
         },
     )
+    broken_ref = _bind_evaluation(broken, "broken-ref-eval")
     _write_binding(
         broken,
         {
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["verification:broken"],
+                    "evidence_refs": [broken_ref],
                 }
             }
         },
@@ -643,13 +714,12 @@ def test_keep_or_no_action_has_no_mutation(brain_home, condition_code):
 
 def test_authorization_refuses_missing_gate_evidence(brain_home):
     directory = _make_skill(brain_home, "gated", "shadow")
+    ref = _bind_evaluation(directory, "gated-eval")
     _write_binding(
         directory,
         {
             "owner": "owner-1",
-            "condition_evidence": {
-                "false_trigger": {"detected": True, "evidence_refs": ["verification:gated"]}
-            },
+            "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": [ref]}},
         },
     )
     observation = next(
@@ -670,9 +740,13 @@ def test_authorization_refuses_missing_gate_evidence(brain_home):
 
 def test_authorization_refuses_stale_skill_hash(brain_home):
     directory = _make_skill(brain_home, "stale-auth", "shadow")
+    ref = _bind_evaluation(directory, "stale-auth-eval")
     _write_binding(
         directory,
-        {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True}}},
+        {
+            "owner": "owner-1",
+            "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": [ref]}},
+        },
     )
     observation = next(
         issue
@@ -738,9 +812,13 @@ def test_active_retirement_requires_production_safety_evidence(brain_home):
 
 def test_delegated_authorization_does_not_mutate(brain_home):
     directory = _make_skill(brain_home, "delegated", "shadow")
+    ref = _bind_evaluation(directory, "delegated-eval")
     _write_binding(
         directory,
-        {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True}}},
+        {
+            "owner": "owner-1",
+            "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": [ref]}},
+        },
     )
     gardener = SkillGardener(brain_home)
     observation = next(
@@ -804,14 +882,13 @@ def test_negative_roi_precedes_retirement_issue_in_observation():
 
 def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
     directory = _make_skill(brain_home, "archive-gated", "shadow")
+    ref = _bind_evaluation(directory, "archive-gated-eval")
     _write_binding(
         directory,
         {
             "owner": "owner-1",
             "usage": {"invocations": 0, "measured": True, "evidence_refs": ["usage:1"]},
-            "condition_evidence": {
-                "false_trigger": {"detected": True, "evidence_refs": ["verification:1"]}
-            },
+            "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": [ref]}},
         },
     )
     gardener = SkillGardener(brain_home)
@@ -842,11 +919,12 @@ def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
 
 def test_merge_rejects_self_survivor(brain_home):
     directory = _make_skill(brain_home, "self-merge", "shadow")
+    ref = _bind_evaluation(directory, "self-merge-eval")
     _write_binding(
         directory,
         {
             "owner": "owner-1",
-            "condition_evidence": {"false_trigger": {"detected": True}},
+            "condition_evidence": {"false_trigger": {"detected": True, "evidence_refs": [ref]}},
         },
     )
     gardener = SkillGardener(brain_home)
@@ -937,6 +1015,7 @@ def _authorized_retirement(
     directory = brain_home / paths.SKILL_LEVEL_DIRS[level] / name
     if not directory.exists():
         directory = _make_skill(brain_home, name, level)
+    ref = _bind_evaluation(directory, f"{name}-dead-eval")
     _write_binding(
         directory,
         {
@@ -944,7 +1023,7 @@ def _authorized_retirement(
             "condition_evidence": {
                 "dead_skill": {
                     "detected": True,
-                    "evidence_refs": [f"verification:{name}:dead"],
+                    "evidence_refs": [ref],
                 }
             },
         },
@@ -1299,6 +1378,7 @@ def test_execute_rejects_missing_authorization_gate_fields(brain_home):
 
 def test_delegated_execution_returns_metadata_without_mutating(brain_home):
     source = _make_skill(brain_home, "delegate-exec", "shadow")
+    ref = _bind_evaluation(source, "delegate-exec-eval")
     _write_binding(
         source,
         {
@@ -1306,7 +1386,7 @@ def test_delegated_execution_returns_metadata_without_mutating(brain_home):
             "condition_evidence": {
                 "false_trigger": {
                     "detected": True,
-                    "evidence_refs": ["verification:delegate"],
+                    "evidence_refs": [ref],
                 }
             },
         },
