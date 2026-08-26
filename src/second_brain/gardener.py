@@ -1744,6 +1744,7 @@ class SkillGardener:
         archive_parent = archive_root / retirement_id
         final_dir = archive_parent / name
         staging_dir = archive_root / f".{retirement_id}.staging"
+        quarantine_root = self.home / "state" / "maintenance" / "retirement-quarantine"
         try:
             source_resolved = source_dir.resolve()
             archive_resolved = archive_root.resolve()
@@ -1751,6 +1752,8 @@ class SkillGardener:
                 archive_resolved == source_resolved
                 or source_resolved.is_relative_to(archive_resolved)
                 or archive_resolved.is_relative_to(source_resolved)
+                or quarantine_root.resolve().is_relative_to(archive_resolved)
+                or archive_resolved.is_relative_to(quarantine_root.resolve())
             ):
                 raise BrainError("archive destination overlaps source skill")
         except OSError as exc:

@@ -885,6 +885,28 @@ def test_archive_destination_inside_source_preserves_source(brain_home):
         if path.is_file()
     } == before
     assert not (source / "nested").exists()
+def test_archive_destination_quarantine_root_is_rejected(brain_home):
+    source = _make_skill(brain_home, "quarantine-collision", "shadow")
+    quarantine_root = (
+        brain_home / "state" / "maintenance" / "retirement-quarantine"
+    )
+    authorization = _authorized_retirement(
+        brain_home, "quarantine-collision", archive_destination=quarantine_root
+    )
+    before = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    with pytest.raises(BrainError, match="overlaps"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+    assert {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    } == before
+    assert not quarantine_root.exists()
+
 
 
 
