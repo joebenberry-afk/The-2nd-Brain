@@ -917,6 +917,44 @@ def test_executed_authorization_cannot_be_replayed_after_restore(brain_home):
     with pytest.raises(BrainError, match="authorization|stale|current"):
         gardener.execute_maintenance(authorization)
 
+def test_source_removal_failure_leaves_authorization_retryable(brain_home, monkeypatch):
+    source = _make_skill(brain_home, "remove-fails", "shadow")
+    authorization = _authorized_retirement(brain_home, "remove-fails")
+    original_files = {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    real_rmtree = shutil.rmtree
+
+    def fail_source(path, *args, **kwargs):
+        if Path(path) == source:
+            raise OSError("remove failed")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", fail_source)
+    with pytest.raises(BrainError, match="source removal|remove"):
+        SkillGardener(brain_home).execute_maintenance(authorization)
+    assert source.exists()
+    assert {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    } == original_files
+    auth_path = (
+        brain_home
+        / "state"
+        / "maintenance"
+        / "authorizations"
+        / f"{authorization['authorization_id']}.json"
+    )
+    recovered = json.loads(auth_path.read_text(encoding="utf-8"))
+    assert recovered["action_executed"] is False
+    assert "execution_state" not in recovered
+    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", real_rmtree)
+    result = SkillGardener(brain_home).execute_maintenance(authorization)
+    assert result["action_executed"] is True
+
 
 def test_restore_requires_complete_retirement_record(brain_home):
     gardener = SkillGardener(brain_home)

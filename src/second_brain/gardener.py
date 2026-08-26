@@ -1591,12 +1591,22 @@ class SkillGardener:
                 pass
             raise BrainError(f"could not persist retirement record: {exc}") from exc
         return record
-    def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
+    def _persist_authorization_state(
+        self,
+        authorization: dict[str, Any],
+        *,
+        executed: bool,
+        state: str | None = None,
+    ) -> None:
         directory = self.home / "state" / "maintenance" / "authorizations"
         target = directory / f"{authorization['authorization_id']}.json"
         temporary = target.with_suffix(".tmp")
         updated = dict(authorization)
-        updated["action_executed"] = True
+        updated["action_executed"] = executed
+        if state is None:
+            updated.pop("execution_state", None)
+        else:
+            updated["execution_state"] = state
         try:
             temporary.write_text(
                 json.dumps(updated, sort_keys=True, separators=(",", ":")) + "\n",
@@ -1609,6 +1619,15 @@ class SkillGardener:
             except OSError:
                 pass
             raise BrainError(f"could not persist authorization execution: {exc}") from exc
+
+    def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
+        self._persist_authorization_state(authorization, executed=True)
+
+    def _mark_authorization_in_progress(self, authorization: dict[str, Any]) -> None:
+        self._persist_authorization_state(authorization, executed=False, state="in_progress")
+
+    def _reset_authorization(self, authorization: dict[str, Any]) -> None:
+        self._persist_authorization_state(authorization, executed=False)
 
 
     def _load_current_authorization(self, authorization: dict[str, Any]) -> dict[str, Any]:
@@ -1623,6 +1642,12 @@ class SkillGardener:
         stored = _read_json_object(path)
         if not stored or stored.get("authorization_id") != authorization_id:
             raise BrainError("authorization record is unavailable")
+        if (
+            stored.get("action_authorized") is not True
+            or stored.get("action_executed") is True
+            or stored.get("execution_state") == "in_progress"
+        ):
+            raise BrainError("authorization is not current")
         for key in (
             "skill_name",
             "skill_version",
@@ -1640,8 +1665,6 @@ class SkillGardener:
         ):
             if key in stored and stored.get(key) != authorization.get(key):
                 raise BrainError("authorization record is stale")
-        if stored.get("action_authorized") is not True or stored.get("action_executed") is True:
-            raise BrainError("authorization is not current")
         return stored
 
     def _archive_root(self, archive_destination: str) -> Path:
@@ -1789,9 +1812,16 @@ class SkillGardener:
                 ]
             self._persist_retirement_record(record)
             persisted = True
-            self._mark_authorization_executed(authorization)
+            self._mark_authorization_in_progress(authorization)
             source_mutation_started = True
-            shutil.rmtree(source_dir)
+            try:
+                shutil.rmtree(source_dir)
+            except (OSError, UnicodeError) as exc:
+                if source_dir.exists():
+                    self._reset_authorization(authorization)
+                    source_mutation_started = False
+                raise BrainError(f"archive source removal failed: {exc}") from exc
+            self._mark_authorization_executed(authorization)
             return {
                 **record,
                 "action_recommended": "archive_retire",
