@@ -144,6 +144,64 @@ def test_observe_portfolio_composes_bounded_evidence_and_issue_shape(brain_home)
     )
 
 
+def test_malformed_counterfactual_json_is_unavailable(brain_home):
+    _make_skill(brain_home, "bad-cf", "shadow")
+    directory = brain_home / "outputs" / "audits" / "counterfactual" / "skill"
+    directory.mkdir(parents=True)
+    (directory / "bad-cf-invalid.json").write_bytes(b"\xff")
+    (directory / "bad-cf-bool.json").write_text(
+        json.dumps(
+            {
+                "intervention": {
+                    "id": "bad-cf",
+                    "hash": skillforge.lifecycle_content_hash(
+                        brain_home / paths.SKILL_LEVEL_DIRS["shadow"] / "bad-cf" / "SKILL.md"
+                    ),
+                },
+                "with_arm": {"tokens": {"total": True}},
+                "without_arm": {"tokens": {"total": False}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = SkillGardener(brain_home).observe_portfolio()
+    skill = next(item for item in result["skills"] if item["skill_name"] == "bad-cf")
+    assert skill["roi_summary"]["invocations"] == 0
+
+
+def test_demotion_requires_canonical_promotion_record(brain_home):
+    directory = _make_skill(brain_home, "demote-gated", "shadow")
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {
+                "false_trigger": {
+                    "detected": True,
+                    "evidence_refs": ["issue:demote"],
+                }
+            },
+        },
+    )
+    gardener = SkillGardener(brain_home)
+    issue = next(
+        item
+        for item in gardener.observe_portfolio()["issues"]
+        if item["skill_name"] == "demote-gated"
+    )
+    recommendation = gardener.recommend_maintenance(issue)
+    recommendation["action_recommended"] = "demote"
+    recommendation["evidence_refs"].append("promotion:fake")
+    with pytest.raises(BrainError, match=r"canonical|promotion"):
+        gardener.authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
 def test_observe_portfolio_does_not_mutate_lifecycle_or_promotion_state(brain_home):
     _make_skill(brain_home, "stable-skill", "shadow")
     before = _lifecycle_snapshot(brain_home)
