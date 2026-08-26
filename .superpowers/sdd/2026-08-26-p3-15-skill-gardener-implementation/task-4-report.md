@@ -19,7 +19,7 @@ Complete. Implemented archive-first `archive_retire` execution and verified rest
 - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
 
 ## Commit
-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`; `ccecccc fix(gardener): require retirement gate refs`
+`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`; `ccecccc fix(gardener): require retirement gate refs`; `591f2c3 style(gardener): format gate regression`
 
 ## Concerns
 - Focused `ruff format` applied to the two changed Python files; focused `ruff check` passed with no findings.
