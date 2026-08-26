@@ -216,25 +216,30 @@ def _replacement_evidence(
                 continue
             name = value.get("skill_name") or value.get("name") or value.get("id")
             version = value.get("version") or value.get("skill_version")
-            capability = value.get("capability_hash") or value.get("normalized_capability_hash")
+            capability = value.get("capability_hash") or value.get(
+                "normalized_capability_hash"
+            )
             cap_evidence = value.get("capability_evidence")
+            if not isinstance(capability, str) and isinstance(cap_evidence, dict):
+                for cap_key in ("normalized_hash", "capability_hash", "content_hash"):
+                    candidate = cap_evidence.get(cap_key)
+                    if isinstance(candidate, str) and candidate:
+                        capability = candidate
+                        break
             if (
                 isinstance(name, str)
                 and name
                 and name != skill_name
                 and isinstance(version, str)
                 and version
-                and (
-                    isinstance(capability, str)
-                    or (isinstance(cap_evidence, (dict, list)) and bool(cap_evidence))
-                )
+                and isinstance(capability, str)
+                and capability
             ):
                 replacement = {
                     "skill_name": name[:_MAX_REFERENCE_LENGTH],
                     "skill_version": version[:_MAX_REFERENCE_LENGTH],
+                    "capability_hash": capability[:_MAX_REFERENCE_LENGTH],
                 }
-                if isinstance(capability, str):
-                    replacement["capability_hash"] = capability[:_MAX_REFERENCE_LENGTH]
                 return replacement, _evidence_refs(
                     value, f"{label}:{key}:{name}:{version}"
                 )

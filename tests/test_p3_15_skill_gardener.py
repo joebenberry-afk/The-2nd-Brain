@@ -307,6 +307,28 @@ def test_superseded_requires_replacement_capability_evidence(brain_home):
     assert superseded[0]["issue_type"] == "superseded"
     assert superseded[0]["replacement_ref"]["skill_name"] == "new-skill"
     assert superseded[0]["evidence_refs"]
+    
+def test_superseded_accepts_nested_normalized_capability_hash(brain_home):
+    replacement = _make_skill(brain_home, "nested-replacement", "shadow")
+    _write_binding(replacement, {"capability_hash": "cap-nested"})
+    old = _make_skill(brain_home, "nested-old", "shadow")
+    _write_binding(
+        old,
+        {
+            "replacement_ref": {
+                "skill_name": "nested-replacement",
+                "version": "1",
+                "capability_evidence": {"normalized_hash": "cap-nested"},
+            }
+        },
+    )
+
+    issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+
+    assert any(
+        i["skill_name"] == "nested-old" and i["condition_code"] == "superseded"
+        for i in issues
+    )
 
 
 def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
