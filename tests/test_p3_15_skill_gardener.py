@@ -219,11 +219,10 @@ def test_missing_usage_is_unavailable_not_measured_zero(brain_home):
     result = SkillGardener(brain_home).observe_portfolio()
 
     assert not any(i["condition_code"] == "measured_zero_use" for i in result["issues"])
-    unavailable = [
-        i for i in result["issues"] if "usage_unavailable" in i["reason_codes"]
-    ]
-    assert unavailable
-    assert all(i["evidence_refs"] for i in unavailable)
+    skill = result["skills"][0]
+    assert skill["usage_state"] == "unknown"
+    assert "usage_unavailable:unknown-use" in skill["usage_evidence_refs"]
+    assert not any(i["issue_type"] == "unused" for i in result["issues"])
 
 
 def test_estimated_or_unavailable_roi_is_not_negative(brain_home):
@@ -278,15 +277,21 @@ def test_exact_duplicate_is_not_capability_overlap(brain_home):
     )
     assert any(i["condition_code"] == "exact_duplicate" for i in issues)
 
+    assert not any(
+        i["skill_name"] == "same-two" and i["condition_code"] == "capability_overlap"
+        for i in issues
+    )
 
 def test_superseded_requires_replacement_capability_evidence(brain_home):
+    replacement = _make_skill(brain_home, "new-skill", "shadow")
+    _write_binding(replacement, {"capability_hash": "cap-new"})
     directory = _make_skill(brain_home, "old-skill", "active")
     _write_binding(
         directory,
         {
             "replacement_ref": {
                 "skill_name": "new-skill",
-                "version": "2",
+                "version": "1",
                 "capability_hash": "cap-new",
                 "evidence_refs": ["promotion:new-skill"],
             }
@@ -308,7 +313,15 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
     stale = _make_skill(brain_home, "stale-ref", "shadow")
     broken = _make_skill(brain_home, "broken-ref", "shadow")
     superseded = _make_skill(brain_home, "superseded-ref", "shadow")
-    _write_binding(stale, {"candidate_content_sha256": "x" * 10_000})
+    replacement = _make_skill(brain_home, "replacement", "shadow")
+    _write_binding(replacement, {"capability_hash": "z" * 256})
+    _write_binding(
+        stale,
+        {
+            "candidate_content_sha256": "x" * 10_000,
+            "condition_evidence": {"false_trigger": {"detected": True}},
+        },
+    )
     _write_binding(
         broken,
         {
@@ -323,13 +336,17 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
             "replacement_ref": {
                 "skill_name": "replacement",
                 "version": "1",
-                "capability_hash": "z" * 10_000,
+                "capability_hash": "z" * 256,
                 "evidence_refs": ["q" * 10_000],
             }
         },
     )
 
     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+    assert not any(
+        i["skill_name"] == "stale-ref" and i["condition_code"] == "false_trigger"
+        for i in issues
+    )
 
     for code in ("evidence_stale", "false_trigger", "superseded"):
         matched = [i for i in issues if i["condition_code"] == code]
