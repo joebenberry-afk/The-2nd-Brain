@@ -1,13 +1,14 @@
 """Focused tests for the read-only P3.15 portfolio observation boundary."""
 
 import json
-import pytest
-
-from second_brain import skillforge
 from pathlib import Path
 
-from second_brain import paths
+import pytest
+
+from second_brain import paths, skillforge
+from second_brain.errors import BrainError
 from second_brain.gardener import SkillGardener
+
 
 
 def _make_skill(home: Path, name: str, level: str) -> Path:
@@ -374,3 +375,172 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
         matched = [i for i in issues if i["condition_code"] == code]
         assert matched
         assert all(len(ref) <= 256 for i in matched for ref in i["evidence_refs"])
+
+def test_negative_roi_recommends_review_only():
+    recommendation = SkillGardener(Path(".")).recommend_maintenance(
+        {
+            "issue_id": "skill:measured_negative",
+            "issue_type": "negative_roi",
+            "condition_code": "measured_negative",
+            "skill_name": "skill",
+            "skill_version": "1",
+            "content_hash": "a" * 64,
+            "lifecycle_state": "shadow",
+            "evidence_refs": ["ledger:1"],
+            "measurement_state": "measured",
+        }
+    )
+    assert recommendation["action_recommended"] in {"repair", "no_action"}
+    assert recommendation["action_recommended"] != "archive_retire"
+    assert recommendation["action_authorized"] is False
+    assert recommendation["action_executed"] is False
+
+
+@pytest.mark.parametrize("condition_code", ["", "unknown"])
+def test_keep_or_no_action_has_no_mutation(brain_home, condition_code):
+    gardener = SkillGardener(brain_home)
+    before = _lifecycle_snapshot(brain_home)
+    observation = {
+        "skill_name": "stable",
+        "skill_version": "1",
+        "content_hash": "b" * 64,
+        "lifecycle_state": "shadow",
+        "condition_code": condition_code,
+        "issue_ids": [],
+        "evidence_refs": ["observation:stable"],
+    }
+    recommendation = gardener.recommend_maintenance(observation)
+    assert recommendation["action_recommended"] in {"keep", "no_action"}
+    assert recommendation["action_authorized"] is False
+    assert recommendation["action_executed"] is False
+    assert _lifecycle_snapshot(brain_home) == before
+
+
+def test_authorization_refuses_missing_gate_evidence(brain_home):
+    directory = _make_skill(brain_home, "gated", "shadow")
+    _write_binding(
+        directory,
+        {
+            "owner": "owner-1",
+            "condition_evidence": {
+                "false_trigger": {"detected": True, "evidence_refs": ["eval:gated"]}
+            },
+        },
+    )
+    observation = next(
+        issue
+        for issue in SkillGardener(brain_home).observe_portfolio()["issues"]
+        if issue["skill_name"] == "gated"
+    )
+    recommendation = SkillGardener(brain_home).recommend_maintenance(observation)
+    with pytest.raises(BrainError, match="approval|non-regression|rollback"):
+        SkillGardener(brain_home).authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="",
+            non_regression_ref="",
+            rollback_ref="",
+        )
+
+
+def test_authorization_refuses_stale_skill_hash(brain_home):
+    directory = _make_skill(brain_home, "stale-auth", "shadow")
+    _write_binding(
+        directory,
+        {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True}}},
+    )
+    observation = next(
+        issue
+        for issue in SkillGardener(brain_home).observe_portfolio()["issues"]
+        if issue["skill_name"] == "stale-auth"
+    )
+    recommendation = SkillGardener(brain_home).recommend_maintenance(observation)
+    recommendation["content_hash"] = "0" * 64
+    with pytest.raises(BrainError, match="hash|stale"):
+        SkillGardener(brain_home).authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
+def test_duplicate_authorization_requires_verified_survivor(brain_home):
+    recommendation = SkillGardener(brain_home).recommend_maintenance(
+        {
+            "issue_id": "duplicate:exact",
+            "issue_type": "duplicate",
+            "condition_code": "exact_duplicate",
+            "skill_name": "duplicate",
+            "skill_version": "1",
+            "content_hash": "c" * 64,
+            "lifecycle_state": "shadow",
+            "evidence_refs": ["capability:c"],
+        }
+    )
+    assert recommendation["action_recommended"] == "merge"
+    with pytest.raises(BrainError, match="survivor|replacement|skill"):
+        SkillGardener(brain_home).authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
+def test_active_retirement_requires_production_safety_evidence(brain_home):
+    directory = _make_skill(brain_home, "active-auth", "active")
+    recommendation = {
+        "skill_name": "active-auth",
+        "skill_version": "1",
+        "content_hash": skillforge.lifecycle_content_hash(directory / "SKILL.md"),
+        "lifecycle_state": "active",
+        "action_recommended": "archive_retire",
+        "issue_ids": ["active-auth:dead_skill"],
+        "evidence_refs": ["audit:active-auth:cannot execute"],
+    }
+    with pytest.raises(BrainError, match="production|safety"):
+        SkillGardener(brain_home).authorize_maintenance(
+            recommendation,
+            actor="owner-1",
+            approval_ref="approval:1",
+            non_regression_ref="verification:1",
+            rollback_ref="rollback:1",
+        )
+
+
+def test_delegated_authorization_does_not_mutate(brain_home):
+    directory = _make_skill(brain_home, "delegated", "shadow")
+    _write_binding(
+        directory,
+        {"owner": "owner-1", "condition_evidence": {"false_trigger": {"detected": True}}},
+    )
+    gardener = SkillGardener(brain_home)
+    observation = next(
+        issue
+        for issue in gardener.observe_portfolio()["issues"]
+        if issue["skill_name"] == "delegated"
+    )
+    recommendation = gardener.recommend_maintenance(observation)
+    before = _lifecycle_snapshot(brain_home)
+    result = gardener.authorize_maintenance(
+        recommendation,
+        actor="owner-1",
+        approval_ref="approval:1",
+        non_regression_ref="verification:1",
+        rollback_ref="rollback:1",
+    )
+    assert result["action_authorized"] is True
+    assert result["action_executed"] is False
+    assert result["authority"] == "skill-development/evaluation"
+    persisted = (
+        brain_home
+        / "state"
+        / "maintenance"
+        / "authorizations"
+        / f"{result['authorization_id']}.json"
+    )
+    assert json.loads(persisted.read_text(encoding="utf-8")) == result
+    assert _lifecycle_snapshot(brain_home) == before
