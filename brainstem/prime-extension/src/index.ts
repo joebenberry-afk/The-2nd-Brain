@@ -1,20 +1,19 @@
 /**
  * The Second Brain OS — Phase 2 observability extension (Prime Agent).
  *
- * MEASUREMENT FIRST, plus the Phase 1 minimal-orchestrator guard: observes
- * the 11 lifecycle events, appends JSONL telemetry to
- * <brain-home>/telemetry/agent-performance/<session>.jsonl, and — for Sol
- * orchestrator-model sessions only — blocks direct execution tools
- * (bash/edit/websearch) and injects the Sol contract as a systemPrompt
- * addendum. All other sessions stay measurement-only.
+ * MEASUREMENT FIRST, plus the Phase 1 minimal-orchestrator guard and the thin
+ * OMP -> Second Brain model-routing handoff. Observes lifecycle events and
+ * appends JSONL telemetry to <brain-home>/telemetry/agent-performance/<session>.jsonl.
+ * For Sol orchestrator-model sessions only, it blocks direct execution tools
+ * (bash/edit/websearch) and injects the Sol contract as a systemPrompt addendum.
+ * Brain routing may replace only provider/model fields exposed by an OMP request.
  *
  * Safety invariants:
- *  - Measurement handlers return undefined. The two guard-capable handlers
- *    (tool_call, before_agent_start) return a patch ONLY for orchestrator
- *    models: tool_call may return {block:true, reason} for Sol + blocked
- *    tool; before_agent_start may return {systemPrompt} for Sol. Everything
- *    else returns undefined.
- *  - tool_call handlers never modify event.input.
+ *  - Measurement handlers return undefined except direct handlers whose runtime
+ *    contract consumes a replacement: before_agent_start, context,
+ *    before_provider_request, and message_end.
+ *  - tool_call handlers do not mutate event.input; the task bridge returns a
+ *    validated replacement only through the supported ToolCallEventResult.input.
  *  - Every handler is wrapped in try/catch; on error an `extension_error`
  *    record is appended best-effort and nothing is thrown into the session.
  *    Guard failures FAIL OPEN (recorded, never blocking) so measurement can
@@ -26,10 +25,8 @@
  * src/sensors.ts (counts/sizes only; bash command text truncated to 500).
  */
 import type {
-  AfterProviderResponseEvent,
   AgentEndEvent,
   BeforeAgentStartEvent,
-  BeforeProviderRequestEvent,
   ExtensionAPI,
   ExtensionContext,
   PrimeEvent,
@@ -37,6 +34,9 @@ import type {
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
+  ToolCallEvent,
+  ToolCallEventResult,
+  ToolResultEvent,
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
@@ -59,7 +59,7 @@ import {
   shouldAttemptRecall,
   type RecallGateConfig,
 } from "./recall-gate";
-import { appendLeanKernel, decideLeanRuntime } from "./lean-code";
+import { appendLeanKernel, decideLeanRuntime, LEAN_KERNEL_MARKER } from "./lean-code";
 import {
   loadContextPagingConfig,
   loadContextStructureConfig,
@@ -84,7 +84,20 @@ import {
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
 import {
+  activeStateMessage,
+  renderActiveState,
+  runActiveStateEnsure,
+  runActiveStateUpdate,
+  runActiveStateUpdateSync,
+} from "./active-state-mirror";
+import {
+  runEnvironmentAssessmentSync,
+  type EnvironmentAssessmentResult,
+} from "./environment-mirror";
+import { runRadarObservationSync } from "./radar-mirror";
+import {
   mirrorExtensionError,
+  mirrorEventSync,
   mirrorFireAndForget,
   runLedgerCheckpoint,
   runLedgerSegmentRollover,
@@ -99,6 +112,36 @@ import {
   TelemetryStore,
   type DirEnsurer,
 } from "./storage";
+import {
+  ompRoutingRecord,
+  runOmpRouting,
+  type OmpModelCandidate,
+  type OmpRoutingDecision,
+  type OmpRoutingOptions,
+  type OmpRoutingResult,
+} from "./routing-bridge";
+import {
+  OMP_VISIBILITY_MAX_INJECTED_CHARS,
+  ompVisibilityRecord,
+  runOmpVisibility,
+  type OmpVisibilityOptions,
+  type OmpVisibilityResult,
+} from "./visibility-bridge";
+import {
+  OMP_WORKER_CONTEXT_MAX_TEXT_CHARS,
+  renderOmpWorkerContext,
+  runOmpWorkerContext,
+  type OmpWorkerContextOptions,
+  type OmpWorkerContextResult,
+} from "./worker-context-bridge";
+import {
+  STOP_CONTROL_COMMAND,
+  StopBoundaryState,
+  extractTextContent,
+  parseStopDecisionOutput,
+  rewriteSessionPlaceholders,
+  rewriteStopControlCommand,
+} from "./stop-boundary";
 
 /** Random fallback session id (used only when no session file exists). */
 function anonSessionId(): string {
@@ -254,6 +297,10 @@ export interface ExtensionOptions {
    * still happens with the existing delivery-only shape).
    */
   autoinjectPacketPreserver?: RtdPreserver;
+  /** OMP worker Context Capsule seam; production uses the bounded Brain CLI bridge. */
+  ompWorkerContextRunner?: (options: OmpWorkerContextOptions) => Promise<OmpWorkerContextResult>;
+  ompRoutingRunner?: (options: OmpRoutingOptions) => Promise<OmpRoutingResult>;
+  ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -332,6 +379,282 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       },
     });
   };
+  let currentTurnIndex = 0;
+  let latestRoutingDecision: OmpRoutingDecision | null = null;
+  let latestRoutingSession: string | null = null;
+  const routingCache = new Map<string, Promise<OmpRoutingResult>>();
+  const stopStates = new Map<string, StopBoundaryState>();
+  const stopControlCalls = new Set<string>();
+  const workerParentSessions = new Map<string, string>();
+  const environmentTaskHashes = new Map<string, string>();
+  const stopStateFor = (session: string): StopBoundaryState => {
+    const existing = stopStates.get(session);
+    if (existing) return existing;
+    const created = new StopBoundaryState();
+    stopStates.set(session, created);
+    return created;
+  };
+  const readySessions = new Set<string>();
+  const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
+  const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
+  const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
+  const safeWorkerContextRunner = async (
+    workerOptions: OmpWorkerContextOptions,
+  ): Promise<OmpWorkerContextResult> => {
+    try {
+      return await workerContextRunner(workerOptions);
+    } catch {
+      return { ok: false, error: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" };
+    }
+  };
+
+  const workerRoleForAgent = (agent: unknown): string =>
+    typeof agent === "string" && agent.toLowerCase().includes("validator") ? "validator" : "worker";
+
+  const projectIdForCwd = (cwd: string): string => {
+    const parts = cwd.split(/[\\/]/).filter(Boolean);
+    return parts.at(-1) ?? "default";
+  };
+
+  const prepareWorkerTaskInput = async (
+    event: ToolCallEvent,
+    ctx: ExtensionContext,
+    session: string,
+  ): Promise<ToolCallEventResult | undefined> => {
+    if (event.toolName !== "task") return undefined;
+    const input = event.input;
+    const batchItems = Array.isArray(input.tasks) ? input.tasks : [];
+    const items: Array<Record<string, unknown>> =
+      batchItems.filter((item): item is Record<string, unknown> => item != null && typeof item === "object");
+    if (batchItems.length !== items.length) {
+      return { block: true, reason: "P3.2 worker context requires object task items" };
+    }
+    if (items.length === 0 && typeof input.task === "string") {
+      items.push({ task: input.task, agent: input.agent, name: input.name });
+    }
+    if (items.length === 0) return undefined;
+    const batch = batchItems.length > 0;
+    const modelId = sensors.modelToString(ctx.model) ?? "unknown";
+    const provider = typeof ctx.model?.provider === "string" ? ctx.model.provider : "unknown";
+    const guardCfg = loadOrchestratorGuardConfig();
+    const role = resolveAgentRole(modelId, loadDriverOrchestratorConfig(), guardCfg.orchestratorModels);
+    const augmented: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const rawTask = item.task;
+      if (typeof rawTask !== "string" || rawTask.trim() === "") {
+        return { block: true, reason: "P3.2 worker context requires a non-empty task" };
+      }
+      const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
+      const taskId = `omp-${taskSha256(`${session}:${task}`)}`;
+      const result = await safeWorkerContextRunner({
+        home: config.home ?? "",
+        sessionId: session,
+        taskId,
+        task,
+        scope: typeof input.scope === "string" ? input.scope : ctx.cwd,
+        completionCondition:
+          typeof input.completion_condition === "string"
+            ? input.completion_condition
+            : "Return bounded evidence for the delegated task",
+        projectId: typeof input.project_id === "string" ? input.project_id : projectIdForCwd(ctx.cwd),
+        cwd: ctx.cwd,
+        role,
+        provider,
+        model: modelId,
+        workerRole: workerRoleForAgent(item.agent),
+        depth: typeof input.depth === "number" ? input.depth : 0,
+        contextRefs: Array.isArray(input.context_refs) ? input.context_refs.filter((ref): ref is string => typeof ref === "string") : undefined,
+      });
+      if (!result.ok || result.contextHandoff === undefined || result.contextMetadata === undefined) {
+        const reason = result.error ?? "P3.2 worker context preparation failed";
+        getStore(session)?.append(
+          ompRoutingRecord("omp_worker_context_failure", session, {
+            task_id: taskId,
+            worker_agent: typeof item.agent === "string" ? item.agent : "default",
+            failure_code: reason,
+          }),
+        );
+        return { block: true, reason };
+      }
+      const metadata = result.contextMetadata;
+      const metadataRecord = {
+        task_id: taskId,
+        packet_sha256: result.packetSha256 ?? null,
+        worker_agent: typeof item.agent === "string" ? item.agent : "default",
+        worker_role: workerRoleForAgent(item.agent),
+        parent_role: role,
+        parent_session_id: session,
+        context_ref_count: metadata.resolved_count,
+        context_source_bytes: metadata.visible_bytes ?? 0,
+        context_source_tokens: metadata.visible_tokens_estimate ?? 0,
+        context_handoff_bytes: metadata.context_handoff_bytes,
+        context_handoff_tokens: metadata.context_handoff_tokens_estimate,
+        context_delta_bytes: metadata.context_delta_bytes,
+        context_delta_tokens: metadata.context_delta_tokens_estimate,
+        context_mode: metadata.mode,
+        context_fingerprint: metadata.context_fingerprint,
+        context_reused: metadata.reused,
+        context_cache_hit: metadata.cache_hit,
+      };
+      getStore(session)?.append(ompRoutingRecord("omp_worker_context_handoff", session, metadataRecord));
+      mirror(session, "task_context_resolved", metadataRecord, { cwd: ctxCwd(ctx) });
+      augmented.push({
+        task: `${task}\n\n[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${renderOmpWorkerContext(result.contextHandoff)}`,
+      });
+    }
+    if (batch) return { input: { ...input, tasks: augmented } };
+    return { input: { ...input, task: String(augmented[0].task ?? "") } };
+  };
+  const recordWorkerChildResults = (event: ToolResultEvent, ctx: ExtensionContext, session: string): void => {
+    if (event.toolName !== "task" || event.details == null || typeof event.details !== "object") return;
+    const rawResults = (event.details as Record<string, unknown>).results;
+    if (!Array.isArray(rawResults)) return;
+    for (const rawResult of rawResults) {
+      if (rawResult == null || typeof rawResult !== "object") continue;
+      const result = rawResult as Record<string, unknown>;
+      const taskText = typeof result.task === "string" ? result.task : "";
+      const marker = taskText.match(
+        /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})\]/,
+      );
+      if (marker === null) continue;
+      const status =
+        result.aborted === true || typeof result.abortReason === "string"
+          ? "cancelled"
+          : event.isError === true || (typeof result.exitCode === "number" && result.exitCode !== 0)
+            ? "failed"
+            : "completed";
+      const fields = {
+        task_id: marker[1],
+        packet_sha256: marker[2],
+        child_omp_agent_id: typeof result.id === "string" ? result.id : null,
+        child_omp_session_file: typeof result.sessionFile === "string" ? result.sessionFile : null,
+        worker_agent: typeof result.agent === "string" ? result.agent : "unknown",
+        worker_model: typeof result.resolvedModel === "string" ? result.resolvedModel : null,
+        status,
+      };
+      getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
+      mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+    }
+  };
+  const mirrorWorkerContextReceipt = (
+    prompt: string,
+    session: string,
+    ctx: ExtensionContext,
+  ): void => {
+    const marker = prompt.match(
+      /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/,
+    );
+    if (marker === null) return;
+    const parentSession = marker[3] ?? null;
+    if (parentSession !== null) workerParentSessions.set(session, parentSession);
+    mirror(
+      session,
+      "task_context_resolved",
+      {
+        task_id: marker[1],
+        packet_sha256: marker[2],
+        parent_session_id: parentSession,
+        worker_session_id: session,
+        status: "child_received",
+      },
+      { cwd: ctxCwd(ctx) },
+    );
+  };
+
+  const modelCandidates = (ctx: ExtensionContext): OmpModelCandidate[] => {
+    const model = ctx.model as (Record<string, unknown> & { provider?: unknown; id?: unknown }) | undefined;
+    const raw = model?.candidates ?? model?.availableModels ?? model?.models;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (candidate): candidate is OmpModelCandidate =>
+        candidate != null &&
+        typeof candidate === "object" &&
+        typeof (candidate as Record<string, unknown>).provider === "string" &&
+        typeof (candidate as Record<string, unknown>).model === "string",
+    );
+  };
+
+  const routingOptions = (
+    session: string,
+    task: string,
+    ctx: ExtensionContext,
+    role: string,
+  ): OmpRoutingOptions => {
+    const model = ctx.model;
+    return {
+      home: config.home ?? "",
+      task,
+      sessionId: session,
+      projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
+      role,
+      provider: typeof model?.provider === "string" ? model.provider : "",
+      model: typeof model?.id === "string" ? model.id : "",
+      cwd: ctxCwd(ctx),
+      candidates: modelCandidates(ctx),
+    };
+  };
+
+  const ensureRoutingDecision = async (
+    session: string,
+    task: string,
+    ctx: ExtensionContext,
+    role: string,
+  ): Promise<OmpRoutingResult> => {
+    const taskHash = taskSha256(task);
+    const key = `${session}:${currentTurnIndex}:${taskHash}`;
+    const existing = routingCache.get(key);
+    if (existing) return existing;
+    latestRoutingDecision = null;
+    const promise = routingRunner(routingOptions(session, task, ctx, role))
+      .then((result) => {
+        if (result.decision) {
+          latestRoutingDecision = result.decision;
+          latestRoutingSession = session;
+          getStore(session)?.append(
+            ompRoutingRecord("omp_routing_decision", session, {
+              decision_id: result.decision.decision_id,
+              task_hash: result.decision.task_hash,
+              selected_provider: result.decision.selected_provider,
+              selected_model: result.decision.selected_model,
+              selected_tier: result.decision.selected_tier,
+              fallback_used: result.decision.fallback_used,
+              reason_code: result.decision.reason_code,
+              status: result.decision.status,
+            }),
+          );
+          mirror(session, "decision", {
+            routing_event: "model_decision",
+            decision_id: result.decision.decision_id,
+            task_hash: result.decision.task_hash,
+            selected_provider: result.decision.selected_provider,
+            selected_model: result.decision.selected_model,
+            fallback_used: result.decision.fallback_used,
+          }, { cwd: ctxCwd(ctx), agentId: sensors.modelToString(ctx.model) ?? "omp" });
+          if (
+            result.decision.status === "selected" &&
+            result.decision.selected_provider &&
+            result.decision.selected_model &&
+            !readySessions.has(session)
+          ) {
+            readySessions.add(session);
+            getStore(session)?.append(ompRoutingRecord("OMP_SECOND_BRAIN_READY", session, {
+              decision_id: result.decision.decision_id,
+              task_hash: result.decision.task_hash,
+            }));
+            const emit = (pi as unknown as { emit?: (event: string, payload: unknown) => void }).emit;
+            if (typeof emit === "function") emit.call(pi, "OMP_SECOND_BRAIN_READY", {
+              decision_id: result.decision.decision_id,
+              session,
+            });
+          }
+        }
+        return result;
+      })
+      .catch(() => ({ decision: null, error: "BRAIN_ROUTING_UNAVAILABLE" }));
+    routingCache.set(key, promise);
+    return promise;
+  };
 
   /**
    * Project attribution for mirror call sites (ledger-cwd-ordering-fix):
@@ -363,9 +686,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     title: string,
     content: Record<string, unknown>,
     metadata?: Record<string, unknown>,
-  ): void => {
-    if (!loadVmemAdmissionConfig(config.home).enabled) return;
-    runVmemStore({
+  ): Promise<{ ok: boolean; objId?: string; error?: string }> => {
+    if (!loadVmemAdmissionConfig(config.home).enabled) {
+      return Promise.resolve({ ok: false, error: "vmem admission disabled" });
+    }
+    return runVmemStore({
       home: config.home ?? "",
       hostSessionId: session,
       kind,
@@ -379,9 +704,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             mirrorExtensionError(session, `vmem store failed: ${result.error ?? "unknown"}`),
           );
         }
+        return result;
       })
-      .catch(() => {
-        // storage/subprocess failed too — admission must not crash the session.
+      .catch((error) => {
+        getStore(session)?.append(
+          sensors.extensionError(session, error),
+        );
+        return { ok: false, error: "vmem store failed" };
       });
   };
 
@@ -403,6 +732,31 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       loadDriverOrchestratorConfig(),
       loadOrchestratorGuardConfig().orchestratorModels,
     );
+    const environment = runEnvironmentAssessmentSync({
+      home: config.home ?? "",
+      hostSessionId: session,
+      repo: ctxCwd(ctx) ?? config.home ?? "",
+      phase: "session_start",
+    });
+    if (environment.ok) {
+      mirror(
+        session,
+        "environment_assessment",
+        {
+          phase: "session_start",
+          environment_steward_id: environment.environmentStewardId ?? null,
+          environment_hash: environment.environmentHash ?? null,
+          mutation_detected: environment.mutationDetected ?? false,
+          mutation_classification: environment.mutationClassification ?? "none",
+          completion_eligible: environment.completionEligible ?? true,
+        },
+        { ignorable: true, cwd: ctxCwd(ctx) },
+      );
+    } else {
+      getStore(session)?.append(
+        mirrorExtensionError(session, environment.error ?? "environment assessment failed"),
+      );
+    }
     mirror(
       session,
       "session_started",
@@ -415,6 +769,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         role_profile: role,
         provider: modelId.split("/")[0] ?? "unknown",
         host_agent_id: modelId,
+        environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
+        environment_hash: environment.ok ? environment.environmentHash ?? null : null,
+        environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
+        environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
+        environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
       },
       // Project attribution: session_started is the first mirrored event, so
       // the auto-init of the session ledger receives the host cwd (when known)
@@ -517,13 +876,63 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (!message) return result;
     return { ...(result ?? {}), message } as T | { systemPrompt?: string; message: unknown };
   }
+  /** Keep the existing AutoInject custom message and append bounded active state. */
+  function mergeActiveStateMessage(primary: unknown, active: unknown): unknown {
+    if (active === undefined || active === null) return primary;
+    if (primary === undefined || primary === null) return active;
+    if (
+      typeof primary === "object" &&
+      typeof active === "object" &&
+      primary !== null &&
+      active !== null &&
+      "content" in primary &&
+      "content" in active &&
+      typeof primary.content === "string" &&
+      typeof active.content === "string"
+    ) {
+      const primaryDetails =
+        "details" in primary && typeof primary.details === "object" && primary.details !== null
+          ? primary.details
+          : {};
+      const activeDetails = "details" in active ? active.details : undefined;
+      return {
+        ...primary,
+        content: `${primary.content}\n\n${active.content}`,
+        details: {
+          ...primaryDetails,
+          active_state: activeDetails,
+        },
+      };
+    }
+    return primary;
+  }
 
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
     let aiMessage: unknown = undefined;
+    let activeMessage: unknown = undefined;
+    let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
       session = resolveSessionId(ctx, anonSession);
+      mirrorWorkerContextReceipt(typeof event.prompt === "string" ? event.prompt : "", session, ctx);
+      const environmentPrompt = typeof event.prompt === "string" ? event.prompt : "";
+      const taskHash = taskSha256(environmentPrompt);
+      if (taskHash && environmentTaskHashes.get(session) !== taskHash) {
+        environmentTaskHashes.set(session, taskHash);
+        environmentTask = runEnvironmentAssessmentSync({
+          home: config.home ?? "",
+          hostSessionId: session,
+          repo: ctxCwd(ctx) ?? config.home ?? "",
+          taskId: taskHash,
+          phase: "task_boundary",
+        });
+        if (!environmentTask.ok) {
+          getStore(session)?.append(
+            mirrorExtensionError(session, environmentTask.error ?? "task environment assessment failed"),
+          );
+        }
+      }
       // Phase 0C/0D: SHADOW = fire-and-forget (never returns a patch);
       // ADVISORY/ACTIVE = awaited and may append a low-authority
       // custom_message (packet carries "authority: advisory"). The message
@@ -537,6 +946,47 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // the records — config.home is required so config/autoinject.toml
       // [autoinject] mode is honored (env-only cfg made the live flip
       // switch inert and silently ran the shadow branch).
+      const taskText = typeof event.prompt === "string" ? event.prompt : "";
+      if (
+        config.home &&
+        taskText.trim().length > 0 &&
+        (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+      ) {
+        const ensured = await runActiveStateEnsure({
+          home: config.home,
+          hostSessionId: session,
+          objective: taskText,
+          nextAction: taskText,
+        });
+        if (!ensured.ok) {
+          getStore(session)?.append(
+            sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
+          );
+        } else if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
+          const rendered = await renderActiveState({
+            home: config.home,
+            hostSessionId: session,
+          });
+          if (!rendered.ok) {
+            getStore(session)?.append(
+              sensors.extensionError(session, new Error(rendered.error ?? "active-state render failed")),
+            );
+          } else {
+            activeMessage = activeStateMessage(rendered);
+            if (activeMessage !== undefined) {
+              getStore(session)?.append(
+                sensors.activeStateDelivery(
+                  session,
+                  ensured.capsuleSha256,
+                  ensured.capsuleBytes,
+                  rendered.renderedText?.length ?? 0,
+                  ensured.changed === true,
+                ),
+              );
+            }
+          }
+        }
+      }
       aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
         aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
@@ -593,12 +1043,52 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } else {
         void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
+      if (config.home && taskText.trim().length > 0) {
+        try {
+          const visibilityResult = await visibilityRunner({
+            home: config.home,
+            task: taskText,
+            sessionId: session,
+            projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
+          });
+          if (
+            visibilityResult.visibility_plan?.mode === "enforced" &&
+            Object.keys(visibilityResult.hydrated_instructions).length > 0
+          ) {
+            const specialistText = Object.entries(visibilityResult.hydrated_instructions)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([, text]) => text)
+              .join("\n\n")
+              .slice(0, OMP_VISIBILITY_MAX_INJECTED_CHARS);
+            aiMessage = mergeActiveStateMessage(aiMessage, {
+              content: specialistText,
+              details: { visibility_plan_id: visibilityResult.visibility_plan.visibility_plan_id },
+            });
+          }
+          getStore(session)?.append(
+            ompVisibilityRecord("omp_visibility_plan", session, {
+              mode: visibilityResult.visibility_plan?.mode ?? null,
+              selected_skill_ids: visibilityResult.visibility_plan?.selected_skill_ids ?? [],
+              hydrated_skill_ids: visibilityResult.visibility_plan?.hydrated_skill_ids ?? [],
+              visibility_plan_id: visibilityResult.visibility_plan?.visibility_plan_id ?? null,
+              error: visibilityResult.error,
+            }),
+          );
+        } catch {
+          // Visibility is advisory: any failure must not block AutoInject/session start.
+        }
+      }
       mirror(
         session,
         "user_task",
         {
           task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
           prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+          environment_steward_id: environmentTask?.environmentStewardId ?? null,
+          environment_hash: environmentTask?.environmentHash ?? null,
+          environment_mutation_detected: environmentTask?.mutationDetected ?? false,
+          environment_mutation_classification: environmentTask?.mutationClassification ?? "none",
+          environment_completion_eligible: environmentTask?.completionEligible ?? true,
         },
         // ledger-cwd-ordering-fix: user_task is the FIRST mirror to reach the
         // ledger in real runs (its init spawn wins the per-process race), so
@@ -612,13 +1102,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         loadDriverOrchestratorConfig(),
         guardCfg.orchestratorModels,
       );
+      const task = typeof event.prompt === "string" ? event.prompt.slice(0, 2048) : "";
+      if (task.length > 0) {
+        await ensureRoutingDecision(session, task, ctx, role);
+      }
       // P3-D lean runtime adapter (plan §8): decide + record BEFORE the
       // branch points so every path emits exactly ONE lean_kernel record.
       // Sol resolves omit/role here and is never injected (the guard branch
       // returns before any kernel could be applied). The dedup check runs
       // against the pre-patch base; appendLeanKernel re-checks the assembled
       // prompt (contract + kernel) when applying.
-      const base = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
+      const promptValue = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
+      const base = Array.isArray(promptValue)
+        ? promptValue.join("\n\n")
+        : typeof promptValue === "string"
+          ? promptValue
+          : undefined;
       const lean = decideLeanRuntime({ home: config.home ?? "", role, base });
       if (lean.error !== undefined) {
         getStore(session)?.append(sensors.extensionError(session, lean.error));
@@ -635,9 +1134,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           dedup_hit: lean.dedupHit,
         }),
       );
+      leanProviderEvidence.set(session, {
+        marker: `[${LEAN_KERNEL_MARKER}]`,
+        kernel: lean.kernel,
+      });
       if (isOrchestratorModel(modelId, guardCfg)) {
         getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
-        return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, aiMessage);
+        return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, mergeActiveStateMessage(aiMessage, activeMessage));
       }
       let patched = role === "driver" ? appendDriverContract(base) : base;
       const driverContractInjected = role === "driver" && patched !== undefined && patched !== base;
@@ -664,15 +1167,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       const recallCfg = loadRecallGateConfig();
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
-        return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), aiMessage);
+        return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), mergeActiveStateMessage(aiMessage, activeMessage));
       }
       if (role === "driver" && patched !== undefined) {
-        return withMessage({ systemPrompt: patched }, aiMessage);
+        return withMessage({ systemPrompt: patched }, mergeActiveStateMessage(aiMessage, activeMessage));
       }
       if (patched !== undefined && patched !== base) {
-        return withMessage({ systemPrompt: patched }, aiMessage);
+        return withMessage({ systemPrompt: patched }, mergeActiveStateMessage(aiMessage, activeMessage));
       }
-      return withMessage(undefined, aiMessage);
+      return withMessage(undefined, mergeActiveStateMessage(aiMessage, activeMessage));
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -683,19 +1186,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // is NEVER dropped by a later handler failure (role resolution, config
       // load, prompt getter). Return it bare in advisory/active; shadow/off
       // keep returning undefined (aiMessage is undefined there).
+      const message = mergeActiveStateMessage(aiMessage, activeMessage);
       if (
-        aiMessage !== undefined &&
+        message !== undefined &&
         (aiCfg.mode === "advisory" || aiCfg.mode === "active")
       ) {
-        return { message: aiMessage };
+        return { message };
       }
     }
     return undefined;
   });
 
-  wire<TurnStartEvent>("turn_start", (event, _ctx, session) =>
-    sensors.turnStart(session, event.turnIndex),
-  );
+  wire<TurnStartEvent>("turn_start", (event, _ctx, session) => {
+    currentTurnIndex = event.turnIndex;
+    return sensors.turnStart(session, event.turnIndex);
+  });
 
   // context: registered DIRECTLY (Phase R3 fix), NOT through wire(). The host
   // applies this handler's return value as a real context replacement
@@ -812,39 +1317,152 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // keys, counts, sizes, and sha256 hashes ONLY — never payload text, tool
   // output, or raw header values. All three handlers are fail-open and
   // fire-and-forget like every other measurement handler. The two read-only
-  // hooks (before_provider_request / after_provider_response) are wired
-  // through `wire`, whose safeHandler returns undefined to the runtime, so the
-  // provider payload and the session are never modified.
+  // These hooks are direct registrations: the provider-request return value
+  // is the supported OMP payload replacement contract.
   // ---------------------------------------------------------------------------
 
-  // Monotonic per-extension request sequence (plan §5.4 request sequence).
   let providerRequestSeq = 0;
+  let lastEffectiveProvider: string | null = null;
+  let lastEffectiveModel: string | null = null;
+  const leanProviderEvidence = new Map<string, sensors.LeanProviderEvidence>();
+  const payloadIdentity = (
+    payload: unknown,
+    ctx: ExtensionContext,
+  ): { provider: string | null; model: string | null } => {
+    const obj = payload != null && typeof payload === "object"
+      ? payload as Record<string, unknown>
+      : {};
+    const contextIdentity = sensors.splitProviderModel(sensors.modelToString(ctx.model));
+    if (typeof obj.model === "string") {
+      const parsed = sensors.splitProviderModel(
+        typeof obj.provider === "string" ? `${obj.provider}/${obj.model}` : obj.model,
+      );
+      return {
+        provider: parsed.provider ?? contextIdentity.provider,
+        model: parsed.model,
+      };
+    }
+    return contextIdentity;
+  };
 
-  wire<BeforeProviderRequestEvent>("before_provider_request", (event, ctx, session) => {
-    providerRequestSeq += 1;
-    const { provider, model } = sensors.splitProviderModel(
-      sensors.modelToString(ctx.model),
-    );
-    return sensors.providerRequestMeta(
-      session,
-      provider,
-      model,
-      providerRequestSeq,
-      event.payload,
-    );
+  pi.on("before_provider_request", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      providerRequestSeq += 1;
+      const original = event.payload;
+      const identity = payloadIdentity(original, ctx);
+      let effective = original;
+      const selected = latestRoutingSession === session ? latestRoutingDecision : null;
+      let handoffFailure: string | undefined;
+      if (selected?.status === "selected" && selected.selected_provider && selected.selected_model) {
+        const originalObject =
+          original != null && typeof original === "object"
+            ? original as Record<string, unknown>
+            : null;
+        const hasProvider = typeof originalObject?.provider === "string";
+        const hasModel = typeof originalObject?.model === "string";
+        if (originalObject && hasProvider && hasModel) {
+          effective = {
+            ...originalObject,
+            provider: selected.selected_provider,
+            model: selected.selected_model,
+          };
+        } else if (
+          originalObject &&
+          hasModel &&
+          !hasProvider &&
+          identity.provider === selected.selected_provider
+        ) {
+          effective = { ...originalObject, model: selected.selected_model };
+        } else {
+          handoffFailure = "OMP_PROVIDER_NOT_REPRESENTABLE";
+          getStore(session)?.append(ompRoutingRecord("omp_routing_handoff_failure", session, {
+            decision_id: selected.decision_id,
+            task_hash: selected.task_hash,
+            reason: handoffFailure,
+            original_provider: identity.provider,
+            original_model: identity.model,
+          }));
+        }
+      }
+      const effectiveIdentity = payloadIdentity(effective, ctx);
+      lastEffectiveProvider = effectiveIdentity.provider;
+      lastEffectiveModel = effectiveIdentity.model;
+      getStore(session)?.append(
+        sensors.providerRequestMeta(
+          session,
+          effectiveIdentity.provider,
+          effectiveIdentity.model,
+          providerRequestSeq,
+          effective,
+          leanProviderEvidence.get(session),
+        ),
+      );
+      if (selected) {
+        getStore(session)?.append(ompRoutingRecord("omp_routing_invocation", session, {
+          decision_id: selected.decision_id,
+          task_hash: selected.task_hash,
+          selected_provider: selected.selected_provider,
+          selected_model: selected.selected_model,
+          effective_provider: effectiveIdentity.provider,
+          effective_model: effectiveIdentity.model,
+          handoff_failure: handoffFailure ?? null,
+        }));
+      }
+      return effective === original ? undefined : effective;
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // fail open
+      }
+      return undefined;
+    }
   });
 
-  wire<AfterProviderResponseEvent>("after_provider_response", (event, ctx, session) => {
-    const { provider, model } = sensors.splitProviderModel(
-      sensors.modelToString(ctx.model),
-    );
-    return sensors.providerResponseMeta(
-      session,
-      provider,
-      model,
-      event.status,
-      event.headers,
-    );
+  pi.on("after_provider_response", (event, ctx) => {
+    let session = "unknown";
+    try {
+      session = resolveSessionId(ctx, anonSession);
+      const headers = event.headers ?? {};
+      const provider = headers["x-provider"] ?? headers["provider"];
+      const model = headers["x-model"] ?? headers["model"];
+      const contextIdentity = sensors.splitProviderModel(sensors.modelToString(ctx.model));
+      const actualProvider =
+        typeof provider === "string"
+          ? provider
+          : latestRoutingSession === session
+            ? lastEffectiveProvider
+            : contextIdentity.provider;
+      const actualModel =
+        typeof model === "string"
+          ? model
+          : latestRoutingSession === session
+            ? lastEffectiveModel
+            : contextIdentity.model;
+      getStore(session)?.append(
+        sensors.providerResponseMeta(session, actualProvider, actualModel, event.status, event.headers),
+      );
+      const responseDecision = latestRoutingSession === session ? latestRoutingDecision : null;
+      if (responseDecision) {
+        getStore(session)?.append(ompRoutingRecord("omp_routing_response", session, {
+          decision_id: responseDecision.decision_id,
+          task_hash: responseDecision.task_hash,
+          selected_provider: responseDecision.selected_provider,
+          selected_model: responseDecision.selected_model,
+          actual_provider: actualProvider,
+          actual_model: actualModel,
+          status: event.status,
+        }));
+      }
+    } catch (error) {
+      try {
+        getStore(session)?.append(sensors.extensionError(session, error));
+      } catch {
+        // fail open
+      }
+    }
   });
 
   // message_end: capture per-assistant-message usage (plan §5.1). Registered
@@ -859,14 +1477,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       session = resolveSessionId(ctx, anonSession);
       const message = event.message;
       if (message != null && message.usage != null) {
+        const routed =
+          latestRoutingSession === session && lastEffectiveProvider && lastEffectiveModel
+            ? { provider: lastEffectiveProvider, model: lastEffectiveModel }
+            : null;
         const model =
-          typeof message.model === "string"
-            ? message.model
-            : (ctx.model?.id ?? null);
+          routed?.model ??
+          (typeof message.model === "string" ? message.model : (ctx.model?.id ?? null));
         const provider =
-          typeof message.provider === "string"
-            ? message.provider
-            : (ctx.model?.provider ?? null);
+          routed?.provider ??
+          (typeof message.provider === "string" ? message.provider : (ctx.model?.provider ?? null));
         const record = sensors.assistantUsage(
           session,
           provider,
@@ -916,22 +1536,39 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
   }
 
-  // tool_call: read-only measurement + minimal-orchestrator guard.
-  // event.input is never modified. The normal tool_call record is ALWAYS
-  // appended; on top of that, when the active model is the orchestrator
-  // (Sol) and the tool is blocked (bash/edit/websearch), an
-  // orchestrator_policy_violation record (kind per SCHEMA.md, bounded
-  // fields, detected_by=runtime_guard) is appended and {block:true, reason}
-  // is returned so the runtime turns the call into an error tool result.
-  // Every other model keeps the previous measurement-only behavior
-  // (returns undefined). ipython is NOT blocked: RLM delegation runs
-  // through the IPython kernel and must stay available to the orchestrator.
-  // Guard failures fail open: the violation is never recorded and the call
-  // is never blocked (an extension_error record is appended instead).
-  pi.on("tool_call", (event, ctx) => {
+  // tool_call: read-only measurement + minimal-orchestrator guard, plus the
+  // narrow OMP task-dispatch Context Capsule bridge. Task input is replaced
+  // only for `task` calls after Brain prepares a bounded handoff; parent
+  // transcript content is never read or copied.
+  pi.on("tool_call", (event, ctx): ToolCallEventResult | Promise<ToolCallEventResult | undefined> | undefined => {
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      const command =
+        typeof event.input?.command === "string" ? event.input.command : "";
+      const isStopControl =
+        event.toolName === "bash" && STOP_CONTROL_COMMAND.test(command);
+      const parentSession = workerParentSessions.get(session) ?? session;
+      const rewrittenCommand =
+        isStopControl || rewriteSessionPlaceholders(command, session, parentSession) !== command
+          ? (isStopControl
+            ? rewriteStopControlCommand(command, session, parentSession)
+            : rewriteSessionPlaceholders(command, session, parentSession))
+          : command;
+      const stopState = stopStateFor(session);
+      if (stopState.shouldBlock(event.toolName) && !isStopControl) {
+        getStore(session)?.append({
+          v: 2,
+          ts: new Date().toISOString(),
+          kind: "stop_blocked",
+          session,
+          tool: event.toolName,
+          tool_call_id: event.toolCallId,
+          reason_code: stopState.current?.reason_code ?? "stop_boundary",
+        });
+        return { block: true, reason: "Second Brain STOP boundary is active" };
+      }
+      if (isStopControl) stopControlCalls.add(event.toolCallId);
       getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
       mirror(
         session,
@@ -939,14 +1576,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         {
           tool: event.toolName,
           input_bytes: sensors.byteLength(JSON.stringify(event.input ?? {})),
+          control_plane: isStopControl,
         },
         { cwd: ctxCwd(ctx) },
       );
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const decision = orchestratorPolicyFor(modelId, event.toolName, loadOrchestratorGuardConfig());
       if (decision.block) {
-        // Fill the session stem the same way every other record does
-        // (buildPolicyBlockRecord leaves it as a placeholder).
         const violation = buildPolicyBlockRecord(
           modelId,
           event.toolName,
@@ -957,12 +1593,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(violation);
         return { block: true, reason: decision.reason };
       }
+      if (event.toolName === "task") {
+        return prepareWorkerTaskInput(event, ctx, session).catch((error) => {
+          try {
+            getStore(session)?.append(sensors.extensionError(session, error));
+          } catch {
+            // measurement must not disturb the session.
+          }
+          return { block: true, reason: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" };
+        });
+      }
+      if (rewrittenCommand !== command) {
+        return { input: { ...event.input, command: rewrittenCommand } };
+      }
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
       } catch {
-        // storage failed too — measurement must not crash the session.
-      }    }
+        // storage failed too — measurement must not disturb the session.
+      }
+    }
     return undefined;
   });
 
@@ -988,20 +1638,90 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      const stopState = stopStateFor(session);
+      if (stopState.shouldBlock(event.toolName)) {
+        getStore(session)?.append({
+          v: 2,
+          ts: new Date().toISOString(),
+          kind: "stop_blocked_result",
+          session,
+          tool: event.toolName,
+          tool_call_id: event.toolCallId,
+        });
+        return undefined;
+      }
+      const isStopControl = stopControlCalls.delete(event.toolCallId);
+      if (isStopControl) {
+        const content = Array.isArray(event.content) ? event.content : [];
+        const stopText = extractTextContent(content);
+        getStore(session)?.append({
+          v: 2,
+          ts: new Date().toISOString(),
+          kind: "stop_control_result",
+          session,
+          tool_call_id: event.toolCallId,
+          content_item_count: content.length,
+          content_item_types: content.slice(0, 4).map((item) =>
+            item === null ? "null" : Array.isArray(item) ? "array" : typeof item,
+          ),
+          output_chars: stopText?.length ?? 0,
+        });
+        const evidence = parseStopDecisionOutput(stopText ?? "");
+        if (evidence !== undefined) {
+          stopState.accept(evidence);
+          const fields = {
+            stop_id: evidence.stop_id,
+            task_id: evidence.task_id,
+            session_id: evidence.session_id,
+            parent_session_id: evidence.parent_session_id,
+            worker_session_id: evidence.worker_session_id,
+            decision: evidence.decision,
+            reason_code: evidence.reason_code,
+            triggering_condition: evidence.triggering_condition,
+            verification_state: evidence.verification_state,
+            completion_condition_state: evidence.completion_condition_state,
+            final_substantive_event: evidence.final_substantive_event,
+            stop_boundary_seq:
+              typeof evidence.sequence === "number" ? evidence.sequence : null,
+            substantive_events_after_boundary: stopState.substantiveEventsAfterBoundary,
+            finalization_state:
+              evidence.decision === "stop" ? "execution_blocked" : "not_triggered",
+          };
+          getStore(session)?.append({
+            v: 2,
+            ts: new Date().toISOString(),
+            kind: evidence.decision === "stop" ? "stop_boundary" : "stop_not_triggered",
+            session,
+            ...fields,
+          });
+          if (evidence.decision === "stop") {
+            const finalization = mirrorEventSync({
+              home: config.home ?? "",
+              hostSessionId: session,
+              record: {
+                kind: "stop_finalized",
+                fields,
+                agentId: evidence.worker_session_id || session,
+              },
+              cwd: ctxCwd(ctx),
+            });
+            if (!finalization.ok) {
+              getStore(session)?.append({
+                v: 2,
+                ts: new Date().toISOString(),
+                kind: "stop_finalization_error",
+                session,
+                error: finalization.error ?? "ledger append failed",
+              });
+            }
+          }
+        }
+      }
+      recordWorkerChildResults(event, ctx, session);
       const rtdCfg = loadRtdConfig(config.home);
       const eligibility = rtdEligibility(event.toolName, event.input, rtdCfg);
       // ONE shared measurement (Phase 3 correction); mirror reuses output_bytes.
       const measurement = measureContent(event.content, eligibility === "ok");
-      mirror(
-        session,
-        "tool_completed",
-        {
-          tool: event.toolName,
-          result_bytes: measurement.outputBytes,
-          is_error: event.isError === true,
-        },
-        { cwd: ctxCwd(ctx) },
-      );
       const rtd = await runRtd({
         session,
         tool: event.toolName,
@@ -1032,8 +1752,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // handler's signature; `rtd.record.artifact_ref`, identical to the
       // artifact_ref already placed in `content`) — no new identity, no
       // raw/distilled tool text, same existing gate, unweakened.
+      let vmemResult: { ok: boolean; objId?: string; error?: string } | undefined;
       if (rtd.record?.distilled === true) {
-        vmemAdmit(
+        vmemResult = await vmemAdmit(
           session,
           "TOOL_OBSERVATION",
           "rtd_artifact",
@@ -1050,6 +1771,36 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           },
         );
       }
+      const artifactRef = rtd.record?.artifact_ref ?? null;
+      const artifactSha256 =
+        typeof artifactRef === "string"
+          ? artifactRef.match(/sha256:([0-9a-f]{64})/)?.[1] ?? null
+          : null;
+      mirror(
+        session,
+        "tool_completed",
+        {
+          tool: event.toolName,
+          tool_call_id: event.toolCallId,
+          result_bytes: measurement.outputBytes,
+          is_error: event.isError === true,
+          rtd_distilled: rtd.record?.distilled === true,
+          rtd_original_chars: rtd.record?.original_chars ?? null,
+          rtd_visible_chars: rtd.record?.visible_chars ?? null,
+          rtd_saved_chars: rtd.record?.saved_chars ?? null,
+          rtd_artifact_sha256: artifactSha256,
+          rtd_artifact_ref: artifactRef,
+          rtd_command_class: rtd.record?.command_class ?? null,
+          vmem_obj_id: vmemResult?.objId ?? null,
+          recovery_status:
+            rtd.record?.distilled !== true
+              ? "not_applicable"
+              : vmemResult?.ok === true
+                ? "admitted"
+                : "admission_failed",
+        },
+        { cwd: ctxCwd(ctx) },
+      );
       getStore(session)?.append(
         sensors.toolResult(
           session,
@@ -1131,6 +1882,20 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       getStore(session)?.append(
         sensors.sessionBeforeCompact(session, compactEvent.branchEntries),
       );
+      const activeStateCfg = loadAutoInjectHostConfig(config.home);
+      if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {
+        const activeState = await runActiveStateUpdate({
+          home: config.home ?? "",
+          hostSessionId: session,
+          verification: { pre_compaction: "persisted" },
+        });
+        if (!activeState.ok) {
+          getStore(session)?.append(
+            sensors.extensionError(session, new Error(activeState.error ?? "active-state checkpoint failed")),
+          );
+          return { cancel: true };
+        }
+      }
       const checkpoint = await runLedgerCheckpoint({
         home: config.home ?? "",
         hostSessionId: session,
@@ -1241,10 +2006,55 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<SessionShutdownEvent>(
     "session_shutdown",
     (event, ctx, session) => {
+      const activeStateCfg = loadAutoInjectHostConfig(config.home);
+      if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {
+        const activeState = runActiveStateUpdateSync({
+          home: config.home ?? "",
+          hostSessionId: session,
+          verification: { session_shutdown: event.reason ?? "normal" },
+        });
+        if (!activeState.ok) {
+          getStore(session)?.append(
+            sensors.extensionError(session, new Error(activeState.error ?? "active-state shutdown failed")),
+          );
+        }
+      }
+      const environment = runEnvironmentAssessmentSync({
+        home: config.home ?? "",
+        hostSessionId: session,
+        repo: ctxCwd(ctx) ?? config.home ?? "",
+        phase: "shutdown",
+      });
+      const projectId =
+        environment.ok &&
+        environment.evidence &&
+        typeof environment.evidence.project_id === "string"
+          ? environment.evidence.project_id
+          : undefined;
+      if (projectId !== undefined) {
+        const radarResult = runRadarObservationSync({
+          home: config.home ?? "",
+          hostSessionId: session,
+          repo: ctxCwd(ctx) ?? config.home ?? "",
+          projectId,
+        });
+        if (!radarResult.ok) {
+          getStore(session)?.append(
+            mirrorExtensionError(session, radarResult.error ?? "Radar observation failed"),
+          );
+        }
+      }
       mirror(
         session,
         "session_inactive",
-        { reason: event.reason },
+        {
+          reason: event.reason,
+          environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
+          environment_hash: environment.ok ? environment.environmentHash ?? null : null,
+          environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
+          environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
+          environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
+        },
         { cwd: ctxCwd(ctx) },
       );
       return sensors.sessionShutdown(session, event.reason);
