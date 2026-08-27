@@ -24,6 +24,7 @@ from typing import Any
 from . import autoinject, contracts, paths, router, skillforge
 
 _MAX_SPECIALIST_SKILLS = 3
+_MAX_HYDRATED_BODY_CHARS = 4096
 _DESCRIPTOR_TEXT_MAX_CHARS = 400
 _PURPOSE_SECTION_MAX_CHARS = 240
 
@@ -242,6 +243,9 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
             body = current["path"].read_text(encoding="utf-8")
         except OSError:
             unavailable_skill_ids[skill_id] = "read_failed"
+            continue
+        if len(body) > _MAX_HYDRATED_BODY_CHARS:
+            unavailable_skill_ids[skill_id] = "body_too_large"
             continue
         hydrated_bodies[skill_id] = body
         hydrated_skill_ids.append(skill_id)

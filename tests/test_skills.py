@@ -131,8 +131,31 @@ def test_hydrate_plan_hydrates_selected_only(brain_home, monkeypatch):
     plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
     updated, bodies = skills.hydrate_plan(brain_home, plan)
     assert updated["hydrated_skill_ids"] == ["picked"]
-    assert set(bodies) == {"picked"}
+    assert bodies["picked"] == (brain_home / "skills" / "shadow" / "picked" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
     assert "not-picked" not in bodies
+
+
+def test_hydrate_plan_rejects_oversized_selected_body(brain_home, monkeypatch):
+    directory = _make_skill(brain_home, "oversized", "shadow")
+    skill_path = directory / "SKILL.md"
+    skill_path.write_text(skill_path.read_text(encoding="utf-8") + ("x" * 5000), encoding="utf-8")
+    monkeypatch.setattr(
+        "second_brain.router.route",
+        lambda home, task, max_active=None, skills=None: {
+            "selected": ["oversized"],
+            "scores": {},
+            "shadow": True,
+        },
+    )
+    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+    updated, bodies = skills.hydrate_plan(brain_home, plan)
+    assert updated["hydrated_skill_ids"] == []
+    assert updated["unavailable_skill_ids"]["oversized"] == "body_too_large"
+    assert updated["hydrated_chars"] == 0
+    assert updated["hydrated_tokens"] == 0
+    assert bodies == {}
 
 
 def test_plan_to_evidence_has_no_raw_bodies_or_task_text(brain_home, monkeypatch):

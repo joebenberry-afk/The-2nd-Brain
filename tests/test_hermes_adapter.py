@@ -351,6 +351,46 @@ def test_pre_llm_enforced_mode_injects_hydrated_skill(brain_home: Path) -> None:
     assert "enforced-visibility-skill content" in out["packet"]
 
 
+def test_pre_llm_enforced_mode_rejects_oversized_hydrated_skill(brain_home: Path) -> None:
+    _current_memory(brain_home)
+    _visibility_skill(brain_home, name="oversized-visibility-skill")
+    skill_path = (
+        brain_home / "skills" / "shadow" / "oversized-visibility-skill" / "SKILL.md"
+    )
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8") + ("x" * 5000),
+        encoding="utf-8",
+    )
+    (brain_home / "config" / "autoinject.toml").write_text(
+        '[autoinject]\nmode = "active"\n', encoding="utf-8"
+    )
+    (brain_home / "config" / "skills.toml").write_text(
+        '[visibility]\nmode = "enforced"\n', encoding="utf-8"
+    )
+    payload = {
+        **_start_payload(session="visibility-oversized", bot="Brain-Dev"),
+        "event": "pre_llm_call",
+        "task": (
+            "How does Hermes retrieve bounded project context for oversized-visibility-skill content?"
+        ),
+        "turn_id": "visibility-oversized-turn-1",
+    }
+
+    result = _run_hook(brain_home, payload)
+
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["visibility_plan"] is not None
+    assert out["visibility_plan"]["mode"] == "enforced"
+    assert out["visibility_plan"]["hydrated_skill_ids"] == []
+    assert (
+        out["visibility_plan"]["unavailable_skill_ids"]["oversized-visibility-skill"]
+        == "body_too_large"
+    )
+    assert "x" * 5000 not in out["packet"]
+    assert "Hermes integration rule" in out["packet"]
+
+
 def test_pre_llm_visibility_failure_does_not_break_existing_autoinject_path(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
