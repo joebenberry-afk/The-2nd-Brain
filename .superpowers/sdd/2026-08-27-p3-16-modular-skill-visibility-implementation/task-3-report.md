@@ -64,3 +64,33 @@ None of this touched Python, `routing-bridge.ts`, or `worker-context-bridge.ts`,
 **Verification:** `npm run typecheck` → 0 errors (previously 1). Full suite (`npm test -- --run`, 602 tests) run 3 times after the fix: 2/3 fully clean, 1/3 hit the same pre-existing unrelated teardown-race flake already documented twice above (a different `wiring.test.ts` `waitForLines` test, not this fix or the fixture change) — no new failure mode.
 
 **Commit:** new commit on top of `08dd141`, touching only `tests/wiring.test.ts` and this report.
+
+## Post-review fix 3: strict visibility validation and per-turn caching
+
+**Findings addressed:** final cross-task review findings 2 and 3. The bridge now
+fails closed for malformed plans: it requires a bounded non-empty plan id,
+`shadow`/`enforced` mode, selected and hydrated skill-id arrays (at most three,
+with bounded non-empty ids), plain rejected/unavailable maps, and hydrated keys
+bound to both selected and hydrated ids. Hydrated bodies are bounded by
+`OMP_VISIBILITY_MAX_INJECTED_CHARS`; invalid output returns a null plan, empty
+bodies, and a bounded error. The same validator is applied to runner seam
+results before any injection, so arbitrary in-process runner output cannot
+bypass the parser's safety boundary.
+
+`before_agent_start` now uses a Promise cache keyed by the existing
+`session:currentTurnIndex:taskSha256` identity. The cached Promise covers runner
+execution, validation, and the single `omp_visibility_plan` append, preventing
+re-emitted host events from repeating subprocess/hydration work or telemetry
+while preserving enforced content in every repeated handler result.
+
+**Regression coverage:** parser tests cover missing required fields, invalid
+mode, unknown hydrated keys, and oversized bodies while retaining valid shadow
+and enforced cases. Wiring coverage proves same-session/turn/task calls invoke
+the runner once, append one plan record, and inject enforced content on both
+responses.
+
+**Verification:** `npm test -- --run tests/visibility-bridge.test.ts tests/wiring.test.ts tests/active-state-wiring.test.ts` → 99/99 pass; `npm run typecheck` → 0 errors.
+
+**Commit:** `3e5618a` (`fix(prime-extension): validate and cache visibility plans`).
+
+**Concerns:** no Python, router.py, Lean, or P3.15 files changed; P3.17 was not started.

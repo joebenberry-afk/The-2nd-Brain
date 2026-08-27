@@ -2372,4 +2372,40 @@ describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)
     ).resolves.not.toThrow();
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
+  it("caches visibility per session, turn, and task while reusing enforced injection", async () => {
+    const runner = vi.fn(async () => ({
+      visibility_plan: {
+        visibility_plan_id: "vplan-cached",
+        mode: "enforced" as const,
+        selected_skill_ids: ["skill1"],
+        hydrated_skill_ids: ["skill1"],
+        rejected_skill_ids: {},
+        unavailable_skill_ids: {},
+      },
+      hydrated_instructions: { skill1: "cached specialist body" },
+      error: null,
+    }));
+    const handlers = loadFactory({ ompVisibilityRunner: runner });
+    const ctx = makeCtx();
+    const beforeAgentStart = handlers.get("before_agent_start")!;
+    const first = (await beforeAgentStart({ prompt: "repeat this task" }, ctx)) as {
+      message?: { content?: unknown };
+    };
+    const second = (await beforeAgentStart({ prompt: "repeat this task" }, ctx)) as {
+      message?: { content?: unknown };
+    };
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(first.message?.content).toContain("cached specialist body");
+    expect(second.message?.content).toContain("cached specialist body");
+    const records = await waitForLines(4);
+    await settle(300);
+    const finalRecords = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(finalRecords.length).toBeGreaterThanOrEqual(records.length);
+    const visibilityRecords = finalRecords.filter((record) => record.kind === "omp_visibility_plan");
+    expect(visibilityRecords).toHaveLength(1);
+  });
 });
