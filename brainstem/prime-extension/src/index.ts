@@ -906,6 +906,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
     return primary;
   }
+  /** Merge an enforced-mode skill-visibility injection into any existing
+   * custom_message under its own "visibility" details key (P3.16) --
+   * deliberately NOT routed through mergeActiveStateMessage's "active_state"
+   * key, which mergeActiveStateMessage unconditionally overwrites on every
+   * call: doing so would silently drop visibility_plan_id whenever AutoInject
+   * mode, active-state mode, and an enforced visibility plan all coincide. */
+  function mergeVisibilityMessage(primary: unknown, specialistText: string, visibilityPlanId: string): unknown {
+    const visibility = { visibility_plan_id: visibilityPlanId };
+    if (primary === undefined || primary === null) {
+      return { content: specialistText, details: { visibility } };
+    }
+    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
+      const primaryDetails =
+        "details" in primary && typeof primary.details === "object" && primary.details !== null
+          ? primary.details
+          : {};
+      return {
+        ...primary,
+        content: `${primary.content}\n\n${specialistText}`,
+        details: { ...primaryDetails, visibility },
+      };
+    }
+    return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
+  }
 
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
@@ -1060,10 +1084,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               .map(([, text]) => text)
               .join("\n\n")
               .slice(0, OMP_VISIBILITY_MAX_INJECTED_CHARS);
-            aiMessage = mergeActiveStateMessage(aiMessage, {
-              content: specialistText,
-              details: { visibility_plan_id: visibilityResult.visibility_plan.visibility_plan_id },
-            });
+            aiMessage = mergeVisibilityMessage(
+              aiMessage,
+              specialistText,
+              visibilityResult.visibility_plan.visibility_plan_id,
+            );
           }
           getStore(session)?.append(
             ompVisibilityRecord("omp_visibility_plan", session, {
