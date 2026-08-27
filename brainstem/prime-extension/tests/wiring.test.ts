@@ -54,7 +54,28 @@ vi.mock("../src/autoinject", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/autoinject")>();
   return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
 });
+const runEnvironmentAssessmentMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/environment-mirror", () => ({
+  runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
+}));
 
+const runRadarObservationMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/radar-mirror", () => ({
+  runRadarObservationSync: runRadarObservationMock,
+}));
+
+// P3.16 skill-visibility wiring: control the visibility outcome directly
+// instead of spawning a real CLI process on every before_agent_start (same
+// rationale as runAdvisoryAutoInjectMock/runEnvironmentAssessmentMock above).
+// Default: no plan (fails open exactly like a fresh/unconfigured brain home),
+// so every pre-existing before_agent_start assertion below now also sees one
+// additional "omp_visibility_plan" record -- tests specifically exercising
+// the visibility bridge override this via ExtensionOptions.ompVisibilityRunner.
+const runOmpVisibilityMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/visibility-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/visibility-bridge")>();
+  return { ...actual, runOmpVisibility: runOmpVisibilityMock };
+});
 /**
  * Wiring tests: exercise the REAL factory from src/index.ts through a fake
  * ExtensionAPI / ExtensionContext, with SECOND_BRAIN_HOME pointed at a per-
@@ -107,6 +128,20 @@ beforeEach(async () => {
   );
   runAdvisoryAutoInjectMock.mockReset();
   runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
+  runEnvironmentAssessmentMock.mockReset();
+  runEnvironmentAssessmentMock.mockReturnValue({
+    ok: true,
+    sessionId: "wiring-test",
+    environmentStewardId: "envsteward-test",
+    environmentHash: "a".repeat(64),
+    mutationDetected: false,
+    mutationClassification: "none",
+    completionEligible: true,
+  });
+  runRadarObservationMock.mockReset();
+  runRadarObservationMock.mockReturnValue({ ok: true, sessionId: "wiring-test", candidateCount: 0, candidates: [] });
+  runOmpVisibilityMock.mockReset();
+  runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
 });
 
 afterEach(async () => {
@@ -114,6 +149,11 @@ afterEach(async () => {
     if (SAVED_ENV[key] === undefined) delete process.env[key];
     else process.env[key] = SAVED_ENV[key] as string;
   }
+  // Drain any still-in-flight fire-and-forget telemetry writes (append()'s
+  // internal promise chain) before removing the temp dir: without this, a
+  // write racing rm() can recreate the directory mid-delete on Windows
+  // (ENOTEMPTY/ENOENT/EPERM), independent of test correctness.
+  await settle();
   await rm(tmp, { recursive: true, force: true });
 });
 
@@ -392,6 +432,52 @@ describe("factory wiring (src/index.ts)", () => {
     handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const final = await waitForLines(3);
     expect(final.map((r) => r.kind)).toEqual(["session_start", "turn_end", "session_shutdown"]);
+  });
+
+  it("consumes Environment Steward evidence at task and session boundaries", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    const started = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_started",
+    );
+    expect(started?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "session_start", hostSessionId: "wiring-test" }),
+    );
+
+    await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "task_boundary", taskId: expect.any(String) }),
+    );
+
+    runEnvironmentAssessmentMock.mockReturnValue({
+      ok: true,
+      sessionId: "wiring-test",
+      environmentStewardId: "envsteward-test",
+      environmentHash: "b".repeat(64),
+      mutationDetected: false,
+      mutationClassification: "none",
+      completionEligible: true,
+      evidence: { project_id: "project-a" },
+    });
+    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields?.environment_hash).toBe("b".repeat(64));
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "shutdown", hostSessionId: "wiring-test" }),
+    );
+    expect(runRadarObservationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostSessionId: "wiring-test",
+        projectId: "project-a",
+        repo: "C:/work",
+      }),
+    );
+    await settle();
   });
 
   it("ledger-cwd-ordering-fix: user_task as FIRST mirror forwards ctx.cwd (project attribution)", async () => {
@@ -779,13 +865,14 @@ describe("Phase 2 anonymous session identity (src/index.ts)", () => {
     handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     const file = await waitForAnyTelemetryFile();
-    // P3-D: before_agent_start adds lean_kernel + fail-open extension_error
-    const records = await waitForFileLines(file, 10);
+    // P3-D: before_agent_start adds lean_kernel + fail-open extension_error;
+    // P3.16: before_agent_start also adds one omp_visibility_plan record.
+    const records = await waitForFileLines(file, 11);
     await settle();
     const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
     expect(names.length).toBe(1); // one session file for the whole anonymous lifecycle
     expect(records.map((r) => r.kind).sort()).toEqual(
-      ["session_start", "before_agent_start", "lean_kernel", "extension_error", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
+      ["session_start", "before_agent_start", "lean_kernel", "extension_error", "omp_visibility_plan", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
     );
     expect(new Set(records.map((r) => String(r.session))).size).toBe(1);
   });
@@ -1007,6 +1094,40 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(call.metadata?.artifactRef).toBe(parsed.artifact_ref);
     // metadata never carries raw/distilled tool text either.
     expect(JSON.stringify(call.metadata)).not.toContain("x".repeat(100));
+    const completed = mirrorFireAndForgetMock.mock.calls
+      .map((call) => call[0] as { record: { kind: string; fields: Record<string, unknown> } })
+      .find((call) => call.record.kind === "tool_completed");
+    expect(completed?.record.fields).toMatchObject({
+      tool_call_id: "vmem-admit-1",
+      rtd_distilled: true,
+      rtd_original_chars: 9000,
+      rtd_artifact_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      rtd_artifact_ref: expect.stringContaining("brain-artifact:sha256:"),
+      vmem_obj_id: "obj-test",
+      recovery_status: "admitted",
+    });
+    expect(JSON.stringify(completed?.record.fields)).not.toContain("x".repeat(100));
+  });
+
+  it("mirrors child worker context receipt with task and packet identity", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    await handlers.get("before_agent_start")!(
+      {
+        prompt: "child task\n[SECOND_BRAIN_WORKER_TASK task_id=task-receipt packet_sha256=" + "a".repeat(64) + "]",
+      },
+      ctx,
+    );
+    await settle();
+    const receipt = mirrorFireAndForgetMock.mock.calls
+      .map((call) => call[0] as { record: { kind: string; fields: Record<string, unknown> } })
+      .find((call) => call.record.kind === "task_context_resolved");
+    expect(receipt?.record.fields).toMatchObject({
+      task_id: "task-receipt",
+      packet_sha256: "a".repeat(64),
+      worker_session_id: "wiring-test",
+      status: "child_received",
+    });
   });
 
   it("does NOT fire the RTD-preserved-artifact admission ref for a NON-distilled RTD result (regression: content below threshold never calls vmemAdmit for TOOL_OBSERVATION)", async () => {
@@ -1069,6 +1190,7 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(call.metadata?.packet_tokens).toBe(55);
     expect(call.metadata?.packetSha256).toBe(sha256Hex(packetText));
     expect(call.metadata?.packetArtifactRef).toBe(`[brain-artifact:sha256:${sha256Hex(packetText)}]`);
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
   it("real AutoInject delivery: preserve/verify failure -> admission still happens with the EXISTING delivery-only shape (fail-open, no packetArtifactRef)", async () => {
@@ -1101,6 +1223,7 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     const parsedContent = JSON.parse(call.content) as Record<string, unknown>;
     expect(parsedContent.delivery_id).toBe("del-preserve-fail-1");
     expect(call.metadata).toBeUndefined(); // no packetArtifactRef/packetSha256 on failure
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
   it("real AutoInject delivery: preserver throwing unexpectedly is fail-open too -- admission still happens with the old shape", async () => {
@@ -1136,6 +1259,7 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(runVmemStoreMock).toHaveBeenCalledTimes(1);
     const [call] = runVmemStoreMock.mock.calls[0] as [{ metadata?: Record<string, unknown> }];
     expect(call.metadata).toBeUndefined();
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
 });
@@ -1373,8 +1497,8 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
 
     // measurement records still appended alongside the patch (P3-D: the
     // lean_kernel omit/role record proves Sol is never injected)
-    const records = await waitForLines(2);
-    expect(records.map((r) => r.kind)).toEqual(["lean_kernel", "before_agent_start"]);
+    const records = await waitForLines(3);
+    expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "lean_kernel", "before_agent_start"]);
     expect(recordOf(records, "lean_kernel").reason).toBe("role");
   });
 
@@ -1385,8 +1509,8 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
     expect(result).toBeUndefined();
 
     // P3-D: venv-less test home has no lean-code skill -> fail-open records
-    const records = await waitForLines(3);
-    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const records = await waitForLines(4);
+    expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
     expect(recordOf(records, "lean_kernel").reason).toBe("skill-missing");
   });
 
@@ -1430,8 +1554,8 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     expect(result).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
     // measurement records still appended (P3-D lean fail-open on missing skill)
-    const records = await waitForLines(3);
-    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const records = await waitForLines(4);
+    expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
   });
 
   it("enabled + substantial prompt: spawns ONCE and appends the brief to the full system prompt", async () => {
@@ -1460,6 +1584,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     expect(result!.systemPrompt!.indexOf("BASE SYSTEM PROMPT")).toBeLessThan(
       result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
     );
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
   it("enabled + trivial prompt: no spawn, no injection", async () => {
@@ -1469,6 +1594,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
   it("enabled + recall spawn fails: silent, no injection, no throw", async () => {
@@ -1506,6 +1632,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
     expect(result).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 });
 
@@ -1531,8 +1658,8 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       patch!.systemPrompt!.indexOf(MARKER),
     );
 
-    const records = await waitForLines(3);
-    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const records = await waitForLines(4);
+    expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
     const contract = recordOf(records, "before_agent_start");
     expect(contract.role).toBe("driver");
     expect(contract.driver_contract_injected).toBe(true);
@@ -1549,14 +1676,14 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(patch).toBeDefined();
     expect(patch!.systemPrompt).toBe(`SEEDED BASE\n\n[${MARKER}] already there`); // stable prompt returned, no duplicate append
 
-    const records = await waitForLines(3);
+    const records = await waitForLines(4);
     const contract = recordOf(records, "before_agent_start");
     expect(contract.role).toBe("driver");
     expect(contract.driver_contract_injected).toBe(false);
     await settle();
     const after = (await readFile(telemetryFile(), "utf8")).trim().split("\n").filter(Boolean);
     // exactly the three P3-D records; no second before_agent_start append ever happens
-    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    expect(after.map((l) => JSON.parse(l).kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
   });
 
   it("before_agent_start: worker model -> no contract, record role=worker", async () => {
@@ -1565,8 +1692,8 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
     expect(result).toBeUndefined();
 
-    const records = await waitForLines(3);
-    expect(records.map((r) => r.kind)).toEqual(["extension_error", "lean_kernel", "before_agent_start"]);
+    const records = await waitForLines(4);
+    expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
     const contract = recordOf(records, "before_agent_start");
     expect(contract.role).toBe("worker");
     expect(contract.driver_contract_injected).toBeUndefined();
@@ -1578,8 +1705,8 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX);
     expect(result).toBeUndefined();
 
-    const records = await waitForLines(1);
-    expect(records[0].role).toBe("normal");
+    const records = await waitForLines(2);
+    expect(recordOf(records, "before_agent_start").role).toBe("normal");
     expect(JSON.stringify(records)).not.toContain(MARKER);
   });
 
@@ -1591,9 +1718,10 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(patch!.systemPrompt).toContain("MUST delegate"); // Sol contract
     expect(patch!.systemPrompt).not.toContain(MARKER); // driver contract absent
 
-    const records = await waitForLines(1);
-    expect(records[0].role).toBe("hard_orchestrator");
-    expect(records[0].driver_contract_injected).toBeUndefined();
+    const records = await waitForLines(2);
+    const contract = recordOf(records, "before_agent_start");
+    expect(contract.role).toBe("hard_orchestrator");
+    expect(contract.driver_contract_injected).toBeUndefined();
   });
 
   it("driver + recall enabled: ONE patch with the Brain Brief AFTER the contract", async () => {
@@ -2164,5 +2292,77 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", () 
     expect(result).toBeUndefined();
     expect(runVmemListPrePageSyncMock).not.toHaveBeenCalled();
     expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)", () => {
+  it("shadow-mode plan never injects specialist text into the returned message", async () => {
+    const handlers = loadFactory({
+      ompVisibilityRunner: async () => ({
+        visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] },
+        hydrated_instructions: { x: "text" },
+        error: null,
+      }),
+    });
+    const ctx = makeCtx();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "do the thing" }, ctx)) as
+      | { message?: { content?: unknown }; systemPrompt?: string }
+      | undefined;
+    expect(JSON.stringify(result ?? {})).not.toContain("text");
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
+  });
+
+  it("enforced-mode plan with a hydrated skill injects specialist text into the returned message", async () => {
+    const handlers = loadFactory({
+      ompVisibilityRunner: async () => ({
+        visibility_plan: {
+          visibility_plan_id: "vplan-x",
+          mode: "enforced",
+          selected_skill_ids: ["skill1"],
+          hydrated_skill_ids: ["skill1"],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
+        hydrated_instructions: { skill1: "specialist body text" },
+        error: null,
+      }),
+    });
+    const ctx = makeCtx();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "do the thing" }, ctx)) as
+      | { message?: { content?: unknown }; systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result?.message?.content).toContain("specialist body text");
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
+  });
+
+  it("a rejecting/erroring runner injects nothing and the handler completes without throwing", async () => {
+    const handlers = loadFactory({
+      ompVisibilityRunner: async () => ({
+        visibility_plan: null,
+        hydrated_instructions: {},
+        error: "BRAIN_VISIBILITY_UNAVAILABLE",
+      }),
+    });
+    const ctx = makeCtx();
+    let result: unknown;
+    await expect(
+      (async () => {
+        result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, ctx);
+      })(),
+    ).resolves.not.toThrow();
+    expect(JSON.stringify(result ?? {})).not.toContain("specialist");
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
+
+    const throwingHandlers = loadFactory({
+      ompVisibilityRunner: async () => {
+        throw new Error("boom");
+      },
+    });
+    const throwingCtx = makeCtx();
+    await expect(
+      throwingHandlers.get("before_agent_start")!({ prompt: "do the thing" }, throwingCtx),
+    ).resolves.not.toThrow();
+    await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 });
