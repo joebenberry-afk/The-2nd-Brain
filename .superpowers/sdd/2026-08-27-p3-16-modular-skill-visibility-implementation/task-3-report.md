@@ -91,6 +91,6 @@ responses.
 
 **Verification:** `npm test -- --run tests/visibility-bridge.test.ts tests/wiring.test.ts tests/active-state-wiring.test.ts` → 99/99 pass; `npm run typecheck` → 0 errors.
 
-**Commit:** `3e5618a` (`fix(prime-extension): validate and cache visibility plans`).
+**Commit:** `9550471` (`fix(prime-extension): validate and cache visibility plans`); report hash update follows.
 
 **Concerns:** no Python, router.py, Lean, or P3.15 files changed; P3.17 was not started.
