@@ -22,6 +22,16 @@ vi.mock("../src/visibility-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/visibility-bridge")>();
   return { ...actual, runOmpVisibility: runOmpVisibilityMock };
 });
+// P3.16 regression coverage: AutoInject mode "active" (set below) means
+// runAdvisoryAutoInject is real by default and fails open (no real venv in
+// the temp test home) -- mocked here so a specific test can give aiMessage
+// real string content, the precondition for the active_state/visibility
+// details-key collision this file's regression test exercises.
+const runAdvisoryAutoInjectMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/autoinject", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/autoinject")>();
+  return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
+});
 
 import factory from "../src/index";
 
@@ -39,6 +49,8 @@ beforeEach(async () => {
   messageMock.mockReset();
   runOmpVisibilityMock.mockReset();
   runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
+  runAdvisoryAutoInjectMock.mockReset();
+  runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
   ensureMock.mockResolvedValue({ ok: true, sessionId: "omp-session" });
   updateMock.mockResolvedValue({ ok: true, sessionId: "omp-session", changed: true });
   mkdirSync(join(tmp, "config"), { recursive: true });
@@ -97,6 +109,35 @@ describe("P3.1 active-state OMP lifecycle", () => {
     expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({ hostSessionId: expect.any(String) }));
     expect(messageMock).toHaveBeenCalled();
     expect((result as { message?: { customType?: string } }).message?.customType).toBe("brain.active-state");
+  });
+
+  it("merging an enforced-mode visibility injection with a live active-state capsule preserves both (regression: visibility_plan_id must survive the active_state merge)", async () => {
+    runAdvisoryAutoInjectMock.mockResolvedValueOnce({
+      content: "AUTOINJECT PACKET TEXT",
+      details: { delivery_id: "del-collision-1" },
+    });
+    runOmpVisibilityMock.mockResolvedValueOnce({
+      visibility_plan: {
+        visibility_plan_id: "vplan-collision-1",
+        mode: "enforced",
+        selected_skill_ids: ["skill1"],
+        hydrated_skill_ids: ["skill1"],
+        rejected_skill_ids: {},
+        unavailable_skill_ids: {},
+      },
+      hydrated_instructions: { skill1: "specialist body text" },
+      error: null,
+    });
+    const handlers = loadFactory();
+    const result = await handlers.get("before_agent_start")!({ prompt: "Resume task" }, context());
+
+    const message = (result as { message?: { content?: string; details?: Record<string, unknown> } }).message;
+    expect(message?.content).toContain("AUTOINJECT PACKET TEXT");
+    expect(message?.content).toContain("specialist body text");
+    expect(message?.content).toContain("[SECOND_BRAIN_ACTIVE_STATE]"); // active-state capsule still merged in
+    const details = message?.details as { visibility?: { visibility_plan_id?: string }; active_state?: unknown } | undefined;
+    expect(details?.visibility?.visibility_plan_id).toBe("vplan-collision-1"); // survives the LATER active_state merge
+    expect(details?.active_state).toEqual({ session_id: "omp-session" });
   });
 
   it("persists the capsule before compaction and at shutdown", async () => {
