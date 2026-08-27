@@ -4,7 +4,14 @@ import { parseOmpVisibilityOutput, runOmpVisibility } from "../src/visibility-br
 describe("parseOmpVisibilityOutput", () => {
   it("parses a well-formed shadow-mode plan", () => {
     const stdout = JSON.stringify({
-      visibility_plan: { mode: "shadow", selected_skill_ids: ["a"], hydrated_skill_ids: [] },
+      visibility_plan: {
+        visibility_plan_id: "vplan-shadow",
+        mode: "shadow",
+        selected_skill_ids: ["a"],
+        hydrated_skill_ids: [],
+        rejected_skill_ids: {},
+        unavailable_skill_ids: {},
+      },
       hydrated_instructions: {},
       error: null,
     });
@@ -35,6 +42,81 @@ describe("parseOmpVisibilityOutput", () => {
     const result = parseOmpVisibilityOutput("not json");
     expect(result.visibility_plan).toBeNull();
     expect(result.error).not.toBeNull();
+  });
+
+  it("fails open when visibility_plan is missing required fields", () => {
+    const result = parseOmpVisibilityOutput(
+      JSON.stringify({
+        visibility_plan: {
+          mode: "shadow",
+          selected_skill_ids: ["a"],
+          hydrated_skill_ids: [],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
+        hydrated_instructions: {},
+      }),
+    );
+    expect(result.visibility_plan).toBeNull();
+    expect(result.hydrated_instructions).toEqual({});
+    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
+  });
+
+  it("fails open when visibility_plan has an invalid mode", () => {
+    const result = parseOmpVisibilityOutput(
+      JSON.stringify({
+        visibility_plan: {
+          visibility_plan_id: "vplan-invalid-mode",
+          mode: "advisory",
+          selected_skill_ids: ["a"],
+          hydrated_skill_ids: [],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
+        hydrated_instructions: {},
+      }),
+    );
+    expect(result.visibility_plan).toBeNull();
+    expect(result.hydrated_instructions).toEqual({});
+    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
+  });
+
+  it("fails open when hydrated instructions include an unselected skill", () => {
+    const result = parseOmpVisibilityOutput(
+      JSON.stringify({
+        visibility_plan: {
+          visibility_plan_id: "vplan-unknown-hydrated",
+          mode: "enforced",
+          selected_skill_ids: ["a"],
+          hydrated_skill_ids: ["a"],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
+        hydrated_instructions: { unknown: "must not inject" },
+      }),
+    );
+    expect(result.visibility_plan).toBeNull();
+    expect(result.hydrated_instructions).toEqual({});
+    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
+  });
+
+  it("fails open when a hydrated body exceeds the injection bound", () => {
+    const result = parseOmpVisibilityOutput(
+      JSON.stringify({
+        visibility_plan: {
+          visibility_plan_id: "vplan-oversized-body",
+          mode: "enforced",
+          selected_skill_ids: ["a"],
+          hydrated_skill_ids: ["a"],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
+        hydrated_instructions: { a: "x".repeat(8193) },
+      }),
+    );
+    expect(result.visibility_plan).toBeNull();
+    expect(result.hydrated_instructions).toEqual({});
+    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
   });
 
   it("fails open when visibility_plan is missing", () => {

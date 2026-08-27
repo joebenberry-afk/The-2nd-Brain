@@ -124,6 +124,7 @@ import {
   OMP_VISIBILITY_MAX_INJECTED_CHARS,
   ompVisibilityRecord,
   runOmpVisibility,
+  validateOmpVisibilityResult,
   type OmpVisibilityOptions,
   type OmpVisibilityResult,
 } from "./visibility-bridge";
@@ -383,6 +384,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   let latestRoutingDecision: OmpRoutingDecision | null = null;
   let latestRoutingSession: string | null = null;
   const routingCache = new Map<string, Promise<OmpRoutingResult>>();
+  const visibilityCache = new Map<string, Promise<OmpVisibilityResult>>();
   const stopStates = new Map<string, StopBoundaryState>();
   const stopControlCalls = new Set<string>();
   const workerParentSessions = new Map<string, string>();
@@ -653,6 +655,50 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       })
       .catch(() => ({ decision: null, error: "BRAIN_ROUTING_UNAVAILABLE" }));
     routingCache.set(key, promise);
+    return promise;
+  };
+
+  const ensureVisibilityPlan = (
+    session: string,
+    task: string,
+    ctx: ExtensionContext,
+  ): Promise<OmpVisibilityResult> => {
+    const taskHash = taskSha256(task);
+    const key = `${session}:${currentTurnIndex}:${taskHash}`;
+    const existing = visibilityCache.get(key);
+    if (existing) return existing;
+    const promise = Promise.resolve()
+      .then(() =>
+        visibilityRunner({
+          home: config.home ?? "",
+          task,
+          sessionId: session,
+          projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
+        }),
+      )
+      .then((result) => validateOmpVisibilityResult(result))
+      .catch(() => ({
+        visibility_plan: null,
+        hydrated_instructions: {},
+        error: "BRAIN_VISIBILITY_UNAVAILABLE",
+      }))
+      .then((result) => {
+        try {
+          getStore(session)?.append(
+            ompVisibilityRecord("omp_visibility_plan", session, {
+              mode: result.visibility_plan?.mode ?? null,
+              selected_skill_ids: result.visibility_plan?.selected_skill_ids ?? [],
+              hydrated_skill_ids: result.visibility_plan?.hydrated_skill_ids ?? [],
+              visibility_plan_id: result.visibility_plan?.visibility_plan_id ?? null,
+              error: result.error,
+            }),
+          );
+        } catch {
+          // Visibility telemetry is advisory and must never block injection.
+        }
+        return result;
+      });
+    visibilityCache.set(key, promise);
     return promise;
   };
 
@@ -1069,12 +1115,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       if (config.home && taskText.trim().length > 0) {
         try {
-          const visibilityResult = await visibilityRunner({
-            home: config.home,
-            task: taskText,
-            sessionId: session,
-            projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
-          });
+          const visibilityResult = await ensureVisibilityPlan(session, taskText, ctx);
           if (
             visibilityResult.visibility_plan?.mode === "enforced" &&
             Object.keys(visibilityResult.hydrated_instructions).length > 0
@@ -1090,15 +1131,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               visibilityResult.visibility_plan.visibility_plan_id,
             );
           }
-          getStore(session)?.append(
-            ompVisibilityRecord("omp_visibility_plan", session, {
-              mode: visibilityResult.visibility_plan?.mode ?? null,
-              selected_skill_ids: visibilityResult.visibility_plan?.selected_skill_ids ?? [],
-              hydrated_skill_ids: visibilityResult.visibility_plan?.hydrated_skill_ids ?? [],
-              visibility_plan_id: visibilityResult.visibility_plan?.visibility_plan_id ?? null,
-              error: visibilityResult.error,
-            }),
-          );
         } catch {
           // Visibility is advisory: any failure must not block AutoInject/session start.
         }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 export const OMP_VISIBILITY_MAX_TASK_CHARS = 2048;
 export const OMP_VISIBILITY_MAX_IDENTITY_CHARS = 128;
+export const OMP_VISIBILITY_MAX_SKILLS = 3;
 export const OMP_VISIBILITY_TIMEOUT_MS = 3000;
 export const OMP_VISIBILITY_MAX_STDOUT_CHARS = 256 * 1024;
 export const OMP_VISIBILITY_MAX_INJECTED_CHARS = 8192;
@@ -38,40 +39,108 @@ function bounded(value: unknown, max: number): string {
   return typeof value === "string" ? value.slice(0, max) : "";
 }
 
+function validBoundedString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function parseSkillIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > OMP_VISIBILITY_MAX_SKILLS) return null;
+  const ids = value.map((id) => (validBoundedString(id, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ? id : null));
+  return ids.every((id): id is string => id !== null) ? ids : null;
+}
+
+function parseSkillReasons(value: unknown): Record<string, string> | null {
+  if (!isPlainObject(value)) return null;
+  const entries = Object.entries(value);
+  if (
+    entries.some(
+      ([key, reason]) =>
+        !validBoundedString(key, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
+        typeof reason !== "string" ||
+        reason.length > OMP_VISIBILITY_MAX_IDENTITY_CHARS,
+    )
+  ) {
+    return null;
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function invalidResult(error: string): OmpVisibilityResult {
+  return { visibility_plan: null, hydrated_instructions: {}, error };
+}
+
+/** Validate an untrusted visibility result and discard malformed injections. */
+export function validateOmpVisibilityResult(raw: unknown): OmpVisibilityResult {
+  if (!isPlainObject(raw)) return invalidResult("BRAIN_VISIBILITY_INVALID_RESPONSE");
+  const value = raw as Record<string, unknown>;
+  const rawPlan = value.visibility_plan;
+  if (!isPlainObject(rawPlan)) {
+    return invalidResult(bounded(value.error, 128) || "BRAIN_VISIBILITY_UNAVAILABLE");
+  }
+  const selectedSkillIds = parseSkillIds(rawPlan.selected_skill_ids);
+  const hydratedSkillIds = parseSkillIds(rawPlan.hydrated_skill_ids);
+  const rejectedSkillIds = parseSkillReasons(rawPlan.rejected_skill_ids);
+  const unavailableSkillIds = parseSkillReasons(rawPlan.unavailable_skill_ids);
+  if (
+    !validBoundedString(rawPlan.visibility_plan_id, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
+    (rawPlan.mode !== "shadow" && rawPlan.mode !== "enforced") ||
+    selectedSkillIds === null ||
+    hydratedSkillIds === null ||
+    rejectedSkillIds === null ||
+    unavailableSkillIds === null
+  ) {
+    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
+  }
+  if (!isPlainObject(value.hydrated_instructions)) {
+    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
+  }
+  const hydratedEntries = Object.entries(value.hydrated_instructions);
+  if (
+    hydratedEntries.some(
+      ([skillId, text]) =>
+        !validBoundedString(skillId, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
+        !selectedSkillIds.includes(skillId) ||
+        !hydratedSkillIds.includes(skillId) ||
+        typeof text !== "string" ||
+        text.length > OMP_VISIBILITY_MAX_INJECTED_CHARS,
+    )
+  ) {
+    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
+  }
+  const plan: OmpVisibilityPlan = {
+    visibility_plan_id: rawPlan.visibility_plan_id,
+    mode: rawPlan.mode,
+    selected_skill_ids: selectedSkillIds,
+    hydrated_skill_ids: hydratedSkillIds,
+    rejected_skill_ids: rejectedSkillIds,
+    unavailable_skill_ids: unavailableSkillIds,
+  };
+  return {
+    visibility_plan: plan,
+    hydrated_instructions: Object.fromEntries(hydratedEntries) as Record<string, string>,
+    error: null,
+  };
+}
+
 /** Parse the omp-routing CLI bridge's skill_visibility JSON response. Every
  * malformed/oversized/non-object shape fails open to a null plan. */
 export function parseOmpVisibilityOutput(stdout: string): OmpVisibilityResult {
   if (stdout.length > OMP_VISIBILITY_MAX_STDOUT_CHARS) {
-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_OUTPUT_TOO_LARGE" };
+    return invalidResult("BRAIN_VISIBILITY_OUTPUT_TOO_LARGE");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_INVALID_JSON" };
+    return invalidResult("BRAIN_VISIBILITY_INVALID_JSON");
   }
-  if (parsed == null || typeof parsed !== "object") {
-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_INVALID_RESPONSE" };
-  }
-  const value = parsed as Record<string, unknown>;
-  const plan = value.visibility_plan;
-  const hydrated = value.hydrated_instructions;
-  const hydratedInstructions: Record<string, string> =
-    hydrated != null && typeof hydrated === "object" && !Array.isArray(hydrated)
-      ? Object.fromEntries(
-          Object.entries(hydrated as Record<string, unknown>).filter(
-            ([, text]) => typeof text === "string",
-          ) as [string, string][],
-        )
-      : {};
-  if (plan == null || typeof plan !== "object" || Array.isArray(plan)) {
-    return {
-      visibility_plan: null,
-      hydrated_instructions: {},
-      error: bounded(value.error, 128) || "BRAIN_VISIBILITY_UNAVAILABLE",
-    };
-  }
-  return { visibility_plan: plan as OmpVisibilityPlan, hydrated_instructions: hydratedInstructions, error: null };
+  return validateOmpVisibilityResult(parsed);
 }
 
 export function ompVisibilityRecord(
