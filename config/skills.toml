@@ -27,6 +27,13 @@ max_active = 3      # ENFORCED — router.py resolves [router] max_active from t
                     # file per route() call (invalid/absent -> 3); CLI --max-active
                     # overrides it (Phase 13)
 
+[visibility]
+mode = "shadow"     # SHADOW/REPORT-ONLY default (plan §56/§113 "shadow route first").
+                    # skills.py resolves this per build_plan() call (invalid/absent -> shadow,
+                    # fail-safe). "enforced" is only ever set by the controlled current-OMP-primary
+                    # evaluation harness for the P3.16 two-phase proof — flipping this file's
+                    # shipped default is a separate promotion decision, not part of this task.
+
 # Lean Code Runtime Kernel activation (plan §11 / §24)
 # ENFORCED — lean_runtime.py reads [lean] eval per event (fallback inert)
 [lean]
