@@ -364,16 +364,23 @@ def test_pre_llm_visibility_failure_does_not_break_existing_autoinject_path(
         "task": "How does Hermes retrieve bounded project context?",
         "turn_id": "visibility-failure-turn-1",
     }
-    # Break skills.build_plan repo-wide via a malformed config/skills.toml so
-    # resolve_visibility_mode's own TOML parse fails (a real, reachable
-    # failure mode, exercised through the actual subprocess rather than a
-    # monkeypatch that a fresh subprocess would not see).
-    (brain_home / "config" / "skills.toml").write_text("not valid toml [[[", encoding="utf-8")
+    # Break skills.build_plan via invalid UTF-8 bytes in config/skills.toml.
+    # resolve_visibility_mode only catches (OSError, tomllib.TOMLDecodeError);
+    # `.read_text(encoding="utf-8")` on invalid UTF-8 raises UnicodeDecodeError
+    # (a ValueError, not caught there), so this is a real, reachable failure
+    # that propagates out of skills.build_plan -- unlike malformed-but-valid-
+    # UTF-8 TOML text, which resolve_visibility_mode already fails safe on
+    # (falling back to "shadow" without raising). Exercised through the
+    # actual subprocess rather than a monkeypatch that a fresh subprocess
+    # would not see.
+    with open(brain_home / "config" / "skills.toml", "wb") as f:
+        f.write(b'[visibility]\nmode = "shad\xffow"\n')
 
     result = _run_hook(brain_home, payload)
 
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
+    assert out["visibility_plan"] is None
     assert out["status"] == "ok"
     assert out["decision"] == "INJECT"
     assert "Hermes integration rule" in out["packet"]
