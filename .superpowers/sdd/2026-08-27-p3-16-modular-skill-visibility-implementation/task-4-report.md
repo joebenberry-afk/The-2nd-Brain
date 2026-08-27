@@ -42,3 +42,50 @@ Review correctly identified that `test_pre_llm_visibility_failure_does_not_break
 Fix applied: replaced the malformed-TOML setup with writing invalid UTF-8 bytes to `config/skills.toml` (`b'[visibility]\nmode = "shad\xffow"\n'`) via a binary file write. `Path.read_text(encoding="utf-8")` on invalid UTF-8 raises `UnicodeDecodeError` (a `ValueError` subtype), which is *not* caught by `resolve_visibility_mode`'s `except (OSError, tomllib.TOMLDecodeError)` clause, so it propagates out of `skills.build_plan` and is only caught by `_visibility_task`'s broad `except Exception`. Verified directly via a standalone script hitting the real subprocess CLI bridge: `visibility_plan` comes back `None` while `status`/`decision`/`packet` are unaffected. Added `assert out["visibility_plan"] is None` to the test (proving the fail-open branch actually ran) and corrected the inline comment to accurately describe the invalid-UTF-8 trigger instead of "malformed TOML".
 
 Re-verified after the fix: `pytest tests/test_hermes_adapter.py -q` → 31 passed; `ruff check`/`ruff format --check` on the edited region clean (same pre-existing unrelated debt elsewhere, untouched); `pyright tests/test_hermes_adapter.py` → 0 errors. Committed as a follow-up commit on top of `f5d77d0`.
+
+## Final cross-task review fix: bounded hydration
+
+### Status
+Complete. Finding 1 is closed at the canonical `skills.hydrate_plan` boundary.
+
+### Files
+- Modified `src/second_brain/skills.py`:
+  - Added a fixed `_MAX_HYDRATED_BODY_CHARS = 4096` bound for each selected
+    `SKILL.md` body.
+  - Oversized bodies now fail closed as `body_too_large`, with no hydrated
+    skill ID and no returned body. Their full-size economics remain in the
+    avoided-body baseline.
+  - Selected bodies within the bound continue to hydrate unchanged and are
+    returned in full.
+- Modified `tests/test_skills.py`:
+  - Strengthened normal hydration coverage to assert the returned body is the
+    complete file content.
+  - Added oversized selected-body rejection coverage, including unavailable
+    reason, empty body result, and zero hydrated economics.
+- Modified `tests/test_hermes_adapter.py`:
+  - Added enforced-mode subprocess coverage proving an oversized selected
+    body is not appended to Hermes' visible packet while the existing
+    AutoInject packet remains available.
+- `src/second_brain/hermes_adapter.py` required no source change: it consumes
+  the bounded core result, so both Hermes and OMP consumers receive no body
+  for oversized selections.
+
+### Tests
+- `.venv/Scripts/python.exe -m pytest tests/test_skills.py -k 'hydrate_plan' -q`
+  → 3 passed (red test was observed before the implementation).
+- `.venv/Scripts/python.exe -m pytest tests/test_hermes_adapter.py -k 'shadow_mode_never_injects or enforced_mode_injects or oversized_hydrated or visibility_failure' -q`
+  → 4 passed.
+- `.venv/Scripts/python.exe -m pytest tests/test_skills.py tests/test_hermes_adapter.py -q`
+  → 43 passed.
+- `.venv/Scripts/python.exe -m py_compile src/second_brain/skills.py src/second_brain/hermes_adapter.py tests/test_skills.py tests/test_hermes_adapter.py`
+  → passed.
+
+### Commit
+`b147a64` — `fix(skills): bound hydrated specialist bodies`
+
+### Concerns
+- The 4096-character bound is per selected body; the existing selected-skill
+  cap remains 3. Bodies are rejected rather than truncated, so no partial
+  text is presented as complete instructions.
+- No formatters, linters, project-wide suites, TS files, router, OMP adapter,
+  or lifecycle/governance code were changed.
