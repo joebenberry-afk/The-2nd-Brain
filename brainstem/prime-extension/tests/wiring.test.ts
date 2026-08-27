@@ -2299,7 +2299,14 @@ describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)
   it("shadow-mode plan never injects specialist text into the returned message", async () => {
     const handlers = loadFactory({
       ompVisibilityRunner: async () => ({
-        visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] },
+        visibility_plan: {
+          visibility_plan_id: "vplan-shadow-1",
+          mode: "shadow",
+          selected_skill_ids: ["x"],
+          hydrated_skill_ids: ["x"],
+          rejected_skill_ids: {},
+          unavailable_skill_ids: {},
+        },
         hydrated_instructions: { x: "text" },
         error: null,
       }),

@@ -54,3 +54,13 @@ None of this touched Python, `routing-bridge.ts`, or `worker-context-bridge.ts`,
 **Verification:** `npm test -- --run active-state-wiring` → 3/3 pass. Full suite (`npm test -- --run`, 26 files / **602 tests**, +1 for the new regression test) run 5 times after the fix: 4/5 clean, 1/5 hit the same pre-existing residual teardown-race flake documented above (a different, unrelated `waitForLines` test in `wiring.test.ts`, not the fix itself) — consistent with the previously-measured baseline flake rate, no new failure mode introduced.
 
 **Commit:** amended into the same feature (new commit on top of `11b1907`, same 5 logical files: `src/index.ts`, `tests/active-state-wiring.test.ts`, plus no changes needed to `visibility-bridge.ts`/`visibility-bridge.test.ts`/`wiring.test.ts` for this fix). No Python file, `routing-bridge.ts`, or `worker-context-bridge.ts` touched; P3.17 not started.
+
+## Post-review fix 2: `npm run typecheck` failure in the shadow-mode test fixture
+
+**Finding (from `Main`'s re-review):** `npm run typecheck` (`tsc --noEmit`) failed at `tests/wiring.test.ts:2301` — the shadow-mode wiring test's `ompVisibilityRunner` fixture (`visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] }`, copied verbatim from the brief's own Step 2 shape) was missing `visibility_plan_id`, `rejected_skill_ids`, and `unavailable_skill_ids`, so it wasn't assignable to `OmpVisibilityPlan`/`OmpVisibilityResult`.
+
+**Fix:** added the three missing fields (`visibility_plan_id: "vplan-shadow-1"`, `rejected_skill_ids: {}`, `unavailable_skill_ids: {}`) to that fixture in `tests/wiring.test.ts`. Grepped both `wiring.test.ts` and `active-state-wiring.test.ts` for every other `visibility_plan:` literal: the enforced-mode fixtures in both files already declared all six `OmpVisibilityPlan` fields (added correctly in the original round), and `visibility-bridge.test.ts`'s `visibility_plan` literals are inside `JSON.stringify(...)` strings passed to `parseOmpVisibilityOutput(stdout: string)` (not statically typed against `OmpVisibilityPlan`), so they were never type-checked and needed no change. No other gaps found.
+
+**Verification:** `npm run typecheck` → 0 errors (previously 1). Full suite (`npm test -- --run`, 602 tests) run 3 times after the fix: 2/3 fully clean, 1/3 hit the same pre-existing unrelated teardown-race flake already documented twice above (a different `wiring.test.ts` `waitForLines` test, not this fix or the fixture change) — no new failure mode.
+
+**Commit:** new commit on top of `08dd141`, touching only `tests/wiring.test.ts` and this report.
