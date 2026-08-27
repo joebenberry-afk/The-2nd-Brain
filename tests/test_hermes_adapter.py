@@ -371,7 +371,8 @@ def test_pre_llm_enforced_mode_rejects_oversized_hydrated_skill(brain_home: Path
         **_start_payload(session="visibility-oversized", bot="Brain-Dev"),
         "event": "pre_llm_call",
         "task": (
-            "How does Hermes retrieve bounded project context for oversized-visibility-skill content?"
+            "How does Hermes retrieve bounded project context for "
+            "oversized-visibility-skill content?"
         ),
         "turn_id": "visibility-oversized-turn-1",
     }

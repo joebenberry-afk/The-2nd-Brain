@@ -89,3 +89,11 @@ Complete. Finding 1 is closed at the canonical `skills.hydrate_plan` boundary.
   text is presented as complete instructions.
 - No formatters, linters, project-wide suites, TS files, router, OMP adapter,
   or lifecycle/governance code were changed.
+
+## Final Ruff E501 mechanical fix
+
+Wrapped the oversized task string in `tests/test_hermes_adapter.py` across adjacent implicit string literals. The resulting value is unchanged; no production code or other tests were modified.
+
+Focused verification:
+- `.venv/Scripts/python.exe -m ruff check src/second_brain/skills.py src/second_brain/hermes_adapter.py tests/test_skills.py tests/test_hermes_adapter.py` → all checks passed.
+- `.venv/Scripts/python.exe -m pytest tests/test_hermes_adapter.py -k "shadow_mode_never_injects or enforced_mode_injects or visibility_failure" -q` → 3 passed.
