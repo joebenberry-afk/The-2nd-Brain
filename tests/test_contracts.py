@@ -26,6 +26,7 @@ from second_brain.contracts import (
     PacketItem,
     RequestEpoch,
     RequestFingerprint,
+    SimplificationReviewOutcome,
     SurfaceVisibility,
     ToolOutcome,
     ToolOutcomeState,
@@ -141,6 +142,29 @@ def test_canonical_json_sorted_keys_and_list_order() -> None:
     assert canonical_json({"b": 1, "a": 2}) == canonical_json({"a": 2, "b": 1})
     assert canonical_json({"a": 2, "b": 1}) == '{"a":2,"b":1}'
     assert canonical_json({"xs": ["z", "a", "m"]}) == '{"xs":["z","a","m"]}'
+
+
+def test_simplification_review_outcomes_are_canonical() -> None:
+    assert [item.value for item in SimplificationReviewOutcome] == [
+        "simplify",
+        "reuse",
+        "defer",
+        "no_action",
+    ]
+
+def test_stop_lifecycle_events_are_canonical() -> None:
+    assert LifecycleEventType.STOP_DECIDED.value == "stop_decided"
+    assert LifecycleEventType.STOP_FINALIZED.value == "stop_finalized"
+
+def test_accuracy_gate_lifecycle_event_is_canonical() -> None:
+    assert LifecycleEventType.ACCURACY_GATE.value == "accuracy_gate"
+
+def test_independent_verification_lifecycle_event_is_canonical() -> None:
+    assert LifecycleEventType.INDEPENDENT_VERIFICATION.value == "independent_verification"
+
+
+def test_environment_assessment_lifecycle_event_is_canonical() -> None:
+    assert LifecycleEventType.ENVIRONMENT_ASSESSMENT.value == "environment_assessment"
 
 
 def test_epoch_deterministic_and_reason_roundtrip() -> None:

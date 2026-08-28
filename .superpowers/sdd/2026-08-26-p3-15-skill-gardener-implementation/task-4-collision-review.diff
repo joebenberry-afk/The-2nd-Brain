@@ -1,0 +1,118 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+index 44705f6..8eca396 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+@@ -1,27 +1,27 @@
+ # Task 4 report: archive-first retirement and restore
+ 
+ ## Status
+-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, and partial-deletion risk.
++Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, partial-deletion risk, and quarantine-root destination collision.
+ 
+ ## Files
+ - `src/second_brain/gardener.py`
+   - Persists archive destination, retirement reason, and production-safety evidence in authorized records.
+   - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then atomically moves the source into a quarantine location outside lifecycle directories.
+   - Cleans incomplete archive output on pre-mutation failures and preserves the source artifact.
+   - Restores verified archives to the previous lifecycle directory without overwriting an existing artifact.
+   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval.
+   - Delegates all non-archive actions without content or lifecycle mutation.
+ - `tests/test_p3_15_skill_gardener.py`
+-  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
++  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, quarantine-root collision, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
+ 
+ ## Tests
+-- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **45 passed**
++- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **46 passed**
+ - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
+ 
+ ## Commit
+-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; atomic recovery fix commit pending
++`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`
+ 
+ ## Concerns
+ - No project-wide suites, formatters, or linters were run per Task 4 scope.
+ - Source mutation uses an atomic same-volume quarantine move after the archive and retirement record are durable; simulated partial-delete behavior cannot affect the source path, and restore remains byte-identical.
+ - Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index 2ab43b2..86153f0 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -1737,27 +1737,30 @@ class SkillGardener:
+         archive_destination = authorization.get("archive_destination")
+         if not isinstance(archive_destination, str) or not archive_destination.strip():
+             raise BrainError("archive destination is required")
+         retirement_id = "retirement-" + hashlib.sha256(
+             f"{authorization['authorization_id']}|{time.time_ns()}".encode()
+         ).hexdigest()[:16]
+         archive_root = self._archive_root(archive_destination.strip())
+         archive_parent = archive_root / retirement_id
+         final_dir = archive_parent / name
+         staging_dir = archive_root / f".{retirement_id}.staging"
++        quarantine_root = self.home / "state" / "maintenance" / "retirement-quarantine"
+         try:
+             source_resolved = source_dir.resolve()
+             archive_resolved = archive_root.resolve()
+             if (
+                 archive_resolved == source_resolved
+                 or source_resolved.is_relative_to(archive_resolved)
+                 or archive_resolved.is_relative_to(source_resolved)
++                or quarantine_root.resolve().is_relative_to(archive_resolved)
++                or archive_resolved.is_relative_to(quarantine_root.resolve())
+             ):
+                 raise BrainError("archive destination overlaps source skill")
+         except OSError as exc:
+             raise BrainError(f"archive destination is unavailable: {exc}") from exc
+         if staging_dir.exists() or final_dir.exists():
+             raise BrainError("archive destination already exists")
+ 
+         persisted = False
+         source_mutation_started = False
+         preserve_retirement_artifacts = False
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 7cc700c..eb1bc11 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -878,20 +878,42 @@ def test_archive_destination_inside_source_preserves_source(brain_home):
+     }
+     with pytest.raises(BrainError, match="overlaps"):
+         SkillGardener(brain_home).execute_maintenance(authorization)
+     assert source.exists()
+     assert {
+         path.relative_to(source).as_posix(): path.read_bytes()
+         for path in source.rglob("*")
+         if path.is_file()
+     } == before
+     assert not (source / "nested").exists()
++def test_archive_destination_quarantine_root_is_rejected(brain_home):
++    source = _make_skill(brain_home, "quarantine-collision", "shadow")
++    quarantine_root = (
++        brain_home / "state" / "maintenance" / "retirement-quarantine"
++    )
++    authorization = _authorized_retirement(
++        brain_home, "quarantine-collision", archive_destination=quarantine_root
++    )
++    before = {
++        path.relative_to(source).as_posix(): path.read_bytes()
++        for path in source.rglob("*")
++        if path.is_file()
++    }
++    with pytest.raises(BrainError, match="overlaps"):
++        SkillGardener(brain_home).execute_maintenance(authorization)
++    assert {
++        path.relative_to(source).as_posix(): path.read_bytes()
++        for path in source.rglob("*")
++        if path.is_file()
++    } == before
++    assert not quarantine_root.exists()
++
+ 
+ 
+ 
+ def test_restore_returns_byte_identical_artifact_and_refuses_overwrite(brain_home):
+     source = _make_skill(brain_home, "restore-me", "shadow")
+     authorization = _authorized_retirement(brain_home, "restore-me")
+     original_files = {
+         path.relative_to(source).as_posix(): path.read_bytes()
+         for path in source.rglob("*")
+         if path.is_file()

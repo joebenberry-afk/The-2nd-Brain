@@ -96,6 +96,14 @@ describe("sensors: event -> record mapping", () => {
     );
   });
 
+  it("tool_call read -> target hash without raw path", () => {
+    const record = sensors.toolCall(SESSION, "read", "call-read", {
+      path: "src/second_brain/radar.py",
+    });
+    expect(record).toHaveProperty("target_sha256");
+    expect(JSON.stringify(record)).not.toContain("radar.py");
+  });
+
   it("tool_call (bash, missing command) -> no command field", () => {
     const record = sensors.toolCall(SESSION, "bash", "call-3", { timeout: 30 });
     expect(record).not.toHaveProperty("command");
@@ -252,6 +260,38 @@ describe("sensors: P3-B economics records (schema v3)", () => {
     expect(text).not.toContain("SECRET");
     expect(text).not.toContain("top-secret");
     expect(text).not.toContain("bash");
+  });
+  it("provider_request_meta proves bounded Lean marker and exact-kernel presence without storing prompt text", () => {
+    const marker = "[second-brain-lean-code-kernel]";
+    const kernel = "# Runtime Kernel\nLEAN CODE: deliver the smallest correct patch.";
+    const candidate = sensors.providerRequestMeta(
+      SESSION,
+      "openai-codex",
+      "gpt-5.6-luna",
+      8,
+      { input: [{ role: "system", content: `BASE\n\n${marker}\n${kernel}` }] },
+      { marker, kernel },
+    );
+    expect(candidate.lean_kernel_marker_count).toBe(1);
+    expect(candidate.lean_kernel_content_count).toBe(1);
+    expect(candidate.lean_kernel_sha256).toBe(sensors.sha256Hex(kernel));
+    expect(candidate.lean_kernel_chars).toBe(kernel.length);
+    expect(candidate.lean_kernel_placement).toBe("$.input[0].content");
+    const candidateText = JSON.stringify(candidate);
+    expect(candidateText).not.toContain(marker);
+    expect(candidateText).not.toContain(kernel);
+
+    const baseline = sensors.providerRequestMeta(
+      SESSION,
+      "openai-codex",
+      "gpt-5.6-luna",
+      9,
+      { input: [{ role: "system", content: "BASE" }] },
+      { marker, kernel },
+    );
+    expect(baseline.lean_kernel_marker_count).toBe(0);
+    expect(baseline.lean_kernel_content_count).toBe(0);
+    expect(baseline.lean_kernel_placement).toBe("absent");
   });
 
   it("provider_request_meta fingerprint is stable across changing user content", () => {

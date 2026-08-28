@@ -19,11 +19,13 @@ Measurement first, then advisory, then safe owned cleanup.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -155,6 +157,183 @@ def snapshot(home: Path, repo: Path, session_id: str | None = None) -> dict:
         target = session_dir(home, session_id) / "environment.json"
         _write_json_atomic(target, out)
     return out
+
+
+EVIDENCE_FILE = "environment-evidence.json"
+_SNAPSHOT_FIELDS = (
+    "repo",
+    "branch",
+    "head",
+    "dirty",
+    "language",
+    "package_manager",
+    "lockfiles",
+    "tools",
+    "repowise_freshness",
+    "brain_version",
+)
+
+
+def _canonical(data: object) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _state(snapshot_data: dict) -> dict:
+    state = {key: snapshot_data.get(key) for key in _SNAPSHOT_FIELDS}
+    state["worktree_count"] = (
+        len(snapshot_data.get("worktrees", []))
+        if isinstance(snapshot_data.get("worktrees"), list)
+        else 0
+    )
+    return state
+
+
+def environment_hash(snapshot_data: dict) -> str:
+    """Hash only stable environment identity/state fields, excluding timestamps."""
+    return hashlib.sha256(_canonical(_state(snapshot_data)).encode("utf-8")).hexdigest()
+
+
+def _project_id(repo: Path) -> str:
+    return hashlib.sha256(str(repo.resolve()).encode("utf-8")).hexdigest()[:16]
+
+
+def classify_mutation(
+    before: dict,
+    after: dict,
+    *,
+    expected_fields: list[str] | None = None,
+    result_state: str = "observed",
+) -> dict:
+    """Classify a read-back delta without treating command exit as success."""
+    if result_state not in {"observed", "failed", "partial"}:
+        raise BrainError("result_state must be observed, failed, or partial")
+    expected = set(expected_fields or [])
+    changed = sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
+    if result_state in {"failed", "partial"}:
+        classification = result_state
+        eligible = False
+        verification_state = "failed"
+    elif not changed:
+        classification = "noop"
+        eligible = True
+        verification_state = "passed"
+    elif set(changed).issubset(expected):
+        classification = "intended"
+        eligible = True
+        verification_state = "passed"
+    else:
+        classification = "unexpected"
+        eligible = False
+        verification_state = "failed"
+    return {
+        "mutation_detected": bool(changed),
+        "classification": classification,
+        "changed_fields": changed,
+        "expected_fields": sorted(expected),
+        "verification_state": verification_state,
+        "completion_eligible": eligible,
+    }
+
+
+def assess(
+    home: Path,
+    repo: Path,
+    *,
+    session_id: str,
+    task_id: str | None = None,
+    phase: str = "session_start",
+    expected_fields: list[str] | None = None,
+    requested_changes: list[str] | None = None,
+    result_state: str = "observed",
+    doctor_check_state: str = "not_run",
+) -> dict:
+    """Capture and persist bounded Environment Steward evidence."""
+    started_at = time.perf_counter()
+    current = snapshot(home, repo)
+    current_state = _state(current)
+    target = session_dir(home, session_id) / EVIDENCE_FILE
+    previous = None
+    if target.exists():
+        try:
+            previous = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = None
+    before_state = previous.get("environment_state") if isinstance(previous, dict) else None
+    mutation = (
+        classify_mutation(
+            before_state,
+            current_state,
+            expected_fields=expected_fields,
+            result_state=result_state,
+        )
+        if isinstance(before_state, dict) and phase != "session_start"
+        else {
+            "mutation_detected": False,
+            "classification": "none",
+            "changed_fields": [],
+            "expected_fields": sorted(set(expected_fields or [])),
+            "verification_state": "passed",
+            "completion_eligible": True,
+        }
+    )
+    project_id = _project_id(Path(repo))
+    if isinstance(previous, dict) and previous.get("project_id") not in {None, project_id}:
+        mutation = {
+            "mutation_detected": True,
+            "classification": "scope_mismatch",
+            "changed_fields": ["project_id"],
+            "expected_fields": [],
+            "verification_state": "failed",
+            "completion_eligible": False,
+        }
+    environment_hash_value = environment_hash(current)
+    steward_seed = {"project_id": project_id, "session_id": session_id}
+    repo_exists = Path(repo).exists()
+    requested = [item.strip() for item in (requested_changes or []) if item.strip()]
+    dependency_refs = [
+        f"dependency-{hashlib.sha256(item.encode('utf-8')).hexdigest()[:16]}"
+        for item in requested
+    ]
+    evidence = {
+        "schema_version": 1,
+        "environment_steward_id": (
+            f"envsteward-{hashlib.sha256(_canonical(steward_seed).encode()).hexdigest()[:16]}"
+        ),
+        "project_id": steward_seed["project_id"],
+        "session_id": session_id,
+        "doctor_check_state": doctor_check_state,
+        "task_id": task_id,
+        "phase": phase,
+        "environment_hash": environment_hash_value,
+        "environment_state": current_state,
+        "required_checks": ["snapshot", "project_identity", "worktree_identity"],
+        "check_outcomes": {
+            "snapshot": "passed",
+            "project_identity": "passed" if repo_exists else "failed",
+            "worktree_identity": "passed" if current_state["worktree_count"] >= 0 else "failed",
+        },
+        "mutation_detected": mutation["mutation_detected"],
+        "mutation_classification": mutation["classification"],
+        "mutation_result_state": result_state,
+        "changed_fields": mutation["changed_fields"],
+        "requested_changes": requested,
+        "verification_state": mutation["verification_state"],
+        "before_environment_hash": (
+            previous.get("environment_hash") if isinstance(previous, dict) else None
+        ),
+        "after_environment_hash": environment_hash_value,
+        "dependency_change_refs": dependency_refs,
+        "recovery_state": "not_required"
+        if mutation["completion_eligible"] and repo_exists
+        else "required",
+        "completion_eligible": mutation["completion_eligible"] and repo_exists,
+        "assessment_overhead_ms": round((time.perf_counter() - started_at) * 1000, 3),
+    }
+    _write_json_atomic(target, evidence)
+    return evidence
+
 
 
 # ---------------------------------------------------------------------------

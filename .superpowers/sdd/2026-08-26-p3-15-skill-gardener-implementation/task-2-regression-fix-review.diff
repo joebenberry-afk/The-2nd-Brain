@@ -1,0 +1,126 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
+index 549fad3..dfdb62c 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
+@@ -25,10 +25,18 @@ Complete. `SkillGardener.observe_portfolio()` now composes bounded, read-only ev
+ - Capability overlap requires a dict with a distinct target and `material=true`; supersession requires an existing surviving replacement with matching current capability identity/version.
+ - Negative ROI ledger fallback is content-hash bound with bounded ledger refs; stale identities suppress current trigger/scope/model/replacement findings; audit bare missing-section titles are recognized.
+ - Telemetry usage is collected once per observation, and duplicate tests assert the peer has no capability-overlap issue.
+ 
+ ## Concerns
+ - Model/scope/trigger findings require explicit persisted evidence fields; arbitrary or unknown values are ignored conservatively.
+ - Authorization, maintenance execution, and P3.16/Lean behavior remain out of scope.
+ 
+ ## Fix-round commit
+ - `da942d7 fix(gardener): harden evidence classification`
++
++## Re-review fix
++- `_replacement_evidence()` now extracts `normalized_hash`, `capability_hash`, or `content_hash` from nested `capability_evidence` and only returns verifiable capability identity.
++- Added focused regression coverage for nested normalized replacement capability proof.
++- Focused tests: **20 passed**.
++
++## Re-review fix commit
++- `1364998 fix(gardener): verify nested capability proofs`
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index 24630f0..a9118a9 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -209,39 +209,44 @@ def _replacement_evidence(
+ ) -> tuple[dict[str, str] | None, list[str]]:
+     for label, source in (("binding", binding), ("evaluation", evaluation)):
+         if not isinstance(source, dict):
+             continue
+         for key in ("replacement_ref", "replacement", "superseded_by"):
+             value = source.get(key)
+             if not isinstance(value, dict):
+                 continue
+             name = value.get("skill_name") or value.get("name") or value.get("id")
+             version = value.get("version") or value.get("skill_version")
+-            capability = value.get("capability_hash") or value.get("normalized_capability_hash")
++            capability = value.get("capability_hash") or value.get(
++                "normalized_capability_hash"
++            )
+             cap_evidence = value.get("capability_evidence")
++            if not isinstance(capability, str) and isinstance(cap_evidence, dict):
++                for cap_key in ("normalized_hash", "capability_hash", "content_hash"):
++                    candidate = cap_evidence.get(cap_key)
++                    if isinstance(candidate, str) and candidate:
++                        capability = candidate
++                        break
+             if (
+                 isinstance(name, str)
+                 and name
+                 and name != skill_name
+                 and isinstance(version, str)
+                 and version
+-                and (
+-                    isinstance(capability, str)
+-                    or (isinstance(cap_evidence, (dict, list)) and bool(cap_evidence))
+-                )
++                and isinstance(capability, str)
++                and capability
+             ):
+                 replacement = {
+                     "skill_name": name[:_MAX_REFERENCE_LENGTH],
+                     "skill_version": version[:_MAX_REFERENCE_LENGTH],
++                    "capability_hash": capability[:_MAX_REFERENCE_LENGTH],
+                 }
+-                if isinstance(capability, str):
+-                    replacement["capability_hash"] = capability[:_MAX_REFERENCE_LENGTH]
+                 return replacement, _evidence_refs(
+                     value, f"{label}:{key}:{name}:{version}"
+                 )
+     return None, []
+ 
+ 
+ def _stale_evidence(
+     item: dict[str, Any], binding: dict[str, Any], evaluation: dict[str, Any]
+ ) -> list[str]:
+     current_hash = item.get("content_hash")
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 3c13a60..8fc909f 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -300,20 +300,42 @@ def test_superseded_requires_replacement_capability_evidence(brain_home):
+ 
+     result = SkillGardener(brain_home).observe_portfolio()
+     superseded = [
+         i for i in result["issues"] if i["condition_code"] == "superseded"
+     ]
+ 
+     assert superseded
+     assert superseded[0]["issue_type"] == "superseded"
+     assert superseded[0]["replacement_ref"]["skill_name"] == "new-skill"
+     assert superseded[0]["evidence_refs"]
++    
++def test_superseded_accepts_nested_normalized_capability_hash(brain_home):
++    replacement = _make_skill(brain_home, "nested-replacement", "shadow")
++    _write_binding(replacement, {"capability_hash": "cap-nested"})
++    old = _make_skill(brain_home, "nested-old", "shadow")
++    _write_binding(
++        old,
++        {
++            "replacement_ref": {
++                "skill_name": "nested-replacement",
++                "version": "1",
++                "capability_evidence": {"normalized_hash": "cap-nested"},
++            }
++        },
++    )
++
++    issues = SkillGardener(brain_home).observe_portfolio()["issues"]
++
++    assert any(
++        i["skill_name"] == "nested-old" and i["condition_code"] == "superseded"
++        for i in issues
++    )
+ 
+ 
+ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
+     stale = _make_skill(brain_home, "stale-ref", "shadow")
+     broken = _make_skill(brain_home, "broken-ref", "shadow")
+     superseded = _make_skill(brain_home, "superseded-ref", "shadow")
+     replacement = _make_skill(brain_home, "replacement", "shadow")
+     _write_binding(replacement, {"capability_hash": "z" * 256})
+     _write_binding(
+         stale,

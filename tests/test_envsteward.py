@@ -291,3 +291,99 @@ def test_process_registry_random_sequences(brain_home, pids, exes, monkeypatch):
     final = envsteward.list_processes(home)
     assert [r["pid"] for r in final] == [r["pid"] for r in seen]
     assert [r["exe"] for r in final] == [r["exe"] for r in seen]
+
+
+def test_assess_persists_bounded_environment_evidence(brain_home, repo):
+    evidence = envsteward.assess(
+        brain_home,
+        repo,
+        session_id="p39-session",
+        task_id="p39-task",
+        phase="session_start",
+    )
+
+    assert evidence["environment_steward_id"].startswith("envsteward-")
+    assert evidence["task_id"] == "p39-task"
+    assert evidence["phase"] == "session_start"
+    assert len(evidence["environment_hash"]) == 64
+    assert evidence["mutation_detected"] is False
+    assert evidence["completion_eligible"] is True
+    persisted = brain_home / "state" / "sessions" / "p39-session" / "environment-evidence.json"
+    assert json.loads(persisted.read_text()) == evidence
+
+
+def test_classify_mutation_distinguishes_intended_unexpected_and_noop():
+    before = {
+        "repo": "C:/repo",
+        "branch": "main",
+        "lockfiles": [],
+        "package_manager": ["unknown"],
+    }
+    noop = envsteward.classify_mutation(before, dict(before), expected_fields=["lockfiles"])
+    intended = envsteward.classify_mutation(
+        before,
+        {**before, "lockfiles": ["uv.lock"], "package_manager": ["uv"]},
+        expected_fields=["lockfiles", "package_manager"],
+    )
+    unexpected = envsteward.classify_mutation(
+        before,
+        {**before, "lockfiles": ["uv.lock"], "branch": "feature"},
+        expected_fields=["lockfiles"],
+    )
+
+    assert noop["classification"] == "noop"
+    assert noop["mutation_detected"] is False
+    assert intended["classification"] == "intended"
+    assert intended["mutation_detected"] is True
+    assert unexpected["classification"] == "unexpected"
+    assert unexpected["completion_eligible"] is False
+
+
+def test_classify_mutation_reports_failed_and_partial_results():
+    before = {"lockfiles": [], "package_manager": ["unknown"]}
+    after = {"lockfiles": ["package-lock.json"], "package_manager": ["npm"]}
+
+    failed = envsteward.classify_mutation(
+        before,
+        after,
+        expected_fields=["lockfiles", "package_manager"],
+        result_state="failed",
+    )
+    partial = envsteward.classify_mutation(
+        before,
+        after,
+        expected_fields=["lockfiles", "package_manager"],
+        result_state="partial",
+    )
+
+    assert failed["classification"] == "failed"
+    assert failed["verification_state"] == "failed"
+    assert partial["classification"] == "partial"
+    assert partial["verification_state"] == "failed"
+
+
+def test_assess_rejects_cross_project_session_reuse(brain_home, tmp_path):
+    first_repo = tmp_path / "first"
+    second_repo = tmp_path / "second"
+    first_repo.mkdir()
+    second_repo.mkdir()
+    envsteward.assess(brain_home, first_repo, session_id="shared-session")
+
+    result = envsteward.assess(
+        brain_home,
+        second_repo,
+        session_id="shared-session",
+        phase="mutation",
+    )
+
+    assert result["mutation_classification"] == "scope_mismatch"
+    assert result["completion_eligible"] is False
+
+
+def test_assess_blocks_missing_project_root(brain_home, tmp_path):
+    missing = tmp_path / "missing"
+    result = envsteward.assess(brain_home, missing, session_id="missing-project")
+
+    assert result["check_outcomes"]["project_identity"] == "failed"
+    assert result["completion_eligible"] is False
+    assert result["recovery_state"] == "required"

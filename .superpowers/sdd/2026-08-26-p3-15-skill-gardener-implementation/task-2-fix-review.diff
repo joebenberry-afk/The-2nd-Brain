@@ -1,0 +1,530 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
+index 66b05f5..549fad3 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-2-report.md
+@@ -13,14 +13,22 @@ Complete. `SkillGardener.observe_portfolio()` now composes bounded, read-only ev
+ 
+ ## Tests
+ - `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q`
+ - Result: **19 passed**.
+ - Project-wide suites, formatters, and linters were intentionally skipped.
+ 
+ ## Commit
+ - `0087ba0 feat(gardener): classify portfolio conditions`
+ - `dcb6580 fix(gardener): accept explicit failure markers`
+ 
++## Reviewer fixes
++- Unknown usage is now skill-level bounded evidence (`usage_state=unknown`, `usage_evidence_refs`), not an `unused` issue.
++- Capability overlap requires a dict with a distinct target and `material=true`; supersession requires an existing surviving replacement with matching current capability identity/version.
++- Negative ROI ledger fallback is content-hash bound with bounded ledger refs; stale identities suppress current trigger/scope/model/replacement findings; audit bare missing-section titles are recognized.
++- Telemetry usage is collected once per observation, and duplicate tests assert the peer has no capability-overlap issue.
++
+ ## Concerns
+ - Model/scope/trigger findings require explicit persisted evidence fields; arbitrary or unknown values are ignored conservatively.
+-- `usage_unavailable` is represented as an `unused`-bucket evidence issue with `reason_codes=["usage_unavailable"]`, never as measured zero use.
+ - Authorization, maintenance execution, and P3.16/Lean behavior remain out of scope.
++
++## Fix-round commit
++- `da942d7 fix(gardener): harden evidence classification`
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index 2ff2a45..24630f0 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -52,21 +52,20 @@ _ISSUE_TYPES = {
+     "dead_skill": "broken",
+     "capability_overlap": "duplicate",
+     "false_trigger": "broken",
+     "measured_zero_use": "unused",
+     "measured_negative": "negative_roi",
+     "exact_duplicate": "duplicate",
+     "scope_too_broad": "broken",
+     "scope_too_narrow": "broken",
+     "model_specific_quirk": "broken",
+     "superseded": "superseded",
+-    "usage_unavailable": "unused",
+ }
+ 
+ 
+ 
+ def _bounded_refs(*values: object) -> list[str]:
+     """Return only short, string evidence references from persisted metadata."""
+     refs: list[str] = []
+     for value in values:
+         if not isinstance(value, list):
+             continue
+@@ -281,63 +280,108 @@ def _ledger_usage(home: Path, skill_name: str) -> tuple[bool, list[str]]:
+                 "SELECT id, measurement_state FROM skill_roi_ledger "
+                 "WHERE skill_name = ? ORDER BY id LIMIT 32",
+                 (skill_name,),
+             ).fetchall()
+     except sqlite3.Error:
+         return False, []
+     measured = [row for row in rows if row[1] == MeasurementState.MEASURED.value]
+     return bool(measured), [f"ledger:{row[0]}" for row in measured]
+ 
+ 
++def _telemetry_usage(home: Path) -> dict[str, list[str]]:
++    """Collect bounded per-skill usage evidence in one telemetry pass."""
++    usage: dict[str, list[str]] = {}
++    for file_name, _, record in telemetry.iter_records(home):
++        if not isinstance(record, dict):
++            continue
++        name = record.get("skill_name")
++        if (
++            isinstance(name, str)
++            and record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}
++        ):
++            refs = usage.setdefault(name, [])
++            if len(refs) < _MAX_EVIDENCE_REFS:
++                refs.append(f"telemetry:{file_name}")
++    return usage
++
++
+ def _usage_state(
+-    home: Path, skill_name: str, binding: dict[str, Any], evaluation: dict[str, Any]
++    home: Path,
++    skill_name: str,
++    binding: dict[str, Any],
++    evaluation: dict[str, Any],
++    telemetry_usage: dict[str, list[str]],
+ ) -> tuple[str, list[str]]:
+     for label, source in (("binding", binding), ("evaluation", evaluation)):
+         if not isinstance(source, dict):
+             continue
+         for key in ("usage", "usage_telemetry", "telemetry"):
+             usage = source.get(key)
+             if not isinstance(usage, dict):
+                 continue
+             count = usage.get("invocations", usage.get("invocation_count", usage.get("uses")))
+             measured = usage.get("measured") is True or isinstance(usage.get("window"), str)
+             if isinstance(count, int) and count >= 0 and measured:
+                 refs = _evidence_refs(usage, f"{label}:{key}:{skill_name}")
+                 return ("zero" if count == 0 else "used"), refs
+     used, refs = _ledger_usage(home, skill_name)
+     if used:
+         return "used", refs
+-    for file_name, _, record in telemetry.iter_records(home):
+-        if not isinstance(record, dict) or record.get("skill_name") != skill_name:
+-            continue
+-        if record.get("kind") in {"skill_invocation", "skill_use", "skill_selected"}:
+-            return "used", [f"telemetry:{file_name}"]
++    if skill_name in telemetry_usage:
++        return "used", telemetry_usage[skill_name]
+     return "unknown", [f"usage_unavailable:{skill_name}"]
+ 
+ 
++def _ledger_measured_roi(
++    home: Path, skill_name: str, content_hash: str
++) -> tuple[int | None, list[str]]:
++    dbfile = home / "state" / "skills" / "skill_roi.sqlite"
++    if not dbfile.is_file():
++        return None, []
++    try:
++        with sqlite3.connect(dbfile, timeout=1.0) as conn:
++            row = conn.execute(
++                "SELECT COUNT(*), COALESCE(SUM(tokens_saved), 0), "
++                "COALESCE(SUM(tokens_invested), 0) "
++                "FROM skill_roi_ledger WHERE skill_name = ? AND skill_version = ? "
++                "AND measurement_state = ?",
++                (skill_name, content_hash, MeasurementState.MEASURED.value),
++            ).fetchone()
++            refs = conn.execute(
++                "SELECT id FROM skill_roi_ledger WHERE skill_name = ? "
++                "AND skill_version = ? AND measurement_state = ? ORDER BY id LIMIT 32",
++                (skill_name, content_hash, MeasurementState.MEASURED.value),
++            ).fetchall()
++    except sqlite3.Error:
++        return None, []
++    if not row or not row[0]:
++        return None, []
++    return int(row[1]) - int(row[2]), [f"ledger:{int(ref[0])}" for ref in refs]
++
++
+ def _measured_roi(
+     home: Path, item: dict[str, Any]
+ ) -> tuple[MeasurementState, int | None, list[str]]:
+     name = str(item["skill_name"])
+     version = str(item.get("content_hash") or item["skill_version"])
+     measured, ref = _measured_from_counterfactual_result(home, name, version)
+     if measured is not None:
+         return MeasurementState.MEASURED, measured, _bounded_refs([ref] if ref else [])
+     measured, ref, candidate_ref = _measured_from_evaluation(home, name, version)
+     if measured is not None:
+         return MeasurementState.MEASURED, measured, _bounded_refs(
+             [ref, f"candidate:{candidate_ref}"] if ref else []
+         )
+-    summary = item.get("roi_summary")
+-    if isinstance(summary, dict) and isinstance(summary.get("invocations"), int):
+-        if summary["invocations"] > 0 and isinstance(summary.get("net_tokens_saved"), int):
+-            return MeasurementState.MEASURED, summary["net_tokens_saved"], []
++    if isinstance(item.get("content_hash"), str):
++        measured, refs = _ledger_measured_roi(home, name, item["content_hash"])
++        if measured is not None:
++            return MeasurementState.MEASURED, measured, refs
+     return MeasurementState.UNAVAILABLE, None, []
+ 
+ def _issue_record(
+     item: dict[str, Any],
+     condition_code: str,
+     evidence_refs: list[str],
+     *,
+     measurement_state: str = "unavailable",
+     reason_codes: list[str] | None = None,
+     replacement_ref: dict[str, str] | None = None,
+@@ -359,123 +403,167 @@ def _issue_record(
+     return issue
+ 
+ 
+ def _classify_portfolio(
+     home: Path,
+     skills: list[dict[str, Any]],
+     evidence: dict[str, tuple[dict[str, Any], dict[str, Any], Path]],
+ ) -> list[dict[str, Any]]:
+     issues: list[dict[str, Any]] = []
+     identities: dict[str, list[dict[str, Any]]] = {}
++    telemetry_usage = _telemetry_usage(home)
++    required_sections = {
++        "Purpose",
++        "Positive Triggers",
++        "Negative Triggers",
++        "Inputs",
++        "Procedure",
++        "Tools",
++        "Safety",
++        "Verification",
++        "Output",
++        "References",
++    }
+     for item in skills:
+         name = str(item["skill_name"])
+         binding, evaluation, path = evidence[name]
+-        stale_refs = _stale_evidence(item, binding, evaluation)
+-        audit_refs = [
+-            f"audit:{name}:{finding}"
+-            for finding in item.get("audit_findings", [])
+-            if isinstance(finding, str)
++        audit_findings = [
++            finding for finding in item.get("audit_findings", []) if isinstance(finding, str)
+         ]
++        audit_refs = [f"audit:{name}:{finding}" for finding in audit_findings]
++        stale_refs = _stale_evidence(item, binding, evaluation)
++        stale_refs.extend(
++            ref
++            for ref in audit_refs
++            if re.search(r"frontmatter\s+status|freshness|stale", ref, re.I)
++        )
++        stale_refs = _bounded_refs(stale_refs)
+         if stale_refs:
+             issues.append(
+                 _issue_record(
+                     item, "evidence_stale", stale_refs, reason_codes=["evidence_stale"]
+                 )
+             )
+-        if item.get("content_hash") is None or any(
+-            re.search(r"missing\s+skill\.md|missing\s+promotion|cannot\s+execute|execution|corrupt|missing\s+section|empty|placeholder|tbd|todo", finding, re.I)
+-            for finding in item.get("audit_findings", [])
+-            if isinstance(finding, str)
+-        ):
+-            refs = [ref for ref in audit_refs if ref]
++        dead = item.get("content_hash") is None or any(
++            re.search(
++                r"missing\s+skill\.md|missing\s+promotion|cannot\s+execute|execution|"
++                r"corrupt|missing\s+section|empty|placeholder|tbd|todo",
++                finding,
++                re.I,
++            )
++            or finding.strip() in required_sections
++            for finding in audit_findings
++        )
++        if dead:
++            refs = list(audit_refs)
+             if item.get("content_hash") is None:
+                 refs.append(f"skill:{name}:SKILL.md")
+             issues.append(_issue_record(item, "dead_skill", refs))
+ 
+-        usage_state, usage_refs = _usage_state(home, name, binding, evaluation)
+-        audit_stale_refs = [
+-            ref
+-            for ref in audit_refs
+-            if re.search(r"frontmatter\s+status|freshness|stale", ref, re.I)
+-        ]
+-        if audit_stale_refs:
+-            issues.append(
+-                _issue_record(
+-                    item, "evidence_stale", audit_stale_refs, reason_codes=["evidence_stale"]
+-                )
+-            )
++        usage_state, usage_refs = _usage_state(
++            home, name, binding, evaluation, telemetry_usage
++        )
++        item["usage_state"] = usage_state
++        item["usage_evidence_refs"] = _bounded_refs(usage_refs)
+         if usage_state == "zero":
+             issues.append(
+                 _issue_record(
+                     item,
+                     "measured_zero_use",
+                     usage_refs,
+                     measurement_state=MeasurementState.MEASURED.value,
+                 )
+             )
+-        elif usage_state == "unknown":
+-            issues.append(
+-                _issue_record(
+-                    item,
+-                    "usage_unavailable",
+-                    usage_refs,
+-                    reason_codes=["usage_unavailable"],
+-                )
+-            )
+ 
+         measurement_state, measured_roi, roi_refs = _measured_roi(home, item)
+-        if measurement_state == MeasurementState.MEASURED and measured_roi is not None and measured_roi < 0:
++        if (
++            measurement_state == MeasurementState.MEASURED
++            and measured_roi is not None
++            and measured_roi < 0
++        ):
+             issues.append(
+                 _issue_record(
+                     item,
+                     "measured_negative",
+                     roi_refs or [f"roi:{name}"],
+                     measurement_state=measurement_state.value,
+                 )
+             )
+ 
+-        for code in (
+-            "dead_skill",
+-            "capability_overlap",
+-            "false_trigger",
+-            "scope_too_broad",
+-            "scope_too_narrow",
+-            "model_specific_quirk",
+-        ):
+-            detected, refs, value = _explicit_condition(binding, evaluation, code, name)
+-            if not detected:
+-                continue
+-            # A lifecycle failure already emitted above is still represented
+-            # separately when explicit evidence names dead_skill.
+-            if code == "dead_skill" and item.get("content_hash") is None:
+-                continue
+-            suffix = ""
+-            if code == "capability_overlap" and isinstance(value, dict):
+-                target = value.get("with") or value.get("skill_name") or value.get("skill_id")
+-                if not isinstance(target, str) or not target or target == name:
+-                    continue
+-                material = value.get("material")
+-                if material is not True:
+-                    continue
+-                suffix = f":{target[:_MAX_REFERENCE_LENGTH]}"
+-            issues.append(_issue_record(item, code, refs))
+ 
+-        replacement, replacement_refs = _replacement_evidence(binding, evaluation, name)
+-        if replacement is not None:
+-            issues.append(
+-                _issue_record(
+-                    item,
+-                    "superseded",
+-                    replacement_refs,
+-                    replacement_ref=replacement,
++        if not stale_refs:
++            for code in (
++                "dead_skill",
++                "capability_overlap",
++                "false_trigger",
++                "scope_too_broad",
++                "scope_too_narrow",
++                "model_specific_quirk",
++            ):
++                detected, refs, value = _explicit_condition(
++                    binding, evaluation, code, name
+                 )
++                if not detected:
++                    continue
++                if code == "dead_skill" and item.get("content_hash") is None:
++                    continue
++                suffix = ""
++                if code == "capability_overlap":
++                    if not isinstance(value, dict):
++                        continue
++                    target_name = (
++                        value.get("with")
++                        or value.get("skill_name")
++                        or value.get("skill_id")
++                    )
++                    if (
++                        not isinstance(target_name, str)
++                        or not target_name
++                        or target_name == name
++                        or value.get("material") is not True
++                    ):
++                        continue
++                    suffix = f":{target_name[:_MAX_REFERENCE_LENGTH]}"
++                issues.append(_issue_record(item, code, refs, suffix=suffix))
++
++            replacement, replacement_refs = _replacement_evidence(
++                binding, evaluation, name
+             )
++            if replacement is not None:
++                target_name = replacement["skill_name"]
++                target = next(
++                    (candidate for candidate in skills if candidate["skill_name"] == target_name),
++                    None,
++                )
++                target_evidence = evidence.get(target_name)
++                target_identity = (
++                    _capability_identity(
++                        target_evidence[2], target_evidence[0], target_evidence[1]
++                    )
++                    if target_evidence is not None
++                    else None
++                )
++                if (
++                    target is not None
++                    and target.get("content_hash") is not None
++                    and target.get("lifecycle_state") in paths.SKILL_LEVEL_DIRS
++                    and replacement.get("skill_version") == target.get("skill_version")
++                    and replacement.get("capability_hash") == target_identity
++                ):
++                    issues.append(
++                        _issue_record(
++                            item,
++                            "superseded",
++                            replacement_refs,
++                            replacement_ref=replacement,
++                        )
++                    )
+         identity = _capability_identity(path, binding, evaluation)
+         if identity:
+             identities.setdefault(identity, []).append(item)
+ 
+     for identity, members in identities.items():
+         if len(members) < 2:
+             continue
+         refs = [f"capability:{identity[:_MAX_REFERENCE_LENGTH]}"]
+         for item in members:
+             issues.append(_issue_record(item, "exact_duplicate", refs))
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 6489a9a..3c13a60 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -212,25 +212,24 @@ def test_condition_codes_are_differentiated(brain_home, condition_code, issue_ty
+     assert matches
+     assert all(issue["issue_type"] == issue_type for issue in matches)
+ 
+ 
+ def test_missing_usage_is_unavailable_not_measured_zero(brain_home):
+     _make_skill(brain_home, "unknown-use", "shadow")
+ 
+     result = SkillGardener(brain_home).observe_portfolio()
+ 
+     assert not any(i["condition_code"] == "measured_zero_use" for i in result["issues"])
+-    unavailable = [
+-        i for i in result["issues"] if "usage_unavailable" in i["reason_codes"]
+-    ]
+-    assert unavailable
+-    assert all(i["evidence_refs"] for i in unavailable)
++    skill = result["skills"][0]
++    assert skill["usage_state"] == "unknown"
++    assert "usage_unavailable:unknown-use" in skill["usage_evidence_refs"]
++    assert not any(i["issue_type"] == "unused" for i in result["issues"])
+ 
+ 
+ def test_estimated_or_unavailable_roi_is_not_negative(brain_home):
+     directory = _make_skill(brain_home, "estimated-only", "candidate")
+     _write_binding(
+         directory,
+         {"source_type": "radar", "source_ref": "candidate-without-measurement"},
+     )
+     (brain_home / "state" / "radar").mkdir(parents=True)
+     (brain_home / "state" / "radar" / "candidates.json").write_text(
+@@ -271,29 +270,35 @@ def test_exact_duplicate_is_not_capability_overlap(brain_home):
+     )
+ 
+     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
+ 
+     assert any(
+         i["skill_name"] == "same-one" and i["condition_code"] == "capability_overlap"
+         for i in issues
+     )
+     assert any(i["condition_code"] == "exact_duplicate" for i in issues)
+ 
++    assert not any(
++        i["skill_name"] == "same-two" and i["condition_code"] == "capability_overlap"
++        for i in issues
++    )
+ 
+ def test_superseded_requires_replacement_capability_evidence(brain_home):
++    replacement = _make_skill(brain_home, "new-skill", "shadow")
++    _write_binding(replacement, {"capability_hash": "cap-new"})
+     directory = _make_skill(brain_home, "old-skill", "active")
+     _write_binding(
+         directory,
+         {
+             "replacement_ref": {
+                 "skill_name": "new-skill",
+-                "version": "2",
++                "version": "1",
+                 "capability_hash": "cap-new",
+                 "evidence_refs": ["promotion:new-skill"],
+             }
+         },
+     )
+ 
+     result = SkillGardener(brain_home).observe_portfolio()
+     superseded = [
+         i for i in result["issues"] if i["condition_code"] == "superseded"
+     ]
+@@ -301,37 +306,49 @@ def test_superseded_requires_replacement_capability_evidence(brain_home):
+     assert superseded
+     assert superseded[0]["issue_type"] == "superseded"
+     assert superseded[0]["replacement_ref"]["skill_name"] == "new-skill"
+     assert superseded[0]["evidence_refs"]
+ 
+ 
+ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
+     stale = _make_skill(brain_home, "stale-ref", "shadow")
+     broken = _make_skill(brain_home, "broken-ref", "shadow")
+     superseded = _make_skill(brain_home, "superseded-ref", "shadow")
+-    _write_binding(stale, {"candidate_content_sha256": "x" * 10_000})
++    replacement = _make_skill(brain_home, "replacement", "shadow")
++    _write_binding(replacement, {"capability_hash": "z" * 256})
++    _write_binding(
++        stale,
++        {
++            "candidate_content_sha256": "x" * 10_000,
++            "condition_evidence": {"false_trigger": {"detected": True}},
++        },
++    )
+     _write_binding(
+         broken,
+         {
+             "condition_evidence": {
+                 "false_trigger": {"detected": True, "evidence_refs": ["y" * 10_000]}
+             }
+         },
+     )
+     _write_binding(
+         superseded,
+         {
+             "replacement_ref": {
+                 "skill_name": "replacement",
+                 "version": "1",
+-                "capability_hash": "z" * 10_000,
++                "capability_hash": "z" * 256,
+                 "evidence_refs": ["q" * 10_000],
+             }
+         },
+     )
+ 
+     issues = SkillGardener(brain_home).observe_portfolio()["issues"]
++    assert not any(
++        i["skill_name"] == "stale-ref" and i["condition_code"] == "false_trigger"
++        for i in issues
++    )
+ 
+     for code in ("evidence_stale", "false_trigger", "superseded"):
+         matched = [i for i in issues if i["condition_code"] == code]
+         assert matched
+         assert all(len(ref) <= 256 for i in matched for ref in i["evidence_refs"])

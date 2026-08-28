@@ -23,6 +23,7 @@ from . import (
     autoinject,
     contracts,
     firewall,
+    handoff,
     ledger,
     model_routing,
     router,
@@ -30,6 +31,7 @@ from . import (
     vmem,
     worker_protocol,
 )
+from .errors import BrainError
 
 ADAPTER_VERSION = "0.1.0"
 _HOST = "hermes"
@@ -46,6 +48,8 @@ _SUPPORTED_EVENTS = {
     "worker_result_review",
     "worker_result_correction",
     "worker_result_corrected",
+    "handoff_create",
+    "handoff_read",
 }
 _VMEM_HOT_CONTEXT_BUDGET = 512
 _TOOL_RESULT_MAX_CHARS = 4000
@@ -1740,6 +1744,85 @@ def _handle_session_end(home: Path, binding: HermesBinding) -> dict[str, Any]:
         "checkpoint": checkpoint,
     }
 
+def _handoff_list_or_none(value: Any) -> list[str] | None:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else None
+
+
+def _handle_handoff_create(
+    home: Path, binding: HermesBinding, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a canonical Brain Handoff Envelope (§3 P3.17) for this session.
+
+    Uses the same :func:`second_brain.handoff.create_handoff_envelope` the
+    OMP adapter calls, so envelope schema and validation never diverge by
+    harness.
+    """
+    _register_binding(home, binding)
+    try:
+        envelope, artifact = handoff.create_handoff_envelope(
+            home,
+            binding.brain_session_id,
+            source_harness=_HOST,
+            target_harness=_first_text(payload, "target_harness"),
+            target_role=_first_text(payload, "target_role"),
+            source_task_id=_first_text(payload, "task_id"),
+            source_role=binding.bot_role,
+            project_id=binding.project_id,
+            context_refs=_handoff_list_or_none(payload.get("context_refs")),
+            artifact_refs=_handoff_list_or_none(payload.get("artifact_refs")),
+            evidence_refs=_handoff_list_or_none(payload.get("evidence_refs")),
+            unavailable_evidence=_handoff_list_or_none(payload.get("unavailable_evidence")),
+        )
+    except contracts.HandoffError as exc:
+        return {
+            **_response_base(binding, "handoff_create"),
+            "status": "failed",
+            "failure_code": exc.code,
+        }
+    except BrainError as exc:
+        return {
+            **_response_base(binding, "handoff_create"),
+            "status": "failed",
+            "failure_code": "HANDOFF_SOURCE_UNAVAILABLE",
+            "error": str(exc)[:128],
+        }
+    return {
+        **_response_base(binding, "handoff_create"),
+        "status": "created",
+        "envelope": envelope.to_dict(),
+        "markdown_path": artifact.artifact_path,
+        "envelope_bytes": envelope.envelope_bytes(),
+    }
+
+
+def _handle_handoff_read(
+    home: Path, binding: HermesBinding, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate and losslessly recover a Brain Handoff Envelope (§3 P3.17)."""
+    _register_binding(home, binding)
+    envelope_data = payload.get("envelope")
+    if not isinstance(envelope_data, dict):
+        return {
+            **_response_base(binding, "handoff_read"),
+            "status": "failed",
+            "failure_code": "HANDOFF_MALFORMED",
+        }
+    try:
+        recovered = handoff.read_handoff_envelope(
+            home,
+            envelope_data,
+            expected_project_id=(binding.project_id or None),
+            allow_stale=bool(payload.get("allow_stale", False)),
+        )
+    except contracts.HandoffError as exc:
+        return {
+            **_response_base(binding, "handoff_read"),
+            "status": "failed",
+            "failure_code": exc.code,
+        }
+    return {**_response_base(binding, "handoff_read"), "status": "recovered", **recovered}
+
+
 
 def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
     """Handle one Hermes adapter request without raising into the host."""
@@ -1845,6 +1928,10 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
                 corrected,
                 payload.get("context_handoff"),
             )
+        if event == "handoff_create":
+            return _handle_handoff_create(home_path, binding, payload)
+        if event == "handoff_read":
+            return _handle_handoff_read(home_path, binding, payload)
         return _handle_session_end(home_path, binding)
     except Exception:
         return {

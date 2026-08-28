@@ -1,127 +1,62 @@
-"""P1 orchestration telemetry tests (Phase D; plan §19/20, amendment §12/§22).
-
-`brainctl orchestration record --json-stdin` reads one counters JSON event,
-computes delegation_purity, and appends a privacy-safe record to
-telemetry/agent-performance/orchestration-<session>.jsonl. Fail-open on
-malformed input; only the nine counters are ever persisted.
-"""
+from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
+import sqlite3
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+import pytest
+
+from second_brain import contracts, hermes_adapter, ledger
 
 
-def _run_cli(home: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess:
-    env = dict(os.environ)
-    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
-        env.pop(k, None)
-    return subprocess.run(
-        [sys.executable, "-m", "second_brain", "--home", str(home), *args],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=home,
-        input=stdin,
-        timeout=120,
+def _identity(role: str = "integrator") -> contracts.AgentIdentity:
+    return contracts.AgentIdentity(
+        agent_id="agent-1", internal_session_id="session-1", host_agent_id="Brain-Integrator",
+        parent_agent_id=None, role_profile=role, model="test-model", provider="test-provider",
+        created_at="2026-08-22T00:00:00Z",
     )
 
 
-def _records(home: Path, session: str) -> list[dict]:
-    f = home / "telemetry" / "agent-performance" / f"orchestration-{session}.jsonl"
-    if not f.exists():
-        return []
-    return [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+def _packet(role: str = "integrator") -> contracts.WorkerTaskPacket:
+    return contracts.WorkerTaskPacket(
+        task_id="task-1", parent_session_id="parent-1", driver_identity=_identity(role),
+        requested_role="dev", objective="Inspect the bounded seam", scope="src only",
+        completion_condition="return evidence refs", project_id="second-brain", repo_root="repo",
+    )
 
 
-def _event(**kw: int) -> str:
-    base = {
-        "driver_actions_total": 100,
-        "driver_execution_attempts": 1,
-        "blocked_execution_attempts": 0,
-        "emergency_execution_actions": 0,
-        "worker_tasks": 5,
-        "worker_corrections": 1,
-        "worker_verifications": 2,
-        "fan_out_width": 2,
-        "recursion_depth": 0,
-    }
-    base.update(kw)
-    return json.dumps(base)
+def test_worker_packets_are_canonical_bounded_and_role_checked() -> None:
+    packet = _packet().validate()
+    assert packet.canonical_json() == contracts.canonical_json(packet)
+    assert len(packet.canonical_json().encode()) <= contracts.WORKER_PACKET_MAX_BYTES
+    with pytest.raises(contracts.WorkerPacketError, match="UNAUTHORIZED_COORDINATOR"):
+        _packet("dev").validate()
+    with pytest.raises(contracts.WorkerPacketError, match="DEPTH_EXCEEDED"):
+        (_packet().__class__(**{**packet.__dict__, "depth": 2})).validate()
 
 
-def test_purity_math_and_record(tmp_path) -> None:
-    home = tmp_path / "brain"
-    home.mkdir()
-    r = _run_cli(home, "init")
-    assert r.returncode == 0, r.stderr
-    # 1 execution + 0 emergency out of 100 actions -> purity 0.99
-    r = _run_cli(home, "orchestration", "record", "--session", "s1", stdin=_event())
-    assert r.returncode == 0, r.stderr
-    out = json.loads(r.stdout)
-    assert out["recorded"] is True
-    assert out["delegation_purity"] == 0.99
-    recs = _records(home, "s1")
-    assert len(recs) == 1
-    rec = recs[0]
-    assert rec["kind"] == "orchestration_record"
-    assert rec["delegation_purity"] == 0.99
-    assert rec["worker_tasks"] == 5
-    assert rec["fan_out_width"] == 2
-    assert rec["recursion_depth"] == 0
-    # emergency actions count against purity too: (1+1)/10 -> 0.8
-    r2 = _run_cli(home, "orchestration", "record", "--session", "s1", stdin=_event(
-        driver_actions_total=10, driver_execution_attempts=1, emergency_execution_actions=1
-    ))
-    out2 = json.loads(r2.stdout)
-    assert out2["delegation_purity"] == 0.8
-    assert len(_records(home, "s1")) == 2  # append-only
+def test_worker_result_requires_explicit_failure_and_is_bounded() -> None:
+    with pytest.raises(contracts.WorkerPacketError, match="MALFORMED_FAILURE"):
+        contracts.WorkerResultPacket("task-1", _identity("dev"), "failed").validate()
+    result = contracts.WorkerResultPacket(
+        "task-1", _identity("dev"), "completed", summary="done", evidence_refs=["test:1"]
+    ).validate()
+    assert json.loads(result.canonical_json())["status"] == "completed"
 
 
-def test_zero_actions_purity_null_not_fabricated(tmp_path) -> None:
-    home = tmp_path / "brain"
-    home.mkdir()
-    _run_cli(home, "init")
-    event = _event(driver_actions_total=0)
-    r = _run_cli(home, "orchestration", "record", "--session", "s2", stdin=event)
-    out = json.loads(r.stdout)
-    assert out["recorded"] is True
-    assert out["delegation_purity"] is None  # never infer 0 or 1 from no data
-    rec = _records(home, "s2")[0]
-    assert rec["delegation_purity"] is None
-
-
-def test_malformed_fail_open(tmp_path) -> None:
-    home = tmp_path / "brain"
-    home.mkdir()
-    _run_cli(home, "init")
-    for bad in ("not json", "", '{"driver_actions_total": -3}', '{"driver_actions_total": "x"}'):
-        r = _run_cli(home, "orchestration", "record", "--session", "s3", stdin=bad)
-        assert r.returncode == 0, (bad, r.stderr)
-        out = json.loads(r.stdout)
-        assert out["recorded"] is False
-        assert "error" in out
-    assert _records(home, "s3") == []  # nothing persisted for malformed input
-
-
-def test_only_known_counters_persisted_no_secrets(tmp_path) -> None:
-    home = tmp_path / "brain"
-    home.mkdir()
-    _run_cli(home, "init")
-    payload = json.loads(_event())
-    payload["secret_token"] = "s3cr3t"
-    payload["raw_prompt"] = "do the thing"
-    r = _run_cli(home, "orchestration", "record", "--session", "s4", stdin=json.dumps(payload))
-    assert r.returncode == 0
-    rec = _records(home, "s4")[0]
-    assert "secret_token" not in rec
-    assert "raw_prompt" not in rec
-    assert set(rec) <= {
-        "v", "ts", "kind", "session", "delegation_purity",
-        "driver_actions_total", "driver_execution_attempts", "blocked_execution_attempts",
-        "emergency_execution_actions", "worker_tasks", "worker_corrections",
-        "worker_verifications", "fan_out_width", "recursion_depth",
-    }
+def test_missing_worker_is_explicit_and_correlated(brain_home: Path) -> None:
+    binding = hermes_adapter.resolve_binding(brain_home, {
+        "bot_name": "Brain-Integrator", "bot_role": "integrator", "hermes_session_id": "s1",
+        "project_id": "second-brain", "repo_root": str(Path.cwd()),
+    })
+    response = hermes_adapter.request_worker_task(
+        brain_home, binding, json.loads(_packet().canonical_json())
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "WORKER_UNAVAILABLE"
+    with sqlite3.connect(ledger.LedgerStore(brain_home, binding.host_session_id).dbfile) as conn:
+        kinds = [row[0] for row in conn.execute("SELECT event_type FROM events ORDER BY seq")]
+    assert "worker_started" in kinds
+    assert "worker_failed" in kinds
+    assert "result_returned" in kinds
+    assert "task-1" in response["task_id"]

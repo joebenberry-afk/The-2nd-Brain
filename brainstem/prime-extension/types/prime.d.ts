@@ -36,8 +36,8 @@ export interface ExtensionContext {
   model: ModelInfo | undefined;
   sessionManager: SessionManagerSurface;
   getContextUsage(): ContextUsage | undefined;
-  /** Full current system prompt (base + earlier extensions' patches, chained). */
-  getSystemPrompt(): string;
+  /** Effective system prompt sections returned by the current OMP runtime. */
+  getSystemPrompt(): string | string[];
   signal: AbortSignal | undefined;
   hasUI: boolean;
   ui: unknown;
@@ -81,8 +81,8 @@ export interface ContextEvent {
 
 /**
  * Fired before a provider request is sent. `payload` is the raw provider
- * request object. Returning a value REPLACES the payload — this extension
- * only measures and always returns undefined.
+ * request object. A returned value replaces the payload; OMP uses this direct
+ * handler contract for Brain-selected provider/model identity.
  */
 export interface BeforeProviderRequestEvent {
   type: "before_provider_request";
@@ -119,8 +119,15 @@ export interface ToolCallEvent {
   type: "tool_call";
   toolName: string;
   toolCallId: string;
-  /** Tool parameters. MUTABLE in the runtime — this extension only reads it. */
+  /** Tool parameters as received before execution. */
   input: Record<string, unknown>;
+}
+
+export interface ToolCallEventResult {
+  block?: boolean;
+  reason?: string;
+  /** Replacement input executed by OMP after handler validation. */
+  input?: Record<string, unknown>;
 }
 
 export interface ToolResultEvent {
@@ -271,7 +278,7 @@ export interface ExtensionAPI {
       ctx: ExtensionContext,
     ) => BeforeAgentStartEventResult | undefined | Promise<BeforeAgentStartEventResult | undefined>,
   ): void;
-  /** P3-B: before_provider_request is measured only — returning undefined keeps the payload. */
+  /** before_provider_request may return a replacement payload; undefined preserves it. */
   on(
     event: "before_provider_request",
     handler: (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => unknown,

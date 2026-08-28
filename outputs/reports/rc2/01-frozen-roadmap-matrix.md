@@ -60,3 +60,73 @@
 - **IMPLEMENTED_BUT_NOT_PROVEN**: 0
 - **PARTIAL**: 0
 - **MISSING**: 0
+
+---
+
+## Independent Qualification Read-back — Hermes P0.3
+
+This addendum records the current independent qualification boundary without
+rewriting the frozen 37-item matrix above. The matrix remains the historical
+roadmap input; this read-back supersedes its unqualified Final Status claims
+where the evidence below differs.
+
+### P0.3 — Automatic Routing: **PROVEN**
+
+The existing deterministic `router.route()` primitive is now exercised through
+the Hermes pre-LLM adapter seam. Evidence:
+
+- `src/second_brain/hermes_adapter.py` invokes `router.route(home, task)` and
+  records only bounded `selected_routes` and `routing_error` metadata.
+- `tests/test_hermes_adapter.py` focused suite: **13 passed**, including the
+  real `autoinject hermes-hook` subprocess path, route selection, bounded
+  packet preservation, identity preservation, and router-failure fail-open.
+- Persistent Brain-Integrator runtime telemetry:
+  `telemetry/agent-performance/hermes-Brain-Integrator-20260821_142254_4174f1.jsonl`
+  records `selected_routes` containing `sqlite-migration-verifier`,
+  `routing_error=false`, `packet_tokens=763`, `model_visible=true`,
+  `bot_name=Brain-Integrator`, `bot_role=integrator`, and project `second-brain`.
+- Independent persistent Brain-Validator runtime telemetry:
+  `telemetry/agent-performance/hermes-Brain-Validator-validator-p03-20260821.jsonl`
+  records `selected_routes=["sqlite-migration-verifier"]`,
+  `routing_error=false`, `packet_tokens=650`, `model_visible=true`,
+  `bot_name=Brain-Validator`, `bot_role=validator`, and project
+  `second-brain`.
+- Brain-Validator independently inspected the two-file change and returned
+  `P0.3_PROVEN` after reproducing the real subprocess path.
+
+### Re-evaluation through the frozen order
+
+The ordered read-back confirms P0.1, P0.2, and P0.3 as proven for the
+qualified evidence boundary. P0.4 is **not** accepted merely because it
+follows P0.3; it was independently checked against its actual requirements.
+
+### P0.4 — Automatic Context Injection: **PROVEN**
+
+The persisted proof manifest
+`outputs/reports/rc2/P0_4_VALIDATOR_RUNTIME_PROOF.md` records the fresh
+Validator session, canonical VMem/telemetry/ledger read-backs, and bounded
+model-visible faulted-in material. Fresh Validator session
+`20260821_155343_90787a` re-read the manifest and every cited canonical source
+after the interactive session boundary and returned `P0.4_PROVEN`.
+
+The seven verified checks are:
+
+1. real post-tool capture into existing VMem;
+2. exact object ID and initial `EVICTED` state;
+3. same-session subsequent pre-LLM turn;
+4. `vmem_context_changed=true` and exact fault-in ID;
+5. resident/faulted-in state and bounded context metrics;
+6. `[SECOND_BRAIN_FAULTED_IN]` material with proof markers in the bounded
+   model-visible context response; and
+7. matching canonical `TOOL_COMPLETED` SQLite row with continuous identity.
+
+### Next unresolved qualified requirement: P0.6 — Injection Telemetry
+
+P0.5 remains proven by the existing activity-capture/ledger evidence. P0.6 is
+the next unresolved item: telemetry and governor pieces exist, but complete
+end-to-end governor/injection-attribution evidence remains missing; the RC2
+token-fabric audit classifies that integration as partial.
+
+**Smallest next task:** independently qualify the existing P0.6 telemetry /
+governor attribution path without changing the frozen roadmap or beginning
+any later roadmap requirement.

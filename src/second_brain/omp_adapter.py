@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import contracts, ledger, model_routing, skills, worker_protocol, working_set
+from . import contracts, handoff, ledger, model_routing, skills, worker_protocol, working_set
 
 _MAX_TASK_CHARS = 2048
 _MAX_IDENTITY_CHARS = 128
@@ -146,6 +146,45 @@ def _candidates(payload: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
     return result
 
 
+
+def _list_or_none(value: Any) -> list[str] | None:
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else None
+
+
+def _prepare_handoff_create(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    session_id = _text(payload.get("host_session_id") or payload.get("session_id"))
+    envelope, artifact = handoff.create_handoff_envelope(
+        home,
+        session_id,
+        source_harness=_text(payload.get("source_harness")) or "omp",
+        target_harness=_text(payload.get("target_harness")),
+        target_role=_text(payload.get("target_role")),
+        source_task_id=_text(payload.get("task_id")),
+        source_role=_text(payload.get("bot_role") or payload.get("role")),
+        project_id=_text(payload.get("project_id")),
+        context_refs=_list_or_none(payload.get("context_refs")),
+        artifact_refs=_list_or_none(payload.get("artifact_refs")),
+        evidence_refs=_list_or_none(payload.get("evidence_refs")),
+        unavailable_evidence=_list_or_none(payload.get("unavailable_evidence")),
+    )
+    return {
+        "envelope": envelope.to_dict(),
+        "markdown_path": artifact.artifact_path,
+        "envelope_bytes": envelope.envelope_bytes(),
+    }
+
+
+def _prepare_handoff_read(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    envelope_data = payload.get("envelope")
+    if not isinstance(envelope_data, dict):
+        raise contracts.HandoffError("HANDOFF_MALFORMED", "envelope must be an object")
+    return handoff.read_handoff_envelope(
+        home,
+        envelope_data,
+        expected_project_id=_text(payload.get("project_id")) or None,
+        allow_stale=bool(payload.get("allow_stale", False)),
+    )
+
 def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return one bounded OMP routing or worker-context response."""
     if not isinstance(payload, Mapping):
@@ -166,6 +205,20 @@ def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[
                 "hydrated_instructions": {},
                 "error": "VISIBILITY_UNAVAILABLE",
             }
+    if payload.get("operation") == "handoff_create":
+        try:
+            return _prepare_handoff_create(Path(home), payload)
+        except contracts.HandoffError as exc:
+            return {"status": "failed", "failure_code": exc.code}
+        except Exception:
+            return {"status": "failed", "failure_code": "HANDOFF_UNAVAILABLE"}
+    if payload.get("operation") == "handoff_read":
+        try:
+            return _prepare_handoff_read(Path(home), payload)
+        except contracts.HandoffError as exc:
+            return {"status": "failed", "failure_code": exc.code}
+        except Exception:
+            return {"status": "failed", "failure_code": "HANDOFF_UNAVAILABLE"}
     task = _text(payload.get("task"), _MAX_TASK_CHARS)
     if not task:
         return {"decision": None, "error": "NO_TASK"}

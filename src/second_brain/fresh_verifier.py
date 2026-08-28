@@ -93,6 +93,54 @@ def parse_verdict(raw_response: str) -> VerifierVerdict:
     return VerifierVerdict(verdict=match.group(1).upper(), confidence=confidence)
 
 
+def bounded_independent_verification(
+    *,
+    raw_response: str,
+    verification_id: str,
+    task_id: str,
+    verifier_session_id: str,
+    implementation_session_id: str,
+    task_hash: str,
+    requirements_hash: str,
+    diff_hash: str,
+    evidence_set_hash: str,
+    failed_requirement_ids: list[str] | None = None,
+    unresolved_requirement_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return bounded verdict metadata without persisting verifier response text."""
+    verdict = parse_verdict(raw_response)
+    reason_codes: list[str] = []
+    hashes = (task_hash, requirements_hash, diff_hash, evidence_set_hash)
+    hashes_valid = all(re.fullmatch(r"[0-9a-f]{64}", value or "") for value in hashes)
+    distinct = bool(verifier_session_id and implementation_session_id) and (
+        verifier_session_id != implementation_session_id
+    )
+    freshness = "fresh" if distinct and hashes_valid else "invalid"
+    if not distinct:
+        reason_codes.append("self_verification")
+    if not hashes_valid:
+        reason_codes.append("evidence_identity_invalid")
+    effective_verdict = verdict.verdict if freshness == "fresh" else "UNPARSEABLE"
+    if effective_verdict == "UNPARSEABLE":
+        reason_codes.append("verdict_unparseable")
+    return {
+        "verification_id": verification_id,
+        "task_id": task_id,
+        "verifier_session_id": verifier_session_id,
+        "implementation_session_id": implementation_session_id,
+        "task_hash": task_hash,
+        "requirements_hash": requirements_hash,
+        "diff_hash": diff_hash,
+        "evidence_set_hash": evidence_set_hash,
+        "verdict": effective_verdict,
+        "confidence": verdict.confidence,
+        "failed_requirement_ids": list(failed_requirement_ids or []),
+        "unresolved_requirement_ids": list(unresolved_requirement_ids or []),
+        "reason_codes": reason_codes,
+        "freshness": freshness,
+    }
+
+
 @dataclass
 class VerifierEvidence:
     """The full capture: prompt, raw response, provenance, usage, and the

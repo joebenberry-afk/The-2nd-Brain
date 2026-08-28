@@ -1,0 +1,419 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
+index 7b0af43..269b927 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
+@@ -16,10 +16,21 @@ Complete. Implemented only `recommend_maintenance()` and `authorize_maintenance(
+ `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q`
+ 
+ Result: **28 passed**.
+ 
+ ## Commit
+ `8067cff feat(gardener): gate maintenance authorization`
+ 
+ ## Concerns
+ - `execute_maintenance()` and `restore_retirement()` are intentionally deferred to Task 4.
+ - Authorization consumes explicit bounded evidence references and persisted candidate owner evidence; execution of delegated authorities remains outside Gardener as required by the action-authority table.
++
++## Review fixes
++- Prioritized measured-negative issues across mixed findings so recommendations remain review-only.
++- Archive authorization now requires the complete current issue set for the current skill/hash.
++- Rejected self-survivors and required replacement capability to bind to a current artifact hash or recomputed normalized identity.
++- Corrected merge/supersede delegation metadata to the existing lifecycle/promotion primitive.
++- Derived lifecycle state from the resolved directory and require production-safety evidence whenever path or frontmatter indicates active.
++
++Focused test result after fixes: **32 passed**.
++
++Additional implementation commit: `cd08377 fix(gardener): close authorization review gaps`.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index a28b48a..d507025 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -1107,25 +1107,32 @@ class SkillGardener:
+             name = item["skill_name"]
+             item_issues = [issue for issue in issues if issue["skill_name"] == name]
+             source: dict[str, Any] = {
+                 **item,
+                 "issue_ids": issue_ids_by_skill.get(name, []),
+                 "evidence_refs": _bounded_refs(
+                     item["evidence_refs"], issue_refs_by_skill.get(name, [])
+                 ),
+             }
+             if item_issues:
+-                # Preserve all issue IDs/refs while selecting one deterministic
+-                # condition to map to the bounded action vocabulary.
+-                selected = sorted(
+-                    item_issues, key=lambda issue: issue["issue_id"]
+-                )[0]
++                # Keep measured-negative highest priority: ROI is always
++                # review-only, even when another issue is also present.
++                selected = min(
++                    item_issues,
++                    key=lambda issue: (
++                        0
++                        if issue.get("condition_code") == "measured_negative"
++                        or issue.get("issue_type") == "negative_roi"
++                        else 1,
++                        str(issue.get("issue_id", "")),
++                    ),
++                )
+                 source.update(selected)
+                 source["issue_ids"] = issue_ids_by_skill.get(name, [])
+                 source["evidence_refs"] = _bounded_refs(
+                     item["evidence_refs"], issue_refs_by_skill.get(name, [])
+                 )
+             recommendation = self.recommend_maintenance(source)
+             recommendation["recommendation"] = recommendation["action_recommended"]
+             recommendations.append(recommendation)
+         return {
+             "skills": skills,
+@@ -1174,20 +1181,21 @@ class SkillGardener:
+             issues = observation.get("issues")
+             if isinstance(issues, list) and issues:
+                 candidates = [item for item in issues if isinstance(item, dict)]
+                 if candidates:
+                     source = dict(
+                         min(
+                             candidates,
+                             key=lambda item: (
+                                 0
+                                 if item.get("condition_code") == "measured_negative"
++                                or item.get("issue_type") == "negative_roi"
+                                 else 1,
+                                 str(item.get("issue_id", "")),
+                             ),
+                         )
+                     )
+                     source["issue_ids"] = [
+                         item["issue_id"]
+                         for item in candidates
+                         if isinstance(item.get("issue_id"), str)
+                     ]
+@@ -1318,69 +1326,79 @@ class SkillGardener:
+         try:
+             current_hash = skillforge.lifecycle_content_hash(skill_path)
+             metadata = skillforge.read_metadata(skill_path)
+         except (OSError, UnicodeError, BrainError) as exc:
+             raise BrainError("current skill evidence is unavailable") from exc
+         if current_hash != expected_hash:
+             raise BrainError("stale current skill hash")
+         current_version = metadata.get("version")
+         if not isinstance(current_version, str) or current_version != version:
+             raise BrainError("stale current skill version")
+-        current_state = metadata.get("status")
+-        if current_state not in paths.SKILL_LEVEL_DIRS:
+-            current_state = next(
+-                (
+-                    level
+-                    for level, relative in paths.SKILL_LEVEL_DIRS.items()
+-                    if skill_path.parent.parent == self.home / relative
+-                ),
+-                None,
+-            )
+-        if current_state not in paths.SKILL_LEVEL_DIRS:
++        declared_state = metadata.get("status")
++        located_state = next(
++            (
++                level
++                for level, relative in paths.SKILL_LEVEL_DIRS.items()
++                if skill_path.parent.parent == self.home / relative
++            ),
++            None,
++        )
++        if located_state is None:
+             raise BrainError("current lifecycle state is unavailable")
++        current_state = located_state
++        production_active = declared_state == "active" or located_state == "active"
+         def required_ref(value: object, label: str) -> str:
+             if not isinstance(value, str) or not value.strip():
+                 raise BrainError(f"{label} evidence is required")
+             if len(value.strip()) > _MAX_REFERENCE_LENGTH:
+                 raise BrainError(f"{label} evidence is too long")
+             return value.strip()
+ 
+         actor_value = required_ref(actor, "owner/actor")
+         approval = required_ref(approval_ref, "approval")
+         non_regression = required_ref(non_regression_ref, "non-regression")
+         rollback = required_ref(rollback_ref, "rollback")
+-
+-        if action == "archive_retire" and current_state == "active":
++        if action == "archive_retire" and production_active:
+             required_ref(
+                 recommendation.get("production_safety_ref")
+                 or recommendation.get("production_safety_approval_ref")
+                 or recommendation.get("production_safety_approval"),
+                 "production safety",
+             )
++        if declared_state in paths.SKILL_LEVEL_DIRS and declared_state != located_state:
++            raise BrainError("stale lifecycle state")
+ 
+         binding = _read_json_object(skill_path.parent / "candidate-binding.json")
+         owner = binding.get("owner")
+         if not isinstance(owner, str) or not owner.strip():
+             raise BrainError("owner governance evidence is required")
+         if owner.strip() != actor_value:
+             raise BrainError("actor is not the recorded owner")
+ 
+         issue_ids = _bounded_refs(recommendation.get("issue_ids"))
+         evidence_refs = _bounded_refs(recommendation.get("evidence_refs"))
+         if not evidence_refs:
+             raise BrainError("issue evidence is required")
+         current_observation = self.observe_portfolio()
+         current_issues = {
+             issue.get("issue_id"): issue
+             for issue in current_observation.get("issues", [])
+             if isinstance(issue, dict) and isinstance(issue.get("issue_id"), str)
+         }
++        current_skill_issue_ids = {
++            issue_id
++            for issue_id, issue in current_issues.items()
++            if issue.get("skill_name") == name
++            and issue.get("content_hash") in {None, current_hash}
++        }
++        if action == "archive_retire" and set(issue_ids) != current_skill_issue_ids:
++            raise BrainError("archive authorization requires the complete current issue set")
+         if action not in {"keep", "no_action"} and not issue_ids:
+             raise BrainError("issue IDs are required for maintenance")
+         for issue_id in issue_ids:
+             issue = current_issues.get(issue_id)
+             if issue is None or issue.get("skill_name") != name:
+                 raise BrainError("issue evidence is missing or stale")
+             current_refs = set(_bounded_refs(issue.get("evidence_refs")))
+             if not current_refs.intersection(evidence_refs):
+                 raise BrainError("issue evidence is missing or stale")
+             if issue.get("content_hash") not in {None, current_hash}:
+@@ -1405,66 +1423,82 @@ class SkillGardener:
+         replacement_value = replacement or recommendation.get("replacement_ref")
+         if action in {"merge", "supersede"}:
+             if not isinstance(replacement_value, dict):
+                 raise BrainError("verified survivor/replacement skill is required")
+             replacement_name = replacement_value.get("skill_name") or replacement_value.get(
+                 "name"
+             )
+             replacement_version = replacement_value.get("skill_version") or replacement_value.get(
+                 "version"
+             )
++            if replacement_name == name:
++                raise BrainError("survivor/replacement must differ from current skill")
+             replacement_capability = replacement_value.get(
+                 "capability_hash"
+             ) or replacement_value.get("normalized_capability_hash")
+             if not all(
+                 isinstance(value, str) and value.strip()
+                 for value in (replacement_name, replacement_version, replacement_capability)
+             ):
+                 raise BrainError("verified survivor/replacement skill is required")
+             replacement_path = skillforge.skill_path(self.home, replacement_name)
+             if replacement_path is None:
+                 raise BrainError("verified survivor skill is unavailable")
+             replacement_metadata = skillforge.read_metadata(replacement_path)
++            if replacement_metadata.get("version") != replacement_version:
++                raise BrainError("replacement capability evidence is stale")
++            replacement_current_hash = skillforge.lifecycle_content_hash(replacement_path)
++            replacement_content_hash = replacement_value.get(
++                "content_hash"
++            ) or replacement_value.get("skill_content_hash")
++            if replacement_content_hash is not None and not isinstance(
++                replacement_content_hash, str
++            ):
++                raise BrainError("replacement artifact hash is invalid")
+             replacement_binding = _read_json_object(
+                 replacement_path.parent / "candidate-binding.json"
+             )
+             replacement_evaluation = _read_json_object(
+                 replacement_path.parent / "evaluation.json"
+             )
+-            replacement_identity = _capability_identity(
+-                replacement_path, replacement_binding, replacement_evaluation
+-            )
+-            if (
+-                replacement_metadata.get("version") != replacement_version
+-                or replacement_identity != replacement_capability
+-            ):
++            if isinstance(replacement_content_hash, str):
++                if replacement_content_hash != replacement_current_hash:
++                    raise BrainError("replacement artifact hash is stale")
++                replacement_identity = _capability_identity(
++                    replacement_path, replacement_binding, replacement_evaluation
++                )
++            else:
++                # An unbound capability claim is valid only when it is
++                # recomputed from the current replacement artifact.
++                replacement_identity = _normalized_capability_hash(replacement_path)
++            if replacement_identity != replacement_capability:
+                 raise BrainError("replacement capability evidence is stale")
+             replacement_record = {
+                 "skill_name": replacement_name[:_MAX_REFERENCE_LENGTH],
+                 "skill_version": replacement_version[:_MAX_REFERENCE_LENGTH],
+                 "capability_hash": replacement_capability[:_MAX_REFERENCE_LENGTH],
+             }
+ 
+         if action in {"repair", "narrow", "hide"}:
+             target = recommendation.get("reversible_target")
+             if not isinstance(target, dict):
+                 raise BrainError("reversible target is required")
+             if target.get("skill_name") != name or target.get("content_hash") != current_hash:
+                 raise BrainError("reversible target is stale")
+ 
+         authority = {
+             "keep": "record-only",
+             "no_action": "record-only",
+             "repair": "skill-development/evaluation",
+             "narrow": "skill-development/evaluation",
+-            "merge": "skill-lifecycle/content",
+-            "supersede": "skill-lifecycle/content",
++            "merge": "lifecycle/promotion",
++            "supersede": "lifecycle/promotion",
+             "demote": "promotion.demote",
+             "hide": "lifecycle-visibility/routing",
+             "archive_retire": "gardener.archive_retire",
+         }[action]
+         created_at = datetime.now(UTC).isoformat()
+         authorization_id = "authorization-" + hashlib.sha256(
+             f"{name}|{current_hash}|{action}|{created_at}|{time.time_ns()}".encode()
+         ).hexdigest()[:16]
+         record: dict[str, Any] = {
+             "authorization_id": authorization_id,
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index ca0e5e3..04b59fa 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -537,10 +537,139 @@ def test_delegated_authorization_does_not_mutate(brain_home):
+     assert result["authority"] == "skill-development/evaluation"
+     persisted = (
+         brain_home
+         / "state"
+         / "maintenance"
+         / "authorizations"
+         / f"{result['authorization_id']}.json"
+     )
+     assert json.loads(persisted.read_text(encoding="utf-8")) == result
+     assert _lifecycle_snapshot(brain_home) == before
++
++
++def test_negative_roi_precedes_retirement_issue_in_observation():
++    recommendation = SkillGardener(Path(".")).recommend_maintenance(
++        {
++            "issues": [
++                {
++                    "issue_id": "skill:dead_skill",
++                    "issue_type": "broken",
++                    "condition_code": "dead_skill",
++                    "skill_name": "skill",
++                    "skill_version": "1",
++                    "content_hash": "a" * 64,
++                    "lifecycle_state": "shadow",
++                    "evidence_refs": ["audit:dead"],
++                },
++                {
++                    "issue_id": "skill:measured_negative",
++                    "issue_type": "negative_roi",
++                    "condition_code": "measured_negative",
++                    "skill_name": "skill",
++                    "skill_version": "1",
++                    "content_hash": "a" * 64,
++                    "lifecycle_state": "shadow",
++                    "measurement_state": "measured",
++                    "evidence_refs": ["ledger:negative"],
++                },
++            ]
++        }
++    )
++    assert recommendation["action_recommended"] == "repair"
++
++
++def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
++    directory = _make_skill(brain_home, "archive-gated", "shadow")
++    _write_binding(
++        directory,
++        {
++            "owner": "owner-1",
++            "usage": {"invocations": 0, "measured": True, "evidence_refs": ["usage:1"]},
++            "condition_evidence": {
++                "false_trigger": {"detected": True, "evidence_refs": ["eval:1"]}
++            },
++        },
++    )
++    gardener = SkillGardener(brain_home)
++    issue = next(
++        issue
++        for issue in gardener.observe_portfolio()["issues"]
++        if issue["skill_name"] == "archive-gated" and issue["condition_code"] == "false_trigger"
++    )
++    recommendation = {
++        "skill_name": "archive-gated",
++        "skill_version": issue["skill_version"],
++        "content_hash": issue["content_hash"],
++        "lifecycle_state": "shadow",
++        "action_recommended": "archive_retire",
++        "issue_ids": [issue["issue_id"]],
++        "evidence_refs": issue["evidence_refs"],
++        "archive_destination": "archive:archive-gated",
++    }
++    with pytest.raises(BrainError, match="complete current issue set"):
++        gardener.authorize_maintenance(
++            recommendation,
++            actor="owner-1",
++            approval_ref="approval:1",
++            non_regression_ref="verification:1",
++            rollback_ref="rollback:1",
++        )
++
++
++def test_merge_rejects_self_survivor(brain_home):
++    directory = _make_skill(brain_home, "self-merge", "shadow")
++    _write_binding(
++        directory,
++        {
++            "owner": "owner-1",
++            "condition_evidence": {"false_trigger": {"detected": True}},
++        },
++    )
++    gardener = SkillGardener(brain_home)
++    issue = next(
++        issue
++        for issue in gardener.observe_portfolio()["issues"]
++        if issue["skill_name"] == "self-merge"
++    )
++    recommendation = gardener.recommend_maintenance(issue)
++    recommendation["action_recommended"] = "merge"
++    recommendation["replacement_ref"] = {
++        "skill_name": "self-merge",
++        "skill_version": "1",
++        "capability_hash": "self",
++    }
++    with pytest.raises(BrainError, match="differ"):
++        gardener.authorize_maintenance(
++            recommendation,
++            actor="owner-1",
++            approval_ref="approval:1",
++            non_regression_ref="verification:1",
++            rollback_ref="rollback:1",
++        )
++
++
++def test_merge_rejects_unbound_stale_survivor_artifact(brain_home):
++    source = _make_skill(brain_home, "merge-source", "shadow")
++    survivor = _make_skill(brain_home, "merge-survivor", "shadow")
++    _write_binding(source, {"owner": "owner-1"})
++    gardener = SkillGardener(brain_home)
++    issue = next(
++        issue
++        for issue in gardener.observe_portfolio()["issues"]
++        if issue["skill_name"] == "merge-source"
++        and issue["condition_code"] == "exact_duplicate"
++    )
++    recommendation = gardener.recommend_maintenance(issue)
++    replacement = {
++        "skill_name": "merge-survivor",
++        "skill_version": "1",
++        "capability_hash": "not-bound-to-current-artifact",
++    }
++    with pytest.raises(BrainError, match="capability"):
++        gardener.authorize_maintenance(
++            recommendation,
++            actor="owner-1",
++            approval_ref="approval:1",
++            non_regression_ref="verification:1",
++            rollback_ref="rollback:1",
++            replacement=replacement,
++        )

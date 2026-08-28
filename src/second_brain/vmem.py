@@ -174,6 +174,7 @@ class VMemStore:
         pinned: bool = False,
         segment_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        artifact_ref: str | None = None,
     ) -> SessionObject:
         """Store a transient session object with content-addressed backing."""
         if isinstance(kind, str):
@@ -182,15 +183,24 @@ class VMemStore:
             except ValueError:
                 kind = SessionObjectKind.GENERIC
 
-        # Backing store exact bytes
-        stored_artifact = artifacts.store_text(
-            self.home,
-            content,
-            kind=kind.value.lower(),
-            tool="vmem",
-            session=self.session_id,
-        )
-        content_sha = stored_artifact["hash"]
+        # Backing store exact bytes, or reference a preserve-first artifact.
+        if artifact_ref is not None:
+            raw_bytes = artifacts.expand(self.home, artifact_ref)
+            actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+            if actual_sha != artifact_ref:
+                raise BrainError(
+                    f"VMem artifact reference mismatch: expected {artifact_ref}, got {actual_sha}"
+                )
+            content_sha = artifact_ref
+        else:
+            stored_artifact = artifacts.store_text(
+                self.home,
+                content,
+                kind=kind.value.lower(),
+                tool="vmem",
+                session=self.session_id,
+            )
+            content_sha = stored_artifact["hash"]
         obj_id = f"obj-{content_sha[:12]}"
         now = _now()
         tokens = _estimate_tokens(content)

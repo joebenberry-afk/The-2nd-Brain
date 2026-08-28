@@ -1,0 +1,74 @@
+{
+  "verdict": "P3.8_PROVEN",
+  "qualification_scope": "Independent Intent Verification only; P3.9 not started",
+  "provenance": {
+    "roadmap_source": "outputs/reports/rc2/01-frozen-roadmap-matrix.md:38",
+    "authoritative_contract_source": "outputs/reports/rc2/P3_8_INDEPENDENT_INTENT_VERIFICATION_QUALIFICATION.json prior frozen contract",
+    "omp_version": "omp/18.0.4",
+    "explicit_current_extension_path": "brainstem/prime-extension/src/index.ts",
+    "explicit_current_extension_sha256": "6a29c7297efa4fffc6023f1d72ef0006175d3ba33a81034da45e51e42437d91d",
+    "installed_extension_path": "C:/Users/assas/.prime/agent/extensions/second-brain/",
+    "installed_extension_index_sha256": "a406a7032b1578dc91fbb436ba91ec3d0a72d92bddbb395670cd4a36fe6f4e8d",
+    "branch": "brain/v1-rc4-prime-074-compat",
+    "head_at_campaign_start": "0bc2b8d56ceed3c1e17576283f05b4dba6f52d91",
+    "current_omp_primary_proof_session": "2026-08-25T18-31-41-014Z_01a03a31-3ed6-7549-afe6-65a4869635be",
+    "current_omp_worker": "LinguisticBird",
+    "current_omp_worker_telemetry": "C:/Users/assas/.omp/agent/sessions/-Documents-The-Second-Brain/2026-08-25T18-31-41-014Z_01a03a31-3ed6-7549-afe6-65a4869635be/LinguisticBird.jsonl",
+    "prior_state": "P3.1_PROVEN through P3.7_PROVEN; Lean candidate/HOLD_SHADOW"
+  },
+  "contract": {
+    "requirement": "P3.8",
+    "title": "Independent Intent Verification",
+    "fresh_context_inputs": ["original requirement", "constraints", "final diff", "relevant source", "validation output"],
+    "backward_reconstruction": "Verifier reads bounded brief and diff first, then compares apparent patch intent to the requirement; response is bounded to apparent intent, alignment, missing evidence, narrow oracle, result, and confidence.",
+    "independence": "Verifier and implementation identities must differ; self-verification is invalid.",
+    "authoritative_completion": "Only fresh PASS with matching task/requirements/diff/evidence hashes satisfies the independent_intent_verifier gate; P3.6 STOP consumes the gate result.",
+    "named_implementation_surfaces": ["src/second_brain/verify.py"],
+    "supporting_surfaces": ["src/second_brain/fresh_verifier.py", "src/second_brain/cli.py", "src/second_brain/contracts.py", "brainstem/prime-extension/src/stop-boundary.ts", "tests/test_fresh_verifier.py", "tests/test_verify.py", "tests/test_cli.py", "tests/test_contracts.py"]
+  },
+  "implementation": {
+    "status": "PROVEN",
+    "seams": ["bounded brief builder", "strict bounded parser", "distinct-session freshness", "four-file hash binding", "ledger event", "gate authority", "STOP authority", "stale/self rejection"]
+  },
+  "automated_evidence": {
+    "status": "PROVEN",
+    "python_command": "pytest tests/test_fresh_verifier.py tests/test_verify.py tests/test_cli.py tests/test_contracts.py -q; ruff check changed Python files; pyright changed Python files",
+    "extension_command": "npm run typecheck; npm test -- --run",
+    "extension_result": "23 test files passed, 587 tests passed",
+    "test_contracts": ["fresh PASS", "self-certification rejection", "stale hash rejection", "unparseable rejection", "bounded evidence", "gate/STOP coupling", "lifecycle event"]
+  },
+  "live_runtime": {
+    "status": "PROVEN",
+    "pass_record": "state/p3_8_dogfood/verifier-nonsynthetic.json",
+    "pass_gate": "state/p3_8_dogfood/gate-nonsynthetic.json",
+    "pass_stop": "stop-p38-nonsynthetic; continuation_forbidden=true; gate_completion_allowed=true",
+    "distinct_identities": {"implementation": "NonSyntheticParent", "verifier": "NonSyntheticWorker"},
+    "hashes": {"task": "6ca57affefc3dfa1c19c58dd9de775a9d2594b84f53ff9d205cd14ad3c5c7afc", "requirements": "6eedc75920a76a2aecbdd01718f96cb69f3cad39117aa1db8d97a997cea5cdf6", "diff": "14cce71ad4b137abc7bc52045a2a502cd777b754c4e4a63bd44a93b0ea367a82", "evidence": "3a933551649ada6def126a4776d16f2983dcd25ad783116512879e46c41da37f"},
+    "negative_probes": {"fail": "state/p3_8_dogfood/gate-real-fail.json", "unparseable": "state/p3_8_dogfood/gate-real-inconclusive.json", "stale": "state/p3_8_dogfood/gate-real-stale.json", "self": "state/p3_8_dogfood/verifier-real-self.json"}
+  },
+  "cross_harness": {
+    "status": "PROVEN",
+    "disposition": "Universal target; current OMP-primary extension path exercised",
+    "evidence": "Current OMP parent delegated a fresh worker; worker read the bounded brief and evidence files, independently selected PASS, and executed verify independent. Fresh final validator returned P3.8_FINAL_VALIDATOR_PASS."
+  },
+  "token_economics": {
+    "status": "PROVEN",
+    "gate_economics": {"gate_bookkeeping_overhead_ms": 0.719, "verification_context_tokens": 0, "verification_model_calls": 0, "verification_tool_calls": 0, "retries": 0, "corrections": 0, "completion_blocked": false, "additional_work_required": null},
+    "verifier_measurement_source": "telemetry/agent-performance and current OMP worker transcript; bounded response contains no solver reasoning or raw response persistence",
+    "bounded_response_fields": ["Apparent intent", "Alignment", "Missing evidence", "Narrow oracle", "Result", "Confidence"]
+  },
+  "dogfood": {
+    "status": "PROVEN",
+    "task": "P3.8 implementation itself",
+    "brief": "outputs/verification/p38-impl-proof.md",
+    "verifier": "state/p3_8_dogfood/verifier-nonsynthetic.json",
+    "completion": "state/p3_8_dogfood/gate-nonsynthetic.json plus STOP decision stop-p38-nonsynthetic"
+  },
+  "final_validation": {
+    "status": "PROVEN",
+    "validator_result": "P3.8_FINAL_VALIDATOR_PASS",
+    "validator_scope": "fresh OMP worker validation of source, focused tests, live artifacts, telemetry, negative probes, economics, and P3.9 boundary"
+  },
+  "scope_decisions": {"p3_9_started": false, "lean_status": "HOLD_SHADOW", "unrelated_scope_added": false},
+  "final_status": "P3.8_PROVEN"
+}

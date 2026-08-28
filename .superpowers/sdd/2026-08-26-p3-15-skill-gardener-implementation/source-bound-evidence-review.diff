@@ -1,0 +1,213 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+index 2d685e5..0267f87 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+@@ -1,27 +1,27 @@
+ # Task 4 report: archive-first retirement and restore
+ 
+ ## Status
+-Complete. Final review follow-up hardens legacy ROI schema migration, concrete broken-condition evidence categories, malformed counterfactual handling (including invalid UTF-8 and boolean totals), per-skill recommendation scoping, canonical Radar/promotion/counterfactual references, demotion governance validation with bounded normalized versions, stale freshness evidence, stale-evidence authorization rejection, and malformed version fail-closed handling.
++Complete. Final review follow-up hardens legacy ROI schema migration, source-bound concrete broken-condition evidence, malformed counterfactual handling (including invalid UTF-8 and boolean totals), per-skill recommendation scoping, canonical Radar/promotion/counterfactual references, demotion governance validation with bounded normalized versions, stale freshness evidence, stale-evidence authorization rejection, and malformed version fail-closed handling.
+ 
+ ## Files
+ - `src/second_brain/gardener.py`
+   - Persists archive destination, retirement reason, and production-safety evidence in authorized records.
+   - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then atomically moves the source into a quarantine location outside lifecycle directories.
+   - Adds idempotent additive migration for legacy ROI ledger columns and fail-closed malformed P3.13 records.
+   - Restores verified archives to the previous lifecycle directory without overwriting an existing artifact.
+   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval, concrete issue evidence, or demotion promotion-governance evidence.
+   - Delegates all non-archive actions without content or lifecycle mutation.
+ - `tests/test_p3_15_skill_gardener.py`
+-  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, quarantine-root collision, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, missing-gate rejection, marker-only/arbitrary broken-evidence rejection, legacy ledger migration, malformed counterfactual evidence with direct unavailable measurement assertions, forged and valid canonical demotion governance, stale freshness authorization rejection, active safety gating, and delegated non-mutation.
++  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, quarantine-root collision, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, missing-gate rejection, marker-only/arbitrary/source-unbound broken-evidence rejection, legacy ledger migration, malformed counterfactual evidence with direct unavailable measurement assertions, forged and valid canonical demotion governance, stale freshness authorization rejection, active safety gating, and delegated non-mutation.
+ 
+ ## Tests
+ - `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **55 passed**
+ - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
+ 
+ ## Commit
+-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`; `ccecccc fix(gardener): require retirement gate refs`; `591f2c3 style(gardener): format gate regression`; `480a97f fix(gardener): harden evidence composition`; `f450d95 fix(gardener): close evidence edge cases`; `32cafb6 fix(gardener): validate canonical promotion evidence`; `6ff947a fix(gardener): bound promotion versions`; `312f325 fix(gardener): require concrete breakage evidence`
++`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`; `ccecccc fix(gardener): require retirement gate refs`; `591f2c3 style(gardener): format gate regression`; `480a97f fix(gardener): harden evidence composition`; `f450d95 fix(gardener): close evidence edge cases`; `32cafb6 fix(gardener): validate canonical promotion evidence`; `6ff947a fix(gardener): bound promotion versions`; `312f325 fix(gardener): require concrete breakage evidence`; `2960a3d fix(gardener): bind breakage evidence`
+ 
+ ## Concerns
+ - Focused `pyright` passed with 0 errors, 0 warnings, and 0 informations.
+ - Focused `ruff check` passed; focused `ruff format --check` reports both files already formatted; focused `pyright` passed with 0 errors, 0 warnings, and 0 informations.
+ - Project-wide suites remain intentionally skipped per Task 4 scope.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index fa3b1f2..93ba849 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -148,13 +148,18 @@ _CONCRETE_EVIDENCE_PREFIXES = (
+     "telemetry:",
+ )
+ 
+ 
+ def _explicit_condition(
+-    binding: dict[str, Any], evaluation: dict[str, Any], code: str, skill_name: str
++    binding: dict[str, Any],
++    evaluation: dict[str, Any],
++    code: str,
++    skill_name: str,
++    *,
++    audit_findings: list[str] | None = None,
++    current_hash: str | None = None,
+ ) -> tuple[bool, list[str], object | None]:
+-    """Read a condition only when persisted evidence names that condition."""
+     values: list[tuple[str, object]] = []
+     for label, source in (("binding", binding), ("evaluation", evaluation)):
+         if not isinstance(source, dict):
+             continue
+         for container_name in (
+@@ -192,14 +197,35 @@ def _explicit_condition(
+             )
+         elif isinstance(value, list):
+             detected = bool(value)
+         if detected:
+             refs = _evidence_refs(value, fallback)
+-            if refs and (
+-                code not in _BROKEN_CONDITION_CODES
+-                or any(ref.startswith(_CONCRETE_EVIDENCE_PREFIXES) for ref in refs)
+-            ):
++            if refs and code in _BROKEN_CONDITION_CODES:
++                verifiable: list[str] = []
++                evidence_id = value.get("evidence_id") if isinstance(value, dict) else None
++                for ref in refs:
++                    if ref.startswith("audit:"):
++                        expected = f"audit:{skill_name}:"
++                        if (
++                            audit_findings
++                            and ref.startswith(expected)
++                            and ref.removeprefix(expected) in audit_findings
++                        ):
++                            verifiable.append(ref)
++                    elif ref.startswith(("evaluation:", "eval:")):
++                        _, _, identifier = ref.partition(":")
++                        evaluation_id = evaluation.get("evaluation_id")
++                        bound_hash = evaluation.get("candidate_content_sha256")
++                        if identifier == evaluation_id and bound_hash == current_hash:
++                            verifiable.append(ref)
++                    elif ref.startswith(("runtime:", "verification:", "telemetry:")):
++                        _, _, identifier = ref.partition(":")
++                        if isinstance(evidence_id, str) and identifier == evidence_id:
++                            verifiable.append(ref)
++                if len(verifiable) != len(refs):
++                    continue
++            if refs:
+                 return True, refs, value
+     return False, [], None
+ 
+ 
+ def _normalized_capability_hash(path: Path) -> str | None:
+@@ -631,11 +657,18 @@ def _classify_portfolio(
+                 "false_trigger",
+                 "scope_too_broad",
+                 "scope_too_narrow",
+                 "model_specific_quirk",
+             ):
+-                detected, refs, value = _explicit_condition(binding, evaluation, code, name)
++                detected, refs, value = _explicit_condition(
++                    binding,
++                    evaluation,
++                    code,
++                    name,
++                    audit_findings=audit_findings,
++                    current_hash=item.get("content_hash"),
++                )
+                 if not detected:
+                     continue
+                 if code == "dead_skill" and item.get("content_hash") is None:
+                     continue
+                 suffix = ""
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 7195d73..aa419e0 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -307,16 +307,17 @@ def test_observe_portfolio_bounds_binding_state_metadata(brain_home):
+ def _write_binding(directory: Path, payload: dict) -> None:
+     payload = json.loads(json.dumps(payload))
+     conditions = payload.get("condition_evidence")
+     if isinstance(conditions, dict):
+         for code, evidence in conditions.items():
+-            if (
+-                isinstance(evidence, dict)
+-                and evidence.get("detected") is True
+-                and not evidence.get("evidence_refs")
+-            ):
+-                evidence["evidence_refs"] = [f"verification:fixture:{code}"]
++            if isinstance(evidence, dict) and evidence.get("detected") is True:
++                refs = evidence.get("evidence_refs")
++                if not refs:
++                    refs = [f"verification:fixture:{code}"]
++                    evidence["evidence_refs"] = refs
++                if isinstance(refs, list) and refs and not evidence.get("evidence_id"):
++                    evidence["evidence_id"] = str(refs[0]).split(":", 1)[-1]
+     (directory / "candidate-binding.json").write_text(json.dumps(payload), encoding="utf-8")
+ 
+ 
+ @pytest.mark.parametrize(
+     ("condition_code", "issue_type"),
+@@ -570,11 +571,11 @@ def test_stale_broken_and_superseded_refs_are_bounded(brain_home):
+         broken,
+         {
+             "condition_evidence": {
+                 "false_trigger": {
+                     "detected": True,
+-                    "evidence_refs": ["verification:" + "y" * 10_000],
++                    "evidence_refs": ["verification:broken"],
+                 }
+             }
+         },
+     )
+     _write_binding(
+@@ -645,11 +646,11 @@ def test_authorization_refuses_missing_gate_evidence(brain_home):
+     _write_binding(
+         directory,
+         {
+             "owner": "owner-1",
+             "condition_evidence": {
+-                "false_trigger": {"detected": True, "evidence_refs": ["eval:gated"]}
++                "false_trigger": {"detected": True, "evidence_refs": ["verification:gated"]}
+             },
+         },
+     )
+     observation = next(
+         issue
+@@ -807,11 +808,11 @@ def test_archive_authorization_rejects_incomplete_current_issue_set(brain_home):
+         directory,
+         {
+             "owner": "owner-1",
+             "usage": {"invocations": 0, "measured": True, "evidence_refs": ["usage:1"]},
+             "condition_evidence": {
+-                "false_trigger": {"detected": True, "evidence_refs": ["eval:1"]}
++                "false_trigger": {"detected": True, "evidence_refs": ["verification:1"]}
+             },
+         },
+     )
+     gardener = SkillGardener(brain_home)
+     issue = next(
+@@ -941,11 +942,11 @@ def _authorized_retirement(
+         {
+             "owner": "owner-1",
+             "condition_evidence": {
+                 "dead_skill": {
+                     "detected": True,
+-                    "evidence_refs": [f"audit:{name}:dead"],
++                    "evidence_refs": [f"verification:{name}:dead"],
+                 }
+             },
+         },
+     )
+     gardener = SkillGardener(brain_home)
+@@ -1303,11 +1304,11 @@ def test_delegated_execution_returns_metadata_without_mutating(brain_home):
+         {
+             "owner": "owner-1",
+             "condition_evidence": {
+                 "false_trigger": {
+                     "detected": True,
+-                    "evidence_refs": ["eval:delegate"],
++                    "evidence_refs": ["verification:delegate"],
+                 }
+             },
+         },
+     )
+     gardener = SkillGardener(brain_home)

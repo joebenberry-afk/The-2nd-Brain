@@ -130,7 +130,7 @@ WORKER TASK PACKET: every spawn gets a narrow objective, scope, constraints, req
 
 REVIEW: audit every worker result for evidence quality and contradictions; prefer one targeted correction over replacing a worker; own final integration and the final answer.
 
-STOP: once worker evidence and the Requirement Ledger prove completion with no material gate remaining, STOP — never spawn "one more" verifier or worker without a risk/evidence reason.`;
+STOP: once worker evidence and the Requirement Ledger prove completion with no material gate remaining or a legitimate blocker, invoke the bounded Brain STOP decision with the current session/task identity; decision=stop is terminal — never spawn "one more" verifier, worker, or substantive tool without a risk/evidence reason.`;
 
 /**
  * Append the driver contract to a base system prompt. Returns undefined when

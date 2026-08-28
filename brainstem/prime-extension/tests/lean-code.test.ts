@@ -533,6 +533,23 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lean?.dedup_hit).toBe(false);
   });
 
+
+  it("uses OMP's effective system-prompt sections for candidate injection", async () => {
+    writeCandidate();
+    writeSkillsToml("advisory");
+    const handlers = loadFactory();
+    const result = await fireBeforeAgentStart(
+      handlers,
+      makeCtx({ getSystemPrompt: () => ["BASE SYSTEM PROMPT", "TOOLS"] }),
+    );
+    expect(promptOf(result)).toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toContain(CANONICAL_KERNEL);
+    const lines = await waitForLines(2);
+    const lean = lines.find((line) => line.kind === "lean_kernel");
+    expect(lean?.decision).toBe("inject");
+    expect(lean?.mode).toBe("advisory");
+    expect(lean?.eval_source).toBe("file");
+  });
   it("FILE gate: skills.toml [lean] eval=advisory (env unset) -> kernel injected, eval_source=file", async () => {
     writeCandidate();
     writeSkillsToml("advisory");

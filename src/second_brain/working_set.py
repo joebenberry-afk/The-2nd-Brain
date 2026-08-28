@@ -82,12 +82,25 @@ def _utcnow() -> str:
 
 
 def session_dir(home: Path, session_id: str) -> Path:
-    """Return the per-session working-set directory (path-safe id only)."""
+    """Return the per-session working-set directory (path-safe id only).
+
+    OMP and the ledger use the host session id for lookups but the ledger stores
+    its durable directory under the canonical internal session hash. Preserve
+    the legacy raw-id path for standalone capsule sessions and reuse the
+    hashed ledger directory when that identity already exists.
+    """
     if not isinstance(session_id, str) or not SESSION_ID_RE.fullmatch(session_id):
         raise BrainError(f"Invalid session id {session_id!r}: must match {SESSION_ID_RE.pattern}")
     if session_id in (".", ".."):
         raise BrainError(f"Invalid session id {session_id!r}: path traversal")
-    return Path(home) / "state" / "sessions" / session_id
+    root = Path(home) / "state" / "sessions"
+    raw = root / session_id
+    from .ledger import internal_session_id
+
+    hashed = root / internal_session_id(session_id)
+    if hashed.exists() and not raw.exists():
+        return hashed
+    return raw
 
 
 # ---------------------------------------------------------------------------

@@ -200,9 +200,11 @@ export function runVmemStore(options: VmemStoreOptions): Promise<VmemStoreResult
 
 export interface VmemHotContextResult {
   ok: boolean;
+  sessionId?: string;
   residentCount?: number;
   evictedCount?: number;
   residentTokens?: number;
+  renderedText?: string;
   error?: string;
 }
 
@@ -246,17 +248,22 @@ export function runVmemHotContext(options: {
           return;
         }
         try {
-          const parsed = JSON.parse(stdout) as {
+          const parsed = JSON.parse(String(stdout)) as {
+            session_id?: string;
             resident_count?: number;
             evicted_count?: number;
             resident_tokens?: number;
+            rendered_text?: string;
           };
-          resolve({
+          const result: VmemHotContextResult = {
             ok: true,
             residentCount: parsed.resident_count,
             evictedCount: parsed.evicted_count,
             residentTokens: parsed.resident_tokens,
-          });
+          };
+          if (typeof parsed.session_id === "string") result.sessionId = parsed.session_id;
+          if (typeof parsed.rendered_text === "string") result.renderedText = parsed.rendered_text;
+          resolve(result);
         } catch {
           resolve({ ok: false, error: "hot-context returned unparsable output" });
         }

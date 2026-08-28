@@ -15,7 +15,7 @@
  * {ok:false,error} — the caller records an extension_error; nothing throws,
  * nothing blocks the host turn.
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -123,6 +123,63 @@ export function taskSha256(prompt: string): string {
   return sha256Hex(prompt);
 }
 
+/**
+ * Synchronous mirror for terminal control-plane evidence. STOP finalization
+ * must reach the ledger before OMP may tear down the session worker.
+ */
+export function mirrorEventSync(options: MirrorOptions): MirrorResult {
+  const homePython = join(options.home, ".venv", "Scripts", "python.exe");
+  const fallbackPython = join(process.cwd(), ".venv", "Scripts", "python.exe");
+  const python =
+    options.python ??
+    (existsSync(homePython) ? homePython : existsSync(fallbackPython) ? fallbackPython : homePython);
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const appendArgs = [
+    "-m",
+    "second_brain",
+    "ledger",
+    "append",
+    "--session",
+    options.hostSessionId,
+    "--stdin-json",
+  ];
+  const initArgs = [
+    "-m",
+    "second_brain",
+    "ledger",
+    "init",
+    "--session",
+    options.hostSessionId,
+    "--host",
+    "prime",
+  ];
+  if (typeof options.cwd === "string" && options.cwd.length > 0) {
+    initArgs.push("--cwd", options.cwd);
+  }
+  try {
+    execFileSync(python, initArgs, {
+      cwd: options.home,
+      env,
+      timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    execFileSync(python, appendArgs, {
+      cwd: options.home,
+      env,
+      timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+      input: buildMirrorEventJson(options.record),
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
 /**
  * Mirror one event. Resolves {ok:true} silently when the brain home has no
  * venv (not a runtime — no-op, matches the autoinject adapter); resolves

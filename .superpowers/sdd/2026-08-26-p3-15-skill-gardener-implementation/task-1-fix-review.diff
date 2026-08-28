@@ -1,0 +1,54 @@
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index 5c78386..64508b0 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -573,21 +573,21 @@ class SkillGardener:
+                 skill_version = metadata.get("version", "unversioned")
+                 skills.append(
+                     {
+                         "skill_name": skill_dir.name,
+                         "skill_version": skill_version,
+                         "content_hash": content_hash,
+                         "lifecycle_state": lifecycle_state,
+                         "binding_present": binding_path.is_file(),
+                         "evaluation_present": evaluation_path.is_file(),
+                         "binding_state": {
+-                            key: binding[key]
++                            key: binding[key][:_MAX_REFERENCE_LENGTH]
+                             for key in (
+                                 "lifecycle_state",
+                                 "evaluation_state",
+                                 "promotion_state",
+                                 "install_state",
+                             )
+                             if isinstance(binding.get(key), str)
+                         },
+                         "roi_summary": roi_summary,
+                         "audit_findings": audit_findings,
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 8550e90..f6b6910 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -116,10 +116,22 @@ def test_observe_portfolio_composes_bounded_evidence_and_issue_shape(brain_home)
+ 
+ 
+ def test_observe_portfolio_does_not_mutate_lifecycle_or_promotion_state(brain_home):
+     _make_skill(brain_home, "stable-skill", "shadow")
+     before = _lifecycle_snapshot(brain_home)
+     gardener = SkillGardener(brain_home)
+ 
+     gardener.observe_portfolio()
+ 
+     assert _lifecycle_snapshot(brain_home) == before
++
++
++def test_observe_portfolio_bounds_binding_state_metadata(brain_home):
++    directory = _make_skill(brain_home, "oversized-binding", "candidate")
++    (directory / "candidate-binding.json").write_text(
++        json.dumps({"evaluation_state": "x" * 10_000}),
++        encoding="utf-8",
++    )
++
++    result = SkillGardener(brain_home).observe_portfolio()
++
++    assert len(result["skills"][0]["binding_state"]["evaluation_state"]) <= 256
