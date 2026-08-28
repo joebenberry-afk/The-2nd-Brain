@@ -376,3 +376,243 @@ def test_cli_risk_assess_verification_ladder(tmp_path):
     # LOW risk must say the independent verifier is NOT required
     assert "independent verifier: not required" in out
     assert "human approval: not required" in out
+
+
+def _gate_actions(level: str, *, omit: set[str] | None = None) -> dict[str, str]:
+    omit = omit or set()
+    tokens = verify.expand_ladder_actions(verify.DEFAULT_VERIFICATION_LADDER, level)
+    return {
+        token: "passed"
+        for token in tokens
+        if token != "optional_second_independent_verification" and token not in omit
+    }
+
+
+def test_accuracy_gate_allows_complete_low_risk_work(brain_home, repo):
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-low",
+        repo,
+        ["README.md"],
+        action_states=_gate_actions("LOW"),
+    )
+    assert result["risk_level"] == "LOW"
+    assert result["completion_allowed"] is True
+    assert result["failed_actions"] == []
+    assert result["unresolved_material_requirements"] == []
+
+
+def test_accuracy_gate_blocks_high_without_independent_verifier(brain_home, repo):
+    actions = _gate_actions("HIGH", omit={"independent_intent_verifier"})
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-high",
+        repo,
+        ["README.md"],
+        user_criticality="HIGH",
+        action_states=actions,
+    )
+    assert result["risk_level"] == "HIGH"
+    assert result["completion_allowed"] is False
+    assert "independent_intent_verifier" in result["unresolved_actions"]
+
+
+def test_accuracy_gate_blocks_critical_without_approval(brain_home, repo):
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-critical",
+        repo,
+        ["README.md"],
+        user_criticality="CRITICAL",
+        action_states=_gate_actions("CRITICAL"),
+        approval_state="not_required",
+    )
+    assert result["risk_level"] == "CRITICAL"
+    assert result["completion_allowed"] is False
+    assert result["approval_state"] == "required"
+def test_accuracy_gate_rejects_self_certified_independent_action(brain_home, repo):
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-self",
+        repo,
+        ["README.md"],
+        user_criticality="HIGH",
+        action_states=_gate_actions("HIGH"),
+    )
+    assert result["completion_allowed"] is False
+    assert "independent_verification_missing" in result["decision_reason"]
+
+
+def test_accuracy_gate_accepts_fresh_independent_pass(brain_home, repo):
+    hashes = {
+        "task_hash": "a" * 64,
+        "requirements_hash": "b" * 64,
+        "diff_hash": "c" * 64,
+        "evidence_set_hash": "d" * 64,
+    }
+    verification = {
+        "verification_id": "ver-pass",
+        "task_id": "task-pass",
+        "verifier_session_id": "verifier-pass",
+        "implementation_session_id": "impl-pass",
+        "verdict": "PASS",
+        "freshness": "fresh",
+        "reason_codes": [],
+        **hashes,
+    }
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-pass",
+        repo,
+        ["README.md"],
+        user_criticality="HIGH",
+        action_states=_gate_actions("HIGH"),
+        independent_verification=verification,
+        task_id="task-pass",
+        parent_session_id="impl-pass",
+        task_hash=hashes["task_hash"],
+        requirements_hash=hashes["requirements_hash"],
+        diff_hash=hashes["diff_hash"],
+        evidence_set_hash=hashes["evidence_set_hash"],
+    )
+    assert result["completion_allowed"] is True
+    assert result["verification_id"] == "ver-pass"
+
+
+def test_accuracy_gate_rejects_stale_independent_pass(brain_home, repo):
+    hashes = {
+        "task_hash": "a" * 64,
+        "requirements_hash": "b" * 64,
+        "diff_hash": "c" * 64,
+        "evidence_set_hash": "d" * 64,
+    }
+    stale = {
+        "verification_id": "ver-stale",
+        "task_id": "task-stale",
+        "verifier_session_id": "verifier-stale",
+        "implementation_session_id": "impl-stale",
+        "verdict": "PASS",
+        "freshness": "fresh",
+        "reason_codes": [],
+        "task_hash": "0" * 64,
+        "requirements_hash": hashes["requirements_hash"],
+        "diff_hash": hashes["diff_hash"],
+        "evidence_set_hash": hashes["evidence_set_hash"],
+    }
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-stale",
+        repo,
+        ["README.md"],
+        user_criticality="HIGH",
+        action_states=_gate_actions("HIGH"),
+        independent_verification=stale,
+        task_id="task-stale",
+        parent_session_id="impl-stale",
+        task_hash=hashes["task_hash"],
+        requirements_hash=hashes["requirements_hash"],
+        diff_hash=hashes["diff_hash"],
+        evidence_set_hash=hashes["evidence_set_hash"],
+    )
+    assert result["completion_allowed"] is False
+    assert "independent_verification_stale" in result["decision_reason"]
+
+
+def test_accuracy_gate_blocks_unresolved_material_requirement(brain_home, repo):
+    ws.add_requirement(brain_home, "gate-medium", "Acceptance evidence", importance="critical")
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-medium",
+        repo,
+        ["README.md"],
+        user_criticality="MEDIUM",
+        action_states=_gate_actions("MEDIUM"),
+    )
+    assert result["completion_allowed"] is False
+    assert result["unresolved_material_requirements"] == ["REQ-001"]
+
+
+def test_accuracy_gate_returns_bounded_canonical_evidence(brain_home, repo):
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-evidence",
+        repo,
+        ["README.md"],
+        user_criticality="HIGH",
+        action_states=_gate_actions("HIGH"),
+        approval_state="not_required",
+        task_id="task-evidence",
+        parent_session_id="parent-evidence",
+        worker_session_id="worker-evidence",
+    )
+    assert set(result) == {
+        "accuracy_gate_id",
+        "task_id",
+        "parent_session_id",
+        "worker_session_id",
+        "risk_level",
+        "risk_reasons",
+        "ladder_id",
+        "required_actions",
+        "completed_actions",
+        "failed_actions",
+        "unresolved_actions",
+        "unresolved_material_requirements",
+        "approval_state",
+        "completion_allowed",
+        "decision_reason",
+        "verification_id",
+        "verifier_session_id",
+        "verification_verdict",
+        "verification_freshness",
+        "verification_reason_codes",
+        "environment_steward_id",
+        "environment_hash",
+        "environment_mutation_classification",
+        "environment_completion_eligible",
+        "economics",
+    }
+    assert result["task_id"] == "task-evidence"
+    assert result["parent_session_id"] == "parent-evidence"
+    assert result["worker_session_id"] == "worker-evidence"
+    assert result["economics"]["verification_model_calls"] == 0
+
+
+def test_accuracy_gate_blocks_material_environment_evidence():
+    evidence = {
+        "project_id": "project",
+        "environment_state": {"repo": "C:/repo"},
+        "environment_hash": "a" * 64,
+        "after_environment_hash": "b" * 64,
+        "verification_state": "failed",
+        "completion_eligible": False,
+    }
+    result = verify.evaluate_accuracy_gate(
+        Path("brain"),
+        "environment-material",
+        Path("C:/repo"),
+        [],
+        user_criticality="LOW",
+        action_states=_gate_actions("LOW"),
+        environment_evidence=evidence,
+        environment_required=True,
+    )
+
+    assert "environment_steward" in result["required_actions"]
+    assert "environment_steward" in result["failed_actions"]
+    assert result["completion_allowed"] is False
+
+
+def test_accuracy_gate_ignores_optional_environment_evidence():
+    result = verify.evaluate_accuracy_gate(
+        Path("brain"),
+        "environment-optional",
+        Path("C:/repo"),
+        [],
+        user_criticality="LOW",
+        action_states=_gate_actions("LOW"),
+        environment_evidence={"completion_eligible": False},
+        environment_required=False,
+    )
+
+    assert "environment_steward" not in result["required_actions"]

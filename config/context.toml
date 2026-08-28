@@ -48,7 +48,7 @@ threshold_chars = 8000
 # Raw results are preserved byte-exactly through the artifact store BEFORE any
 # reduction and verified recoverable; preservation failure returns the ORIGINAL
 # content unchanged (plan §11.4). Binary/non-text results are never distilled.
-enabled = false
+enabled = true
 max_distill_chars = 2000
 whitelist_tools = ["bash"]
 whitelist_commands = ["pytest", "git", "rg", "grep"]
@@ -78,7 +78,7 @@ budget_tokens = 1500
 # (that toggle is compact-prep/hot-context bookkeeping only). Fail-open: a
 # failing admission call only records an extension_error, never blocks the
 # session. Rollback = set back to false (no redeploy needed, per-event read).
-enabled = false
+enabled = true
 
 [context_structure]
 # Context structural telemetry (pilot-2 prep, RC4 amendment).
@@ -114,7 +114,7 @@ enabled = false
 # mutation when no eligible cold item exists (returns undefined, not an
 # identical-looking patch). Rollback = set back to false (no redeploy
 # needed, per-event read).
-enabled = false
+enabled = true
 # Never page any of the LAST N elements of event.messages (current-turn
 # pin window — generous headroom by default so nothing from the live
 # exchange is ever touched).

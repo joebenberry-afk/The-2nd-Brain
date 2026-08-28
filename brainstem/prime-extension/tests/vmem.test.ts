@@ -276,6 +276,23 @@ describe("runVmemHotContext", () => {
     ]);
     expect(result).toEqual({ ok: true, residentCount: 2, evictedCount: 5, residentTokens: 900 });
   });
+  it("returns the bounded rendered active state with session identity", async () => {
+    const { home } = await fakeHome();
+    execFileMock.mockImplementation((_py, _args, _opts, cb) => {
+      cb(null, JSON.stringify({
+        session_id: "sess-2",
+        rendered_text: "[SECOND_BRAIN_HOT_CONTEXT]\nObjective: Resume",
+        resident_count: 0,
+        evicted_count: 0,
+        resident_tokens: 12,
+      }));
+    });
+
+    const result = await runVmemHotContext({ home, hostSessionId: "sess-2", budgetTokens: 256 });
+
+    expect(result.sessionId).toBe("sess-2");
+    expect(result.renderedText).toContain("Objective: Resume");
+  });
 
   it("fails open (ok:false) when no venv exists", async () => {
     const result = await runVmemHotContext({

@@ -96,3 +96,61 @@ class TestRecordVerifierResponse:
             prompt="p", raw_response="I think it's probably okay.", provenance=provenance
         )
         assert evidence.verdict.verdict == "UNPARSEABLE"
+
+
+def test_bounded_independent_verification_requires_distinct_identity():
+    from second_brain.fresh_verifier import bounded_independent_verification
+
+    result = bounded_independent_verification(
+        raw_response="Result: PASS\nConfidence: 0.9\n",
+        verification_id="ver-1",
+        task_id="task-1",
+        verifier_session_id="verifier-1",
+        implementation_session_id="impl-1",
+        task_hash="a" * 64,
+        requirements_hash="b" * 64,
+        diff_hash="c" * 64,
+        evidence_set_hash="d" * 64,
+    )
+    assert result["verdict"] == "PASS"
+    assert result["freshness"] == "fresh"
+    assert result["verification_id"] == "ver-1"
+    assert "raw_response" not in result
+
+
+def test_bounded_independent_verification_rejects_self_verification():
+    from second_brain.fresh_verifier import bounded_independent_verification
+
+    result = bounded_independent_verification(
+        raw_response="Result: PASS\n",
+        verification_id="ver-2",
+        task_id="task-2",
+        verifier_session_id="same",
+        implementation_session_id="same",
+        task_hash="a" * 64,
+        requirements_hash="b" * 64,
+        diff_hash="c" * 64,
+        evidence_set_hash="d" * 64,
+    )
+    assert result["verdict"] == "UNPARSEABLE"
+    assert result["freshness"] == "invalid"
+    assert "self_verification" in result["reason_codes"]
+
+
+def test_bounded_independent_verification_rejects_missing_verdict():
+    from second_brain.fresh_verifier import bounded_independent_verification
+
+    result = bounded_independent_verification(
+        raw_response="No result marker",
+        verification_id="ver-3",
+        task_id="task-3",
+        verifier_session_id="verifier-3",
+        implementation_session_id="impl-3",
+        task_hash="a" * 64,
+        requirements_hash="b" * 64,
+        diff_hash="c" * 64,
+        evidence_set_hash="d" * 64,
+    )
+    assert result["verdict"] == "UNPARSEABLE"
+    assert result["freshness"] == "fresh"
+    assert "verdict_unparseable" in result["reason_codes"]

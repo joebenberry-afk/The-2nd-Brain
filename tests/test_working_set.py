@@ -128,6 +128,16 @@ def test_session_id_valid_ids_roundtrip(brain_home):
         ws.init_capsule(brain_home, sid, "Objective")
         assert ws.show_capsule(brain_home, sid)["objective"] == "Objective"
 
+def test_session_dir_reuses_ledger_internal_identity_when_present(brain_home):
+    from second_brain.ledger import internal_session_id
+
+    host_session = "2026-08-24T05-12-05-023Z_01a0322e-d49f-74a1-9084-5e7129e7457d"
+    internal = internal_session_id(host_session)
+    hashed = brain_home / "state" / "sessions" / internal
+    hashed.mkdir(parents=True)
+
+    assert ws.session_dir(brain_home, host_session) == hashed
+
 
 # ---------------------------------------------------------------------------
 # Requirement ledger

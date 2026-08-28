@@ -529,6 +529,8 @@ export interface ToolCallRecord extends BaseRecord {
   id: string;
   /** bash only: command text truncated to 500 chars (privacy rule). */
   command?: string;
+  /** Hash of a read target; raw paths never enter telemetry. */
+  target_sha256?: string;
   input_bytes: number;
 }
 
@@ -549,6 +551,12 @@ export function toolCall(
   if (name === "bash") {
     const command = bashCommand(inputObj);
     if (command !== undefined) record.command = command;
+  }
+  if (name === "read") {
+    const target = inputObj.path ?? inputObj.AbsolutePath ?? inputObj.file;
+    if (typeof target === "string" && target.length > 0) {
+      record.target_sha256 = createHash("sha256").update(target, "utf8").digest("hex");
+    }
   }
   return record;
 }
@@ -695,6 +703,31 @@ export function vmemHotContext(
     evicted_count: typeof evictedCount === "number" ? evictedCount : null,
     resident_tokens: typeof residentTokens === "number" ? residentTokens : null,
   }) as unknown as VmemHotContextRecord;
+}
+
+export interface ActiveStateDeliveryRecord extends BaseRecord {
+  kind: "active_state_delivery";
+  capsule_sha256: string | null;
+  capsule_bytes: number | null;
+  rendered_chars: number;
+  changed: boolean;
+  model_visible: boolean;
+}
+
+export function activeStateDelivery(
+  session: string,
+  capsuleSha256: string | undefined,
+  capsuleBytes: number | undefined,
+  renderedChars: number,
+  changed: boolean,
+): ActiveStateDeliveryRecord {
+  return base("active_state_delivery", session, {
+    capsule_sha256: capsuleSha256 ?? null,
+    capsule_bytes: typeof capsuleBytes === "number" ? capsuleBytes : null,
+    rendered_chars: renderedChars,
+    changed,
+    model_visible: true,
+  }) as unknown as ActiveStateDeliveryRecord;
 }
 
 export interface VmemFaultInRecord extends BaseRecord {
@@ -1049,8 +1082,17 @@ export interface ProviderRequestMetaRecord extends BaseRecord {
   vmem_pointer_count: number;
   /** Same technique, counting `"[SECOND_BRAIN_RTD]"` occurrences. */
   rtd_pointer_count: number;
+  /** Count of the stable Lean marker in the serialized provider payload. */
+  lean_kernel_marker_count?: number;
+  /** Count of exact canonical Lean kernel strings in provider string fields. */
+  lean_kernel_content_count?: number;
+  /** Hash of the canonical kernel expected for this session, never its text. */
+  lean_kernel_sha256?: string;
+  /** Canonical kernel character length expected for this session. */
+  lean_kernel_chars?: number;
+  /** Bounded non-sensitive path/placement metadata for the marker. */
+  lean_kernel_placement?: string;
 }
-
 /**
  * Provider-request fingerprint (plan §5.4): metadata only — top-level payload
  * keys (sorted), serialized byte size, message count, and sha256 fingerprints
@@ -1062,12 +1104,58 @@ export interface ProviderRequestMetaRecord extends BaseRecord {
  * there is no user message the whole messages array is fingerprinted. This
  * detects stable-prefix epochs busted by system-prompt/tool-schema changes.
  */
+export interface LeanProviderEvidence {
+  marker: string;
+  kernel?: string;
+}
+
+function countValueOccurrences(value: unknown, needle: string, seen = new Set<object>(), depth = 0): number {
+  if (depth > 8 || needle.length === 0) return 0;
+  if (typeof value === "string") return countOccurrences(value, needle);
+  if (value === null || typeof value !== "object") return 0;
+  if (seen.has(value)) return 0;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + countValueOccurrences(item, needle, seen, depth + 1), 0);
+  }
+  return Object.values(value).reduce(
+    (total, item) => total + countValueOccurrences(item, needle, seen, depth + 1),
+    0,
+  );
+}
+
+function findValuePath(
+  value: unknown,
+  needle: string,
+  path = "$",
+  seen = new Set<object>(),
+  depth = 0,
+): string | undefined {
+  if (depth > 8 || needle.length === 0) return undefined;
+  if (typeof value === "string") return value.includes(needle) ? path : undefined;
+  if (value === null || typeof value !== "object" || seen.has(value)) return undefined;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const found = findValuePath(value[index], needle, `${path}[${index}]`, seen, depth + 1);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    const found = findValuePath(item, needle, `${path}.${key}`, seen, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 export function providerRequestMeta(
   session: string,
   provider: string | null,
   model: string | null,
   requestSeq: number,
   payload: unknown,
+  leanEvidence?: LeanProviderEvidence,
 ): ProviderRequestMetaRecord {
   const obj =
     payload != null && typeof payload === "object"
@@ -1090,6 +1178,23 @@ export function providerRequestMeta(
     vmem_pointer_count: countOccurrences(serializedPayload, "[SECOND_BRAIN_VMEM]"),
     rtd_pointer_count: countOccurrences(serializedPayload, "[SECOND_BRAIN_RTD]"),
   };
+  if (leanEvidence?.marker) {
+    const markerCount = countOccurrences(serializedPayload, leanEvidence.marker);
+    const contentCount =
+      leanEvidence.kernel === undefined
+        ? 0
+        : countValueOccurrences(obj, leanEvidence.kernel);
+    extra.lean_kernel_marker_count = markerCount;
+    extra.lean_kernel_content_count = contentCount;
+    extra.lean_kernel_chars = leanEvidence.kernel?.length ?? 0;
+    extra.lean_kernel_placement =
+      markerCount > 0
+        ? findValuePath(obj, leanEvidence.marker) ?? "provider_payload"
+        : "absent";
+    if (leanEvidence.kernel !== undefined) {
+      extra.lean_kernel_sha256 = sha256Hex(leanEvidence.kernel);
+    }
+  }
   let prefix = messages;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (isUserMessage(messages[i])) {

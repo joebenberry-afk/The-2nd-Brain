@@ -24,12 +24,16 @@ import contextlib
 import os
 import subprocess
 import tempfile
+import time
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from .contracts import stable_content_hash
 from .errors import BrainError
-from .working_set import show_capsule, show_requirements
+from .risk import assess_risk
+from .working_set import check_requirements, show_capsule, show_requirements
 
 MAX_DIFF_LINES = 400
 
@@ -309,4 +313,241 @@ def verification_ladder_payload(
         "actions": actions,
         "independent_verifier": "independent_intent_verifier" in tokens,
         "approval_required": "human_approval_for_irreversible" in tokens,
+    }
+
+def evaluate_accuracy_gate(
+    home: Path | str,
+    session_id: str,
+    repo: Path | str,
+    files_touched: list[str],
+    *,
+    action_states: dict[str, str] | None = None,
+    user_criticality: str | None = None,
+    approval_state: str = "not_required",
+    task_id: str = "",
+    parent_session_id: str = "",
+    worker_session_id: str = "",
+    independent_verification: dict[str, object] | None = None,
+    task_hash: str = "",
+    requirements_hash: str = "",
+    diff_hash: str = "",
+    evidence_set_hash: str = "",
+    environment_evidence: dict[str, object] | None = None,
+    environment_required: bool = False,
+) -> dict[str, Any]:
+    """Evaluate completion against the existing risk ladder and evidence ledger."""
+    started_at = time.perf_counter()
+    states = action_states or {}
+    invalid = {
+        key: value
+        for key, value in states.items()
+        if value not in {"passed", "failed", "unresolved"}
+    }
+    if invalid:
+        raise BrainError(f"invalid verification action states: {sorted(invalid)}")
+    assessment = assess_risk(Path(repo), files_touched, user_criticality=user_criticality)
+    level = str(assessment["level"])
+    ladder = load_verification_ladder(home)
+    all_actions = expand_ladder_actions(ladder, level)
+    required_actions = [
+        action
+        for action in all_actions
+        if action != "optional_second_independent_verification"
+    ]
+    environment_reason = ""
+    if environment_required:
+        required_actions.append("environment_steward")
+        if environment_evidence is None:
+            states["environment_steward"] = "unresolved"
+            environment_reason = "environment_steward_missing"
+        else:
+            env_state = environment_evidence.get("environment_state")
+            repo_match = (
+                isinstance(env_state, dict)
+                and env_state.get("repo") == str(Path(repo).resolve())
+            )
+            hash_match = (
+                isinstance(environment_evidence.get("environment_hash"), str)
+                and environment_evidence.get("environment_hash")
+                == environment_evidence.get("after_environment_hash")
+            )
+            valid_environment = (
+                repo_match
+                and hash_match
+                and environment_evidence.get("verification_state") == "passed"
+                and environment_evidence.get("completion_eligible") is True
+            )
+            states["environment_steward"] = "passed" if valid_environment else "failed"
+            if not valid_environment:
+                environment_reason = "environment_steward_invalid"
+    independent_reason = ""
+    independent_action_required = "independent_intent_verifier" in required_actions
+    if independent_action_required:
+        if independent_verification is None:
+            states["independent_intent_verifier"] = "unresolved"
+            independent_reason = "independent_verification_missing"
+        else:
+            expected_hashes = {
+                "task_hash": task_hash,
+                "requirements_hash": requirements_hash,
+                "diff_hash": diff_hash,
+                "evidence_set_hash": evidence_set_hash,
+            }
+            hash_mismatch = any(
+                expected and independent_verification.get(name) != expected
+                for name, expected in expected_hashes.items()
+            )
+            fresh_pass = (
+                independent_verification.get("verdict") == "PASS"
+                and independent_verification.get("freshness") == "fresh"
+                and independent_verification.get("verifier_session_id") != parent_session_id
+                and not hash_mismatch
+            )
+            if fresh_pass:
+                states["independent_intent_verifier"] = "passed"
+            else:
+                states["independent_intent_verifier"] = "failed"
+                independent_reason = (
+                    "independent_verification_stale"
+                    if hash_mismatch
+                    else "independent_verification_invalid"
+                )
+    effective_parent_session = parent_session_id or (
+        str(independent_verification.get("implementation_session_id"))
+        if independent_verification and independent_verification.get("implementation_session_id")
+        else ""
+    )
+    effective_worker_session = worker_session_id or (
+        str(independent_verification.get("verifier_session_id"))
+        if independent_verification and independent_verification.get("verifier_session_id")
+        else ""
+    )
+    completed_actions = [action for action in required_actions if states.get(action) == "passed"]
+    failed_actions = [action for action in required_actions if states.get(action) == "failed"]
+    unresolved_actions = [
+        action for action in required_actions if states.get(action) not in {"passed", "failed"}
+    ]
+    requirement_check = check_requirements(Path(home), session_id)
+    unresolved_requirements = [str(entry["id"]) for entry in requirement_check["entries"]]
+    approval_required = "human_approval_for_irreversible" in required_actions
+    effective_approval = (
+        "approved"
+        if approval_required and approval_state == "approved"
+        else "required"
+        if approval_required
+        else "not_required"
+    )
+    if unresolved_requirements:
+        completion_allowed = False
+        decision_reason = "material_requirements_unresolved"
+    elif independent_reason:
+        completion_allowed = False
+        decision_reason = independent_reason
+    elif environment_reason:
+        completion_allowed = False
+        decision_reason = environment_reason
+    elif failed_actions:
+        completion_allowed = False
+        decision_reason = "verification_actions_failed"
+    elif unresolved_actions:
+        completion_allowed = False
+        decision_reason = "verification_actions_unresolved"
+    elif effective_approval == "required":
+        completion_allowed = False
+        decision_reason = "irreversible_action_approval_required"
+    else:
+        completion_allowed = True
+        decision_reason = "all_required_evidence_satisfied"
+    risk_reasons = [
+        str(signal["name"])
+        for signal in assessment["signals"]
+        if int(signal["points"]) > 0
+    ]
+    ladder_id = stable_content_hash({"risk_level": level, "required_actions": required_actions})
+    accuracy_gate_id = stable_content_hash(
+        {
+            "task_id": task_id,
+            "session_id": session_id,
+            "parent_session_id": effective_parent_session,
+            "worker_session_id": effective_worker_session,
+            "ladder_id": ladder_id,
+        }
+    )
+    raw_verification_reasons = (
+        independent_verification.get("reason_codes", [])
+        if independent_verification
+        else []
+    )
+    verification_reason_codes = (
+        [str(item) for item in raw_verification_reasons]
+        if isinstance(raw_verification_reasons, list)
+        else [independent_reason] if independent_reason else []
+    )
+    return {
+        "accuracy_gate_id": f"gate-{accuracy_gate_id[:24]}",
+        "task_id": task_id,
+        "parent_session_id": effective_parent_session,
+        "worker_session_id": effective_worker_session,
+        "risk_level": level,
+        "risk_reasons": risk_reasons,
+        "ladder_id": ladder_id,
+        "required_actions": required_actions,
+        "completed_actions": completed_actions,
+        "failed_actions": failed_actions,
+        "unresolved_actions": unresolved_actions,
+        "unresolved_material_requirements": unresolved_requirements,
+        "approval_state": effective_approval,
+        "completion_allowed": completion_allowed,
+        "decision_reason": decision_reason,
+        "verification_id": (
+            independent_verification.get("verification_id")
+            if independent_verification
+            else None
+        ),
+        "verifier_session_id": (
+            independent_verification.get("verifier_session_id")
+            if independent_verification
+            else None
+        ),
+        "verification_verdict": (
+            independent_verification.get("verdict")
+            if independent_verification
+            else None
+        ),
+        "verification_freshness": (
+            independent_verification.get("freshness")
+            if independent_verification
+            else None
+        ),
+        "verification_reason_codes": verification_reason_codes,
+        "environment_steward_id": (
+            environment_evidence.get("environment_steward_id")
+            if environment_evidence
+            else None
+        ),
+        "environment_hash": (
+            environment_evidence.get("environment_hash") if environment_evidence else None
+        ),
+        "environment_mutation_classification": (
+            environment_evidence.get("mutation_classification")
+            if environment_evidence
+            else None
+        ),
+        "environment_completion_eligible": (
+            environment_evidence.get("completion_eligible")
+            if environment_evidence
+            else None
+        ),
+        "economics": {
+            "verification_model_calls": 0,
+            "verification_tool_calls": 0,
+            "verification_context_tokens": 0,
+            "gate_bookkeeping_overhead_ms": round(
+                (time.perf_counter() - started_at) * 1000, 3
+            ),
+            "retries": 0,
+            "corrections": 0,
+            "completion_blocked": not completion_allowed,
+            "additional_work_required": None,
+        },
     }

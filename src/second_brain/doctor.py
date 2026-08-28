@@ -14,7 +14,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, db, paths
+from . import __version__, db, envsteward, paths
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -191,7 +191,56 @@ def check_version_file(home: Path, checks: list[Check]) -> None:
         checks.append(Check("version", STATUS_FAIL, "VERSION file missing"))
 
 
-def run_doctor(home: Path | None = None) -> DoctorResult:
+def check_environment(
+    home: Path,
+    repo: Path | None,
+    session_id: str | None,
+    checks: list[Check],
+) -> dict | None:
+    root = Path(repo) if repo is not None else Path.cwd()
+    try:
+        evidence = (
+            envsteward.assess(
+                home,
+                root,
+                session_id=session_id,
+                phase="doctor",
+                doctor_check_state="passed",
+            )
+            if session_id is not None
+            else envsteward.snapshot(home, root)
+        )
+    except Exception as exc:
+        checks.append(Check("environment steward", STATUS_FAIL, f"assessment failed: {exc}"))
+        return None
+    if evidence.get("completion_eligible") is False:
+        checks.append(
+            Check(
+                "environment steward",
+                STATUS_FAIL,
+                (
+                    f"{evidence.get('environment_steward_id')} "
+                    f"mutation={evidence.get('mutation_classification')}"
+                ),
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                "environment steward",
+                STATUS_OK,
+                f"{evidence.get('environment_steward_id')} session={session_id or 'unpersisted'}",
+            )
+        )
+    return evidence
+
+
+def run_doctor(
+    home: Path | None = None,
+    *,
+    repo: Path | None = None,
+    session_id: str | None = None,
+) -> DoctorResult:
     home = Path(home) if home else paths.resolve_home()
     checks: list[Check] = []
     check_home(home, checks)
@@ -204,6 +253,7 @@ def run_doctor(home: Path | None = None) -> DoctorResult:
         check_git(home, checks)
         check_db(home, checks)
         check_tools(checks)
+        check_environment(home, repo, session_id, checks)
     return DoctorResult(home=home, checks=checks)
 
 

@@ -1,0 +1,71 @@
+{
+  "candidate_content_sha256": "6e1547852b74ecdf700a62e5381c8d699c56881e79fac9a05955bbcc4b9eb100",
+  "candidate_id": "skill-candidate-c42679a4a39bcc5415ae0671",
+  "candidate_type": "REPEATED_READ",
+  "evaluation_state": "hold",
+  "evidence_refs": [
+    {
+      "record_hash": "12b7a7442e98372c3cd75f5b68676207eae5c84b4cad1799ebcfdf3dfb12903e",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:4",
+      "ts": "2026-08-26T08:21:36.728213+00:00"
+    },
+    {
+      "record_hash": "b82312429bb4f24c15cfbd8a8e663554df5c7be39cbc53ac9d79bd4dbba0e126",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:15",
+      "ts": "2026-08-26T08:21:43.319Z"
+    },
+    {
+      "record_hash": "529d9653ffae20694bc0df03cb6fa89e395f0d05cca26fc204d51a4f6c8ece45",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:17",
+      "ts": "2026-08-26T08:21:43.336Z"
+    },
+    {
+      "record_hash": "108c93e9b1b270039482260bb9b219f57626bc1c5ce730065a1ecc0e7ffc948a",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:23",
+      "ts": "2026-08-26T08:21:45.808Z"
+    },
+    {
+      "record_hash": "f0ce4a429969ec9ec9f98a88d18d9c3b408a783f8cc57f3df4c439743cff948a",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:25",
+      "ts": "2026-08-26T08:21:45.823Z"
+    },
+    {
+      "record_hash": "7f44ff204a6f889cc1fd6b90eab9a67170842a5b63128ef9b55aee05cdf5b6ee",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:31",
+      "ts": "2026-08-26T08:21:48.828Z"
+    },
+    {
+      "record_hash": "07d69099827709027e798d869f1404ed5ed8279bd87122c06957c6060fb41b51",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:33",
+      "ts": "2026-08-26T08:21:48.843Z"
+    },
+    {
+      "record_hash": "8bd900d74c73ba25a04bdbc1868684fa81af18a6c5103ef85643afb18deaeb2f",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:39",
+      "ts": "2026-08-26T08:21:51.012Z"
+    },
+    {
+      "record_hash": "514193450eb8afa96abd13084d2ac8796ca099997ad6b61eff79f48ba78ef370",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:41",
+      "ts": "2026-08-26T08:21:51.020Z"
+    },
+    {
+      "record_hash": "032f9968172b2d36250d279b42ac253aecb40aa27e2e0785207f23616bb593a8",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:47",
+      "ts": "2026-08-26T08:21:52.899Z"
+    },
+    {
+      "record_hash": "65473d90ce69f15ab99f1e64cedba7296d00a03091727d07d3a8e8142cd346b7",
+      "telemetry_ref": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl:49",
+      "ts": "2026-08-26T08:21:52.907Z"
+    }
+  ],
+  "install_state": "inactive",
+  "lifecycle_state": "candidate",
+  "project_id": "019edaf1f87d9577",
+  "promotion_state": "hold",
+  "reason_codes": [
+    "REPEATED_READ"
+  ],
+  "source_radar_candidate_id": "candidate-76c88737ad58a6a525c959f5"
+}

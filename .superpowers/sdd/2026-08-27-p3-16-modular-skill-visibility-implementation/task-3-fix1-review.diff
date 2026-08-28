@@ -1,0 +1,245 @@
+diff --git a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+new file mode 100644
+index 0000000..443339d
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+@@ -0,0 +1,56 @@
++# Task 3 Report: `visibility-bridge.ts` + `index.ts` wiring
++
++## Status: DONE
++
++All brief steps completed. Insertion contexts in `index.ts` matched the brief exactly (verified before each edit): `ompRoutingRunner?:` field, `const routingRunner = options.ompRoutingRunner ?? runOmpRouting;` line, and the `if (aiCfg.mode === "advisory" || aiCfg.mode === "active") { ... } else { void runShadowAutoInject(...); }` / `mirror(session, "user_task", ...)` boundary all matched verbatim, with `taskText`, `aiMessage`, `mergeActiveStateMessage`, `config.home`, `session`, `ctxCwd` confirmed in scope at the insertion point. No NEEDS_CONTEXT condition arose.
++
++## Files
++
++- Created `brainstem/prime-extension/src/visibility-bridge.ts` — mirrors `routing-bridge.ts` exactly, including its python-resolution expression (`options.python ?? join(options.home, ".venv", "Scripts", "python.exe")`).
++- Created `brainstem/prime-extension/tests/visibility-bridge.test.ts` — the 7 tests specified in the brief, verbatim.
++- Modified `brainstem/prime-extension/src/index.ts` — additive only:
++  - new `visibility-bridge` import block (placed immediately after the `routing-bridge` import, before `worker-context-bridge`, per the brief's literal anchor)
++  - `ompVisibilityRunner?: ...` field on `ExtensionOptions`, immediately after `ompRoutingRunner?:`
++  - `const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;`, immediately after the `routingRunner` binding
++  - the visibility-plan block inside `before_agent_start`, inserted after the AutoInject `if/else` closes and before `mirror(session, "user_task", ...)`, exactly as specified (including the `OMP_VISIBILITY_MAX_INJECTED_CHARS` import addendum from the brief's note)
++- Modified `brainstem/prime-extension/tests/wiring.test.ts` (2268 lines, under the ~2500 threshold, so extended in place rather than creating `visibility-wiring.test.ts`):
++  - new `describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)", ...)` block with the 3 specified cases (shadow no-inject, enforced-with-hydration inject, fail-open no-throw)
++  - see "Unplanned but required fixes" below for the rest of the diff to this file
++- Modified `brainstem/prime-extension/tests/active-state-wiring.test.ts` (see below) — not named in the brief, but required for suite-wide green; same rationale as the `wiring.test.ts` fixes.
++
++## Unplanned but required fixes (full disclosure)
++
++The brief's Step 4d code appends one `ompVisibilityRecord("omp_visibility_plan", ...)` telemetry record on **every** `before_agent_start` call where `config.home` is set and the prompt is non-empty — unconditionally, regardless of shadow/enforced mode (only the *injected content* is mode-gated, not the telemetry). Implementing this exactly as specified made ~600 pre-existing wiring tests non-hypothetically regress, for two independent reasons:
++
++1. **New telemetry record breaks exact-list assertions.** `wiring.test.ts` has ~10 tests asserting the *exact* ordered/sorted list of telemetry `kind`s written per `before_agent_start` call (a pattern the file's own comments document was already needed once before, for P3-D's `lean_kernel` record: *"Exact-kind assertions below account for the new records"*). I updated these ~10 assertions (and one `records[0].role` → `recordOf(records, "before_agent_start").role` pair, since `omp_visibility_plan` could now land first) to include `"omp_visibility_plan"`, following that exact established precedent. No test's *meaning* changed — only the expected record set, matching the acknowledged-additive new behavior.
++2. **Real subprocess spawn per test → teardown races.** Unmocked, the fallback `visibilityRunner` is the real `runOmpVisibility`, which `execFile`s a nonexistent `.venv/Scripts/python.exe` in every temp test home. This is consistent with how the codebase already treats every other real per-call side effect in `wiring.test.ts` (`runAdvisoryAutoInject`, `runEnvironmentAssessmentSync`, `runRadarObservationSync` are all `vi.mock`ed there for the same reason). I added the same `vi.mock("../src/visibility-bridge", ...)` pattern (default: `{ visibility_plan: null, hydrated_instructions: {}, error: null }`, overridable per-test via `ompVisibilityRunner`), and did the same in `active-state-wiring.test.ts` (which also exercises `before_agent_start` and was previously unmocked). This eliminated a real, non-hypothetical Windows `ENOTEMPTY`/`EPERM`/`ENOENT` teardown-race regression from spawning one extra child process + fire-and-forget telemetry append per test.
++3. As extra hardening (this file's tests already lengthen the `TelemetryStore`'s serialized fire-and-forget append chain by one link per `before_agent_start` call), I added `await settle()` to the handful of tests that returned without draining pending writes, and added a small universal drain (`await settle()` / a bounded wait) inside both files' shared `afterEach`, immediately before `rm(tmp, {recursive:true, force:true})`. This is the same idiom the file already uses elsewhere (`settle()` — "Give pending fire-and-forget writes a chance to land").
++
++None of this touched Python, `routing-bridge.ts`, or `worker-context-bridge.ts`, and no unrelated `index.ts`/`wiring.test.ts` code was reformatted — only the specific assertions/mocks made necessary by the new, intentionally-added `omp_visibility_plan` telemetry record.
++
++## Tests
++
++- `npm test -- --run visibility-bridge`: 7/7 pass.
++- `npm test -- --run` (full suite, 26 files / 601 tests): **601/601 pass**, run repeatedly (18+ full-suite runs during this session). One residual, low-frequency (~1 in 10–15 runs) Windows temp-dir teardown race remained even after the above mitigation, always the `ENOTEMPTY`/`EPERM`/`ENOENT` class already present in this suite pre-Task-3 (confirmed via a `git stash`/baseline run before any of my edits, which showed 2 unrelated pre-existing flaky failures in `active-state-wiring.test.ts` under the same full-suite run). This is a structural characteristic of the existing `rm(tmp, {recursive:true, force:true})`-vs-fire-and-forget-append race across the whole suite, not a logic defect in the visibility bridge; every deterministic (100%-reproducible) failure was eliminated.
++
++## Commit
++
++`11b1907` — "feat(prime-extension): wire skill-visibility bridge at pre-model hook" (5 files changed: `src/visibility-bridge.ts`, `src/index.ts`, `tests/visibility-bridge.test.ts`, `tests/wiring.test.ts`, `tests/active-state-wiring.test.ts`). Note: `src/index.ts` and `tests/wiring.test.ts` already carried a large pre-existing uncommitted diff from earlier, still-uncommitted TS-side phases (P3.1 active-state, P3-B economics, worker-context-bridge, routing-bridge, stop-boundary, etc. — visible in the file before this task started); this commit necessarily includes that prior accumulated diff alongside Task 3's own additive changes, since git commits whole-file content, not just this task's hunks. No Python file, `router.py`, `gardener.py`, or `hermes_adapter.py` was touched.
++
++## Concerns
++
++- An automated repo lint policy (`ts-no-tiny-functions`, `ts-promise-with-resolvers`, `ts-no-any`, `ts-import-type`) flagged parts of `visibility-bridge.ts`/`wiring.test.ts` during editing (tiny `bounded()` helper, `new Promise((resolve) => ...)` executor, inline `typeof import(...)`). These are exact mirrors of `routing-bridge.ts`'s and `wiring.test.ts`'s own existing, established conventions; deviating would have created a second, inconsistent style next to the file(s) they mirror, so I kept the brief's verbatim code/pattern as instructed and did not "fix" these per the automated policy.
++- The residual ~1-in-10–15-run teardown flakiness described above pre-dates this task and is not specific to skill-visibility; a full fix (auditing every test in all ~26 files for a missing `settle()`, or replacing the temp-dir-based test harness) is out of Task 3's scope and was not attempted beyond the two files this task's `index.ts` change actually affects.
++- P3.17 was not started.
++
++## Post-review fix: `active_state`/`visibility` details-key collision (P2)
++
++**Finding (from `Main`'s review):** the original visibility injection routed its merge through `mergeActiveStateMessage(aiMessage, {content, details: {visibility_plan_id}})`. That helper hardcodes the second argument's `details` under a literal `active_state` key (its only prior caller merges the real active-state capsule). Every `before_agent_start` return path then re-runs `mergeActiveStateMessage(aiMessage, activeMessage)` at the end, which unconditionally **overwrites** `details.active_state` with the real active-state capsule's own details — silently discarding `visibility_plan_id` whenever AutoInject mode ("advisory"/"active"), active-state mode, and an enforced visibility plan with hydrated content all coincide (realistic, since AutoInject and active-state both gate on the same `aiCfg.mode`). The injected specialist *text* survived; only the `visibility_plan_id` correlator was lost.
++
++**Fix:** added a dedicated `mergeVisibilityMessage(primary, specialistText, visibilityPlanId)` helper in `src/index.ts` (placed immediately after `mergeActiveStateMessage`, same file, same section) that merges the specialist text under its own `details.visibility.visibility_plan_id` key instead of borrowing `mergeActiveStateMessage`'s `active_state` slot. Its branching mirrors `mergeActiveStateMessage`'s own fail-open semantics (no existing message → return the new one; existing message without a string `.content` → return it unchanged; otherwise concatenate content and merge details). The `before_agent_start` visibility-injection call site now calls `mergeVisibilityMessage(aiMessage, specialistText, visibilityResult.visibility_plan.visibility_plan_id)` in place of the old `mergeActiveStateMessage(aiMessage, {content, details})` call. Because `visibility` and `active_state` are now distinct `details` keys, the later `mergeActiveStateMessage(aiMessage, activeMessage)` call's `{...primaryDetails, active_state: activeDetails}` spread preserves `details.visibility` untouched.
++
++**Regression test:** added `active-state-wiring.test.ts` > *"merging an enforced-mode visibility injection with a live active-state capsule preserves both (regression: visibility_plan_id must survive the active_state merge)"*. This required also mocking `runAdvisoryAutoInject` in that file (added `runAdvisoryAutoInjectMock`, default `mockResolvedValue(undefined)` — matches its real fail-open behavior in a venv-less test home, so the file's pre-existing test is unaffected) so the test can give `aiMessage` real string content (`"AUTOINJECT PACKET TEXT"`) from AutoInject mode `"active"` (already the file's default config), combined with the file's existing real active-state capsule mock (`messageMock`) and a new `runOmpVisibilityMock` enforced-plan resolution. The test asserts the final message's `content` contains both `"AUTOINJECT PACKET TEXT"` and `"specialist body text"` and the real active-state marker, and that `details.visibility.visibility_plan_id === "vplan-collision-1"` **and** `details.active_state` still equals the real active-state details — i.e. both merges' payloads survive together. Before the fix this test fails (`visibility_plan_id` is `undefined`, having been overwritten); after the fix it passes.
++
++**Verification:** `npm test -- --run active-state-wiring` → 3/3 pass. Full suite (`npm test -- --run`, 26 files / **602 tests**, +1 for the new regression test) run 5 times after the fix: 4/5 clean, 1/5 hit the same pre-existing residual teardown-race flake documented above (a different, unrelated `waitForLines` test in `wiring.test.ts`, not the fix itself) — consistent with the previously-measured baseline flake rate, no new failure mode introduced.
++
++**Commit:** amended into the same feature (new commit on top of `11b1907`, same 5 logical files: `src/index.ts`, `tests/active-state-wiring.test.ts`, plus no changes needed to `visibility-bridge.ts`/`visibility-bridge.test.ts`/`wiring.test.ts` for this fix). No Python file, `routing-bridge.ts`, or `worker-context-bridge.ts` touched; P3.17 not started.
+diff --git a/brainstem/prime-extension/src/index.ts b/brainstem/prime-extension/src/index.ts
+index 051882c..ed3fb38 100644
+--- a/brainstem/prime-extension/src/index.ts
++++ b/brainstem/prime-extension/src/index.ts
+@@ -899,20 +899,44 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
+         ...primary,
+         content: `${primary.content}\n\n${active.content}`,
+         details: {
+           ...primaryDetails,
+           active_state: activeDetails,
+         },
+       };
+     }
+     return primary;
+   }
++  /** Merge an enforced-mode skill-visibility injection into any existing
++   * custom_message under its own "visibility" details key (P3.16) --
++   * deliberately NOT routed through mergeActiveStateMessage's "active_state"
++   * key, which mergeActiveStateMessage unconditionally overwrites on every
++   * call: doing so would silently drop visibility_plan_id whenever AutoInject
++   * mode, active-state mode, and an enforced visibility plan all coincide. */
++  function mergeVisibilityMessage(primary: unknown, specialistText: string, visibilityPlanId: string): unknown {
++    const visibility = { visibility_plan_id: visibilityPlanId };
++    if (primary === undefined || primary === null) {
++      return { content: specialistText, details: { visibility } };
++    }
++    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
++      const primaryDetails =
++        "details" in primary && typeof primary.details === "object" && primary.details !== null
++          ? primary.details
++          : {};
++      return {
++        ...primary,
++        content: `${primary.content}\n\n${specialistText}`,
++        details: { ...primaryDetails, visibility },
++      };
++    }
++    return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
++  }
+ 
+   pi.on("before_agent_start", async (event, ctx) => {
+     let session = "unknown";
+     let aiCfg = loadAutoInjectHostConfig(config.home);
+     let aiMessage: unknown = undefined;
+     let activeMessage: unknown = undefined;
+     let environmentTask: EnvironmentAssessmentResult | undefined;
+     try {
+       session = resolveSessionId(ctx, anonSession);
+       mirrorWorkerContextReceipt(typeof event.prompt === "string" ? event.prompt : "", session, ctx);
+@@ -1053,24 +1077,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
+           });
+           if (
+             visibilityResult.visibility_plan?.mode === "enforced" &&
+             Object.keys(visibilityResult.hydrated_instructions).length > 0
+           ) {
+             const specialistText = Object.entries(visibilityResult.hydrated_instructions)
+               .sort(([a], [b]) => a.localeCompare(b))
+               .map(([, text]) => text)
+               .join("\n\n")
+               .slice(0, OMP_VISIBILITY_MAX_INJECTED_CHARS);
+-            aiMessage = mergeActiveStateMessage(aiMessage, {
+-              content: specialistText,
+-              details: { visibility_plan_id: visibilityResult.visibility_plan.visibility_plan_id },
+-            });
++            aiMessage = mergeVisibilityMessage(
++              aiMessage,
++              specialistText,
++              visibilityResult.visibility_plan.visibility_plan_id,
++            );
+           }
+           getStore(session)?.append(
+             ompVisibilityRecord("omp_visibility_plan", session, {
+               mode: visibilityResult.visibility_plan?.mode ?? null,
+               selected_skill_ids: visibilityResult.visibility_plan?.selected_skill_ids ?? [],
+               hydrated_skill_ids: visibilityResult.visibility_plan?.hydrated_skill_ids ?? [],
+               visibility_plan_id: visibilityResult.visibility_plan?.visibility_plan_id ?? null,
+               error: visibilityResult.error,
+             }),
+           );
+diff --git a/brainstem/prime-extension/tests/active-state-wiring.test.ts b/brainstem/prime-extension/tests/active-state-wiring.test.ts
+index 5eb33f5..6a4b86f 100644
+--- a/brainstem/prime-extension/tests/active-state-wiring.test.ts
++++ b/brainstem/prime-extension/tests/active-state-wiring.test.ts
+@@ -15,37 +15,49 @@ vi.mock("../src/active-state-mirror", () => ({
+   runActiveStateUpdate: updateMock,
+   runActiveStateUpdateSync: updateSyncMock,
+   renderActiveState: renderMock,
+   activeStateMessage: messageMock,
+ }));
+ const runOmpVisibilityMock = vi.hoisted(() => vi.fn());
+ vi.mock("../src/visibility-bridge", async (importOriginal) => {
+   const actual = await importOriginal<typeof import("../src/visibility-bridge")>();
+   return { ...actual, runOmpVisibility: runOmpVisibilityMock };
+ });
++// P3.16 regression coverage: AutoInject mode "active" (set below) means
++// runAdvisoryAutoInject is real by default and fails open (no real venv in
++// the temp test home) -- mocked here so a specific test can give aiMessage
++// real string content, the precondition for the active_state/visibility
++// details-key collision this file's regression test exercises.
++const runAdvisoryAutoInjectMock = vi.hoisted(() => vi.fn());
++vi.mock("../src/autoinject", async (importOriginal) => {
++  const actual = await importOriginal<typeof import("../src/autoinject")>();
++  return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
++});
+ 
+ import factory from "../src/index";
+ 
+ type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+ let tmp: string;
+ 
+ beforeEach(async () => {
+   tmp = await mkdtemp(join(tmpdir(), "sb-active-state-wiring-"));
+   mkdirSync(join(tmp, "telemetry", "agent-performance"), { recursive: true });
+   process.env.SECOND_BRAIN_HOME = tmp;
+   ensureMock.mockReset();
+   updateMock.mockReset();
+   updateSyncMock.mockReset();
+   renderMock.mockReset();
+   messageMock.mockReset();
+   runOmpVisibilityMock.mockReset();
+   runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
++  runAdvisoryAutoInjectMock.mockReset();
++  runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
+   ensureMock.mockResolvedValue({ ok: true, sessionId: "omp-session" });
+   updateMock.mockResolvedValue({ ok: true, sessionId: "omp-session", changed: true });
+   mkdirSync(join(tmp, "config"), { recursive: true });
+   writeFileSync(join(tmp, "config", "autoinject.toml"), "[autoinject]\nmode = \"active\"\n");
+   updateSyncMock.mockReturnValue({ ok: true, sessionId: "omp-session", changed: true });
+   renderMock.mockResolvedValue({
+     ok: true,
+     sessionId: "omp-session",
+     renderedText: "[SECOND_BRAIN_HOT_CONTEXT]\nObjective: Resume task",
+   });
+@@ -92,20 +104,49 @@ describe("P3.1 active-state OMP lifecycle", () => {
+ 
+     expect(ensureMock).toHaveBeenCalledWith(expect.objectContaining({
+       objective: "Resume task",
+       hostSessionId: expect.any(String),
+     }));
+     expect(renderMock).toHaveBeenCalledWith(expect.objectContaining({ hostSessionId: expect.any(String) }));
+     expect(messageMock).toHaveBeenCalled();
+     expect((result as { message?: { customType?: string } }).message?.customType).toBe("brain.active-state");
+   });
+ 
++  it("merging an enforced-mode visibility injection with a live active-state capsule preserves both (regression: visibility_plan_id must survive the active_state merge)", async () => {
++    runAdvisoryAutoInjectMock.mockResolvedValueOnce({
++      content: "AUTOINJECT PACKET TEXT",
++      details: { delivery_id: "del-collision-1" },
++    });
++    runOmpVisibilityMock.mockResolvedValueOnce({
++      visibility_plan: {
++        visibility_plan_id: "vplan-collision-1",
++        mode: "enforced",
++        selected_skill_ids: ["skill1"],
++        hydrated_skill_ids: ["skill1"],
++        rejected_skill_ids: {},
++        unavailable_skill_ids: {},
++      },
++      hydrated_instructions: { skill1: "specialist body text" },
++      error: null,
++    });
++    const handlers = loadFactory();
++    const result = await handlers.get("before_agent_start")!({ prompt: "Resume task" }, context());
++
++    const message = (result as { message?: { content?: string; details?: Record<string, unknown> } }).message;
++    expect(message?.content).toContain("AUTOINJECT PACKET TEXT");
++    expect(message?.content).toContain("specialist body text");
++    expect(message?.content).toContain("[SECOND_BRAIN_ACTIVE_STATE]"); // active-state capsule still merged in
++    const details = message?.details as { visibility?: { visibility_plan_id?: string }; active_state?: unknown } | undefined;
++    expect(details?.visibility?.visibility_plan_id).toBe("vplan-collision-1"); // survives the LATER active_state merge
++    expect(details?.active_state).toEqual({ session_id: "omp-session" });
++  });
++
+   it("persists the capsule before compaction and at shutdown", async () => {
+     const handlers = loadFactory();
+     const ctx = context();
+ 
+     await handlers.get("session_before_compact")!({ branchEntries: [] }, ctx);
+     handlers.get("session_shutdown")!({ reason: "normal" }, ctx);
+ 
+     expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
+       verification: { pre_compaction: "persisted" },
+     }));

@@ -1,0 +1,90 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+index 7e92b96..de61138 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+@@ -1,27 +1,27 @@
+ # Task 4 report: archive-first retirement and restore
+ 
+ ## Status
+-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, partial-deletion risk, quarantine-root destination collision, focused lint issues, and focused type-check issues.
++Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, source-removal recovery deadlock, partial-deletion risk, quarantine-root destination collision, focused lint issues, focused type-check issues, and missing authorization gate references.
+ 
+ ## Files
+ - `src/second_brain/gardener.py`
+   - Persists archive destination, retirement reason, and production-safety evidence in authorized records.
+   - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then atomically moves the source into a quarantine location outside lifecycle directories.
+   - Cleans incomplete archive output on pre-mutation failures and preserves the source artifact.
+   - Restores verified archives to the previous lifecycle directory without overwriting an existing artifact.
+   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval.
+   - Delegates all non-archive actions without content or lifecycle mutation.
+ - `tests/test_p3_15_skill_gardener.py`
+-  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, quarantine-root collision, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
++  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, quarantine-root collision, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, missing-gate rejection, active safety gating, and delegated non-mutation.
+ 
+ ## Tests
+-- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **46 passed**
++- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **47 passed**
+ - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
+ 
+ ## Commit
+-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`
++`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`; `825db11 fix(gardener): quarantine source atomically`; `bbcdeaa fix(gardener): reject quarantine collisions`; `dc91628 style(gardener): satisfy focused Ruff gate`; `1179ff0 fix(gardener): narrow archive types`; `ccecccc fix(gardener): require retirement gate refs`; `591f2c3 style(gardener): format gate regression`
+ 
+ ## Concerns
+ - Focused `ruff format` applied to the two changed Python files; focused `ruff check` passed with no findings.
+ - Focused `pyright` passed with 0 errors, 0 warnings, and 0 informations.
+ - Project-wide suites remain intentionally skipped per Task 4 scope.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index 814c81f..896706e 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -1698,10 +1698,16 @@ class SkillGardener:
+         ):
+             raise BrainError("archive authorization identity is incomplete")
+         owner_value = authorization.get("owner")
+         if not isinstance(owner_value, str) or not owner_value:
+             raise BrainError("archive owner evidence is required")
++        approval_value = authorization.get("approval_ref")
++        if not isinstance(approval_value, str) or not approval_value:
++            raise BrainError("approval evidence is required")
++        non_regression_value = authorization.get("non_regression_ref")
++        if not isinstance(non_regression_value, str) or not non_regression_value:
++            raise BrainError("non-regression evidence is required")
+         rollback_value = authorization.get("rollback_ref")
+         if not isinstance(rollback_value, str) or not rollback_value:
+             raise BrainError("rollback evidence is required")
+ 
+         source_file = skillforge.skill_path(self.home, name)
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index a8644e1..46b4944 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -1018,10 +1018,28 @@ def test_active_retirement_execution_requires_production_safety_approval(brain_h
+     authorization.pop("production_safety_ref", None)
+     with pytest.raises(BrainError, match=r"production|safety"):
+         SkillGardener(brain_home).execute_maintenance(authorization)
+ 
+ 
++def test_execute_rejects_missing_authorization_gate_fields(brain_home):
++    gardener = SkillGardener(brain_home)
++    authorization = _authorized_retirement(brain_home, "missing-gate")
++    auth_path = (
++        brain_home
++        / "state"
++        / "maintenance"
++        / "authorizations"
++        / f"{authorization['authorization_id']}.json"
++    )
++    persisted = json.loads(auth_path.read_text(encoding="utf-8"))
++    persisted.pop("approval_ref")
++    auth_path.write_text(json.dumps(persisted), encoding="utf-8")
++    with pytest.raises(BrainError, match=r"approval"):
++        gardener.execute_maintenance(authorization)
++    assert (brain_home / paths.SKILL_LEVEL_DIRS["shadow"] / "missing-gate").exists()
++
++
+ def test_delegated_execution_returns_metadata_without_mutating(brain_home):
+     source = _make_skill(brain_home, "delegate-exec", "shadow")
+     _write_binding(
+         source,
+         {

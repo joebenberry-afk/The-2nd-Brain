@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,8 +14,10 @@ import {
   loadVmemConfig,
   observabilityDisabledByEnv,
   resolveBrainHome,
+  rtdConfigFromContextToml,
   rtdThresholdFromConfig,
   thresholdCharsFromContextToml,
+  vmemAdmissionConfigFromContextToml,
   vmemConfigFromContextToml,
 } from "../src/config";
 
@@ -304,5 +306,14 @@ describe("loadContextPagingConfig (file read, never throws)", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("repository P3.3 runtime gates", () => {
+  it("enables the existing RTD, VMem admission, and context-paging path", async () => {
+    const text = await readFile(join(process.cwd(), "..", "..", "config", "context.toml"), "utf8");
+    expect(rtdConfigFromContextToml(text).enabled).toBe(true);
+    expect(vmemAdmissionConfigFromContextToml(text).enabled).toBe(true);
+    expect(contextPagingConfigFromContextToml(text).enabled).toBe(true);
   });
 });

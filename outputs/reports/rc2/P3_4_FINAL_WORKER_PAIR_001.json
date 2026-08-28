@@ -1,0 +1,103 @@
+{
+  "pair_id": "p34-final-worker-pair-001",
+  "verdict": "P3.4_PROVEN",
+  "repo_head": "0bc2b8d56ceed3c1e17576283f05b4dba6f52d91",
+  "model": "openai-codex/gpt-5.6-luna",
+  "provider": "openai-codex",
+  "canonical_task_body_sha256": "e641535e39a2181f66e649cc7fbc795e91424b1f82f8248e1754fcbc16349ecd",
+  "task_body_source": "immutable normalized worker task body before Active State/JIT/session/transport augmentation",
+  "starting_state": {
+    "candidate_src_sha256": "5ba67b0fe5efc87a1724952efb819a720e13e8d7309db48d0c9b4a92ad26b070",
+    "baseline_src_sha256": "5ba67b0fe5efc87a1724952efb819a720e13e8d7309db48d0c9b4a92ad26b070",
+    "candidate_test_sha256": "01ec935f671f5ff04c245343a8b4bb24b687e04d3052594a527dcbae1046ac3c",
+    "baseline_test_sha256": "01ec935f671f5ff04c245343a8b4bb24b687e04d3052594a527dcbae1046ac3c"
+  },
+  "arms": {
+    "baseline": {
+      "pair_id": "p34-final-worker-pair-001",
+      "lean_arm": "baseline",
+      "canonical_task_body_sha256": "e641535e39a2181f66e649cc7fbc795e91424b1f82f8248e1754fcbc16349ecd",
+      "worker_packet_sha256": "84ceb8ace3799ad89cfa5d0be7b2c3cbdcaa55abd328d8e8f795adec1bb776fb",
+      "task_id": "omp-c418c8f920f9ec9b0ddda9a464e56297acac94eb473846bc6f91b58b71e13763",
+      "parent_session_id": "2026-08-24T23-46-25-629Z_01a0362b-0add-72f7-937d-b85379675437",
+      "worker_session_id": "FinalWeightedMeanBaseline",
+      "worker_task_sha256": "474cd2f506614e0731f79a20a5c472c0fc27798bc92b81059ae5b81375b51d45",
+      "role": "driver",
+      "lean_decision": "omit",
+      "lean_reason": "off",
+      "provider_record": "telemetry/agent-performance/FinalWeightedMeanBaseline.jsonl:11",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "marker_count": 0,
+      "exact_kernel_count": 0,
+      "kernel_placement": "absent",
+      "result_output_sha256": "c581bbe617022999022e59cff160d5e725a14aa6f525fd02c6af9417787a6f55",
+      "worker_tests": "6 passed",
+      "parent_tests": "6 passed",
+      "correctness_verdict": "non-inferior under semantic task identity",
+      "retries": 0,
+      "economics": {"input_tokens":45273,"cache_read_tokens":432640,"output_tokens":2907,"total_tokens":480820,"cost_total":0.0211958,"model_calls":19,"tool_errors":1}
+    },
+    "candidate": {
+      "pair_id": "p34-final-worker-pair-001",
+      "lean_arm": "candidate",
+      "canonical_task_body_sha256": "e641535e39a2181f66e649cc7fbc795e91424b1f82f8248e1754fcbc16349ecd",
+      "worker_packet_sha256": "76e783c2d4ebff7d8c378b08104bb44769d25012a966978c5c2adfaea0555847",
+      "task_id": "omp-0763def920eb4bd846435e1c094e8350061b185d2f9d78860afea129634ef4d0",
+      "parent_session_id": "2026-08-24T23-46-37-439Z_01a0362b-38ff-74b6-a50d-bf2799c4bfea",
+      "worker_session_id": "FinalWeightedMeanCandidate",
+      "worker_task_sha256": "010d907d0ab713b19e8d3d0c4bd7b3a1f61832852ef3de11f0efad16442c08e9",
+      "role": "driver",
+      "lean_decision": "inject",
+      "lean_reason": "advisory",
+      "provider_record": "telemetry/agent-performance/FinalWeightedMeanCandidate.jsonl:11",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "marker_count": 1,
+      "exact_kernel_count": 1,
+      "kernel_chars": 865,
+      "kernel_sha256": "0af4076fb0bb1137f640f2c69f7a28825d2fdab53e95011916eb984e6c620122",
+      "kernel_placement": "$.input[1].content[0].text",
+      "result_output_sha256": "766c7279e8ebfc1591bdfb49fc9bd9319b7ac8e33f712f0009605364b7bba68a",
+      "worker_tests": "6 passed",
+      "parent_tests": "6 passed",
+      "correctness_verdict": "non-inferior under semantic task identity",
+      "retries": "1 edit correction; 0 test retries",
+      "economics": {"input_tokens":48655,"cache_read_tokens":564736,"output_tokens":4587,"total_tokens":617978,"cost_total":0.02653012,"model_calls":23,"tool_errors":0}
+    }
+  },
+  "task_identity_proof": {
+    "invariant": "baseline.canonical_task_body_sha256 == candidate.canonical_task_body_sha256",
+    "status": "PASS",
+    "normalized_body_equal": true,
+    "packet_hashes_permitted_to_differ": true,
+    "recorded_worker_task_hashes_differ_because": "Active State/JIT objective names and execution/session metadata are included in effective prompt/packet lifecycle hashes; this is not semantic task identity.",
+    "contract_basis": "Frozen P3-E protocol requires TASK PROMPT copied verbatim for both arms and paired judge/economics invariants; it does not require WorkerTaskPacket.canonical_hash equality."
+  },
+  "task_lifecycle_readback": {
+    "baseline_events": "only task_context_resolved; task_created/task_assigned/worker_started/result_returned/result_reviewed are not mirrored",
+    "candidate_events": "task_context_resolved duplicated for the same task_id; task_created/task_assigned/worker_started/result_returned/result_reviewed are not mirrored",
+    "baseline_task_id": "omp-c418c8f920f9ec9b0ddda9a464e56297acac94eb473846bc6f91b58b71e13763",
+    "candidate_task_id": "omp-0763def920eb4bd846435e1c094e8350061b185d2f9d78860afea129634ef4d0",
+    "packet_hashes_differ": true
+  },
+  "correctness_judgment": {
+    "criteria": ["task completion","tests","requirements","regressions","complexity","retries/corrections"],
+    "result": "Both outputs implement equivalent weightedMean behavior and pass six tests; candidate is non-inferior under the semantic task identity invariant.",
+    "independent_readback": "fresh Validator confirmed bounded semantic non-inferiority and distinct legitimate execution identities"
+  },
+  "economics": {
+    "baseline": {"total_tokens":480820,"cost_total":0.0211958,"input_tokens":45273,"cache_read_tokens":432640,"output_tokens":2907},
+    "candidate": {"total_tokens":617978,"cost_total":0.02653012,"input_tokens":48655,"cache_read_tokens":564736,"output_tokens":4587},
+    "candidate_delta": {"total_tokens":137158,"cost_total":0.00533432,"input_tokens":3382,"output_tokens":1680},
+    "interpretation": "Negative economics; preserve HOLD_SHADOW. This does not block functional P3.4 proof under the frozen contract."
+  },
+  "ledger_correlation": {
+    "status": "PASS semantic pair; packet/session identities distinct by design",
+    "manifests": ["state/sessions/6c362c88bd63dcc3aaec5df3805097c5b733ca729cdaba3586a436191c4e2624/manifest.json","state/sessions/6dfb1c04c6341031f360ad1021da86168ebdc0ce0b4f3ea30c1d5da837195aef/manifest.json"],
+    "worker_identities": ["FinalWeightedMeanBaseline","FinalWeightedMeanCandidate"],
+    "pair_artifact": "outputs/reports/rc2/P3_4_FINAL_WORKER_PAIR_001.json"
+  },
+  "promotion": {"lean_skill_status":"candidate","lean_promotion_status":"HOLD_SHADOW"},
+  "p3_5_started": false
+}

@@ -1,0 +1,59 @@
+diff --git a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+index 443339d..639ff18 100644
+--- a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
++++ b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+@@ -47,10 +47,20 @@ None of this touched Python, `routing-bridge.ts`, or `worker-context-bridge.ts`,
+ 
+ **Finding (from `Main`'s review):** the original visibility injection routed its merge through `mergeActiveStateMessage(aiMessage, {content, details: {visibility_plan_id}})`. That helper hardcodes the second argument's `details` under a literal `active_state` key (its only prior caller merges the real active-state capsule). Every `before_agent_start` return path then re-runs `mergeActiveStateMessage(aiMessage, activeMessage)` at the end, which unconditionally **overwrites** `details.active_state` with the real active-state capsule's own details — silently discarding `visibility_plan_id` whenever AutoInject mode ("advisory"/"active"), active-state mode, and an enforced visibility plan with hydrated content all coincide (realistic, since AutoInject and active-state both gate on the same `aiCfg.mode`). The injected specialist *text* survived; only the `visibility_plan_id` correlator was lost.
+ 
+ **Fix:** added a dedicated `mergeVisibilityMessage(primary, specialistText, visibilityPlanId)` helper in `src/index.ts` (placed immediately after `mergeActiveStateMessage`, same file, same section) that merges the specialist text under its own `details.visibility.visibility_plan_id` key instead of borrowing `mergeActiveStateMessage`'s `active_state` slot. Its branching mirrors `mergeActiveStateMessage`'s own fail-open semantics (no existing message → return the new one; existing message without a string `.content` → return it unchanged; otherwise concatenate content and merge details). The `before_agent_start` visibility-injection call site now calls `mergeVisibilityMessage(aiMessage, specialistText, visibilityResult.visibility_plan.visibility_plan_id)` in place of the old `mergeActiveStateMessage(aiMessage, {content, details})` call. Because `visibility` and `active_state` are now distinct `details` keys, the later `mergeActiveStateMessage(aiMessage, activeMessage)` call's `{...primaryDetails, active_state: activeDetails}` spread preserves `details.visibility` untouched.
+ 
+ **Regression test:** added `active-state-wiring.test.ts` > *"merging an enforced-mode visibility injection with a live active-state capsule preserves both (regression: visibility_plan_id must survive the active_state merge)"*. This required also mocking `runAdvisoryAutoInject` in that file (added `runAdvisoryAutoInjectMock`, default `mockResolvedValue(undefined)` — matches its real fail-open behavior in a venv-less test home, so the file's pre-existing test is unaffected) so the test can give `aiMessage` real string content (`"AUTOINJECT PACKET TEXT"`) from AutoInject mode `"active"` (already the file's default config), combined with the file's existing real active-state capsule mock (`messageMock`) and a new `runOmpVisibilityMock` enforced-plan resolution. The test asserts the final message's `content` contains both `"AUTOINJECT PACKET TEXT"` and `"specialist body text"` and the real active-state marker, and that `details.visibility.visibility_plan_id === "vplan-collision-1"` **and** `details.active_state` still equals the real active-state details — i.e. both merges' payloads survive together. Before the fix this test fails (`visibility_plan_id` is `undefined`, having been overwritten); after the fix it passes.
+ 
+ **Verification:** `npm test -- --run active-state-wiring` → 3/3 pass. Full suite (`npm test -- --run`, 26 files / **602 tests**, +1 for the new regression test) run 5 times after the fix: 4/5 clean, 1/5 hit the same pre-existing residual teardown-race flake documented above (a different, unrelated `waitForLines` test in `wiring.test.ts`, not the fix itself) — consistent with the previously-measured baseline flake rate, no new failure mode introduced.
+ 
+ **Commit:** amended into the same feature (new commit on top of `11b1907`, same 5 logical files: `src/index.ts`, `tests/active-state-wiring.test.ts`, plus no changes needed to `visibility-bridge.ts`/`visibility-bridge.test.ts`/`wiring.test.ts` for this fix). No Python file, `routing-bridge.ts`, or `worker-context-bridge.ts` touched; P3.17 not started.
++
++## Post-review fix 2: `npm run typecheck` failure in the shadow-mode test fixture
++
++**Finding (from `Main`'s re-review):** `npm run typecheck` (`tsc --noEmit`) failed at `tests/wiring.test.ts:2301` — the shadow-mode wiring test's `ompVisibilityRunner` fixture (`visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] }`, copied verbatim from the brief's own Step 2 shape) was missing `visibility_plan_id`, `rejected_skill_ids`, and `unavailable_skill_ids`, so it wasn't assignable to `OmpVisibilityPlan`/`OmpVisibilityResult`.
++
++**Fix:** added the three missing fields (`visibility_plan_id: "vplan-shadow-1"`, `rejected_skill_ids: {}`, `unavailable_skill_ids: {}`) to that fixture in `tests/wiring.test.ts`. Grepped both `wiring.test.ts` and `active-state-wiring.test.ts` for every other `visibility_plan:` literal: the enforced-mode fixtures in both files already declared all six `OmpVisibilityPlan` fields (added correctly in the original round), and `visibility-bridge.test.ts`'s `visibility_plan` literals are inside `JSON.stringify(...)` strings passed to `parseOmpVisibilityOutput(stdout: string)` (not statically typed against `OmpVisibilityPlan`), so they were never type-checked and needed no change. No other gaps found.
++
++**Verification:** `npm run typecheck` → 0 errors (previously 1). Full suite (`npm test -- --run`, 602 tests) run 3 times after the fix: 2/3 fully clean, 1/3 hit the same pre-existing unrelated teardown-race flake already documented twice above (a different `wiring.test.ts` `waitForLines` test, not this fix or the fixture change) — no new failure mode.
++
++**Commit:** new commit on top of `08dd141`, touching only `tests/wiring.test.ts` and this report.
+diff --git a/brainstem/prime-extension/tests/wiring.test.ts b/brainstem/prime-extension/tests/wiring.test.ts
+index dd67ff1..53f0421 100644
+--- a/brainstem/prime-extension/tests/wiring.test.ts
++++ b/brainstem/prime-extension/tests/wiring.test.ts
+@@ -2292,21 +2292,28 @@ describe("Part B/E: context paging wiring (real factory, [context_paging])", ()
+     expect(result).toBeUndefined();
+     expect(runVmemListPrePageSyncMock).not.toHaveBeenCalled();
+     expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
+   });
+ });
+ 
+ describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)", () => {
+   it("shadow-mode plan never injects specialist text into the returned message", async () => {
+     const handlers = loadFactory({
+       ompVisibilityRunner: async () => ({
+-        visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] },
++        visibility_plan: {
++          visibility_plan_id: "vplan-shadow-1",
++          mode: "shadow",
++          selected_skill_ids: ["x"],
++          hydrated_skill_ids: ["x"],
++          rejected_skill_ids: {},
++          unavailable_skill_ids: {},
++        },
+         hydrated_instructions: { x: "text" },
+         error: null,
+       }),
+     });
+     const ctx = makeCtx();
+     const result = (await handlers.get("before_agent_start")!({ prompt: "do the thing" }, ctx)) as
+       | { message?: { content?: unknown }; systemPrompt?: string }
+       | undefined;
+     expect(JSON.stringify(result ?? {})).not.toContain("text");
+     await settle(); // drain pending fire-and-forget telemetry writes before teardown

@@ -103,6 +103,70 @@ def _ts(record: dict) -> str | None:
     return record.get("ts") if isinstance(record.get("ts"), str) else None
 
 
+def session_usage(home: Path, session_id: str) -> dict:
+    """Real per-session token usage, summed from this session's
+    ``assistant_usage`` records (P3-B economics kind). Every field mirrors an
+    EXACT host-reported counter (plan §44: use current runtime evidence, do
+    not fabricate). ``reasoning`` stays ``None`` when no record in this
+    session ever reported it — omission is preserved, never invented as 0."""
+    totals: dict[str, int] = {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "total": 0,
+    }
+    reasoning_total = 0
+    reasoning_seen = False
+    message_count = 0
+    for _, _, record in iter_records(home):
+        if record.get("session") != session_id or record.get("kind") != "assistant_usage":
+            continue
+        message_count += 1
+        totals["input"] += int(record.get("input_tokens") or 0)
+        totals["cache_read"] += int(record.get("cache_read_tokens") or 0)
+        totals["cache_write"] += int(record.get("cache_write_tokens") or 0)
+        totals["output"] += int(record.get("output_tokens") or 0)
+        totals["total"] += int(record.get("total_tokens") or 0)
+        if "reasoning_tokens" in record:
+            reasoning_seen = True
+            reasoning_total += int(record.get("reasoning_tokens") or 0)
+    result: dict[str, int | None] = dict(totals)
+    result["reasoning"] = reasoning_total if reasoning_seen else None
+    result["message_count"] = message_count
+    return result
+
+
+def session_tool_calls(home: Path, session_id: str) -> int:
+    """Real count of ``tool_call`` records for one session — actual tool
+    executions, not an estimate."""
+    return sum(
+        1
+        for _, _, record in iter_records(home)
+        if record.get("session") == session_id and record.get("kind") == "tool_call"
+    )
+
+
+def session_wall_time_ms(home: Path, session_id: str) -> float | None:
+    """Real elapsed wall time for one session: the span between its first and
+    last telemetry timestamp (one clock, ms; plan §44 'stable timestamps').
+    ``None`` when fewer than two timestamped records exist for the session."""
+    ts_values = sorted(
+        ts
+        for _, _, record in iter_records(home)
+        if record.get("session") == session_id
+        for ts in [_ts(record)]
+        if ts is not None
+    )
+    if len(ts_values) < 2:
+        return None
+    from datetime import datetime as _datetime
+
+    start = _datetime.fromisoformat(ts_values[0].replace("Z", "+00:00"))
+    end = _datetime.fromisoformat(ts_values[-1].replace("Z", "+00:00"))
+    return max((end - start).total_seconds() * 1000, 0.0)
+
+
 def report(home: Path, *, since: str | None = None) -> dict:
     """Aggregate telemetry into a compact report (deterministic)."""
     records = [rec for _, _, rec in iter_records(home) if "__parse_error__" not in rec]

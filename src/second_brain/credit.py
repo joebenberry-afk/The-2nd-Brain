@@ -5,22 +5,38 @@ outcome recording + routing — creates credit_events automatically. The ONLY
 writer is :func:`assign_credit`, which requires the caller to state levels
 explicitly (plan §43: task success must never reward every active skill).
 
-Counterfactual evaluation (plan §44) routes each task WITH and WITHOUT one
-shadow skill via the router's ``skills`` override (no filesystem mutation) and
-reports routing deltas; :func:`eval_skill_credit` turns those deltas into
-INERT recommendations — nothing is written.
+Counterfactual evaluation (plan §44) has two layers, kept structurally
+distinct (predicted effect vs. observed effect):
+
+- :func:`counterfactual_eval` / :func:`eval_skill_credit` — the PREDICTED
+  effect: routes each task WITH and WITHOUT one shadow skill via the
+  router's ``skills`` override (no filesystem mutation) and reports routing
+  deltas; INERT recommendations only, nothing is written.
+- :func:`counterfactual_result` — the OBSERVED effect: a bounded,
+  same-starting-state with/without comparison across all six §44
+  dimensions (success, tokens, tools, time, verification, regressions),
+  built from real evidence the caller already collected (telemetry usage,
+  P3.7/P3.8 verification outcomes, regression test evidence) — never
+  self-reported or fabricated. A :func:`counterfactual_eval` result may be
+  embedded as ``predicted_effect`` alongside it; the two are never
+  conflated. Harness-neutral: applies identically to skills, memories,
+  routing policies, Scout, and verification policy via one
+  ``intervention_type`` enum, not five separate evaluators.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 import sqlite3
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import db, plasticity, router
+from . import db, plasticity, router, telemetry
 from .errors import BrainError
 
 CREDIT_LEVELS: tuple[str, ...] = plasticity.CREDIT_LEVELS
@@ -225,4 +241,295 @@ def eval_skill_credit(home: Path, skill_name: str, tasks: list[dict]) -> dict:
         "tasks": per_task,
         "recommendations": recommendations,
         "note": "recommendations only; nothing was written (NO_AUTO_REWARD)",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Counterfactual result (plan §44, observed effect)
+# ---------------------------------------------------------------------------
+
+# Harness-neutral intervention classes §44 names explicitly. One evaluator,
+# not five: every class flows through the same counterfactual_result().
+INTERVENTION_TYPES: tuple[str, ...] = (
+    "skill",
+    "memory",
+    "routing_policy",
+    "scout",
+    "verification_policy",
+)
+
+# Reuse verify.py's exact action-state vocabulary (evaluate_accuracy_gate)
+# so "verification" comes from the existing P3.7/P3.8 evidence, not a new
+# enum invented here.
+VERIFICATION_OUTCOMES: tuple[str, ...] = ("passed", "failed", "unresolved")
+
+# Real telemetry counters only (brainstem/telemetry/SCHEMA.md assistant_usage
+# field names); "reasoning" is tracked separately because the current schema
+# does not always report it and must never be fabricated as 0.
+TOKEN_FIELDS: tuple[str, ...] = ("input", "cache_read", "cache_write", "output", "total")
+
+STARTING_STATE_FIELDS: tuple[str, ...] = (
+    "task_hash",
+    "repository_state_hash",
+    "requirements_hash",
+    "model_config_hash",
+    "available_tools_hash",
+    "environment_hash",
+)
+
+
+def _stable_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _validate_tokens(tokens: object, label: str) -> dict:
+    if not isinstance(tokens, dict):
+        raise BrainError(f"{label}.tokens must be a dict")
+    out: dict[str, int | None] = {}
+    for field in TOKEN_FIELDS:
+        value = tokens.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise BrainError(f"{label}.tokens.{field} must be a non-negative integer")
+        out[field] = value
+    reasoning = tokens.get("reasoning")
+    if reasoning is not None and (
+        not isinstance(reasoning, int) or isinstance(reasoning, bool) or reasoning < 0
+    ):
+        raise BrainError(f"{label}.tokens.reasoning must be a non-negative integer or None")
+    out["reasoning"] = reasoning
+    return out
+
+
+def _validate_verification(verification: object, label: str) -> dict:
+    if not isinstance(verification, dict):
+        raise BrainError(f"{label}.verification must be a dict")
+    outcome = verification.get("outcome")
+    if outcome not in VERIFICATION_OUTCOMES:
+        raise BrainError(f"{label}.verification.outcome must be one of {VERIFICATION_OUTCOMES}")
+    evidence_ref = verification.get("evidence_ref")
+    if not isinstance(evidence_ref, str) or not evidence_ref.strip():
+        raise BrainError(f"{label}.verification.evidence_ref must be a non-empty string")
+    return {"outcome": outcome, "evidence_ref": evidence_ref}
+
+
+def _validate_regressions(regressions: object, label: str) -> dict:
+    if not isinstance(regressions, dict):
+        raise BrainError(f"{label}.regressions must be a dict")
+    count = regressions.get("count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise BrainError(f"{label}.regressions.count must be a non-negative integer")
+    evidence_ref = regressions.get("evidence_ref")
+    if not isinstance(evidence_ref, str) or not evidence_ref.strip():
+        raise BrainError(f"{label}.regressions.evidence_ref must be a non-empty string")
+    return {"count": count, "evidence_ref": evidence_ref}
+
+
+def _validate_arm(arm: object, label: str) -> dict:
+    if not isinstance(arm, dict):
+        raise BrainError(f"{label} must be a dict")
+    run_id = arm.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise BrainError(f"{label}.run_id must be a non-empty string")
+    success = arm.get("success")
+    if not isinstance(success, bool):
+        raise BrainError(f"{label}.success must be a bool")
+    tool_calls = arm.get("tool_calls")
+    if not isinstance(tool_calls, int) or isinstance(tool_calls, bool) or tool_calls < 0:
+        raise BrainError(f"{label}.tool_calls must be a non-negative integer")
+    wall_time_ms = arm.get("wall_time_ms")
+    if (
+        not isinstance(wall_time_ms, (int, float))
+        or isinstance(wall_time_ms, bool)
+        or wall_time_ms < 0
+    ):
+        raise BrainError(f"{label}.wall_time_ms must be a non-negative number")
+    return {
+        "run_id": run_id,
+        "success": success,
+        "tokens": _validate_tokens(arm.get("tokens"), label),
+        "tool_calls": tool_calls,
+        "wall_time_ms": float(wall_time_ms),
+        "verification": _validate_verification(arm.get("verification"), label),
+        "regressions": _validate_regressions(arm.get("regressions"), label),
+    }
+
+
+def _validate_starting_state(starting_state: object) -> dict:
+    if not isinstance(starting_state, dict):
+        raise BrainError("starting_state must be a dict")
+    out: dict[str, str] = {}
+    for field in STARTING_STATE_FIELDS:
+        value = starting_state.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise BrainError(f"starting_state.{field} must be a non-empty string")
+        out[field] = value
+    return out
+
+
+def _token_deltas(with_tokens: dict, without_tokens: dict) -> dict:
+    deltas = {field: with_tokens[field] - without_tokens[field] for field in TOKEN_FIELDS}
+    with_reasoning = with_tokens["reasoning"]
+    without_reasoning = without_tokens["reasoning"]
+    deltas["reasoning"] = (
+        with_reasoning - without_reasoning
+        if with_reasoning is not None and without_reasoning is not None
+        else None
+    )
+    return deltas
+
+
+def counterfactual_result(
+    home: Path,
+    *,
+    evaluation_id: str,
+    intervention_type: str,
+    intervention_id: str,
+    intervention_hash: str,
+    starting_state: dict,
+    with_arm: dict,
+    without_arm: dict,
+    predicted_effect: dict | None = None,
+) -> dict:
+    """§44 OBSERVED counterfactual result: one bounded, same-starting-state
+    with(A)/without(B) comparison across success, tokens, tools, time,
+    verification, and regressions.
+
+    ``starting_state`` is a single shared argument (not supplied per arm),
+    which structurally enforces the "same starting state" invariant — the
+    two arms cannot diverge on it. ``with_arm``/``without_arm`` must carry
+    distinct ``run_id``s (genuinely separate executions) and real evidence:
+    tokens/tool_calls/wall_time from telemetry (see :func:`arm_from_telemetry`),
+    ``verification`` from existing P3.7/P3.8 gate evidence (never
+    self-reported), ``regressions`` from existing test evidence. Zero is a
+    valid, measured value everywhere; nothing here is hardcoded or invented.
+    Optionally embeds a :func:`counterfactual_eval` result as
+    ``predicted_effect`` — the routing-selection PREDICTION, kept structurally
+    distinct from this function's OBSERVED execution effect.
+    """
+    if not isinstance(evaluation_id, str) or not evaluation_id.strip():
+        raise BrainError("evaluation_id must be a non-empty string")
+    if intervention_type not in INTERVENTION_TYPES:
+        raise BrainError(f"intervention_type must be one of {INTERVENTION_TYPES}")
+    if not isinstance(intervention_id, str) or not intervention_id.strip():
+        raise BrainError("intervention_id must be a non-empty string")
+    if not isinstance(intervention_hash, str) or not intervention_hash.strip():
+        raise BrainError("intervention_hash must be a non-empty string")
+    state = _validate_starting_state(starting_state)
+    with_result = _validate_arm(with_arm, "with_arm")
+    without_result = _validate_arm(without_arm, "without_arm")
+    if with_result["run_id"] == without_result["run_id"]:
+        raise BrainError(
+            "with_arm and without_arm must be genuinely separate runs (distinct run_id)"
+        )
+    started = time.perf_counter()
+    starting_state_hash = _stable_hash(state)
+
+    with_verdict = with_result["verification"]["outcome"]
+    without_verdict = without_result["verification"]["outcome"]
+    if with_result["success"] and without_result["success"]:
+        success_delta = "both_succeeded"
+    elif with_result["success"] and not without_result["success"]:
+        success_delta = "with_only"
+    elif not with_result["success"] and without_result["success"]:
+        success_delta = "without_only"
+    else:
+        success_delta = "neither_succeeded"
+
+    deltas = {
+        "success": success_delta,
+        "tokens": _token_deltas(with_result["tokens"], without_result["tokens"]),
+        "tool_calls": with_result["tool_calls"] - without_result["tool_calls"],
+        "wall_time_ms": with_result["wall_time_ms"] - without_result["wall_time_ms"],
+        "verification": (
+            "same" if with_verdict == without_verdict else f"{without_verdict}->{with_verdict}"
+        ),
+        "regressions": with_result["regressions"]["count"] - without_result["regressions"]["count"],
+    }
+
+    result = {
+        "schema_version": 1,
+        "evaluation_id": evaluation_id,
+        "intervention": {
+            "type": intervention_type,
+            "id": intervention_id,
+            "hash": intervention_hash,
+        },
+        "starting_state": state,
+        "starting_state_hash": starting_state_hash,
+        "with_arm": with_result,
+        "without_arm": without_result,
+        "observed_effect": {"deltas": deltas},
+        "predicted_effect": predicted_effect,
+        "evaluator_economics": {
+            "evaluation_model_calls": 0,
+            "evaluation_tokens": 0,
+            "evaluation_tool_calls": 0,
+            "bookkeeping_wall_time_ms": round((time.perf_counter() - started) * 1000, 3),
+        },
+        "created_at": _utcnow(),
+    }
+    _write_counterfactual_result(home, result)
+    return result
+
+
+def _write_counterfactual_result(home: Path, result: dict) -> Path:
+    intervention = result["intervention"]
+    out_dir = Path(home) / "outputs" / "audits" / "counterfactual" / intervention["type"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"{intervention['id']}-{result['evaluation_id']}.json"
+    fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=target.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        os.replace(tmp, target)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise BrainError(f"Could not write counterfactual result {target}: {exc}") from exc
+    return target
+
+
+def is_counterfactual_result_current(result: dict, current_intervention_hash: str) -> bool:
+    """§44 treatment-identity check: a result only describes the exact
+    intervention version it was computed against. A changed intervention
+    (new hash) makes stale evidence detectable rather than silently reused."""
+    intervention = result.get("intervention")
+    return isinstance(intervention, dict) and intervention.get("hash") == current_intervention_hash
+
+
+def arm_from_telemetry(
+    home: Path,
+    session_id: str,
+    *,
+    success: bool,
+    verification: dict,
+    regressions: dict,
+) -> dict:
+    """Build one counterfactual arm from REAL current telemetry for one
+    session: token usage (:func:`telemetry.session_usage`), tool-call count
+    (:func:`telemetry.session_tool_calls`), and wall time
+    (:func:`telemetry.session_wall_time_ms`). ``success``/``verification``/
+    ``regressions`` are supplied by the caller from existing requirement,
+    P3.7/P3.8 verification, and test evidence — never derived from telemetry
+    or model self-report."""
+    wall_time_ms = telemetry.session_wall_time_ms(home, session_id)
+    if wall_time_ms is None:
+        raise BrainError(
+            f"No measurable telemetry for session {session_id!r}: at least two "
+            "timestamped records are required for a real wall-time measurement. "
+            "A missing or absent session must be rejected, never reported as a "
+            "zero-valued arm."
+        )
+    usage = telemetry.session_usage(home, session_id)
+    return {
+        "run_id": session_id,
+        "success": success,
+        "tokens": {field: usage[field] for field in TOKEN_FIELDS}
+        | {"reasoning": usage["reasoning"]},
+        "tool_calls": telemetry.session_tool_calls(home, session_id),
+        "wall_time_ms": wall_time_ms,
+        "verification": verification,
+        "regressions": regressions,
     }

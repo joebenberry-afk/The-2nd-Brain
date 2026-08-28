@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from . import episodes, paths
+from . import episodes, paths, radar
 from .errors import BrainError
 from .security.identifiers import validate_skill_name
 
@@ -165,6 +165,16 @@ def skill_path(home: Path, name: str) -> Path | None:
     return None
 
 
+def lifecycle_content_hash(path: Path) -> str:
+    """Content hash that ignores the ``status:`` field. Directory/status
+    transitions between shadow -> candidate -> active are lifecycle
+    metadata, not content edits, so a single binding/approval/evaluation
+    must remain valid as a skill moves through the guarded path."""
+    content = path.read_text(encoding="utf-8")
+    normalized = re.sub(r"(?m)^status:\s*[^\r\n]+", "status: <lifecycle>", content, count=1)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def artifact_binding(home: Path, name: str) -> dict[str, str]:
     """Return hashes/version that a frontier approval must bind to."""
     path = skill_path(home, name)
@@ -173,9 +183,7 @@ def artifact_binding(home: Path, name: str) -> dict[str, str]:
     # Directory/status transitions are lifecycle metadata, not content edits.
     # Normalize that one line so a single approval remains valid across the
     # guarded shadow -> candidate -> active path.
-    content = path.read_text(encoding="utf-8")
-    normalized = re.sub(r"(?m)^status:\s*[^\r\n]+", "status: <lifecycle>", content, count=1)
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    digest = lifecycle_content_hash(path)
     metadata = read_metadata(path)
     eval_dir = Path(home) / "skills" / "evals" / name
     eval_hash = hashlib.sha256()
@@ -376,6 +384,323 @@ def forge_candidate(home: Path, name: str, episode_ids: list[str]) -> Path:
             os.unlink(tmp)
         raise BrainError(f"Could not write candidate skill {target}: {exc}") from exc
     return target
+
+
+def bind_candidate(
+    home: Path,
+    name: str,
+    *,
+    source_type: str,
+    source_ref: str,
+    owner: str,
+    project_id: str = "",
+    candidate_type: str = "general",
+    reason_codes: list[str] | None = None,
+    evidence_refs: list | None = None,
+) -> dict:
+    """Persist canonical §119 binding metadata for ANY candidate source
+    (Radar, frontier-evidence, episode-forged, or otherwise). Idempotent:
+    re-binding an unchanged skill refreshes owner/metadata without
+    disturbing the candidate's content or evaluation history."""
+    if not owner or not str(owner).strip():
+        raise BrainError("owner must be a non-empty string")
+    if not source_type or not str(source_type).strip():
+        raise BrainError("source_type must be a non-empty string")
+    if not source_ref or not str(source_ref).strip():
+        raise BrainError("source_ref must be a non-empty string")
+    name = validate_skill_name(name)
+    path = skill_path(home, name)
+    if path is None:
+        raise BrainError(f"No skill {name!r} found under lifecycle directories")
+    content_hash = lifecycle_content_hash(path)
+    candidate_id = (
+        "skill-candidate-"
+        + hashlib.sha256(f"{source_type}|{source_ref}|{name}".encode()).hexdigest()[:24]
+    )
+    binding_path = path.parent / "candidate-binding.json"
+    previous_state = {}
+    if binding_path.exists():
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            previous_state = json.loads(binding_path.read_text(encoding="utf-8"))
+    binding = {
+        "candidate_id": candidate_id,
+        "source_type": source_type,
+        "source_ref": source_ref,
+        "owner": str(owner).strip(),
+        "project_id": project_id,
+        "candidate_type": candidate_type,
+        "reason_codes": list(reason_codes or []),
+        "evidence_refs": list(evidence_refs or [])[:32],
+        "candidate_content_sha256": content_hash,
+        "lifecycle_state": previous_state.get("lifecycle_state", "candidate"),
+        "evaluation_state": previous_state.get("evaluation_state", "pending"),
+        "promotion_state": previous_state.get("promotion_state", "hold"),
+        "install_state": previous_state.get("install_state", "inactive"),
+    }
+    if previous_state.get("candidate_content_sha256") != content_hash:
+        # Content changed since the last binding: prior evaluation no longer applies.
+        binding["evaluation_state"] = "pending"
+        binding["promotion_state"] = "hold"
+    if source_type == "radar":
+        binding["source_radar_candidate_id"] = source_ref
+    try:
+        binding_path.write_text(
+            json.dumps(binding, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        raise BrainError(f"Could not persist candidate binding for {name!r}") from exc
+    return binding
+
+
+def forge_radar_candidate(
+    home: Path,
+    radar_candidate_id: str,
+    *,
+    name: str,
+    project_id: str,
+    owner: str,
+) -> Path:
+    """Persist one bounded candidate derived from an existing Radar signal."""
+    if not project_id.strip():
+        raise BrainError("project_id must be non-empty")
+    if not owner or not str(owner).strip():
+        raise BrainError("owner must be a non-empty string")
+    name = validate_skill_name(name)
+    source = radar.ImprovementRadar(home).get_candidate(radar_candidate_id)
+    if source.get("status") != "candidate" or source.get("promotion_eligible") is not False:
+        raise BrainError(f"Radar candidate {radar_candidate_id!r} is not candidate-only")
+    candidate_id = (
+        "skill-candidate-"
+        + hashlib.sha256(f"radar|{radar_candidate_id}|{name}".encode()).hexdigest()[:24]
+    )
+    candidate_dir = _candidates_dir(home) / name
+    binding_path = candidate_dir / "candidate-binding.json"
+    if binding_path.exists():
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        if binding.get("candidate_id") == candidate_id:
+            bind_candidate(
+                home,
+                name,
+                source_type="radar",
+                source_ref=radar_candidate_id,
+                owner=owner,
+                project_id=project_id,
+                candidate_type=source.get("candidate_type", "radar"),
+                reason_codes=source.get("reason_codes", []),
+                evidence_refs=source.get("telemetry_evidence_refs", []),
+            )
+            return candidate_dir / "SKILL.md"
+        candidate_dir = _allocate_dir(_candidates_dir(home), name)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "---",
+            f"name: {name}",
+            "status: candidate",
+            "version: 1",
+            f"candidate_id: {candidate_id}",
+            f"project_id: {project_id}",
+            f"source_radar_candidate_id: {radar_candidate_id}",
+            f"created_at: {_utcnow()}",
+            "---",
+            "",
+            "# Purpose",
+            "",
+            "Avoid repeated reads by reusing verified context before reopening unchanged files.",
+            "",
+            "# Positive Triggers",
+            "",
+            "- repeated file reads",
+            "- unchanged source requested again",
+            "",
+            "# Negative Triggers",
+            "",
+            "- first read of a changed file",
+            "- correctness-critical fresh read",
+            "",
+            "# Inputs",
+            "",
+            "- current task and verified context",
+            "- canonical telemetry evidence",
+            "",
+            "# Procedure",
+            "",
+            "1. Check whether verified context already contains the requested source.",
+            "2. Reuse unchanged context; otherwise perform one bounded read.",
+            "3. Verify the result against the task before continuing.",
+            "",
+            "# Tools",
+            "",
+            "- existing context and read tool",
+            "",
+            "# Safety",
+            "",
+            "Never reuse context after source or task identity changes.",
+            "",
+            "# Verification",
+            "",
+            "Confirm the reused content is sufficient and current before relying on it.",
+            "",
+            "# Output",
+            "",
+            "A bounded read/reuse decision with no automatic installation.",
+            "",
+            "# References",
+            "",
+            f"- radar-candidate {radar_candidate_id}",
+            "",
+        ]
+    )
+    skill_target = candidate_dir / "SKILL.md"
+    try:
+        skill_target.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise BrainError(f"Could not persist Radar-backed candidate {name!r}") from exc
+    bind_candidate(
+        home,
+        name,
+        source_type="radar",
+        source_ref=radar_candidate_id,
+        owner=owner,
+        project_id=project_id,
+        candidate_type=source.get("candidate_type", "radar"),
+        reason_codes=source.get("reason_codes", []),
+        evidence_refs=source.get("telemetry_evidence_refs", []),
+    )
+    return skill_target
+
+
+def record_evaluation(home: Path, name: str, result: dict) -> dict:
+    """Persist bounded current evaluation evidence for one exact candidate."""
+    path = skill_path(home, name)
+    if path is None:
+        raise BrainError(f"No skill {name!r} found under lifecycle directories")
+    binding_path = path.parent / "candidate-binding.json"
+    if not binding_path.exists():
+        raise BrainError(f"No candidate binding for {name!r}; call bind_candidate() first")
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+    content_hash = lifecycle_content_hash(path)
+    if content_hash != binding.get("candidate_content_sha256"):
+        raise BrainError(f"candidate content changed for {name!r}")
+    baseline = result.get("baseline")
+    candidate = result.get("candidate")
+    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
+        raise BrainError("evaluation requires baseline and candidate metrics")
+
+    def metric_total(metrics: dict) -> int:
+        total = metrics.get("total_tokens")
+        if isinstance(total, int) and total >= 0:
+            return total
+        inputs = metrics.get("input_tokens")
+        outputs = metrics.get("output_tokens")
+        if not isinstance(inputs, int) or not isinstance(outputs, int):
+            raise BrainError("evaluation metrics require total_tokens or input/output tokens")
+        return inputs + outputs
+
+    quality_input = result.get("quality")
+    if not isinstance(quality_input, dict):
+        raise BrainError("evaluation requires quality gates")
+    quality_keys = (
+        "correctness",
+        "requirements",
+        "protected_values",
+        "regressions",
+        "verification",
+    )
+    quality = {key: bool(quality_input.get(key)) for key in quality_keys}
+    gates_input = result.get("gates", {})
+    gates_passed = (
+        isinstance(gates_input, dict)
+        and isinstance(gates_input.get("trigger"), dict)
+        and gates_input["trigger"].get("failed") == 0
+        and isinstance(gates_input.get("workflow"), dict)
+        and gates_input["workflow"].get("structural") is True
+        and gates_input["workflow"].get("failed") == 0
+        and isinstance(gates_input.get("regression"), dict)
+        and gates_input["regression"].get("regression") is False
+        and gates_input["regression"].get("failed") == 0
+        and isinstance(gates_input.get("security"), dict)
+        and gates_input["security"].get("passed") is True
+    )
+    quality_gate = (
+        "passed"
+        if (
+            gates_passed
+            and quality["correctness"]
+            and quality["requirements"]
+            and quality["protected_values"]
+            and not quality["regressions"]
+            and quality["verification"]
+        )
+        else "failed"
+    )
+    baseline_total = metric_total(baseline)
+    candidate_total = metric_total(candidate)
+    net_saved = baseline_total - candidate_total
+    status = "passed" if quality_gate == "passed" and net_saved > 0 else "hold"
+    evaluation = {
+        "schema_version": 1,
+        "evaluation_id": str(result.get("evaluation_id", "")),
+        "candidate_id": binding["candidate_id"],
+        "candidate_content_sha256": content_hash,
+        "task_id": str(result.get("task_id", "")),
+        "task_hash": str(result.get("task_hash", "")),
+        "repository_state_hash": str(result.get("repository_state_hash", "")),
+        "baseline": baseline,
+        "candidate": candidate,
+        "quality": quality,
+        "gates": {
+            key: value
+            for key in ("trigger", "workflow", "regression", "security")
+            if isinstance((value := result.get("gates", {}).get(key)), dict)
+        },
+        "quality_gate": quality_gate,
+        "roi": {
+            "baseline_total_tokens": baseline_total,
+            "candidate_total_tokens": candidate_total,
+            "net_tokens_saved": net_saved,
+            "candidate_better": net_saved > 0,
+        },
+        "evidence_refs": [str(ref) for ref in result.get("evidence_refs", [])[:16]],
+        "status": status,
+        "promotion_recommendation": "authority_review" if status == "passed" else "hold",
+        "created_at": _utcnow(),
+    }
+    evaluation_path = path.parent / "evaluation.json"
+    temporary = evaluation_path.with_suffix(".tmp")
+
+    try:
+        temporary.write_text(
+            json.dumps(evaluation, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, evaluation_path)
+        binding["evaluation_state"] = status
+        binding["promotion_state"] = "authority_review" if status == "passed" else "hold"
+        binding_path.write_text(
+            json.dumps(binding, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            temporary.unlink()
+        raise BrainError(f"Could not persist evaluation for {name!r}") from exc
+    return evaluation
+
+
+def candidate_binding(home: Path, name: str) -> dict | None:
+    """Read bounded lifecycle metadata for a Skill Forge candidate."""
+    path = skill_path(home, name)
+    if path is None:
+        return None
+    binding_path = path.parent / "candidate-binding.json"
+    if not binding_path.exists():
+        return None
+    try:
+        value = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BrainError(f"Invalid candidate binding for {name!r}") from exc
+    return value if isinstance(value, dict) else None
 
 
 def _allocate_dir(parent: Path, name: str) -> Path:

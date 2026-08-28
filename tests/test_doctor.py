@@ -1,3 +1,5 @@
+import json
+
 from second_brain import db, doctor
 
 
@@ -62,3 +64,14 @@ def test_format_result(brain_home):
     text = doctor.format_result(doctor.run_doctor(brain_home))
     assert "PASS" in text
     assert "Brain home" in text
+
+
+def test_doctor_reports_environment_steward_state(brain_home, repo):
+    result = doctor.run_doctor(brain_home, repo=repo, session_id="doctor-session")
+    env_check = next(check for check in result.checks if check.name == "environment steward")
+    assert env_check.status == "ok"
+    assert "doctor-session" in env_check.detail
+    persisted = brain_home / "state" / "sessions" / "doctor-session" / "environment-evidence.json"
+    assert persisted.is_file()
+    payload = json.loads(persisted.read_text())
+    assert payload["doctor_check_state"] == "passed"

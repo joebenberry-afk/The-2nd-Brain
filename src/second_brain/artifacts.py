@@ -60,6 +60,28 @@ def recover_hint(hash: str) -> str:
     return RECOVER_HINT_TEMPLATE.format(short=hash[:12])
 
 
+_REF_PREFIXES: tuple[str, ...] = ("artifact:", "brain://artifact/")
+
+
+def parse_ref(ref: str) -> str | None:
+    """Parse any supported content-addressed artifact reference scheme.
+
+    Accepts ``artifact:<hash>``, ``brain://artifact/<hash>``, and the
+    ``[brain-artifact:sha256:<hash>]`` recovery handle. Returns the sha256
+    hash, or ``None`` when ``ref`` is not an artifact reference (e.g. a
+    ``memory:`` or file-path reference).
+    """
+    if not isinstance(ref, str):
+        return None
+    for prefix in _REF_PREFIXES:
+        if ref.startswith(prefix):
+            return ref.removeprefix(prefix)
+    marker = "[brain-artifact:sha256:"
+    if ref.startswith(marker) and ref.endswith("]"):
+        return ref[len(marker) : -1]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Distillers (pure and deterministic)
 # ---------------------------------------------------------------------------

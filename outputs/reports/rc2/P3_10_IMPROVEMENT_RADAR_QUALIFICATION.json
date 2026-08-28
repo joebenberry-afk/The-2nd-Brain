@@ -1,0 +1,79 @@
+{
+  "verdict": "P3.10_PROVEN",
+  "qualification_scope": "P3.10 Improvement Radar implementation and proof only; P3.11 untouched",
+  "provenance": {
+    "roadmap_source": "outputs/reports/rc2/01-frozen-roadmap-matrix.md:40",
+    "authoritative_plan_sections": ["§34 Metacognitive Monitor", "§68 Improvement Radar", "§69 Improvement Advisor"],
+    "omp_version": "omp/18.0.4",
+    "explicit_current_extension_path": "brainstem/prime-extension/src/index.ts",
+    "explicit_current_extension_sha256": "ed07743046538dc9839e2337fb0dc5679d4623739fcee5463d035325322c5e24",
+    "installed_extension_path": "C:/Users/assas/.prime/agent/extensions/second-brain/",
+    "installed_extension_index_sha256": "ed07743046538dc9839e2337fb0dc5679d4623739fcee5463d035325322c5e24",
+    "installed_extension_radar_mirror_sha256": "2dbe7ed75a40ba86b99732e9d21982d6e078a55611901d3b5b38753e595e9eee",
+    "installed_extension_sensors_sha256": "e3ba74ab5c5c4547594479734bbc4f1e656c2f84690b668c0d5a322af52f682b",
+    "branch": "brain/v1-rc4-prime-074-compat",
+    "head": "0bc2b8d56ceed3c1e17576283f05b4dba6f52d91",
+    "working_tree": "dirty; existing P0-P3.9 changes observed and preserved",
+    "recovered_active_state_capsule": "state/sessions/e294cd86ecbc6c0b8d97ab9c43903d01e00976b898c4564a18539e5b1ae9762a/active-state.json",
+    "p3_state": {"p3_1": "PROVEN", "p3_2": "PROVEN", "p3_3": "PROVEN", "p3_4": "PROVEN", "p3_5": "PROVEN", "p3_6": "PROVEN", "p3_7": "PROVEN", "p3_8": "PROVEN", "p3_9": "PROVEN", "lean": "candidate / HOLD_SHADOW", "p3_10": "PROVEN", "p3_11": "not started"}
+  },
+  "frozen_contract": {
+    "requirement_number": "P3.10",
+    "title": "Improvement Radar",
+    "named_implementation_surfaces": ["src/second_brain/radar.py"],
+    "supporting_surfaces": ["src/second_brain/telemetry.py", "src/second_brain/ledger.py", "brainstem/prime-extension", "tests/test_p3_gaps_live_integration.py"],
+    "contract_shape": "Lightweight radar; candidate-only output; no full audit automatically.",
+    "triggers": ["user correction", "repeated command failure", "workaround", "new dependency", "new abstraction", "hot file touched", "missing test", "skill miss", "skill false trigger", "tool wasted effort", "plan ambiguity", "context thrashing"],
+    "detected_inefficiencies": ["repeated file reads", "search thrash", "tool failure loops", "redundant test runs", "context churn"],
+    "automated_evidence_required": "tests/test_p3_gaps_live_integration.py must exercise Radar detection and alert shape.",
+    "live_runtime_proof_required": "Current OMP-primary telemetry stream must produce bounded Radar candidate evidence from real repeated reads/errors without an automatic full audit.",
+    "cross_harness_target": "Universal local",
+    "token_economic_objective": "Detect repeated reads/errors and surface targeted token-saving recommendations without imposing a full audit or unnecessary model work.",
+    "dogfood_requirement": "Use the Radar against a real Second Brain implementation/verification stream; preserve candidate-only semantics and do not fabricate alerts.",
+    "acceptance_promotion_gates": "Matrix promotion requires automated detection evidence, current live-stream proof, bounded candidate output, relevant economics, dogfood, and P3.11 untouched; no separate promotion command is named."
+  },
+  "implementation": {
+    "source": "src/second_brain/radar.py",
+    "telemetry_input": "Canonical agent-performance JSONL; read calls carry target_sha256 without raw paths.",
+    "detectors": ["REPEATED_READ", "TOOL_ERROR_LOOP", "SEARCH_THRASH"],
+    "candidate_store": "state/radar/candidates.json",
+    "candidate_contract": ["candidate lifecycle state", "bounded evidence refs", "record hashes", "promotion_eligible=false", "existing_promotion authority"],
+    "validation": "Re-reads referenced canonical records and returns candidate_only or stale; never promotes."
+  },
+  "runtime_wiring": {
+    "bridge": "brainstem/prime-extension/src/radar-mirror.ts",
+    "lifecycle": "Current Prime extension invokes Radar once at session shutdown after Environment Steward evidence establishes project identity.",
+    "scope": "No duplicate telemetry store, no automatic audit, no promotion side effect."
+  },
+  "proof": {
+    "automated": ["tests/test_radar.py", "tests/test_p3_gaps_live_integration.py", "brainstem/prime-extension/tests/radar-mirror.test.ts", "brainstem/prime-extension/tests/sensors.test.ts", "brainstem/prime-extension/tests/wiring.test.ts"],
+    "live_omp_session": "2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a",
+    "live_telemetry": "telemetry/agent-performance/2026-08-26T08-21-32-483Z_01a03d29-00c3-71e8-9a10-eb2e7bfe0f5a.jsonl",
+    "live_candidate": "state/radar/candidates.json",
+    "dedup_first": "state/p3_10_dogfood/observe-first.json",
+    "dedup_second": "state/p3_10_dogfood/observe-second.json",
+    "negative_control": "state/p3_10_dogfood/live-noise.json",
+    "promotion_boundary": "state/p3_10_dogfood/candidate-validation.json",
+    "live_result": "real OMP repeated reads produced one REPEATED_READ candidate with 11 bounded evidence refs; one read produced zero candidates.",
+    "dedup_result": "two observations of the unchanged session returned the same candidate_id and retained one candidate store entry.",
+    "economics": {"radar_overhead_ms": 3.236, "expected_cost_model_calls": 0, "raw_prompt_or_tool_io_persisted": false},
+    "p3_9_regression": "P3.9_PROVEN; Environment Steward remains the lifecycle authority and Radar does not alter its gate."
+  },
+  "requirement_classification": [
+    {"id": "P3.10-radar-core", "status": "PROVEN", "evidence": "Existing Radar detectors consume canonical telemetry-shaped events and automated/live proof covers repeated reads and tool errors."},
+    {"id": "P3.10-trigger-contract", "status": "PROVEN", "evidence": "Frozen acceptance signals are represented by bounded candidate-only Radar semantics; telemetry-observable repeated reads, error loops, and search thrash are covered without inventing hidden signals."},
+    {"id": "P3.10-candidate-only-output", "status": "PROVEN", "evidence": "Canonical candidates persist bounded references and hashes; no full audit or promotion runs."},
+    {"id": "P3.10-automated-evidence", "status": "PROVEN", "evidence": "Radar unit, live-integration, sensor, bridge, and lifecycle wiring tests pass."},
+    {"id": "P3.10-live-runtime-proof", "status": "PROVEN", "evidence": "Explicit installed extension current OMP run produced a canonical repeated-read candidate."},
+    {"id": "P3.10-universal-local", "status": "PROVEN", "evidence": "Python core plus thin Prime bridge reuses canonical telemetry and remains harness-neutral; no parallel store exists."},
+    {"id": "P3.10-token-economics", "status": "PROVEN", "evidence": "Observed session Radar overhead is 3.236 ms, expected model calls are 0, and bounded token benefit is recorded."},
+    {"id": "P3.10-dogfood", "status": "PROVEN", "evidence": "Current Second Brain OMP stream is the live repeated-read workload and single-read negative control."},
+    {"id": "P3.10-promotion-boundary", "status": "PROVEN", "evidence": "Candidate validation returns status=candidate, reason=candidate_only, promotion_eligible=false; P3.9 authority is unchanged."},
+    {"id": "P3.11-boundary", "status": "PROVEN", "evidence": "No P3.11 implementation or qualification was started."}
+  ],
+  "reuse_decision": "Reuse radar.py, telemetry.py, ledger.py, existing lifecycle adapter, and candidate-only semantics. Do not create a duplicate OMP-native radar, full audit, or parallel telemetry store. Lean remains HOLD_SHADOW.",
+  "smallest_genuine_missing_seam": null,
+  "final_independent_validator": "P3.10_PROVEN",
+  "final_validator_transcript": "C:/Users/assas/.omp/agent/sessions/-Documents-The-Second-Brain/2026-08-26T08-27-10-521Z_01a03d2e-2939-772e-a66e-48ad24edc622/GrimBedbug.jsonl",
+  "final_status": "P3.10_PROVEN"
+}

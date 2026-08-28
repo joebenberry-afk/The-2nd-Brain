@@ -8,7 +8,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from second_brain import frontier, paths, plasticity, promotion
+from second_brain import frontier, paths, plasticity, promotion, skillforge
 from second_brain.errors import BrainError
 
 LEVELS = ("shadow", "candidate", "active")
@@ -37,6 +37,41 @@ def _skill(home, name="scout", level="shadow", marker="content"):
         encoding="utf-8",
     )
     return directory
+
+
+def _bind(home, name, owner="steward-scout"):
+    skillforge.bind_candidate(
+        home,
+        name,
+        source_type="frontier",
+        source_ref=f"frontier-{name}",
+        owner=owner,
+    )
+    skillforge.record_evaluation(
+        home,
+        name,
+        {
+            "evaluation_id": f"eval-{name}",
+            "task_id": f"task-{name}",
+            "task_hash": "t" * 64,
+            "repository_state_hash": "r" * 64,
+            "baseline": {"input_tokens": 1000, "output_tokens": 100},
+            "candidate": {"input_tokens": 500, "output_tokens": 100},
+            "quality": {
+                "correctness": True,
+                "requirements": True,
+                "protected_values": True,
+                "regressions": False,
+                "verification": True,
+            },
+            "gates": {
+                "trigger": {"failed": 0},
+                "workflow": {"structural": True, "failed": 0},
+                "regression": {"regression": False, "failed": 0},
+                "security": {"passed": True},
+            },
+        },
+    )
 
 
 def _approve(home, name):
@@ -110,6 +145,7 @@ def test_promote_all_guards_green_moves_and_records(brain_home):
     source = _skill(brain_home)
     _evidence(brain_home, "scout")
     _approve(brain_home, "scout")
+    _bind(brain_home, "scout")
     result = promotion.promote(brain_home, "scout", "shadow", "candidate", session_id="s9")
     assert result["promoted"] is True
     assert result["from_level"] == "shadow"
@@ -124,7 +160,17 @@ def test_promote_all_guards_green_moves_and_records(brain_home):
         "frontier_approved": True,
         "immune_clear": True,
         "frontier_binding_current": True,
+        "bound": True,
+        "owner": True,
+        "evaluation": True,
+        "version": True,
     }
+    assert record["owner"] == "steward-scout"
+    assert record["candidate_id"].startswith("skill-candidate-")
+    assert record["baseline_comparison"] == "passed"
+    assert record["resulting_version"] == 1
+    assert record["promotion_id"].startswith("promotion-")
+    assert record["rollback_clear"] is True
     assert record["frontier_verdict"] == "approve"
     assert record["evidence_counts"]["credit_events"] == 1
     assert record["session_id"] == "s9"
@@ -137,6 +183,7 @@ def test_promote_to_active(brain_home):
     _skill(brain_home)
     _evidence(brain_home, "scout")
     _approve(brain_home, "scout")
+    _bind(brain_home, "scout")
     promotion.promote(brain_home, "scout", "shadow", "candidate")
     result = promotion.promote(brain_home, "scout", "candidate", "active")
     assert result["promoted"] is True
@@ -162,6 +209,7 @@ def test_incomplete_skill_cannot_become_active(brain_home):
     )
     _evidence(brain_home, "incomplete")
     _approve(brain_home, "incomplete")
+    _bind(brain_home, "incomplete")
     assert promotion.promote(brain_home, "incomplete", "shadow", "candidate")["promoted"]
     result = promotion.promote(brain_home, "incomplete", "candidate", "active")
     assert result["promoted"] is False
@@ -199,6 +247,7 @@ def test_destination_conflict_refuses(brain_home):
     _skill(brain_home, name="scout", level="candidate")  # conflict target
     _evidence(brain_home, "scout")
     _approve(brain_home, "scout")
+    _bind(brain_home, "scout")
     result = promotion.promote(brain_home, "scout", "shadow", "candidate")
     assert result["promoted"] is False
     assert result["reason"] == "destination_exists"
@@ -266,7 +315,7 @@ def test_promotion_status_and_determinism(brain_home):
 # ---------------------------------------------------------------------------
 
 
-def _reference(to, has_evidence, frontier_ok, rolled_back, dest_conflict):
+def _reference(to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict):
     if to == "shadow":
         return "already_at_level"
     if to == "active":
@@ -277,6 +326,8 @@ def _reference(to, has_evidence, frontier_ok, rolled_back, dest_conflict):
         return "frontier_not_approved"
     if rolled_back:
         return "rolled_back"
+    if not bound:
+        return "no_promotion_binding"
     if dest_conflict:
         return "destination_exists"
     return "promoted"
@@ -291,9 +342,10 @@ def _reference(to, has_evidence, frontier_ok, rolled_back, dest_conflict):
     st.booleans(),
     st.booleans(),
     st.booleans(),
+    st.booleans(),
 )
 def test_guard_combos_match_reference(
-    brain_home, to, has_evidence, frontier_ok, rolled_back, dest_conflict
+    brain_home, to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict
 ):
     home = _fresh(brain_home)
     _skill(home)
@@ -303,10 +355,12 @@ def test_guard_combos_match_reference(
         _approve(home, "scout")
     if rolled_back:
         _rollback_record(home, "scout")
+    if bound:
+        _bind(home, "scout")
     if dest_conflict:
         _skill(home, name="scout", level="candidate")
     result = promotion.promote(home, "scout", "shadow", to)
-    expected = _reference(to, has_evidence, frontier_ok, rolled_back, dest_conflict)
+    expected = _reference(to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict)
     if expected == "promoted":
         assert result["promoted"] is True
         assert (home / "skills" / "candidates" / "scout").is_dir()
@@ -339,6 +393,7 @@ def test_promotion_record_names_contained(brain_home):
     _skill(brain_home, name="record-me")
     _evidence(brain_home, "record-me")
     _approve(brain_home, "record-me")
+    _bind(brain_home, "record-me")
     result = promotion.promote(brain_home, "record-me", "shadow", "candidate")
     assert result["promoted"] is True
     record_path = Path(result["record_path"])

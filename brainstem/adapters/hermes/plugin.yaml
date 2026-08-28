@@ -1,0 +1,55 @@
+name: second-brain-hermes
+version: 0.1.0
+description: Thin Hermes Agent adapter for The Second Brain
+provides_tools:
+  - second_brain_writeback
+  - second_brain_delegate
+  - second_brain_review_worker_result
+  - second_brain_correct_worker_result
+provides_hooks:
+  - on_session_start
+  - pre_tool_call
+  - post_tool_call
+  - pre_llm_call
+  - post_api_request
+  - api_request_error
+  - on_session_finalize
+provides_middleware:
+  - llm_request
+config_schema:
+  brain_home:
+    type: str
+    description: Canonical Second Brain root
+  brain_python:
+    type: str
+    description: Python executable or brainctl command used to reach the Brain
+  bot_name:
+    type: str
+    description: Stable bot identity, for example Brain-Dev
+  bot_role:
+    type: str
+    description: Stable role identity, for example dev, validator, or integrator
+  project_id:
+    type: str
+    description: Optional registered Brain project id
+  repo_root:
+    type: str
+    description: Repository root used for project resolution
+  model_candidates:
+    type: list
+    description: Bounded provider/model/tier/capability/cost/availability metadata passed to Brain routing
+  timeout_seconds:
+    type: float
+    default: 5.0
+    description: Fail-open timeout for one Brain request
+  worker_profile:
+    type: str
+    description: Persistent Hermes worker profile; empty means explicit unavailable
+  hermes_cli:
+    type: str
+    default: hermes
+    description: Hermes CLI executable used only for configured worker delegation
+  worker_timeout_seconds:
+    type: float
+    default: 180.0
+    description: Bounded wall-clock limit for one persistent worker run

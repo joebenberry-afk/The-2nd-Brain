@@ -1,0 +1,71 @@
+{
+  "verdict": "P3.17_PROVEN",
+  "final_active_state_capsule_sha256": "06d21fe4d41a878990f161518d5136afdb972c6f909a83b1ad326bbb5966ed22",
+  "scope": "Implement and prove only the smallest standardized bounded lossless cross-harness handoff artifact/readback seam identified by the prior P3.17 qualification report. P3.1-P3.16 unmodified; Lean promotion state unchanged; P4 not started.",
+  "authoritative_source": "outputs/reports/rc2/01-frozen-roadmap-matrix.md:47 (RC2 row); prior qualification outputs/reports/rc2/P3_17_BRAIN_HANDOFF_QUALIFICATION.json",
+  "frozen_contract": {
+    "artifact": "Standard cross-agent handoff artifact",
+    "scope": "Cross-harness",
+    "transfer_property": "Lossless context transfer",
+    "human_readable_format": "Markdown output"
+  },
+  "reuse_decisions": [
+    "Active State Capsule (P3.1, working_set.py) is the full unmodified lossless payload -- no subset was hand-picked.",
+    "Content-addressed Artifact Store (artifacts.py) holds the payload; a new artifacts.parse_ref() helper was factored out and worker_protocol._artifact_ref now delegates to it (no duplicate ref-parsing logic).",
+    "Canonical JSON / stable_content_hash (contracts.py) used for every hash in the envelope, matching the existing WorkerTaskPacket/BrainPacket convention.",
+    "OMP (omp_adapter.py) and Hermes (hermes_adapter.py) adapters both call the same handoff.create_handoff_envelope/read_handoff_envelope -- no divergent per-harness logic.",
+    "brainctl handoff create/read CLI reuses the existing argparse/dispatch conventions (cli.py).",
+    "No new memory store, no new artifact store, no harness-specific format, no full transcript copy, no unbounded serialized context dump were created."
+  ],
+  "implementation_surfaces": [
+    "src/second_brain/contracts.py (BrainHandoffEnvelope, HandoffError, HANDOFF_* constants)",
+    "src/second_brain/handoff.py (build_payload, create_handoff_envelope, read_handoff_envelope; legacy create_handoff/BrainHandoffArtifact preserved unchanged)",
+    "src/second_brain/artifacts.py (parse_ref helper, reused by worker_protocol and handoff)",
+    "src/second_brain/worker_protocol.py (_artifact_ref delegates to artifacts.parse_ref; no behavior change)",
+    "src/second_brain/omp_adapter.py (operation=handoff_create/handoff_read)",
+    "src/second_brain/hermes_adapter.py (event=handoff_create/handoff_read)",
+    "src/second_brain/cli.py (brainctl handoff create|read)",
+    "tests/test_handoff.py (new, 17 tests: losslessness, boundedness, 6 negative controls, cross-harness adapter parity)"
+  ],
+  "envelope_schema": {
+    "fields": [
+      "handoff_id (content hash of every other field -- self-evident alteration detection)",
+      "schema_version", "project_id", "source_harness", "source_session_id", "source_task_id", "source_role",
+      "destination_harness", "destination_role",
+      "capsule_ref", "capsule_sha256", "capsule_updated_at",
+      "payload_ref", "payload_sha256", "payload_canonical_sha256",
+      "context_refs", "artifact_refs", "evidence_refs", "unavailable_evidence",
+      "requirement_summary", "created_at"
+    ],
+    "bound": "<=8192 bytes (measured real envelope: 1462 bytes)",
+    "payload": "schema_version + full Active State Capsule dict + full requirement ledger, canonical-JSON-serialized and stored via artifacts.store_text (content-addressed, idempotent)"
+  },
+  "requirement_classification": [
+    {"id": "canonical-envelope", "status": "PROVEN", "evidence": "contracts.BrainHandoffEnvelope; one schema, one validate()/from_dict(), used by both adapters and the CLI."},
+    {"id": "bounded-lossless-separation", "status": "PROVEN", "evidence": "Envelope carries only identity/refs/hashes (1462 bytes measured); full capsule+requirements payload (61071 bytes) recoverable via payload_ref through the existing Artifact Store, never embedded in the envelope."},
+    {"id": "readback-import-path", "status": "PROVEN", "evidence": "read_handoff_envelope validates schema/identity/hashes, resolves the payload artifact, and returns only bounded continuation-relevant state (objective, verification, decisions, next_action, requirement_summary)."},
+    {"id": "identity-integrity", "status": "PROVEN", "evidence": "handoff_id = content hash of every other field (self-evident tamper detection); capsule_sha256/payload_sha256/payload_canonical_sha256 independently verified structural + byte-exact recovery."},
+    {"id": "no-source-transcript-dependency", "status": "PROVEN", "evidence": "Dogfood: a second real OMP-primary session recovered the full continuation state via the Hermes adapter with only the 1462-byte envelope as input -- no source conversation history."},
+    {"id": "current-omp-primary-to-second-harness-dogfood", "status": "PROVEN", "evidence": "state/p3_17_dogfood/handoff-lifecycle-evidence.json: OMP-primary session 01a046da-9348-7009-aa30-035d615f774f created the envelope from this session's own live capsule; OMP-primary session 01a046dd-83e7-7330-8c47-5e259defa255 recovered it via `second_brain autoinject hermes-hook` (hermes_adapter.handle_request, event=handoff_read) with matching capsule_sha256, 234 verification keys, 40 decisions, 28 confirmed_facts."},
+    {"id": "bidirectional-schema", "status": "PROVEN", "evidence": "tests/test_handoff.py::TestCrossHarnessAdapters proves both OMP-creates/Hermes-reads and Hermes-creates/OMP-reads using the identical envelope schema and functions; frozen contract does not mandate bidirectionality but it was proven anyway since the implementation is inherently symmetric."},
+    {"id": "losslessness-independent-hash", "status": "PROVEN", "evidence": "payload_sha256 (raw artifact byte hash via artifacts.expand) and payload_canonical_sha256 (structural hash via stable_content_hash on the parsed payload) are computed through two independent code paths and both verified to match."},
+    {"id": "boundedness", "status": "PROVEN", "evidence": "Real envelope 1462 bytes <= 8192-byte bound; payload 61071 bytes stays in the Artifact Store and is never counted as transported context."},
+    {"id": "token-context-economics", "status": "PROVEN", "evidence": "365 estimated envelope tokens vs 15267 estimated payload tokens (41.77x); 59609 bytes avoided vs a naive full-payload-inline baseline. Provider-side cache/model counters were unavailable on this harness path and no cache savings are claimed."},
+    {"id": "negative-controls", "status": "PROVEN", "evidence": "tests/test_handoff.py proves HANDOFF_ID_MISMATCH (altered envelope), HANDOFF_HASH_MISMATCH (altered payload), HANDOFF_ARTIFACT_UNRESOLVED (missing artifact), HANDOFF_PROJECT_MISMATCH (wrong project), HANDOFF_STALE (+ explicit allow_stale classification), HANDOFF_SCHEMA_MISMATCH (unsupported schema), HANDOFF_MALFORMED (oversized ref lists rejected, not silently truncated)."},
+    {"id": "unavailable-vs-empty-evidence", "status": "PROVEN", "evidence": "unavailable_evidence is a distinct bounded field from evidence_refs; tests/test_handoff.py::test_unavailable_evidence_distinct_from_empty proves the distinction."},
+    {"id": "canonical-lifecycle-evidence", "status": "PROVEN", "evidence": "state/p3_17_dogfood/handoff-lifecycle-evidence.json -- IDs, hashes, refs, and bounded metrics only; no large payloads stored."},
+    {"id": "p3-1-16-boundary", "status": "PROVEN", "evidence": "Full existing pytest suite (unchanged) passes 100%; git diff touches only artifacts.py, cli.py, contracts.py, handoff.py, hermes_adapter.py, omp_adapter.py, worker_protocol.py, and the new tests/test_handoff.py."},
+    {"id": "p3-state-boundary", "status": "PROVEN", "evidence": "P3.1-P3.16 remain PROVEN; Lean remains candidate/HOLD_SHADOW; P4 not started."}
+  ],
+  "verification": {
+    "focused_tests": "tests/test_handoff.py -q: 17 passed",
+    "regression_tests": "full pytest suite: 100% pass, unchanged from pre-P3.17 baseline",
+    "static": "ruff check: all checks passed on every touched file; pyright: 0 errors/0 warnings/0 informations",
+    "dogfood": "state/p3_17_dogfood/handoff-lifecycle-evidence.json",
+    "final_independent_validator": "P3.17_PROVEN",
+    "final_validator_transcript": "state/p3_17_dogfood/final-validator-verdict.txt (OMP session 2026-08-28T05-38-46-307Z_01a046e0-b3a3-763b-bd42-587a6aa242d5, message 147a91bf, phase=final_answer)"
+  },
+  "smallest_genuine_remaining_gap": "none -- the standardized bounded lossless cross-harness handoff artifact/readback seam identified as the smallest missing P3.17 gap is closed and independently proven.",
+  "final_status": "P3.17_PROVEN",
+  "created_at": "2026-08-28T05:50:00.000000+00:00"
+}

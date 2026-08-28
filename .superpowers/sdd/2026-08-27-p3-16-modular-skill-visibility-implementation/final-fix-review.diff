@@ -1,0 +1,788 @@
+diff --git a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+index 639ff18..daa4430 100644
+--- a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
++++ b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-3-report.md
+@@ -57,10 +57,40 @@ None of this touched Python, `routing-bridge.ts`, or `worker-context-bridge.ts`,
+ 
+ ## Post-review fix 2: `npm run typecheck` failure in the shadow-mode test fixture
+ 
+ **Finding (from `Main`'s re-review):** `npm run typecheck` (`tsc --noEmit`) failed at `tests/wiring.test.ts:2301` — the shadow-mode wiring test's `ompVisibilityRunner` fixture (`visibility_plan: { mode: "shadow", selected_skill_ids: ["x"], hydrated_skill_ids: ["x"] }`, copied verbatim from the brief's own Step 2 shape) was missing `visibility_plan_id`, `rejected_skill_ids`, and `unavailable_skill_ids`, so it wasn't assignable to `OmpVisibilityPlan`/`OmpVisibilityResult`.
+ 
+ **Fix:** added the three missing fields (`visibility_plan_id: "vplan-shadow-1"`, `rejected_skill_ids: {}`, `unavailable_skill_ids: {}`) to that fixture in `tests/wiring.test.ts`. Grepped both `wiring.test.ts` and `active-state-wiring.test.ts` for every other `visibility_plan:` literal: the enforced-mode fixtures in both files already declared all six `OmpVisibilityPlan` fields (added correctly in the original round), and `visibility-bridge.test.ts`'s `visibility_plan` literals are inside `JSON.stringify(...)` strings passed to `parseOmpVisibilityOutput(stdout: string)` (not statically typed against `OmpVisibilityPlan`), so they were never type-checked and needed no change. No other gaps found.
+ 
+ **Verification:** `npm run typecheck` → 0 errors (previously 1). Full suite (`npm test -- --run`, 602 tests) run 3 times after the fix: 2/3 fully clean, 1/3 hit the same pre-existing unrelated teardown-race flake already documented twice above (a different `wiring.test.ts` `waitForLines` test, not this fix or the fixture change) — no new failure mode.
+ 
+ **Commit:** new commit on top of `08dd141`, touching only `tests/wiring.test.ts` and this report.
++
++## Post-review fix 3: strict visibility validation and per-turn caching
++
++**Findings addressed:** final cross-task review findings 2 and 3. The bridge now
++fails closed for malformed plans: it requires a bounded non-empty plan id,
++`shadow`/`enforced` mode, selected and hydrated skill-id arrays (at most three,
++with bounded non-empty ids), plain rejected/unavailable maps, and hydrated keys
++bound to both selected and hydrated ids. Hydrated bodies are bounded by
++`OMP_VISIBILITY_MAX_INJECTED_CHARS`; invalid output returns a null plan, empty
++bodies, and a bounded error. The same validator is applied to runner seam
++results before any injection, so arbitrary in-process runner output cannot
++bypass the parser's safety boundary.
++
++`before_agent_start` now uses a Promise cache keyed by the existing
++`session:currentTurnIndex:taskSha256` identity. The cached Promise covers runner
++execution, validation, and the single `omp_visibility_plan` append, preventing
++re-emitted host events from repeating subprocess/hydration work or telemetry
++while preserving enforced content in every repeated handler result.
++
++**Regression coverage:** parser tests cover missing required fields, invalid
++mode, unknown hydrated keys, and oversized bodies while retaining valid shadow
++and enforced cases. Wiring coverage proves same-session/turn/task calls invoke
++the runner once, append one plan record, and inject enforced content on both
++responses.
++
++**Verification:** `npm test -- --run tests/visibility-bridge.test.ts tests/wiring.test.ts tests/active-state-wiring.test.ts` → 99/99 pass; `npm run typecheck` → 0 errors.
++
++**Commit:** `9550471` (`fix(prime-extension): validate and cache visibility plans`); report hash update follows.
++
++**Concerns:** no Python, router.py, Lean, or P3.15 files changed; P3.17 was not started.
+diff --git a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-4-report.md b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-4-report.md
+index 30f63c5..47f9800 100644
+--- a/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-4-report.md
++++ b/.superpowers/sdd/2026-08-27-p3-16-modular-skill-visibility-implementation/task-4-report.md
+@@ -35,10 +35,57 @@ Two touched-code-only formatting fixes were also required beyond the brief's exa
+ ## Concerns
+ - Neither `hermes_adapter.py` nor `test_hermes_adapter.py` had any prior git history in this repository (both were untracked before this commit, despite being large pre-existing files) — this is a pre-existing repo-state fact unrelated to Task 4, noted for visibility since it affected how I had to verify "pre-existing vs. newly introduced" formatting debt (via line-range inspection rather than `git diff`/`git stash`, since stash does not touch untracked files).
+ - Did not touch `skills.py`, `router.py`, `gardener.py`, `omp_adapter.py`, or any Prime-extension TS file, and did not begin P3.17, per the assignment's constraints.
+ 
+ ## Post-review fix (P3_16_Task4Review finding)
+ Review correctly identified that `test_pre_llm_visibility_failure_does_not_break_existing_autoinject_path` did not exercise a real failure: `skills.resolve_visibility_mode` only catches `(OSError, tomllib.TOMLDecodeError)` around `config/skills.toml`, and the original malformed-TOML text (`"not valid toml [[["`) is exactly the case that clause already fail-safes to `"shadow"` on — it never raises, so `_visibility_task`'s `except Exception` fail-open branch had zero coverage and the test passed vacuously.
+ 
+ Fix applied: replaced the malformed-TOML setup with writing invalid UTF-8 bytes to `config/skills.toml` (`b'[visibility]\nmode = "shad\xffow"\n'`) via a binary file write. `Path.read_text(encoding="utf-8")` on invalid UTF-8 raises `UnicodeDecodeError` (a `ValueError` subtype), which is *not* caught by `resolve_visibility_mode`'s `except (OSError, tomllib.TOMLDecodeError)` clause, so it propagates out of `skills.build_plan` and is only caught by `_visibility_task`'s broad `except Exception`. Verified directly via a standalone script hitting the real subprocess CLI bridge: `visibility_plan` comes back `None` while `status`/`decision`/`packet` are unaffected. Added `assert out["visibility_plan"] is None` to the test (proving the fail-open branch actually ran) and corrected the inline comment to accurately describe the invalid-UTF-8 trigger instead of "malformed TOML".
+ 
+ Re-verified after the fix: `pytest tests/test_hermes_adapter.py -q` → 31 passed; `ruff check`/`ruff format --check` on the edited region clean (same pre-existing unrelated debt elsewhere, untouched); `pyright tests/test_hermes_adapter.py` → 0 errors. Committed as a follow-up commit on top of `f5d77d0`.
++
++## Final cross-task review fix: bounded hydration
++
++### Status
++Complete. Finding 1 is closed at the canonical `skills.hydrate_plan` boundary.
++
++### Files
++- Modified `src/second_brain/skills.py`:
++  - Added a fixed `_MAX_HYDRATED_BODY_CHARS = 4096` bound for each selected
++    `SKILL.md` body.
++  - Oversized bodies now fail closed as `body_too_large`, with no hydrated
++    skill ID and no returned body. Their full-size economics remain in the
++    avoided-body baseline.
++  - Selected bodies within the bound continue to hydrate unchanged and are
++    returned in full.
++- Modified `tests/test_skills.py`:
++  - Strengthened normal hydration coverage to assert the returned body is the
++    complete file content.
++  - Added oversized selected-body rejection coverage, including unavailable
++    reason, empty body result, and zero hydrated economics.
++- Modified `tests/test_hermes_adapter.py`:
++  - Added enforced-mode subprocess coverage proving an oversized selected
++    body is not appended to Hermes' visible packet while the existing
++    AutoInject packet remains available.
++- `src/second_brain/hermes_adapter.py` required no source change: it consumes
++  the bounded core result, so both Hermes and OMP consumers receive no body
++  for oversized selections.
++
++### Tests
++- `.venv/Scripts/python.exe -m pytest tests/test_skills.py -k 'hydrate_plan' -q`
++  → 3 passed (red test was observed before the implementation).
++- `.venv/Scripts/python.exe -m pytest tests/test_hermes_adapter.py -k 'shadow_mode_never_injects or enforced_mode_injects or oversized_hydrated or visibility_failure' -q`
++  → 4 passed.
++- `.venv/Scripts/python.exe -m pytest tests/test_skills.py tests/test_hermes_adapter.py -q`
++  → 43 passed.
++- `.venv/Scripts/python.exe -m py_compile src/second_brain/skills.py src/second_brain/hermes_adapter.py tests/test_skills.py tests/test_hermes_adapter.py`
++  → passed.
++
++### Commit
++`b147a64` — `fix(skills): bound hydrated specialist bodies`
++
++### Concerns
++- The 4096-character bound is per selected body; the existing selected-skill
++  cap remains 3. Bodies are rejected rather than truncated, so no partial
++  text is presented as complete instructions.
++- No formatters, linters, project-wide suites, TS files, router, OMP adapter,
++  or lifecycle/governance code were changed.
+diff --git a/brainstem/prime-extension/src/index.ts b/brainstem/prime-extension/src/index.ts
+index ed3fb38..1c7771f 100644
+--- a/brainstem/prime-extension/src/index.ts
++++ b/brainstem/prime-extension/src/index.ts
+@@ -117,20 +117,21 @@ import {
+   runOmpRouting,
+   type OmpModelCandidate,
+   type OmpRoutingDecision,
+   type OmpRoutingOptions,
+   type OmpRoutingResult,
+ } from "./routing-bridge";
+ import {
+   OMP_VISIBILITY_MAX_INJECTED_CHARS,
+   ompVisibilityRecord,
+   runOmpVisibility,
++  validateOmpVisibilityResult,
+   type OmpVisibilityOptions,
+   type OmpVisibilityResult,
+ } from "./visibility-bridge";
+ import {
+   OMP_WORKER_CONTEXT_MAX_TEXT_CHARS,
+   renderOmpWorkerContext,
+   runOmpWorkerContext,
+   type OmpWorkerContextOptions,
+   type OmpWorkerContextResult,
+ } from "./worker-context-bridge";
+@@ -376,20 +377,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
+         } catch {
+           // storage failed too — stay silent
+         }
+       },
+     });
+   };
+   let currentTurnIndex = 0;
+   let latestRoutingDecision: OmpRoutingDecision | null = null;
+   let latestRoutingSession: string | null = null;
+   const routingCache = new Map<string, Promise<OmpRoutingResult>>();
++  const visibilityCache = new Map<string, Promise<OmpVisibilityResult>>();
+   const stopStates = new Map<string, StopBoundaryState>();
+   const stopControlCalls = new Set<string>();
+   const workerParentSessions = new Map<string, string>();
+   const environmentTaskHashes = new Map<string, string>();
+   const stopStateFor = (session: string): StopBoundaryState => {
+     const existing = stopStates.get(session);
+     if (existing) return existing;
+     const created = new StopBoundaryState();
+     stopStates.set(session, created);
+     return created;
+@@ -649,20 +651,64 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
+             });
+           }
+         }
+         return result;
+       })
+       .catch(() => ({ decision: null, error: "BRAIN_ROUTING_UNAVAILABLE" }));
+     routingCache.set(key, promise);
+     return promise;
+   };
+ 
++  const ensureVisibilityPlan = (
++    session: string,
++    task: string,
++    ctx: ExtensionContext,
++  ): Promise<OmpVisibilityResult> => {
++    const taskHash = taskSha256(task);
++    const key = `${session}:${currentTurnIndex}:${taskHash}`;
++    const existing = visibilityCache.get(key);
++    if (existing) return existing;
++    const promise = Promise.resolve()
++      .then(() =>
++        visibilityRunner({
++          home: config.home ?? "",
++          task,
++          sessionId: session,
++          projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
++        }),
++      )
++      .then((result) => validateOmpVisibilityResult(result))
++      .catch(() => ({
++        visibility_plan: null,
++        hydrated_instructions: {},
++        error: "BRAIN_VISIBILITY_UNAVAILABLE",
++      }))
++      .then((result) => {
++        try {
++          getStore(session)?.append(
++            ompVisibilityRecord("omp_visibility_plan", session, {
++              mode: result.visibility_plan?.mode ?? null,
++              selected_skill_ids: result.visibility_plan?.selected_skill_ids ?? [],
++              hydrated_skill_ids: result.visibility_plan?.hydrated_skill_ids ?? [],
++              visibility_plan_id: result.visibility_plan?.visibility_plan_id ?? null,
++              error: result.error,
++            }),
++          );
++        } catch {
++          // Visibility telemetry is advisory and must never block injection.
++        }
++        return result;
++      });
++    visibilityCache.set(key, promise);
++    return promise;
++  };
++
+   /**
+    * Project attribution for mirror call sites (ledger-cwd-ordering-fix):
+    * every mirror that has a ctx hands its cwd to `ledger init` so the FIRST
+    * auto-init of a session — whichever event wins the per-process race —
+    * resolves project_id through the AutoInject ladder instead of ''.
+    */
+   const ctxCwd = (ctx: ExtensionContext): string | undefined =>
+     typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : undefined;
+ 
+   /**
+@@ -1062,50 +1108,36 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
+               }
+             }
+             vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", detailsObj, packetMetadata);
+           }
+         }
+       } else {
+         void runShadowAutoInject(autoinjectCall(session, event, ctx));
+       }
+       if (config.home && taskText.trim().length > 0) {
+         try {
+-          const visibilityResult = await visibilityRunner({
+-            home: config.home,
+-            task: taskText,
+-            sessionId: session,
+-            projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
+-          });
++          const visibilityResult = await ensureVisibilityPlan(session, taskText, ctx);
+           if (
+             visibilityResult.visibility_plan?.mode === "enforced" &&
+             Object.keys(visibilityResult.hydrated_instructions).length > 0
+           ) {
+             const specialistText = Object.entries(visibilityResult.hydrated_instructions)
+               .sort(([a], [b]) => a.localeCompare(b))
+               .map(([, text]) => text)
+               .join("\n\n")
+               .slice(0, OMP_VISIBILITY_MAX_INJECTED_CHARS);
+             aiMessage = mergeVisibilityMessage(
+               aiMessage,
+               specialistText,
+               visibilityResult.visibility_plan.visibility_plan_id,
+             );
+           }
+-          getStore(session)?.append(
+-            ompVisibilityRecord("omp_visibility_plan", session, {
+-              mode: visibilityResult.visibility_plan?.mode ?? null,
+-              selected_skill_ids: visibilityResult.visibility_plan?.selected_skill_ids ?? [],
+-              hydrated_skill_ids: visibilityResult.visibility_plan?.hydrated_skill_ids ?? [],
+-              visibility_plan_id: visibilityResult.visibility_plan?.visibility_plan_id ?? null,
+-              error: visibilityResult.error,
+-            }),
+-          );
+         } catch {
+           // Visibility is advisory: any failure must not block AutoInject/session start.
+         }
+       }
+       mirror(
+         session,
+         "user_task",
+         {
+           task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
+           prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+diff --git a/brainstem/prime-extension/src/visibility-bridge.ts b/brainstem/prime-extension/src/visibility-bridge.ts
+index 6fc0ba0..30d723f 100644
+--- a/brainstem/prime-extension/src/visibility-bridge.ts
++++ b/brainstem/prime-extension/src/visibility-bridge.ts
+@@ -1,17 +1,18 @@
+ /** Thin OMP -> Second Brain skill-visibility bridge (plan P3.16). */
+ 
+ import { execFile } from "node:child_process";
+ import { join } from "node:path";
+ 
+ export const OMP_VISIBILITY_MAX_TASK_CHARS = 2048;
+ export const OMP_VISIBILITY_MAX_IDENTITY_CHARS = 128;
++export const OMP_VISIBILITY_MAX_SKILLS = 3;
+ export const OMP_VISIBILITY_TIMEOUT_MS = 3000;
+ export const OMP_VISIBILITY_MAX_STDOUT_CHARS = 256 * 1024;
+ export const OMP_VISIBILITY_MAX_INJECTED_CHARS = 8192;
+ 
+ export interface OmpVisibilityOptions {
+   home: string;
+   task: string;
+   sessionId: string;
+   projectId: string;
+   python?: string;
+@@ -31,54 +32,122 @@ export interface OmpVisibilityPlan {
+ export interface OmpVisibilityResult {
+   visibility_plan: OmpVisibilityPlan | null;
+   hydrated_instructions: Record<string, string>;
+   error: string | null;
+ }
+ 
+ function bounded(value: unknown, max: number): string {
+   return typeof value === "string" ? value.slice(0, max) : "";
+ }
+ 
++function validBoundedString(value: unknown, max: number): value is string {
++  return typeof value === "string" && value.length > 0 && value.length <= max;
++}
++
++function isPlainObject(value: unknown): value is Record<string, unknown> {
++  if (value == null || typeof value !== "object" || Array.isArray(value)) return false;
++  const prototype = Object.getPrototypeOf(value);
++  return prototype === Object.prototype || prototype === null;
++}
++
++function parseSkillIds(value: unknown): string[] | null {
++  if (!Array.isArray(value) || value.length > OMP_VISIBILITY_MAX_SKILLS) return null;
++  const ids = value.map((id) => (validBoundedString(id, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ? id : null));
++  return ids.every((id): id is string => id !== null) ? ids : null;
++}
++
++function parseSkillReasons(value: unknown): Record<string, string> | null {
++  if (!isPlainObject(value)) return null;
++  const entries = Object.entries(value);
++  if (
++    entries.some(
++      ([key, reason]) =>
++        !validBoundedString(key, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
++        typeof reason !== "string" ||
++        reason.length > OMP_VISIBILITY_MAX_IDENTITY_CHARS,
++    )
++  ) {
++    return null;
++  }
++  return Object.fromEntries(entries) as Record<string, string>;
++}
++
++function invalidResult(error: string): OmpVisibilityResult {
++  return { visibility_plan: null, hydrated_instructions: {}, error };
++}
++
++/** Validate an untrusted visibility result and discard malformed injections. */
++export function validateOmpVisibilityResult(raw: unknown): OmpVisibilityResult {
++  if (!isPlainObject(raw)) return invalidResult("BRAIN_VISIBILITY_INVALID_RESPONSE");
++  const value = raw as Record<string, unknown>;
++  const rawPlan = value.visibility_plan;
++  if (!isPlainObject(rawPlan)) {
++    return invalidResult(bounded(value.error, 128) || "BRAIN_VISIBILITY_UNAVAILABLE");
++  }
++  const selectedSkillIds = parseSkillIds(rawPlan.selected_skill_ids);
++  const hydratedSkillIds = parseSkillIds(rawPlan.hydrated_skill_ids);
++  const rejectedSkillIds = parseSkillReasons(rawPlan.rejected_skill_ids);
++  const unavailableSkillIds = parseSkillReasons(rawPlan.unavailable_skill_ids);
++  if (
++    !validBoundedString(rawPlan.visibility_plan_id, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
++    (rawPlan.mode !== "shadow" && rawPlan.mode !== "enforced") ||
++    selectedSkillIds === null ||
++    hydratedSkillIds === null ||
++    rejectedSkillIds === null ||
++    unavailableSkillIds === null
++  ) {
++    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
++  }
++  if (!isPlainObject(value.hydrated_instructions)) {
++    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
++  }
++  const hydratedEntries = Object.entries(value.hydrated_instructions);
++  if (
++    hydratedEntries.some(
++      ([skillId, text]) =>
++        !validBoundedString(skillId, OMP_VISIBILITY_MAX_IDENTITY_CHARS) ||
++        !selectedSkillIds.includes(skillId) ||
++        !hydratedSkillIds.includes(skillId) ||
++        typeof text !== "string" ||
++        text.length > OMP_VISIBILITY_MAX_INJECTED_CHARS,
++    )
++  ) {
++    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
++  }
++  const plan: OmpVisibilityPlan = {
++    visibility_plan_id: rawPlan.visibility_plan_id,
++    mode: rawPlan.mode,
++    selected_skill_ids: selectedSkillIds,
++    hydrated_skill_ids: hydratedSkillIds,
++    rejected_skill_ids: rejectedSkillIds,
++    unavailable_skill_ids: unavailableSkillIds,
++  };
++  return {
++    visibility_plan: plan,
++    hydrated_instructions: Object.fromEntries(hydratedEntries) as Record<string, string>,
++    error: null,
++  };
++}
++
+ /** Parse the omp-routing CLI bridge's skill_visibility JSON response. Every
+  * malformed/oversized/non-object shape fails open to a null plan. */
+ export function parseOmpVisibilityOutput(stdout: string): OmpVisibilityResult {
+   if (stdout.length > OMP_VISIBILITY_MAX_STDOUT_CHARS) {
+-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_OUTPUT_TOO_LARGE" };
++    return invalidResult("BRAIN_VISIBILITY_OUTPUT_TOO_LARGE");
+   }
+   let parsed: unknown;
+   try {
+     parsed = JSON.parse(stdout);
+   } catch {
+-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_INVALID_JSON" };
+-  }
+-  if (parsed == null || typeof parsed !== "object") {
+-    return { visibility_plan: null, hydrated_instructions: {}, error: "BRAIN_VISIBILITY_INVALID_RESPONSE" };
+-  }
+-  const value = parsed as Record<string, unknown>;
+-  const plan = value.visibility_plan;
+-  const hydrated = value.hydrated_instructions;
+-  const hydratedInstructions: Record<string, string> =
+-    hydrated != null && typeof hydrated === "object" && !Array.isArray(hydrated)
+-      ? Object.fromEntries(
+-          Object.entries(hydrated as Record<string, unknown>).filter(
+-            ([, text]) => typeof text === "string",
+-          ) as [string, string][],
+-        )
+-      : {};
+-  if (plan == null || typeof plan !== "object" || Array.isArray(plan)) {
+-    return {
+-      visibility_plan: null,
+-      hydrated_instructions: {},
+-      error: bounded(value.error, 128) || "BRAIN_VISIBILITY_UNAVAILABLE",
+-    };
++    return invalidResult("BRAIN_VISIBILITY_INVALID_JSON");
+   }
+-  return { visibility_plan: plan as OmpVisibilityPlan, hydrated_instructions: hydratedInstructions, error: null };
++  return validateOmpVisibilityResult(parsed);
+ }
+ 
+ export function ompVisibilityRecord(
+   kind: string,
+   session: string,
+   fields: Record<string, unknown>,
+ ): Record<string, unknown> {
+   return {
+     v: 3,
+     ts: new Date().toISOString(),
+diff --git a/brainstem/prime-extension/tests/visibility-bridge.test.ts b/brainstem/prime-extension/tests/visibility-bridge.test.ts
+index 8326f18..2ab5016 100644
+--- a/brainstem/prime-extension/tests/visibility-bridge.test.ts
++++ b/brainstem/prime-extension/tests/visibility-bridge.test.ts
+@@ -1,17 +1,24 @@
+ import { describe, expect, it } from "vitest";
+ import { parseOmpVisibilityOutput, runOmpVisibility } from "../src/visibility-bridge";
+ 
+ describe("parseOmpVisibilityOutput", () => {
+   it("parses a well-formed shadow-mode plan", () => {
+     const stdout = JSON.stringify({
+-      visibility_plan: { mode: "shadow", selected_skill_ids: ["a"], hydrated_skill_ids: [] },
++      visibility_plan: {
++        visibility_plan_id: "vplan-shadow",
++        mode: "shadow",
++        selected_skill_ids: ["a"],
++        hydrated_skill_ids: [],
++        rejected_skill_ids: {},
++        unavailable_skill_ids: {},
++      },
+       hydrated_instructions: {},
+       error: null,
+     });
+     const result = parseOmpVisibilityOutput(stdout);
+     expect(result.visibility_plan?.mode).toBe("shadow");
+     expect(result.error).toBeNull();
+   });
+ 
+   it("parses a well-formed enforced-mode plan with hydrated instructions", () => {
+     const stdout = JSON.stringify({
+@@ -30,20 +37,95 @@ describe("parseOmpVisibilityOutput", () => {
+     expect(result.visibility_plan?.mode).toBe("enforced");
+     expect(result.hydrated_instructions.a).toBe("full skill text");
+   });
+ 
+   it("fails open on malformed JSON", () => {
+     const result = parseOmpVisibilityOutput("not json");
+     expect(result.visibility_plan).toBeNull();
+     expect(result.error).not.toBeNull();
+   });
+ 
++  it("fails open when visibility_plan is missing required fields", () => {
++    const result = parseOmpVisibilityOutput(
++      JSON.stringify({
++        visibility_plan: {
++          mode: "shadow",
++          selected_skill_ids: ["a"],
++          hydrated_skill_ids: [],
++          rejected_skill_ids: {},
++          unavailable_skill_ids: {},
++        },
++        hydrated_instructions: {},
++      }),
++    );
++    expect(result.visibility_plan).toBeNull();
++    expect(result.hydrated_instructions).toEqual({});
++    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
++  });
++
++  it("fails open when visibility_plan has an invalid mode", () => {
++    const result = parseOmpVisibilityOutput(
++      JSON.stringify({
++        visibility_plan: {
++          visibility_plan_id: "vplan-invalid-mode",
++          mode: "advisory",
++          selected_skill_ids: ["a"],
++          hydrated_skill_ids: [],
++          rejected_skill_ids: {},
++          unavailable_skill_ids: {},
++        },
++        hydrated_instructions: {},
++      }),
++    );
++    expect(result.visibility_plan).toBeNull();
++    expect(result.hydrated_instructions).toEqual({});
++    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
++  });
++
++  it("fails open when hydrated instructions include an unselected skill", () => {
++    const result = parseOmpVisibilityOutput(
++      JSON.stringify({
++        visibility_plan: {
++          visibility_plan_id: "vplan-unknown-hydrated",
++          mode: "enforced",
++          selected_skill_ids: ["a"],
++          hydrated_skill_ids: ["a"],
++          rejected_skill_ids: {},
++          unavailable_skill_ids: {},
++        },
++        hydrated_instructions: { unknown: "must not inject" },
++      }),
++    );
++    expect(result.visibility_plan).toBeNull();
++    expect(result.hydrated_instructions).toEqual({});
++    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
++  });
++
++  it("fails open when a hydrated body exceeds the injection bound", () => {
++    const result = parseOmpVisibilityOutput(
++      JSON.stringify({
++        visibility_plan: {
++          visibility_plan_id: "vplan-oversized-body",
++          mode: "enforced",
++          selected_skill_ids: ["a"],
++          hydrated_skill_ids: ["a"],
++          rejected_skill_ids: {},
++          unavailable_skill_ids: {},
++        },
++        hydrated_instructions: { a: "x".repeat(8193) },
++      }),
++    );
++    expect(result.visibility_plan).toBeNull();
++    expect(result.hydrated_instructions).toEqual({});
++    expect(result.error).toBe("BRAIN_VISIBILITY_INVALID_PLAN");
++  });
++
+   it("fails open when visibility_plan is missing", () => {
+     const result = parseOmpVisibilityOutput(JSON.stringify({ error: "VISIBILITY_UNAVAILABLE" }));
+     expect(result.visibility_plan).toBeNull();
+     expect(result.error).toBe("VISIBILITY_UNAVAILABLE");
+   });
+ 
+   it("fails open when hydrated_instructions is not an object", () => {
+     const stdout = JSON.stringify({
+       visibility_plan: { mode: "shadow", selected_skill_ids: [], hydrated_skill_ids: [] },
+       hydrated_instructions: "nope",
+diff --git a/brainstem/prime-extension/tests/wiring.test.ts b/brainstem/prime-extension/tests/wiring.test.ts
+index 53f0421..febf4ef 100644
+--- a/brainstem/prime-extension/tests/wiring.test.ts
++++ b/brainstem/prime-extension/tests/wiring.test.ts
+@@ -2365,11 +2365,47 @@ describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)
+       ompVisibilityRunner: async () => {
+         throw new Error("boom");
+       },
+     });
+     const throwingCtx = makeCtx();
+     await expect(
+       throwingHandlers.get("before_agent_start")!({ prompt: "do the thing" }, throwingCtx),
+     ).resolves.not.toThrow();
+     await settle(); // drain pending fire-and-forget telemetry writes before teardown
+   });
++  it("caches visibility per session, turn, and task while reusing enforced injection", async () => {
++    const runner = vi.fn(async () => ({
++      visibility_plan: {
++        visibility_plan_id: "vplan-cached",
++        mode: "enforced" as const,
++        selected_skill_ids: ["skill1"],
++        hydrated_skill_ids: ["skill1"],
++        rejected_skill_ids: {},
++        unavailable_skill_ids: {},
++      },
++      hydrated_instructions: { skill1: "cached specialist body" },
++      error: null,
++    }));
++    const handlers = loadFactory({ ompVisibilityRunner: runner });
++    const ctx = makeCtx();
++    const beforeAgentStart = handlers.get("before_agent_start")!;
++    const first = (await beforeAgentStart({ prompt: "repeat this task" }, ctx)) as {
++      message?: { content?: unknown };
++    };
++    const second = (await beforeAgentStart({ prompt: "repeat this task" }, ctx)) as {
++      message?: { content?: unknown };
++    };
++
++    expect(runner).toHaveBeenCalledTimes(1);
++    expect(first.message?.content).toContain("cached specialist body");
++    expect(second.message?.content).toContain("cached specialist body");
++    const records = await waitForLines(4);
++    await settle(300);
++    const finalRecords = (await readFile(telemetryFile(), "utf8"))
++      .split("\n")
++      .filter((line) => line.trim().length > 0)
++      .map((line) => JSON.parse(line) as Record<string, unknown>);
++    expect(finalRecords.length).toBeGreaterThanOrEqual(records.length);
++    const visibilityRecords = finalRecords.filter((record) => record.kind === "omp_visibility_plan");
++    expect(visibilityRecords).toHaveLength(1);
++  });
+ });
+diff --git a/src/second_brain/skills.py b/src/second_brain/skills.py
+index c5824a6..07facd6 100644
+--- a/src/second_brain/skills.py
++++ b/src/second_brain/skills.py
+@@ -17,20 +17,21 @@ from __future__ import annotations
+ 
+ import hashlib
+ import tomllib
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from . import autoinject, contracts, paths, router, skillforge
+ 
+ _MAX_SPECIALIST_SKILLS = 3
++_MAX_HYDRATED_BODY_CHARS = 4096
+ _DESCRIPTOR_TEXT_MAX_CHARS = 400
+ _PURPOSE_SECTION_MAX_CHARS = 240
+ 
+ 
+ def _purpose_excerpt(text: str) -> str:
+     """Bounded ``# Purpose`` section text: up to the next ``# `` heading or EOF."""
+     marker = "# Purpose"
+     start = text.find(marker)
+     if start == -1:
+         return ""
+@@ -236,20 +237,23 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
+             unavailable_skill_ids[skill_id] = "not_eligible"
+             continue
+         if current["content_hash"] != selected_content_hashes.get(skill_id):
+             unavailable_skill_ids[skill_id] = "stale_content_hash"
+             continue
+         try:
+             body = current["path"].read_text(encoding="utf-8")
+         except OSError:
+             unavailable_skill_ids[skill_id] = "read_failed"
+             continue
++        if len(body) > _MAX_HYDRATED_BODY_CHARS:
++            unavailable_skill_ids[skill_id] = "body_too_large"
++            continue
+         hydrated_bodies[skill_id] = body
+         hydrated_skill_ids.append(skill_id)
+ 
+     hydrated_chars = 0
+     hydrated_tokens = 0
+     avoided_full_chars = plan["avoided_full_chars"]
+     avoided_full_tokens = plan["avoided_full_tokens"]
+     for body in hydrated_bodies.values():
+         chars = len(body)
+         tokens = autoinject.token_estimate(body)
+diff --git a/tests/test_hermes_adapter.py b/tests/test_hermes_adapter.py
+index dcaf1a4..66cbcec 100644
+--- a/tests/test_hermes_adapter.py
++++ b/tests/test_hermes_adapter.py
+@@ -344,20 +344,60 @@ def test_pre_llm_enforced_mode_injects_hydrated_skill(brain_home: Path) -> None:
+ 
+     result = _run_hook(brain_home, payload)
+ 
+     assert result.returncode == 0, result.stderr
+     out = json.loads(result.stdout)
+     assert out["visibility_plan"] is not None
+     assert out["visibility_plan"]["mode"] == "enforced"
+     assert "enforced-visibility-skill content" in out["packet"]
+ 
+ 
++def test_pre_llm_enforced_mode_rejects_oversized_hydrated_skill(brain_home: Path) -> None:
++    _current_memory(brain_home)
++    _visibility_skill(brain_home, name="oversized-visibility-skill")
++    skill_path = (
++        brain_home / "skills" / "shadow" / "oversized-visibility-skill" / "SKILL.md"
++    )
++    skill_path.write_text(
++        skill_path.read_text(encoding="utf-8") + ("x" * 5000),
++        encoding="utf-8",
++    )
++    (brain_home / "config" / "autoinject.toml").write_text(
++        '[autoinject]\nmode = "active"\n', encoding="utf-8"
++    )
++    (brain_home / "config" / "skills.toml").write_text(
++        '[visibility]\nmode = "enforced"\n', encoding="utf-8"
++    )
++    payload = {
++        **_start_payload(session="visibility-oversized", bot="Brain-Dev"),
++        "event": "pre_llm_call",
++        "task": (
++            "How does Hermes retrieve bounded project context for oversized-visibility-skill content?"
++        ),
++        "turn_id": "visibility-oversized-turn-1",
++    }
++
++    result = _run_hook(brain_home, payload)
++
++    assert result.returncode == 0, result.stderr
++    out = json.loads(result.stdout)
++    assert out["visibility_plan"] is not None
++    assert out["visibility_plan"]["mode"] == "enforced"
++    assert out["visibility_plan"]["hydrated_skill_ids"] == []
++    assert (
++        out["visibility_plan"]["unavailable_skill_ids"]["oversized-visibility-skill"]
++        == "body_too_large"
++    )
++    assert "x" * 5000 not in out["packet"]
++    assert "Hermes integration rule" in out["packet"]
++
++
+ def test_pre_llm_visibility_failure_does_not_break_existing_autoinject_path(
+     brain_home: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+     _current_memory(brain_home)
+     (brain_home / "config" / "autoinject.toml").write_text(
+         '[autoinject]\nmode = "active"\n', encoding="utf-8"
+     )
+     payload = {
+         **_start_payload(session="visibility-failure", bot="Brain-Dev"),
+         "event": "pre_llm_call",
+diff --git a/tests/test_skills.py b/tests/test_skills.py
+index 41429f5..802d015 100644
+--- a/tests/test_skills.py
++++ b/tests/test_skills.py
+@@ -124,24 +124,47 @@ def test_hydrate_plan_hydrates_selected_only(brain_home, monkeypatch):
+         "second_brain.router.route",
+         lambda home, task, max_active=None, skills=None: {
+             "selected": ["picked"],
+             "scores": {},
+             "shadow": True,
+         },
+     )
+     plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+     updated, bodies = skills.hydrate_plan(brain_home, plan)
+     assert updated["hydrated_skill_ids"] == ["picked"]
+-    assert set(bodies) == {"picked"}
++    assert bodies["picked"] == (brain_home / "skills" / "shadow" / "picked" / "SKILL.md").read_text(
++        encoding="utf-8"
++    )
+     assert "not-picked" not in bodies
+ 
+ 
++def test_hydrate_plan_rejects_oversized_selected_body(brain_home, monkeypatch):
++    directory = _make_skill(brain_home, "oversized", "shadow")
++    skill_path = directory / "SKILL.md"
++    skill_path.write_text(skill_path.read_text(encoding="utf-8") + ("x" * 5000), encoding="utf-8")
++    monkeypatch.setattr(
++        "second_brain.router.route",
++        lambda home, task, max_active=None, skills=None: {
++            "selected": ["oversized"],
++            "scores": {},
++            "shadow": True,
++        },
++    )
++    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
++    updated, bodies = skills.hydrate_plan(brain_home, plan)
++    assert updated["hydrated_skill_ids"] == []
++    assert updated["unavailable_skill_ids"]["oversized"] == "body_too_large"
++    assert updated["hydrated_chars"] == 0
++    assert updated["hydrated_tokens"] == 0
++    assert bodies == {}
++
++
+ def test_plan_to_evidence_has_no_raw_bodies_or_task_text(brain_home, monkeypatch):
+     _make_skill(brain_home, "picked", "shadow")
+     monkeypatch.setattr(
+         "second_brain.router.route",
+         lambda home, task, max_active=None, skills=None: {
+             "selected": ["picked"],
+             "scores": {},
+             "shadow": True,
+         },
+     )

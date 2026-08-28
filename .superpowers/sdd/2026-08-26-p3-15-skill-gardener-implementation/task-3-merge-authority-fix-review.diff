@@ -1,0 +1,95 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
+index 269b927..64da43d 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-3-report.md
+@@ -27,10 +27,17 @@ Result: **28 passed**.
+ ## Review fixes
+ - Prioritized measured-negative issues across mixed findings so recommendations remain review-only.
+ - Archive authorization now requires the complete current issue set for the current skill/hash.
+ - Rejected self-survivors and required replacement capability to bind to a current artifact hash or recomputed normalized identity.
+ - Corrected merge/supersede delegation metadata to the existing lifecycle/promotion primitive.
+ - Derived lifecycle state from the resolved directory and require production-safety evidence whenever path or frontmatter indicates active.
+ 
+ Focused test result after fixes: **32 passed**.
+ 
+ Additional implementation commit: `cd08377 fix(gardener): close authorization review gaps`.
++
++## Final authority correction
++- `merge` delegates to the existing `skill-lifecycle/content` path.
++- `supersede` delegates to the existing `lifecycle/promotion` primitive.
++- Added a focused successful merge authorization assertion; no delegated action executes.
++
++Focused test result after correction: **33 passed**.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index d507025..c82ea5a 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -1483,21 +1483,21 @@ class SkillGardener:
+             if not isinstance(target, dict):
+                 raise BrainError("reversible target is required")
+             if target.get("skill_name") != name or target.get("content_hash") != current_hash:
+                 raise BrainError("reversible target is stale")
+ 
+         authority = {
+             "keep": "record-only",
+             "no_action": "record-only",
+             "repair": "skill-development/evaluation",
+             "narrow": "skill-development/evaluation",
+-            "merge": "lifecycle/promotion",
++            "merge": "skill-lifecycle/content",
+             "supersede": "lifecycle/promotion",
+             "demote": "promotion.demote",
+             "hide": "lifecycle-visibility/routing",
+             "archive_retire": "gardener.archive_retire",
+         }[action]
+         created_at = datetime.now(UTC).isoformat()
+         authorization_id = "authorization-" + hashlib.sha256(
+             f"{name}|{current_hash}|{action}|{created_at}|{time.time_ns()}".encode()
+         ).hexdigest()[:16]
+         record: dict[str, Any] = {
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index 04b59fa..78612ad 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -666,10 +666,41 @@ def test_merge_rejects_unbound_stale_survivor_artifact(brain_home):
+     }
+     with pytest.raises(BrainError, match="capability"):
+         gardener.authorize_maintenance(
+             recommendation,
+             actor="owner-1",
+             approval_ref="approval:1",
+             non_regression_ref="verification:1",
+             rollback_ref="rollback:1",
+             replacement=replacement,
+         )
++
++
++def test_merge_authorization_delegates_content_lifecycle(brain_home):
++    source = _make_skill(brain_home, "merge-source-valid", "shadow")
++    _make_skill(brain_home, "merge-survivor-valid", "shadow")
++    _write_binding(source, {"owner": "owner-1"})
++    gardener = SkillGardener(brain_home)
++    issue = next(
++        issue
++        for issue in gardener.observe_portfolio()["issues"]
++        if issue["skill_name"] == "merge-source-valid"
++        and issue["condition_code"] == "exact_duplicate"
++    )
++    capability_ref = next(
++        ref for ref in issue["evidence_refs"] if ref.startswith("capability:")
++    )
++    recommendation = gardener.recommend_maintenance(issue)
++    result = gardener.authorize_maintenance(
++        recommendation,
++        actor="owner-1",
++        approval_ref="approval:1",
++        non_regression_ref="verification:1",
++        rollback_ref="rollback:1",
++        replacement={
++            "skill_name": "merge-survivor-valid",
++            "skill_version": "1",
++            "capability_hash": capability_ref.removeprefix("capability:"),
++        },
++    )
++    assert result["authority"] == "skill-lifecycle/content"
++    assert result["action_executed"] is False

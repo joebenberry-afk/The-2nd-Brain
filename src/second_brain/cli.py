@@ -15,11 +15,13 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import cast
 
 from . import (
     __version__,
     artifacts,
+    capsule_runtime,
     cerebellum,
     credit,
     crossmodel,
@@ -29,17 +31,20 @@ from . import (
     episodes,
     frontier,
     governor,
+    handoff,
     immune,
     monitor,
     paths,
     plasticity,
     promotion,
+    radar,
     reconsolidation,
     registry,
     risk,
     router,
     scout,
     semantic,
+    simplification,
     skillforge,
     sleep,
     verify,
@@ -71,7 +76,11 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--force", action="store_true", help="initialize even if the directory is non-empty"
     )
-    sub.add_parser("doctor", parents=[home_parent], help="run health checks")
+    doctor_parser = sub.add_parser("doctor", parents=[home_parent], help="run health checks")
+    doctor_parser.add_argument("--repo", type=Path, default=None)
+    doctor_parser.add_argument("--session", dest="session_id", default=None)
+    doctor_parser.add_argument("--json", action="store_true")
+    doctor_parser.add_argument("--out", type=Path, default=None)
     sub.add_parser("status", parents=[home_parent], help="show Brain status summary")
 
     pa = sub.add_parser("project", parents=[home_parent], help="project registry")
@@ -112,6 +121,13 @@ def _parser() -> argparse.ArgumentParser:
 
     cap = sub.add_parser("capsule", parents=[home_parent], help="Active State Capsule (Phase 4)")
     cps = cap.add_subparsers(dest="capsule_command", required=True)
+    censure = cps.add_parser("ensure", parents=[home_parent], help="create or bind a capsule")
+    censure.add_argument("session_id")
+    censure.add_argument("objective")
+    censure.add_argument("--next-action", default=None)
+    censure.add_argument("--task-mode", default="STANDARD")
+    censure.add_argument("--risk", default="MEDIUM")
+    censure.add_argument("--json", action="store_true")
     cinit = cps.add_parser("init", parents=[home_parent], help="create a capsule")
     cinit.add_argument("session_id")
     cinit.add_argument("objective")
@@ -124,6 +140,8 @@ def _parser() -> argparse.ArgumentParser:
     cupd.add_argument("--next-action", default=None)
     cupd.add_argument("--task-mode", default=None)
     cupd.add_argument("--risk", default=None)
+    cupd.add_argument("--json", action="store_true")
+    cupd.add_argument("--verification-json", default=None)
     for name, dest in (
         ("--add-constraint", "constraints"),
         ("--add-fact", "confirmed_facts"),
@@ -158,6 +176,64 @@ def _parser() -> argparse.ArgumentParser:
     rs.add_parser(
         "check", parents=[home_parent], help="fail if material requirements are unverified"
     ).add_argument("session_id")
+    ho = sub.add_parser(
+        "handoff",
+        parents=[home_parent],
+        help="Brain Handoff Envelope: bounded cross-harness transfer (P3.17)",
+    )
+    hos = ho.add_subparsers(dest="handoff_command", required=True)
+    hcreate = hos.add_parser(
+        "create", parents=[home_parent], help="create a canonical bounded handoff envelope"
+    )
+    hcreate.add_argument("session_id")
+    hcreate.add_argument("--source-harness", required=True)
+    hcreate.add_argument("--target-harness", default="")
+    hcreate.add_argument("--target-role", default="")
+    hcreate.add_argument("--source-task-id", default="")
+    hcreate.add_argument("--source-role", default="")
+    hcreate.add_argument("--project", dest="project_id", default="")
+    hcreate.add_argument("--context-ref", dest="context_refs", action="append", default=None)
+    hcreate.add_argument("--artifact-ref", dest="artifact_refs", action="append", default=None)
+    hcreate.add_argument("--evidence-ref", dest="evidence_refs", action="append", default=None)
+    hcreate.add_argument(
+        "--unavailable-evidence", dest="unavailable_evidence", action="append", default=None
+    )
+    hcreate.add_argument("--json", action="store_true")
+    hread = hos.add_parser(
+        "read", parents=[home_parent], help="validate + losslessly recover a handoff envelope"
+    )
+    hread.add_argument("envelope_path", type=Path)
+    hread.add_argument("--project", dest="project_id", default=None)
+    hread.add_argument("--allow-stale", action="store_true")
+    simp = sub.add_parser(
+        "simplification",
+        parents=[home_parent],
+        help="Simplification Review (P3.5)",
+    )
+    simps = simp.add_subparsers(dest="simplification_command", required=True)
+    srev = simps.add_parser("review", parents=[home_parent], help="record one bounded review")
+    srev.add_argument("--project-root", type=Path, required=True)
+    srev.add_argument("--project", dest="project_id", required=True)
+    srev.add_argument("--session", dest="session_id", required=True)
+    srev.add_argument("--task-id", required=True)
+    srev.add_argument("--review-id", required=True)
+    srev.add_argument(
+        "--outcome",
+        choices=[item.value for item in simplification.SimplificationOutcome],
+        required=True,
+    )
+    srev.add_argument("--reason-code", required=True)
+    srev.add_argument("--affected-hash", action="append", default=[])
+    srev.add_argument("--changed-hash", action="append", default=[])
+    srev.add_argument("--deferred-hash", action="append", default=[])
+    srev.add_argument("--debt-ref", default=None)
+    srev.add_argument(
+        "--verification",
+        choices=["passed", "failed", "blocked", "not_run"],
+        default="passed",
+    )
+    srev.add_argument("--metric", action="append", default=[], help="key=value metric")
+    srev.add_argument("--json", action="store_true")
 
     rl = sub.add_parser("read-ledger", parents=[home_parent], help="Read Ledger (Phase 4)")
     rls = rl.add_subparsers(dest="read_ledger_command", required=True)
@@ -218,6 +294,16 @@ def _parser() -> argparse.ArgumentParser:
         parents=[home_parent],
         help="Claude Code hook adapter: SessionStart/PreCompact/Stop JSON on stdin -> stdout",
     )
+    ais.add_parser(
+        "hermes-hook",
+        parents=[home_parent],
+        help="Hermes plugin adapter: lifecycle JSON on stdin -> stdout",
+    )
+    ais.add_parser(
+        "omp-routing",
+        parents=[home_parent],
+        help="OMP model-routing adapter: bounded JSON on stdin -> JSON on stdout",
+    )
     awb = ais.add_parser(
         "writeback", parents=[home_parent], help="P0-G9 write-back: create an outcome candidate"
     )
@@ -244,6 +330,32 @@ def _parser() -> argparse.ArgumentParser:
         help="record one orchestration counters event from JSON stdin; computes delegation_purity",
     )
     orec.add_argument("--session", default=None, help="session id for the telemetry file name")
+
+    stop = sub.add_parser(
+        "stop", parents=[home_parent], help="P3.6 bounded STOP decision and evidence"
+    )
+    stops = stop.add_subparsers(dest="stop_command", required=True)
+    sdecide = stops.add_parser("decide", parents=[home_parent], help="evaluate and record STOP")
+    sdecide.add_argument("--session", dest="host_session_id", required=True)
+    sdecide.add_argument("--task-id", required=True)
+    sdecide.add_argument("--parent-session-id", default="")
+    sdecide.add_argument("--worker-session-id", default="")
+    sdecide.add_argument("--stop-id", required=True)
+    sdecide.add_argument("--reason-code", required=True)
+    sdecide.add_argument("--triggering-condition", required=True)
+    sdecide.add_argument(
+        "--verification-state",
+        choices=("passed", "failed", "blocked", "unverified"),
+        required=True,
+    )
+    sdecide.add_argument(
+        "--completion-condition-state",
+        choices=("satisfied", "failed", "blocked", "unresolved"),
+        required=True,
+    )
+    sdecide.add_argument("--final-substantive-event", required=True)
+    sdecide.add_argument("--gate-file", type=Path, default=None)
+    sdecide.add_argument("--json", action="store_true")
 
     led = sub.add_parser(
         "ledger", parents=[home_parent], help="P2 session ledger (plan §9/§9.10; Phase G)"
@@ -384,6 +496,25 @@ def _parser() -> argparse.ArgumentParser:
         "resulting risk level (plan §10; config/verification.toml [ladder])",
     )
 
+    radar_parser = sub.add_parser(
+        "radar", parents=[home_parent], help="improvement radar (P3.10)"
+    )
+    radar_sub = radar_parser.add_subparsers(dest="radar_command", required=True)
+    robs = radar_sub.add_parser(
+        "observe", parents=[home_parent], help="observe one telemetry session"
+    )
+    robs.add_argument("session_id")
+    robs.add_argument("--project-id", required=True)
+    robs.add_argument("--repo", type=Path, required=True)
+    robs.add_argument("--task-id", default=None)
+    robs.add_argument("--out", type=Path, default=None)
+    robs.add_argument("--json", action="store_true")
+    rval = radar_sub.add_parser(
+        "validate", parents=[home_parent], help="validate candidate telemetry evidence"
+    )
+    rval.add_argument("candidate_id")
+    rval.add_argument("--json", action="store_true")
+
     vf = sub.add_parser("verify", parents=[home_parent], help="intent verifier brief (Phase 7)")
     vfs = vf.add_subparsers(dest="verify_command", required=True)
     vbuild = vfs.add_parser(
@@ -391,6 +522,54 @@ def _parser() -> argparse.ArgumentParser:
     )
     vbuild.add_argument("session_id")
     vbuild.add_argument("repo", type=Path)
+    vgate = vfs.add_parser(
+        "gate", parents=[home_parent], help="evaluate the risk-adaptive completion gate"
+    )
+    vgate.add_argument("session_id")
+    vgate.add_argument("repo", type=Path)
+    vgate.add_argument("--file", dest="files", action="append", default=[])
+    vgate.add_argument("--criticality", choices=risk.RISK_LEVELS, default=None)
+    vgate.add_argument("--action", action="append", default=[], metavar="ACTION=STATE")
+    vgate.add_argument(
+        "--approval-state",
+        choices=("not_required", "required", "approved"),
+        default="not_required",
+    )
+    vgate.add_argument("--task-id", default="")
+    vgate.add_argument("--parent-session-id", default="")
+    vgate.add_argument("--worker-session-id", default="")
+    vgate.add_argument("--verification-file", type=Path, default=None)
+    vgate.add_argument("--task-hash", default="")
+    vgate.add_argument("--requirements-hash", default="")
+    vgate.add_argument("--diff-hash", default="")
+    vgate.add_argument("--evidence-set-hash", default="")
+    vgate.add_argument("--environment-file", type=Path, default=None)
+    vgate.add_argument("--environment-required", action="store_true")
+    vgate.add_argument("--out", type=Path, default=None)
+    vgate.add_argument("--json", action="store_true")
+    vind = vfs.add_parser(
+        "independent",
+        parents=[home_parent],
+        help="record one bounded fresh verifier verdict",
+    )
+    vind.add_argument("--task-file", type=Path, default=None)
+    vind.add_argument("--requirements-file", type=Path, default=None)
+    vind.add_argument("--diff-file", type=Path, default=None)
+    vind.add_argument("--evidence-file", type=Path, default=None)
+    vind.add_argument("--response-file", type=Path, required=True)
+    vind.add_argument("--verification-id", required=True)
+    vind.add_argument("--task-id", required=True)
+    vind.add_argument("--verifier-session-id", required=True)
+    vind.add_argument("--implementation-session-id", required=True)
+    vind.add_argument("--task-hash", required=True)
+    vind.add_argument("--requirements-hash", required=True)
+    vind.add_argument("--diff-hash", required=True)
+    vind.add_argument("--evidence-set-hash", required=True)
+    vind.add_argument("--failed-requirement-id", action="append", default=[])
+    vind.add_argument("--unresolved-requirement-id", action="append", default=[])
+    vind.add_argument("--out", type=Path, required=True)
+    vind.add_argument("--json", action="store_true")
+
 
     envp = sub.add_parser("env", parents=[home_parent], help="environment steward (Phase 8)")
     eps = envp.add_subparsers(dest="env_command", required=True)
@@ -400,6 +579,24 @@ def _parser() -> argparse.ArgumentParser:
     esnap.add_argument("repo", type=Path)
     esnap.add_argument("--session", dest="session_id", default=None)
     esnap.add_argument("--json", action="store_true", dest="as_json")
+    eassess = eps.add_parser(
+        "assess", parents=[home_parent], help="capture bounded Environment Steward evidence"
+    )
+    eassess.add_argument("repo", type=Path)
+    eassess.add_argument("--session", dest="session_id", required=True)
+    eassess.add_argument("--task-id", default=None)
+    eassess.add_argument(
+        "--phase",
+        choices=("session_start", "task_boundary", "mutation", "doctor", "shutdown"),
+        default="session_start",
+    )
+    eassess.add_argument("--expected-field", action="append", default=[])
+    eassess.add_argument("--requested-change", action="append", default=[])
+    eassess.add_argument(
+        "--mutation-state", choices=("observed", "failed", "partial"), default="observed"
+    )
+    eassess.add_argument("--json", action="store_true", dest="as_json")
+    eassess.add_argument("--out", type=Path, default=None)
 
     pr = sub.add_parser("processes", parents=[home_parent], help="process ownership (Phase 8)")
     prs = pr.add_subparsers(dest="processes_command", required=True)
@@ -1232,8 +1429,28 @@ def cmd_init(args) -> int:
 
 
 def cmd_doctor(args) -> int:
-    result = doctor_mod.run_doctor(_home(args))
-    print(doctor_mod.format_result(result))
+    import json
+
+    result = doctor_mod.run_doctor(
+        _home(args),
+        repo=args.repo,
+        session_id=args.session_id,
+    )
+    payload = {
+        "home": str(result.home),
+        "failed": result.failed,
+        "warnings": [check.name for check in result.warnings],
+        "checks": [
+            {"name": check.name, "status": check.status, "detail": check.detail}
+            for check in result.checks
+        ],
+    }
+    if args.out is not None:
+        args.out.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(doctor_mod.format_result(result))
     return 1 if result.failed else 0
 
 
@@ -1362,23 +1579,268 @@ def cmd_risk(args) -> int:
     return 0
 
 
+def cmd_radar(args) -> int:
+    import json
+
+    home = _home(args)
+    detector = radar.ImprovementRadar(home)
+    if args.radar_command == "observe":
+        started = perf_counter()
+        candidates = detector.observe_session(
+            args.session_id,
+            project_id=args.project_id,
+            task_id=args.task_id,
+        )
+        payload = {
+            "session_id": args.session_id,
+            "project_id": args.project_id,
+            "repo": str(args.repo.resolve()),
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+            "radar_overhead_ms": round((perf_counter() - started) * 1000, 3),
+        }
+        if args.out is not None:
+            args.out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    else:
+        payload = detector.validate_candidate(args.candidate_id)
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(payload)
+    return 0
+
+
 def cmd_verify(args) -> int:
     home = _home(args)
-    path = verify.build_verifier_brief(home, args.session_id, args.repo)
-    print(f"Verifier brief: {path}")
-    return 0
+    if args.verify_command == "build-brief":
+        path = verify.build_verifier_brief(home, args.session_id, args.repo)
+        print(f"Verifier brief: {path}")
+        return 0
+    if args.verify_command == "independent":
+        import json
+
+        from . import contracts, fresh_verifier, ledger
+
+        raw_response = args.response_file.read_text(encoding="utf-8")
+        if len(raw_response) > 8192:
+            raise BrainError("independent verifier response exceeds 8192 characters")
+        file_args = {
+            "task_hash": args.task_file,
+            "requirements_hash": args.requirements_file,
+            "diff_hash": args.diff_file,
+            "evidence_set_hash": args.evidence_file,
+        }
+        for field, path in file_args.items():
+            if path is None:
+                continue
+            try:
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise BrainError(f"independent verifier evidence file unavailable: {path}") from exc
+            supplied = getattr(args, field)
+            if supplied and supplied != actual:
+                raise BrainError(f"independent verifier hash mismatch: {field}")
+            setattr(args, field, actual)
+        result = fresh_verifier.bounded_independent_verification(
+            raw_response=raw_response,
+            verification_id=args.verification_id,
+            task_id=args.task_id,
+            verifier_session_id=args.verifier_session_id,
+            implementation_session_id=args.implementation_session_id,
+            task_hash=args.task_hash,
+            requirements_hash=args.requirements_hash,
+            diff_hash=args.diff_hash,
+            evidence_set_hash=args.evidence_set_hash,
+            failed_requirement_ids=args.failed_requirement_id,
+            unresolved_requirement_ids=args.unresolved_requirement_id,
+        )
+        event = contracts.BrainLifecycleEvent(
+            seq=0,
+            event_id=f"independent-verification-{args.verification_id}",
+            internal_session_id=ledger.internal_session_id(args.verifier_session_id),
+            agent_id=args.verifier_session_id,
+            event_type=contracts.LifecycleEventType.INDEPENDENT_VERIFICATION,
+            timestamp=datetime.now(UTC).isoformat(),
+            surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
+            ignorable=False,
+            payload=result,
+        )
+        with ledger.LedgerStore(home, args.verifier_session_id).open(create=True) as store:
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=ledger.internal_session_id(args.verifier_session_id),
+                    host="prime",
+                    host_session_id=args.verifier_session_id,
+                    project_id="",
+                    created_at=event.timestamp,
+                    status="active",
+                    pinned=False,
+                    schema_version=contracts.LEDGER_SCHEMA_VERSION,
+                )
+            )
+            result = {**result, "sequence": store.append_events([event])[0]}
+        args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        if args.json:
+            print(contracts.canonical_json(result))
+        else:
+            print(f"{result['verdict']} ({result['freshness']})")
+        return 0 if result["verdict"] == "PASS" and result["freshness"] == "fresh" else 1
+    if args.verify_command == "gate":
+        import json
+
+        from . import contracts, ledger
+
+        action_states: dict[str, str] = {}
+        for item in args.action:
+            action, separator, state = item.partition("=")
+            if (
+                not separator
+                or not action
+                or state not in {"passed", "failed", "unresolved"}
+            ):
+                raise BrainError(
+                    f"invalid --action {item!r}; "
+                    "expected ACTION=passed|failed|unresolved"
+                )
+            action_states[action] = state
+        independent_verification = None
+        if args.verification_file is not None:
+            try:
+                loaded = json.loads(args.verification_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BrainError(
+                    f"invalid independent verification file: {args.verification_file}"
+                ) from exc
+            if not isinstance(loaded, dict):
+                raise BrainError(
+                    f"invalid independent verification file: {args.verification_file}"
+                )
+            independent_verification = loaded
+        environment_evidence = None
+        if args.environment_file is not None:
+            try:
+                loaded = json.loads(args.environment_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise BrainError(
+                    f"invalid environment evidence file: {args.environment_file}"
+                ) from exc
+            if not isinstance(loaded, dict):
+                raise BrainError(f"invalid environment evidence file: {args.environment_file}")
+            environment_evidence = loaded
+        result = verify.evaluate_accuracy_gate(
+            home,
+            args.session_id,
+            args.repo,
+            args.files,
+            action_states=action_states,
+            user_criticality=args.criticality,
+            approval_state=args.approval_state,
+            task_id=args.task_id,
+            parent_session_id=args.parent_session_id,
+            worker_session_id=args.worker_session_id,
+            independent_verification=independent_verification,
+            task_hash=args.task_hash,
+            requirements_hash=args.requirements_hash,
+            diff_hash=args.diff_hash,
+            evidence_set_hash=args.evidence_set_hash,
+            environment_evidence=environment_evidence,
+            environment_required=args.environment_required,
+        )
+        event = contracts.BrainLifecycleEvent(
+            seq=0,
+            event_id=f"accuracy-gate-{result['accuracy_gate_id']}",
+            internal_session_id=ledger.internal_session_id(args.session_id),
+            agent_id=args.worker_session_id or args.session_id,
+            event_type=contracts.LifecycleEventType.ACCURACY_GATE,
+            timestamp=datetime.now(UTC).isoformat(),
+            surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
+            ignorable=False,
+            payload=result,
+        )
+        with ledger.LedgerStore(home, args.session_id).open(create=True) as store:
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=ledger.internal_session_id(args.session_id),
+                    host="prime",
+                    host_session_id=args.session_id,
+                    project_id="",
+                    created_at=event.timestamp,
+                    status="active",
+                    pinned=False,
+                    schema_version=contracts.LEDGER_SCHEMA_VERSION,
+                )
+            )
+            sequence = store.append_events([event])[0]
+        result = {**result, "sequence": sequence}
+        if args.out is not None:
+            args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        if args.json:
+            print(contracts.canonical_json(result))
+        else:
+            print(
+                f"{result['risk_level']}: "
+                f"{'allowed' if result['completion_allowed'] else 'blocked'} "
+                f"({result['decision_reason']})"
+            )
+        return 0 if result["completion_allowed"] else 1
+    return 2
 
 
 def cmd_env(args) -> int:
     import json
 
     home = _home(args)
-    snap = envsteward.snapshot(home, args.repo, session_id=args.session_id)
-    if args.as_json:
-        print(json.dumps(snap, indent=1, default=str))
+    if args.env_command == "assess":
+        result = envsteward.assess(
+            home,
+            args.repo,
+            session_id=args.session_id,
+            task_id=args.task_id,
+            phase=args.phase,
+            expected_fields=args.expected_field,
+            requested_changes=args.requested_change,
+            result_state=args.mutation_state,
+        )
     else:
-        for k, v in snap.items():
-            print(f"{k:18s} {v}")
+        result = envsteward.snapshot(home, args.repo, session_id=args.session_id)
+    if args.env_command == "assess" and db.db_path(home).exists():
+        import uuid
+
+        from . import contracts, ledger
+
+        timestamp = datetime.now(UTC).isoformat()
+        event = contracts.BrainLifecycleEvent(
+            seq=0,
+            event_id=f"environment-assessment-{uuid.uuid4()}",
+            internal_session_id=ledger.internal_session_id(args.session_id),
+            agent_id=args.session_id,
+            event_type=contracts.LifecycleEventType.ENVIRONMENT_ASSESSMENT,
+            timestamp=timestamp,
+            surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
+            ignorable=False,
+            payload=result,
+        )
+        with ledger.LedgerStore(home, args.session_id).open(create=True) as store:
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=ledger.internal_session_id(args.session_id),
+                    host="prime",
+                    host_session_id=args.session_id,
+                    project_id=str(result.get("project_id", "")),
+                    created_at=timestamp,
+                    status="active",
+                    pinned=False,
+                    schema_version=contracts.LEDGER_SCHEMA_VERSION,
+                )
+            )
+            result = {**result, "sequence": store.append_events([event])[0]}
+    if args.env_command == "assess" and args.out is not None:
+        args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    if args.as_json:
+        print(json.dumps(result, indent=1, default=str))
+    else:
+        for k, v in result.items():
+            print(f"{k:24s} {v}")
     return 0
 
 
@@ -2149,6 +2611,23 @@ def cmd_capsule(args) -> int:
     import json
 
     home = _home(args)
+    if args.capsule_command == "ensure":
+        result = capsule_runtime.ensure_capsule(
+            home,
+            args.session_id,
+            objective=args.objective,
+            next_action=args.next_action,
+            task_mode=args.task_mode,
+            risk=args.risk,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(
+                f"Capsule {'created' if result['changed'] else 'bound'}: "
+                f"{result['capsule_path']}"
+            )
+        return 0
     if args.capsule_command == "init":
         path = working_set.init_capsule(
             home,
@@ -2161,34 +2640,98 @@ def cmd_capsule(args) -> int:
         print(f"Capsule created: {path}")
         return 0
     if args.capsule_command == "update":
-        fields: dict = {}
-        for name, dest in (
-            ("objective", "objective"),
-            ("next_action", "next_action"),
-            ("task_mode", "task_mode"),
-            ("risk", "risk"),
-            ("constraints", "constraints"),
-            ("confirmed_facts", "confirmed_facts"),
-            ("current_hypotheses", "current_hypotheses"),
-            ("decisions_this_session", "decisions_this_session"),
-            ("files_touched", "files_touched"),
-            ("open_questions", "open_questions"),
-            ("brain_refs", "brain_refs"),
-            ("artifact_refs", "artifact_refs"),
+        verification = None
+        if args.verification_json is not None:
+            try:
+                verification = json.loads(args.verification_json)
+            except json.JSONDecodeError as exc:
+                print(f"brainctl: error: invalid verification JSON: {exc}", file=sys.stderr)
+                return 2
+            if not isinstance(verification, dict):
+                print("brainctl: error: verification JSON must be an object", file=sys.stderr)
+                return 2
+        result = capsule_runtime.update_capsule(
+            home,
+            args.session_id,
+            objective=args.objective,
+            next_action=args.next_action,
+            task_mode=args.task_mode,
+            risk=args.risk,
+            constraints=args.constraints,
+            facts=args.confirmed_facts,
+            hypotheses=args.current_hypotheses,
+            decisions=args.decisions_this_session,
+            files_touched=args.files_touched,
+            open_questions=args.open_questions,
+            brain_refs=args.brain_refs,
+            artifact_refs=args.artifact_refs,
+            verification=verification,
+        )
+        if not result["changed"] and not any(
+            getattr(args, name, None) is not None
+            for name in (
+                "objective",
+                "next_action",
+                "task_mode",
+                "risk",
+                "constraints",
+                "confirmed_facts",
+                "current_hypotheses",
+                "decisions_this_session",
+                "files_touched",
+                "open_questions",
+
+                "brain_refs",
+                "artifact_refs",
+                "verification_json",
+            )
         ):
-            value = getattr(args, dest, None)
-            if value is not None:
-                fields[name] = value
-        if not fields:
             print("brainctl: error: no update fields given", file=sys.stderr)
             return 2
-        working_set.update_capsule(home, args.session_id, **fields)
-        print("Capsule updated.")
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("Capsule updated." if result["changed"] else "Capsule unchanged.")
         return 0
     if args.capsule_command == "show":
         print(json.dumps(working_set.show_capsule(home, args.session_id), indent=2))
         return 0
     return 2
+def cmd_simplification(args) -> int:
+    import json
+
+    if args.simplification_command != "review":
+        return 2
+    metrics: dict[str, int | float] = {}
+    for raw in args.metric:
+        if "=" not in raw:
+            raise BrainError(f"invalid metric {raw!r}; expected key=value")
+        key, value = raw.split("=", 1)
+        try:
+            metrics[key] = float(value) if "." in value else int(value)
+        except ValueError as exc:
+            raise BrainError(f"invalid metric {raw!r}") from exc
+    review = simplification.SimplificationReview(
+        review_id=args.review_id,
+        project_id=args.project_id,
+        task_id=args.task_id,
+        session_id=args.session_id,
+        outcome=simplification.SimplificationOutcome(args.outcome),
+        reason_code=args.reason_code,
+        affected_hashes=args.affected_hash,
+        changed_hashes=args.changed_hash,
+        deferred_hashes=args.deferred_hash,
+        debt_ref=args.debt_ref,
+        verification=args.verification,
+        metrics=metrics,
+    )
+    result = simplification.record_review(_home(args), args.project_root, review)
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    else:
+        print(f"{result['outcome']} review {result['review_id']} recorded")
+    return 0
+
 
 
 def cmd_requirements(args) -> int:
@@ -2233,6 +2776,48 @@ def cmd_requirements(args) -> int:
                 f"  {entry['id']} [{entry['importance']}/{entry['status']}]: {entry['requirement']}"
             )
         return 1 if result["blocks"] else 0
+    return 2
+
+
+def cmd_handoff(args) -> int:
+    """Brain Handoff Envelope CLI: bounded, harness-neutral transfer (P3.17)."""
+    import json
+
+    home = _home(args)
+    if args.handoff_command == "create":
+        envelope, artifact = handoff.create_handoff_envelope(
+            home,
+            args.session_id,
+            source_harness=args.source_harness,
+            target_harness=args.target_harness,
+            target_role=args.target_role,
+            source_task_id=args.source_task_id,
+            source_role=args.source_role,
+            project_id=args.project_id,
+            context_refs=args.context_refs,
+            artifact_refs=args.artifact_refs,
+            evidence_refs=args.evidence_refs,
+            unavailable_evidence=args.unavailable_evidence,
+        )
+        if args.json:
+            print(json.dumps({
+                "envelope": envelope.to_dict(),
+                "markdown_path": artifact.artifact_path,
+                "envelope_bytes": envelope.envelope_bytes(),
+            }, indent=2, default=str))
+        else:
+            print(f"Handoff created: {envelope.handoff_id}")
+            print(f"  envelope ref: {artifact.envelope_ref}")
+            print(f"  markdown:     {artifact.artifact_path}")
+            print(f"  bytes:        {envelope.envelope_bytes()}")
+        return 0
+    if args.handoff_command == "read":
+        data = json.loads(args.envelope_path.read_text(encoding="utf-8"))
+        recovered = handoff.read_handoff_envelope(
+            home, data, expected_project_id=args.project_id, allow_stale=args.allow_stale
+        )
+        print(json.dumps(recovered, indent=2, default=str))
+        return 0
     return 2
 
 
@@ -2927,6 +3512,43 @@ def _cmd_claude_code_hook(home: Path) -> int:
     return 0
 
 
+def _cmd_hermes_hook(home: Path) -> int:
+    """Hermes plugin bridge over the existing Brain primitives.
+
+    The Hermes plugin is intentionally transport-only: it sends one bounded
+    JSON request to this command and receives one JSON response. Policy,
+    identity mapping, AutoInject, writeback, telemetry, and ledger operations
+    remain in the Brain adapter.
+    """
+    import json
+
+    from . import contracts, hermes_adapter
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else None
+    except Exception:
+        payload = None
+    response = hermes_adapter.handle_request(home, payload)
+    print(contracts.canonical_json(response))
+    return 0
+
+def _cmd_omp_routing(home: Path) -> int:
+    """OMP transport bridge; Brain owns all routing policy and selection."""
+    import json
+
+    from . import contracts, omp_adapter
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else None
+    except Exception:
+        payload = None
+    response = omp_adapter.handle_request(home, payload)
+    print(contracts.canonical_json(response))
+    return 0
+
+
 def _cmd_writeback(home: Path, args) -> int:
     """P0-G9 write-back: outcome candidate creation (fail-open JSON output)."""
     import json
@@ -3243,6 +3865,104 @@ def cmd_ledger(args) -> int:
         print(contracts.canonical_json(out))
         return 0
     return 2
+def cmd_stop(args) -> int:
+    """P3.6 STOP decision using the existing requirement ledger and ledger store."""
+    from . import contracts, ledger
+
+    home = _home(args)
+    import json
+
+    check = working_set.check_requirements(home, args.host_session_id)
+    gate: dict[str, object] | None = None
+    if args.gate_file is not None:
+        try:
+            parsed_gate = json.loads(args.gate_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BrainError(f"invalid accuracy gate file: {args.gate_file}") from exc
+        if not isinstance(parsed_gate, dict) or not isinstance(
+            parsed_gate.get("completion_allowed"), bool
+        ):
+            raise BrainError(f"invalid accuracy gate file: {args.gate_file}")
+        gate = parsed_gate
+    gate_blocked = gate is not None and gate["completion_allowed"] is False
+    gate_parent_session = str(gate.get("parent_session_id") or "") if gate else ""
+    gate_worker_session = str(gate.get("worker_session_id") or "") if gate else ""
+    verification_state = args.verification_state
+    completion_state = args.completion_condition_state
+    if check["blocks"]:
+        decision = "continue"
+        reason_code = "requirements_unresolved"
+    elif verification_state in {"failed", "blocked"} or completion_state in {"failed", "blocked"}:
+        decision = "stop"
+        reason_code = args.reason_code
+    elif gate_blocked:
+        decision = "continue"
+        reason_code = "accuracy_gate_blocked"
+    elif verification_state == "passed" and completion_state == "satisfied":
+        decision = "stop"
+        reason_code = args.reason_code
+    else:
+        decision = "continue"
+        reason_code = (
+            "verification_unresolved"
+            if verification_state != "passed"
+            else "completion_condition_unresolved"
+        )
+    continuation_forbidden = decision == "stop"
+    payload = {
+        "stop_id": args.stop_id,
+        "task_id": args.task_id,
+        "session_id": args.host_session_id,
+        "parent_session_id": args.parent_session_id or gate_parent_session,
+        "worker_session_id": args.worker_session_id or gate_worker_session,
+        "decision": decision,
+        "reason_code": reason_code,
+        "triggering_condition": args.triggering_condition,
+        "verification_state": verification_state,
+        "completion_condition_state": completion_state,
+        "final_substantive_event": args.final_substantive_event,
+        "material_total": check["material_total"],
+        "material_unverified": check["material_unverified"],
+        "continuation_forbidden": continuation_forbidden,
+        "accuracy_gate_id": gate.get("accuracy_gate_id") if gate else None,
+        "gate_risk_level": gate.get("risk_level") if gate else None,
+        "gate_ladder_id": gate.get("ladder_id") if gate else None,
+        "gate_completion_allowed": gate.get("completion_allowed") if gate else None,
+        "gate_decision_reason": gate.get("decision_reason") if gate else None,
+    }
+    event = contracts.BrainLifecycleEvent(
+        seq=0,
+        event_id=f"stop-{args.stop_id}",
+        internal_session_id=ledger.internal_session_id(args.host_session_id),
+        agent_id=args.worker_session_id or args.host_session_id,
+        event_type=contracts.LifecycleEventType.STOP_DECIDED,
+        timestamp=datetime.now(UTC).isoformat(),
+        surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
+        ignorable=False,
+        payload=payload,
+    )
+    with ledger.LedgerStore(home, args.host_session_id).open(create=True) as store:
+        store.create_session(
+            contracts.BrainSessionIdentity(
+                internal_session_id=ledger.internal_session_id(args.host_session_id),
+                host="prime",
+                host_session_id=args.host_session_id,
+                project_id="",
+                created_at=event.timestamp,
+                status="active",
+                pinned=False,
+                schema_version=contracts.LEDGER_SCHEMA_VERSION,
+            )
+        )
+        seq = store.append_events([event])[0]
+    payload = {**payload, "sequence": seq}
+    if args.json:
+        print(contracts.canonical_json(payload))
+    else:
+        print(f"{decision}: {reason_code}")
+    return 0
+
+
 
 
 def cmd_session(args) -> int:
@@ -3308,6 +4028,10 @@ def cmd_autoinject(args) -> int:
         return _cmd_antigravity_hook(home)
     if args.autoinject_command == "claude-code-hook":
         return _cmd_claude_code_hook(home)
+    if args.autoinject_command == "hermes-hook":
+        return _cmd_hermes_hook(home)
+    if args.autoinject_command == "omp-routing":
+        return _cmd_omp_routing(home)
     if args.autoinject_command == "writeback":
         return _cmd_writeback(home, args)
     if args.autoinject_command != "shadow":
@@ -4255,15 +4979,19 @@ def main(argv: list[str] | None = None) -> int:
         "episodes": cmd_episodes,
         "env": cmd_env,
         "processes": cmd_processes,
+        "radar": cmd_radar,
         "risk": cmd_risk,
         "verify": cmd_verify,
         "artifact": cmd_artifact,
+        "simplification": cmd_simplification,
         "requirements": cmd_requirements,
+        "handoff": cmd_handoff,
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
         "autoinject": cmd_autoinject,
         "orchestration": cmd_orchestration,
         "ledger": cmd_ledger,
+        "stop": cmd_stop,
         "session": cmd_session,
     }
     try:

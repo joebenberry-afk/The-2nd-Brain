@@ -11,6 +11,7 @@ destination conflicts are refused. Demotion (active -> anything, or via
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import UTC, datetime
@@ -86,17 +87,52 @@ def _frontier_binding_current(home: Path, skill_name: str) -> bool:
     return all(review.get(key) == value for key, value in binding.items())
 
 
+def _last_active_version(home: Path, skill_name: str) -> int | None:
+    """The version most recently promoted to active for this skill, or
+    None if it has never been active. Only active-bound versions constrain
+    future promotions; lifecycle moves toward active for a brand-new
+    candidate need not bump a version that has no prior release."""
+    records = [
+        r
+        for r in _read_records(home, skill_name)
+        if r.get("to_level") == "active" and isinstance(r.get("resulting_version"), int)
+    ]
+    if not records:
+        return None
+    records.sort(key=lambda r: r.get("ts", ""))
+    return records[-1]["resulting_version"]
+
+
+def _version_check(home: Path, skill_name: str) -> tuple[bool, str | None, int | None]:
+    """§119 version gate: the artifact must carry a valid positive integer
+    version, and it must strictly exceed any version this skill previously
+    reached active with."""
+    binding_artifact = skillforge.artifact_binding(home, skill_name)
+    raw = binding_artifact.get("artifact_version", "unversioned")
+    if raw == "unversioned":
+        return False, "version_missing", None
+    try:
+        candidate_version = int(raw)
+    except (TypeError, ValueError):
+        return False, "version_invalid", None
+    if candidate_version < 1:
+        return False, "version_invalid", None
+    previous = _last_active_version(home, skill_name)
+    if previous is not None and candidate_version <= previous:
+        return False, "version_not_incremented", candidate_version
+    return True, None, candidate_version
+
+
 def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
     evidence = _evidence_counts(home, skill_name)
     has_evidence = evidence["credit_events"] >= 1 or evidence["model_skill_outcomes"] >= 1
     verdict = _frontier_verdict(home, skill_name)
-    frontier_ok = verdict == "approve"
     rolled_back = any(
         record.get("policy_id") == f"skill-{skill_name}" for record in immune.rollback_log(home)
     )
     guards = {
         "evidence": has_evidence,
-        "frontier_approved": frontier_ok,
+        "frontier_approved": verdict == "approve",
         "immune_clear": not rolled_back,
         "frontier_binding_current": _frontier_binding_current(home, skill_name),
     }
@@ -106,6 +142,41 @@ def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
         "rolled_back": rolled_back,
         "frontier_binding_current": guards["frontier_binding_current"],
     }
+    binding = skillforge.candidate_binding(home, skill_name)
+    guards["bound"] = binding is not None
+    if binding is not None:
+        # §119 baseline-vs-candidate comparison: universal for every bound
+        # candidate source (Radar, frontier-evidence, or otherwise), not
+        # only Skill-Forge-originated ones.
+        candidate_path = skillforge.skill_path(home, skill_name)
+        if candidate_path is None:
+            raise BrainError(f"No skill {skill_name!r} found under lifecycle directories")
+        current_hash = skillforge.lifecycle_content_hash(candidate_path)
+        evaluation_path = candidate_path.parent / "evaluation.json"
+        try:
+            evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            evaluation = {}
+        evaluation_current = (
+            binding.get("evaluation_state") == "passed"
+            and binding.get("candidate_content_sha256") == current_hash
+            and evaluation.get("status") == "passed"
+            and evaluation.get("candidate_content_sha256") == current_hash
+        )
+        guards["evaluation"] = evaluation_current
+        details["evaluation_state"] = binding.get("evaluation_state")
+        details["evaluation_stale"] = (
+            binding.get("evaluation_state") == "passed" and not evaluation_current
+        )
+        # §119 owner: explicit, bounded, persisted with the binding.
+        owner = str(binding.get("owner") or "").strip()
+        guards["owner"] = bool(owner)
+        details["owner"] = owner or None
+        details["candidate_id"] = binding.get("candidate_id")
+    version_ok, version_issue, candidate_version = _version_check(home, skill_name)
+    guards["version"] = version_ok
+    details["version"] = candidate_version
+    details["version_issue"] = version_issue
     return guards, details
 
 
@@ -189,6 +260,11 @@ def promote(
     }
     if not demotion:
         guards, details = _guard_checks(home, skill_name)
+        if guards.get("evaluation") is False:
+            reason = (
+                "evaluation_stale" if details.get("evaluation_stale") else "evaluation_not_proven"
+            )
+            return {"promoted": False, "reason": reason, **details}
         if not guards["evidence"]:
             return {"promoted": False, "reason": "no_evidence", **details}
         if not guards["frontier_approved"]:
@@ -197,6 +273,16 @@ def promote(
             return {"promoted": False, "reason": "frontier_stale", **details}
         if guards["immune_clear"] is False:
             return {"promoted": False, "reason": "rolled_back", **details}
+        if not guards["bound"]:
+            return {"promoted": False, "reason": "no_promotion_binding", **details}
+        if not guards.get("owner", False):
+            return {"promoted": False, "reason": "no_owner", **details}
+        if not guards["version"]:
+            return {
+                "promoted": False,
+                "reason": details.get("version_issue") or "version_invalid",
+                **details,
+            }
 
         if to_level == "active":
             ready = skillforge.validate_execution_ready(
@@ -219,15 +305,25 @@ def promote(
             else {"promoted": False, "reason": "move_failed", "detail": str(exc)}
         )
 
+    ts = _utcnow()
+    promotion_id = (
+        "promotion-" + hashlib.sha256(f"{skill_name}|{ts}|{session_id}".encode()).hexdigest()[:16]
+    )
     record = {
+        "promotion_id": promotion_id,
         "skill_name": skill_name,
         "from_level": from_level,
         "to_level": to_level,
-        "ts": _utcnow(),
+        "ts": ts,
         "session_id": session_id,
         "guards": guards,
         "frontier_verdict": details["frontier_verdict"],
         "evidence_counts": details["evidence_counts"],
+        "owner": details.get("owner"),
+        "candidate_id": details.get("candidate_id"),
+        "baseline_comparison": details.get("evaluation_state"),
+        "rollback_clear": not details.get("rolled_back", False),
+        "resulting_version": details.get("version") if not demotion else None,
         "reason": "demoted-via-promote" if demotion else None,
     }
     record_path = _write_record(home, record)
@@ -301,7 +397,7 @@ def promotion_status(home: Path, skill_name: str | None = None) -> dict:
     """Current level per skill + promotion history records."""
     levels: dict[str, str] = {}
     for level in LEVELS:
-        directory = _skills_dir(home) / level
+        directory = _skill_dir(home, level)
         if directory.is_dir():
             for entry in sorted(directory.iterdir()):
                 if entry.is_dir():

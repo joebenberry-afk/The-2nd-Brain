@@ -102,6 +102,32 @@ class LifecycleEventType(StrEnum):
     SESSION_FINALIZED = "session_finalized"
     TURN_END = "turn_end"
     AGENT_ENDED = "agent_ended"
+    TASK_CREATED = "task_created"
+    TASK_ASSIGNED = "task_assigned"
+    WORKER_STARTED = "worker_started"
+    WORKER_COMPLETED = "worker_completed"
+    WORKER_FAILED = "worker_failed"
+    WORKER_CANCELLED = "worker_cancelled"
+    RESULT_RETURNED = "result_returned"
+    RESULT_REVIEWED = "result_reviewed"
+    TASK_CONTEXT_RESOLVED = "task_context_resolved"
+    RESULT_CORRECTION_REQUESTED = "result_correction_requested"
+    RESULT_CORRECTED = "result_corrected"
+    SIMPLIFICATION_REVIEW = "simplification_review"
+    STOP_DECIDED = "stop_decided"
+    STOP_FINALIZED = "stop_finalized"
+    ACCURACY_GATE = "accuracy_gate"
+    INDEPENDENT_VERIFICATION = "independent_verification"
+    ENVIRONMENT_ASSESSMENT = "environment_assessment"
+
+
+class SimplificationReviewOutcome(StrEnum):
+    """One bounded P3.5 review outcome."""
+
+    SIMPLIFY = "simplify"
+    REUSE = "reuse"
+    DEFER = "defer"
+    NO_ACTION = "no_action"
 
 
 class SurfaceVisibility(StrEnum):
@@ -190,10 +216,7 @@ def _coerce(hint: Any, value: Any) -> Any:
         return [_coerce(arg, v) for v in value]
     if origin is tuple and value is not None:
         args = typing.get_args(hint)
-        coerced = (
-            _coerce(args[i] if i < len(args) else args[-1], v)
-            for i, v in enumerate(value)
-        )
+        coerced = (_coerce(args[i] if i < len(args) else args[-1], v) for i, v in enumerate(value))
         return tuple(coerced)
     if isinstance(hint, type) and issubclass(hint, Enum):
         return hint(value)
@@ -272,6 +295,277 @@ class TaskIdentity:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> TaskIdentity:
         return _from_dict(cls, data)
+
+
+# Harness-neutral delegation packets. These limits are deliberately small: the
+# packet is a work description, not a transcript or a prompt cache.
+WORKER_PACKET_MAX_BYTES = 16_384
+WORKER_RESULT_MAX_BYTES = 16_384
+WORKER_TEXT_MAX_CHARS = 4_096
+WORKER_LIST_MAX_ITEMS = 16
+WORKER_REF_MAX_CHARS = 512
+WORKER_CONTEXT_MAX_CHARS = 2_048
+WORKER_CONTEXT_MAX_TOTAL_CHARS = 8_192
+WORKER_MAX_FANOUT = 2
+WORKER_DEFAULT_FANOUT = 1
+WORKER_MAX_DEPTH = 1
+WORKER_MAX_CORRECTION_ATTEMPTS = 3
+COORDINATOR_ROLES = frozenset({"integrator", "driver", "orchestrator", "hard_orchestrator"})
+WORKER_ROLES = frozenset({"dev", "validator", "worker"})
+
+
+class WorkerPacketError(BrainError):
+    """Deterministic malformed task/result error with a machine-readable code."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message or code}")
+
+
+def _check_worker_text(value: Any, field_name: str, limit: int = WORKER_TEXT_MAX_CHARS) -> None:
+    if not isinstance(value, str) or not value or len(value) > limit:
+        raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
+
+
+def _check_worker_list(values: Any, field_name: str) -> None:
+    if not isinstance(values, list) or len(values) > WORKER_LIST_MAX_ITEMS:
+        raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
+    if any(
+        not isinstance(item, str) or not item or len(item) > WORKER_REF_MAX_CHARS for item in values
+    ):
+        raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
+
+
+def _check_sha256(value: Any, field_name: str, code: str = "MALFORMED_RESULT") -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value.lower())
+    ):
+        raise WorkerPacketError(code, f"invalid {field_name}")
+
+
+@dataclass(frozen=True)
+class WorkerTaskPacket:
+    task_id: str
+    parent_session_id: str
+    driver_identity: AgentIdentity
+    requested_role: str
+    objective: str
+    scope: str
+    constraints: list[str] = field(default_factory=list)
+    evidence_requirements: list[str] = field(default_factory=list)
+    completion_condition: str = ""
+    context_refs: list[str] = field(default_factory=list)
+    fanout_index: int = 0
+    fanout: int = WORKER_DEFAULT_FANOUT
+    depth: int = 0
+    project_id: str = ""
+    repo_root: str = ""
+
+    def validate(self) -> WorkerTaskPacket:
+        for name in ("task_id", "parent_session_id", "requested_role", "project_id", "repo_root"):
+            _check_worker_text(getattr(self, name), name, WORKER_REF_MAX_CHARS)
+        for name in ("objective", "scope", "completion_condition"):
+            _check_worker_text(getattr(self, name), name)
+        _check_worker_list(self.constraints, "constraints")
+        _check_worker_list(self.evidence_requirements, "evidence_requirements")
+        _check_worker_list(self.context_refs, "context_refs")
+        if self.driver_identity.role_profile not in COORDINATOR_ROLES:
+            raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "driver role is not authorized")
+        if self.requested_role not in WORKER_ROLES:
+            raise WorkerPacketError("UNAUTHORIZED_WORKER", "requested role is not a worker role")
+        if self.fanout != WORKER_DEFAULT_FANOUT and not 1 <= self.fanout <= WORKER_MAX_FANOUT:
+            raise WorkerPacketError("FANOUT_EXCEEDED", "fanout outside bounded range")
+        if not 0 <= self.fanout_index < self.fanout or self.fanout > WORKER_MAX_FANOUT:
+            raise WorkerPacketError("FANOUT_EXCEEDED", "fanout index outside bounded range")
+        if self.depth < 0 or self.depth > WORKER_MAX_DEPTH:
+            raise WorkerPacketError("DEPTH_EXCEEDED", "delegation depth exceeded")
+        if (
+            self.driver_identity.parent_agent_id is not None
+            and self.driver_identity.role_profile in WORKER_ROLES
+        ):
+            raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "worker cannot create child tasks")
+        if len(self.canonical_json().encode("utf-8")) > WORKER_PACKET_MAX_BYTES:
+            raise WorkerPacketError("TASK_TOO_LARGE", "task packet exceeds byte bound")
+        return self
+
+    def canonical_json(self) -> str:
+        return canonical_json(self)
+
+    def canonical_hash(self) -> str:
+        """sha256 of this packet's canonical wire representation."""
+        return stable_content_hash(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> WorkerTaskPacket:
+        try:
+            values = dict(data)
+            values["driver_identity"] = AgentIdentity.from_dict(values["driver_identity"])
+            packet = _from_dict(cls, values)
+            packet.validate()
+            return packet
+        except WorkerPacketError:
+            raise
+        except Exception as exc:
+            raise WorkerPacketError("MALFORMED_TASK") from exc
+
+
+@dataclass(frozen=True)
+class WorkerResultPacket:
+    task_id: str
+    worker_identity: AgentIdentity
+    status: str
+    summary: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+    files_changed: list[str] = field(default_factory=list)
+    artifacts: list[str] = field(default_factory=list)
+    tests_run: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    failure_code: str | None = None
+    retryable: bool = False
+    correction_of_hash: str | None = None
+    correction_attempt: int = 0
+
+    def validate(self) -> WorkerResultPacket:
+        _check_worker_text(self.task_id, "task_id", WORKER_REF_MAX_CHARS)
+        if self.worker_identity.role_profile not in WORKER_ROLES:
+            raise WorkerPacketError("UNAUTHORIZED_WORKER", "result identity is not a worker role")
+        if self.status not in {"completed", "failed", "cancelled"}:
+            raise WorkerPacketError("MALFORMED_RESULT", "invalid result status")
+        if not isinstance(self.summary, str) or len(self.summary) > WORKER_TEXT_MAX_CHARS:
+            raise WorkerPacketError("MALFORMED_RESULT", "invalid summary")
+        for name in ("evidence_refs", "files_changed", "artifacts", "tests_run", "limitations"):
+            try:
+                _check_worker_list(getattr(self, name), name)
+            except WorkerPacketError as exc:
+                raise WorkerPacketError("MALFORMED_RESULT", str(exc)) from exc
+        if self.status == "failed" and not self.failure_code:
+            raise WorkerPacketError("MALFORMED_FAILURE", "failed result requires failure_code")
+        if self.status != "failed" and self.failure_code is not None:
+            raise WorkerPacketError(
+                "MALFORMED_RESULT", "failure_code only belongs to failed results"
+            )
+        if not isinstance(self.retryable, bool):
+            raise WorkerPacketError("MALFORMED_RESULT", "retryable must be boolean")
+        if self.correction_of_hash is not None:
+            _check_sha256(self.correction_of_hash, "correction_of_hash")
+            if not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS:
+                raise WorkerPacketError("MALFORMED_RESULT", "invalid correction_attempt")
+        elif self.correction_attempt != 0:
+            raise WorkerPacketError(
+                "MALFORMED_RESULT", "correction_attempt requires correction_of_hash"
+            )
+        if len(self.canonical_json().encode("utf-8")) > WORKER_RESULT_MAX_BYTES:
+            raise WorkerPacketError("RESULT_TOO_LARGE", "result packet exceeds byte bound")
+        return self
+
+    def canonical_json(self) -> str:
+        return canonical_json(self)
+
+    def canonical_hash(self) -> str:
+        """sha256 of this result's canonical wire representation."""
+        return stable_content_hash(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> WorkerResultPacket:
+        try:
+            values = dict(data)
+            values["worker_identity"] = AgentIdentity.from_dict(values["worker_identity"])
+            result = _from_dict(cls, values)
+            result.validate()
+            return result
+        except WorkerPacketError:
+            raise
+        except Exception as exc:
+            raise WorkerPacketError("MALFORMED_RESULT") from exc
+
+
+@dataclass(frozen=True)
+class WorkerContextResolution:
+    """One bounded, ephemeral Brain reference resolved for a worker task."""
+
+    ref: str
+    kind: str
+    content: str
+    content_sha256: str
+    content_chars: int
+    truncated: bool = False
+
+    def validate(self) -> WorkerContextResolution:
+        _check_worker_text(self.ref, "ref", WORKER_REF_MAX_CHARS)
+        _check_worker_text(self.kind, "kind", WORKER_REF_MAX_CHARS)
+        if not isinstance(self.content, str) or len(self.content) > WORKER_CONTEXT_MAX_CHARS:
+            raise WorkerPacketError("CONTEXT_REF_TOO_LARGE", "resolved context exceeds bound")
+        _check_sha256(self.content_sha256, "content_sha256", "CONTEXT_REF_UNRESOLVED")
+        if not isinstance(self.content_chars, int) or self.content_chars < len(self.content):
+            raise WorkerPacketError("CONTEXT_REF_UNRESOLVED", "invalid resolved context size")
+        if not isinstance(self.truncated, bool):
+            raise WorkerPacketError("CONTEXT_REF_UNRESOLVED", "invalid resolved context truncation")
+        return self
+
+    def metadata(self) -> dict[str, Any]:
+        """Privacy-safe metadata for telemetry and the canonical ledger."""
+        return {
+            "ref_sha256": stable_content_hash(self.ref),
+            "kind": self.kind,
+            "content_sha256": self.content_sha256,
+            "content_chars": self.content_chars,
+            "visible_chars": len(self.content),
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True)
+class WorkerCorrectionPacket:
+    """Bounded coordinator-to-worker correction request."""
+
+    task_id: str
+    parent_session_id: str
+    worker_identity: AgentIdentity
+    reviewer_identity: AgentIdentity
+    original_result_sha256: str
+    reason: str
+    requested_changes: list[str] = field(default_factory=list)
+    evidence_requirements: list[str] = field(default_factory=list)
+    correction_attempt: int = 1
+
+    def validate(self) -> WorkerCorrectionPacket:
+        _check_worker_text(self.task_id, "task_id", WORKER_REF_MAX_CHARS)
+        _check_worker_text(self.parent_session_id, "parent_session_id", WORKER_REF_MAX_CHARS)
+        _check_worker_text(self.reason, "reason")
+        _check_worker_list(self.requested_changes, "requested_changes")
+        _check_worker_list(self.evidence_requirements, "evidence_requirements")
+        _check_sha256(self.original_result_sha256, "original_result_sha256", "MALFORMED_CORRECTION")
+        if self.worker_identity.role_profile not in WORKER_ROLES:
+            raise WorkerPacketError("UNAUTHORIZED_WORKER", "correction target is not a worker role")
+        if self.reviewer_identity.role_profile not in COORDINATOR_ROLES:
+            raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "reviewer role is not authorized")
+        if not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS:
+            raise WorkerPacketError("CORRECTION_LIMIT_EXCEEDED", "correction attempt outside bound")
+        if len(self.canonical_json().encode("utf-8")) > WORKER_RESULT_MAX_BYTES:
+            raise WorkerPacketError("CORRECTION_TOO_LARGE", "correction packet exceeds byte bound")
+        return self
+
+    def canonical_json(self) -> str:
+        return canonical_json(self)
+
+    def canonical_hash(self) -> str:
+        return stable_content_hash(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> WorkerCorrectionPacket:
+        try:
+            values = dict(data)
+            values["worker_identity"] = AgentIdentity.from_dict(values["worker_identity"])
+            values["reviewer_identity"] = AgentIdentity.from_dict(values["reviewer_identity"])
+            packet = _from_dict(cls, values)
+            packet.validate()
+            return packet
+        except WorkerPacketError:
+            raise
+        except Exception as exc:
+            raise WorkerPacketError("MALFORMED_CORRECTION") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -520,9 +814,7 @@ class BrainLifecycleEvent:
             raise BrainError(f"unknown required event type: {event_type!r}") from None
         if not dataclasses.is_dataclass(cls):
             raise TypeError(f"{cls!r} is not a dataclass")
-        hints = _HINTS_CACHE.setdefault(
-            typing.cast(type[Any], cls), typing.get_type_hints(cls)
-        )
+        hints = _HINTS_CACHE.setdefault(typing.cast(type[Any], cls), typing.get_type_hints(cls))
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
             if f.name == "event_type":
@@ -705,3 +997,164 @@ def read_ledger_header(data: Mapping[str, Any]) -> LedgerHeader:
         adapter_version=str(header["adapter_version"]),
         created_at=str(header["created_at"]),
     )
+
+
+# ---------------------------------------------------------------------------
+# Brain Handoff Envelope (plan §3 P3.17): bounded, harness-neutral transport.
+# ---------------------------------------------------------------------------
+
+HANDOFF_SCHEMA_VERSION = 1
+# Small relative to a transcript/full-context transport (typically tens to
+# hundreds of KB): the envelope never carries raw text, only identity, refs,
+# and hashes. Full canonical state lives in the existing content-addressed
+# Artifact Store and is recovered by resolving payload_ref.
+HANDOFF_ENVELOPE_MAX_BYTES = 8_192
+HANDOFF_IDENTITY_MAX_CHARS = 128
+HANDOFF_REF_MAX_CHARS = 256
+HANDOFF_LIST_MAX_ITEMS = 8
+# Capsule state older than this at read time is classified STALE rather than
+# silently trusted; callers may still read it with allow_stale=True.
+HANDOFF_STALE_AFTER_SECONDS = 24 * 60 * 60
+
+
+class HandoffError(BrainError):
+    """Deterministic malformed/mismatched/stale Brain Handoff error (§3 P3.17)."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message or code}")
+
+
+def _check_handoff_text(value: Any, field_name: str, *, limit: int, allow_empty: bool) -> None:
+    if not isinstance(value, str) or len(value) > limit or (not allow_empty and not value):
+        raise HandoffError("HANDOFF_MALFORMED", f"invalid {field_name}")
+
+
+def _check_handoff_sha256(value: Any, field_name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value.lower())
+    ):
+        raise HandoffError("HANDOFF_MALFORMED", f"invalid {field_name}")
+
+
+def _check_handoff_list(values: Any, field_name: str) -> None:
+    if not isinstance(values, list) or len(values) > HANDOFF_LIST_MAX_ITEMS:
+        raise HandoffError("HANDOFF_MALFORMED", f"invalid {field_name}")
+    if any(
+        not isinstance(item, str) or not item or len(item) > HANDOFF_REF_MAX_CHARS
+        for item in values
+    ):
+        raise HandoffError("HANDOFF_MALFORMED", f"invalid {field_name}")
+
+
+@dataclass(frozen=True)
+class BrainHandoffEnvelope:
+    """Bounded, harness-neutral cross-agent/session handoff transport envelope
+    (plan §3 P3.17).
+
+    The envelope never carries raw transcript or full capsule state. It binds
+    exact source identity and integrity hashes; the full canonical payload
+    (Active State Capsule + requirement ledger) is recovered by resolving
+    ``payload_ref`` through the existing content-addressed Artifact Store
+    (:mod:`second_brain.artifacts`). ``handoff_id`` is the content hash of
+    every other field, so any alteration is self-evident.
+    """
+
+    handoff_id: str
+    schema_version: int
+    project_id: str
+    source_harness: str
+    source_session_id: str
+    source_task_id: str
+    source_role: str
+    destination_harness: str
+    destination_role: str
+    capsule_ref: str
+    capsule_sha256: str
+    capsule_updated_at: str
+    payload_ref: str
+    payload_sha256: str
+    payload_canonical_sha256: str
+    context_refs: list[str] = field(default_factory=list)
+    artifact_refs: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
+    unavailable_evidence: list[str] = field(default_factory=list)
+    requirement_summary: dict[str, str] = field(default_factory=dict)
+    created_at: str = ""
+
+    def _identity_fields(self) -> dict[str, Any]:
+        data = dataclasses.asdict(self)
+        del data["handoff_id"]
+        return data
+
+    @staticmethod
+    def compute_id(fields_without_id: Mapping[str, Any]) -> str:
+        """Content hash binding the envelope to its exact source state."""
+        return stable_content_hash(dict(fields_without_id))
+
+    def canonical_json(self) -> str:
+        return canonical_json(self)
+
+    def envelope_bytes(self) -> int:
+        return len(self.canonical_json().encode("utf-8"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    def validate(self) -> BrainHandoffEnvelope:
+        if self.schema_version != HANDOFF_SCHEMA_VERSION:
+            raise HandoffError(
+                "HANDOFF_SCHEMA_MISMATCH",
+                f"unsupported schema_version {self.schema_version!r}; "
+                f"this runtime supports {HANDOFF_SCHEMA_VERSION}",
+            )
+        for name in ("source_harness", "source_session_id", "capsule_ref", "payload_ref"):
+            _check_handoff_text(
+                getattr(self, name), name, limit=HANDOFF_IDENTITY_MAX_CHARS, allow_empty=False
+            )
+        for name in (
+            "project_id", "source_task_id", "source_role",
+            "destination_harness", "destination_role",
+        ):
+            _check_handoff_text(
+                getattr(self, name), name, limit=HANDOFF_IDENTITY_MAX_CHARS, allow_empty=True
+            )
+        for name in ("created_at", "capsule_updated_at"):
+            _check_handoff_text(getattr(self, name), name, limit=64, allow_empty=False)
+        for name in ("capsule_sha256", "payload_sha256", "payload_canonical_sha256"):
+            _check_handoff_sha256(getattr(self, name), name)
+        for name in ("context_refs", "artifact_refs", "evidence_refs", "unavailable_evidence"):
+            _check_handoff_list(getattr(self, name), name)
+        if (
+            not isinstance(self.requirement_summary, dict)
+            or len(self.requirement_summary) > HANDOFF_LIST_MAX_ITEMS * 2
+            or any(
+                not isinstance(k, str) or not isinstance(v, str)
+                or len(k) > HANDOFF_REF_MAX_CHARS or len(v) > HANDOFF_REF_MAX_CHARS
+                for k, v in self.requirement_summary.items()
+            )
+        ):
+            raise HandoffError("HANDOFF_MALFORMED", "invalid requirement_summary")
+        recomputed = self.compute_id(self._identity_fields())
+        if recomputed != self.handoff_id:
+            raise HandoffError("HANDOFF_ID_MISMATCH", "envelope was altered after creation")
+        if self.envelope_bytes() > HANDOFF_ENVELOPE_MAX_BYTES:
+            raise HandoffError("HANDOFF_ENVELOPE_TOO_LARGE", "envelope exceeds byte bound")
+        return self
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> BrainHandoffEnvelope:
+        try:
+            values = dict(data)
+            values.setdefault("context_refs", [])
+            values.setdefault("artifact_refs", [])
+            values.setdefault("evidence_refs", [])
+            values.setdefault("unavailable_evidence", [])
+            values.setdefault("requirement_summary", {})
+            return _from_dict(cls, values)
+        except HandoffError:
+            raise
+        except Exception as exc:
+            raise HandoffError("HANDOFF_MALFORMED", str(exc)) from exc

@@ -28,6 +28,301 @@ def run_cli(
         input=stdin,
     )
 
+def test_simplification_review_cli_persists_defer_and_deduplicates(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    project.mkdir()
+    args = (
+        "simplification",
+        "review",
+        "--project-root",
+        str(project),
+        "--project",
+        "demo",
+        "--session",
+        "s1",
+        "--task-id",
+        "t1",
+        "--review-id",
+        "r1",
+        "--outcome",
+        "defer",
+        "--reason-code",
+        "duplicate-wrapper",
+        "--affected-hash",
+        "a" * 64,
+        "--deferred-hash",
+        "b" * 64,
+        "--json",
+    )
+    first = run_cli(home, *args)
+    assert first.returncode == 0, first.stderr
+    second = run_cli(home, *args)
+    assert second.returncode == 0, second.stderr
+    assert (project / "simplification-debt.md").read_text(encoding="utf-8").count("DEBT-") == 1
+
+
+def _stop_args(session: str, task_id: str) -> tuple[str, ...]:
+    return (
+        "stop",
+        "decide",
+        "--session",
+        session,
+        "--task-id",
+        task_id,
+        "--parent-session-id",
+        "parent-1",
+        "--worker-session-id",
+        session,
+        "--stop-id",
+        f"stop-{task_id}",
+        "--reason-code",
+        "completion_proven",
+        "--triggering-condition",
+        "completion_condition_satisfied",
+        "--verification-state",
+        "passed",
+        "--completion-condition-state",
+        "satisfied",
+        "--final-substantive-event",
+        "task_result",
+        "--json",
+    )
+
+
+def test_stop_decide_allows_proven_completion_and_records_bounded_evidence(tmp_path):
+    home = tmp_path / "brain"
+    session = "omp-success"
+    assert (
+        run_cli(home, "requirements", "add", session, "ship the task", "--importance", "critical")
+        .returncode
+        == 0
+    )
+    assert (
+        run_cli(home, "requirements", "evidence", session, "REQ-001", "focused test passed")
+        .returncode
+        == 0
+    )
+    assert run_cli(home, "requirements", "status", session, "REQ-001", "verified").returncode == 0
+
+    result = run_cli(home, *_stop_args(session, "task-success"))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "stop"
+    assert payload["stop_id"] == "stop-task-success"
+    assert payload["verification_state"] == "passed"
+    assert payload["completion_condition_state"] == "satisfied"
+    assert payload["continuation_forbidden"] is True
+
+    searched = run_cli(home, "ledger", "search", session, "--query", "stop_decided")
+    assert searched.returncode == 0
+    assert "completion_proven" in searched.stdout
+
+
+def test_stop_decide_does_not_false_positive_when_acceptance_is_unresolved(tmp_path):
+    home = tmp_path / "brain"
+    session = "omp-incomplete"
+    assert (
+        run_cli(home, "requirements", "add", session, "ship the task", "--importance", "critical")
+        .returncode
+        == 0
+    )
+
+    result = run_cli(home, *_stop_args(session, "task-incomplete"))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "continue"
+    assert payload["reason_code"] == "requirements_unresolved"
+    assert payload["continuation_forbidden"] is False
+
+
+def test_stop_decide_stops_failed_or_blocked_work(tmp_path):
+    home = tmp_path / "brain"
+    session = "omp-blocked"
+    args = list(_stop_args(session, "task-blocked"))
+    args[args.index("--reason-code") + 1] = "verification_failed"
+    args[args.index("--triggering-condition") + 1] = "verification_failed"
+    args[args.index("--verification-state") + 1] = "failed"
+    args[args.index("--completion-condition-state") + 1] = "failed"
+    result = run_cli(home, *args)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "stop"
+    assert payload["continuation_forbidden"] is True
+
+def test_verify_gate_blocks_stop_until_risk_actions_pass(tmp_path):
+    home = tmp_path / "brain"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# gate\n", encoding="utf-8")
+    gate_file = tmp_path / "gate.json"
+    actions = [
+        "targeted_test=passed",
+        "typecheck_or_compile=passed",
+        "diff_sanity=passed",
+    ]
+    gate = run_cli(
+        home,
+        "verify",
+        "gate",
+        "gate-cli",
+        str(repo),
+        "--file",
+        "README.md",
+        "--criticality",
+        "LOW",
+        "--action",
+        actions[0],
+        "--action",
+        actions[1],
+        "--action",
+        actions[2],
+        "--out",
+        str(gate_file),
+        "--json",
+    )
+    assert gate.returncode == 0, gate.stderr
+    payload = json.loads(gate.stdout)
+    assert payload["completion_allowed"] is True
+    assert gate_file.exists()
+
+    blocked_gate = dict(payload)
+    blocked_gate["completion_allowed"] = False
+    blocked_gate["decision_reason"] = "verification_actions_unresolved"
+    blocked_file = tmp_path / "blocked-gate.json"
+    blocked_file.write_text(json.dumps(blocked_gate), encoding="utf-8")
+    stop = run_cli(
+        home,
+        "stop",
+        "decide",
+        "--session",
+        "gate-cli",
+        "--task-id",
+        "task-gate-cli",
+        "--stop-id",
+        "stop-gate-cli",
+        "--reason-code",
+        "completion_proven",
+        "--triggering-condition",
+        "completion_condition_satisfied",
+        "--verification-state",
+        "passed",
+        "--completion-condition-state",
+        "satisfied",
+        "--final-substantive-event",
+        "gate",
+        "--gate-file",
+        str(blocked_file),
+        "--json",
+    )
+    assert stop.returncode == 0, stop.stderr
+    stop_payload = json.loads(stop.stdout)
+    assert stop_payload["decision"] == "continue"
+    assert stop_payload["reason_code"] == "accuracy_gate_blocked"
+
+def test_independent_verifier_cli_binds_fresh_pass_to_high_gate(tmp_path):
+    home = tmp_path / "brain"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# gate\n", encoding="utf-8")
+    response = tmp_path / "response.txt"
+    response.write_text("Result: PASS\nConfidence: 0.9\n", encoding="utf-8")
+    verification = tmp_path / "verification.json"
+    hashes = ("a" * 64, "b" * 64, "c" * 64, "d" * 64)
+    independent = run_cli(
+        home,
+        "verify",
+        "independent",
+        "--response-file",
+        str(response),
+        "--verification-id",
+        "ver-cli",
+        "--task-id",
+        "task-cli",
+        "--verifier-session-id",
+        "verifier-cli",
+        "--implementation-session-id",
+        "implementation-cli",
+        "--task-hash",
+        hashes[0],
+        "--requirements-hash",
+        hashes[1],
+        "--diff-hash",
+        hashes[2],
+        "--evidence-set-hash",
+        hashes[3],
+        "--out",
+        str(verification),
+        "--json",
+    )
+    assert independent.returncode == 0, independent.stderr
+    assert json.loads(independent.stdout)["verdict"] == "PASS"
+
+    actions = [
+        "targeted_test=passed",
+        "typecheck_or_compile=passed",
+        "diff_sanity=passed",
+        "targeted_plus_relevant_tests=passed",
+        "requirement_ledger=passed",
+        "affected_file_review=passed",
+        "simplification_check=passed",
+        "repowise_impact_context=passed",
+        "independent_intent_verifier=passed",
+        "negative_adversarial_tests=passed",
+        "rollback_check=passed",
+    ]
+    args = [
+        "verify",
+        "gate",
+        "gate-cli",
+        str(repo),
+        "--file",
+        "README.md",
+        "--criticality",
+        "HIGH",
+        "--verification-file",
+        str(verification),
+        "--task-hash",
+        hashes[0],
+        "--requirements-hash",
+        hashes[1],
+        "--diff-hash",
+        hashes[2],
+        "--evidence-set-hash",
+        hashes[3],
+        "--task-id",
+        "task-cli",
+        "--parent-session-id",
+        "implementation-cli",
+        "--action",
+        actions[0],
+        "--action",
+        actions[1],
+        "--action",
+        actions[2],
+        "--action",
+        actions[3],
+        "--action",
+        actions[4],
+        "--action",
+        actions[5],
+        "--action",
+        actions[6],
+        "--action",
+        actions[7],
+        "--action",
+        actions[8],
+        "--action",
+        actions[9],
+        "--action",
+        actions[10],
+        "--json",
+    ]
+    gate = run_cli(home, *args)
+    assert gate.returncode == 0, gate.stderr
+    gate_payload = json.loads(gate.stdout)
+    assert gate_payload["completion_allowed"] is True
+    assert gate_payload["verification_id"] == "ver-cli"
 
 def test_init_doctor_status_flow(tmp_path):
     home = tmp_path / "brain"
@@ -422,3 +717,293 @@ def test_vmem_claim_pages_cli_malformed_stdin_errors_cleanly(tmp_path):
     r = run_cli(home, "vmem", "claim-pages", "sess-claim-cli-bad", stdin="not json at all")
     assert r.returncode == 2
     assert "JSON" in r.stderr
+
+def test_capsule_ensure_and_additive_update_cli(tmp_path):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+
+    ensure = run_cli(
+        home,
+        "capsule",
+        "ensure",
+        "omp-s1",
+        "Resume the active task",
+        "--next-action",
+        "Run the focused proof",
+        "--json",
+    )
+    assert ensure.returncode == 0, ensure.stderr
+    first = json.loads(ensure.stdout)
+    assert first["session_id"] == "omp-s1"
+    assert first["changed"] is True
+    assert Path(first["capsule_path"]).is_file()
+
+    update = run_cli(
+        home,
+        "capsule",
+        "update",
+        "omp-s1",
+        "--add-decision",
+        "Reuse the existing VMem path",
+        "--add-question",
+        "Did compaction preserve the state?",
+        "--json",
+    )
+    assert update.returncode == 0, update.stderr
+    capsule = json.loads(update.stdout)["capsule"]
+    assert capsule["decisions_this_session"] == ["Reuse the existing VMem path"]
+    assert capsule["open_questions"] == ["Did compaction preserve the state?"]
+
+
+def test_environment_assess_cli_records_readback_and_mutation_class(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    project.mkdir()
+    start = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-cli",
+        "--task-id",
+        "p39-task",
+        "--phase",
+        "session_start",
+        "--json",
+    )
+    assert start.returncode == 0, start.stderr
+    first = json.loads(start.stdout)
+    assert first["completion_eligible"] is True
+    assert len(first["environment_hash"]) == 64
+    assert (home / "state" / "sessions" / "p39-cli" / "environment-evidence.json").is_file()
+
+    shutdown = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-cli",
+        "--task-id",
+        "p39-task",
+        "--phase",
+        "shutdown",
+        "--expected-field",
+        "lockfiles",
+        "--json",
+    )
+    assert shutdown.returncode == 0, shutdown.stderr
+    second = json.loads(shutdown.stdout)
+    assert second["before_environment_hash"] == first["environment_hash"]
+    assert second["mutation_classification"] in {"noop", "unexpected", "intended"}
+
+
+def test_environment_assess_cli_correlates_intended_dependency_mutation(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    project.mkdir()
+    start = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-dependency",
+        "--phase",
+        "session_start",
+        "--json",
+    )
+    assert start.returncode == 0, start.stderr
+    (project / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    mutation = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-dependency",
+        "--phase",
+        "mutation",
+        "--expected-field",
+        "lockfiles",
+        "--expected-field",
+        "package_manager",
+        "--requested-change",
+        "npm install package",
+        "--mutation-state",
+        "observed",
+        "--json",
+    )
+    assert mutation.returncode == 0, mutation.stderr
+    payload = json.loads(mutation.stdout)
+    assert payload["mutation_classification"] == "intended"
+    assert payload["verification_state"] == "passed"
+    assert payload["before_environment_hash"] != payload["after_environment_hash"]
+    assert payload["dependency_change_refs"]
+
+
+
+def test_verify_gate_blocks_unexpected_environment_mutation(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_cli(home, "init").returncode == 0
+    assert (
+        run_cli(
+            home,
+            "env",
+            "assess",
+            str(project),
+            "--session",
+            "p39-gate",
+            "--phase",
+            "session_start",
+            "--json",
+        ).returncode
+        == 0
+    )
+    (project / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    mutation = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-gate",
+        "--phase",
+        "mutation",
+        "--expected-field",
+        "lockfiles",
+        "--requested-change",
+        "unplanned package change",
+        "--json",
+    )
+    assert mutation.returncode == 0
+    evidence = home / "state" / "sessions" / "p39-gate" / "environment-evidence.json"
+    gate = run_cli(
+        home,
+        "verify",
+        "gate",
+        "p39-gate",
+        str(project),
+        "--criticality",
+        "LOW",
+        "--action",
+        "targeted_test=passed",
+        "--action",
+        "typecheck_or_compile=passed",
+        "--action",
+        "diff_sanity=passed",
+        "--environment-file",
+        str(evidence),
+        "--environment-required",
+        "--json",
+    )
+
+    assert gate.returncode == 1
+    payload = json.loads(gate.stdout)
+    assert payload["decision_reason"] == "environment_steward_invalid"
+    assert "environment_steward" in payload["failed_actions"]
+
+
+def test_environment_assess_cli_writes_bounded_output_file(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    output = tmp_path / "assessment.json"
+    project.mkdir()
+    result = run_cli(
+        home,
+        "env",
+        "assess",
+        str(project),
+        "--session",
+        "p39-output",
+        "--out",
+        str(output),
+        "--json",
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_text())["session_id"] == "p39-output"
+
+
+def test_radar_observe_cli_persists_and_deduplicates_candidate(tmp_path):
+    home = tmp_path / "brain"
+    telemetry_dir = home / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {
+            "v": 2,
+            "kind": "tool_call",
+            "session": "radar-cli",
+            "ts": f"2026-08-26T00:00:0{i}Z",
+            "tool": "read",
+            "id": f"call-{i}",
+            "target_sha256": "d" * 64,
+            "input_bytes": 80,
+        }
+        for i in range(3)
+    ]
+    (telemetry_dir / "radar-cli.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    first = run_cli(
+        home,
+        "radar",
+        "observe",
+        "radar-cli",
+        "--project-id",
+        "project-a",
+        "--repo",
+        str(tmp_path),
+        "--task-id",
+        "task-a",
+        "--json",
+    )
+    second = run_cli(
+        home,
+        "radar",
+        "observe",
+        "radar-cli",
+        "--project-id",
+        "project-a",
+        "--repo",
+        str(tmp_path),
+        "--task-id",
+        "task-a",
+        "--json",
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    first_payload = json.loads(first.stdout)
+    first_candidate = first_payload["candidates"][0]
+    second_payload = json.loads(second.stdout)
+    second_candidates = second_payload["candidates"]
+    assert first_payload["radar_overhead_ms"] >= 0
+    assert first_payload["repo"] == str(tmp_path.resolve())
+    assert second_candidates[0]["candidate_id"] == first_candidate["candidate_id"]
+    assert second_payload["radar_overhead_ms"] >= 0
+    assert len(json.loads((home / "state" / "radar" / "candidates.json").read_text())) == 1
+
+def test_doctor_json_includes_environment_steward_check(tmp_path):
+    home = tmp_path / "brain"
+    project = tmp_path / "project"
+    project.mkdir()
+    assert run_cli(home, "init").returncode == 0
+    result = run_cli(
+        home,
+        "doctor",
+        "--repo",
+        str(project),
+        "--session",
+        "doctor-cli",
+        "--json",
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    check = next(item for item in payload["checks"] if item["name"] == "environment steward")
+    assert check["status"] == "ok"
+    assert "doctor-cli" in check["detail"]

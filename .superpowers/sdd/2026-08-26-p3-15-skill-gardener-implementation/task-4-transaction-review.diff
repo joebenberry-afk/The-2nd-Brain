@@ -1,0 +1,236 @@
+diff --git a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+index cb08c95..5f7ef58 100644
+--- a/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
++++ b/.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/task-4-report.md
+@@ -1,27 +1,27 @@
+ # Task 4 report: archive-first retirement and restore
+ 
+ ## Status
+-Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, and incomplete retirement-record restore gaps.
++Complete. Implemented archive-first `archive_retire` execution and verified restoration while preserving delegated behavior for non-archive actions. Review follow-up closes archive-inside-source overlap, authorization replay, incomplete retirement-record restore gaps, and source-removal recovery deadlock.
+ 
+ ## Files
+ - `src/second_brain/gardener.py`
+   - Persists archive destination, retirement reason, and production-safety evidence in authorized records.
+   - Copies the complete skill tree to staging, verifies every archived byte and `SKILL.md` lifecycle hash, persists a bounded retirement record, then removes the source lifecycle entry.
+   - Cleans incomplete archive output on pre-mutation failures and preserves the source artifact.
+   - Restores verified archives to the previous lifecycle directory without overwriting an existing artifact.
+   - Rejects stale/invalid authorizations and active retirements lacking explicit production-safety approval.
+   - Delegates all non-archive actions without content or lifecycle mutation.
+ - `tests/test_p3_15_skill_gardener.py`
+-  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, active safety gating, and delegated non-mutation.
++  - Added focused coverage for operation ordering, complete retirement record fields, copy/hash/record failures, archive overlap, byte-identical restore, restore collision refusal, authorization replay refusal, incomplete-record refusal, source-removal recovery, active safety gating, and delegated non-mutation.
+ 
+ ## Tests
+-- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **43 passed**
++- `.venv/Scripts/python.exe -m pytest tests/test_p3_15_skill_gardener.py -q` — **44 passed**
+ - `.venv/Scripts/python.exe -m py_compile src/second_brain/gardener.py tests/test_p3_15_skill_gardener.py` — passed
+ 
+ ## Commit
+-`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`
++`216b6cb feat(gardener): add archive retirement`; `0db28d3 fix(gardener): close retirement replay gaps`; `a33fbe7 fix(gardener): recover failed source removal`
+ 
+ ## Concerns
+ - No project-wide suites, formatters, or linters were run per Task 4 scope.
+ - Source mutation uses removal only after the archive and retirement record are durable; the archive remains the reversible copy.
+-- Consumed authorizations are durably marked before source mutation, preventing replay even after restoration/recreation.
++- Consumed authorizations are durably marked after successful source mutation; an in-progress marker is reset when source removal fails, allowing safe retry. In-progress authorizations reject replay if post-removal marker persistence itself fails.
+diff --git a/src/second_brain/gardener.py b/src/second_brain/gardener.py
+index f3deaf7..545c8d0 100644
+--- a/src/second_brain/gardener.py
++++ b/src/second_brain/gardener.py
+@@ -1584,71 +1584,94 @@ class SkillGardener:
+                 encoding="utf-8",
+             )
+             temporary.replace(target)
+         except OSError as exc:
+             try:
+                 temporary.unlink()
+             except OSError:
+                 pass
+             raise BrainError(f"could not persist retirement record: {exc}") from exc
+         return record
+-    def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
++    def _persist_authorization_state(
++        self,
++        authorization: dict[str, Any],
++        *,
++        executed: bool,
++        state: str | None = None,
++    ) -> None:
+         directory = self.home / "state" / "maintenance" / "authorizations"
+         target = directory / f"{authorization['authorization_id']}.json"
+         temporary = target.with_suffix(".tmp")
+         updated = dict(authorization)
+-        updated["action_executed"] = True
++        updated["action_executed"] = executed
++        if state is None:
++            updated.pop("execution_state", None)
++        else:
++            updated["execution_state"] = state
+         try:
+             temporary.write_text(
+                 json.dumps(updated, sort_keys=True, separators=(",", ":")) + "\n",
+                 encoding="utf-8",
+             )
+             temporary.replace(target)
+         except OSError as exc:
+             try:
+                 temporary.unlink()
+             except OSError:
+                 pass
+             raise BrainError(f"could not persist authorization execution: {exc}") from exc
+ 
++    def _mark_authorization_executed(self, authorization: dict[str, Any]) -> None:
++        self._persist_authorization_state(authorization, executed=True)
++
++    def _mark_authorization_in_progress(self, authorization: dict[str, Any]) -> None:
++        self._persist_authorization_state(authorization, executed=False, state="in_progress")
++
++    def _reset_authorization(self, authorization: dict[str, Any]) -> None:
++        self._persist_authorization_state(authorization, executed=False)
++
+ 
+     def _load_current_authorization(self, authorization: dict[str, Any]) -> dict[str, Any]:
+         if not isinstance(authorization, dict):
+             raise BrainError("authorization must be a dict")
+         authorization_id = authorization.get("authorization_id")
+         if not isinstance(authorization_id, str) or not authorization_id:
+             raise BrainError("invalid authorization record ID")
+         path = self.home / "state" / "maintenance" / "authorizations" / (
+             f"{authorization_id}.json"
+         )
+         stored = _read_json_object(path)
+         if not stored or stored.get("authorization_id") != authorization_id:
+             raise BrainError("authorization record is unavailable")
++        if (
++            stored.get("action_authorized") is not True
++            or stored.get("action_executed") is True
++            or stored.get("execution_state") == "in_progress"
++        ):
++            raise BrainError("authorization is not current")
+         for key in (
+             "skill_name",
+             "skill_version",
+             "content_hash",
+             "lifecycle_state",
+             "action_recommended",
+             "action_authorized",
+             "action_executed",
+             "owner",
+             "approval_ref",
+             "non_regression_ref",
+             "rollback_ref",
+             "archive_destination",
+             "production_safety_ref",
+         ):
+             if key in stored and stored.get(key) != authorization.get(key):
+                 raise BrainError("authorization record is stale")
+-        if stored.get("action_authorized") is not True or stored.get("action_executed") is True:
+-            raise BrainError("authorization is not current")
+         return stored
+ 
+     def _archive_root(self, archive_destination: str) -> Path:
+         if archive_destination.startswith("archive:") or "://" in archive_destination:
+             return self.home / "state" / "maintenance" / "archives"
+         root = Path(archive_destination)
+         return root if root.is_absolute() else self.home / root
+ 
+     def execute_maintenance(self, authorization: dict[str, Any]) -> dict[str, Any]:
+         """Execute an already-authorized archive retirement or delegate it."""
+@@ -1782,23 +1805,30 @@ class SkillGardener:
+                     key: str(replacement[key])[:_MAX_REFERENCE_LENGTH]
+                     for key in ("skill_name", "skill_version")
+                     if isinstance(replacement.get(key), str)
+                 }
+             if isinstance(authorization.get("production_safety_ref"), str):
+                 record["production_safety_ref"] = authorization["production_safety_ref"][
+                     :_MAX_REFERENCE_LENGTH
+                 ]
+             self._persist_retirement_record(record)
+             persisted = True
+-            self._mark_authorization_executed(authorization)
++            self._mark_authorization_in_progress(authorization)
+             source_mutation_started = True
+-            shutil.rmtree(source_dir)
++            try:
++                shutil.rmtree(source_dir)
++            except (OSError, UnicodeError) as exc:
++                if source_dir.exists():
++                    self._reset_authorization(authorization)
++                    source_mutation_started = False
++                raise BrainError(f"archive source removal failed: {exc}") from exc
++            self._mark_authorization_executed(authorization)
+             return {
+                 **record,
+                 "action_recommended": "archive_retire",
+                 "action_authorized": True,
+                 "action_executed": True,
+             }
+         except BrainError:
+             if not source_mutation_started:
+                 shutil.rmtree(staging_dir, ignore_errors=True)
+                 shutil.rmtree(final_dir, ignore_errors=True)
+diff --git a/tests/test_p3_15_skill_gardener.py b/tests/test_p3_15_skill_gardener.py
+index cacdd9f..f98569c 100644
+--- a/tests/test_p3_15_skill_gardener.py
++++ b/tests/test_p3_15_skill_gardener.py
+@@ -910,20 +910,58 @@ def test_restore_returns_byte_identical_artifact_and_refuses_overwrite(brain_hom
+ 
+ def test_executed_authorization_cannot_be_replayed_after_restore(brain_home):
+     gardener = SkillGardener(brain_home)
+     authorization = _authorized_retirement(brain_home, "replay")
+     result = gardener.execute_maintenance(authorization)
+     restored = gardener.restore_retirement(result["retirement_record_id"])
+     shutil.rmtree(restored["restored_path"])
+     with pytest.raises(BrainError, match="authorization|stale|current"):
+         gardener.execute_maintenance(authorization)
+ 
++def test_source_removal_failure_leaves_authorization_retryable(brain_home, monkeypatch):
++    source = _make_skill(brain_home, "remove-fails", "shadow")
++    authorization = _authorized_retirement(brain_home, "remove-fails")
++    original_files = {
++        path.relative_to(source).as_posix(): path.read_bytes()
++        for path in source.rglob("*")
++        if path.is_file()
++    }
++    real_rmtree = shutil.rmtree
++
++    def fail_source(path, *args, **kwargs):
++        if Path(path) == source:
++            raise OSError("remove failed")
++        return real_rmtree(path, *args, **kwargs)
++
++    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", fail_source)
++    with pytest.raises(BrainError, match="source removal|remove"):
++        SkillGardener(brain_home).execute_maintenance(authorization)
++    assert source.exists()
++    assert {
++        path.relative_to(source).as_posix(): path.read_bytes()
++        for path in source.rglob("*")
++        if path.is_file()
++    } == original_files
++    auth_path = (
++        brain_home
++        / "state"
++        / "maintenance"
++        / "authorizations"
++        / f"{authorization['authorization_id']}.json"
++    )
++    recovered = json.loads(auth_path.read_text(encoding="utf-8"))
++    assert recovered["action_executed"] is False
++    assert "execution_state" not in recovered
++    monkeypatch.setattr("second_brain.gardener.shutil.rmtree", real_rmtree)
++    result = SkillGardener(brain_home).execute_maintenance(authorization)
++    assert result["action_executed"] is True
++
+ 
+ def test_restore_requires_complete_retirement_record(brain_home):
+     gardener = SkillGardener(brain_home)
+     result = gardener.execute_maintenance(_authorized_retirement(brain_home, "record-shape"))
+     record_path = (
+         brain_home
+         / "state"
+         / "maintenance"
+         / "retirements"
+         / f"{result['retirement_record_id']}.json"

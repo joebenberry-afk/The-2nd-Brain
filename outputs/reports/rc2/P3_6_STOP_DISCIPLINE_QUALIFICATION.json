@@ -1,0 +1,141 @@
+{
+  "verdict": "P3.6_PROVEN",
+  "qualification_scope": "P3.6 implementation and independent OMP-primary proof only; P3.7 not started",
+  "provenance": {
+    "roadmap_source": "outputs/reports/rc2/01-frozen-roadmap-matrix.md:12-15,36",
+    "authoritative_plan": "The_Second_Brain_OS_V4_2_Self_Hosting_OneShot_Implementation_Plan.md:5308-5322,5378 (plan §147)",
+    "omp_version": "omp/18.0.4",
+    "explicit_live_extension_path": "brainstem/prime-extension/src/index.ts",
+    "explicit_live_extension_sha256": "567d352d1a3c5f2ad824de5f030468d5f3d8cfdfceeb1c7855ee1f12d2a4ece3",
+    "installed_extension_path": "C:/Users/assas/.prime/agent/extensions/second-brain/",
+    "installed_extension_index_sha256": "a406a7032b1578dc91fbb436ba91ec3d0a72d92bddbb395670cd4a36fe6f4e8d",
+    "branch": "brain/v1-rc4-prime-074-compat",
+    "head": "0bc2b8d56ceed3c1e17576283f05b4dba6f52d91",
+    "primary_success_session": "2026-08-25T04-30-09-435Z_01a0372e-ce1b-717d-8aba-9320821d61d1",
+    "primary_worker_probe_session": "2026-08-25T04-42-43-759Z_01a0373a-50af-74b9-8bc6-440115ea7460",
+    "worker_session": "PossibleSalmon",
+    "recovered_active_state_capsule": "state/sessions/e294cd86ecbc6c0b8d97ab9c43903d01e00976b898c4564a18539e5b1ae9762a/active-state.json",
+    "prior_state": "P3.1_PROVEN, P3.2_PROVEN, P3.3_PROVEN, P3.4_PROVEN, P3.5_PROVEN; Lean candidate/HOLD_SHADOW; P3.6 unstarted before this implementation"
+  },
+  "contract": {
+    "requirement": "P3.6",
+    "title": "STOP Discipline",
+    "frozen_contract": "Strict stop-condition enforcement: stop and report rather than improvising when a frozen STOP condition is reached; do not continue once the Requirement Ledger proves completion with no material gate remaining.",
+    "plan_stop_conditions": [
+      "project root conflicts with unrelated existing data",
+      "global config cannot be safely merged",
+      "current Prime hook API differs materially from assumed architecture",
+      "adapter would overwrite unrelated skill directories",
+      "DB migration is not idempotent",
+      "artifact recovery is not byte-identical",
+      "PID/process ownership is ambiguous",
+      "context pruning could delete unrecoverable data",
+      "skill security review fails",
+      "Constitution rules conflict",
+      "benchmark shows meaningful regression"
+    ],
+    "named_implementation_surfaces": ["src/second_brain/contracts.py", "src/second_brain/cli.py", "tests/test_contracts.py"],
+    "reused_supporting_surfaces": ["src/second_brain/working_set.py", "src/second_brain/ledger.py", "brainstem/prime-extension/src/index.ts", "brainstem/prime-extension/src/ledger-mirror.ts", "brainstem/prime-extension/src/worker-context-bridge.ts"],
+    "expected_automated_evidence": "Canonical stop lifecycle events, CLI decision matrix, bounded parser/state, OMP tool-call enforcement, worker context identity, and finalization tests.",
+    "required_live_runtime_evidence": "OMP-primary success, delegated worker, failed/blocker, incomplete negative control, bounded ledger/telemetry evidence, and zero substantive post-STOP execution.",
+    "cross_harness_target": "Universal Brain CLI/ledger primitive with thin OMP lifecycle adapter; OMP-primary enforcement proven here without changing P3.1-P3.5 or Lean promotion.",
+    "token_economic_objective": "No trailing substantive tool/model loop after STOP; only bounded result/finalization/yield/session events remain.",
+    "dogfood_requirement": "Implementation probes themselves reached STOP and stopped before P3.7 or unrelated cleanup.",
+    "promotion_acceptance_gates": "Automated checks, current OMP-primary runtime cases, canonical evidence, independent Validator reconstruction, prior-phase regression gate, and explicit P3.7 exclusion all pass."
+  },
+  "implementation": {
+    "classification": "PROVEN",
+    "surfaces": [
+      "src/second_brain/contracts.py:74-118",
+      "src/second_brain/cli.py:298-321,3416-3513",
+      "brainstem/prime-extension/src/stop-boundary.ts:21-124",
+      "brainstem/prime-extension/src/index.ts:373-381,488,531-547,1445-1512,1533-1620",
+      "brainstem/prime-extension/src/ledger-mirror.ts:126-181"
+    ],
+    "behavior": [
+      "Existing Requirement Ledger decides stop/continue; unresolved material requirements force continue.",
+      "Tool-call is the narrow OMP enforcement boundary; post-STOP substantive tools and their results are blocked per session.",
+      "Synchronous stop_finalized ledger append closes the durability race before OMP worker teardown.",
+      "Only session_shutdown, telemetry, stop_finalize, and yield remain allowed after STOP.",
+      "Worker context marker propagates parent_session_id; current placeholders resolve session and worker identities separately."
+    ]
+  },
+  "classification": {
+    "implementation": "PROVEN",
+    "integration": "PROVEN",
+    "automated_evidence": "PROVEN",
+    "live_runtime": "PROVEN",
+    "cross_harness": "PROVEN for the frozen OMP-primary boundary composed with universal Brain primitives",
+    "token_economics": "PROVEN: live stop boundaries show zero executed substantive post-stop tool events; only bounded result/finalization/provider-final-answer/session events follow",
+    "dogfood": "PROVEN",
+    "promotion_acceptance": "PROVEN after fresh independent Validator reconstruction"
+  },
+  "canonical_evidence": {
+    "fields": [
+      "stop_id",
+      "task_id",
+      "session_id",
+      "parent_session_id",
+      "worker_session_id",
+      "reason_code",
+      "triggering_condition",
+      "verification_state",
+      "completion_condition_state",
+      "final_substantive_event",
+      "stop_boundary_seq",
+      "substantive_events_after_boundary",
+      "finalization_state"
+    ],
+    "ledger_events": ["stop_decided", "stop_finalized"],
+    "post_boundary_policy": "No substantive tool_requested/tool_completed event is accepted after the boundary; bounded control result, finalization, yield, turn, agent_end, and session shutdown remain permitted.",
+    "post_boundary_count": "Runtime field is sourced from per-session StopBoundaryState; live probes recorded 0 executed substantive events after boundary."
+  },
+  "live_probes": {
+    "successful_completion": {
+      "status": "PROVEN",
+      "telemetry": "state/p3_6_dogfood/telemetry/agent-performance/2026-08-25T04-30-09-435Z_01a0372e-ce1b-717d-8aba-9320821d61d1.jsonl",
+      "ledger": "state/p3_6_dogfood/state/sessions/b36239b6a78a948e98daa48f8d46e240a640dd058781a3eb0001380c221575ab/ledger.sqlite",
+      "evidence": "stop decision passed/satisfied; stop_boundary and stop_finalized; zero substantive post-stop tool execution; only result/turn/shutdown/agent_end follow."
+    },
+    "worker_completion": {
+      "status": "PROVEN",
+      "parent_telemetry": "telemetry/agent-performance/2026-08-25T04-42-43-759Z_01a0373a-50af-74b9-8bc6-440115ea7460.jsonl",
+      "worker_telemetry": "telemetry/agent-performance/PossibleSalmon.jsonl",
+      "ledger": "state/sessions/9272a25f1977b831710e07f223c39d78f8ff8de1dc083bae32e7255eeb777192/ledger.sqlite",
+      "identity": "parent_session_id=2026-08-25T04-42-43-759Z_01a0373a-50af-74b9-8bc6-440115ea7460; worker_session_id=PossibleSalmon",
+      "evidence": "worker stop boundary, synchronous finalization, bounded yield/result, worker agent_end/session completion, and unaffected parent task result."
+    },
+    "failed_or_blocked": {
+      "status": "PROVEN",
+      "telemetry": "state/p3_6_dogfood/telemetry/agent-performance/2026-08-25T04-35-35-309Z_01a03733-c70d-72e4-a1d1-178664036748.jsonl",
+      "evidence": "failed verification arms stop; subsequent substantive bash is stop_blocked with no executed tool result."
+    },
+    "incomplete_negative_control": {
+      "status": "PROVEN",
+      "telemetry": "state/p3_6_dogfood/telemetry/agent-performance/2026-08-25T04-34-58-637Z_01a03733-37cd-7049-8479-a0a92b91d3f9.jsonl",
+      "evidence": "material requirement unresolved yields decision=continue, reason=requirements_unresolved, stop_not_triggered, no stop boundary."
+    },
+    "post_stop_block": {
+      "status": "PROVEN",
+      "telemetry": "state/p3_6_dogfood/telemetry/agent-performance/2026-08-25T04-30-46-568Z_01a0372f-5f28-7137-b726-347fabdcabb2.jsonl",
+      "evidence": "deliberate post-STOP bash attempt records stop_blocked and does not execute."
+    }
+  },
+  "verification": {
+    "focused_python_gate": "passed: P3.1-P3.5 supporting tests plus STOP contract/CLI tests",
+    "python_static": "ruff passed; pyright 0 errors, 0 warnings, 0 informations",
+    "focused_omp_gate": "26 passed: stop-boundary, worker-context, driver-orchestrator",
+    "omp_full_regression": "587 passed across 23 Vitest files",
+    "independent_validator": "P3.6_PROVEN after final parent/worker identity propagation proof",
+    "prior_phase_state": "P3.1-P3.5 remain PROVEN under scoped regression; Lean candidate/HOLD_SHADOW unchanged",
+    "p3_7_started": false,
+    "source_scope": "No P3.7 or unrelated cleanup implemented"
+  },
+  "scope_decisions": {
+    "p3_6_implementation_started": true,
+    "p3_1_p3_5_redesigned": false,
+    "lean_promotion_changed": false,
+    "p3_7_started": false
+  },
+  "final_status": "P3.6_PROVEN"
+}
