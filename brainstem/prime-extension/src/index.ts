@@ -1120,6 +1120,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             visibilityResult.visibility_plan?.mode === "enforced" &&
             Object.keys(visibilityResult.hydrated_instructions).length > 0
           ) {
+            // validateOmpVisibilityResult already rejects the whole plan if
+            // the concatenated total exceeds OMP_VISIBILITY_MAX_INJECTED_CHARS
+            // (P3.16 defect fix) -- hydrated_instructions is always within
+            // budget here, so this slice is a redundant safety net, never
+            // the active truncation path.
             const specialistText = Object.entries(visibilityResult.hydrated_instructions)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([, text]) => text)

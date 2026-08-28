@@ -6,6 +6,7 @@ provides_tools:
   - second_brain_delegate
   - second_brain_review_worker_result
   - second_brain_correct_worker_result
+  - second_brain_handoff_read
 provides_hooks:
   - on_session_start
   - pre_tool_call

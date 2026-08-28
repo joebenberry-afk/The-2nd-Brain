@@ -1,0 +1,61 @@
+{
+  "description": "Remediation of the P3.17 audit defect: the prior dogfood used a second OMP-primary process invoking Hermes adapter code directly, not a real Hermes host. This evidence proves a genuine external Hermes Agent process (separate installed binary, separate Python 3.11 runtime, separate OAuth session) consumed the handoff.",
+  "defect_being_remediated": "Independent GitHub audit: 'current final dogfood used OMP-primary source -> second OMP-primary session invoking the Hermes adapter path... Do not treat an OMP process calling Hermes adapter code as a real Hermes-host proof.'",
+  "remediation_summary": "Added a genuine Hermes Agent tool (second_brain_handoff_read) to the already-installed brainstem/adapters/hermes plugin (hermes_plugin.py + plugin.yaml), synced it into the real installed plugin copy at the Hermes 'dev' profile, and ran the real `hermes` CLI (C:/Users/assas/AppData/Local/hermes/bin/hermes.cmd, Hermes Agent v0.20.5, Python 3.11.16, separate install at C:/Users/assas/AppData/Local/hermes/hermes-agent) as profile 'dev' (bot_name=Brain-Dev) in bounded oneshot mode. The tool internally calls the unchanged _BrainClient.request() -> `second_brain autoinject hermes-hook` -> hermes_adapter.handle_request(event=handoff_read) path -- the same adapter code, but now invoked by a real external Hermes process instead of an OMP subprocess.",
+  "source": {
+    "harness": "omp",
+    "driver_omp_session": "envelope created by a real OMP-primary bash tool call (second_brain handoff create) on the live session capsule"
+  },
+  "envelope": {
+    "handoff_id": "b53e09cefd63c20af331779ebabb1fbf2d21423ab21551b06a694ebb179e08c3",
+    "envelope_path": "outputs/handoffs/handoff-e294cd86ecbc6c0b8d97ab9c43903d01e00976b898c4564a18539e5b1ae9762a-b53e09cefd63.json",
+    "capsule_sha256": "5ad081bfcd3b5f44ace37026bc907cba82f4cd156d275822e77e15819cee3a13",
+    "payload_sha256": "d4ef959b52982da6e98cea960668bff1b898dd0622b954bec6287cf0fb87819b",
+    "payload_canonical_sha256": "d4ef959b52982da6e98cea960668bff1b898dd0622b954bec6287cf0fb87819b",
+    "project_id": "second-brain",
+    "source_harness": "omp",
+    "destination_harness": "hermes"
+  },
+  "real_hermes_host": {
+    "binary": "C:/Users/assas/AppData/Local/hermes/bin/hermes.cmd",
+    "version": "Hermes Agent v0.20.5 (2026.8.19), upstream 608a56ed",
+    "install_directory": "C:/Users/assas/AppData/Local/hermes/hermes-agent",
+    "python": "3.11.16",
+    "profile": "dev",
+    "plugin_doctor": "PASS -- manifest second-brain-hermes 0.1.0 (standalone); runtime discovery, manifest parsing, import, and registration passed; registrations: 5 tool(s), 7 hook(s)",
+    "invocation": "hermes -p dev chat --query-file <prompt> --accept-hooks --yolo --pass-session-id --in <repo> --max-turns 6 --run-budget 90 --source tool -v",
+    "model": "openai-codex gpt-5.6-luna (Codex OAuth, https://chatgpt.com/backend-api/codex)",
+    "hermes_session_id": "20260828_025246_379945",
+    "bot_name": "Brain-Dev",
+    "bot_role": "dev",
+    "host_session_id": "hermes:Brain-Dev:20260828_025246_379945",
+    "brain_session_id": "ea3c71637453f463eae74ec14fa0e61af7b314f4f413c70415518453011a2aa7",
+    "tool_invoked": "second_brain_handoff_read",
+    "tool_call_latency_seconds": 0.25,
+    "tool_result_bytes": 52525
+  },
+  "recovered_state": {
+    "status": "recovered",
+    "freshness": "FRESH",
+    "capsule_sha256": "5ad081bfcd3b5f44ace37026bc907cba82f4cd156d275822e77e15819cee3a13",
+    "capsule_sha256_matches_source": true,
+    "payload_sha256": "d4ef959b52982da6e98cea960668bff1b898dd0622b954bec6287cf0fb87819b",
+    "payload_sha256_matches_source": true,
+    "objective_matches_source": true,
+    "next_action_matches_source": true,
+    "verification_dict_recovered": true,
+    "decisions_this_session_recovered": true,
+    "confirmed_facts_recovered": true,
+    "no_source_transcript_supplied": true,
+    "note": "Only the 1462-2000-ish byte bounded envelope JSON was ever passed to the real Hermes process (as a tool-call argument constructed by the model from the prompt text); no OMP conversation history, session transcript, or ledger was accessible to or supplied to the Hermes process."
+  },
+  "verification_chain": [
+    "real OMP-primary source session -> canonical BrainHandoffEnvelope (created via `second_brain handoff create`)",
+    "-> real Hermes host process (hermes.cmd, profile dev, bot_name Brain-Dev, genuine Codex OAuth session)",
+    "-> handoff_read through the Hermes adapter (second_brain_handoff_read tool -> hermes_plugin._BrainClient.request -> `second_brain autoinject hermes-hook` -> hermes_adapter.handle_request event=handoff_read)",
+    "-> objective/state/evidence/next_action recovered in full",
+    "-> canonical hashes (capsule_sha256, payload_sha256, payload_canonical_sha256) match the source envelope exactly",
+    "-> no source transcript supplied (only the bounded envelope object)"
+  ],
+  "created_at": "2026-08-28T06:55:00.000000+00:00"
+}

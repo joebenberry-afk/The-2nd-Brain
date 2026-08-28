@@ -158,6 +158,114 @@ def test_hydrate_plan_rejects_oversized_selected_body(brain_home, monkeypatch):
     assert bodies == {}
 
 
+def _pad_to_length(path: Path, target_len: int) -> None:
+    text = path.read_text(encoding="utf-8")
+    assert len(text) <= target_len, f"base skill body already {len(text)} chars"
+    path.write_text(text + ("x" * (target_len - len(text))), encoding="utf-8")
+
+
+def test_hydrate_plan_applies_aggregate_budget_no_partial_injection(brain_home, monkeypatch):
+    """P3.16 defect fix: three near-limit bodies (well under the 4096-char
+    per-skill cap) cannot all three fit the 8192-char aggregate injection
+    budget OMP concatenates. hydrated_skill_ids must equal exactly the
+    complete bodies present -- no skill is ever partially injected."""
+    near_limit = 4000
+    source_paths: dict[str, Path] = {}
+    for name in ("a", "b", "c"):
+        directory = _make_skill(brain_home, name, "shadow")
+        skill_path = directory / "SKILL.md"
+        _pad_to_length(skill_path, near_limit)
+        source_paths[name] = skill_path
+    monkeypatch.setattr(
+        "second_brain.router.route",
+        lambda home, task, max_active=None, skills=None: {
+            "selected": ["a", "b", "c"],
+            "scores": {},
+            "shadow": True,
+        },
+    )
+    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+    assert plan["selected_skill_ids"] == ["a", "b", "c"]  # 0-3 selection preserved
+    updated, bodies = skills.hydrate_plan(brain_home, plan)
+
+    # Never partially inject: every hydrated body is byte-identical to source.
+    for skill_id, body in bodies.items():
+        assert body == source_paths[skill_id].read_text(encoding="utf-8")
+        assert len(body) == near_limit
+
+    # plan/effective-input identity: hydrated_skill_ids == exactly the bodies present.
+    assert updated["hydrated_skill_ids"] == list(bodies.keys())
+    assert set(updated["hydrated_skill_ids"]) == set(bodies)
+
+    # Not all three fit: rejected with an explicit bounded reason, never a
+    # silent partial injection.
+    assert len(updated["hydrated_skill_ids"]) < 3
+    assert updated["unavailable_skill_ids"]["c"] == "aggregate_budget_exceeded"
+
+    # The exact concatenation OMP performs never exceeds the aggregate
+    # injection budget, and contains each hydrated body exactly once, whole.
+    effective_input = "\n\n".join(bodies[sid] for sid in sorted(bodies))
+    assert len(effective_input) <= skills.AGGREGATE_MAX_INJECTED_CHARS
+    for _skill_id, body in bodies.items():
+        assert effective_input.count(body) == 1
+
+
+def test_hydrate_plan_two_near_limit_bodies_both_fit_whole(brain_home, monkeypatch):
+    """Two near-limit bodies within the aggregate budget both hydrate whole."""
+    near_limit = 3000
+    for name in ("a", "b"):
+        directory = _make_skill(brain_home, name, "shadow")
+        _pad_to_length(directory / "SKILL.md", near_limit)
+    monkeypatch.setattr(
+        "second_brain.router.route",
+        lambda home, task, max_active=None, skills=None: {
+            "selected": ["a", "b"],
+            "scores": {},
+            "shadow": True,
+        },
+    )
+    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+    updated, bodies = skills.hydrate_plan(brain_home, plan)
+    assert updated["hydrated_skill_ids"] == ["a", "b"]
+    assert len(bodies["a"]) == near_limit
+    assert len(bodies["b"]) == near_limit
+    assert "aggregate_budget_exceeded" not in updated["unavailable_skill_ids"].values()
+    effective_input = "\n\n".join(bodies[sid] for sid in sorted(bodies))
+    assert len(effective_input) == near_limit * 2 + 2
+    assert len(effective_input) <= skills.AGGREGATE_MAX_INJECTED_CHARS
+
+
+def test_hydrate_plan_aggregate_budget_rejects_lower_priority_skills_deterministically(
+    brain_home, monkeypatch
+):
+    """Once the budget is exhausted, every LOWER-priority (later-selected)
+    skill is rejected too -- even one that would fit the remaining budget on
+    its own were the exhausting skill absent. Never a non-deterministic
+    'skip one, keep a later smaller one' outcome."""
+    # a=4096 (at the per-skill cap) fits alone (running total 4096).
+    # b=4096 does not fit after a (4096+2+4096=8194 > 8192) -> exhausts budget.
+    # c=4094 would fit perfectly after "a" alone (4096+2+4094=8192), proving
+    # its rejection is purely about priority order, not its own size.
+    for name, length in (("a", 4096), ("b", 4096), ("c", 4094)):
+        directory = _make_skill(brain_home, name, "shadow")
+        _pad_to_length(directory / "SKILL.md", length)
+    monkeypatch.setattr(
+        "second_brain.router.route",
+        lambda home, task, max_active=None, skills=None: {
+            "selected": ["a", "b", "c"],
+            "scores": {},
+            "shadow": True,
+        },
+    )
+    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+    updated, bodies = skills.hydrate_plan(brain_home, plan)
+    assert updated["hydrated_skill_ids"] == ["a"]
+    assert updated["unavailable_skill_ids"]["b"] == "aggregate_budget_exceeded"
+    assert updated["unavailable_skill_ids"]["c"] == "aggregate_budget_exceeded"
+    assert "b" not in bodies
+    assert "c" not in bodies
+
+
 def test_plan_to_evidence_has_no_raw_bodies_or_task_text(brain_home, monkeypatch):
     _make_skill(brain_home, "picked", "shadow")
     monkeypatch.setattr(

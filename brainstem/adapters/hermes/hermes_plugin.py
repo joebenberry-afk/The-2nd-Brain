@@ -105,6 +105,32 @@ _CORRECT_SCHEMA = {
         "required": ["packet", "result", "reason"],
     },
 }
+_HANDOFF_READ_SCHEMA = {
+    "name": "second_brain_handoff_read",
+    "description": (
+        "Validate and losslessly recover a Brain Handoff Envelope (P3.17) produced by "
+        "another harness. Returns the bounded continuation state (objective, "
+        "verification, decisions, next_action) without any source transcript."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "envelope": {"type": "object", "description": "The BrainHandoffEnvelope JSON object."},
+            "project_id": {
+                "type": "string",
+                "description": "Expected project id; mismatch is rejected.",
+            },
+            "allow_stale": {
+                "type": "boolean",
+                "description": (
+                    "Accept and explicitly classify stale capsule state "
+                    "instead of rejecting."
+                ),
+            },
+        },
+        "required": ["envelope"],
+    },
+}
 @dataclass(frozen=True)
 class _Settings:
     brain_home: Path
@@ -970,6 +996,28 @@ def register(ctx: Any) -> None:
             separators=(",", ":"),
         )
 
+    def handoff_read(params: dict[str, Any], **kwargs: Any) -> str:
+        active_session = (
+            kwargs.get("session_id") or current_session.get() or os.environ.get("HERMES_SESSION_ID")
+        )
+        envelope = params.get("envelope")
+        request_payload = _common(
+            settings, active_session, kwargs.get("model"), kwargs.get("provider")
+        ) | {
+            "event": "handoff_read",
+            "envelope": envelope if isinstance(envelope, dict) else {},
+        }
+        if params.get("project_id"):
+            request_payload["project_id"] = str(params["project_id"])
+        if "allow_stale" in params:
+            request_payload["allow_stale"] = bool(params["allow_stale"])
+        response = client.request(request_payload)
+        return json.dumps(
+            response or {"status": "fail_open"},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
     ctx.register_hook("on_session_start", on_session_start)
     ctx.register_hook("pre_tool_call", capture_tool_session)
     ctx.register_hook("pre_llm_call", pre_llm_call)
@@ -1005,4 +1053,11 @@ def register(ctx: Any) -> None:
         schema=_CORRECT_SCHEMA,
         handler=correct,
         description=_CORRECT_SCHEMA["description"],
+    )
+    ctx.register_tool(
+        name="second_brain_handoff_read",
+        toolset="second_brain",
+        schema=_HANDOFF_READ_SCHEMA,
+        handler=handoff_read,
+        description=_HANDOFF_READ_SCHEMA["description"],
     )

@@ -27,6 +27,13 @@ _MAX_SPECIALIST_SKILLS = 3
 _MAX_HYDRATED_BODY_CHARS = 4096
 _DESCRIPTOR_TEXT_MAX_CHARS = 400
 _PURPOSE_SECTION_MAX_CHARS = 240
+# Mirrors OMP_VISIBILITY_MAX_INJECTED_CHARS in visibility-bridge.ts: the total
+# model-visible specialist text OMP concatenates and injects (P3.16 defect
+# fix). hydrate_plan() enforces this BEFORE the plan leaves Python so
+# hydrated_skill_ids always equals the complete bodies actually injected --
+# never a partial body. Two entries joined by "\n\n" cost 2 separator chars.
+AGGREGATE_MAX_INJECTED_CHARS = 8192
+_INJECTION_JOIN_CHARS = 2
 
 
 def _purpose_excerpt(text: str) -> str:
@@ -222,13 +229,24 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
     ``unavailable_skill_ids`` entries instead. Returns a new plan dict
     (the input is never mutated) plus ``{skill_id: full SKILL.md text}``
     for every skill that actually hydrated.
+
+    Aggregate injection budget (P3.16 defect fix): OMP concatenates every
+    hydrated body with a 2-char ``"\\n\\n"`` separator and injects the
+    result as one block, bounded by ``AGGREGATE_MAX_INJECTED_CHARS``. Each
+    body already satisfies the per-skill ``_MAX_HYDRATED_BODY_CHARS`` cap,
+    but up to 3 near-limit bodies can still exceed the aggregate bound.
+    Candidates are accepted in ``selected_skill_ids`` (router priority)
+    order; the first skill whose full body would push the running total
+    over budget, and every skill after it, is rejected whole with
+    ``"aggregate_budget_exceeded"`` -- never partially injected. This keeps
+    ``hydrated_skill_ids`` exactly equal to the complete bodies actually
+    injected.
     """
     updated = dict(plan)
     eligible = {item["skill_id"]: item for item in eligible_skills(home)}
     selected_content_hashes: dict[str, str] = plan.get("_selected_content_hashes", {})
 
-    hydrated_skill_ids: list[str] = []
-    hydrated_bodies: dict[str, str] = {}
+    candidate_bodies: dict[str, str] = {}
     unavailable_skill_ids: dict[str, str] = dict(plan.get("unavailable_skill_ids", {}))
 
     for skill_id in plan["selected_skill_ids"]:
@@ -247,6 +265,25 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
         if len(body) > _MAX_HYDRATED_BODY_CHARS:
             unavailable_skill_ids[skill_id] = "body_too_large"
             continue
+        candidate_bodies[skill_id] = body
+
+    hydrated_skill_ids: list[str] = []
+    hydrated_bodies: dict[str, str] = {}
+    running_total = 0
+    budget_exhausted = False
+    for skill_id in plan["selected_skill_ids"]:
+        body = candidate_bodies.get(skill_id)
+        if body is None:
+            continue
+        if budget_exhausted:
+            unavailable_skill_ids[skill_id] = "aggregate_budget_exceeded"
+            continue
+        separator = _INJECTION_JOIN_CHARS if hydrated_bodies else 0
+        if running_total + separator + len(body) > AGGREGATE_MAX_INJECTED_CHARS:
+            unavailable_skill_ids[skill_id] = "aggregate_budget_exceeded"
+            budget_exhausted = True
+            continue
+        running_total += separator + len(body)
         hydrated_bodies[skill_id] = body
         hydrated_skill_ids.append(skill_id)
 

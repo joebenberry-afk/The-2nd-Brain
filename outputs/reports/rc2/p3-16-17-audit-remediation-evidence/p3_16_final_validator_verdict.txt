@@ -1,0 +1,8 @@
+P3.16_PROVEN
+
+The requested P3.16 evidence remains valid under `SECOND_BRAIN_HOME=C:/Users/assas/Documents/The-Second-Brain`: aggregate hydration is bounded at 8192 characters with whole-body rejection and 2-character separators; probe IDs exactly match returned body keys, alpha and beta are each 4090 characters with intact distinct tail markers, and `4090 + 4090 + 2 = 8182`; gamma is rejected as `aggregate_budget_exceeded`. Bridge validation rejects whole plans on aggregate overflow and hydrated-ID/body count mismatch. Both required focused test commands passed. P3.1-P3.15 and P3.17 remain untouched by this fix; shipped visibility remains `shadow`, and Lean remains candidate/HOLD_SHADOW.
+
+---
+Source: independent read-only OMP-primary re-validation session (--plan-yolo)
+OMP session id: 2026-08-28T06-43-32-311Z_01a0471b-ff57-7429-bc62-e6a5098371ca
+Model: openai-codex/gpt-5.6-luna
