@@ -130,3 +130,22 @@ token-fabric audit classifies that integration as partial.
 **Smallest next task:** independently qualify the existing P0.6 telemetry /
 governor attribution path without changing the frozen roadmap or beginning
 any later roadmap requirement.
+
+---
+
+## Current authoritative status (supersedes this document's Final Status column)
+
+This document's 37-item "Final Status" column above (line 16-52) is the **historical, unqualified
+2026-08-19 RC2 repair claim**. Every P0-P3 item was subsequently independently requalified in a
+dedicated current-campaign OMP-primary session, and P4 was never qualified at all. Do not read the
+"PROVEN" labels above (including the P4.1-P4.5 rows) as current verified status.
+
+The single authoritative current status for all 37 items, with a citation to the qualifying evidence
+for each, is:
+
+```text
+outputs/reports/rc2/00-AUTHORITATIVE-CURRENT-STATUS-LEDGER.md
+```
+
+As of that ledger's last update: P0.1-P3.17 (32 items) are PROVEN; P4.1-P4.5 (5 items) are NOT
+QUALIFIED. P4 has not been started.

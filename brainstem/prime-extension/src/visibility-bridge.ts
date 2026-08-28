@@ -113,6 +113,21 @@ export function validateOmpVisibilityResult(raw: unknown): OmpVisibilityResult {
   ) {
     return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
   }
+  // hydrated_skill_ids must equal the complete bodies actually present --
+  // never a subset/superset (P3.16 defect fix companion check).
+  if (hydratedSkillIds.length !== hydratedEntries.length) {
+    return invalidResult("BRAIN_VISIBILITY_INVALID_PLAN");
+  }
+  // Aggregate injection budget (P3.16 defect fix): the same bound OMP applies
+  // when concatenating hydrated bodies with a 2-char "\n\n" separator before
+  // injection. Reject the WHOLE plan here -- fail open to no injection --
+  // rather than let a later concatenate+slice silently truncate one body.
+  const totalInjectedChars =
+    hydratedEntries.reduce((sum, [, text]) => sum + (text as string).length, 0) +
+    Math.max(0, hydratedEntries.length - 1) * 2;
+  if (totalInjectedChars > OMP_VISIBILITY_MAX_INJECTED_CHARS) {
+    return invalidResult("BRAIN_VISIBILITY_AGGREGATE_TOO_LARGE");
+  }
   const plan: OmpVisibilityPlan = {
     visibility_plan_id: rawPlan.visibility_plan_id,
     mode: rawPlan.mode,

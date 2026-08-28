@@ -1,5 +1,5 @@
 {
-  "verdict": "P3.16_PARTIAL",
+  "verdict": "P3.16_PROVEN",
   "scope": "Implement and prove only the missing router-selection to modular skill-visibility gate; no P3.17",
   "implementation_commits": [
     "08367ca feat(skills): add harness-neutral visibility plan core",
@@ -80,5 +80,13 @@
     "enforced_phase": "PASS: controlled current-source OMP-primary enforced probes show selected specialist markers present, unselected bodies absent, exact 0/1/2/3 cardinality, and 4->3 cap. Enforced mode was temporary and is disabled/restored to shipped shadow default.",
     "independent_validator": "C:/Users/assas/.omp/agent/sessions/-Documents-The-Second-Brain/2026-08-28T01-07-56-248Z_01a045e8-bed8-7674-b216-32ac9fdbcdd9.jsonl returned P3.16_PROVEN.",
     "preserved": "P3.1-P3.15 remain PROVEN; P3.15 evidence-provenance hardening was not weakened; Lean remains candidate/HOLD_SHADOW; P3.17 untouched."
-  }
+  },
+  "audit_remediation": {
+    "defect": "Independent GitHub audit: skills.py permitted up to 3 hydrated bodies at <=4096 chars each (up to 12288 total), but OMP index.ts concatenates and slices total injected specialist text to OMP_VISIBILITY_MAX_INJECTED_CHARS=8192, so hydrated_skill_ids could claim 3 complete skills while the actual model-visible input silently truncated one.",
+    "fix": "skills.hydrate_plan now applies a deterministic aggregate injection budget (AGGREGATE_MAX_INJECTED_CHARS=8192, mirroring visibility-bridge.ts's OMP_VISIBILITY_MAX_INJECTED_CHARS, with a 2-char join separator) BEFORE returning hydrated_skill_ids. Candidates are accepted in selected_skill_ids (router priority) order; the first skill whose full body would exceed the running total, and every skill after it, is rejected whole with unavailable_skill_ids[id]='aggregate_budget_exceeded' -- never partially injected. visibility-bridge.ts's validateOmpVisibilityResult independently rejects (fails the whole plan open) any plan whose aggregate hydrated_instructions total exceeds the same budget, and rejects a hydrated_skill_ids/hydrated_instructions count mismatch. 0-3 selection, descriptor-first routing, lifecycle/hash checks, no-all-skills fallback, and the shipped shadow default are all unchanged.",
+    "tests": "tests/test_skills.py: 3 new adversarial tests (three near-limit bodies exceed budget; two near-limit bodies both fit whole; deterministic lower-priority rejection). brainstem/prime-extension/tests/visibility-bridge.test.ts: 3 new tests (aggregate-too-large whole-plan rejection; exact-budget acceptance with byte-identical bodies; hydrated_skill_ids/hydrated_instructions count-mismatch rejection).",
+    "live_proof": "state/p3_16_dogfood/aggregate-budget-enforced-probe.json: a real current OMP-primary enforced-mode session ran three temporary near-4090-char probe skills (each with a distinct end-of-body tail marker) through the real `second_brain autoinject omp-routing` CLI bridge. Result: selected_skill_ids=[alpha,beta,gamma], hydrated_skill_ids=[alpha,beta] (both full 4090 chars with intact tail markers), unavailable_skill_ids={gamma: aggregate_budget_exceeded}, aggregate total 8182<=8192. Probe skills and enforced config were removed/restored afterward.",
+    "gates": "Full pytest suite: 100% pass. Full Vitest suite: 610/610 pass (one unrelated pre-existing flaky test in omp-routing.test.ts confirmed non-reproducing on isolated rerun and full-suite rerun). TypeScript typecheck: clean.",
+    "final_independent_validator": "P3.16_PROVEN -- OMP session 2026-08-28T06-43-32-311Z_01a0471b-ff57-7429-bc62-e6a5098371ca independently re-derived the 4090+4090+2=8182<=8192 arithmetic, confirmed hydrated IDs/body keys match exactly, confirmed both required test commands passed, and confirmed P3.1-P3.15/P3.17 untouched with shipped visibility remaining shadow."
+   }
 }
