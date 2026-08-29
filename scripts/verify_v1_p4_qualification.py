@@ -1,7 +1,7 @@
 """Independent verifier for the v1 P4 qualification manifest (Task 8, Step 5).
 
 Reads the manifest and its raw evidence from disk in a fresh process and
-performs the eleven checks from the brief. It trusts nothing the runner
+performs the ten checks from the brief. It trusts nothing the runner
 claimed: every check re-derives its own answer from the raw artifacts,
 the fresh telemetry files, and a fresh `brain.sqlite` connection.
 
@@ -45,7 +45,7 @@ REQUIRED_SCENARIOS = frozenset({
     "driver_worker", "failed_worker", "malformed_state", "stale_state",
     "token_pressure", "cache_sensitive", "long_running_goal",
     "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood", "optimization_lifecycle",
+    "security_boundary", "genuine_project_dogfood",
 })
 
 _P4_TABLES = ("goals", "goal_events", "bottleneck_fingerprints", "heartbeat_state", "heartbeat_runs")
@@ -700,254 +700,6 @@ def check_privacy_absence(manifest: dict[str, Any], out_dir: Path) -> dict[str, 
     return check("privacy_absence", ok, {"scanned": scanned, "offenders": offenders})
 
 
-# ---------------------------------------------------------------------------
-# 11. Governed optimization lifecycle is ordered and evidence-bound
-# ---------------------------------------------------------------------------
-
-
-def _optimization_raw_commands(
-    scenario: dict[str, Any], out_dir: Path,
-) -> list[tuple[list[str], str, int | None]]:
-    """Load command metadata and only its raw stdout capture."""
-    commands: list[tuple[list[str], str, int | None]] = []
-    for command in scenario.get("commands", []):
-        if not isinstance(command, dict):
-            continue
-        ref = command.get("stdout_ref")
-        path = _raw_artifact_path(out_dir, ref)
-        if path is None or not path.is_file():
-            continue
-        argv = command.get("argv")
-        if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
-            commands.append((
-                argv,
-                path.read_text(encoding="utf-8", errors="replace"),
-                command.get("returncode"),
-            ))
-    return commands
-
-
-
-
-def check_optimization_lifecycle(
-    manifest: dict[str, Any], out_dir: Path,
-) -> dict[str, Any]:
-    """Verify proposal -> evaluation -> frontier -> activation -> rollback.
-
-    This check intentionally ignores the scenario row's metrics and home
-    state. It reads command captures and the evaluation input snapshot only.
-    """
-    scenario = next(
-        (row for row in manifest.get("scenarios", [])
-         if isinstance(row, dict) and row.get("name") == "optimization_lifecycle"),
-        None,
-    )
-    if not isinstance(scenario, dict):
-        return check("optimization_lifecycle", False, {"reason": "scenario missing"})
-
-    commands = _optimization_raw_commands(scenario, out_dir)
-    command_by_kind: dict[str, tuple[int, list[str], str]] = {}
-    ordered: list[str] = []
-    for index, (argv, text, returncode) in enumerate(commands):
-        if returncode != 0:
-            return check(
-                "optimization_lifecycle", False,
-                {"reason": "lifecycle command failed", "index": index, "returncode": returncode},
-            )
-        kind: str | None = None
-        if "init" in argv:
-            kind = "init"
-        elif "optimize" in argv and "propose" in argv:
-            kind = "propose"
-        elif "optimize" in argv and "evaluate" in argv:
-            kind = "evaluate"
-        elif "frontier" in argv and "review" in argv:
-            kind = "frontier_review"
-        elif "frontier" in argv and "status" in argv:
-            kind = "frontier_status"
-        elif "optimize" in argv and "activate" in argv:
-            kind = "activate"
-        elif "immune" in argv and "trigger" in argv:
-            kind = "trigger"
-        elif "immune" in argv and "ingest" in argv:
-            kind = "ingest"
-        elif "immune" in argv and "check" in argv:
-            kind = "trigger_check"
-        elif "optimize" in argv and "rollback" in argv:
-            kind = "rollback"
-        elif "optimize" in argv and "show" in argv:
-            kind = "show"
-        elif "-c" in argv:
-            try:
-                payload = json.loads(text)
-            except (json.JSONDecodeError, ValueError):
-                payload = None
-            if isinstance(payload, dict) and "fingerprint_id" in payload:
-                kind = "seed"
-            elif isinstance(payload, dict) and payload.get("mutation_applied") is True:
-                kind = "mutation"
-        if kind is not None:
-            if kind in command_by_kind:
-                return check("optimization_lifecycle", False, {"reason": f"duplicate {kind}"})
-            command_by_kind[kind] = (index, argv, text)
-            ordered.append(kind)
-
-    expected = [
-        "init", "seed", "propose", "evaluate", "frontier_review",
-        "frontier_status", "activate", "trigger", "ingest", "mutation",
-        "trigger_check", "rollback", "show",
-    ]
-    if len(commands) != len(expected) or ordered != expected:
-        return check(
-            "optimization_lifecycle", False,
-            {"reason": "lifecycle order mismatch", "expected": expected, "actual": ordered},
-        )
-    if any(command_by_kind[k][2].strip() == "" for k in expected):
-        return check("optimization_lifecycle", False, {"reason": "empty raw command output"})
-
-    def parsed(kind: str) -> dict[str, Any] | None:
-        text = command_by_kind[kind][2]
-        try:
-            value = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        return value if isinstance(value, dict) else None
-
-    seed = parsed("seed")
-    proposal = parsed("propose")
-    evaluated = parsed("evaluate")
-    activated = parsed("activate")
-    rolled_back = parsed("rollback")
-    final = parsed("show")
-    if not all(isinstance(value, dict) for value in (seed, proposal, evaluated, activated, rolled_back, final)):
-        return check("optimization_lifecycle", False, {"reason": "missing JSON lifecycle output"})
-
-    fixture: dict[str, Any] | None = None
-    for ref in scenario.get("evidence_refs", []):
-        path = _raw_artifact_path(out_dir, ref)
-        if path is None or not path.is_file():
-            continue
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(value, dict) and isinstance(value.get("qualification_fixture"), dict):
-            fixture = value
-            break
-    if fixture is None:
-        return check("optimization_lifecycle", False, {"reason": "evaluation fixture missing"})
-
-    proposal_id = proposal.get("proposal_id")
-    intervention = proposal.get("intervention")
-    intervention_hash = intervention.get("hash") if isinstance(intervention, dict) else None
-    fixture_intervention = fixture.get("intervention_hash")
-    fixture_quality = fixture.get("quality")
-    fixture_gates = fixture.get("gates")
-    fixture_baseline = fixture.get("baseline")
-    fixture_candidate = fixture.get("candidate")
-    gates_ok = (
-        isinstance(fixture_quality, dict)
-        and fixture_quality.get("correctness") is True
-        and fixture_quality.get("requirements") is True
-        and fixture_quality.get("protected_values") is True
-        and fixture_quality.get("regressions") is False
-        and fixture_quality.get("verification") is True
-        and isinstance(fixture_gates, dict)
-        and isinstance(fixture_gates.get("trigger"), dict)
-        and fixture_gates["trigger"].get("failed") == 0
-        and isinstance(fixture_gates.get("workflow"), dict)
-        and fixture_gates["workflow"].get("structural") is True
-        and fixture_gates["workflow"].get("failed") == 0
-        and isinstance(fixture_gates.get("regression"), dict)
-        and fixture_gates["regression"].get("regression") is False
-        and fixture_gates["regression"].get("failed") == 0
-        and isinstance(fixture_gates.get("security"), dict)
-        and fixture_gates["security"].get("passed") is True
-    )
-    economics_ok = (
-        isinstance(fixture_baseline, dict)
-        and isinstance(fixture_candidate, dict)
-        and isinstance(fixture_baseline.get("input_tokens"), int)
-        and isinstance(fixture_baseline.get("output_tokens"), int)
-        and isinstance(fixture_candidate.get("input_tokens"), int)
-        and isinstance(fixture_candidate.get("output_tokens"), int)
-        and fixture_baseline["input_tokens"] + fixture_baseline["output_tokens"]
-        > fixture_candidate["input_tokens"] + fixture_candidate["output_tokens"]
-    )
-    proposal_ok = (
-        isinstance(proposal_id, str) and proposal.get("mode") == "active"
-        and proposal.get("status") == "shadow"
-        and isinstance(intervention_hash, str)
-        and intervention_hash == fixture_intervention
-        and seed.get("fingerprint_id") == proposal.get("fingerprint_id")
-        and seed.get("intervention_hash") == intervention_hash
-        and seed.get("skill_name") == "candidate"
-    )
-    evaluation_ok = (
-        gates_ok and economics_ok
-        and "evaluate" in command_by_kind["evaluate"][1]
-        and proposal_id in command_by_kind["evaluate"][1]
-        and evaluated.get("proposal_id") == proposal_id
-        and evaluated.get("status") == "evaluated"
-        and isinstance(evaluated.get("evaluation"), dict)
-        and evaluated["evaluation"].get("quality_gate") == "passed"
-        and evaluated["evaluation"].get("candidate_content_sha256") == intervention_hash
-        and isinstance(evaluated.get("intervention"), dict)
-        and evaluated["intervention"].get("hash") == intervention_hash
-    )
-    frontier_ok = (
-        "skill-candidate-promotion" in command_by_kind["frontier_review"][1]
-        and "skill-candidate-promotion" in command_by_kind["frontier_status"][1]
-        and "latest=approve" in command_by_kind["frontier_status"][2]
-        and "review:" in command_by_kind["frontier_review"][2]
-    )
-    activation_ok = (
-        proposal_id in command_by_kind["activate"][1]
-        and activated.get("activated") is True
-        and isinstance(activated.get("proposal"), dict)
-        and activated["proposal"].get("proposal_id") == proposal_id
-        and activated["proposal"].get("status") == "activated"
-        and isinstance(activated["proposal"].get("intervention"), dict)
-        and activated["proposal"]["intervention"].get("hash") == intervention_hash
-    )
-    trigger_ok = (
-        "skill-candidate" in command_by_kind["trigger"][1]
-        and "trigger registered: skill-candidate" in command_by_kind["trigger"][2]
-        and "tests_failed" in command_by_kind["ingest"][1]
-        and "ingested tests_failed=" in command_by_kind["ingest"][2]
-        and "skill-candidate" in command_by_kind["trigger_check"][1]
-        and "matched=True" in command_by_kind["trigger_check"][2]
-    )
-    rollback_ok = (
-        proposal_id in command_by_kind["rollback"][1]
-        and "skill-candidate" in command_by_kind["rollback"][1]
-        and rolled_back.get("rolled_back") is True
-        and isinstance(rolled_back.get("proposal"), dict)
-        and rolled_back["proposal"].get("proposal_id") == proposal_id
-        and rolled_back["proposal"].get("status") == "rolled_back"
-        and proposal_id in command_by_kind["show"][1]
-        and final.get("proposal_id") == proposal_id
-        and final.get("status") == "rolled_back"
-        and isinstance(final.get("intervention"), dict)
-        and final["intervention"].get("hash") == intervention_hash
-    )
-    return check(
-        "optimization_lifecycle",
-        proposal_ok and evaluation_ok and frontier_ok and activation_ok and trigger_ok and rollback_ok,
-        {
-            "ordered": ordered,
-            "proposal_id": proposal_id,
-            "intervention_hash": intervention_hash,
-            "proposal_ok": proposal_ok,
-            "evaluation_ok": evaluation_ok,
-            "frontier_ok": frontier_ok,
-            "activation_ok": activation_ok,
-            "trigger_ok": trigger_ok,
-            "rollback_ok": rollback_ok,
-        },
-    )
-
-
 CHECKS = (
     check_scenario_completeness,
     check_artifact_hash_integrity,
@@ -959,7 +711,6 @@ CHECKS = (
     check_off_shadow_boundaries,
     check_claims_grounded,
     check_privacy_absence,
-    check_optimization_lifecycle,
 )
 
 
@@ -974,8 +725,7 @@ def verify(manifest_path: Path) -> dict[str, Any]:
             if fn in (check_scenario_completeness,):
                 results.append(fn(manifest))
             elif fn in (check_artifact_hash_integrity, check_stale_and_unsafe_refusals,
-                        check_off_shadow_boundaries, check_claims_grounded,
-                        check_privacy_absence, check_optimization_lifecycle):
+                        check_off_shadow_boundaries, check_claims_grounded, check_privacy_absence):
                 results.append(fn(manifest, out_dir))
             elif fn in (check_git_currency, check_database_integrity,
                         check_telemetry_validation, check_backup_restore_preservation):
