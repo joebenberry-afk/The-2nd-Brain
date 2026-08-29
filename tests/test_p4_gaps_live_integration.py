@@ -52,6 +52,13 @@ class TestP4GapsLiveIntegration:
         assert g3.status == GoalStatus.COMPLETED
         assert g3.completed_at is not None
 
+        history = store.list_goal_events(goal.goal_id)
+        assert [event["event_type"] for event in history] == [
+            "MILESTONE_COMPLETED",
+            "MILESTONE_COMPLETED",
+            "MILESTONE_COMPLETED",
+        ]
+
         # Verify active goals list excludes completed goal
         active_goals = store.list_active_goals()
         assert goal.goal_id not in [g.goal_id for g in active_goals]
