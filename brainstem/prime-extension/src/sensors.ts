@@ -1263,3 +1263,191 @@ export function providerResponseMeta(
   if (headerEntries.length > 0) extra.headers = headerEntries;
   return baseV3("provider_response_meta", session, extra) as unknown as ProviderResponseMetaRecord;
 }
+
+// ---------------------------------------------------------------------------
+// P4 sensors (Task 7; plan §3 P4, SCHEMA.md). Bounded mirrors of p4-mirror.ts's
+// `P4PulseResult` fields. Privacy: enumerated strings, booleans, bounded
+// non-negative numbers, 64-hex hashes, and bounded issue-code lists only —
+// candidate summaries, proposal bodies, command text, and raw tool payloads
+// (present on the raw Python dicts p4-mirror.ts relays) never reach a
+// sensor here.
+// ---------------------------------------------------------------------------
+
+const P4_SHA256_HEX_RE = /^[0-9a-fA-F]{64}$/;
+const P4_TOKEN_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+/** Bounded non-negative integer, clamped to `max`; malformed input -> 0. */
+function boundedCount(value: unknown, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return 0;
+  return Math.min(value, max);
+}
+
+/** Bounded token (proposal ids, status/state enums), or null when malformed
+ * (never free text) — three-plus call sites below, per project convention. */
+function boundedToken(value: unknown): string | null {
+  return typeof value === "string" && P4_TOKEN_RE.test(value) ? value : null;
+}
+
+/** Bounded sha256 hex digest, or null when absent/malformed. */
+function boundedHash(value: unknown): string | null {
+  return typeof value === "string" && P4_SHA256_HEX_RE.test(value) ? value : null;
+}
+
+export const HEARTBEAT_MODES = ["off", "shadow", "active"] as const;
+
+export interface HeartbeatPulseRecord extends BaseRecord {
+  kind: "heartbeat_pulse";
+  mode: "off" | "shadow" | "active";
+  event: string;
+  due: boolean;
+  ran: boolean;
+  healthy: boolean;
+  db_ok: boolean;
+  cache_pruned_count: number;
+  git_dirty: boolean;
+  issue_codes: string[];
+  latency_ms: number;
+  model_tokens_used: number;
+}
+
+/**
+ * Bounded telemetry mirror of one `p4.pulse()` heartbeat result (Task 3's
+ * `HeartbeatCoordinator.run_if_due()` output, relayed through p4-mirror.ts).
+ * Only the fixed heartbeat_pulse field set ever leaves this builder;
+ * `model_tokens_used` is always zero (the heartbeat is zero-token by design).
+ */
+export function heartbeatPulse(
+  session: string,
+  result: Record<string, unknown> | undefined,
+): HeartbeatPulseRecord {
+  const value = result ?? {};
+  const mode =
+    typeof value.mode === "string" && (HEARTBEAT_MODES as readonly string[]).includes(value.mode)
+      ? (value.mode as "off" | "shadow" | "active")
+      : "shadow";
+  const issueCodes = Array.isArray(value.issue_codes)
+    ? value.issue_codes
+        .filter((code): code is string => typeof code === "string" && code.length >= 1 && code.length <= 64)
+        .slice(0, 32)
+    : [];
+  return base("heartbeat_pulse", session, {
+    mode,
+    event: typeof value.event === "string" ? truncate(value.event, 128) : "",
+    due: value.due === true,
+    ran: value.ran === true,
+    healthy: value.healthy === true,
+    db_ok: value.db_ok === true,
+    cache_pruned_count: boundedCount(value.cache_pruned_count, 1_000_000),
+    git_dirty: value.git_dirty === true,
+    issue_codes: issueCodes,
+    latency_ms: boundedCount(value.latency_ms, 86_400_000),
+    model_tokens_used: 0,
+  }) as unknown as HeartbeatPulseRecord;
+}
+
+export const BOTTLENECK_CATEGORIES = [
+  "PROMPT_BLOAT",
+  "TOOL_CHAIN_THRASH",
+  "UNCOMPRESSED_PAYLOAD",
+  "RETRIEVAL_OVERLOAD",
+] as const;
+
+export interface BottleneckFingerprintRecord extends BaseRecord {
+  kind: "bottleneck_fingerprint";
+  fingerprint_id: string;
+  category: string;
+  scope_id: string;
+  occurrence_count: number;
+  impact_score: number;
+  evidence_count: number;
+  evidence_hash: string | null;
+}
+
+/**
+ * Bounded telemetry mirror of one Radar fingerprint (Task 5's
+ * `ImprovementRadar.observe_session()` fingerprint dict, relayed through
+ * p4-mirror.ts's `fingerprints[]`). Only fingerprint_id/category/scope_id/
+ * counts/impact_score/evidence_hash ever leave this builder — the raw
+ * dict's `description`, `mitigation`, `metadata`, and `evidence_refs` are
+ * never read.
+ */
+export function bottleneckFingerprint(
+  session: string,
+  fingerprint: Record<string, unknown> | undefined,
+): BottleneckFingerprintRecord {
+  const value = fingerprint ?? {};
+  const category =
+    typeof value.category === "string" && (BOTTLENECK_CATEGORIES as readonly string[]).includes(value.category)
+      ? value.category
+      : "unknown";
+  const impactScore =
+    typeof value.impact_score === "number" && Number.isFinite(value.impact_score) && value.impact_score >= 0
+      ? Math.min(value.impact_score, 1_000_000)
+      : 0;
+  return base("bottleneck_fingerprint", session, {
+    fingerprint_id: typeof value.fingerprint_id === "string" ? truncate(value.fingerprint_id, 128) : "",
+    category,
+    scope_id: typeof value.scope_id === "string" ? truncate(value.scope_id, 128) : "",
+    occurrence_count: boundedCount(value.occurrence_count, 1_000_000_000),
+    impact_score: impactScore,
+    evidence_count: boundedCount(value.evidence_count, 1_000_000_000),
+    evidence_hash: boundedHash(value.evidence_hash),
+  }) as unknown as BottleneckFingerprintRecord;
+}
+
+export const OPTIMIZATION_EVENT_KINDS = [
+  "optimization_proposal",
+  "optimization_evaluation",
+  "optimization_activation",
+  "optimization_rollback",
+] as const;
+export type OptimizationEventKind = (typeof OPTIMIZATION_EVENT_KINDS)[number];
+
+export interface OptimizationEventMetadata {
+  proposal_id: string;
+  status: string;
+  approval_state?: string;
+  rollback_state?: string;
+  intervention_hash?: string;
+  evidence_hash?: string;
+}
+
+export interface OptimizationEventRecord extends BaseRecord {
+  kind: OptimizationEventKind;
+  proposal_id: string;
+  status: string;
+  approval_state: string | null;
+  rollback_state: string | null;
+  intervention_hash: string | null;
+  evidence_hash: string | null;
+}
+
+/**
+ * Bounded telemetry mirror of one optimization lifecycle event (proposal /
+ * evaluation / activation / rollback, Task 6's `optimization.py` records).
+ * `metadata` never carries proposal bodies or intervention content — only
+ * bounded tokens and hashes. Returns null on an unrecognized `kind` or a
+ * missing/malformed `proposal_id`/`status` (never emits an unbounded
+ * fallback record).
+ *
+ * NOT WIRED: this sensor is available for future use; the P4 pulse bridge
+ * (p4-mirror.ts) does not surface optimization events today.
+ */
+export function optimizationEvent(
+  session: string,
+  kind: OptimizationEventKind,
+  metadata: OptimizationEventMetadata,
+): OptimizationEventRecord | null {
+  if (!(OPTIMIZATION_EVENT_KINDS as readonly string[]).includes(kind)) return null;
+  const proposalId = boundedToken(metadata.proposal_id);
+  const status = boundedToken(metadata.status);
+  if (proposalId === null || status === null) return null;
+  return base(kind, session, {
+    proposal_id: proposalId,
+    status,
+    approval_state: boundedToken(metadata.approval_state),
+    rollback_state: boundedToken(metadata.rollback_state),
+    intervention_hash: boundedHash(metadata.intervention_hash),
+    evidence_hash: boundedHash(metadata.evidence_hash),
+  }) as unknown as OptimizationEventRecord;
+}

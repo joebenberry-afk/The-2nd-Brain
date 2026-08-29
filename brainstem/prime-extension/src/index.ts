@@ -94,7 +94,7 @@ import {
   runEnvironmentAssessmentSync,
   type EnvironmentAssessmentResult,
 } from "./environment-mirror";
-import { runRadarObservationSync } from "./radar-mirror";
+import { runP4Pulse, runP4PulseSync } from "./p4-mirror";
 import {
   mirrorExtensionError,
   mirrorEventSync,
@@ -712,6 +712,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : undefined;
 
   /**
+   * Task 7: queue one bounded, non-blocking P4 pulse (heartbeat only —
+   * Radar/fingerprints run on shutdown, never here) for `session_start`/
+   * `turn_start`. Fire-and-forget: every bridge failure is silently
+   * fail-open and never affects the host turn or return value.
+   */
+  const queueP4Pulse = (event: string, session: string, ctx: ExtensionContext): void => {
+    runP4Pulse({
+      home: config.home ?? "",
+      hostSessionId: session,
+      event,
+      repo: ctxCwd(ctx),
+    })
+      .then((pulse) => {
+        if (pulse.ok && pulse.heartbeat) {
+          getStore(session)?.append(sensors.heartbeatPulse(session, pulse.heartbeat));
+        }
+      })
+      .catch(() => {
+        // bridge failure: bounded fail-open, never affects the host turn.
+      });
+  };
+
+  /**
    * Phase B: VMem admission — the SMALLEST automatic path that stores an
    * ALREADY-COMPUTED, structured reference object (never raw prompt/tool
    * content) into VMem's session-object store (`second_brain vmem store`).
@@ -878,6 +901,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
     }
+    queueP4Pulse("session_start", session, ctx);
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 
@@ -1259,8 +1283,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return undefined;
   });
 
-  wire<TurnStartEvent>("turn_start", (event, _ctx, session) => {
+  wire<TurnStartEvent>("turn_start", (event, ctx, session) => {
     currentTurnIndex = event.turnIndex;
+    queueP4Pulse("turn_start", session, ctx);
     return sensors.turnStart(session, event.turnIndex);
   });
 
@@ -2093,18 +2118,27 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         typeof environment.evidence.project_id === "string"
           ? environment.evidence.project_id
           : undefined;
-      if (projectId !== undefined) {
-        const radarResult = runRadarObservationSync({
-          home: config.home ?? "",
-          hostSessionId: session,
-          repo: ctxCwd(ctx) ?? config.home ?? "",
-          projectId,
-        });
-        if (!radarResult.ok) {
-          getStore(session)?.append(
-            mirrorExtensionError(session, radarResult.error ?? "Radar observation failed"),
-          );
+      // Task 7: one bounded P4 pulse — heartbeat always runs; Radar/
+      // fingerprints run only when `projectId` is known (gated inside
+      // p4.pulse() itself, mirrors the prior project_id-gated Radar call).
+      const p4Result = runP4PulseSync({
+        home: config.home ?? "",
+        hostSessionId: session,
+        event: "session_shutdown",
+        repo: ctxCwd(ctx) ?? config.home ?? "",
+        projectId,
+      });
+      if (p4Result.ok) {
+        if (p4Result.heartbeat) {
+          getStore(session)?.append(sensors.heartbeatPulse(session, p4Result.heartbeat));
         }
+        for (const fingerprint of p4Result.fingerprints ?? []) {
+          getStore(session)?.append(sensors.bottleneckFingerprint(session, fingerprint));
+        }
+      } else {
+        getStore(session)?.append(
+          sensors.extensionError(session, new Error(p4Result.error ?? "P4 pulse failed")),
+        );
       }
       mirror(
         session,

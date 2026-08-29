@@ -144,8 +144,14 @@ class ImprovementRadar:
         *,
         project_id: str,
         task_id: str | None = None,
+        emit_telemetry: bool = True,
     ) -> list[dict[str, Any]]:
-        """Observe one canonical telemetry stream and persist candidates."""
+        """Observe one canonical telemetry stream and persist candidates.
+
+        `emit_telemetry=False` (used by `p4.pulse()`'s `--no-telemetry`
+        composition) skips the internal `bottleneck_fingerprint` telemetry
+        write below; the returned candidates/fingerprints are unaffected.
+        """
         if not project_id.strip():
             raise BrainError("project_id must be non-empty")
         fingerprint_scope_id = project_id.strip()[:128]
@@ -163,25 +169,26 @@ class ImprovementRadar:
                 scope_id=fingerprint_scope_id,
                 evidence_refs=refs[:64],
             )
-            evidence_hash = hashlib.sha256(
-                json.dumps(
-                    fingerprint.evidence_refs or [],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            telemetry.append_record(
-                self.home,
-                session_id,
-                "bottleneck_fingerprint",
-                fingerprint_id=fingerprint.fingerprint_id,
-                category=_FINGERPRINT_CATEGORY[alert.pattern].value,
-                scope_id=fingerprint_scope_id,
-                occurrence_count=fingerprint.occurrence_count,
-                impact_score=fingerprint.impact_score,
-                evidence_count=len(fingerprint.evidence_refs or []),
-                evidence_hash=evidence_hash,
-            )
+            if emit_telemetry:
+                evidence_hash = hashlib.sha256(
+                    json.dumps(
+                        fingerprint.evidence_refs or [],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                telemetry.append_record(
+                    self.home,
+                    session_id,
+                    "bottleneck_fingerprint",
+                    fingerprint_id=fingerprint.fingerprint_id,
+                    category=_FINGERPRINT_CATEGORY[alert.pattern].value,
+                    scope_id=fingerprint_scope_id,
+                    occurrence_count=fingerprint.occurrence_count,
+                    impact_score=fingerprint.impact_score,
+                    evidence_count=len(fingerprint.evidence_refs or []),
+                    evidence_hash=evidence_hash,
+                )
             return fingerprint.to_dict()
 
         results: list[dict[str, Any]] = []

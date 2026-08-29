@@ -59,9 +59,11 @@ vi.mock("../src/environment-mirror", () => ({
   runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
 }));
 
-const runRadarObservationMock = vi.hoisted(() => vi.fn());
-vi.mock("../src/radar-mirror", () => ({
-  runRadarObservationSync: runRadarObservationMock,
+const runP4PulseMock = vi.hoisted(() => vi.fn());
+const runP4PulseSyncMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/p4-mirror", () => ({
+  runP4Pulse: runP4PulseMock,
+  runP4PulseSync: runP4PulseSyncMock,
 }));
 
 // P3.16 skill-visibility wiring: control the visibility outcome directly
@@ -138,8 +140,10 @@ beforeEach(async () => {
     mutationClassification: "none",
     completionEligible: true,
   });
-  runRadarObservationMock.mockReset();
-  runRadarObservationMock.mockReturnValue({ ok: true, sessionId: "wiring-test", candidateCount: 0, candidates: [] });
+  runP4PulseMock.mockReset();
+  runP4PulseMock.mockResolvedValue({ ok: true, sessionId: "wiring-test" });
+  runP4PulseSyncMock.mockReset();
+  runP4PulseSyncMock.mockReturnValue({ ok: true, sessionId: "wiring-test" });
   runOmpVisibilityMock.mockReset();
   runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
 });
@@ -470,14 +474,107 @@ describe("factory wiring (src/index.ts)", () => {
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "shutdown", hostSessionId: "wiring-test" }),
     );
-    expect(runRadarObservationMock).toHaveBeenCalledWith(
+    expect(runP4PulseSyncMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hostSessionId: "wiring-test",
+        event: "session_shutdown",
         projectId: "project-a",
         repo: "C:/work",
       }),
     );
     await settle();
+  });
+
+  it("Task 7: session_start/turn_start queue a fire-and-forget P4 pulse and append its bounded heartbeat", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    runP4PulseMock.mockResolvedValue({
+      ok: true,
+      sessionId: "wiring-test",
+      heartbeat: {
+        mode: "shadow", event: "session_start", due: true, ran: true, healthy: true,
+        db_ok: true, cache_pruned_count: 0, git_dirty: false, issue_codes: [],
+        latency_ms: 2, model_tokens_used: 0,
+      },
+    });
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(runP4PulseMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostSessionId: "wiring-test", event: "session_start", repo: "C:/work" }),
+    );
+
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    expect(runP4PulseMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostSessionId: "wiring-test", event: "turn_start", repo: "C:/work" }),
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l));
+    const heartbeats = records.filter((r) => r.kind === "heartbeat_pulse");
+    expect(heartbeats.length).toBeGreaterThan(0);
+    expect(heartbeats[0].model_tokens_used).toBe(0);
+  });
+
+  it("Task 7: session_shutdown appends bounded heartbeat_pulse/bottleneck_fingerprint records from a successful P4 pulse", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    runP4PulseSyncMock.mockReturnValue({
+      ok: true,
+      sessionId: "wiring-test",
+      heartbeat: {
+        mode: "shadow", event: "session_shutdown", due: true, ran: true, healthy: true,
+        db_ok: true, cache_pruned_count: 1, git_dirty: false, issue_codes: [],
+        latency_ms: 5, model_tokens_used: 0,
+      },
+      candidates: [{ candidate_id: "candidate-1", lifecycle_state: "candidate" }],
+      fingerprints: [
+        {
+          fingerprint_id: "fp-1", category: "PROMPT_BLOAT", scope_id: "project-a",
+          occurrence_count: 3, impact_score: 4.2, evidence_count: 2, evidence_hash: "a".repeat(64),
+        },
+      ],
+    });
+
+    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await settle();
+
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l));
+    const heartbeat = records.find((r) => r.kind === "heartbeat_pulse");
+    const fingerprint = records.find((r) => r.kind === "bottleneck_fingerprint");
+    expect(heartbeat?.mode).toBe("shadow");
+    expect(heartbeat?.model_tokens_used).toBe(0);
+    expect(fingerprint?.fingerprint_id).toBe("fp-1");
+    expect(fingerprint?.evidence_hash).toBe("a".repeat(64));
+    // Privacy: the raw candidate dict (lifecycle_state, candidate_id, ...)
+    // is never serialized into telemetry by these sensors.
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain("candidate_id");
+    expect(serialized).not.toContain("lifecycle_state");
+    expect(records.map((r) => r.kind)).toContain("session_shutdown");
+  });
+
+  it("Task 7: a failed P4 pulse at shutdown appends a bounded extension_error and never blocks shutdown", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    runP4PulseSyncMock.mockReturnValue({ ok: false, sessionId: "wiring-test", error: "p4 pulse timed out" });
+
+    const result = handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    expect(result).toBeUndefined();
+    await settle();
+
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l));
+    expect(records.map((r) => r.kind)).toContain("session_shutdown");
+    const error = records.find((r) => r.kind === "extension_error" && r.error === "p4 pulse timed out");
+    expect(error).toBeDefined();
   });
 
   it("ledger-cwd-ordering-fix: user_task as FIRST mirror forwards ctx.cwd (project attribution)", async () => {

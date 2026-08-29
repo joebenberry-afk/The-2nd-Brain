@@ -875,3 +875,118 @@ describe("Part B/E: contextPaging (privacy-safe paging-count telemetry)", () => 
     expect(serialized).not.toContain("del-");
   });
 });
+
+describe("P4 sensors: heartbeatPulse/bottleneckFingerprint/optimizationEvent (Task 7)", () => {
+  it("heartbeatPulse mirrors a healthy shadow pulse and forces model_tokens_used to zero", () => {
+    const record = sensors.heartbeatPulse(SESSION, {
+      mode: "shadow",
+      event: "session_start",
+      due: true,
+      ran: true,
+      healthy: true,
+      db_ok: true,
+      cache_pruned_count: 3,
+      git_dirty: false,
+      issue_codes: ["cache_stale"],
+      latency_ms: 12,
+      model_tokens_used: 999, // must never survive: heartbeat is zero-token by design
+    });
+    expectBase(record, "heartbeat_pulse");
+    expect(record.mode).toBe("shadow");
+    expect(record.event).toBe("session_start");
+    expect(record.due).toBe(true);
+    expect(record.cache_pruned_count).toBe(3);
+    expect(record.issue_codes).toEqual(["cache_stale"]);
+    expect(record.latency_ms).toBe(12);
+    expect(record.model_tokens_used).toBe(0);
+  });
+
+  it("heartbeatPulse falls back to bounded defaults for missing/malformed input", () => {
+    const record = sensors.heartbeatPulse(SESSION, undefined);
+    expectBase(record, "heartbeat_pulse");
+    expect(record.mode).toBe("shadow");
+    expect(record.event).toBe("");
+    expect(record.due).toBe(false);
+    expect(record.ran).toBe(false);
+    expect(record.cache_pruned_count).toBe(0);
+    expect(record.issue_codes).toEqual([]);
+  });
+
+  it("heartbeatPulse rejects an unrecognized mode and clamps out-of-range counts", () => {
+    const record = sensors.heartbeatPulse(SESSION, {
+      mode: "turbo",
+      cache_pruned_count: 9_999_999,
+      latency_ms: -5,
+      issue_codes: Array.from({ length: 40 }, (_, i) => `code-${i}`),
+    });
+    expect(record.mode).toBe("shadow");
+    expect(record.cache_pruned_count).toBe(1_000_000);
+    expect(record.latency_ms).toBe(0);
+    expect(record.issue_codes).toHaveLength(32);
+  });
+
+  it("bottleneckFingerprint mirrors bounded fields only — never description/mitigation/metadata/evidence_refs", () => {
+    const record = sensors.bottleneckFingerprint(SESSION, {
+      fingerprint_id: "fp-1",
+      category: "PROMPT_BLOAT",
+      scope_id: "project-a",
+      occurrence_count: 4,
+      impact_score: 7.5,
+      evidence_count: 2,
+      evidence_hash: "a".repeat(64),
+      description: "SECRET: repeated read of large file",
+      mitigation: "SECRET: use grep instead",
+      metadata: { note: "SECRET" },
+      evidence_refs: [{ telemetry_ref: "SECRET:1" }],
+    });
+    expectBase(record, "bottleneck_fingerprint");
+    expect(record.fingerprint_id).toBe("fp-1");
+    expect(record.category).toBe("PROMPT_BLOAT");
+    expect(record.occurrence_count).toBe(4);
+    expect(record.impact_score).toBe(7.5);
+    expect(record.evidence_hash).toBe("a".repeat(64));
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain("SECRET");
+  });
+
+  it("bottleneckFingerprint rejects a malformed evidence_hash and unknown category", () => {
+    const record = sensors.bottleneckFingerprint(SESSION, {
+      fingerprint_id: "fp-2",
+      category: "NOT_A_REAL_CATEGORY",
+      evidence_hash: "not-hex",
+    });
+    expect(record.category).toBe("unknown");
+    expect(record.evidence_hash).toBeNull();
+  });
+
+  it("optimizationEvent mirrors bounded tokens/hashes for a recognized kind", () => {
+    const record = sensors.optimizationEvent(SESSION, "optimization_activation", {
+      proposal_id: "proposal-abc123",
+      status: "activated",
+      approval_state: "approved",
+      rollback_state: "clear",
+      intervention_hash: "b".repeat(64),
+      evidence_hash: "c".repeat(64),
+    });
+    expect(record).not.toBeNull();
+    expectBase(record!, "optimization_activation");
+    expect(record!.proposal_id).toBe("proposal-abc123");
+    expect(record!.status).toBe("activated");
+    expect(record!.intervention_hash).toBe("b".repeat(64));
+  });
+
+  it("optimizationEvent returns null for an unrecognized kind or missing proposal_id/status", () => {
+    expect(
+      sensors.optimizationEvent(SESSION, "not_a_kind" as sensors.OptimizationEventKind, {
+        proposal_id: "p",
+        status: "s",
+      }),
+    ).toBeNull();
+    expect(
+      sensors.optimizationEvent(SESSION, "optimization_proposal", {
+        proposal_id: "",
+        status: "proposed",
+      }),
+    ).toBeNull();
+  });
+});

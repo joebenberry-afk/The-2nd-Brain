@@ -1012,6 +1012,19 @@ def _parser() -> argparse.ArgumentParser:
     heartbeat_run.add_argument("--force", action="store_true")
     heartbeat_run.add_argument("--json", action="store_true")
 
+    p4_parser = sub.add_parser(
+        "p4", parents=[home_parent], help="bounded P4 pulse (heartbeat + shutdown Radar, Task 7)"
+    )
+    p4_sub = p4_parser.add_subparsers(dest="p4_command", required=True)
+    p4_pulse = p4_sub.add_parser("pulse", parents=[home_parent], help="run one bounded P4 pulse")
+    p4_pulse.add_argument("--event", required=True)
+    p4_pulse.add_argument("--session", dest="session_id", required=True)
+    p4_pulse.add_argument("--repo", type=Path, default=None)
+    p4_pulse.add_argument("--project-id", dest="project_id", default=None)
+    p4_pulse.add_argument("--force", action="store_true")
+    p4_pulse.add_argument("--no-telemetry", dest="emit_telemetry", action="store_false")
+    p4_pulse.add_argument("--json", action="store_true")
+
 
 
     gov = sub.add_parser(
@@ -4195,6 +4208,27 @@ def cmd_heartbeat(args) -> int:
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 0
 
+def cmd_p4(args) -> int:
+    import json
+
+    from . import p4
+
+    home = _home(args)
+    result = p4.pulse(
+        home,
+        event=args.event,
+        session_id=args.session_id,
+        repo_dir=args.repo,
+        project_id=args.project_id,
+        force=args.force,
+        emit_telemetry=args.emit_telemetry,
+    )
+    if args.json:
+        print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    else:
+        print(result)
+    return 0
+
 
 
 
@@ -5076,6 +5110,7 @@ def main(argv: list[str] | None = None) -> int:
         "project": cmd_project,
         "backup": cmd_backup,
         "heartbeat": cmd_heartbeat,
+        "p4": cmd_p4,
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
         "governor": cmd_governor,
