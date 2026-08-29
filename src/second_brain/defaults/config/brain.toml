@@ -26,3 +26,8 @@ include_projects = true
 # categories for commits about the Brain (see constitution/change-control.md)
 categories = ["brain(core)", "brain(memory)", "brain(skill)", "brain(policy)",
               "brain(project)", "brain(immune)", "brain(db)", "brain(adapter)"]
+
+[heartbeat]
+mode = "shadow"
+min_interval_seconds = 60
+max_run_history = 256

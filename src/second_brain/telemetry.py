@@ -8,9 +8,10 @@ brainstem/telemetry/SCHEMA.md). Aggregation is deterministic and read-only.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
-
 SCHEMA_VERSION = 2
 KNOWN_KINDS = {
     "session_start",
@@ -32,6 +33,7 @@ KNOWN_KINDS = {
     "assistant_usage",
     "provider_request_meta",
     "provider_response_meta",
+    "heartbeat_pulse",
 }
 # P3-B economics kinds carry v=3 (additive); every other kind stays v=2.
 # The version check is kind-aware so legacy records are never flagged and the
@@ -254,3 +256,81 @@ def format_report(rep: dict) -> str:
         for k, v in rep["models"].items():
             lines.append(f"  {k:40s} {v}")
     return "\n".join(lines)
+
+
+_HEARTBEAT_FIELDS = (
+    "mode",
+    "event",
+    "due",
+    "ran",
+    "healthy",
+    "db_ok",
+    "cache_pruned_count",
+    "git_dirty",
+    "issue_codes",
+    "latency_ms",
+    "model_tokens_used",
+)
+_HEARTBEAT_MODES = frozenset({"off", "shadow", "active"})
+
+
+def _safe_stem(session_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "-", session_id)[:128] or "unknown"
+
+
+def append_record(
+    home: Path | str,
+    session_id: str,
+    kind: str,
+    fields: dict | None = None,
+    **extra: object,
+) -> dict:
+    """Append one validated, privacy-safe telemetry record.
+
+    The heartbeat writer deliberately allowlists its fields: arbitrary host
+    payloads (prompts, tool output, and secrets) never reach the JSONL store.
+    """
+    payload = dict(fields or {})
+    payload.update(extra)
+    if kind != "heartbeat_pulse":
+        raise ValueError(f"unsupported append kind: {kind!r}")
+    safe = {key: payload[key] for key in _HEARTBEAT_FIELDS if key in payload}
+    safe.setdefault("mode", "shadow")
+    safe.setdefault("event", "")
+    safe.setdefault("due", False)
+    safe.setdefault("ran", False)
+    safe.setdefault("healthy", False)
+    safe.setdefault("db_ok", False)
+    safe.setdefault("cache_pruned_count", 0)
+    safe.setdefault("git_dirty", False)
+    safe.setdefault("issue_codes", [])
+    safe.setdefault("latency_ms", 0)
+    safe.setdefault("model_tokens_used", 0)
+    if safe["mode"] not in _HEARTBEAT_MODES:
+        raise ValueError("invalid heartbeat mode")
+    if not isinstance(safe["event"], str) or len(safe["event"]) > 128:
+        raise ValueError("invalid heartbeat event")
+    for key in ("due", "ran", "healthy", "db_ok", "git_dirty"):
+        if not isinstance(safe[key], bool):
+            raise ValueError(f"invalid heartbeat field: {key}")
+    for key in ("cache_pruned_count", "latency_ms", "model_tokens_used"):
+        if isinstance(safe[key], bool) or not isinstance(safe[key], int) or safe[key] < 0:
+            raise ValueError(f"invalid heartbeat field: {key}")
+    if safe["model_tokens_used"] != 0:
+        raise ValueError("heartbeat model token count must be zero")
+    if not isinstance(safe["issue_codes"], list) or not all(
+        isinstance(code, str) and len(code) <= 64 for code in safe["issue_codes"]
+    ):
+        raise ValueError("invalid heartbeat issue codes")
+    record = {
+        "v": SCHEMA_VERSION,
+        "kind": kind,
+        "session": str(session_id)[:256],
+        "ts": datetime.now(UTC).isoformat(),
+        **safe,
+    }
+    path = telemetry_dir(Path(home)) / f"{_safe_stem(str(session_id))}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
+    return record

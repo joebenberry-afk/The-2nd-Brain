@@ -974,6 +974,17 @@ def _parser() -> argparse.ArgumentParser:
     trep.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     ts.add_parser("validate", help="validate telemetry records")
 
+    heartbeat_parser = sub.add_parser(
+        "heartbeat", parents=[home_parent], help="event-driven local heartbeat"
+    )
+    heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command", required=True)
+    heartbeat_run = heartbeat_sub.add_parser("run", parents=[home_parent], help="run heartbeat if due")
+    heartbeat_run.add_argument("--event", required=True)
+    heartbeat_run.add_argument("--session", dest="session_id", required=True)
+    heartbeat_run.add_argument("--repo", type=Path, default=None)
+    heartbeat_run.add_argument("--force", action="store_true")
+    heartbeat_run.add_argument("--json", action="store_true")
+
 
 
     gov = sub.add_parser(
@@ -4068,6 +4079,43 @@ def cmd_autoinject(args) -> int:
         print(f"selected: {', '.join(decision.selected_ids) or 'none'}")
         print(f"delivery: {delivery_id or 'none'}")
     return 0
+def cmd_heartbeat(args) -> int:
+    import json
+
+    from . import heartbeat, telemetry
+
+    home = _home(args)
+    result = heartbeat.HeartbeatCoordinator(home).run_if_due(
+        args.event,
+        args.session_id,
+        args.repo,
+        force=args.force,
+    )
+    try:
+        telemetry.append_record(
+            home,
+            args.session_id,
+            "heartbeat_pulse",
+            {
+                "mode": result["mode"],
+                "event": result["event"],
+                "due": result["due"],
+                "ran": result["ran"],
+                "healthy": result["healthy"],
+                "db_ok": result["db_ok"],
+                "cache_pruned_count": result["cache_pruned_count"],
+                "git_dirty": result["git_dirty"],
+                "issue_codes": result["issue_codes"],
+                "latency_ms": result["latency_ms"],
+                "model_tokens_used": result["model_tokens_used"],
+            },
+        )
+    except (OSError, ValueError):
+        pass
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    return 0
+
+
 
 
 def cmd_telemetry(args) -> int:
@@ -4947,6 +4995,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": cmd_status,
         "project": cmd_project,
         "backup": cmd_backup,
+        "heartbeat": cmd_heartbeat,
         "restore": cmd_restore,
         "telemetry": cmd_telemetry,
         "governor": cmd_governor,
