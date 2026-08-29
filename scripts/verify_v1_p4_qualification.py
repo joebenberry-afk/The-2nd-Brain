@@ -60,6 +60,40 @@ _FORBIDDEN_RECORD_FIELDS = frozenset({
     "tool-input", "tool_output", "chain_of_thought", "chain-of-thought",
     "thinking", "internal_monologue", "cot",
 })
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+_QUALIFICATION_EVIDENCE_PREFIX = "outputs/reports/v1-p4/"
+
+
+def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _git_currency_detail(
+    recorded_sha: Any, fresh_sha: str | None, repo: Path, **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "recorded_sha": recorded_sha,
+        "fresh_sha": fresh_sha,
+        "repo": str(repo),
+        **extra,
+    }
+
+
+def _is_repository_root(repo: Path) -> tuple[bool, str | None]:
+    root = _run_git(repo, "rev-parse", "--show-toplevel")
+    if root.returncode != 0:
+        return False, "could not resolve repository root"
+    try:
+        return Path(root.stdout.strip()).resolve() == repo.resolve(), None
+    except (OSError, RuntimeError):
+        return False, "could not resolve repository root"
+
 
 
 def _artifact_path(out_dir: Path, ref: Any) -> Path | None:
@@ -200,16 +234,50 @@ def check_git_currency(manifest: dict[str, Any]) -> dict[str, Any]:
     repo = Path(manifest.get("repo", "."))
     recorded_sha = (manifest.get("git") or {}).get("sha")
     if not repo.is_dir() or not (repo / ".git").exists():
-        return check("git_currency", False, {"reason": "repo is not a git checkout", "repo": str(repo)})
-    proc = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True, check=False,
+        return check("git_currency", False, _git_currency_detail(
+            recorded_sha, None, repo, reason="repo is not a git checkout",
+        ))
+
+    is_root, root_error = _is_repository_root(repo)
+    if not is_root:
+        return check("git_currency", False, _git_currency_detail(
+            recorded_sha, None, repo, reason=root_error or "repo is not the repository root",
+        ))
+
+    fresh = _run_git(repo, "rev-parse", "HEAD")
+    fresh_sha = fresh.stdout.strip() if fresh.returncode == 0 else None
+    detail = _git_currency_detail(recorded_sha, fresh_sha, repo)
+    if not isinstance(recorded_sha, str) or not _GIT_SHA_RE.fullmatch(recorded_sha):
+        detail["reason"] = "recorded SHA is malformed"
+        return check("git_currency", False, detail)
+    if not isinstance(fresh_sha, str) or not _GIT_SHA_RE.fullmatch(fresh_sha):
+        detail["reason"] = "could not read a valid HEAD SHA"
+        return check("git_currency", False, detail)
+
+    recorded_sha = recorded_sha.lower()
+    fresh_sha = fresh_sha.lower()
+    detail["recorded_sha"] = recorded_sha
+    detail["fresh_sha"] = fresh_sha
+    if recorded_sha == fresh_sha:
+        detail.update({"ancestor": True, "intervening_paths": [], "disallowed_paths": []})
+        return check("git_currency", True, detail)
+
+    ancestor = _run_git(repo, "merge-base", "--is-ancestor", recorded_sha, fresh_sha)
+    detail["ancestor"] = ancestor.returncode == 0
+    if ancestor.returncode != 0:
+        detail["reason"] = "recorded SHA is not an ancestor of HEAD"
+        return check("git_currency", False, detail)
+
+    diff = _run_git(repo, "diff", "--name-only", "-z", f"{recorded_sha}..{fresh_sha}", "--")
+    if diff.returncode != 0:
+        detail["reason"] = "could not inspect changes after recorded SHA"
+        return check("git_currency", False, detail)
+    paths = [path for path in diff.stdout.split("\0") if path]
+    disallowed = sorted(
+        path for path in paths if not path.replace("\\", "/").startswith(_QUALIFICATION_EVIDENCE_PREFIX)
     )
-    fresh_sha = proc.stdout.strip() if proc.returncode == 0 else None
-    ok = bool(recorded_sha) and fresh_sha == recorded_sha
-    return check(
-        "git_currency", ok,
-        {"recorded_sha": recorded_sha, "fresh_sha": fresh_sha, "repo": str(repo)},
-    )
+    detail.update({"intervening_paths": paths, "disallowed_paths": disallowed})
+    return check("git_currency", not disallowed, detail)
 
 
 # ---------------------------------------------------------------------------
