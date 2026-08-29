@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -51,6 +52,81 @@ claims_grounded = VERIFIER.claims_grounded
 check_artifact_hash_integrity = VERIFIER.check_artifact_hash_integrity
 check_privacy_absence = VERIFIER.check_privacy_absence
 read_json_ref = VERIFIER._read_json_ref
+
+
+def _git(cwd: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _git_manifest(repo: Path, recorded_sha: str) -> dict:
+    return {"repo": str(repo), "git": {"sha": recorded_sha}}
+
+
+def test_git_currency_accepts_exact_recorded_sha(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "source.py").write_text("baseline\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "baseline")
+    recorded_sha = _git(repo, "rev-parse", "HEAD")
+
+    result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
+
+    assert result["ok"] is True, result
+    assert result["detail"]["fresh_sha"] == recorded_sha
+
+
+def test_git_currency_accepts_evidence_only_descendant(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "source.py").write_text("baseline\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "baseline")
+    recorded_sha = _git(repo, "rev-parse", "HEAD")
+
+    evidence = repo / "outputs" / "reports" / "v1-p4" / "raw" / "capture.stdout"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("captured\n", encoding="utf-8")
+    _git(repo, "add", str(evidence.relative_to(repo)))
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "evidence")
+
+    result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
+
+    assert result["ok"] is True, result
+    assert result["detail"]["disallowed_paths"] == []
+
+
+def test_git_currency_rejects_source_change_descendant(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "source.py").write_text("baseline\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "baseline")
+    recorded_sha = _git(repo, "rev-parse", "HEAD")
+
+    (repo / "source.py").write_text("changed\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "source change")
+
+    result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
+
+    assert result["ok"] is False, result
+    assert result["detail"]["disallowed_paths"] == ["source.py"]
 
 
 def test_qualification_manifest_has_all_required_scenarios(tmp_path):
