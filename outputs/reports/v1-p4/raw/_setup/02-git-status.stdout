@@ -1,6 +1,4 @@
  M .superpowers/sdd/.gitignore
- D outputs/reports/v1-p4/independent-verifier.json
- M outputs/reports/v1-p4/qualification-manifest.json
  M outputs/reports/v1-p4/raw/_setup/01-git-sha.stdout
  D outputs/reports/v1-p4/raw/_setup/02-git-status.stderr
  D outputs/reports/v1-p4/raw/_setup/02-git-status.stdout
@@ -104,7 +102,4 @@
  D outputs/reports/v1-p4/raw/token_pressure/01-reduce.stdout
  D outputs/reports/v1-p4/raw/token_pressure/02-expand.stderr
  D outputs/reports/v1-p4/raw/token_pressure/02-expand.stdout
- M scripts/run_v1_p4_qualification.py
- M scripts/verify_v1_p4_qualification.py
- M tests/test_v1_p4_qualification.py
 ?? UsersassasAppDataLocalTemptmp.d6ZWVPACze/
