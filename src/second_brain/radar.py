@@ -148,6 +148,7 @@ class ImprovementRadar:
         """Observe one canonical telemetry stream and persist candidates."""
         if not project_id.strip():
             raise BrainError("project_id must be non-empty")
+        fingerprint_scope_id = project_id.strip()[:128]
         rows = self._session_rows(session_id)
         events = [record for _, _, record in rows]
         alerts = self.analyze_events(events)
@@ -155,6 +156,34 @@ class ImprovementRadar:
             return []
         candidates = self._load_candidates()
         fingerprint_store = BottleneckFingerprintStore(self.home)
+
+        def project_fingerprint(alert: ImprovementAlert, refs: list[dict[str, Any]]) -> dict[str, Any]:
+            fingerprint = fingerprint_store.record_alert(
+                alert,
+                scope_id=fingerprint_scope_id,
+                evidence_refs=refs[:64],
+            )
+            evidence_hash = hashlib.sha256(
+                json.dumps(
+                    fingerprint.evidence_refs or [],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            telemetry.append_record(
+                self.home,
+                session_id,
+                "bottleneck_fingerprint",
+                fingerprint_id=fingerprint.fingerprint_id,
+                category=_FINGERPRINT_CATEGORY[alert.pattern].value,
+                scope_id=fingerprint_scope_id,
+                occurrence_count=fingerprint.occurrence_count,
+                impact_score=fingerprint.impact_score,
+                evidence_count=len(fingerprint.evidence_refs or []),
+                evidence_hash=evidence_hash,
+            )
+            return fingerprint.to_dict()
+
         results: list[dict[str, Any]] = []
         for alert in alerts:
             signal_key = self._signal_key(alert)
@@ -200,10 +229,25 @@ class ImprovementRadar:
                 }
                 candidates.append(existing)
             existing.setdefault("fingerprints", [])
-            if any(
+            duplicate_observation = any(
                 item.get("observation_id") == observation_id
                 for item in existing["observations"]
-            ):
+            )
+            if not duplicate_observation or not existing["fingerprints"]:
+                fingerprint = project_fingerprint(alert, refs)
+                existing["fingerprints"] = [
+                    item
+                    for item in existing["fingerprints"]
+                    if item.get("fingerprint_id") != fingerprint["fingerprint_id"]
+                ]
+                existing["fingerprints"].append(fingerprint)
+                existing["fingerprints"].sort(
+                    key=lambda item: (
+                        -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
+                        str(item.get("fingerprint_id", "")),
+                    )
+                )
+            if duplicate_observation:
                 results.append(existing)
                 continue
             timestamps: list[str] = []
@@ -239,42 +283,6 @@ class ImprovementRadar:
                     "status": "candidate",
                     "promotion_authority": "existing_promotion",
                 }
-            )
-            fingerprint = fingerprint_store.record_alert(
-                alert,
-                scope_id=project_id,
-                evidence_refs=refs[:64],
-            )
-            existing["fingerprints"] = [
-                item
-                for item in existing["fingerprints"]
-                if item.get("fingerprint_id") != fingerprint.fingerprint_id
-            ]
-            existing["fingerprints"].append(fingerprint.to_dict())
-            existing["fingerprints"].sort(
-                key=lambda item: (
-                    -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
-                    str(item.get("fingerprint_id", "")),
-                )
-            )
-            evidence_hash = hashlib.sha256(
-                json.dumps(
-                    fingerprint.evidence_refs or [],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            telemetry.append_record(
-                self.home,
-                session_id,
-                "bottleneck_fingerprint",
-                fingerprint_id=fingerprint.fingerprint_id,
-                category=_FINGERPRINT_CATEGORY[alert.pattern].value,
-                scope_id=project_id,
-                occurrence_count=fingerprint.occurrence_count,
-                impact_score=fingerprint.impact_score,
-                evidence_count=len(fingerprint.evidence_refs or []),
-                evidence_hash=evidence_hash,
             )
             existing["observations"].append(observation)
             existing["observations"] = existing["observations"][-16:]
