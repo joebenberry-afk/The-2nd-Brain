@@ -40,7 +40,7 @@ SCENARIO_NAMES = (
     "driver_worker", "failed_worker", "malformed_state", "stale_state",
     "token_pressure", "cache_sensitive", "long_running_goal",
     "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood",
+    "security_boundary", "genuine_project_dogfood", "optimization_lifecycle",
 )
 
 _ENV_STRIP = ("PYTHONHOME", "PYTHONPATH")
@@ -1201,6 +1201,235 @@ def scenario_genuine_project_dogfood(ctx: Ctx, home: Path, shared: dict[str, Any
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
 
+# ---------------------------------------------------------------------------
+# Scenario 19: optimization_lifecycle
+# ---------------------------------------------------------------------------
+
+
+def scenario_optimization_lifecycle(
+    ctx: Ctx, home_root: Path, shared: dict[str, Any],
+) -> dict[str, Any]:
+    """Exercise the governed optimization lifecycle in a fresh home."""
+    name = "optimization_lifecycle"
+    home = home_root / name
+    commands: list[dict[str, Any]] = []
+    evidence_refs: list[str] = []
+
+    cr = run_cli(ctx, name, ["init"], home=home, label="init")
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+
+    seed_code = (
+        "import json\n"
+        "from pathlib import Path\n"
+        "from second_brain import skillforge\n"
+        "from second_brain.fingerprints import BottleneckFingerprintStore\n"
+        f"home = Path({_q(str(home))})\n"
+        "fp = BottleneckFingerprintStore(home).record_bottleneck("
+        "'TOOL_CHAIN_THRASH', 'qualification signal', 'bounded candidate', "
+        "scope_id='second-brain')\n"
+        "directory = home / 'skills' / 'candidates' / 'candidate'\n"
+        "directory.mkdir(parents=True, exist_ok=True)\n"
+        "sections = '\\n\\n'.join('# ' + title + '\\n\\n- verified' for title in ("
+        "'Purpose', 'Positive Triggers', 'Negative Triggers', 'Inputs', "
+        "'Procedure', 'Tools', 'Safety', 'Verification', 'Output', 'References'))\n"
+        "path = directory / 'SKILL.md'\n"
+        "path.write_text('---\\nname: candidate\\nstatus: candidate\\nversion: 1\\n---\\n\\n' "
+        "+ sections + '\\n', encoding='utf-8')\n"
+        "skillforge.bind_candidate(home, 'candidate', source_type='radar', "
+        "source_ref=fp.fingerprint_id, owner='release-steward', project_id='second-brain')\n"
+        "print(json.dumps({'fingerprint_id': fp.fingerprint_id, "
+        "'intervention_hash': skillforge.lifecycle_content_hash(path), "
+        "'skill_name': 'candidate'}, sort_keys=True))\n"
+    )
+    cr = run_py(ctx, name, seed_code, home=home, label="seed-fingerprint-candidate")
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    seed = json_stdout(cr)
+    fingerprint_id = seed["fingerprint_id"]
+    intervention_hash = seed["intervention_hash"]
+    assert isinstance(fingerprint_id, str) and fingerprint_id
+    assert re.fullmatch(r"[0-9a-f]{64}", intervention_hash), intervention_hash
+
+    cr = run_cli(
+        ctx, name,
+        ["optimize", "propose", fingerprint_id, "--skill", "candidate",
+         "--intervention-hash", intervention_hash, "--mode", "active", "--json"],
+        home=home, label="optimize-propose",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    proposal = json_stdout(cr)
+    proposal_id = proposal["proposal_id"]
+    assert proposal["status"] == "shadow", proposal
+    assert proposal["mode"] == "active", proposal
+    assert proposal["intervention"]["hash"] == intervention_hash, proposal
+
+    evaluation_fixture = {
+        "qualification_fixture": {
+            "kind": "deterministic_local",
+            "usage_source": "fixture_input_only",
+            "provider_usage_claimed": False,
+        },
+        "evaluation_id": "qualification-local-eval",
+        "task_id": "qualification-local-task",
+        "task_hash": "t" * 64,
+        "repository_state_hash": "r" * 64,
+        "intervention_hash": intervention_hash,
+        "baseline": {"input_tokens": 1000, "output_tokens": 100},
+        "candidate": {"input_tokens": 500, "output_tokens": 100},
+        "quality": {
+            "correctness": True, "requirements": True, "protected_values": True,
+            "regressions": False, "verification": True,
+        },
+        "gates": {
+            "trigger": {"failed": 0},
+            "workflow": {"structural": True, "failed": 0},
+            "regression": {"regression": False, "failed": 0},
+            "security": {"passed": True},
+        },
+    }
+    evaluation_ref = write_evidence(ctx, name, "evaluation-input", evaluation_fixture)
+    evidence_refs.append(evaluation_ref)
+    evaluation_path = ctx.out_dir / evaluation_ref
+    cr = run_cli(
+        ctx, name,
+        ["optimize", "evaluate", proposal_id, "--result-json", str(evaluation_path), "--json"],
+        home=home, label="optimize-evaluate",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    evaluated = json_stdout(cr)
+    assert evaluated["status"] == "evaluated", evaluated
+    assert evaluated["evaluation"]["quality_gate"] == "passed", evaluated
+    assert evaluated["intervention"]["hash"] == intervention_hash, evaluated
+
+    cr = run_cli(
+        ctx, name,
+        ["frontier", "review", "skill-candidate-promotion", "--summary",
+         "qualification lifecycle promotion", "--risk", "high", "--reviewer",
+         "qualification-reviewer", "--verdict", "approve", "--notes",
+         "current candidate and evaluation reviewed"],
+        home=home, label="frontier-approve",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+
+    cr = run_cli(
+        ctx, name,
+        ["frontier", "status", "--change-id", "skill-candidate-promotion"],
+        home=home, label="frontier-status",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    assert "latest=approve" in cr.stdout.decode("utf-8"), cr.stdout.decode("utf-8")
+
+    cr = run_cli(
+        ctx, name,
+        ["optimize", "activate", proposal_id, "--session", "qualification-lifecycle", "--json"],
+        home=home, label="optimize-activate",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    activated = json_stdout(cr)
+    assert activated["activated"] is True, activated
+    assert activated["proposal"]["status"] == "activated", activated
+    active_path = home / "skills" / "active" / "candidate" / "SKILL.md"
+    assert active_path.is_file(), "activation must promote the candidate to active"
+
+    trigger_id = "skill-candidate"
+    cr = run_cli(
+        ctx, name,
+        ["immune", "trigger", trigger_id, "--metric", "tests_failed", "--operator",
+         ">", "--value", "0", "--window", "1"],
+        home=home, label="register-rollback-trigger",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+
+    cr = run_cli(
+        ctx, name,
+        ["immune", "ingest", "tests_failed", "1", "--run", "qualification-failing-run"],
+        home=home, label="ingest-failing-metric",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+
+    mutate_code = (
+        "import json\n"
+        "from pathlib import Path\n"
+        f"path = Path({_q(str(active_path))})\n"
+        "path.write_text(path.read_text(encoding='utf-8') + '\\n- qualification mutation\\n', "
+        "encoding='utf-8')\n"
+        "print(json.dumps({'mutation_applied': True}))\n"
+    )
+    cr = run_py(ctx, name, mutate_code, home=home, label="mutate-active-file")
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+
+    cr = run_cli(
+        ctx, name, ["immune", "check", "--policy", "skill-candidate"],
+        home=home, label="check-failing-trigger",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    assert "matched=True" in cr.stdout.decode("utf-8"), cr.stdout.decode("utf-8")
+
+    cr = run_cli(
+        ctx, name,
+        ["optimize", "rollback", proposal_id, trigger_id, "--reason",
+         "qualification post-mutation recovery", "--json"],
+        home=home, label="optimize-rollback",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    rolled_back = json_stdout(cr)
+    assert rolled_back["rolled_back"] is True, rolled_back
+    assert rolled_back["proposal"]["status"] == "rolled_back", rolled_back
+    assert not active_path.exists(), "rollback must move the mutated active file aside"
+
+    cr = run_cli(
+        ctx, name, ["optimize", "show", proposal_id, "--json"],
+        home=home, label="optimize-final-show",
+    )
+    commands.append(cr.record)
+    evidence_refs.append(cr.record["stdout_ref"])
+    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
+    final = json_stdout(cr)
+    assert final["status"] == "rolled_back", final
+    assert final["proposal_id"] == proposal_id
+    assert final["intervention"]["hash"] == intervention_hash
+
+    metrics = {
+        "proposal_id": proposal_id,
+        "fingerprint_id": fingerprint_id,
+        "intervention_hash": intervention_hash,
+        "evaluation_status": evaluated["status"],
+        "frontier_verdict": "approve",
+        "activation_status": activated["proposal"]["status"],
+        "rollback_status": final["status"],
+        "trigger_matched": True,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+    }
+    return make_result(
+        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        home=str(home),
+    )
+
+
 SCENARIO_FUNCS: tuple[tuple[str, Any], ...] = (
     ("fresh_session", scenario_fresh_session),
     ("resumed_session", scenario_resumed_session),
@@ -1220,11 +1449,12 @@ SCENARIO_FUNCS: tuple[tuple[str, Any], ...] = (
     ("recovery_rollback", scenario_recovery_rollback),
     ("security_boundary", scenario_security_boundary),
     ("genuine_project_dogfood", scenario_genuine_project_dogfood),
+    ("optimization_lifecycle", scenario_optimization_lifecycle),
 )
 
 
 def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
-    """Run all 18 real P4 qualification scenarios; return the manifest dict.
+    """Run all 19 real P4 qualification scenarios; return the manifest dict.
 
     Every raw artifact this run produces (subprocess captures, seeded
     fixtures, evidence snapshots) is written under `out_dir`. The manifest
