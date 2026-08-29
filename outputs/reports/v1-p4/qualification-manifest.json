@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-08-29T22:45:10.044439+00:00",
+  "generated_at": "2026-08-29T23:02:41.351067+00:00",
   "git": {
     "dirty": true,
-    "sha": "678dcf7b82f142fc25a49762d6ea90a351c4a597"
+    "sha": "1e1217c0bba70aef578d3b526ab73aaadaf89a46"
   },
   "home": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared",
   "out_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4",
@@ -56,7 +56,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 334,
           "stdout_ref": "raw/fresh_session/02-p4-pulse.stdout",
-          "stdout_sha256": "896f9ef07e62928edb49e019846b5def501a56df621440b6f20d2e2f130e8ea9"
+          "stdout_sha256": "c13a0a6ed2f394878063857503ca8cdaa2425ab2469fccd7ba81b6b22d6d543e"
         },
         {
           "argv": [
@@ -71,14 +71,14 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/fresh_session/03-create-goal.stdout",
-          "stdout_sha256": "229b44260663f9bdeab207a8f7eb330e1793ffd52100f53bfa7a39c3b13debee"
+          "stdout_sha256": "2449ad7e95322f436ae546bc76744c1fb610559a4789d1010fde9280027c981f"
         }
       ],
       "evidence_ref_hashes": {
         "raw/fresh_session/01-doctor.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "raw/fresh_session/01-doctor.stdout": "092e69f90d11c55793470d156f95696f98561e8ea3a032ab78d4d464675835af",
-        "raw/fresh_session/02-p4-pulse.stdout": "896f9ef07e62928edb49e019846b5def501a56df621440b6f20d2e2f130e8ea9",
-        "raw/fresh_session/03-create-goal.stdout": "229b44260663f9bdeab207a8f7eb330e1793ffd52100f53bfa7a39c3b13debee"
+        "raw/fresh_session/02-p4-pulse.stdout": "c13a0a6ed2f394878063857503ca8cdaa2425ab2469fccd7ba81b6b22d6d543e",
+        "raw/fresh_session/03-create-goal.stdout": "2449ad7e95322f436ae546bc76744c1fb610559a4789d1010fde9280027c981f"
       },
       "evidence_refs": [
         "raw/fresh_session/01-doctor.stdout",
@@ -86,7 +86,7 @@
         "raw/fresh_session/02-p4-pulse.stdout",
         "raw/fresh_session/03-create-goal.stdout"
       ],
-      "goal_id": "goal-242498774f7b",
+      "goal_id": "goal-ed97ed794bcd",
       "metrics": {
         "background_model_calls": 0,
         "doctor_failed": false,
@@ -113,7 +113,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-242498774f7b')\nassert goal is not None, 'goal not found on reopen in a new process'\nprint(json.dumps({'goal_title': goal.title, 'goal_status': goal.status.value}))\n"
+            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-ed97ed794bcd')\nassert goal is not None, 'goal not found on reopen in a new process'\nprint(json.dumps({'goal_title': goal.title, 'goal_status': goal.status.value}))\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -196,7 +196,7 @@
       ],
       "evidence_ref_hashes": {
         "raw/compacted_session/01-ledger-init.stdout": "fc235679a0953a3c25ea0f0bdcc3b3e30bbf2de4ea2e122aaa8665bc1e9dc1e6",
-        "raw/compacted_session/02-compact-telemetry-records.json": "10e4d527d79d1ffbb8fc7d81d730c39506a06557193b4d5719f5096d87528065",
+        "raw/compacted_session/02-compact-telemetry-records.json": "66a931bcd2d5e1090ea7a2750dbd424178f2642f776ec89294ee5eb8135583e6",
         "raw/compacted_session/03-ledger-checkpoint.stdout": "587535aebd30c98bbde16d92a991baac79f8d554d57dd856a7c84fb75142e514"
       },
       "evidence_refs": [
@@ -226,7 +226,7 @@
         },
         "reasoning_tokens": null,
         "tool_calls": 0,
-        "wall_time_ms": 0.721
+        "wall_time_ms": 0.64
       },
       "name": "compacted_session",
       "session_id": "q8-compact",
@@ -247,13 +247,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/cross_session_continuity/01-process-a-create.stdout",
-          "stdout_sha256": "45c9d57428a8fe1dca2c57fec13038c590d842c3cc1ea3a9887c357f07323701"
+          "stdout_sha256": "c3038c93ae34b212865d241a95ff27d656bcf322263ac993c4a684f9a31074b3"
         },
         {
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-e95e6ce7d798')\nassert goal is not None, 'goal created in process A missing in process B'\nprint(goal.title)\n"
+            "from second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-77424cb110cf')\nassert goal is not None, 'goal created in process A missing in process B'\nprint(goal.title)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -266,14 +266,14 @@
         }
       ],
       "evidence_ref_hashes": {
-        "raw/cross_session_continuity/01-process-a-create.stdout": "45c9d57428a8fe1dca2c57fec13038c590d842c3cc1ea3a9887c357f07323701",
+        "raw/cross_session_continuity/01-process-a-create.stdout": "c3038c93ae34b212865d241a95ff27d656bcf322263ac993c4a684f9a31074b3",
         "raw/cross_session_continuity/02-process-b-read.stdout": "0cdcf3fe59e450ea878d1a61d04b8f525d98efb09095a407a12c2524f91fa334"
       },
       "evidence_refs": [
         "raw/cross_session_continuity/01-process-a-create.stdout",
         "raw/cross_session_continuity/02-process-b-read.stdout"
       ],
-      "goal_id": "goal-e95e6ce7d798",
+      "goal_id": "goal-77424cb110cf",
       "metrics": {
         "background_model_calls": 0,
         "provider_tokens": null,
@@ -307,7 +307,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 332,
           "stdout_ref": "raw/harness_isolation/01-pulse-q8-iso-a.stdout",
-          "stdout_sha256": "760c0b602467f782b6ba49484948746647af9019fde4a13c87a2a304725ea54a"
+          "stdout_sha256": "196f8269c181b47b2850a5847173dcd23061b33236b50dc6e2ef4760ccccc9a9"
         },
         {
           "argv": [
@@ -330,12 +330,12 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 332,
           "stdout_ref": "raw/harness_isolation/02-pulse-q8-iso-b.stdout",
-          "stdout_sha256": "23e935181c3ba29414d92d352bb63497f70a27af75d0549741dd621a76d6d7fe"
+          "stdout_sha256": "5e9f70b7f1ace570f8c11c57e7fd67a4b10fc5576a6bd25c28cc0026b23926b4"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/harness_isolation/01-pulse-q8-iso-a.stdout": "760c0b602467f782b6ba49484948746647af9019fde4a13c87a2a304725ea54a",
-        "raw/harness_isolation/02-pulse-q8-iso-b.stdout": "23e935181c3ba29414d92d352bb63497f70a27af75d0549741dd621a76d6d7fe"
+        "raw/harness_isolation/01-pulse-q8-iso-a.stdout": "196f8269c181b47b2850a5847173dcd23061b33236b50dc6e2ef4760ccccc9a9",
+        "raw/harness_isolation/02-pulse-q8-iso-b.stdout": "5e9f70b7f1ace570f8c11c57e7fd67a4b10fc5576a6bd25c28cc0026b23926b4"
       },
       "evidence_refs": [
         "raw/harness_isolation/01-pulse-q8-iso-a.stdout",
@@ -377,7 +377,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 338,
           "stdout_ref": "raw/harness_switch/01-python-cli-pulse.stdout",
-          "stdout_sha256": "9fb8a39bdeee60d72c08965bf5a5a08b36641ab0ffda1a665d4fa67aac6daeb2"
+          "stdout_sha256": "5f380c992626044ea6f687658d004208b945458e791803b260487eaf1b7cb579"
         },
         {
           "argv": [
@@ -396,7 +396,7 @@
         }
       ],
       "evidence_ref_hashes": {
-        "raw/harness_switch/01-python-cli-pulse.stdout": "9fb8a39bdeee60d72c08965bf5a5a08b36641ab0ffda1a665d4fa67aac6daeb2",
+        "raw/harness_switch/01-python-cli-pulse.stdout": "5f380c992626044ea6f687658d004208b945458e791803b260487eaf1b7cb579",
         "raw/harness_switch/02-prime-bridge-direct-pulse.stdout": "207905fdd1ee52420cff04c38b39410ad435d14f202dbc0ecbe6d8f2ec503153"
       },
       "evidence_refs": [
@@ -452,7 +452,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 291,
           "stdout_ref": "raw/driver_worker/02-spawn.stdout",
-          "stdout_sha256": "a382acdb012cf7432423a8e612196ff4023da055dd220d311ea242332ff17918"
+          "stdout_sha256": "667508a1c985655bc4fe898571149c2135a6a44e5df30db0ac81a3f29d34e1bc"
         },
         {
           "argv": [
@@ -481,7 +481,7 @@
             "worker-plane",
             "complete",
             "q8-driver-worker",
-            "worker-22563aab64ad",
+            "worker-f4cc5ec226fb",
             "--status",
             "COMPLETED",
             "--summary",
@@ -495,7 +495,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 80,
           "stdout_ref": "raw/driver_worker/04-complete.stdout",
-          "stdout_sha256": "51f7470b7566eeb49dfc59daa560d43e943dabefeab226433f55333e3e2fea6a"
+          "stdout_sha256": "2fe37de7e8964b83d720468ab5175120aa8d26ab10ca703ebd0f7ebd152257ab"
         },
         {
           "argv": [
@@ -519,9 +519,9 @@
       ],
       "evidence_ref_hashes": {
         "raw/driver_worker/01-init.stdout": "c39f308aafb3191e12f1e4ab686b649f60485e481feb966c93236357119ee203",
-        "raw/driver_worker/02-spawn.stdout": "a382acdb012cf7432423a8e612196ff4023da055dd220d311ea242332ff17918",
+        "raw/driver_worker/02-spawn.stdout": "667508a1c985655bc4fe898571149c2135a6a44e5df30db0ac81a3f29d34e1bc",
         "raw/driver_worker/03-status-active.stdout": "18b81bd18b9d1cb4bc06d99b12bfaf314e6229b81995344625d78ef39faf2402",
-        "raw/driver_worker/04-complete.stdout": "51f7470b7566eeb49dfc59daa560d43e943dabefeab226433f55333e3e2fea6a",
+        "raw/driver_worker/04-complete.stdout": "2fe37de7e8964b83d720468ab5175120aa8d26ab10ca703ebd0f7ebd152257ab",
         "raw/driver_worker/05-status-after.stdout": "1abce3172fe17acdb707340aff7ab84b9ab2a2ed10e5cddf661b783850d44344"
       },
       "evidence_refs": [
@@ -539,7 +539,7 @@
         "provider_tokens": null,
         "spawned": true,
         "wall_time_ms": null,
-        "worker_id": "worker-22563aab64ad"
+        "worker_id": "worker-f4cc5ec226fb"
       },
       "name": "driver_worker",
       "status": "passed"
@@ -580,7 +580,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 292,
           "stdout_ref": "raw/failed_worker/02-spawn.stdout",
-          "stdout_sha256": "398a71eac27f9a0ddc87eeeeda03887dd30b296deff7ec4d3201f73a5989ac7c"
+          "stdout_sha256": "e35bba560b66f22667cb8ff182dd23aea6b98bbcf1498cb321f65bc85702dc91"
         },
         {
           "argv": [
@@ -590,7 +590,7 @@
             "worker-plane",
             "complete",
             "q8-failed-worker",
-            "worker-572314ad465e",
+            "worker-e50bf11d4063",
             "--status",
             "FAILED",
             "--summary",
@@ -606,7 +606,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 77,
           "stdout_ref": "raw/failed_worker/03-complete-failed.stdout",
-          "stdout_sha256": "1d227ba3088005eaa4629ecb94c93266553ad39d9aa956503802db3d204beb13"
+          "stdout_sha256": "b1471ff2e28e5969998262e53889c15b3368bcf145aa53a15f733fe0cdf223fa"
         },
         {
           "argv": [
@@ -645,15 +645,15 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 286,
           "stdout_ref": "raw/failed_worker/05-retry-spawn.stdout",
-          "stdout_sha256": "e604dce944c21455989ff74f984e6cf50044081948b1c72e935a65c5dbbc3a64"
+          "stdout_sha256": "ec53785b0a2b826d426cffbcb499a14ae0112dc0fe349e0849c9620d03a30df5"
         }
       ],
       "evidence_ref_hashes": {
         "raw/failed_worker/01-init.stdout": "6569bd29c4f843739cb7b6d355fd39c4a23552ba23cd2ad23ab4f94aac87a50d",
-        "raw/failed_worker/02-spawn.stdout": "398a71eac27f9a0ddc87eeeeda03887dd30b296deff7ec4d3201f73a5989ac7c",
-        "raw/failed_worker/03-complete-failed.stdout": "1d227ba3088005eaa4629ecb94c93266553ad39d9aa956503802db3d204beb13",
+        "raw/failed_worker/02-spawn.stdout": "e35bba560b66f22667cb8ff182dd23aea6b98bbcf1498cb321f65bc85702dc91",
+        "raw/failed_worker/03-complete-failed.stdout": "b1471ff2e28e5969998262e53889c15b3368bcf145aa53a15f733fe0cdf223fa",
         "raw/failed_worker/04-status-after-fail.stdout": "1abce3172fe17acdb707340aff7ab84b9ab2a2ed10e5cddf661b783850d44344",
-        "raw/failed_worker/05-retry-spawn.stdout": "e604dce944c21455989ff74f984e6cf50044081948b1c72e935a65c5dbbc3a64"
+        "raw/failed_worker/05-retry-spawn.stdout": "ec53785b0a2b826d426cffbcb499a14ae0112dc0fe349e0849c9620d03a30df5"
       },
       "evidence_refs": [
         "raw/failed_worker/01-init.stdout",
@@ -669,7 +669,7 @@
         "retry_spawned": true,
         "retryable": true,
         "wall_time_ms": null,
-        "worker_id": "worker-572314ad465e"
+        "worker_id": "worker-e50bf11d4063"
       },
       "name": "failed_worker",
       "status": "passed"
@@ -680,7 +680,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json, sys\nfrom second_brain.goals import GoalStore\nfrom second_brain.errors import BrainError\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\isolated\\\\malformed_state')\ntry:\n    store.get_goal('goal-242498774f7b')\n    print(json.dumps({'refused': False}))\n    sys.exit(0)\nexcept BrainError as exc:\n    print(json.dumps({'refused': True, 'error': str(exc)}))\n    sys.exit(3)\n"
+            "import json, sys\nfrom second_brain.goals import GoalStore\nfrom second_brain.errors import BrainError\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\isolated\\\\malformed_state')\ntry:\n    store.get_goal('goal-ed97ed794bcd')\n    print(json.dumps({'refused': False}))\n    sys.exit(0)\nexcept BrainError as exc:\n    print(json.dumps({'refused': True, 'error': str(exc)}))\n    sys.exit(3)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 3,
@@ -689,11 +689,11 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 99,
           "stdout_ref": "raw/malformed_state/01-corrupt-goal-read.stdout",
-          "stdout_sha256": "9cba7fb15091882d13a789bbd0be5791ae74946fa0e6e2af43c34f5f0bef9875"
+          "stdout_sha256": "36bcad3c29dfc7f8584d151bbfc85f987c45bcd1a25dae1e0e7bfc227bdd7157"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/malformed_state/01-corrupt-goal-read.stdout": "9cba7fb15091882d13a789bbd0be5791ae74946fa0e6e2af43c34f5f0bef9875"
+        "raw/malformed_state/01-corrupt-goal-read.stdout": "36bcad3c29dfc7f8584d151bbfc85f987c45bcd1a25dae1e0e7bfc227bdd7157"
       },
       "evidence_refs": [
         "raw/malformed_state/01-corrupt-goal-read.stdout"
@@ -733,7 +733,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 3918,
           "stdout_ref": "raw/stale_state/02-observe.stdout",
-          "stdout_sha256": "8d7d06b34eca60bd1e1de249653a93fb9a1278f6280426e85abeb417db614d66"
+          "stdout_sha256": "211cb3ed3956458529110808630a657c585b958eb92570a7c3f3d701497235e6"
         },
         {
           "argv": [
@@ -776,7 +776,7 @@
       ],
       "evidence_ref_hashes": {
         "raw/stale_state/01-seed-telemetry.json": "2e84501fcea299c828e428a6924d99876042f93b3eceb560a8a8bf7787af08cb",
-        "raw/stale_state/02-observe.stdout": "8d7d06b34eca60bd1e1de249653a93fb9a1278f6280426e85abeb417db614d66",
+        "raw/stale_state/02-observe.stdout": "211cb3ed3956458529110808630a657c585b958eb92570a7c3f3d701497235e6",
         "raw/stale_state/03-validate-fresh.stdout": "d7e2048ed45188f5954d2fe54b9f1dfa9fb892180dd96f4ccb65e172dfd33641",
         "raw/stale_state/04-validate-stale.stdout": "b2089f8bbee645af626f512e2cef38fad9a521f6ece72a23a98d8197851dfccd"
       },
@@ -885,7 +885,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 695,
           "stdout_ref": "raw/cache_sensitive/01-search-miss.stdout",
-          "stdout_sha256": "95595a8d8f1f1d1488556ce09679e9c542666a6e49ca73510d96f4cc9fd79e16"
+          "stdout_sha256": "d70bb99f8e8ce3c38dbc7326bff9cdfcdb1071cfdc585ee506455afd83560247"
         },
         {
           "argv": [
@@ -906,12 +906,12 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 693,
           "stdout_ref": "raw/cache_sensitive/02-search-hit.stdout",
-          "stdout_sha256": "13834a58d72d56c2b8d09e2ed1ebb164ae31121eb724f42e2e8fb0a725e67efe"
+          "stdout_sha256": "b2528f5c8518ab8169d4e16f589a47d54e55636bb204df70a090a4660080bfe7"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/cache_sensitive/01-search-miss.stdout": "95595a8d8f1f1d1488556ce09679e9c542666a6e49ca73510d96f4cc9fd79e16",
-        "raw/cache_sensitive/02-search-hit.stdout": "13834a58d72d56c2b8d09e2ed1ebb164ae31121eb724f42e2e8fb0a725e67efe"
+        "raw/cache_sensitive/01-search-miss.stdout": "d70bb99f8e8ce3c38dbc7326bff9cdfcdb1071cfdc585ee506455afd83560247",
+        "raw/cache_sensitive/02-search-hit.stdout": "b2528f5c8518ab8169d4e16f589a47d54e55636bb204df70a090a4660080bfe7"
       },
       "evidence_refs": [
         "raw/cache_sensitive/01-search-miss.stdout",
@@ -920,8 +920,8 @@
       "metrics": {
         "background_model_calls": 0,
         "hit_after_miss": true,
-        "hit_latency_ms": 21.893,
-        "miss_latency_ms": 329.777,
+        "hit_latency_ms": 26.561,
+        "miss_latency_ms": 350.984,
         "provider_tokens": null,
         "wall_time_ms": null
       },
@@ -943,13 +943,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/long_running_goal/01-create.stdout",
-          "stdout_sha256": "413223aa9fb84e9eda02e45eafbf20333b4a93fb06e41e9945453575272140e2"
+          "stdout_sha256": "1c60dc896ff02459a55e059883eb0aefb333fc81f1e84b8f30becb4c339d379c"
         },
         {
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-a9dcb787f9e7', GoalStatus.BLOCKED, blocker_note='waiting on a real qualification dependency')\nprint(store.get_goal('goal-a9dcb787f9e7').status.value)\n"
+            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-cf73802c9e76', GoalStatus.BLOCKED, blocker_note='waiting on a real qualification dependency')\nprint(store.get_goal('goal-cf73802c9e76').status.value)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -964,7 +964,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-a9dcb787f9e7', GoalStatus.ACTIVE)\nprint(store.get_goal('goal-a9dcb787f9e7').status.value)\n"
+            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-cf73802c9e76', GoalStatus.ACTIVE)\nprint(store.get_goal('goal-cf73802c9e76').status.value)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -979,7 +979,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.complete_milestone('goal-a9dcb787f9e7', 'm-1', evidence_ref='qualification:plan-done')\nstore.complete_milestone('goal-a9dcb787f9e7', 'm-2', evidence_ref='qualification:ship-done')\ngoal = store.get_goal('goal-a9dcb787f9e7')\nprint(json.dumps({'status': goal.status.value, 'completed': goal.completed_at is not None}))\n"
+            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.complete_milestone('goal-cf73802c9e76', 'm-1', evidence_ref='qualification:plan-done')\nstore.complete_milestone('goal-cf73802c9e76', 'm-2', evidence_ref='qualification:ship-done')\ngoal = store.get_goal('goal-cf73802c9e76')\nprint(json.dumps({'status': goal.status.value, 'completed': goal.completed_at is not None}))\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -992,7 +992,7 @@
         }
       ],
       "evidence_ref_hashes": {
-        "raw/long_running_goal/01-create.stdout": "413223aa9fb84e9eda02e45eafbf20333b4a93fb06e41e9945453575272140e2",
+        "raw/long_running_goal/01-create.stdout": "1c60dc896ff02459a55e059883eb0aefb333fc81f1e84b8f30becb4c339d379c",
         "raw/long_running_goal/02-block.stdout": "a0b7186db1d11c2c88e6a0cd248ad48c69b9b659a3879b3b1e757ec337f6f4db",
         "raw/long_running_goal/03-resume.stdout": "268cf92f8fc496f180ba098b4423a370e8f0825190cc6140eb5ad4c55c108f49",
         "raw/long_running_goal/04-complete-milestones.stdout": "01183e40cd99034f21971236cecf288eaa0a9399480831c8a29893433378ba37"
@@ -1003,11 +1003,11 @@
         "raw/long_running_goal/03-resume.stdout",
         "raw/long_running_goal/04-complete-milestones.stdout"
       ],
-      "goal_id": "goal-a9dcb787f9e7",
+      "goal_id": "goal-cf73802c9e76",
       "metrics": {
         "background_model_calls": 0,
         "final_status": "COMPLETED",
-        "goal_id": "goal-a9dcb787f9e7",
+        "goal_id": "goal-cf73802c9e76",
         "provider_tokens": null,
         "transitions": [
           "ACTIVE",
@@ -1393,13 +1393,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 334,
           "stdout_ref": "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout",
-          "stdout_sha256": "26e6e6175f5c067f408ec9ad269ddec084af32446e80e914f466e2abe1d9f8a2"
+          "stdout_sha256": "cc6e6e9dbf2e02cd692f53bc72c447d433fa25ddfd8fee701b15cd7544bddffa"
         }
       ],
       "evidence_ref_hashes": {
         "raw/genuine_project_dogfood/01-focused-p4-pytest.stdout": "55cf85556f9212aec3cf3688ddb048b901ad2536966113215358784c657a7532",
         "raw/genuine_project_dogfood/02-doctor-registered-project.stdout": "092e69f90d11c55793470d156f95696f98561e8ea3a032ab78d4d464675835af",
-        "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout": "26e6e6175f5c067f408ec9ad269ddec084af32446e80e914f466e2abe1d9f8a2"
+        "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout": "cc6e6e9dbf2e02cd692f53bc72c447d433fa25ddfd8fee701b15cd7544bddffa"
       },
       "evidence_refs": [
         "raw/genuine_project_dogfood/01-focused-p4-pytest.stdout",
@@ -1434,7 +1434,7 @@
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stdout_bytes": 41,
       "stdout_ref": "raw/_setup/01-git-sha.stdout",
-      "stdout_sha256": "fb29cb161ac27ac2e7c340d1420e8e0df426344707f41d44afd84b722a63143c"
+      "stdout_sha256": "777cfe9e79c2c6e1bde24f8a1eaea058c72ca6db8899efea0826e93eb507e2de"
     },
     {
       "argv": [
@@ -1447,9 +1447,9 @@
       "stderr_bytes": 0,
       "stderr_ref": "raw/_setup/02-git-status.stderr",
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "stdout_bytes": 7315,
+      "stdout_bytes": 7095,
       "stdout_ref": "raw/_setup/02-git-status.stdout",
-      "stdout_sha256": "a82d9ccb4dea06ef5077a62a1562373cb73e9851d26488ba64e7147052e6672f"
+      "stdout_sha256": "59daa42726e360cfdd0796082ac8f3d86a3668054cac811512da462d2670f053"
     },
     {
       "argv": [
