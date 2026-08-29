@@ -25,9 +25,9 @@
       "detail": {
         "ancestor": true,
         "disallowed_paths": [],
-        "fresh_sha": "1e1217c0bba70aef578d3b526ab73aaadaf89a46",
+        "fresh_sha": "db8944b6c31b23b6574d5b153408d62fe4f0b52e",
         "intervening_paths": [],
-        "recorded_sha": "1e1217c0bba70aef578d3b526ab73aaadaf89a46",
+        "recorded_sha": "db8944b6c31b23b6574d5b153408d62fe4f0b52e",
         "repo": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration"
       },
       "ok": true
@@ -67,10 +67,10 @@
     {
       "check": "backup_restore_preservation",
       "detail": {
-        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-230249-103364",
+        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-231932-381607",
         "fingerprint_id": "fp-670994ca63e2",
         "fingerprint_preserved": true,
-        "goal_id": "goal-74cbdd1ee2aa",
+        "goal_id": "goal-99fa8ade5153",
         "goal_preserved": true
       },
       "ok": true
@@ -101,7 +101,7 @@
           "git_dirty": true,
           "healthy": true,
           "issue_codes": [],
-          "latency_ms": 36,
+          "latency_ms": 29,
           "maintenance_mutated": false,
           "mode": "shadow",
           "model_tokens_used": 0,
@@ -127,7 +127,7 @@
       "ok": true
     }
   ],
-  "generated_at": "2026-08-29T23:02:49.257647+00:00",
+  "generated_at": "2026-08-29T23:19:32.546219+00:00",
   "manifest_path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json",
   "ok": true
 }

@@ -1,10 +1,10 @@
 {
   "spawned": true,
-  "worker_id": "worker-6330dd043ebf",
+  "worker_id": "worker-21677f796ddb",
   "session_id": "q8-failed-worker",
   "subtask": "qualification_retry_after_real_failure",
   "target_files": [],
   "relevant_symbols": [],
   "context_capsule": "",
-  "created_at": "2026-08-29T23:02:34.421100+00:00"
+  "created_at": "2026-08-29T23:19:21.919418+00:00"
 }
