@@ -55,6 +55,38 @@ _FORBIDDEN_MARKERS = (
     "chain_of_thought", "chain-of-thought", "internal_monologue",
     "<thinking>", "tool_input", "tool_output",
 )
+_FORBIDDEN_RECORD_FIELDS = frozenset({
+    "prompt", "payload", "secret", "content", "tool_input", "tool_output",
+    "chain_of_thought", "thinking", "internal_monologue",
+})
+
+
+def _artifact_path(out_dir: Path, ref: Any) -> Path | None:
+    """Resolve a manifest ref only when it stays under the evidence directory."""
+    if not isinstance(ref, str) or not ref:
+        return None
+    try:
+        root = out_dir.resolve()
+        path = (out_dir / ref).resolve()
+        path.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path
+
+
+def _forbidden_record_fields(node: Any) -> list[str]:
+    """Find privacy-sensitive field names recursively in JSON-like data."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            field = str(key).casefold()
+            if field in _FORBIDDEN_RECORD_FIELDS:
+                found.append(str(key))
+            found.extend(_forbidden_record_fields(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_forbidden_record_fields(value))
+    return found
 
 
 def check(name: str, ok: bool, detail: Any) -> dict[str, Any]:
@@ -84,12 +116,10 @@ def check_scenario_completeness(manifest: dict[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # 2. Raw artifact hash integrity
-# ---------------------------------------------------------------------------
-
-
 def check_artifact_hash_integrity(manifest: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     mismatches: list[str] = []
     missing: list[str] = []
+    unhashed: list[str] = []
     checked = 0
     all_commands = list(manifest.get("setup_commands", []))
     for row in manifest.get("scenarios", []):
@@ -98,20 +128,42 @@ def check_artifact_hash_integrity(manifest: dict[str, Any], out_dir: Path) -> di
         for ref_key, hash_key in (("stdout_ref", "stdout_sha256"), ("stderr_ref", "stderr_sha256")):
             ref = cmd.get(ref_key)
             expected = cmd.get(hash_key)
-            if not ref or not expected:
+            if not ref:
                 continue
-            path = out_dir / ref
-            if not path.is_file():
+            if not expected:
+                unhashed.append(ref)
+                continue
+            path = _artifact_path(out_dir, ref)
+            if path is None or not path.is_file():
                 missing.append(ref)
                 continue
             actual = hashlib.sha256(path.read_bytes()).hexdigest()
             checked += 1
             if actual != expected:
                 mismatches.append(ref)
-    ok = not mismatches and not missing and checked > 0
+    # Every evidence_refs entry (command captures *and* non-command
+    # snapshots written via write_evidence(), e.g. seeded/compacted
+    # telemetry fixtures) must also match its manifest-recorded hash, not
+    # just the two command-stream refs above.
+    for row in manifest.get("scenarios", []):
+        ref_hashes = row.get("evidence_ref_hashes", {})
+        for ref in row.get("evidence_refs", []):
+            expected = ref_hashes.get(ref)
+            if not expected:
+                unhashed.append(ref)
+                continue
+            path = _artifact_path(out_dir, ref)
+            if path is None or not path.is_file():
+                missing.append(ref)
+                continue
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            checked += 1
+            if actual != expected:
+                mismatches.append(ref)
+    ok = not mismatches and not missing and not unhashed and checked > 0
     return check(
         "artifact_hash_integrity", ok,
-        {"checked": checked, "mismatches": mismatches, "missing": missing},
+        {"checked": checked, "mismatches": mismatches, "missing": missing, "unhashed": unhashed},
     )
 
 
@@ -421,7 +473,14 @@ def _walk_claims(node: Any, path: str = "") -> list[tuple[str, Any]]:
 
 
 def _gather_raw_text(scenario: dict[str, Any], out_dir: Path) -> str:
-    chunks: list[str] = [json.dumps(scenario, default=str)]
+    """Real raw-evidence text only: command stdout/stderr captures, every
+    non-command `evidence_refs` artifact written via `write_evidence()`
+    (e.g. seeded/compacted telemetry fixtures), and the scenario's home
+    telemetry. NEVER the manifest/scenario row itself — that row is the
+    claim under test, and folding it into the haystack would let a
+    fabricated claim trivially "ground" itself in its own JSON text.
+    """
+    chunks: list[str] = []
     home = scenario.get("home")
     if home and Path(home).is_dir():
         for _, _, record in telemetry.iter_records(Path(home)):
@@ -431,9 +490,13 @@ def _gather_raw_text(scenario: dict[str, Any], out_dir: Path) -> str:
             ref = cmd.get(ref_key)
             if not ref:
                 continue
-            path = out_dir / ref
-            if path.is_file():
+            path = _artifact_path(out_dir, ref)
+            if path is not None and path.is_file():
                 chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+    for ref in scenario.get("evidence_refs", []):
+        path = _artifact_path(out_dir, ref)
+        if path is not None and path.is_file():
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
     return "\n".join(chunks)
 
 
@@ -475,19 +538,51 @@ def check_privacy_absence(manifest: dict[str, Any], out_dir: Path) -> dict[str, 
     all_commands = list(manifest.get("setup_commands", []))
     for row in manifest.get("scenarios", []):
         all_commands.extend(row.get("commands", []))
+    command_refs: set[str] = set()
     for cmd in all_commands:
         for ref_key in ("stdout_ref", "stderr_ref"):
             ref = cmd.get(ref_key)
             if not ref:
                 continue
-            path = out_dir / ref
-            if not path.is_file():
+            command_refs.add(ref)
+            path = _artifact_path(out_dir, ref)
+            if path is None or not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8", errors="replace").lower()
             scanned += 1
             for marker in _FORBIDDEN_MARKERS:
                 if marker in text:
                     offenders.append(f"{ref}: contains {marker!r}")
+    # Non-command evidence artifacts written via write_evidence() (seeded/
+    # compacted telemetry fixtures, etc.) carry the same privacy obligations
+    # as command output and telemetry, but are never scanned above because
+    # they are not a command's stdout_ref/stderr_ref. Scan their raw text
+    # for the same forbidden markers, and their JSON structure for the same
+    # forbidden field names the telemetry loop below checks. Command-derived
+    # refs that also happen to appear in evidence_refs are skipped here --
+    # they were already text-scanned above, and their JSON is real CLI
+    # output (which may legitimately use field names like "content") rather
+    # than a raw telemetry-record snapshot, so the structural field check
+    # would otherwise false-positive on it.
+    for row in manifest.get("scenarios", []):
+        for ref in row.get("evidence_refs", []):
+            if ref in command_refs:
+                continue
+            path = _artifact_path(out_dir, ref)
+            if path is None or not path.is_file():
+                continue
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+            scanned += 1
+            lowered = raw_text.lower()
+            for marker in _FORBIDDEN_MARKERS:
+                if marker in lowered:
+                    offenders.append(f"{ref}: contains {marker!r}")
+            try:
+                parsed = json.loads(raw_text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            for field in _forbidden_record_fields(parsed):
+                offenders.append(f"{ref}: forbidden field {field!r} present")
     homes = {manifest["home"]}
     for row in manifest.get("scenarios", []):
         if row.get("home"):
@@ -497,10 +592,8 @@ def check_privacy_absence(manifest: dict[str, Any], out_dir: Path) -> dict[str, 
         if not home.is_dir():
             continue
         for _, _, record in telemetry.iter_records(home):
-            for field in ("prompt", "payload", "secret", "content", "tool_input", "tool_output",
-                          "chain_of_thought", "thinking", "internal_monologue"):
-                if field in record:
-                    offenders.append(f"telemetry {home_str}: forbidden field {field!r} present")
+            for field in _forbidden_record_fields(record):
+                offenders.append(f"telemetry {home_str}: forbidden field {field!r} present")
             scanned += 1
     ok = not offenders and scanned > 0
     return check("privacy_absence", ok, {"scanned": scanned, "offenders": offenders})

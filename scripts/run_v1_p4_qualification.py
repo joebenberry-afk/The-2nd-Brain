@@ -1262,6 +1262,19 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
         f"scenario name mismatch: {set(ordered_names) ^ set(SCENARIO_NAMES)}"
     )
 
+    # Every referenced raw artifact (command captures already carry
+    # stdout_sha256/stderr_sha256 on their own records; write_evidence()
+    # snapshots like seeded telemetry/compaction fixtures do not) gets a
+    # manifest-recorded sha256 here so the independent verifier can check
+    # integrity of the *entire* evidence_refs set, not just command streams.
+    for row in scenarios:
+        hashes: dict[str, str] = {}
+        for ref in row.get("evidence_refs", []):
+            ref_path = out_dir / ref
+            if ref_path.is_file():
+                hashes[ref] = hashlib.sha256(ref_path.read_bytes()).hexdigest()
+        row["evidence_ref_hashes"] = hashes
+
     manifest = {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
