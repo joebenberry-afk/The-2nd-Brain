@@ -1,0 +1,22 @@
+{
+  "summary": "generic output: 3000 lines, 153000 bytes",
+  "high_value_sections": [
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "... (2990 lines omitted) ...",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line",
+    "qualification firewall reduction real fixture line"
+  ],
+  "error_count": 0,
+  "warning_count": 0,
+  "raw_object_ref": "05a4b55d71fd334cfbd0d9020a5a6345e953067b5c1147d75dfadba9817cbc72",
+  "reduction_ratio": 0.9946,
+  "lossless_retrieval_handle": "[brain-artifact:sha256:05a4b55d71fd334cfbd0d9020a5a6345e953067b5c1147d75dfadba9817cbc72]",
+  "distilled_text": "[SECOND_BRAIN_FIREWALL:kind=generic]\nSummary: generic output: 3000 lines, 153000 bytes\nKey Sections:\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  ... (2990 lines omitted) ...\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\n  qualification firewall reduction real fixture line\nRaw Artifact: [brain-artifact:sha256:05a4b55d71fd334cfbd0d9020a5a6345e953067b5c1147d75dfadba9817cbc72] (153000 bytes)\nFull output recoverable: /brain-expand 05a4b55d71fd"
+}

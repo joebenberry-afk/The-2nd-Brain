@@ -1,0 +1,10 @@
+{
+  "spawned": true,
+  "worker_id": "worker-30bc44d0bd48",
+  "session_id": "q8-failed-worker",
+  "subtask": "qualification_real_subtask_reproduce_failure",
+  "target_files": [],
+  "relevant_symbols": [],
+  "context_capsule": "",
+  "created_at": "2026-08-29T19:51:54.904091+00:00"
+}

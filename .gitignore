@@ -27,6 +27,14 @@ outputs/context-capsules/
 outputs/evidence-maps/
 outputs/cache/
 
+# v1 P4 qualification (Task 8): raw command-capture evidence under
+# outputs/reports/v1-p4/raw/ is canonical evidence and tracked; the full
+# scratch Brain homes and fixtures it ran against are derived/rebuildable.
+outputs/reports/v1-p4/homes/
+outputs/reports/v1-p4/isolated/
+outputs/reports/v1-p4/fixtures/
+outputs/reports/v1-p4/verifier-scratch/
+
 # Proof campaign results are derived; manifests, fixtures, hashes, and reports are canonical.
 proof/results/
 proof/snapshots/

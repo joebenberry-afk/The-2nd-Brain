@@ -1,0 +1,4 @@
+{
+  "active_workers": 1,
+  "max_concurrent_workers": 2
+}
