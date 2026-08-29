@@ -341,7 +341,7 @@ git commit -m "feat(heartbeat): add bounded event coordination"
 
 **Interfaces:**
 - Consumes: existing JSONL records and the exact kind/version inventory emitted by the current Prime/OMP code.
-- Produces: strict registry validation for all current kinds plus P4 records; `operational_report(home, since=None) -> dict`; `report()` keeps all existing top-level keys and adds `operational`; `append_record(home, record) -> None` writes only validated bounded records.
+- Produces: strict registry validation for all current kinds plus P4 records; `operational_report(home, since=None) -> dict`; `report()` keeps all existing top-level keys and adds `operational`; the existing `append_record(home, session_id, kind, fields=None, **extra) -> dict` contract remains backward-compatible while gaining allowlisted P4 record support.
 
 - [ ] **Step 1: Write failing registry and report tests.**
 
