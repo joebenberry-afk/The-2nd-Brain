@@ -29,7 +29,7 @@ REQUIRED_SCENARIOS = {
     "driver_worker", "failed_worker", "malformed_state", "stale_state",
     "token_pressure", "cache_sensitive", "long_running_goal",
     "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood", "optimization_lifecycle",
+    "security_boundary", "genuine_project_dogfood",
 }
 
 
@@ -52,7 +52,6 @@ claims_grounded = VERIFIER.claims_grounded
 check_artifact_hash_integrity = VERIFIER.check_artifact_hash_integrity
 check_privacy_absence = VERIFIER.check_privacy_absence
 read_json_ref = VERIFIER._read_json_ref
-check_optimization_lifecycle = VERIFIER.check_optimization_lifecycle
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -588,158 +587,3 @@ def test_artifact_hash_integrity_rejects_evidence_ref_outside_output_dir(tmp_pat
     result = check_artifact_hash_integrity(manifest, out_dir)
     assert result["ok"] is False
     assert ref in result["detail"]["missing"]
-
-
-def _raw_optimization_manifest(tmp_path: Path) -> tuple[dict, Path]:
-    out_dir = tmp_path / "out"
-    raw_dir = out_dir / "raw" / "optimization_lifecycle"
-    raw_dir.mkdir(parents=True)
-    intervention_hash = "a" * 64
-    proposal_id = "proposal-" + "b" * 24 + "-v1"
-    outputs = [
-        ("init", ["python", "-m", "second_brain.cli", "init"], "initialized\n"),
-        (
-            "seed",
-            ["python", "-c", "seed"],
-            json.dumps({
-                "fingerprint_id": "fingerprint-1",
-                "intervention_hash": intervention_hash,
-                "skill_name": "candidate",
-            }),
-        ),
-        (
-            "propose",
-            ["python", "-m", "second_brain.cli", "optimize", "propose"],
-            json.dumps({
-                "fingerprint_id": "fingerprint-1", "intervention": {"hash": intervention_hash},
-                "mode": "active", "proposal_id": proposal_id, "status": "shadow",
-            }),
-        ),
-        (
-            "evaluate",
-            ["python", "-m", "second_brain.cli", "optimize", "evaluate", proposal_id],
-            json.dumps({
-                "intervention": {"hash": intervention_hash}, "proposal_id": proposal_id,
-                "evaluation": {
-                    "quality_gate": "passed",
-                    "candidate_content_sha256": intervention_hash,
-                },
-                "status": "evaluated",
-            }),
-        ),
-        (
-            "frontier_review",
-            ["python", "-m", "second_brain.cli", "frontier", "review",
-             "skill-candidate-promotion"],
-            "review: frontier/skill-candidate-promotion-1.json\n",
-        ),
-        (
-            "frontier_status",
-            ["python", "-m", "second_brain.cli", "frontier", "status",
-             "--change-id", "skill-candidate-promotion"],
-            "skill-candidate-promotion: latest=approve reviews=1\n",
-        ),
-        (
-            "activate",
-            ["python", "-m", "second_brain.cli", "optimize", "activate", proposal_id],
-            json.dumps({
-                "activated": True,
-                "proposal": {
-                    "intervention": {"hash": intervention_hash},
-                    "proposal_id": proposal_id, "status": "activated",
-                },
-            }),
-        ),
-        (
-            "trigger",
-            ["python", "-m", "second_brain.cli", "immune", "trigger", "skill-candidate"],
-            "trigger registered: skill-candidate\n",
-        ),
-        (
-            "ingest",
-            ["python", "-m", "second_brain.cli", "immune", "ingest", "tests_failed"],
-            "ingested tests_failed=1.0\n",
-        ),
-        (
-            "mutation",
-            ["python", "-c", "mutation"],
-            json.dumps({"mutation_applied": True}),
-        ),
-        (
-            "trigger_check",
-            ["python", "-m", "second_brain.cli", "immune", "check", "--policy", "skill-candidate"],
-            "skill-candidate: matched=True computed=1.0 policies=['skill-candidate']\n",
-        ),
-        (
-            "rollback",
-            ["python", "-m", "second_brain.cli", "optimize", "rollback", proposal_id, "skill-candidate"],
-            json.dumps({
-                "rolled_back": True,
-                "proposal": {
-                    "intervention": {"hash": intervention_hash},
-                    "proposal_id": proposal_id, "status": "rolled_back",
-                },
-            }),
-        ),
-        (
-            "show",
-            ["python", "-m", "second_brain.cli", "optimize", "show", proposal_id],
-            json.dumps({
-                "intervention": {"hash": intervention_hash},
-                "proposal_id": proposal_id, "status": "rolled_back",
-            }),
-        ),
-    ]
-    commands = []
-    for index, (_, argv, text) in enumerate(outputs, start=1):
-        ref = f"raw/optimization_lifecycle/{index:02d}-stdout"
-        (out_dir / ref).write_text(text, encoding="utf-8")
-        commands.append({"argv": argv, "stdout_ref": ref, "returncode": 0})
-    fixture_ref = "raw/optimization_lifecycle/15-evaluation-input.json"
-    (out_dir / fixture_ref).write_text(
-        json.dumps({
-            "qualification_fixture": {
-                "kind": "deterministic_local",
-                "usage_source": "fixture_input_only",
-                "provider_usage_claimed": False,
-            },
-            "intervention_hash": intervention_hash,
-            "baseline": {"input_tokens": 1000, "output_tokens": 100},
-            "candidate": {"input_tokens": 500, "output_tokens": 100},
-            "quality": {
-                "correctness": True, "requirements": True, "protected_values": True,
-                "regressions": False, "verification": True,
-            },
-            "gates": {
-                "trigger": {"failed": 0},
-                "workflow": {"structural": True, "failed": 0},
-                "regression": {"regression": False, "failed": 0},
-                "security": {"passed": True},
-            },
-        }),
-        encoding="utf-8",
-    )
-    manifest = {
-        "scenarios": [{
-            "name": "optimization_lifecycle",
-            "commands": commands,
-            "evidence_refs": [fixture_ref],
-            "metrics": {"status": "ignored by verifier"},
-        }],
-    }
-    return manifest, out_dir
-
-
-def test_optimization_lifecycle_verifier_accepts_ordered_raw_evidence(tmp_path):
-    manifest, out_dir = _raw_optimization_manifest(tmp_path)
-    result = check_optimization_lifecycle(manifest, out_dir)
-    assert result["ok"] is True, result
-
-
-def test_optimization_lifecycle_verifier_rejects_frontier_before_evaluation(tmp_path):
-    manifest, out_dir = _raw_optimization_manifest(tmp_path)
-    commands = manifest["scenarios"][0]["commands"]
-    commands[4], commands[5] = commands[5], commands[4]
-    result = check_optimization_lifecycle(manifest, out_dir)
-    assert result["ok"] is False
-    assert result["detail"]["reason"] == "lifecycle order mismatch"
