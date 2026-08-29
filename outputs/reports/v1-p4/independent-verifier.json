@@ -25,8 +25,31 @@
       "detail": {
         "ancestor": true,
         "disallowed_paths": [],
-        "fresh_sha": "db8944b6c31b23b6574d5b153408d62fe4f0b52e",
-        "intervening_paths": [],
+        "fresh_sha": "37dbb9ce35adb8bd168dc0ac24de04a1b556ad85",
+        "intervening_paths": [
+          "outputs/reports/v1-p4/independent-verifier.json",
+          "outputs/reports/v1-p4/qualification-manifest.json",
+          "outputs/reports/v1-p4/raw/_setup/01-git-sha.stdout",
+          "outputs/reports/v1-p4/raw/_setup/02-git-status.stdout",
+          "outputs/reports/v1-p4/raw/brain_on/02-pulse-active.stdout",
+          "outputs/reports/v1-p4/raw/cache_sensitive/01-search-miss.stdout",
+          "outputs/reports/v1-p4/raw/cache_sensitive/02-search-hit.stdout",
+          "outputs/reports/v1-p4/raw/compacted_session/02-compact-telemetry-records.json",
+          "outputs/reports/v1-p4/raw/cross_session_continuity/01-process-a-create.stdout",
+          "outputs/reports/v1-p4/raw/driver_worker/02-spawn.stdout",
+          "outputs/reports/v1-p4/raw/driver_worker/04-complete.stdout",
+          "outputs/reports/v1-p4/raw/failed_worker/02-spawn.stdout",
+          "outputs/reports/v1-p4/raw/failed_worker/03-complete-failed.stdout",
+          "outputs/reports/v1-p4/raw/failed_worker/05-retry-spawn.stdout",
+          "outputs/reports/v1-p4/raw/fresh_session/02-p4-pulse.stdout",
+          "outputs/reports/v1-p4/raw/fresh_session/03-create-goal.stdout",
+          "outputs/reports/v1-p4/raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout",
+          "outputs/reports/v1-p4/raw/harness_switch/01-python-cli-pulse.stdout",
+          "outputs/reports/v1-p4/raw/harness_switch/02-prime-bridge-direct-pulse.stdout",
+          "outputs/reports/v1-p4/raw/long_running_goal/01-create.stdout",
+          "outputs/reports/v1-p4/raw/malformed_state/01-corrupt-goal-read.stdout",
+          "outputs/reports/v1-p4/raw/stale_state/02-observe.stdout"
+        ],
         "recorded_sha": "db8944b6c31b23b6574d5b153408d62fe4f0b52e",
         "repo": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration"
       },
@@ -67,10 +90,10 @@
     {
       "check": "backup_restore_preservation",
       "detail": {
-        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-231932-381607",
+        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-232024-590692",
         "fingerprint_id": "fp-670994ca63e2",
         "fingerprint_preserved": true,
-        "goal_id": "goal-99fa8ade5153",
+        "goal_id": "goal-daa8b7f0f362",
         "goal_preserved": true
       },
       "ok": true
@@ -127,7 +150,7 @@
       "ok": true
     }
   ],
-  "generated_at": "2026-08-29T23:19:32.546219+00:00",
+  "generated_at": "2026-08-29T23:20:24.749301+00:00",
   "manifest_path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json",
   "ok": true
 }
