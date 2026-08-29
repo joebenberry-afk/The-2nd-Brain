@@ -18,23 +18,60 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from .errors import BrainError
+from . import db, paths
+from .errors import BrainError, MigrationError
+_MAX_TEXT_CHARS = 512
+_MAX_REFERENCE_CHARS = 256
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goals (
-    goal_id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    status TEXT NOT NULL,
-    milestones_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    target_date TEXT,
-    completed_at TEXT,
-    blocker_note TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_goal_status ON goals (status);
-"""
+
+def _bounded_text(value: object, field: str, limit: int = _MAX_TEXT_CHARS) -> str:
+    if not isinstance(value, str):
+        raise BrainError(f"{field} must be a string")
+    return value.strip()[:limit]
+
+
+def _canonical_json(value: object) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise BrainError("malformed JSON value") from exc
+
+
+def _legacy_sidecar_has_rows(path: Path) -> bool:
+    try:
+        conn = sqlite3.connect(path, timeout=5.0)
+        try:
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            return any(
+                conn.execute(
+                    f'SELECT 1 FROM "{str(table[0]).replace(chr(34), chr(34) * 2)}" LIMIT 1'
+                ).fetchone()
+                is not None
+                for table in tables
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise MigrationError(f"Cannot inspect legacy goals sidecar {path}: {exc}") from exc
+
+
+def _retire_legacy_sidecars(home: Path) -> None:
+    directory = home / "state" / "goals"
+    sidecars = sorted(directory.glob("*.sqlite")) if directory.is_dir() else []
+    if any(_legacy_sidecar_has_rows(path) for path in sidecars):
+        raise MigrationError(
+            "Refusing to discard non-empty legacy goals sidecar; migrate it explicitly"
+        )
+    for path in sidecars:
+        for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                pass
+
 
 
 class GoalStatus(StrEnum):
@@ -115,15 +152,25 @@ class GoalStore:
 
     def __init__(self, home: Path | str) -> None:
         self.home = Path(home)
-        self._db_dir = self.home / "state" / "goals"
-        self._db_dir.mkdir(parents=True, exist_ok=True)
-        self._dbfile = self._db_dir / "goals.sqlite"
-        self._init_db()
+        _retire_legacy_sidecars(self.home)
+        db.migrate(paths.db_path(self.home))
 
-    def _init_db(self) -> None:
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.executescript(_SCHEMA)
-            conn.commit()
+    @staticmethod
+    def _row_to_goal(row: sqlite3.Row) -> LongRunningGoal:
+        milestones_raw = json.loads(row["milestones_json"])
+        milestones = [Milestone.from_dict(m) for m in milestones_raw]
+        return LongRunningGoal(
+            goal_id=row["goal_id"],
+            title=row["title"],
+            description=row["description"],
+            status=GoalStatus(row["status"]),
+            milestones=milestones,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            target_date=row["target_date"],
+            completed_at=row["completed_at"],
+            blocker_note=row["blocker_note"] or None,
+        )
 
     def create_goal(
         self,
@@ -134,17 +181,24 @@ class GoalStore:
     ) -> LongRunningGoal:
         """Create a new long-running goal."""
         import hashlib
+
+        title = _bounded_text(title, "title")
+        description = _bounded_text(description, "description")
+        if milestone_titles is not None and not isinstance(milestone_titles, list):
+            raise BrainError("milestone_titles must be a list")
+        milestones = [
+            Milestone(
+                milestone_id=f"m-{i + 1}",
+                title=_bounded_text(value, "milestone title"),
+            )
+            for i, value in enumerate(milestone_titles or [])
+        ]
+        if target_date is not None and not isinstance(target_date, str):
+            raise BrainError("target_date must be a string or None")
         now = datetime.now(UTC).isoformat()
         digest = hashlib.sha256(f"{title}:{now}".encode()).hexdigest()[:12]
-        goal_id = f"goal-{digest}"
-
-        milestones = [
-            Milestone(milestone_id=f"m-{i+1}", title=t)
-            for i, t in enumerate(milestone_titles or [])
-        ]
-
         goal = LongRunningGoal(
-            goal_id=goal_id,
+            goal_id=f"goal-{digest}",
             title=title,
             description=description,
             status=GoalStatus.ACTIVE,
@@ -153,49 +207,44 @@ class GoalStore:
             updated_at=now,
             target_date=target_date,
         )
-
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+        conn = db.connect(paths.db_path(self.home))
+        try:
             conn.execute(
                 "INSERT INTO goals "
                 "(goal_id, title, description, status, milestones_json, created_at, "
-                " updated_at, target_date) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "updated_at, target_date, blocker_note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     goal.goal_id,
                     goal.title,
                     goal.description,
                     goal.status.value,
-                    json.dumps([m.to_dict() for m in goal.milestones]),
+                    _canonical_json([m.to_dict() for m in goal.milestones]),
                     goal.created_at,
                     goal.updated_at,
                     goal.target_date,
+                    "",
                 ),
             )
             conn.commit()
-
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise BrainError(f"Could not create goal: {exc}") from exc
+        finally:
+            conn.close()
         return goal
 
     def get_goal(self, goal_id: str) -> LongRunningGoal | None:
         """Retrieve goal by ID."""
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.row_factory = sqlite3.Row
+        conn = db.connect(paths.db_path(self.home))
+        try:
             row = conn.execute("SELECT * FROM goals WHERE goal_id = ?", (goal_id,)).fetchone()
-            if not row:
-                return None
-            milestones_raw = json.loads(row["milestones_json"])
-            milestones = [Milestone.from_dict(m) for m in milestones_raw]
-            return LongRunningGoal(
-                goal_id=row["goal_id"],
-                title=row["title"],
-                description=row["description"],
-                status=GoalStatus(row["status"]),
-                milestones=milestones,
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-                target_date=row["target_date"],
-                completed_at=row["completed_at"],
-                blocker_note=row["blocker_note"],
-            )
+            return self._row_to_goal(row) if row else None
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise BrainError(f"Could not retrieve goal: {exc}") from exc
+        finally:
+            conn.close()
 
     def complete_milestone(
         self, goal_id: str, milestone_id: str, evidence_ref: str = ""
@@ -204,48 +253,52 @@ class GoalStore:
         goal = self.get_goal(goal_id)
         if goal is None:
             raise BrainError(f"Goal {goal_id} not found")
-
-        found = False
+        evidence_ref = _bounded_text(evidence_ref, "evidence_ref", _MAX_REFERENCE_CHARS)
         now = datetime.now(UTC).isoformat()
-        for m in goal.milestones:
-            if m.milestone_id == milestone_id:
-                m.completed = True
-                m.evidence_ref = evidence_ref
-                m.completed_at = now
-                found = True
+        for milestone in goal.milestones:
+            if milestone.milestone_id == milestone_id:
+                milestone.completed = True
+                milestone.evidence_ref = evidence_ref
+                milestone.completed_at = now
                 break
-
-        if not found:
+        else:
             raise BrainError(f"Milestone {milestone_id} not found on goal {goal_id}")
-
-        # Check if all milestones completed
         if all(m.completed for m in goal.milestones):
             goal.status = GoalStatus.COMPLETED
             goal.completed_at = now
-
         goal.updated_at = now
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+        conn = db.connect(paths.db_path(self.home))
+        try:
             conn.execute(
                 "UPDATE goals SET status = ?, milestones_json = ?, "
                 "updated_at = ?, completed_at = ? WHERE goal_id = ?",
                 (
                     goal.status.value,
-                    json.dumps([m.to_dict() for m in goal.milestones]),
+                    _canonical_json([m.to_dict() for m in goal.milestones]),
                     goal.updated_at,
                     goal.completed_at,
                     goal.goal_id,
                 ),
             )
             conn.commit()
-
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise BrainError(f"Could not update goal: {exc}") from exc
+        finally:
+            conn.close()
         return goal
 
     def list_active_goals(self) -> list[LongRunningGoal]:
         """List all goals with status ACTIVE or BLOCKED."""
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.row_factory = sqlite3.Row
+        conn = db.connect(paths.db_path(self.home))
+        try:
             rows = conn.execute(
-                "SELECT goal_id FROM goals WHERE status IN ('ACTIVE', 'BLOCKED') "
+                "SELECT * FROM goals WHERE status IN ('ACTIVE', 'BLOCKED') "
                 "ORDER BY updated_at DESC"
             ).fetchall()
-            return [g for r in rows if (g := self.get_goal(r["goal_id"])) is not None]
+            return [self._row_to_goal(row) for row in rows]
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise BrainError(f"Could not list goals: {exc}") from exc
+        finally:
+            conn.close()

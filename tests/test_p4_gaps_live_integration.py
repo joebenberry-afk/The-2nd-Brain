@@ -7,6 +7,7 @@ Tests:
 3. P4.4 Structural Bottleneck Fingerprinting: records, aggregates, and ranks systemic bottlenecks.
 """
 
+from second_brain import db
 from second_brain.fingerprints import BottleneckCategory, BottleneckFingerprintStore
 from second_brain.goals import GoalStatus, GoalStore
 from second_brain.heartbeat import LocalHeartbeatEngine
@@ -16,6 +17,7 @@ class TestP4GapsLiveIntegration:
     """Proves P4 gap closures on the frozen roadmap (§4 R10)."""
 
     def test_long_running_goal_lifecycle_and_milestones(self, brain_home):
+        assert db.db_path(brain_home).is_file()
         store = GoalStore(brain_home)
 
         # Create goal with 3 milestones
