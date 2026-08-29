@@ -1,0 +1,6 @@
+ M .superpowers/sdd/.gitignore
+?? .qual-smoke/
+?? outputs/reports/v1-p4/
+?? scripts/run_v1_p4_qualification.py
+?? scripts/verify_v1_p4_qualification.py
+?? tests/test_v1_p4_qualification.py
