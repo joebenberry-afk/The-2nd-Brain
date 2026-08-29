@@ -176,6 +176,11 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             or impact > 1_000_000
         ):
             issues.append(_field_issue(identity, "impact_score", "must be a bounded non-negative number"))
+        if "evidence_hash" in record and (
+            not isinstance(record["evidence_hash"], str)
+            or not _SHA256_RE.fullmatch(record["evidence_hash"])
+        ):
+            issues.append(_field_issue(identity, "evidence_hash", "must be a SHA-256 hex digest"))
 
     elif kind in _P4_OPTIMIZATION_KINDS:
         for field in ("proposal_id", "status"):
@@ -359,20 +364,19 @@ def operational_report(home: Path, since: str | None = None) -> dict:
         if kind in _P4_OPTIMIZATION_KINDS:
             counts["optimization_events"] += 1
 
-        role = record.get("role")
-        if not isinstance(role, str):
-            role = record.get("bot_role")
-        if not isinstance(role, str):
-            role = record.get("role_profile")
-        role = role.lower() if isinstance(role, str) else ""
-        if role in {"driver", "integrator", "orchestrator", "hard_orchestrator"}:
+        roles = {
+            value.lower()
+            for field in ("role", "bot_role", "role_profile", "worker_role", "parent_role")
+            if isinstance(value := record.get(field), str)
+        }
+        if roles & {"driver", "integrator", "orchestrator", "hard_orchestrator"}:
             counts["driver_events"] += 1
-        elif role in {"worker", "dev", "validator", "explorer", "verifier"}:
+        if roles & {"worker", "dev", "validator", "explorer", "verifier"}:
             counts["worker_events"] += 1
         harness = record.get("harness")
         if isinstance(harness, str) and harness.lower() in {"background", "daemon", "cron"}:
             counts["background_events"] += 1
-        elif role == "background":
+        elif "background" in roles:
             counts["background_events"] += 1
 
     return {"provider_tokens": tokens, **counts}

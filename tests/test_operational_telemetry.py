@@ -97,3 +97,42 @@ def test_operational_report_counts_grouped_events_and_hash_rereads(brain_home: P
     assert result["heartbeat_runs"] == 1
     assert result["fingerprint_events"] == 1
     assert result["optimization_events"] == 1
+
+
+def test_validate_rejects_unbounded_bottleneck_evidence_hash(brain_home: Path):
+    _write_records(
+        brain_home,
+        [{
+            "v": 2,
+            "kind": "bottleneck_fingerprint",
+            "session": "s",
+            "ts": "2026-08-29T00:00:00Z",
+            "fingerprint_id": "fp",
+            "category": "tool",
+            "scope_id": "project",
+            "occurrence_count": 1,
+            "impact_score": 1.0,
+            "evidence_count": 1,
+            "evidence_hash": "raw-evidence",
+        }],
+    )
+    issues = telemetry.validate(brain_home)["issues"]
+    assert len(issues) == 1
+    assert "invalid evidence_hash" in issues[0]
+
+
+def test_operational_report_groups_omp_worker_and_parent_roles(brain_home: Path):
+    _write_records(
+        brain_home,
+        [{
+            "v": 3,
+            "kind": "omp_worker_context_handoff",
+            "session": "s",
+            "ts": "2026-08-29T00:00:00Z",
+            "worker_role": "worker",
+            "parent_role": "driver",
+        }],
+    )
+    result = telemetry.operational_report(brain_home)
+    assert result["worker_events"] == 1
+    assert result["driver_events"] == 1
