@@ -56,37 +56,59 @@ _FORBIDDEN_MARKERS = (
     "<thinking>", "tool_input", "tool_output",
 )
 _FORBIDDEN_RECORD_FIELDS = frozenset({
-    "prompt", "payload", "secret", "content", "tool_input", "tool_output",
-    "chain_of_thought", "thinking", "internal_monologue",
+    "prompt", "payload", "secret", "content", "tool_input", "tool-output",
+    "tool-input", "tool_output", "chain_of_thought", "chain-of-thought",
+    "thinking", "internal_monologue", "cot",
 })
 
 
 def _artifact_path(out_dir: Path, ref: Any) -> Path | None:
-    """Resolve a manifest ref only when it stays under the evidence directory."""
+    """Resolve a relative ref only when it stays under the evidence directory."""
     if not isinstance(ref, str) or not ref:
         return None
     try:
+        ref_path = Path(ref)
+        # Manifest refs are repository-local evidence names, never filesystem
+        # paths. Reject absolute and traversal spellings before resolution.
+        if ref_path.is_absolute() or ".." in ref_path.parts:
+            return None
         root = out_dir.resolve()
-        path = (out_dir / ref).resolve()
+        path = (out_dir / ref_path).resolve()
         path.relative_to(root)
     except (OSError, RuntimeError, ValueError):
         return None
     return path
 
 
-def _forbidden_record_fields(node: Any) -> list[str]:
+def _raw_artifact_path(out_dir: Path, ref: Any) -> Path | None:
+    """Resolve only raw evidence refs, excluding manifest/result metadata."""
+    path = _artifact_path(out_dir, ref)
+    if path is None:
+        return None
+    try:
+        path.relative_to((out_dir / "raw").resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path
+
+
+def _forbidden_record_fields(
+    node: Any, *, allowed_fields: frozenset[str] = frozenset(),
+) -> list[str]:
     """Find privacy-sensitive field names recursively in JSON-like data."""
     found: list[str] = []
     if isinstance(node, dict):
         for key, value in node.items():
             field = str(key).casefold()
-            if field in _FORBIDDEN_RECORD_FIELDS:
+            if field in _FORBIDDEN_RECORD_FIELDS and field not in allowed_fields:
                 found.append(str(key))
-            found.extend(_forbidden_record_fields(value))
+            found.extend(_forbidden_record_fields(value, allowed_fields=allowed_fields))
     elif isinstance(node, list):
         for value in node:
-            found.extend(_forbidden_record_fields(value))
+            found.extend(_forbidden_record_fields(value, allowed_fields=allowed_fields))
     return found
+
+
 
 
 def check(name: str, ok: bool, detail: Any) -> dict[str, Any]:
@@ -124,14 +146,16 @@ def check_artifact_hash_integrity(manifest: dict[str, Any], out_dir: Path) -> di
     all_commands = list(manifest.get("setup_commands", []))
     for row in manifest.get("scenarios", []):
         all_commands.extend(row.get("commands", []))
-    for cmd in all_commands:
+    for index, cmd in enumerate(all_commands):
+        if not isinstance(cmd, dict):
+            unhashed.append(f"<command[{index}]>")
+            continue
         for ref_key, hash_key in (("stdout_ref", "stdout_sha256"), ("stderr_ref", "stderr_sha256")):
             ref = cmd.get(ref_key)
             expected = cmd.get(hash_key)
-            if not ref:
-                continue
-            if not expected:
-                unhashed.append(ref)
+            label = ref or f"<command[{index}].{ref_key}>"
+            if not ref or not expected:
+                unhashed.append(label)
                 continue
             path = _artifact_path(out_dir, ref)
             if path is None or not path.is_file():
@@ -384,7 +408,10 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
 
 
 def _read_json_ref(out_dir: Path, ref: str) -> Any:
-    return json.loads((out_dir / ref).read_text(encoding="utf-8"))
+    path = _artifact_path(out_dir, ref)
+    if path is None or not path.is_file():
+        raise ValueError(f"invalid or missing evidence ref: {ref!r}")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict[str, Any]:
@@ -490,11 +517,11 @@ def _gather_raw_text(scenario: dict[str, Any], out_dir: Path) -> str:
             ref = cmd.get(ref_key)
             if not ref:
                 continue
-            path = _artifact_path(out_dir, ref)
+            path = _raw_artifact_path(out_dir, ref)
             if path is not None and path.is_file():
                 chunks.append(path.read_text(encoding="utf-8", errors="replace"))
     for ref in scenario.get("evidence_refs", []):
-        path = _artifact_path(out_dir, ref)
+        path = _raw_artifact_path(out_dir, ref)
         if path is not None and path.is_file():
             chunks.append(path.read_text(encoding="utf-8", errors="replace"))
     return "\n".join(chunks)
@@ -540,6 +567,13 @@ def check_privacy_absence(manifest: dict[str, Any], out_dir: Path) -> dict[str, 
         all_commands.extend(row.get("commands", []))
     command_refs: set[str] = set()
     for cmd in all_commands:
+        if not isinstance(cmd, dict):
+            continue
+        allowed_fields = (
+            frozenset({"content"})
+            if "action-cache" in [str(arg) for arg in cmd.get("argv", [])]
+            else frozenset()
+        )
         for ref_key in ("stdout_ref", "stderr_ref"):
             ref = cmd.get(ref_key)
             if not ref:
@@ -548,22 +582,20 @@ def check_privacy_absence(manifest: dict[str, Any], out_dir: Path) -> dict[str, 
             path = _artifact_path(out_dir, ref)
             if path is None or not path.is_file():
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace").lower()
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
             scanned += 1
+            lowered = raw_text.lower()
             for marker in _FORBIDDEN_MARKERS:
-                if marker in text:
+                if marker in lowered:
                     offenders.append(f"{ref}: contains {marker!r}")
+            try:
+                parsed = json.loads(raw_text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            for field in _forbidden_record_fields(parsed, allowed_fields=allowed_fields):
+                offenders.append(f"{ref}: forbidden field {field!r} present")
     # Non-command evidence artifacts written via write_evidence() (seeded/
-    # compacted telemetry fixtures, etc.) carry the same privacy obligations
-    # as command output and telemetry, but are never scanned above because
-    # they are not a command's stdout_ref/stderr_ref. Scan their raw text
-    # for the same forbidden markers, and their JSON structure for the same
-    # forbidden field names the telemetry loop below checks. Command-derived
-    # refs that also happen to appear in evidence_refs are skipped here --
-    # they were already text-scanned above, and their JSON is real CLI
-    # output (which may legitimately use field names like "content") rather
-    # than a raw telemetry-record snapshot, so the structural field check
-    # would otherwise false-positive on it.
+    # compacted telemetry fixtures, etc.) carry the same privacy obligations.
     for row in manifest.get("scenarios", []):
         for ref in row.get("evidence_refs", []):
             if ref in command_refs:

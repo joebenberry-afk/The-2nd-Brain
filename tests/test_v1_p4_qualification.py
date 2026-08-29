@@ -46,16 +46,22 @@ RUNNER = _load_script("run_v1_p4_qualification")
 VERIFIER = _load_script("verify_v1_p4_qualification")
 
 run_qualification = RUNNER.run_qualification
+confined_evidence_path = RUNNER._confined_evidence_path
 claims_grounded = VERIFIER.claims_grounded
 check_artifact_hash_integrity = VERIFIER.check_artifact_hash_integrity
 check_privacy_absence = VERIFIER.check_privacy_absence
+read_json_ref = VERIFIER._read_json_ref
 
 
 def test_qualification_manifest_has_all_required_scenarios(tmp_path):
+    stale = tmp_path / "out" / "raw" / "old-scenario" / "stale.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale", encoding="utf-8")
     manifest = run_qualification(tmp_path / "out", repo=REPO_ROOT)
     names = {row["name"] for row in manifest["scenarios"]}
     assert names == REQUIRED_SCENARIOS
     assert manifest["git"]["sha"]
+    assert not stale.exists()
 
 
 @pytest.fixture(scope="module")
@@ -137,6 +143,34 @@ def test_claims_grounded_rejects_fabricated_model_and_token_values(tmp_path):
         "note": "totally-fabricated-model-xyz",
     }
     ok, detail = claims_grounded(fabricated_scenario, out_dir)
+    assert ok is False
+    assert "not backed by any raw artifact" in detail
+
+
+def test_claims_grounded_ignores_metadata_refs_and_aliases(tmp_path):
+    """Manifest and verifier result files are metadata, never grounding
+    evidence, including a raw symlink alias to either file."""
+    out_dir = tmp_path / "out"
+    raw_dir = out_dir / "raw" / "fake_scenario"
+    raw_dir.mkdir(parents=True)
+    metadata_model = "metadata-only-model"
+    for filename in ("qualification-manifest.json", "independent-verifier.json"):
+        (out_dir / filename).write_text(json.dumps({"model": metadata_model}), encoding="utf-8")
+    refs = ["qualification-manifest.json", "independent-verifier.json"]
+    alias = raw_dir / "metadata-alias.json"
+    try:
+        alias.symlink_to(out_dir / "qualification-manifest.json")
+    except OSError:
+        alias = None
+    if alias is not None:
+        refs.append(str(alias.relative_to(out_dir).as_posix()))
+    scenario = {
+        "name": "fake_scenario",
+        "evidence_refs": refs,
+        "commands": [],
+        "metrics": {"model": metadata_model},
+    }
+    ok, detail = claims_grounded(scenario, out_dir)
     assert ok is False
     assert "not backed by any raw artifact" in detail
 
@@ -246,6 +280,112 @@ def test_artifact_hash_integrity_catches_tampered_non_command_evidence_ref(tmp_p
     removed = check_artifact_hash_integrity(manifest, out_dir)
     assert removed["ok"] is False
     assert ref in removed["detail"]["missing"]
+
+
+def test_check_privacy_absence_scans_nested_command_json_fields(tmp_path):
+    """Command captures are structurally checked, not only searched for
+    marker strings, including nested lists and dictionaries."""
+    out_dir = tmp_path / "out"
+    scen_dir = out_dir / "raw" / "security_boundary"
+    scen_dir.mkdir(parents=True)
+    stdout_path = scen_dir / "01-command.stdout"
+    stderr_path = scen_dir / "01-command.stderr"
+    stdout_path.write_text(
+        json.dumps({"result": [{"payload": {"tool-input": {"value": "secret"}}}]}),
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+    stdout_ref = str(stdout_path.relative_to(out_dir).as_posix())
+    stderr_ref = str(stderr_path.relative_to(out_dir).as_posix())
+    manifest = {
+        "home": str(tmp_path / "nonexistent-home"),
+        "setup_commands": [],
+        "scenarios": [{
+            "name": "security_boundary",
+            "commands": [{"argv": ["python", "safe-command"], "stdout_ref": stdout_ref, "stderr_ref": stderr_ref}],
+            "evidence_refs": [],
+        }],
+    }
+    result = check_privacy_absence(manifest, out_dir)
+    assert result["ok"] is False
+    assert any(stdout_ref in offender and "payload" in offender for offender in result["detail"]["offenders"])
+
+
+def test_check_privacy_absence_allows_action_cache_content(tmp_path):
+    """Action-cache CLI output intentionally exposes a `content` field."""
+    out_dir = tmp_path / "out"
+    scen_dir = out_dir / "raw" / "cache_sensitive"
+    scen_dir.mkdir(parents=True)
+    stdout_path = scen_dir / "01-search.stdout"
+    stderr_path = scen_dir / "01-search.stderr"
+    stdout_path.write_text(json.dumps({"hit": True, "content": "cached result"}), encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    stdout_ref = str(stdout_path.relative_to(out_dir).as_posix())
+    stderr_ref = str(stderr_path.relative_to(out_dir).as_posix())
+    manifest = {
+        "home": str(tmp_path / "nonexistent-home"),
+        "setup_commands": [],
+        "scenarios": [{
+            "name": "cache_sensitive",
+            "commands": [{
+                "argv": ["python", "-m", "second_brain.cli", "action-cache", "search"],
+                "stdout_ref": stdout_ref,
+                "stderr_ref": stderr_ref,
+            }],
+            "evidence_refs": [],
+        }],
+    }
+    result = check_privacy_absence(manifest, out_dir)
+    assert result["ok"] is True, result
+
+
+def test_artifact_hash_integrity_requires_both_command_capture_refs(tmp_path):
+    """A command capture without either stdout or stderr ref fails closed."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    result = check_artifact_hash_integrity(
+        {"setup_commands": [{"stdout_ref": None, "stderr_ref": None}], "scenarios": []},
+        out_dir,
+    )
+    assert result["ok"] is False
+    assert any("stdout_ref" in item for item in result["detail"]["unhashed"])
+    assert any("stderr_ref" in item for item in result["detail"]["unhashed"])
+
+
+def test_read_json_ref_rejects_traversal_absolute_and_outside_symlink(tmp_path):
+    """Verifier JSON reads must reject refs before opening files."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "inside.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"unsafe": true}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        read_json_ref(out_dir, "../outside.json")
+    with pytest.raises(ValueError):
+        read_json_ref(out_dir, str(outside))
+    link = out_dir / "outside-link.json"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        return
+    with pytest.raises(ValueError):
+        read_json_ref(out_dir, "outside-link.json")
+
+
+def test_runner_evidence_path_rejects_unsafe_refs(tmp_path):
+    """Runner hashing must not follow absolute/traversal/outside refs."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside", encoding="utf-8")
+    assert confined_evidence_path(out_dir, "../outside.json") is None
+    assert confined_evidence_path(out_dir, str(outside)) is None
+    link = out_dir / "link.json"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        return
+    assert confined_evidence_path(out_dir, "link.json") is None
 
 
 def test_check_privacy_absence_flags_marker_in_non_command_evidence_ref(tmp_path):

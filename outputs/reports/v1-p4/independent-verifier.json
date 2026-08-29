@@ -13,17 +13,18 @@
     {
       "check": "artifact_hash_integrity",
       "detail": {
-        "checked": 102,
+        "checked": 153,
         "mismatches": [],
-        "missing": []
+        "missing": [],
+        "unhashed": []
       },
       "ok": true
     },
     {
       "check": "git_currency",
       "detail": {
-        "fresh_sha": "1b1433f91f042f845c07835eefd0c93497ff0e17",
-        "recorded_sha": "1b1433f91f042f845c07835eefd0c93497ff0e17",
+        "fresh_sha": "678dcf7b82f142fc25a49762d6ea90a351c4a597",
+        "recorded_sha": "678dcf7b82f142fc25a49762d6ea90a351c4a597",
         "repo": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration"
       },
       "ok": true
@@ -63,10 +64,10 @@
     {
       "check": "backup_restore_preservation",
       "detail": {
-        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-195208-478034",
+        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-224655-334243",
         "fingerprint_id": "fp-670994ca63e2",
         "fingerprint_preserved": true,
-        "goal_id": "goal-6a490d34a1a8",
+        "goal_id": "goal-e6802009dac3",
         "goal_preserved": true
       },
       "ok": true
@@ -97,7 +98,7 @@
           "git_dirty": true,
           "healthy": true,
           "issue_codes": [],
-          "latency_ms": 30,
+          "latency_ms": 28,
           "maintenance_mutated": false,
           "mode": "shadow",
           "model_tokens_used": 0,
@@ -118,12 +119,12 @@
       "check": "privacy_absence",
       "detail": {
         "offenders": [],
-        "scanned": 117
+        "scanned": 119
       },
       "ok": true
     }
   ],
-  "generated_at": "2026-08-29T19:52:08.614892+00:00",
+  "generated_at": "2026-08-29T22:46:55.499271+00:00",
   "manifest_path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json",
   "ok": true
 }

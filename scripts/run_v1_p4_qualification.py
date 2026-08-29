@@ -77,6 +77,22 @@ def _rel(ctx: Ctx, path: Path) -> str:
     return path.resolve().relative_to(ctx.out_dir.resolve()).as_posix()
 
 
+
+
+def _confined_evidence_path(out_dir: Path, ref: Any) -> Path | None:
+    """Resolve a relative evidence ref only when it stays under out_dir."""
+    if not isinstance(ref, str) or not ref:
+        return None
+    try:
+        ref_path = Path(ref)
+        if ref_path.is_absolute() or ".." in ref_path.parts:
+            return None
+        root = out_dir.resolve()
+        path = (out_dir / ref_path).resolve()
+        path.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path
 def run_argv(
     ctx: Ctx,
     scenario: str,
@@ -203,11 +219,19 @@ def prime_version(repo: Path) -> tuple[str | None, str]:
 
 def set_heartbeat_mode(home: Path, mode: str) -> None:
     cfg = home / "config" / "brain.toml"
-    text = cfg.read_text(encoding="utf-8")
-    new_text, _ = re.subn(r'(?m)^mode = "\w+"', f'mode = "{mode}"', text, count=1)
-    if new_text == text:
-        raise AssertionError(f"could not locate heartbeat mode setting in {cfg}")
-    cfg.write_text(new_text, encoding="utf-8")
+    lines = cfg.read_text(encoding="utf-8").splitlines(keepends=True)
+    in_heartbeat = False
+    for index, line in enumerate(lines):
+        section = line.strip()
+        if section.startswith("[") and section.endswith("]"):
+            in_heartbeat = section == "[heartbeat]"
+            continue
+        if in_heartbeat and re.match(r'^mode\s*=\s*"\w+"\s*(?:#.*)?(?:\r?\n)?$', line):
+            newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            lines[index] = f'mode = "{mode}"{newline}'
+            cfg.write_text("".join(lines), encoding="utf-8")
+            return
+    raise AssertionError(f"could not locate heartbeat mode setting in {cfg}")
 
 
 def common_metrics(home: Path, session_id: str) -> dict[str, Any]:
@@ -644,7 +668,7 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     cr = run_cli(ctx, name, ["worker-plane", "status", sess, "--json"], home=home, label="status-after-fail")
     commands.append(cr.record); evidence_refs.append(cr.record["stdout_ref"])
     status_after = json_stdout(cr)
-    retryable = status_after["active_workers"] == 0
+    retryable = status_after["active_workers"] < status_after["max_concurrent_workers"]
 
     cr = run_cli(
         ctx, name,
@@ -1209,8 +1233,16 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
     out_dir = Path(out_dir).resolve()
     repo = Path(repo).resolve()
     raw_dir = out_dir / "raw"
+    if raw_dir.is_symlink():
+        raise RuntimeError(f"raw evidence directory must not be a symlink: {raw_dir}")
+    if raw_dir.exists():
+        shutil.rmtree(raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
     homes_dir = out_dir / "homes"
+    if homes_dir.is_symlink():
+        raise RuntimeError(f"qualification homes directory must not be a symlink: {homes_dir}")
+    if homes_dir.exists():
+        shutil.rmtree(homes_dir)
     homes_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = Ctx(repo=repo, out_dir=out_dir, raw_dir=raw_dir, python_exe=Path(sys.executable))
@@ -1270,9 +1302,10 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
     for row in scenarios:
         hashes: dict[str, str] = {}
         for ref in row.get("evidence_refs", []):
-            ref_path = out_dir / ref
-            if ref_path.is_file():
-                hashes[ref] = hashlib.sha256(ref_path.read_bytes()).hexdigest()
+            ref_path = _confined_evidence_path(out_dir, ref)
+            if ref_path is None or not ref_path.is_file():
+                raise ValueError(f"invalid or missing evidence ref: {ref!r}")
+            hashes[ref] = hashlib.sha256(ref_path.read_bytes()).hexdigest()
         row["evidence_ref_hashes"] = hashes
 
     manifest = {
