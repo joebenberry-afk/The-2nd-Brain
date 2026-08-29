@@ -24,6 +24,7 @@ from . import (
     capsule_runtime,
     cerebellum,
     credit,
+    optimization,
     crossmodel,
     db,
     engram,
@@ -852,6 +853,32 @@ def _parser() -> argparse.ArgumentParser:
     cf.add_argument("skill_name")
     cf.add_argument("tasks_file")
 
+    opt = sub.add_parser(
+        "optimize", parents=[home_parent], help="governed optimization lifecycle"
+    )
+    opts = opt.add_subparsers(dest="optimization_command", required=True)
+    opp = opts.add_parser("propose", parents=[home_parent], help="create an immutable proposal")
+    opp.add_argument("fingerprint_id")
+    opp.add_argument("--skill", dest="skill_name", required=True)
+    opp.add_argument("--intervention-hash", required=True)
+    opp.add_argument("--mode", choices=optimization.MODES, default="shadow")
+    opp.add_argument("--json", action="store_true")
+    ope = opts.add_parser("evaluate", parents=[home_parent], help="attach evaluation evidence")
+    ope.add_argument("proposal_id")
+    ope.add_argument("--result-json", type=Path, required=True)
+    ope.add_argument("--json", action="store_true")
+    opa = opts.add_parser("activate", parents=[home_parent], help="activate a proved proposal")
+    opa.add_argument("proposal_id")
+    opa.add_argument("--session", dest="session_id", default="")
+    opa.add_argument("--json", action="store_true")
+    opr = opts.add_parser("rollback", parents=[home_parent], help="delegate guarded rollback")
+    opr.add_argument("proposal_id")
+    opr.add_argument("trigger_id")
+    opr.add_argument("--reason", required=True)
+    opr.add_argument("--json", action="store_true")
+    opshow = opts.add_parser("show", parents=[home_parent], help="show latest proposal version")
+    opshow.add_argument("proposal_id")
+    opshow.add_argument("--json", action="store_true")
     eg = sub.add_parser(
         "engrams", parents=[home_parent], help="workflow engrams (Phase 19, candidates only)"
     )
@@ -2420,6 +2447,39 @@ def cmd_credit(args) -> int:
             )
         return 0
     return 2
+
+def cmd_optimize(args) -> int:
+    import json
+
+    home = _home(args)
+    if args.optimization_command == "propose":
+        result = optimization.propose(
+            home,
+            args.fingerprint_id,
+            skill_name=args.skill_name,
+            intervention_hash=args.intervention_hash,
+            mode=args.mode,
+        )
+    elif args.optimization_command == "evaluate":
+        try:
+            result_data = json.loads(args.result_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BrainError(f"invalid evaluation JSON: {args.result_json}") from exc
+        result = optimization.evaluate(home, args.proposal_id, result_data)
+    elif args.optimization_command == "activate":
+        result = optimization.activate(home, args.proposal_id, session_id=args.session_id)
+    elif args.optimization_command == "rollback":
+        result = optimization.rollback(home, args.proposal_id, args.trigger_id, args.reason)
+    elif args.optimization_command == "show":
+        result = optimization.get_proposal(home, args.proposal_id)
+    else:
+        return 2
+
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    else:
+        print(result)
+    return 0
 
 
 def cmd_promote(args) -> int:
@@ -5037,6 +5097,7 @@ def main(argv: list[str] | None = None) -> int:
         "demote": cmd_demote,
         "promotions": cmd_promotions,
         "credit": cmd_credit,
+        "optimize": cmd_optimize,
         "router": cmd_router,
         "skills": cmd_skills,
         "reconsolidation": cmd_reconsolidation,
