@@ -311,3 +311,66 @@ correlate `cacheRead`/`cacheWrite` with prefix stability (plan §5.4).
 - The Prime host-side mode-aware `autoinject_shadow_decision.model_visible`
   event is **authoritative** for actual model visibility (advisory/active =
   true, shadow = false).
+
+## Live registry and P4 operations (2026-08-29)
+
+The Python telemetry registry is the authoritative allowlist for records
+currently emitted by Prime, OMP, and the local P4 operations. Every kind below
+uses schema v2 unless marked v3:
+
+| kind | version | kind | version |
+|---|---:|---|---:|
+| OMP_SECOND_BRAIN_READY | 3 | active_state_delivery | 2 |
+| agent_end | 2 | assistant_usage | 3 |
+| autoinject_shadow_decision | 2 | before_agent_start | 2 |
+| brain_no_injection | 2 | brain_packet_delivered | 2 |
+| brain_retrieval_attempt | 2 | claude_code_stop_turn | 2 |
+| codex_hook_shadow_decision | 2 | context | 2 |
+| context_paging | 2 | context_structure | 2 |
+| extension_error | 2 | hermes_model_decision | 2 |
+| hermes_post_tool_call | 2 | hermes_pre_llm_call | 2 |
+| hermes_session_finalized | 2 | hermes_session_started | 2 |
+| hermes_worker_context_resolved | 2 | hermes_worker_lifecycle | 2 |
+| hermes_worker_result_corrected | 2 | hermes_worker_result_correction_requested | 2 |
+| hermes_worker_result_reviewed | 2 | hermes_writeback_candidate | 2 |
+| lean_kernel | 2 | model_fallback_used | 2 |
+| model_invocation_completed | 2 | model_invocation_failed | 2 |
+| model_invocation_started | 2 | model_routing_decision | 2 |
+| omp_routing_decision | 3 | omp_routing_handoff_failure | 3 |
+| omp_routing_invocation | 3 | omp_routing_response | 3 |
+| omp_visibility_plan | 3 | omp_worker_child_result | 3 |
+| omp_worker_context_failure | 3 | omp_worker_context_handoff | 3 |
+| orchestration_record | 2 | orchestrator_policy_violation | 2 |
+| preinvocation | 2 | preinvocation_no_task | 2 |
+| prime_tool_surface | 2 | provider_request_meta | 3 |
+| provider_response_meta | 3 | rtd_shadow | 2 |
+| session_before_compact | 2 | session_compact | 2 |
+| session_finalized | 2 | session_shutdown | 2 |
+| session_start | 2 | session_started | 2 |
+| simplification_review | 2 | stop_allowed | 2 |
+| stop_blocked | 2 | stop_blocked_result | 2 |
+| stop_boundary | 2 | stop_continue | 2 |
+| stop_control_result | 2 | stop_finalization_error | 2 |
+| stop_finalized | 2 | stop_not_triggered | 2 |
+| tool_call | 2 | tool_result | 2 |
+| turn_end | 2 | turn_start | 2 |
+| vmem_compact_prep | 2 | vmem_fault_in | 2 |
+| vmem_hot_context | 2 | writeback_candidate | 2 |
+| heartbeat_pulse | 2 | bottleneck_fingerprint | 2 |
+| optimization_proposal | 2 | optimization_evaluation | 2 |
+| optimization_activation | 2 | optimization_rollback | 2 |
+
+P4 field contracts are bounded and metadata-only:
+
+- `heartbeat_pulse`: `mode`, `event`, `due`, `ran`, `healthy`, `db_ok`,
+  `cache_pruned_count`, `git_dirty`, `issue_codes`, `latency_ms`,
+  `model_tokens_used` (which must equal zero).
+- `bottleneck_fingerprint`: `fingerprint_id`, `category`, `scope_id`,
+  `occurrence_count`, `impact_score`, `evidence_count`, `evidence_hash`.
+- `optimization_*`: `proposal_id`, `status`, `intervention_hash`,
+  `evidence_hash`, `approval_state`, `rollback_state`.
+
+P4 telemetry has no content or payload fields. Prompts, tool I/O, secrets, and
+chain-of-thought are never admitted. Missing provider economics remain
+missing; absent token counters are not rewritten as zero, and null provider
+values are preserved.
