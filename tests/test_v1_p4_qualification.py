@@ -127,6 +127,28 @@ def test_git_currency_rejects_source_change_descendant(tmp_path):
 
     assert result["ok"] is False, result
     assert result["detail"]["disallowed_paths"] == ["source.py"]
+def test_git_currency_rejects_source_rename_into_evidence_namespace(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "source.py").write_text("baseline\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "baseline")
+    recorded_sha = _git(repo, "rev-parse", "HEAD")
+
+    destination = repo / "outputs" / "reports" / "v1-p4" / "raw" / "source.py"
+    destination.parent.mkdir(parents=True)
+    (repo / "source.py").rename(destination)
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+         "commit", "-m", "rename source into evidence")
+
+    result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
+
+    assert result["ok"] is False, result
+    assert result["detail"]["disallowed_paths"] == ["source.py"]
+
 
 
 def test_qualification_manifest_has_all_required_scenarios(tmp_path):
