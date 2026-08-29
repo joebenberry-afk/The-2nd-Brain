@@ -325,7 +325,7 @@ The handler prints the exact coordinator dictionary and appends one privacy-safe
 
 ```text
 env -u PYTHONHOME -u PYTHONPATH .venv/Scripts/python.exe -m pytest -q tests/test_heartbeat_coordinator.py
-git add src/second_brain/heartbeat.py src/second_brain/cli.py config/brain.toml defaults/config/brain.toml tests/test_heartbeat_coordinator.py
+git add src/second_brain/heartbeat.py src/second_brain/telemetry.py src/second_brain/cli.py config/brain.toml defaults/config/brain.toml tests/test_heartbeat_coordinator.py
 git commit -m "feat(heartbeat): add bounded event coordination"
 ```
 
