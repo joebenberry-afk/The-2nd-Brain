@@ -268,7 +268,8 @@ def check_git_currency(manifest: dict[str, Any]) -> dict[str, Any]:
         detail["reason"] = "recorded SHA is not an ancestor of HEAD"
         return check("git_currency", False, detail)
 
-    diff = _run_git(repo, "diff", "--name-only", "-z", f"{recorded_sha}..{fresh_sha}", "--")
+    diff = _run_git(repo, "diff", "--no-renames", "--name-only", "-z",
+                    f"{recorded_sha}..{fresh_sha}", "--")
     if diff.returncode != 0:
         detail["reason"] = "could not inspect changes after recorded SHA"
         return check("git_currency", False, detail)
