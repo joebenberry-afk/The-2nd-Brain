@@ -1,4 +1,4 @@
-from second_brain import cli
+from second_brain import cli, db
 
 import json
 from pathlib import Path
@@ -154,3 +154,37 @@ def test_radar_cli_retains_existing_keys_and_flattens_fingerprints(brain_home, r
     assert set(payload) >= {"candidate_count", "candidates", "radar_overhead_ms", "fingerprints"}
     assert len(payload["fingerprints"]) == 1
     assert payload["fingerprints"][0]["category"] == "TOOL_CHAIN_THRASH"
+
+
+def test_radar_bounds_long_project_scope_for_store_and_telemetry(brain_home):
+    _write_stream(brain_home, "long-scope", "e" * 64)
+    project_id = "project-" + ("x" * 200)
+    result = ImprovementRadar(brain_home).observe_session("long-scope", project_id=project_id)
+    assert result[0]["fingerprints"][0]["scope_id"] == project_id[:128]
+    records = [
+        record
+        for _, _, record in telemetry.iter_records(brain_home)
+        if record.get("kind") == "bottleneck_fingerprint"
+    ]
+    assert records[0]["scope_id"] == project_id[:128]
+
+
+def test_radar_migrates_missing_fingerprint_on_duplicate_observation(brain_home):
+    _write_stream(brain_home, "legacy", "f" * 64)
+    radar = ImprovementRadar(brain_home)
+    first = radar.observe_session("legacy", project_id="project-a")[0]
+    path = brain_home / "state" / "radar" / "candidates.json"
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    persisted[0].pop("fingerprints", None)
+    path.write_text(json.dumps(persisted), encoding="utf-8")
+    connection = db.connect(db.db_path(brain_home))
+    try:
+        connection.execute("DELETE FROM bottleneck_fingerprints")
+        connection.commit()
+    finally:
+        connection.close()
+
+    migrated = radar.observe_session("legacy", project_id="project-a")[0]
+    assert migrated["candidate_id"] == first["candidate_id"]
+    assert len(migrated["fingerprints"]) == 1
+    assert migrated["fingerprints"][0]["occurrence_count"] == 1
