@@ -25,7 +25,7 @@
       "detail": {
         "ancestor": true,
         "disallowed_paths": [],
-        "fresh_sha": "37dbb9ce35adb8bd168dc0ac24de04a1b556ad85",
+        "fresh_sha": "fc8698cb49466aca47bd64a8f5aab451b7f01943",
         "intervening_paths": [
           "outputs/reports/v1-p4/independent-verifier.json",
           "outputs/reports/v1-p4/qualification-manifest.json",
@@ -90,10 +90,10 @@
     {
       "check": "backup_restore_preservation",
       "detail": {
-        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-232024-590692",
+        "backup_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared\\backups\\backup-20260829-232050-981172",
         "fingerprint_id": "fp-670994ca63e2",
         "fingerprint_preserved": true,
-        "goal_id": "goal-daa8b7f0f362",
+        "goal_id": "goal-f2ce63322593",
         "goal_preserved": true
       },
       "ok": true
@@ -150,7 +150,7 @@
       "ok": true
     }
   ],
-  "generated_at": "2026-08-29T23:20:24.749301+00:00",
+  "generated_at": "2026-08-29T23:20:51.138522+00:00",
   "manifest_path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\qualification-manifest.json",
   "ok": true
 }
