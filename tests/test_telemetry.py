@@ -172,6 +172,52 @@ def test_validate_accepts_rtd_shadow(brain_home):
     assert r["issues"] == []
 
 
+def test_current_omp_v3_records_validate(brain_home):
+    _write_session(
+        brain_home,
+        "session.jsonl",
+        [
+            {"v": 3, "kind": "omp_routing_invocation", "session": "s", "ts": "2026-08-29T00:00:00Z"},
+            {
+                "v": 2,
+                "kind": "heartbeat_pulse",
+                "session": "s",
+                "ts": "2026-08-29T00:00:01Z",
+                "mode": "shadow",
+                "event": "session_start",
+                "due": True,
+                "ran": True,
+                "healthy": True,
+                "db_ok": True,
+                "cache_pruned_count": 0,
+                "git_dirty": False,
+                "issue_codes": [],
+                "latency_ms": 0,
+                "model_tokens_used": 0,
+            },
+        ],
+    )
+    assert telemetry.validate(brain_home)["issues"] == []
+
+
+def test_operational_report_preserves_missing_provider_counters(brain_home):
+    _write_session(
+        brain_home,
+        "session.jsonl",
+        [
+            _rec("session_start", model="local", cwd="/repo"),
+            _rec("tool_call", tool="read", input_bytes=10, target_sha256="a" * 64),
+            _rec("heartbeat_pulse", mode="shadow", event="turn_start", due=True, ran=True,
+                 healthy=True, db_ok=True, cache_pruned_count=0, git_dirty=False,
+                 issue_codes=[], latency_ms=0, model_tokens_used=0),
+        ],
+    )
+    result = telemetry.report(brain_home)["operational"]
+    assert result["provider_tokens"]["input"] is None
+    assert result["tool_calls"] == 1
+    assert result["heartbeat_runs"] == 1
+
+
 
 
 def test_telemetry_schema_has_no_reasoning_fields():
