@@ -26,6 +26,8 @@ from typing import Any
 
 from . import telemetry
 from .errors import BrainError
+from .fingerprints import BottleneckCategory, BottleneckFingerprintStore
+
 
 
 class InefficiencyPattern(StrEnum):
@@ -35,6 +37,14 @@ class InefficiencyPattern(StrEnum):
     REDUNDANT_TEST_RUN = "REDUNDANT_TEST_RUN"
     CONTEXT_CHURN = "CONTEXT_CHURN"
 
+
+_FINGERPRINT_CATEGORY = {
+    InefficiencyPattern.REPEATED_READ: BottleneckCategory.TOOL_CHAIN_THRASH,
+    InefficiencyPattern.TOOL_ERROR_LOOP: BottleneckCategory.TOOL_CHAIN_THRASH,
+    InefficiencyPattern.SEARCH_THRASH: BottleneckCategory.RETRIEVAL_OVERLOAD,
+    InefficiencyPattern.REDUNDANT_TEST_RUN: BottleneckCategory.TOOL_CHAIN_THRASH,
+    InefficiencyPattern.CONTEXT_CHURN: BottleneckCategory.PROMPT_BLOAT,
+}
 
 @dataclass
 class ImprovementAlert:
@@ -144,6 +154,7 @@ class ImprovementRadar:
         if not alerts:
             return []
         candidates = self._load_candidates()
+        fingerprint_store = BottleneckFingerprintStore(self.home)
         results: list[dict[str, Any]] = []
         for alert in alerts:
             signal_key = self._signal_key(alert)
@@ -151,15 +162,17 @@ class ImprovementRadar:
                 "candidate-"
                 + hashlib.sha256(f"{project_id}|{signal_key}".encode()).hexdigest()[:24]
             )
-            refs = [
-                {
+            refs: list[dict[str, Any]] = []
+            for filename, line_number, record in rows:
+                if record.get("kind") not in {"tool_call", "tool_result", "brain_retrieval_attempt"}:
+                    continue
+                reference = {
                     "telemetry_ref": f"{filename}:{line_number}",
                     "record_hash": self._record_hash(record),
-                    "ts": record.get("ts"),
                 }
-                for filename, line_number, record in rows
-                if record.get("kind") in {"tool_call", "tool_result", "brain_retrieval_attempt"}
-            ]
+                if isinstance(record.get("ts"), str):
+                    reference["ts"] = record["ts"]
+                refs.append(reference)
             observation_id = hashlib.sha256(
                 json.dumps(
                     {
@@ -186,6 +199,7 @@ class ImprovementRadar:
                     "observations": [],
                 }
                 candidates.append(existing)
+            existing.setdefault("fingerprints", [])
             if any(
                 item.get("observation_id") == observation_id
                 for item in existing["observations"]
@@ -225,6 +239,42 @@ class ImprovementRadar:
                     "status": "candidate",
                     "promotion_authority": "existing_promotion",
                 }
+            )
+            fingerprint = fingerprint_store.record_alert(
+                alert,
+                scope_id=project_id,
+                evidence_refs=refs[:64],
+            )
+            existing["fingerprints"] = [
+                item
+                for item in existing["fingerprints"]
+                if item.get("fingerprint_id") != fingerprint.fingerprint_id
+            ]
+            existing["fingerprints"].append(fingerprint.to_dict())
+            existing["fingerprints"].sort(
+                key=lambda item: (
+                    -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
+                    str(item.get("fingerprint_id", "")),
+                )
+            )
+            evidence_hash = hashlib.sha256(
+                json.dumps(
+                    fingerprint.evidence_refs or [],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            telemetry.append_record(
+                self.home,
+                session_id,
+                "bottleneck_fingerprint",
+                fingerprint_id=fingerprint.fingerprint_id,
+                category=_FINGERPRINT_CATEGORY[alert.pattern].value,
+                scope_id=project_id,
+                occurrence_count=fingerprint.occurrence_count,
+                impact_score=fingerprint.impact_score,
+                evidence_count=len(fingerprint.evidence_refs or []),
+                evidence_hash=evidence_hash,
             )
             existing["observations"].append(observation)
             existing["observations"] = existing["observations"][-16:]

@@ -1602,12 +1602,32 @@ def cmd_radar(args) -> int:
             project_id=args.project_id,
             task_id=args.task_id,
         )
+        fingerprints_by_id: dict[str, dict] = {}
+        for candidate in candidates:
+            for fingerprint in candidate.get("fingerprints", []):
+                fingerprint_id = str(fingerprint.get("fingerprint_id", ""))
+                existing = fingerprints_by_id.get(fingerprint_id)
+                if existing is None or (
+                    float(fingerprint.get("impact_score", 0))
+                    * int(fingerprint.get("occurrence_count", 0))
+                    > float(existing.get("impact_score", 0))
+                    * int(existing.get("occurrence_count", 0))
+                ):
+                    fingerprints_by_id[fingerprint_id] = fingerprint
+        fingerprints = sorted(
+            fingerprints_by_id.values(),
+            key=lambda item: (
+                -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
+                str(item.get("fingerprint_id", "")),
+            ),
+        )
         payload = {
             "session_id": args.session_id,
             "project_id": args.project_id,
             "repo": str(args.repo.resolve()),
             "candidate_count": len(candidates),
             "candidates": candidates,
+            "fingerprints": fingerprints,
             "radar_overhead_ms": round((perf_counter() - started) * 1000, 3),
         }
         if args.out is not None:
