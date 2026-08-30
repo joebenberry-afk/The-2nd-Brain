@@ -333,7 +333,8 @@ def operational_report(home: Path, since: str | None = None) -> dict:
             ):
                 value = record.get(source)
                 if isinstance(value, int) and not isinstance(value, bool):
-                    tokens[field] = value if tokens[field] is None else tokens[field] + value
+                    current = tokens[field]
+                    tokens[field] = value if current is None else current + value
         if kind == "tool_call":
             counts["tool_calls"] += 1
             if record.get("tool") == "read":
