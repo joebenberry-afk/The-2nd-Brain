@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -170,7 +169,13 @@ def test_counterfactual_evaluation_can_activate_with_skillforge_binding(brain_ho
         },
         without_arm={
             "run_id": "without-run", "success": True,
-            "tokens": {"input": 1000, "cache_read": 0, "cache_write": 0, "output": 0, "total": 1000},
+            "tokens": {
+                "input": 1000,
+                "cache_read": 0,
+                "cache_write": 0,
+                "output": 0,
+                "total": 1000,
+            },
             "tool_calls": 2, "wall_time_ms": 20,
             "verification": {"outcome": "passed", "evidence_ref": "verify:cf"},
             "regressions": {"count": 0, "evidence_ref": "tests:cf"},
@@ -205,7 +210,7 @@ def test_activation_policy_baseline_matches_raw_hash_after_move(brain_home):
 
 
 def test_evaluation_evidence_and_net_value_are_attached(brain_home):
-    proposal, intervention_hash = _activate_ready(brain_home)
+    proposal, _intervention_hash = _activate_ready(brain_home)
     current = optimization.get_proposal(brain_home, proposal["proposal_id"])
     assert current["status"] == "evaluated"
     assert current["evaluation_ref"]
@@ -228,7 +233,9 @@ def test_activation_refuses_stale_fingerprint_and_owner_version(brain_home):
     assert (brain_home / "skills" / "candidates" / "candidate").exists()
 
 
-def test_rollback_requires_registered_trigger_identity_and_updates_plasticity_only_on_success(brain_home):
+def test_rollback_requires_registered_trigger_identity_and_updates_plasticity_only_on_success(
+    brain_home,
+):
     proposal, _ = _activate_ready(brain_home)
     assert optimization.activate(brain_home, proposal["proposal_id"])[
         "activated"

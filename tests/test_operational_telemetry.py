@@ -74,20 +74,96 @@ def test_validate_reports_one_issue_per_invalid_p4_field(brain_home: Path):
 
 def test_operational_report_counts_grouped_events_and_hash_rereads(brain_home: Path):
     records = [
-        {"v": 2, "kind": "session_start", "session": "s", "ts": "2026-08-29T00:00:00Z", "role": "driver", "harness": "prime"},
-        {"v": 2, "kind": "turn_start", "session": "s", "ts": "2026-08-29T00:00:01Z", "role": "worker", "harness": "omp"},
-        {"v": 2, "kind": "tool_call", "session": "s", "ts": "2026-08-29T00:00:02Z", "tool": "read", "target_sha256": "a" * 64},
-        {"v": 2, "kind": "tool_call", "session": "s", "ts": "2026-08-29T00:00:03Z", "tool": "read", "target_sha256": "a" * 64},
-        {"v": 2, "kind": "tool_result", "session": "s", "ts": "2026-08-29T00:00:04Z", "is_error": True, "output_bytes": 5},
-        {"v": 2, "kind": "extension_error", "session": "s", "ts": "2026-08-29T00:00:05Z"},
-        {"v": 2, "kind": "heartbeat_pulse", "session": "s", "ts": "2026-08-29T00:00:06Z", **_heartbeat()},
-        {"v": 3, "kind": "assistant_usage", "session": "s", "ts": "2026-08-29T00:00:07Z", "input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
-        {"v": 2, "kind": "bottleneck_fingerprint", "session": "s", "ts": "2026-08-29T00:00:08Z", "fingerprint_id": "fp", "category": "tool", "occurrence_count": 1, "impact_score": 1},
-        {"v": 2, "kind": "optimization_proposal", "session": "s", "ts": "2026-08-29T00:00:09Z", "proposal_id": "p", "status": "proposed"},
+        {
+            "v": 2,
+            "kind": "session_start",
+            "session": "s",
+            "ts": "2026-08-29T00:00:00Z",
+            "role": "driver",
+            "harness": "prime",
+        },
+        {
+            "v": 2,
+            "kind": "turn_start",
+            "session": "s",
+            "ts": "2026-08-29T00:00:01Z",
+            "role": "worker",
+            "harness": "omp",
+        },
+        {
+            "v": 2,
+            "kind": "tool_call",
+            "session": "s",
+            "ts": "2026-08-29T00:00:02Z",
+            "tool": "read",
+            "target_sha256": "a" * 64,
+        },
+        {
+            "v": 2,
+            "kind": "tool_call",
+            "session": "s",
+            "ts": "2026-08-29T00:00:03Z",
+            "tool": "read",
+            "target_sha256": "a" * 64,
+        },
+        {
+            "v": 2,
+            "kind": "tool_result",
+            "session": "s",
+            "ts": "2026-08-29T00:00:04Z",
+            "is_error": True,
+            "output_bytes": 5,
+        },
+        {
+            "v": 2,
+            "kind": "extension_error",
+            "session": "s",
+            "ts": "2026-08-29T00:00:05Z",
+        },
+        {
+            "v": 2,
+            "kind": "heartbeat_pulse",
+            "session": "s",
+            "ts": "2026-08-29T00:00:06Z",
+            **_heartbeat(),
+        },
+        {
+            "v": 3,
+            "kind": "assistant_usage",
+            "session": "s",
+            "ts": "2026-08-29T00:00:07Z",
+            "input_tokens": 2,
+            "output_tokens": 3,
+            "total_tokens": 5,
+        },
+        {
+            "v": 2,
+            "kind": "bottleneck_fingerprint",
+            "session": "s",
+            "ts": "2026-08-29T00:00:08Z",
+            "fingerprint_id": "fp",
+            "category": "tool",
+            "occurrence_count": 1,
+            "impact_score": 1,
+        },
+        {
+            "v": 2,
+            "kind": "optimization_proposal",
+            "session": "s",
+            "ts": "2026-08-29T00:00:09Z",
+            "proposal_id": "p",
+            "status": "proposed",
+        },
     ]
     _write_records(brain_home, records)
     result = telemetry.operational_report(brain_home)
-    assert result["provider_tokens"] == {"input": 2, "output": 3, "total": 5, "cache_read": None, "cache_write": None}
+    assert result["provider_tokens"] == {
+        "input": 2,
+        "output": 3,
+        "total": 5,
+        "cache_read": None,
+        "cache_write": None,
+    }
     assert result["file_reads"] == 2
     assert result["file_rereads"] == 1
     assert result["driver_events"] == 1

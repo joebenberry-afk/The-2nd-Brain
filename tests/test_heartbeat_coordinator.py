@@ -15,13 +15,21 @@ def _config(home: Path, text: str) -> None:
 
 
 def test_shadow_is_read_only_and_active_prunes(brain_home: Path, tmp_path: Path):
-    shadow = HeartbeatCoordinator(brain_home).run_if_due("session_start", "s1", tmp_path, force=True)
+    shadow = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_start", "s1", tmp_path, force=True
+    )
     assert shadow["mode"] == "shadow"
     assert shadow["model_tokens_used"] == 0
     assert shadow["maintenance_mutated"] is False
 
-    _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'active'\nmin_interval_seconds = 0\n")
-    active = HeartbeatCoordinator(brain_home).run_if_due("session_shutdown", "s1", tmp_path, force=True)
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
+        "min_interval_seconds = 0\n",
+    )
+    active = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_shutdown", "s1", tmp_path, force=True
+    )
     assert active["mode"] == "active"
     assert active["model_tokens_used"] == 0
     assert active["maintenance_mutated"] is True
@@ -29,7 +37,9 @@ def test_shadow_is_read_only_and_active_prunes(brain_home: Path, tmp_path: Path)
 
 def test_off_does_not_probe_or_mutate(brain_home: Path, tmp_path: Path):
     _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'off'\n")
-    result = HeartbeatCoordinator(brain_home).run_if_due("session_start", "s1", tmp_path, force=True)
+    result = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_start", "s1", tmp_path, force=True
+    )
     assert result == {
         "mode": "off", "event": "session_start", "due": False, "ran": False,
         "healthy": True, "db_ok": True, "cache_pruned_count": 0,
@@ -59,28 +69,55 @@ def test_shadow_counts_without_deleting_expired_cache(brain_home: Path):
 
 
 def test_interval_skip_and_force(brain_home: Path, tmp_path: Path):
-    _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'shadow'\nmin_interval_seconds = 60\n")
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\n"
+        "min_interval_seconds = 60\n",
+    )
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    first = HeartbeatCoordinator(brain_home).run_if_due("turn_start", "s1", tmp_path, force=True, now=now)
-    skipped = HeartbeatCoordinator(brain_home).run_if_due("turn_start", "s1", tmp_path, now=now + timedelta(seconds=1))
-    forced = HeartbeatCoordinator(brain_home).run_if_due("session_shutdown", "s1", tmp_path, force=True, now=now + timedelta(seconds=1))
+    first = HeartbeatCoordinator(brain_home).run_if_due(
+        "turn_start", "s1", tmp_path, force=True, now=now
+    )
+    skipped = HeartbeatCoordinator(brain_home).run_if_due(
+        "turn_start", "s1", tmp_path, now=now + timedelta(seconds=1)
+    )
+    forced = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_shutdown",
+        "s1",
+        tmp_path,
+        force=True,
+        now=now + timedelta(seconds=1),
+    )
     assert first["ran"] is True
     assert skipped["due"] is False and skipped["ran"] is False
     assert forced["due"] is True and forced["ran"] is True
 
 
 def test_concurrent_callers_reserve_one_run(brain_home: Path, tmp_path: Path):
-    _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'shadow'\nmin_interval_seconds = 60\n")
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\n"
+        "min_interval_seconds = 60\n",
+    )
     results: list[dict] = []
     barrier = threading.Barrier(2)
 
     def run() -> None:
         barrier.wait()
-        results.append(HeartbeatCoordinator(brain_home).run_if_due("turn_start", "s1", tmp_path, now=datetime(2026, 1, 1, tzinfo=UTC)))
+        results.append(
+            HeartbeatCoordinator(brain_home).run_if_due(
+                "turn_start",
+                "s1",
+                tmp_path,
+                now=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
 
     threads = [threading.Thread(target=run) for _ in range(2)]
-    for thread in threads: thread.start()
-    for thread in threads: thread.join()
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
     assert sum(result["ran"] for result in results) == 1
     with db.connect(db.db_path(brain_home)) as conn:
         assert conn.execute("SELECT COUNT(*) FROM heartbeat_runs").fetchone()[0] == 1
@@ -89,17 +126,30 @@ def test_concurrent_callers_reserve_one_run(brain_home: Path, tmp_path: Path):
 def test_probe_failures_are_visible_and_nonthrowing(brain_home: Path, tmp_path: Path):
     status = LocalHeartbeatEngine(brain_home).pulse(tmp_path / "missing-repo", mode="shadow")
     assert "git_probe" in status.issues
-    missing = HeartbeatCoordinator(tmp_path / "missing-home").run_if_due("session_start", "s1", tmp_path, force=True)
+    missing = HeartbeatCoordinator(tmp_path / "missing-home").run_if_due(
+        "session_start", "s1", tmp_path, force=True
+    )
     assert "db_missing" in missing["issue_codes"]
     assert missing["ran"] is False
 
 
 def test_cache_prune_failure_is_visible(brain_home: Path, monkeypatch, tmp_path: Path):
-    _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'active'\nmin_interval_seconds = 0\n")
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
+        "min_interval_seconds = 0\n",
+    )
     from second_brain import heartbeat
+
     original = heartbeat.ActionCacheStore.prune_expired
-    monkeypatch.setattr(heartbeat.ActionCacheStore, "prune_expired", lambda self: (_ for _ in ()).throw(RuntimeError("no")))
-    result = HeartbeatCoordinator(brain_home).run_if_due("session_start", "s1", tmp_path, force=True)
+    monkeypatch.setattr(
+        heartbeat.ActionCacheStore,
+        "prune_expired",
+        lambda self: (_ for _ in ()).throw(RuntimeError("no")),
+    )
+    result = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_start", "s1", tmp_path, force=True
+    )
     assert "cache_prune" in result["issue_codes"]
     monkeypatch.setattr(heartbeat.ActionCacheStore, "prune_expired", original)
 
@@ -112,10 +162,20 @@ def test_config_fallback_is_bounded(brain_home: Path):
 
 
 def test_retains_only_configured_runs(brain_home: Path, tmp_path: Path):
-    _config(brain_home, "schema_version = 1\n[heartbeat]\nmode = 'shadow'\nmin_interval_seconds = 0\nmax_run_history = 256\n")
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\n"
+        "min_interval_seconds = 0\nmax_run_history = 256\n",
+    )
     coordinator = HeartbeatCoordinator(brain_home)
     for index in range(260):
-        coordinator.run_if_due("turn_start", f"s{index}", tmp_path, force=True, now=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index))
+        coordinator.run_if_due(
+            "turn_start",
+            f"s{index}",
+            tmp_path,
+            force=True,
+            now=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index),
+        )
     with db.connect(db.db_path(brain_home)) as conn:
         assert conn.execute("SELECT COUNT(*) FROM heartbeat_runs").fetchone()[0] == 256
 
