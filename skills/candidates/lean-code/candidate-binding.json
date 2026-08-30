@@ -1,0 +1,21 @@
+{
+  "candidate_content_sha256": "24afb3198440996c3cf647d293b4d4bab4d21abf57ff2ab66424760e8d65233a",
+  "candidate_id": "skill-candidate-8845b97d4799c9c9eff7d26f",
+  "candidate_type": "general",
+  "evaluation_state": "hold",
+  "evidence_refs": [
+    "outputs/reports/p3-promo-eval/p4-5-fixed-c-1/evidence.json",
+    "outputs/reports/p3-promo-eval/p4-5-fixed-b-1/evidence.json"
+  ],
+  "install_state": "inactive",
+  "lifecycle_state": "candidate",
+  "owner": "p4-5-governed-lifecycle",
+  "project_id": "second-brain",
+  "promotion_state": "hold",
+  "reason_codes": [
+    "SEARCH_THRASH"
+  ],
+  "source_radar_candidate_id": "candidate-5c7e74f419eac2293db6690c",
+  "source_ref": "candidate-5c7e74f419eac2293db6690c",
+  "source_type": "radar"
+}
