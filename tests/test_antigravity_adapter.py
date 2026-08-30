@@ -269,9 +269,7 @@ def test_post_tool_use_nested_tool_call_empty_object(brain: Path) -> None:
     # telemetry recorded tool name
     tfile = brain / "telemetry" / "agent-performance" / "antigravity-hooks.jsonl"
     lines = [
-        json.loads(line)
-        for line in tfile.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in tfile.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     tool_records = [line for line in lines if line.get("kind") == "tool_result"]
     assert tool_records and tool_records[-1]["tool"] == "run_command"
@@ -352,6 +350,145 @@ def test_uninitialized_brain_fail_open(tmp_path: Path) -> None:
     r = _run_cli(empty, "autoinject", "antigravity-hook", stdin=payload)
     assert r.returncode == 0
     assert json.loads(r.stdout) == {}
+
+
+# ---------------------------------------------------------------- Raw-byte stdin identity
+#
+# Regression coverage for the P4.5 telemetry correlation gap: the real
+# Antigravity/PowerShell hook transport (brainstem/adapters/antigravity/
+# scripts/run-hook.ps1) delivers the payload as raw bytes, not a decoded
+# Python str. A stray leading UTF-8 BOM (observed in production: the launcher
+# was closing the child process's `.StandardInput` StreamWriter wrapper
+# instead of its `.BaseStream`, which flushed that StreamWriter's own
+# BOM-emitting encoding as a side effect) broke `json.loads()` on nearly
+# every real invocation, silently degrading conversationId/model identity to
+# the anonymous fallback. These tests drive the CLI with genuine bytes
+# (bypassing `subprocess.run(text=True)`'s ambient encoding) to prove the
+# fix holds independent of the calling process's locale/PYTHONIOENCODING.
+
+
+def _run_cli_bytes(
+    home: Path,
+    *args: str,
+    stdin_bytes: bytes,
+    env_extra: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(k, None)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-m", "second_brain", "--home", str(home), *args],
+        capture_output=True,
+        env=env,
+        cwd=home,
+        input=stdin_bytes,
+        timeout=120,
+    )
+
+
+def _hook_log(home: Path) -> list[dict]:
+    log = home / "telemetry" / "agent-performance" / "antigravity-hooks.jsonl"
+    if not log.is_file():
+        return []
+    return [
+        json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+
+
+def test_preinvocation_bom_prefixed_bytes_still_binds_real_identity(
+    brain: Path, tmp_path: Path
+) -> None:
+    """A leading UTF-8 BOM in the raw stdin bytes must not fall back to anonymous."""
+    transcript = _transcript(tmp_path, "migration ordering rules")
+    payload = _pre_invocation_payload(conversation="agy-conv-bom", transcript=str(transcript))
+    raw = b"\xef\xbb\xbf" + json.dumps(payload).encode("utf-8")
+    r = _run_cli_bytes(
+        brain,
+        "autoinject",
+        "antigravity-hook",
+        stdin_bytes=raw,
+        env_extra={"SECOND_BRAIN_AUTOINJECT_MODE": "active"},
+    )
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout.decode("utf-8"))
+    assert "injectSteps" in out
+
+    records = _hook_log(brain)
+    sessions = {rec["session"] for rec in records}
+    assert "agy-conv-bom" in sessions
+    assert "antigravity-anon" not in sessions
+    pre = next(
+        rec
+        for rec in records
+        if rec["kind"] == "preinvocation" and rec["session"] == "agy-conv-bom"
+    )
+    assert pre["model"] == "gemini-3.7-flash"
+
+
+def test_preinvocation_garbage_bytes_falls_back_to_explicit_anonymous(brain: Path) -> None:
+    """Bytes invalid as JSON even after BOM-stripping stay an explicit anonymous fail-open."""
+    r = _run_cli_bytes(
+        brain, "autoinject", "antigravity-hook", stdin_bytes=b"\xef\xbb\xbfnot json at all"
+    )
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.decode("utf-8")) == {}
+
+    records = _hook_log(brain)
+    assert records, "fail-open path must still record telemetry, not silently drop it"
+    assert records[-1]["session"] == "antigravity-anon"
+    assert records[-1]["kind"] == "preinvocation_no_task"
+
+
+def test_two_concurrent_sessions_do_not_cross_bind(brain: Path, tmp_path: Path) -> None:
+    """Two distinct real conversationIds must never share or overwrite each other's identity."""
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    transcript_a = _transcript(dir_a, "migration ordering rules")
+    transcript_b = _transcript(dir_b, "migration ordering rules")
+    payload_a = _pre_invocation_payload(
+        conversation="agy-conv-sess-a", transcript=str(transcript_a)
+    )
+    payload_b = _pre_invocation_payload(
+        conversation="agy-conv-sess-b", transcript=str(transcript_b)
+    )
+    payload_a["modelName"] = "gemini-3.7-flash-high"
+    payload_b["modelName"] = "gemini-3.7-flash-medium"
+
+    env_active = {"SECOND_BRAIN_AUTOINJECT_MODE": "active"}
+    r_a = _run_cli_bytes(
+        brain,
+        "autoinject",
+        "antigravity-hook",
+        stdin_bytes=json.dumps(payload_a).encode("utf-8"),
+        env_extra=env_active,
+    )
+    r_b = _run_cli_bytes(
+        brain,
+        "autoinject",
+        "antigravity-hook",
+        stdin_bytes=json.dumps(payload_b).encode("utf-8"),
+        env_extra=env_active,
+    )
+    assert r_a.returncode == 0 and r_b.returncode == 0
+
+    records = _hook_log(brain)
+    pre_a = next(
+        rec
+        for rec in records
+        if rec["kind"] == "preinvocation" and rec["session"] == "agy-conv-sess-a"
+    )
+    pre_b = next(
+        rec
+        for rec in records
+        if rec["kind"] == "preinvocation" and rec["session"] == "agy-conv-sess-b"
+    )
+    assert pre_a["session"] != pre_b["session"]
+    assert pre_a["model"] == "gemini-3.7-flash-high"
+    assert pre_b["model"] == "gemini-3.7-flash-medium"
 
 
 # ---------------------------------------------------------------- Lean parity
