@@ -1,0 +1,50 @@
+{
+  "run_id": "e07-jsonc-config-b-run1",
+  "task_id": "p4-5-governed",
+  "slug": "e07-jsonc-config",
+  "arm_type": "b",
+  "provider": "gemini",
+  "lean_state": "OFF",
+  "model_slug": "gemini-3.7-flash-medium",
+  "conversation_id": "e9bb9ba5-acda-4a8b-9f4b-5e4d6ebc3d26",
+  "started_at": "2026-08-30T01:38:41.917759+00:00",
+  "wall_ms": 73362,
+  "agy_exit": 0,
+  "usage": {
+    "input_tokens": 15896,
+    "output_tokens": 256,
+    "cache_read_tokens": 0,
+    "total_tokens": 16152
+  },
+  "acceptance": "PASS",
+  "judge": [
+    {
+      "command": "node tests/test.js",
+      "exit": 0
+    },
+    {
+      "command": "node -e \"const s=require('fs').readFileSync('src/config.js','utf8');if(!/jsonc-simple/.test(s))process.exit(3);\"",
+      "exit": 0
+    }
+  ],
+  "diff": {
+    "changed_files": [
+      "src/config.js"
+    ],
+    "added_lines": 5,
+    "deleted_lines": 1,
+    "new_files": [
+      "node_modules/"
+    ]
+  },
+  "brain_telemetry": [],
+  "lean_telemetry": [],
+  "validity": "REJECTED",
+  "rejections": [
+    "no Brain hook telemetry captured",
+    "no real tool activity recorded in hook telemetry"
+  ],
+  "cost": "UNAVAILABLE-not-inferred",
+  "run_artifact_path": "outputs\\reports\\p3-promo-eval\\p4-5-governed-b-1\\agy-stream.jsonl",
+  "finished_at": "2026-08-30T01:39:55.473085+00:00"
+}
