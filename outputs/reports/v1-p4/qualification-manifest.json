@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-08-29T23:19:29.471315+00:00",
+  "generated_at": "2026-08-30T07:33:25.029989+00:00",
   "git": {
     "dirty": true,
-    "sha": "db8944b6c31b23b6574d5b153408d62fe4f0b52e"
+    "sha": "07e506060914df468cbb4c5095d70eb74ab28340"
   },
   "home": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4\\homes\\shared",
   "out_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\outputs\\reports\\v1-p4",
@@ -56,7 +56,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 334,
           "stdout_ref": "raw/fresh_session/02-p4-pulse.stdout",
-          "stdout_sha256": "09485072f470a8cb23468cc1c79105f6a6294a2c1c3389989debe2d8ace6532a"
+          "stdout_sha256": "198d0f8f0f3ceb40193bc543c48c84b4cda88be96ec24973b934409f8bcf109a"
         },
         {
           "argv": [
@@ -71,14 +71,14 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/fresh_session/03-create-goal.stdout",
-          "stdout_sha256": "aa74036cadaf2fe2056d5bb8f1462f3574a7eb0d3d57caa9e948be394a01d8ef"
+          "stdout_sha256": "47d1fb5509695415697627da58ab3ab0a2612ebf0ef82b67fcb2ce43b72867df"
         }
       ],
       "evidence_ref_hashes": {
         "raw/fresh_session/01-doctor.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "raw/fresh_session/01-doctor.stdout": "092e69f90d11c55793470d156f95696f98561e8ea3a032ab78d4d464675835af",
-        "raw/fresh_session/02-p4-pulse.stdout": "09485072f470a8cb23468cc1c79105f6a6294a2c1c3389989debe2d8ace6532a",
-        "raw/fresh_session/03-create-goal.stdout": "aa74036cadaf2fe2056d5bb8f1462f3574a7eb0d3d57caa9e948be394a01d8ef"
+        "raw/fresh_session/02-p4-pulse.stdout": "198d0f8f0f3ceb40193bc543c48c84b4cda88be96ec24973b934409f8bcf109a",
+        "raw/fresh_session/03-create-goal.stdout": "47d1fb5509695415697627da58ab3ab0a2612ebf0ef82b67fcb2ce43b72867df"
       },
       "evidence_refs": [
         "raw/fresh_session/01-doctor.stdout",
@@ -86,7 +86,7 @@
         "raw/fresh_session/02-p4-pulse.stdout",
         "raw/fresh_session/03-create-goal.stdout"
       ],
-      "goal_id": "goal-53bdbe8d1dc3",
+      "goal_id": "goal-66dd4ebbbc39",
       "metrics": {
         "background_model_calls": 0,
         "doctor_failed": false,
@@ -113,7 +113,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-53bdbe8d1dc3')\nassert goal is not None, 'goal not found on reopen in a new process'\nprint(json.dumps({'goal_title': goal.title, 'goal_status': goal.status.value}))\n"
+            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-66dd4ebbbc39')\nassert goal is not None, 'goal not found on reopen in a new process'\nprint(json.dumps({'goal_title': goal.title, 'goal_status': goal.status.value}))\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -196,7 +196,7 @@
       ],
       "evidence_ref_hashes": {
         "raw/compacted_session/01-ledger-init.stdout": "fc235679a0953a3c25ea0f0bdcc3b3e30bbf2de4ea2e122aaa8665bc1e9dc1e6",
-        "raw/compacted_session/02-compact-telemetry-records.json": "9cf5db289fb516faa44fc29f499dffd165121810946888d269fb68f264309741",
+        "raw/compacted_session/02-compact-telemetry-records.json": "8d6042f8834df54d1af5bf58c366d673e06e4229db623b50be4835ea018a6596",
         "raw/compacted_session/03-ledger-checkpoint.stdout": "587535aebd30c98bbde16d92a991baac79f8d554d57dd856a7c84fb75142e514"
       },
       "evidence_refs": [
@@ -226,7 +226,7 @@
         },
         "reasoning_tokens": null,
         "tool_calls": 0,
-        "wall_time_ms": 0.674
+        "wall_time_ms": 0.637
       },
       "name": "compacted_session",
       "session_id": "q8-compact",
@@ -247,13 +247,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/cross_session_continuity/01-process-a-create.stdout",
-          "stdout_sha256": "8961767c778a5a173b7a05b5bf1d574d9bc81e52183ec09b1b9c9f1afb2135e5"
+          "stdout_sha256": "bd49c5a1e149abbc0b1cefe575f1ed065c92d2d00a9219465bc662d9cac31ecc"
         },
         {
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-257e1292ef53')\nassert goal is not None, 'goal created in process A missing in process B'\nprint(goal.title)\n"
+            "from second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\ngoal = store.get_goal('goal-5c65dac24687')\nassert goal is not None, 'goal created in process A missing in process B'\nprint(goal.title)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -266,14 +266,14 @@
         }
       ],
       "evidence_ref_hashes": {
-        "raw/cross_session_continuity/01-process-a-create.stdout": "8961767c778a5a173b7a05b5bf1d574d9bc81e52183ec09b1b9c9f1afb2135e5",
+        "raw/cross_session_continuity/01-process-a-create.stdout": "bd49c5a1e149abbc0b1cefe575f1ed065c92d2d00a9219465bc662d9cac31ecc",
         "raw/cross_session_continuity/02-process-b-read.stdout": "0cdcf3fe59e450ea878d1a61d04b8f525d98efb09095a407a12c2524f91fa334"
       },
       "evidence_refs": [
         "raw/cross_session_continuity/01-process-a-create.stdout",
         "raw/cross_session_continuity/02-process-b-read.stdout"
       ],
-      "goal_id": "goal-257e1292ef53",
+      "goal_id": "goal-5c65dac24687",
       "metrics": {
         "background_model_calls": 0,
         "provider_tokens": null,
@@ -307,7 +307,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 332,
           "stdout_ref": "raw/harness_isolation/01-pulse-q8-iso-a.stdout",
-          "stdout_sha256": "196f8269c181b47b2850a5847173dcd23061b33236b50dc6e2ef4760ccccc9a9"
+          "stdout_sha256": "08625d71a832da47404f15ee11134c831c21785a103da149fada5bcdd2260cc5"
         },
         {
           "argv": [
@@ -330,12 +330,12 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 332,
           "stdout_ref": "raw/harness_isolation/02-pulse-q8-iso-b.stdout",
-          "stdout_sha256": "5e9f70b7f1ace570f8c11c57e7fd67a4b10fc5576a6bd25c28cc0026b23926b4"
+          "stdout_sha256": "fd7bc405a93ff9f328e8be935c44ffd5905617222890192fbb1722722ac4cfdc"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/harness_isolation/01-pulse-q8-iso-a.stdout": "196f8269c181b47b2850a5847173dcd23061b33236b50dc6e2ef4760ccccc9a9",
-        "raw/harness_isolation/02-pulse-q8-iso-b.stdout": "5e9f70b7f1ace570f8c11c57e7fd67a4b10fc5576a6bd25c28cc0026b23926b4"
+        "raw/harness_isolation/01-pulse-q8-iso-a.stdout": "08625d71a832da47404f15ee11134c831c21785a103da149fada5bcdd2260cc5",
+        "raw/harness_isolation/02-pulse-q8-iso-b.stdout": "fd7bc405a93ff9f328e8be935c44ffd5905617222890192fbb1722722ac4cfdc"
       },
       "evidence_refs": [
         "raw/harness_isolation/01-pulse-q8-iso-a.stdout",
@@ -392,12 +392,12 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 375,
           "stdout_ref": "raw/harness_switch/02-prime-bridge-direct-pulse.stdout",
-          "stdout_sha256": "821af56d001b1208f16debafc2d7e97ed4f972642bb057f8210b14728f088edd"
+          "stdout_sha256": "6982cf5e6bb14cfee6c9908d643eda88bc52258c5efd866da9df231d82f5f9bd"
         }
       ],
       "evidence_ref_hashes": {
         "raw/harness_switch/01-python-cli-pulse.stdout": "e2567a58abb258490136192dcb25cf09777537f6969adc39396ff97a1ba1f3c0",
-        "raw/harness_switch/02-prime-bridge-direct-pulse.stdout": "821af56d001b1208f16debafc2d7e97ed4f972642bb057f8210b14728f088edd"
+        "raw/harness_switch/02-prime-bridge-direct-pulse.stdout": "6982cf5e6bb14cfee6c9908d643eda88bc52258c5efd866da9df231d82f5f9bd"
       },
       "evidence_refs": [
         "raw/harness_switch/01-python-cli-pulse.stdout",
@@ -452,7 +452,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 291,
           "stdout_ref": "raw/driver_worker/02-spawn.stdout",
-          "stdout_sha256": "fc589f58bca433126070476cba27253bfa4ab93cbc68b3ef9f1bb01d59844c75"
+          "stdout_sha256": "ea22bc70ffab91b966082f190f8c358d36d3b1e8cf70e6acb2312702b9919f2e"
         },
         {
           "argv": [
@@ -481,7 +481,7 @@
             "worker-plane",
             "complete",
             "q8-driver-worker",
-            "worker-84227f0c6d5d",
+            "worker-7dd87c7d464f",
             "--status",
             "COMPLETED",
             "--summary",
@@ -495,7 +495,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 80,
           "stdout_ref": "raw/driver_worker/04-complete.stdout",
-          "stdout_sha256": "7b3f1655a6d5d766c72e0df3ec0f4084996a417bc45f427be91e7bd393e6596a"
+          "stdout_sha256": "57f23f159f0d86fdd5f85a4b14c1ce4bdad34fb0a22bfc5291c8ca5e622ae4cf"
         },
         {
           "argv": [
@@ -519,9 +519,9 @@
       ],
       "evidence_ref_hashes": {
         "raw/driver_worker/01-init.stdout": "c39f308aafb3191e12f1e4ab686b649f60485e481feb966c93236357119ee203",
-        "raw/driver_worker/02-spawn.stdout": "fc589f58bca433126070476cba27253bfa4ab93cbc68b3ef9f1bb01d59844c75",
+        "raw/driver_worker/02-spawn.stdout": "ea22bc70ffab91b966082f190f8c358d36d3b1e8cf70e6acb2312702b9919f2e",
         "raw/driver_worker/03-status-active.stdout": "18b81bd18b9d1cb4bc06d99b12bfaf314e6229b81995344625d78ef39faf2402",
-        "raw/driver_worker/04-complete.stdout": "7b3f1655a6d5d766c72e0df3ec0f4084996a417bc45f427be91e7bd393e6596a",
+        "raw/driver_worker/04-complete.stdout": "57f23f159f0d86fdd5f85a4b14c1ce4bdad34fb0a22bfc5291c8ca5e622ae4cf",
         "raw/driver_worker/05-status-after.stdout": "1abce3172fe17acdb707340aff7ab84b9ab2a2ed10e5cddf661b783850d44344"
       },
       "evidence_refs": [
@@ -539,7 +539,7 @@
         "provider_tokens": null,
         "spawned": true,
         "wall_time_ms": null,
-        "worker_id": "worker-84227f0c6d5d"
+        "worker_id": "worker-7dd87c7d464f"
       },
       "name": "driver_worker",
       "status": "passed"
@@ -580,7 +580,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 292,
           "stdout_ref": "raw/failed_worker/02-spawn.stdout",
-          "stdout_sha256": "b1ad614be99cf2df01c2643c65c6b4850c3d455ae710e703da9d30f547ab0055"
+          "stdout_sha256": "6e4a6be511791703ff7db3b6e5281234a2491658e369318c674d8b05fb01c172"
         },
         {
           "argv": [
@@ -590,7 +590,7 @@
             "worker-plane",
             "complete",
             "q8-failed-worker",
-            "worker-1814f5056fde",
+            "worker-c87c6d675914",
             "--status",
             "FAILED",
             "--summary",
@@ -606,7 +606,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 77,
           "stdout_ref": "raw/failed_worker/03-complete-failed.stdout",
-          "stdout_sha256": "48a64772bfaaf34e0de9c9b401b4df0018de4864a2d1b4f4fe1c06d6d8ac0653"
+          "stdout_sha256": "449caf7e3e4cc922048e506e1858396b3898cced4c20a2aeb2942048c0a78905"
         },
         {
           "argv": [
@@ -645,15 +645,15 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 286,
           "stdout_ref": "raw/failed_worker/05-retry-spawn.stdout",
-          "stdout_sha256": "87c2a84e6b7bfc3cfefcf6a2910c6527e613b98827663bb60ce3d68b2b28853b"
+          "stdout_sha256": "9bcab83d5d61cc091c2b23bd1a90ed920ea50b84f26709630d1a207d53ad04d3"
         }
       ],
       "evidence_ref_hashes": {
         "raw/failed_worker/01-init.stdout": "6569bd29c4f843739cb7b6d355fd39c4a23552ba23cd2ad23ab4f94aac87a50d",
-        "raw/failed_worker/02-spawn.stdout": "b1ad614be99cf2df01c2643c65c6b4850c3d455ae710e703da9d30f547ab0055",
-        "raw/failed_worker/03-complete-failed.stdout": "48a64772bfaaf34e0de9c9b401b4df0018de4864a2d1b4f4fe1c06d6d8ac0653",
+        "raw/failed_worker/02-spawn.stdout": "6e4a6be511791703ff7db3b6e5281234a2491658e369318c674d8b05fb01c172",
+        "raw/failed_worker/03-complete-failed.stdout": "449caf7e3e4cc922048e506e1858396b3898cced4c20a2aeb2942048c0a78905",
         "raw/failed_worker/04-status-after-fail.stdout": "1abce3172fe17acdb707340aff7ab84b9ab2a2ed10e5cddf661b783850d44344",
-        "raw/failed_worker/05-retry-spawn.stdout": "87c2a84e6b7bfc3cfefcf6a2910c6527e613b98827663bb60ce3d68b2b28853b"
+        "raw/failed_worker/05-retry-spawn.stdout": "9bcab83d5d61cc091c2b23bd1a90ed920ea50b84f26709630d1a207d53ad04d3"
       },
       "evidence_refs": [
         "raw/failed_worker/01-init.stdout",
@@ -669,7 +669,7 @@
         "retry_spawned": true,
         "retryable": true,
         "wall_time_ms": null,
-        "worker_id": "worker-1814f5056fde"
+        "worker_id": "worker-c87c6d675914"
       },
       "name": "failed_worker",
       "status": "passed"
@@ -680,7 +680,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json, sys\nfrom second_brain.goals import GoalStore\nfrom second_brain.errors import BrainError\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\isolated\\\\malformed_state')\ntry:\n    store.get_goal('goal-53bdbe8d1dc3')\n    print(json.dumps({'refused': False}))\n    sys.exit(0)\nexcept BrainError as exc:\n    print(json.dumps({'refused': True, 'error': str(exc)}))\n    sys.exit(3)\n"
+            "import json, sys\nfrom second_brain.goals import GoalStore\nfrom second_brain.errors import BrainError\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\isolated\\\\malformed_state')\ntry:\n    store.get_goal('goal-66dd4ebbbc39')\n    print(json.dumps({'refused': False}))\n    sys.exit(0)\nexcept BrainError as exc:\n    print(json.dumps({'refused': True, 'error': str(exc)}))\n    sys.exit(3)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 3,
@@ -689,11 +689,11 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 99,
           "stdout_ref": "raw/malformed_state/01-corrupt-goal-read.stdout",
-          "stdout_sha256": "0758d7d089fcce8d59f3732c23bd359781a2abe19cec3be28463ea20486e31b7"
+          "stdout_sha256": "7e5b0ea928445f03489d4b69f3046d11ff9286fcc2153f21f4c9860f86182591"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/malformed_state/01-corrupt-goal-read.stdout": "0758d7d089fcce8d59f3732c23bd359781a2abe19cec3be28463ea20486e31b7"
+        "raw/malformed_state/01-corrupt-goal-read.stdout": "7e5b0ea928445f03489d4b69f3046d11ff9286fcc2153f21f4c9860f86182591"
       },
       "evidence_refs": [
         "raw/malformed_state/01-corrupt-goal-read.stdout"
@@ -731,9 +731,9 @@
           "stderr_bytes": 0,
           "stderr_ref": "raw/stale_state/02-observe.stderr",
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "stdout_bytes": 3918,
+          "stdout_bytes": 3919,
           "stdout_ref": "raw/stale_state/02-observe.stdout",
-          "stdout_sha256": "642348891fd929c5cb9305bc53034cc442c75cb1eb3d0a35cfa4f462cf0c4bf1"
+          "stdout_sha256": "ae6d175c291b1a80283f9d695abc74c8551c246c5761c4bd17185e174f4ce39c"
         },
         {
           "argv": [
@@ -776,7 +776,7 @@
       ],
       "evidence_ref_hashes": {
         "raw/stale_state/01-seed-telemetry.json": "2e84501fcea299c828e428a6924d99876042f93b3eceb560a8a8bf7787af08cb",
-        "raw/stale_state/02-observe.stdout": "642348891fd929c5cb9305bc53034cc442c75cb1eb3d0a35cfa4f462cf0c4bf1",
+        "raw/stale_state/02-observe.stdout": "ae6d175c291b1a80283f9d695abc74c8551c246c5761c4bd17185e174f4ce39c",
         "raw/stale_state/03-validate-fresh.stdout": "d7e2048ed45188f5954d2fe54b9f1dfa9fb892180dd96f4ccb65e172dfd33641",
         "raw/stale_state/04-validate-stale.stdout": "b2089f8bbee645af626f512e2cef38fad9a521f6ece72a23a98d8197851dfccd"
       },
@@ -885,7 +885,7 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 695,
           "stdout_ref": "raw/cache_sensitive/01-search-miss.stdout",
-          "stdout_sha256": "dad8b603f284ae30325757f32cd02506e019d7b972f67f435cf1f50c1a07a32e"
+          "stdout_sha256": "6d92124ffd9257b2b02671eecfdecda3d4e6381e67f15ec6b3f35d5f876008f8"
         },
         {
           "argv": [
@@ -906,12 +906,12 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 693,
           "stdout_ref": "raw/cache_sensitive/02-search-hit.stdout",
-          "stdout_sha256": "674015decf553d6d48cf2a25a842383f4e8b76329cc1f7dba49d4d0acbd30873"
+          "stdout_sha256": "28d87a0a4f27977318dd88f0a7c9ed503161b8aad63c274adb769070fd4d5ec4"
         }
       ],
       "evidence_ref_hashes": {
-        "raw/cache_sensitive/01-search-miss.stdout": "dad8b603f284ae30325757f32cd02506e019d7b972f67f435cf1f50c1a07a32e",
-        "raw/cache_sensitive/02-search-hit.stdout": "674015decf553d6d48cf2a25a842383f4e8b76329cc1f7dba49d4d0acbd30873"
+        "raw/cache_sensitive/01-search-miss.stdout": "6d92124ffd9257b2b02671eecfdecda3d4e6381e67f15ec6b3f35d5f876008f8",
+        "raw/cache_sensitive/02-search-hit.stdout": "28d87a0a4f27977318dd88f0a7c9ed503161b8aad63c274adb769070fd4d5ec4"
       },
       "evidence_refs": [
         "raw/cache_sensitive/01-search-miss.stdout",
@@ -920,8 +920,8 @@
       "metrics": {
         "background_model_calls": 0,
         "hit_after_miss": true,
-        "hit_latency_ms": 20.369,
-        "miss_latency_ms": 383.152,
+        "hit_latency_ms": 30.064,
+        "miss_latency_ms": 472.685,
         "provider_tokens": null,
         "wall_time_ms": null
       },
@@ -943,13 +943,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 19,
           "stdout_ref": "raw/long_running_goal/01-create.stdout",
-          "stdout_sha256": "a9655d8452ec73234d37776a89ce0ef7aa6cb471a1b55545a2fac98e8f2a7ea3"
+          "stdout_sha256": "e579c22d08285a223dc0386f80dc9731d5052940dcdf3d85d8aa724543efe3b9"
         },
         {
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-89cf3eb16acf', GoalStatus.BLOCKED, blocker_note='waiting on a real qualification dependency')\nprint(store.get_goal('goal-89cf3eb16acf').status.value)\n"
+            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-02aefe178a8a', GoalStatus.BLOCKED, blocker_note='waiting on a real qualification dependency')\nprint(store.get_goal('goal-02aefe178a8a').status.value)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -964,7 +964,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-89cf3eb16acf', GoalStatus.ACTIVE)\nprint(store.get_goal('goal-89cf3eb16acf').status.value)\n"
+            "from second_brain.goals import GoalStore, GoalStatus\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.transition('goal-02aefe178a8a', GoalStatus.ACTIVE)\nprint(store.get_goal('goal-02aefe178a8a').status.value)\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -979,7 +979,7 @@
           "argv": [
             "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration\\.venv\\Scripts\\python.exe",
             "-c",
-            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.complete_milestone('goal-89cf3eb16acf', 'm-1', evidence_ref='qualification:plan-done')\nstore.complete_milestone('goal-89cf3eb16acf', 'm-2', evidence_ref='qualification:ship-done')\ngoal = store.get_goal('goal-89cf3eb16acf')\nprint(json.dumps({'status': goal.status.value, 'completed': goal.completed_at is not None}))\n"
+            "import json\nfrom second_brain.goals import GoalStore\nstore = GoalStore('C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v1-p4-canonical-integration\\\\outputs\\\\reports\\\\v1-p4\\\\homes\\\\shared')\nstore.complete_milestone('goal-02aefe178a8a', 'm-1', evidence_ref='qualification:plan-done')\nstore.complete_milestone('goal-02aefe178a8a', 'm-2', evidence_ref='qualification:ship-done')\ngoal = store.get_goal('goal-02aefe178a8a')\nprint(json.dumps({'status': goal.status.value, 'completed': goal.completed_at is not None}))\n"
           ],
           "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v1-p4-canonical-integration",
           "returncode": 0,
@@ -992,7 +992,7 @@
         }
       ],
       "evidence_ref_hashes": {
-        "raw/long_running_goal/01-create.stdout": "a9655d8452ec73234d37776a89ce0ef7aa6cb471a1b55545a2fac98e8f2a7ea3",
+        "raw/long_running_goal/01-create.stdout": "e579c22d08285a223dc0386f80dc9731d5052940dcdf3d85d8aa724543efe3b9",
         "raw/long_running_goal/02-block.stdout": "a0b7186db1d11c2c88e6a0cd248ad48c69b9b659a3879b3b1e757ec337f6f4db",
         "raw/long_running_goal/03-resume.stdout": "268cf92f8fc496f180ba098b4423a370e8f0825190cc6140eb5ad4c55c108f49",
         "raw/long_running_goal/04-complete-milestones.stdout": "01183e40cd99034f21971236cecf288eaa0a9399480831c8a29893433378ba37"
@@ -1003,11 +1003,11 @@
         "raw/long_running_goal/03-resume.stdout",
         "raw/long_running_goal/04-complete-milestones.stdout"
       ],
-      "goal_id": "goal-89cf3eb16acf",
+      "goal_id": "goal-02aefe178a8a",
       "metrics": {
         "background_model_calls": 0,
         "final_status": "COMPLETED",
-        "goal_id": "goal-89cf3eb16acf",
+        "goal_id": "goal-02aefe178a8a",
         "provider_tokens": null,
         "transitions": [
           "ACTIVE",
@@ -1393,13 +1393,13 @@
           "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "stdout_bytes": 334,
           "stdout_ref": "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout",
-          "stdout_sha256": "46afd9e8baa2b3a724c3bafbc7c294488e4c2b64d749ea266ed2194d399d9719"
+          "stdout_sha256": "26e6e6175f5c067f408ec9ad269ddec084af32446e80e914f466e2abe1d9f8a2"
         }
       ],
       "evidence_ref_hashes": {
         "raw/genuine_project_dogfood/01-focused-p4-pytest.stdout": "55cf85556f9212aec3cf3688ddb048b901ad2536966113215358784c657a7532",
         "raw/genuine_project_dogfood/02-doctor-registered-project.stdout": "092e69f90d11c55793470d156f95696f98561e8ea3a032ab78d4d464675835af",
-        "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout": "46afd9e8baa2b3a724c3bafbc7c294488e4c2b64d749ea266ed2194d399d9719"
+        "raw/genuine_project_dogfood/03-p4-pulse-registered-project.stdout": "26e6e6175f5c067f408ec9ad269ddec084af32446e80e914f466e2abe1d9f8a2"
       },
       "evidence_refs": [
         "raw/genuine_project_dogfood/01-focused-p4-pytest.stdout",
@@ -1434,7 +1434,7 @@
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stdout_bytes": 41,
       "stdout_ref": "raw/_setup/01-git-sha.stdout",
-      "stdout_sha256": "65c311eee8f55d8c686ed40e494c55b5490acb4e40152b24b0054763f244ed15"
+      "stdout_sha256": "3a8a72f6a1ef3e4baed6a47aaed4f35342c2958c0d190edef98a408faa87f7f3"
     },
     {
       "argv": [

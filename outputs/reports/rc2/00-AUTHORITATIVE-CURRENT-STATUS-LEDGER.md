@@ -9,9 +9,10 @@ independently qualified in this OMP-primary campaign, with a citation to the evi
 An item is `PROVEN` only when a dedicated qualification/requalification artifact or capsule state
 exists for that exact item; incidental reuse of a module by another item's proof does not qualify it.
 
-**Last updated**: 2026-08-28 (P3.16 and P3.17 reopened and re-validated after an independent GitHub
-audit found two closure defects; see `outputs/reports/rc2/P3_16_MODULAR_SKILL_VISIBILITY_IMPLEMENTATION.json`
-`audit_remediation` and `outputs/reports/rc2/P3_17_BRAIN_HANDOFF_IMPLEMENTATION.json` `audit_remediation`).
+**Last updated**: 2026-08-30 (P4.1-P4.5 qualified and this ledger's rows changed from `NOT QUALIFIED`
+to `PROVEN`; see `outputs/reports/v1-p4/qualification-report.md` and
+`outputs/reports/v1-release-baseline.md` for the full P4/P4.5 evidence and Second Brain **v1.0.0**
+release gate. P3.16/P3.17 reopened-and-fixed note below is preserved from the prior 2026-08-28 update.)
 
 | Item | Requirement | Current Status | Evidence |
 |---|---|---|---|
@@ -47,21 +48,21 @@ audit found two closure defects; see `outputs/reports/rc2/P3_16_MODULAR_SKILL_VI
 | P3.15 | Skill Gardener | **PROVEN** | Active State Capsule decision `P3.15-EVIDENCE-PROVENANCE-HARDENED-AND-PROVEN`; `.superpowers/sdd/2026-08-26-p3-15-skill-gardener-implementation/`. Note: `outputs/reports/rc2/P3_15_SKILL_GARDENER_QUALIFICATION.json` predates implementation and still reads `P3.15_PARTIAL` — it is the pre-implementation gap report, superseded by the capsule's post-implementation PROVEN decision and this ledger. |
 | P3.16 | Modular Skill Visibility | **PROVEN** | `outputs/reports/rc2/P3_16_MODULAR_SKILL_VISIBILITY_IMPLEMENTATION.json` (`verdict`: `P3.16_PROVEN`, root now agrees with `acceptance.status`). **Reopened and fixed 2026-08-28**: an independent audit found the aggregate OMP injection budget was unenforced (up to 3x4096-char bodies could exceed the 8192-char OMP concatenation bound, causing `hydrated_skill_ids` to silently diverge from the actual model-visible input). Fixed in `skills.hydrate_plan` (deterministic aggregate budget, whole-skill rejection) and `visibility-bridge.ts` (`validateOmpVisibilityResult` independently rejects aggregate overflow and hydrated-ID/body count mismatches). See `audit_remediation` in the implementation report. |
 | P3.17 | Brain Handoff | **PROVEN** | `outputs/reports/rc2/P3_17_BRAIN_HANDOFF_IMPLEMENTATION.json`. **Reopened and fixed 2026-08-28**: an independent audit found the prior dogfood used a second OMP-primary process invoking Hermes adapter code directly, not a real Hermes host. Fixed by adding a genuine `second_brain_handoff_read` tool to the already-installed real Hermes plugin and re-running the proof through the actual `hermes` CLI (profile `dev`, bot_name `Brain-Dev`, separate installation/runtime/OAuth session). See `state/p3_17_dogfood/real-hermes-host-proof.json` and `audit_remediation` in the implementation report. |
-| P4.1 | Long-Running Goals | **NOT QUALIFIED** | `src/second_brain/goals.py` and `tests/test_p4_gaps_live_integration.py` exist on disk from an earlier repair pass, but no P4 qualification, dogfood, or OMP-primary campaign has run in this campaign. The frozen matrix's `PROVEN` label for this row is a stale, unqualified historical claim and must not be trusted without current verification (same rule already applied to every P0-P3 row before its own independent requalification). |
-| P4.2 | Schedules / Heartbeats | **NOT QUALIFIED** | `src/second_brain/heartbeat.py` exists but is unqualified this campaign; same caveat as P4.1. |
-| P4.3 | Operational Telemetry | **NOT QUALIFIED** | `telemetry.py`/`governor.py` are proven as they relate to **P0.6** (Injection Telemetry); P4.3 as its own distinct roadmap item (systemic metrics tracking / full feature attribution) has not been independently qualified this campaign. Module reuse by another item's proof does not qualify this item. |
-| P4.4 | Bottleneck Fingerprinting | **NOT QUALIFIED** | `src/second_brain/fingerprints.py` exists but is unqualified this campaign; same caveat as P4.1. |
-| P4.5 | Controlled Self-Optimization | **NOT QUALIFIED** | `plasticity.py`/`promotion.py` are exercised incidentally by other proven items (e.g. skill promotion in P3.11-P3.15), but P4.5 as its own distinct roadmap item (governed optimization lifecycle) has not been independently qualified this campaign. |
+| P4.1 | Long-Running Goals | **PROVEN** | Fresh `long_running_goal` scenario: goal transitions `ACTIVE → BLOCKED → ACTIVE → COMPLETED` with completion output, at candidate `07e506060914df468cbb4c5095d70eb74ab28340`. `outputs/reports/v1-p4/qualification-report.md` (P4.1 row); `outputs/reports/v1-p4/qualification-manifest.json`; `outputs/reports/v1-p4/independent-verifier.json` (`scenario_completeness`, `artifact_hash_integrity`, `database_integrity`, `backup_restore_preservation`, `claims_grounded`, `privacy_absence` all true). |
+| P4.2 | Schedules / Heartbeats | **PROVEN** | Fresh active/off/shadow boundary evidence: active heartbeat mutates maintenance, off does not run or mutate, shadow runs without maintenance mutation. `outputs/reports/v1-p4/qualification-report.md` (P4.2 row); independent verifier `off_shadow_boundaries`, `telemetry_validation` true. |
+| P4.3 | Operational Telemetry | **PROVEN** | Fresh qualification homes validate successfully; P4 pulse outputs expose heartbeat latency/mode/mutation fields; harness switch (Python CLI vs Prime bridge) emits equivalent rows. `outputs/reports/v1-p4/qualification-report.md` (P4.3 row); independent verifier `telemetry_validation`, `off_shadow_boundaries` true. |
+| P4.4 | Bottleneck Fingerprinting | **PROVEN** | Fresh Radar evidence observes and validates a candidate, then rejects tampered telemetry as `stale`. Additionally directly exercised by the real P4.5 pair: `radar observe` on the genuine Antigravity/Gemini candidate session found a real `SEARCH_THRASH`/`RETRIEVAL_OVERLOAD` fingerprint (`fp-c4e5249a75e3`), independently re-derived from raw telemetry in this release task. `outputs/reports/v1-p4/qualification-report.md` (P4.4 row); independent verifier `stale_and_unsafe_refusals` true. |
+| P4.5 | Controlled Self-Optimization | **PROVEN** | Governed optimization lifecycle exercised end-to-end through the real CLI against a genuine Antigravity/Gemini baseline/candidate pair (post BOM/StreamWriter transport fix, `brainstem/adapters/antigravity/scripts/run-hook.ps1` + `src/second_brain/cli.py` `_cmd_antigravity_hook`): real Radar fingerprint → real `skillforge.bind_candidate` → real `credit.counterfactual_result` (94,103 vs 94,476 cumulative total tokens, `net_tokens_saved: -373`) → `optimize propose` → `optimize evaluate` (quality gates pass, ROI gate fail, `status: hold`) → `optimize activate` correctly refused (`{"activated": false, "reason": "evaluation_not_proven"}`). The mechanism is proven; the specific `lean-code` candidate is correctly NOT promoted (measured negative ROI). `outputs/reports/v1-p4/qualification-report.md` (P4.5 row); `outputs/audits/counterfactual/skill/lean-code-p4-5-e07-jsonc-config-lean-code-eval1.json`; `outputs/audits/optimization/proposal-9b1eabfe5e023d012b30aeaf-v3.json`; `outputs/reports/p3-promo-eval/p4-5-fixed-b-1/evidence.json`; `outputs/reports/p3-promo-eval/p4-5-fixed-c-1/evidence.json`. |
 
 ## Summary
 
-- **P0-P3 (32 items)**: all **PROVEN**, each backed by a dedicated current-campaign qualification,
+- **P0-P4.5 (37 items)**: all **PROVEN**, each backed by a dedicated current-campaign qualification,
   requalification, or capsule-recorded implementation/validator artifact cited above.
-- **P4 (5 items)**: all **NOT QUALIFIED**. Frozen-matrix code/test file presence is not evidence of
-  a current independent qualification; P4 has not been started in this campaign. Do not treat any
-  P4 item as PROVEN until it receives the same qualify-implement-dogfood-validate treatment every
-  P0-P3 item received.
-- **Lean promotion**: **candidate / HOLD_SHADOW** (a separate promotion-state track, not one of the
-  37 roadmap items).
-- **P4/Sparking Zero**: not started; STOP holds before P4 per every capsule `next_action` in this
-  campaign.
+- **P4 (5 items)**: qualified 2026-08-30 with fresh, independently re-verified evidence at candidate
+  `07e506060914df468cbb4c5095d70eb74ab28340`. See `outputs/reports/v1-p4/qualification-report.md`
+  and `outputs/reports/v1-release-baseline.md`.
+- **Lean promotion**: **candidate / HOLD_SHADOW** remains unchanged as a skill-lifecycle state — the
+  P4.5 governed-lifecycle exercise correctly evaluated and held (did not promote) the `lean-code`
+  candidate on measured negative ROI. This is separate from the P4.5 roadmap item, which is PROVEN
+  because the governance mechanism itself worked correctly.
+- **Second Brain v1.0.0**: released at this candidate. No V2-A or later v2 behavior has started.
