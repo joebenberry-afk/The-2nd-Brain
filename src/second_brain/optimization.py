@@ -43,7 +43,12 @@ def _require_text(value: object, name: str) -> str:
 
 
 def _proposal_id(fingerprint_id: str, intervention_hash: str) -> str:
-    return "proposal-" + hashlib.sha256(fingerprint_id.encode() + intervention_hash.encode()).hexdigest()[:24]
+    return (
+        "proposal-"
+        + hashlib.sha256(
+            fingerprint_id.encode() + intervention_hash.encode()
+        ).hexdigest()[:24]
+    )
 
 
 def _proposal_files(home: Path, proposal_id: str) -> list[tuple[int, Path]]:
@@ -116,10 +121,21 @@ def _append(home: Path, current: dict, **changes: Any) -> dict:
 def _fingerprint_exists(home: Path, fingerprint_id: str) -> bool:
     # The store intentionally exposes a bounded ranking API, not a second
     # lookup authority.  Read all bounded persisted records and match ids.
-    return any(fp.fingerprint_id == fingerprint_id for fp in BottleneckFingerprintStore(home).list_top_bottlenecks(10000))
+    return any(
+        fp.fingerprint_id == fingerprint_id
+        for fp in BottleneckFingerprintStore(home).list_top_bottlenecks(10000)
+    )
 
 
-def _emit(home: Path, kind: str, proposal: dict, *, status: str, evidence_hash: str = "", session: str = "") -> None:
+def _emit(
+    home: Path,
+    kind: str,
+    proposal: dict,
+    *,
+    status: str,
+    evidence_hash: str = "",
+    session: str = "",
+) -> None:
     evidence_hash = evidence_hash or hashlib.sha256(
         json.dumps(proposal, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
@@ -192,7 +208,10 @@ def propose(
 
 def _counterfactual_evidence(result: dict, intervention_hash: str) -> tuple[dict, bool]:
     evidence = result.get("counterfactual_result", result)
-    if not isinstance(evidence, dict) or not credit.is_counterfactual_result_current(evidence, intervention_hash):
+    if (
+        not isinstance(evidence, dict)
+        or not credit.is_counterfactual_result_current(evidence, intervention_hash)
+    ):
         raise BrainError("counterfactual evidence is stale or malformed")
     with_arm, without_arm = evidence.get("with_arm"), evidence.get("without_arm")
     if not isinstance(with_arm, dict) or not isinstance(without_arm, dict):
@@ -200,16 +219,29 @@ def _counterfactual_evidence(result: dict, intervention_hash: str) -> tuple[dict
     if with_arm.get("run_id") == without_arm.get("run_id"):
         raise BrainError("counterfactual arms must have distinct run ids")
     for arm in (with_arm, without_arm):
-        if not isinstance(arm.get("verification"), dict) or not isinstance(arm.get("regressions"), dict):
-            raise BrainError("counterfactual evidence requires verification and regression evidence")
-        if not isinstance(arm.get("tokens"), dict) or not isinstance(arm.get("tool_calls"), int) or not isinstance(arm.get("wall_time_ms"), (int, float)):
+        if (
+            not isinstance(arm.get("verification"), dict)
+            or not isinstance(arm.get("regressions"), dict)
+        ):
+            raise BrainError(
+                "counterfactual evidence requires verification and regression evidence"
+            )
+        if (
+            not isinstance(arm.get("tokens"), dict)
+            or not isinstance(arm.get("tool_calls"), int)
+            or not isinstance(arm.get("wall_time_ms"), (int, float))
+        ):
             raise BrainError("counterfactual evidence requires measured telemetry economics")
     with_tokens = with_arm["tokens"].get("total")
     without_tokens = without_arm["tokens"].get("total")
     if not isinstance(with_tokens, (int, float)) or not isinstance(without_tokens, (int, float)):
         raise BrainError("counterfactual evidence requires total token economics")
     net_saved = without_tokens - with_tokens
-    verified = with_arm.get("success") is True and with_arm["verification"].get("outcome") == "passed" and with_arm["regressions"].get("count") == 0
+    verified = (
+        with_arm.get("success") is True
+        and with_arm["verification"].get("outcome") == "passed"
+        and with_arm["regressions"].get("count") == 0
+    )
     summary = {
         "evaluation_id": str(evidence.get("evaluation_id", "")),
         "candidate_content_sha256": result.get("candidate_content_sha256"),
@@ -253,7 +285,10 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
 
     skill_name = current["skill_name"]
     skill_path = skillforge.skill_path(home, skill_name)
-    if skill_path is None or skillforge.lifecycle_content_hash(skill_path) != current["intervention"]["hash"]:
+    if (
+        skill_path is None
+        or skillforge.lifecycle_content_hash(skill_path) != current["intervention"]["hash"]
+    ):
         updated = _append(home, current, status="hold", refusal_reason="intervention_stale")
         _emit(home, "optimization_evaluation", updated, status="hold")
         return updated
@@ -265,7 +300,9 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
                 "evaluation_id": summary["evaluation_id"],
                 "task_id": summary["evaluation_id"],
                 "task_hash": str(result.get("task_hash", summary["evaluation_id"])),
-                "repository_state_hash": str(result.get("repository_state_hash", summary["evaluation_id"])),
+                "repository_state_hash": str(
+                    result.get("repository_state_hash", summary["evaluation_id"])
+                ),
                 "intervention_hash": current["intervention"]["hash"],
                 "baseline": summary["baseline"],
                 "candidate": summary["candidate"],
@@ -288,7 +325,9 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
                 "status": "evaluated" if passed else "hold",
                 "quality_gate": evaluation.get("quality_gate"),
                 "roi": evaluation.get("roi", {}),
-                "evidence_hash": hashlib.sha256(json.dumps(evaluation, sort_keys=True).encode()).hexdigest(),
+                "evidence_hash": hashlib.sha256(
+                    json.dumps(evaluation, sort_keys=True).encode()
+                ).hexdigest(),
             }
     except BrainError as exc:
         summary = {
@@ -296,7 +335,9 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
             "status": "hold",
             "roi": {"net_tokens_saved": 0, "candidate_better": False},
             "refusal_reason": str(exc),
-            "evidence_hash": hashlib.sha256(json.dumps(result, sort_keys=True, default=str).encode()).hexdigest(),
+            "evidence_hash": hashlib.sha256(
+                json.dumps(result, sort_keys=True, default=str).encode()
+            ).hexdigest(),
         }
         passed = False
     status = "evaluated" if passed else "hold"
@@ -310,7 +351,13 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
         evaluation=summary,
         evaluated_at=_utc_now(),
     )
-    _emit(home, "optimization_evaluation", updated, status=status, evidence_hash=summary.get("evidence_hash", ""))
+    _emit(
+        home,
+        "optimization_evaluation",
+        updated,
+        status=status,
+        evidence_hash=summary.get("evidence_hash", ""),
+    )
     if passed:
         roi = summary.get("roi", {})
         net_value = roi.get("net_tokens_saved", 0)
@@ -390,12 +437,21 @@ def activate(home: Path, proposal_id: str, *, session_id: str = "") -> dict:
     active_path = Path(home) / "skills" / "active" / skill_name / "SKILL.md"
     if active_path.exists():
         return {"activated": False, "reason": "destination_exists"}
-    if any(record.get("policy_id") == current["rollback_policy_id"] for record in immune.rollback_log(home)):
+    if any(
+        record.get("policy_id") == current["rollback_policy_id"]
+        for record in immune.rollback_log(home)
+    ):
         return {"activated": False, "reason": "rolled_back"}
 
     # Promotion's existing evidence gate is credit-based.  A verified,
     # positive evaluation is the explicit evidence for this coordinator.
-    credit.assign_credit(home, session_id or proposal_id, direct=[skill_name], contributory=[], correlated=[])
+    credit.assign_credit(
+        home,
+        session_id or proposal_id,
+        direct=[skill_name],
+        contributory=[],
+        correlated=[],
+    )
     promoted = promotion.promote(home, skill_name, "candidate", "active", session_id=session_id)
     if not promoted.get("promoted"):
         return {"activated": False, "reason": promoted.get("reason", "promotion_refused")}
@@ -427,6 +483,13 @@ def rollback(home: Path, proposal_id: str, trigger_id: str, reason: str) -> dict
     result = immune.rollback(home, current["rollback_policy_id"], trigger_id, reason)
     if not result.get("rolled_back"):
         return result
-    updated = _append(home, current, status="rolled_back", rollback_state="rolled_back", rollback=result, rolled_back_at=_utc_now())
+    updated = _append(
+        home,
+        current,
+        status="rolled_back",
+        rollback_state="rolled_back",
+        rollback=result,
+        rolled_back_at=_utc_now(),
+    )
     _emit(home, "optimization_rollback", updated, status="rolled_back")
     return {"rolled_back": True, "proposal": updated, "rollback": result}

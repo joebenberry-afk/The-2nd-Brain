@@ -11,10 +11,11 @@ Categories:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-from dataclasses import dataclass
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -59,7 +60,12 @@ def _bounded_refs(value: object) -> list[dict[str, Any]]:
         for field in ("input_bytes", "output_bytes"):
             if field in raw_ref:
                 number = raw_ref[field]
-                if isinstance(number, bool) or not isinstance(number, int) or number < 0 or number > 1_000_000_000:
+                if (
+                    isinstance(number, bool)
+                    or not isinstance(number, int)
+                    or number < 0
+                    or number > 1_000_000_000
+                ):
                     raise BrainError(f"{field} must be a bounded non-negative integer")
                 ref[field] = number
         refs.append(ref)
@@ -70,7 +76,9 @@ def _bounded_refs(value: object) -> list[dict[str, Any]]:
     return list(by_hash.values())[-_MAX_EVIDENCE_REFS:]
 
 
-def _merge_refs(previous: list[dict[str, Any]], latest: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _merge_refs(
+    previous: list[dict[str, Any]], latest: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for ref in [*previous, *latest]:
         merged.pop(ref["record_hash"], None)
@@ -117,10 +125,8 @@ def _retire_legacy_sidecars(home: Path) -> None:
         )
     for path in sidecars:
         for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 candidate.unlink()
-            except FileNotFoundError:
-                pass
 
 
 class BottleneckCategory(StrEnum):
@@ -230,7 +236,11 @@ class BottleneckFingerprintStore:
             ).fetchone()
             if row:
                 previous_count = row["occurrence_count"]
-                if isinstance(previous_count, bool) or not isinstance(previous_count, int) or previous_count < 0:
+                if (
+                    isinstance(previous_count, bool)
+                    or not isinstance(previous_count, int)
+                    or previous_count < 0
+                ):
                     raise BrainError("stored occurrence_count is invalid")
                 count = previous_count + 1
                 previous_refs = _bounded_refs(json.loads(row["evidence_refs_json"]))
@@ -240,7 +250,13 @@ class BottleneckFingerprintStore:
                     "UPDATE bottleneck_fingerprints "
                     "SET occurrence_count = ?, impact_score = ?, last_seen = ?, "
                     "evidence_refs_json = ? WHERE fingerprint_id = ?",
-                    (count, new_impact, now, _canonical_json(merged_refs, "evidence_refs"), row["fingerprint_id"]),
+                    (
+                        count,
+                        new_impact,
+                        now,
+                        _canonical_json(merged_refs, "evidence_refs"),
+                        row["fingerprint_id"],
+                    ),
                 )
                 stored = {
                     "fingerprint_id": row["fingerprint_id"],

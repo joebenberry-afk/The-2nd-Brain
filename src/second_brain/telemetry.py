@@ -13,6 +13,7 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+
 SCHEMA_VERSION = 2
 KNOWN_KINDS = {
     "OMP_SECOND_BRAIN_READY", "active_state_delivery", "agent_end",
@@ -123,7 +124,13 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
         if "event" in record and (
             not isinstance(event, str) or len(event) > 128
         ):
-            issues.append(_field_issue(identity, "event", "must be a string of at most 128 characters"))
+            issues.append(
+                _field_issue(
+                    identity,
+                    "event",
+                    "must be a string of at most 128 characters",
+                )
+            )
         for field in ("due", "ran", "healthy", "db_ok", "git_dirty"):
             value = values[field]
             if field in record and not isinstance(value, bool):
@@ -135,10 +142,20 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             ):
                 issues.append(_field_issue(identity, field, "must be a non-negative integer"))
         cache_count = values["cache_pruned_count"]
-        if "cache_pruned_count" in record and isinstance(cache_count, int) and not isinstance(cache_count, bool) and cache_count > 1_000_000:
+        if (
+            "cache_pruned_count" in record
+            and isinstance(cache_count, int)
+            and not isinstance(cache_count, bool)
+            and cache_count > 1_000_000
+        ):
             issues.append(_field_issue(identity, "cache_pruned_count", "exceeds bound"))
         latency = values["latency_ms"]
-        if "latency_ms" in record and isinstance(latency, int) and not isinstance(latency, bool) and latency > 86_400_000:
+        if (
+            "latency_ms" in record
+            and isinstance(latency, int)
+            and not isinstance(latency, bool)
+            and latency > 86_400_000
+        ):
             issues.append(_field_issue(identity, "latency_ms", "exceeds bound"))
         tokens = values["model_tokens_used"]
         if "model_tokens_used" in record and isinstance(tokens, int) and tokens != 0:
@@ -149,7 +166,13 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             or len(codes) > 32
             or any(not isinstance(code, str) or not 1 <= len(code) <= 64 for code in codes)
         ):
-            issues.append(_field_issue(identity, "issue_codes", "must be at most 32 bounded strings"))
+            issues.append(
+                _field_issue(
+                    identity,
+                    "issue_codes",
+                    "must be at most 32 bounded strings",
+                )
+            )
 
     elif kind == "bottleneck_fingerprint":
         for field in ("fingerprint_id", "category", "occurrence_count", "impact_score"):
@@ -166,7 +189,13 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
                 or record[field] < 0
                 or record[field] > 1_000_000_000
             ):
-                issues.append(_field_issue(identity, field, "must be a bounded non-negative integer"))
+                issues.append(
+                    _field_issue(
+                        identity,
+                        field,
+                        "must be a bounded non-negative integer",
+                    )
+                )
         impact = record.get("impact_score")
         if "impact_score" in record and (
             isinstance(impact, bool)
@@ -175,7 +204,13 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             or impact < 0
             or impact > 1_000_000
         ):
-            issues.append(_field_issue(identity, "impact_score", "must be a bounded non-negative number"))
+            issues.append(
+                _field_issue(
+                    identity,
+                    "impact_score",
+                    "must be a bounded non-negative number",
+                )
+            )
         if "evidence_hash" in record and (
             not isinstance(record["evidence_hash"], str)
             or not _SHA256_RE.fullmatch(record["evidence_hash"])
@@ -208,7 +243,11 @@ def _record_issues(record: object, identity: str) -> list[str]:
     kind = record.get("kind")
     if kind not in KNOWN_KINDS:
         issues.append(f"{identity}: unknown kind {kind!r}")
-    expected_v = KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION) if isinstance(kind, str) else SCHEMA_VERSION
+    expected_v = (
+        KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION)
+        if isinstance(kind, str)
+        else SCHEMA_VERSION
+    )
     version = record.get("v")
     if isinstance(version, bool) or (version is not None and not isinstance(version, int)):
         issues.append(f"{identity}: schema version is not an integer")
@@ -346,7 +385,11 @@ def operational_report(home: Path, since: str | None = None) -> dict:
                     seen_targets.add(target)
         if kind == "tool_result":
             output_bytes = record.get("output_bytes")
-            if isinstance(output_bytes, int) and not isinstance(output_bytes, bool) and output_bytes >= 0:
+            if (
+                isinstance(output_bytes, int)
+                and not isinstance(output_bytes, bool)
+                and output_bytes >= 0
+            ):
                 counts["tool_result_bytes"] += output_bytes
             if record.get("is_error") is True:
                 counts["tool_errors"] += 1
@@ -375,9 +418,10 @@ def operational_report(home: Path, since: str | None = None) -> dict:
         if roles & {"worker", "dev", "validator", "explorer", "verifier"}:
             counts["worker_events"] += 1
         harness = record.get("harness")
-        if isinstance(harness, str) and harness.lower() in {"background", "daemon", "cron"}:
-            counts["background_events"] += 1
-        elif "background" in roles:
+        if (
+            isinstance(harness, str)
+            and harness.lower() in {"background", "daemon", "cron"}
+        ) or "background" in roles:
             counts["background_events"] += 1
 
     return {"provider_tokens": tokens, **counts}

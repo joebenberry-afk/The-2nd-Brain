@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import subprocess
@@ -16,7 +17,6 @@ from typing import Any
 from . import db
 from .action_cache import ActionCacheStore
 from .paths import db_path
-
 
 _DEFAULT_MODE = "shadow"
 _DEFAULT_INTERVAL = 60
@@ -232,7 +232,11 @@ class HeartbeatCoordinator:
 
     def _record_failure(self, mode: str, event: str, code: str, *, due: bool) -> dict[str, Any]:
         result = self._base_result(mode, event, due=due, ran=False)
-        result.update(healthy=False, db_ok=code not in {"db_missing", "db_integrity"}, issue_codes=[code])
+        result.update(
+            healthy=False,
+            db_ok=code not in {"db_missing", "db_integrity"},
+            issue_codes=[code],
+        )
         if code in {"db_missing", "db_integrity"}:
             result["db_ok"] = False
         return result
@@ -281,7 +285,9 @@ class HeartbeatCoordinator:
             due = force or not last
             if not due:
                 try:
-                    due = (current - _as_datetime(last)).total_seconds() >= config.min_interval_seconds
+                    due = (
+                        current - _as_datetime(last)
+                    ).total_seconds() >= config.min_interval_seconds
                 except (TypeError, ValueError, OverflowError):
                     due = True
             if not due:
@@ -301,10 +307,8 @@ class HeartbeatCoordinator:
             conn.commit()
         except sqlite3.Error:
             if conn is not None:
-                try:
+                with contextlib.suppress(sqlite3.Error):
                     conn.rollback()
-                except sqlite3.Error:
-                    pass
             return self._record_failure(config.mode, event, "db_integrity", due=True) | (
                 {"configuration_warning": config.warning} if config.warning else {}
             )
@@ -350,10 +354,8 @@ class HeartbeatCoordinator:
             final_conn.commit()
         except sqlite3.Error:
             if final_conn is not None:
-                try:
+                with contextlib.suppress(sqlite3.Error):
                     final_conn.rollback()
-                except sqlite3.Error:
-                    pass
         finally:
             if final_conn is not None:
                 final_conn.close()

@@ -24,7 +24,6 @@ from . import (
     capsule_runtime,
     cerebellum,
     credit,
-    optimization,
     crossmodel,
     db,
     engram,
@@ -35,6 +34,7 @@ from . import (
     handoff,
     immune,
     monitor,
+    optimization,
     paths,
     plasticity,
     promotion,
@@ -1005,7 +1005,11 @@ def _parser() -> argparse.ArgumentParser:
         "heartbeat", parents=[home_parent], help="event-driven local heartbeat"
     )
     heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command", required=True)
-    heartbeat_run = heartbeat_sub.add_parser("run", parents=[home_parent], help="run heartbeat if due")
+    heartbeat_run = heartbeat_sub.add_parser(
+        "run",
+        parents=[home_parent],
+        help="run heartbeat if due",
+    )
     heartbeat_run.add_argument("--event", required=True)
     heartbeat_run.add_argument("--session", dest="session_id", required=True)
     heartbeat_run.add_argument("--repo", type=Path, default=None)
@@ -4184,7 +4188,7 @@ def cmd_heartbeat(args) -> int:
         args.repo,
         force=args.force,
     )
-    try:
+    with contextlib.suppress(OSError, ValueError):
         telemetry.append_record(
             home,
             args.session_id,
@@ -4203,8 +4207,6 @@ def cmd_heartbeat(args) -> int:
                 "model_tokens_used": result["model_tokens_used"],
             },
         )
-    except (OSError, ValueError):
-        pass
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 0
 

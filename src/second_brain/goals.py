@@ -10,9 +10,9 @@ Supports:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -20,6 +20,7 @@ from typing import Any
 
 from . import db, paths
 from .errors import BrainError, MigrationError
+
 _MAX_TEXT_CHARS = 512
 _MAX_REFERENCE_CHARS = 256
 
@@ -67,10 +68,8 @@ def _retire_legacy_sidecars(home: Path) -> None:
         )
     for path in sidecars:
         for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 candidate.unlink()
-            except FileNotFoundError:
-                pass
 
 
 
@@ -80,8 +79,8 @@ class GoalStatus(StrEnum):
     BLOCKED = "BLOCKED"
     COMPLETED = "COMPLETED"
     ABANDONED = "ABANDONED"
- 
- 
+
+
 _ALLOWED = {
     GoalStatus.PENDING: {GoalStatus.ACTIVE, GoalStatus.ABANDONED},
     GoalStatus.ACTIVE: {GoalStatus.BLOCKED, GoalStatus.COMPLETED, GoalStatus.ABANDONED},
@@ -179,7 +178,9 @@ class GoalStore:
         try:
             milestones_raw = json.loads(row["milestones_json"])
         except (TypeError, json.JSONDecodeError) as exc:
-            raise BrainError(f"Goal {goal_id} has malformed database field milestones_json") from exc
+            raise BrainError(
+                f"Goal {goal_id} has malformed database field milestones_json"
+            ) from exc
         if not isinstance(milestones_raw, list):
             raise BrainError(f"Goal {goal_id} database field milestones_json must be a list")
         milestones: list[Milestone] = []
@@ -189,10 +190,10 @@ class GoalStore:
                     f"Goal {goal_id} milestone {index} in database field milestones_json "
                     "must be an object"
                 )
-            for field in ("milestone_id", "title"):
-                if field not in data:
+            for column in ("milestone_id", "title"):
+                if column not in data:
                     raise BrainError(
-                        f"Goal {goal_id} milestone {index} missing database field {field}"
+                        f"Goal {goal_id} milestone {index} missing database field {column}"
                     )
             try:
                 milestones.append(Milestone.from_dict(data))
@@ -432,7 +433,8 @@ class GoalStore:
                     conn.rollback()
                     return goal
                 raise BrainError(
-                    f"Milestone {milestone_id} on goal {goal_id} already completed with different evidence"
+                    f"Milestone {milestone_id} on goal {goal_id} already completed "
+                    "with different evidence"
                 )
             if goal.status in (GoalStatus.COMPLETED, GoalStatus.ABANDONED):
                 raise BrainError(f"Illegal milestone completion on terminal goal {goal_id}")
@@ -485,7 +487,13 @@ class GoalStore:
 
     def list_goals(
         self,
-        statuses: GoalStatus | str | list[GoalStatus | str] | tuple[GoalStatus | str, ...] | None = None,
+        statuses: (
+            GoalStatus
+            | str
+            | list[GoalStatus | str]
+            | tuple[GoalStatus | str, ...]
+            | None
+        ) = None,
     ) -> list[LongRunningGoal]:
         """List goals in deterministic newest-updated order, optionally by status."""
         conn = db.connect(paths.db_path(self.home))
@@ -499,7 +507,8 @@ class GoalStore:
                     return []
                 placeholders = ", ".join("?" for _ in normalized)
                 rows = conn.execute(
-                    f"SELECT * FROM goals WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
+                    f"SELECT * FROM goals WHERE status IN ({placeholders}) "
+                    "ORDER BY updated_at DESC",
                     tuple(status.value for status in normalized),
                 ).fetchall()
             return [self._row_to_goal(row) for row in rows]

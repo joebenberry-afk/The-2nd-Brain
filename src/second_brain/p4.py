@@ -10,6 +10,7 @@ verbatim from `ImprovementRadar.observe_session()` (Task 5).
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -86,15 +87,13 @@ def pulse(
         )
 
     if emit_telemetry:
-        try:
+        with contextlib.suppress(OSError, ValueError):
             telemetry.append_record(
                 home,
                 session_id,
                 "heartbeat_pulse",
                 {field: heartbeat_result[field] for field in _HEARTBEAT_RECORD_FIELDS},
             )
-        except (OSError, ValueError):
-            pass
 
     return {
         "session_id": session_id,
