@@ -41,6 +41,7 @@ AGY_EFFORT_ENV = "P3_AGY_EFFORT"  # exact frozen effort
 AGY_TIMEOUT_ENV = "P3_AGY_TIMEOUT_S"  # per-arm timeout (default 1200s)
 AGY_PRINT_TIMEOUT_ENV = "P3_AGY_PRINT_TIMEOUT_S"  # agy --print-timeout (default 900s)
 AGY_SKIP_PERMISSIONS_ENV = "P3_AGY_SKIP_PERMISSIONS"  # "1" = pass --dangerously-skip-permissions
+AGY_PROJECT_ENV = "P3_AGY_PROJECT"  # optional Antigravity project id/name for hook wiring
 
 # Frozen campaign order (plan §32). e01/e02/e03/e06 are retained genuine
 # DeepSeek/Prime pairs — the runner never re-executes them, only reconciles.
@@ -270,6 +271,7 @@ def invoke_agy(prompt_file: Path, workdir: Path, artifact_path: Path, arm: dict)
     agy = os.environ.get(AGY_ENV, "agy")
     model = os.environ[AGY_MODEL_ENV]
     effort = os.environ.get(AGY_EFFORT_ENV, "")
+    project = os.environ.get(AGY_PROJECT_ENV, "").strip()
     timeout = int(os.environ.get(AGY_TIMEOUT_ENV, "1200"))
     print_timeout = int(os.environ.get(AGY_PRINT_TIMEOUT_ENV, "900"))
     cmd = [
@@ -285,6 +287,8 @@ def invoke_agy(prompt_file: Path, workdir: Path, artifact_path: Path, arm: dict)
         "--print-timeout",
         f"{print_timeout}s",
     ]
+    if project:
+        cmd += ["--project", project]
     if effort:
         cmd += ["--effort", effort]
     if os.environ.get(AGY_SKIP_PERMISSIONS_ENV, "").strip().lower() in ("1", "true", "yes"):
