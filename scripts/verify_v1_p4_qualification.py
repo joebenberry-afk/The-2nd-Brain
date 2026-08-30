@@ -30,12 +30,10 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from second_brain import backup as backup_module  # noqa: E402
-from second_brain import db  # noqa: E402
+from second_brain import db, immune, telemetry  # noqa: E402
 from second_brain import fingerprints as fingerprints_module  # noqa: E402
-from second_brain import immune  # noqa: E402
 from second_brain import paths as paths_module  # noqa: E402
 from second_brain import radar as radar_module  # noqa: E402
-from second_brain import telemetry  # noqa: E402
 from second_brain.errors import BrainError  # noqa: E402
 from second_brain.goals import GoalStore  # noqa: E402
 
@@ -48,7 +46,10 @@ REQUIRED_SCENARIOS = frozenset({
     "security_boundary", "genuine_project_dogfood",
 })
 
-_P4_TABLES = ("goals", "goal_events", "bottleneck_fingerprints", "heartbeat_state", "heartbeat_runs")
+_P4_TABLES = (
+    "goals", "goal_events", "bottleneck_fingerprints",
+    "heartbeat_state", "heartbeat_runs",
+)
 
 _CLAIM_KEY_RE = re.compile(r"model|token|success", re.IGNORECASE)
 _FORBIDDEN_MARKERS = (
@@ -166,7 +167,10 @@ def check_scenario_completeness(manifest: dict[str, Any]) -> dict[str, Any]:
     ok = not missing and not unexpected and not duplicated
     return check(
         "scenario_completeness", ok,
-        {"missing": missing, "unexpected": unexpected, "duplicated": duplicated, "total": len(names)},
+        {
+            "missing": missing, "unexpected": unexpected,
+            "duplicated": duplicated, "total": len(names),
+        },
     )
 
 
@@ -275,7 +279,9 @@ def check_git_currency(manifest: dict[str, Any]) -> dict[str, Any]:
         return check("git_currency", False, detail)
     paths = [path for path in diff.stdout.split("\0") if path]
     disallowed = sorted(
-        path for path in paths if not path.replace("\\", "/").startswith(_QUALIFICATION_EVIDENCE_PREFIX)
+        path
+        for path in paths
+        if not path.replace("\\", "/").startswith(_QUALIFICATION_EVIDENCE_PREFIX)
     )
     detail.update({"intervening_paths": paths, "disallowed_paths": disallowed})
     return check("git_currency", not disallowed, detail)
@@ -290,14 +296,20 @@ def check_database_integrity(manifest: dict[str, Any]) -> dict[str, Any]:
     home = Path(manifest["home"])
     dbfile = paths_module.db_path(home)
     if not dbfile.is_file():
-        return check("database_integrity", False, {"reason": "brain.sqlite missing", "path": str(dbfile)})
+        return check(
+            "database_integrity", False,
+            {"reason": "brain.sqlite missing", "path": str(dbfile)},
+        )
 
     conn = sqlite3.connect(str(dbfile))
     try:
         integrity_row = conn.execute("PRAGMA integrity_check").fetchone()
         integrity_ok = bool(integrity_row) and integrity_row[0] == "ok"
         tables = {
-            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
         }
     finally:
         conn.close()
@@ -418,7 +430,10 @@ def check_backup_restore_preservation(manifest: dict[str, Any]) -> dict[str, Any
 def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     home = Path(manifest["home"])
     stale_row = next((r for r in manifest["scenarios"] if r["name"] == "stale_state"), None)
-    candidate_id = (stale_row or {}).get("candidate_id") or (stale_row or {}).get("metrics", {}).get("candidate_id")
+    candidate_id = (
+        (stale_row or {}).get("candidate_id")
+        or (stale_row or {}).get("metrics", {}).get("candidate_id")
+    )
     radar_ok = False
     radar_detail: dict[str, Any] = {}
     if candidate_id:
@@ -440,8 +455,11 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
     good_hash = hashlib.sha256(good).hexdigest()
     immune.register_policy(
         scratch, "verifier-unsafe-policy",
-        {"rollback_trigger": "verifier-unsafe-trigger", "rollback_target": "state/verifier-guarded-target.txt",
-         "backup_of": good_hash},
+        {
+            "rollback_trigger": "verifier-unsafe-trigger",
+            "rollback_target": "state/verifier-guarded-target.txt",
+            "backup_of": good_hash,
+        },
     )
     immune.register_trigger(
         scratch, "verifier-unsafe-trigger",
@@ -456,7 +474,10 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
     unsafe_refused = False
     unsafe_detail = "no exception raised"
     try:
-        immune.rollback(scratch, "verifier-unsafe-policy", "verifier-unsafe-trigger", "verifier probe")
+        immune.rollback(
+            scratch, "verifier-unsafe-policy", "verifier-unsafe-trigger",
+            "verifier probe",
+        )
     except BrainError as exc:
         unsafe_refused = True
         unsafe_detail = str(exc)
@@ -465,7 +486,8 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
     return check(
         "stale_and_unsafe_refusals", ok,
         {
-            "stale_radar_candidate_id": candidate_id, "stale_radar_status": radar_detail.get("status"),
+            "stale_radar_candidate_id": candidate_id,
+            "stale_radar_status": radar_detail.get("status"),
             "unsafe_rollback_refused": unsafe_refused, "unsafe_rollback_detail": unsafe_detail,
         },
     )
@@ -503,9 +525,13 @@ def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict
             conn.close()
     off_no_mutation = off_runs == 0 and off_state is None
 
-    shadow_pulse_ref = next(
-        (c["stdout_ref"] for c in fresh_row.get("commands", []) if "p4-pulse" in c.get("argv", [""])[-1]
-         or any("p4" in a for a in c.get("argv", []))),
+    next(
+        (
+            c["stdout_ref"]
+            for c in fresh_row.get("commands", [])
+            if "p4-pulse" in c.get("argv", [""])[-1]
+            or any("p4" in a for a in c.get("argv", []))
+        ),
         None,
     )
     shadow_no_maintenance = False
@@ -514,7 +540,10 @@ def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict
         if "pulse" in cmd.get("argv", []):
             payload = _read_json_ref(out_dir, cmd["stdout_ref"])
             shadow_detail = payload.get("heartbeat", {})
-            shadow_no_maintenance = shadow_detail.get("mode") == "shadow" and shadow_detail.get("maintenance_mutated") is False
+            shadow_no_maintenance = (
+                shadow_detail.get("mode") == "shadow"
+                and shadow_detail.get("maintenance_mutated") is False
+            )
             break
 
     on_home = Path(on_row.get("home", ""))
@@ -534,7 +563,8 @@ def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict
         {
             "off_heartbeat_runs": off_runs, "off_heartbeat_state": off_state,
             "off_no_mutation": off_no_mutation,
-            "shadow_heartbeat": shadow_detail, "shadow_no_maintenance_mutation": shadow_no_maintenance,
+            "shadow_heartbeat": shadow_detail,
+            "shadow_no_maintenance_mutation": shadow_no_maintenance,
             "on_heartbeat_runs": on_runs, "on_has_real_records": on_has_real_records,
         },
     )
@@ -610,7 +640,10 @@ def claims_grounded(scenario: dict[str, Any], out_dir: Path) -> tuple[bool, str]
     haystack = _gather_raw_text(scenario, out_dir)
     for key, value in suspects:
         if str(value) not in haystack:
-            return False, f"claim {key}={value!r} is not backed by any raw artifact for scenario {scenario.get('name')!r}"
+            return False, (
+                f"claim {key}={value!r} is not backed by any raw artifact "
+                f"for scenario {scenario.get('name')!r}"
+            )
     return True, "every model/token/success claim traced to a raw artifact"
 
 
@@ -732,7 +765,7 @@ def verify(manifest_path: Path) -> dict[str, Any]:
                 results.append(fn(manifest))
             else:
                 results.append(fn(manifest))
-        except Exception as exc:  # noqa: BLE001 - a check crashing is a failure, not a crash
+        except Exception as exc:
             results.append(check(fn.__name__, False, {"exception": f"{type(exc).__name__}: {exc}"}))
 
     ok = all(row["ok"] for row in results)
@@ -752,7 +785,12 @@ def main(argv: list[str] | None = None) -> int:
 
     result = verify(args.manifest)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps({"ok": result["ok"], "checks": [(c["check"], c["ok"]) for c in result["checks"]]}, indent=2))
+    print(
+        json.dumps(
+            {"ok": result["ok"], "checks": [(c["check"], c["ok"]) for c in result["checks"]]},
+            indent=2,
+        )
+    )
     return 0 if result["ok"] else 1
 
 
