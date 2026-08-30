@@ -1,5 +1,23 @@
 # Current State
 
+## Status (v1.0.0 released — current authoritative record)
+
+Second Brain **v1.0.0** is released. P0.1 through P4.5 (all 37 roadmap
+items) are `PROVEN`; see `outputs/reports/rc2/00-AUTHORITATIVE-CURRENT-STATUS-LEDGER.md`
+for the item-by-item ledger and `outputs/reports/v1-p4/qualification-report.md`
+/ `outputs/reports/v1-release-baseline.md` for the P4/P4.5 release gate.
+P4.5 qualified the governed optimization mechanism (real fingerprint →
+candidate binding → counterfactual evidence → propose → evaluate →
+activate) using a genuine Antigravity/Gemini paired session; the evaluated
+Lean-code candidate had measured negative ROI and activation was correctly
+refused — that refusal is the qualifying evidence. No V2-A or later v2
+behavior has started; everything below is the frozen v1 baseline.
+
+The "2026-08-15" status section immediately below predates the rc2 37-item
+roadmap ledger and P4 work; it is retained as historical record of the
+earlier build/optimization campaign, not the current status source.
+
+
 ## Status (2026-08-15 — BUILD COMPLETE; live rollout deployed)
 
 - Phases 0-23: COMPLETE, each gated by the retained independent reviewer
