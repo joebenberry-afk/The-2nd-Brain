@@ -177,7 +177,12 @@ def test_current_omp_v3_records_validate(brain_home):
         brain_home,
         "session.jsonl",
         [
-            {"v": 3, "kind": "omp_routing_invocation", "session": "s", "ts": "2026-08-29T00:00:00Z"},
+            {
+                "v": 3,
+                "kind": "omp_routing_invocation",
+                "session": "s",
+                "ts": "2026-08-29T00:00:00Z",
+            },
             {
                 "v": 2,
                 "kind": "heartbeat_pulse",

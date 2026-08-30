@@ -1,11 +1,9 @@
-from second_brain import cli, db
-
 import json
 from pathlib import Path
 
 import pytest
 
-from second_brain import telemetry
+from second_brain import cli, db, telemetry
 from second_brain.errors import BrainError
 from second_brain.fingerprints import BottleneckFingerprintStore
 from second_brain.radar import ImprovementRadar
@@ -70,7 +68,12 @@ def test_fingerprint_rejects_invalid_values(brain_home):
     with pytest.raises(BrainError):
         store.record_bottleneck("TOOL_CHAIN_THRASH", "signal", "cache", impact_score=float("nan"))
     with pytest.raises(BrainError):
-        store.record_bottleneck("TOOL_CHAIN_THRASH", "signal", "cache", metadata={"x": "y" * 10_000})
+        store.record_bottleneck(
+            "TOOL_CHAIN_THRASH",
+            "signal",
+            "cache",
+            metadata={"x": "y" * 10_000},
+        )
 def test_fingerprint_merges_latest_bounded_evidence_by_hash(brain_home):
     store = BottleneckFingerprintStore(brain_home)
     first_refs = [{"record_hash": f"{index:064x}", "output_bytes": index} for index in range(64)]
@@ -118,7 +121,11 @@ def test_radar_emits_fingerprint_telemetry_without_raw_payload(brain_home):
     radar = ImprovementRadar(brain_home)
     radar.observe_session("telemetry-session", project_id="project-a")
     records = list(telemetry.iter_records(brain_home))
-    fingerprint_records = [record for _, _, record in records if record.get("kind") == "bottleneck_fingerprint"]
+    fingerprint_records = [
+        record
+        for _, _, record in records
+        if record.get("kind") == "bottleneck_fingerprint"
+    ]
     assert len(fingerprint_records) == 1
     record = fingerprint_records[0]
     assert set(record) >= {

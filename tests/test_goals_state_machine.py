@@ -1,5 +1,4 @@
 import json
-import sqlite3
 
 import pytest
 
@@ -73,7 +72,9 @@ def test_unknown_milestone_and_empty_milestones(brain_home):
         store.complete_milestone(goal.goal_id, "m-2", "test://p4")
     empty = store.create_goal("empty", "no steps")
     assert empty.status is GoalStatus.ACTIVE
-    assert store.transition(empty.goal_id, GoalStatus.COMPLETED, evidence_ref="test://empty").status is GoalStatus.COMPLETED
+    assert store.transition(
+        empty.goal_id, GoalStatus.COMPLETED, evidence_ref="test://empty"
+    ).status is GoalStatus.COMPLETED
     persisted = store.get_goal(empty.goal_id)
     assert persisted is not None
     assert persisted.completed_at is not None
@@ -120,7 +121,7 @@ def test_missing_milestone_field_is_explicit(brain_home):
         conn.commit()
     finally:
         conn.close()
-    with pytest.raises(BrainError, match="milestone.*title"):
+    with pytest.raises(BrainError, match=r"milestone.*title"):
         store.get_goal(goal.goal_id)
 
 

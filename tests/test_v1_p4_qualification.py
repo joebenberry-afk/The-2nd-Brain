@@ -400,13 +400,22 @@ def test_check_privacy_absence_scans_nested_command_json_fields(tmp_path):
         "setup_commands": [],
         "scenarios": [{
             "name": "security_boundary",
-            "commands": [{"argv": ["python", "safe-command"], "stdout_ref": stdout_ref, "stderr_ref": stderr_ref}],
+            "commands": [
+                {
+                    "argv": ["python", "safe-command"],
+                    "stdout_ref": stdout_ref,
+                    "stderr_ref": stderr_ref,
+                }
+            ],
             "evidence_refs": [],
         }],
     }
     result = check_privacy_absence(manifest, out_dir)
     assert result["ok"] is False
-    assert any(stdout_ref in offender and "payload" in offender for offender in result["detail"]["offenders"])
+    assert any(
+        stdout_ref in offender and "payload" in offender
+        for offender in result["detail"]["offenders"]
+    )
 
 
 def test_check_privacy_absence_allows_action_cache_content(tmp_path):
@@ -560,7 +569,10 @@ def test_check_privacy_absence_scans_nested_evidence_fields_case_insensitively(t
     }
     result = check_privacy_absence(manifest, out_dir)
     assert result["ok"] is False
-    assert any(ref in offender and "PROMPT" in offender for offender in result["detail"]["offenders"])
+    assert any(
+        ref in offender and "PROMPT" in offender
+        for offender in result["detail"]["offenders"]
+    )
 
 
 def test_artifact_hash_integrity_rejects_evidence_ref_outside_output_dir(tmp_path):
