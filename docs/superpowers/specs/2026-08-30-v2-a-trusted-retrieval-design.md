@@ -3,7 +3,8 @@
 **Status:** Architecture approved; implementation not started
 **Date:** 2026-08-30
 **Baseline:** `v1.0.0` at commit `7735033a939cda08739193378116bb908a5fd983`
-**Branch:** `brain/v2-a-trusted-retrieval`
+**Design branch:** `brain/v1-rc4-prime-074-compat`
+**Planned implementation branch:** `brain/v2-a-trusted-retrieval`
 
 ## 1. Problem and scope
 
@@ -152,16 +153,18 @@ The payload has exactly these logical fields:
   "status": "...",
   "tags": [],
   "title": "...",
-  "version": 1,
-  "schema_version": 1
+  "version": 1
 }
 ```
 
-`schema_version` defaults to `1` for legacy V1 files that do not declare it;
-new V2 writers emit it explicitly. `version` is the semantic memory version.
-`canonical_created_at` is the memory's original canonical creation value.
-`version_created_at` is a separate manifest-only operational timestamp and is
-not part of this payload.
+`version` is the semantic memory version. `canonical_created_at` is the
+memory's original canonical creation value. `version_created_at` is a separate
+manifest-only operational timestamp and is not part of this payload.
+
+V2-A has no separate `schema_version` field. `semantic-payload-v1` is the sole
+hash-contract identifier. A `schema_version` declaration is an unknown
+unprefixed field and therefore produces `MALFORMED_CANONICAL`; future schema
+changes require a new hash algorithm identifier and an explicit contract.
 
 `summary`, `updated_at`, `last_verified_at`, `strength`, `stability`, and
 filesystem signature values are not part of the payload.
@@ -201,12 +204,13 @@ unrecognized metadata from becoming hidden authority.
 
 ### 3.4 Tag normalization
 
-The optional `tags` field is a scalar string in V2-A. Normalization is:
+The optional `tags` field defaults to an empty list when absent and otherwise
+is a scalar string in V2-A. Normalization is:
 
 1. NFC normalize, then Unicode casefold.
 2. Split on commas or Unicode whitespace.
-3. Discard no token silently: empty tokens caused by separators are ignored,
-but a non-empty invalid token rejects the canonical file.
+3. Empty tokens caused by separators are ignored; no non-empty token is
+discarded silently. A non-empty invalid token rejects the canonical file.
 4. Require each token to match:
 
 ```text
@@ -294,7 +298,20 @@ memory_index.hash_algorithm
 ```
 
 The canonical Markdown must also declare matching `id`, `version`, `title`,
-`scope`, `project`, `status`, `grade`, and `canonical_created_at` values.
+`scope`, `project`, `status`, `grade`, and canonical-created-at values
+(`created_at` is accepted as the legacy spelling and normalized to
+`canonical_created_at`), plus normalized `tags`. Tag agreement is exact after
+V2-A tag normalization:
+
+```text
+normalize_tags(canonical Markdown)
+    = memory_versions.tags
+    = memories.tags
+    = memory_index.tags
+```
+
+Any disagreement in these canonical fields, including tags, produces
+`CANONICAL_IDENTITY_MISMATCH`.
 
 Additional invariants:
 
@@ -413,7 +430,8 @@ TrustRefusal {
 }
 ```
 
-The first-failure precedence is fixed:
+The first-failure precedence is fixed. The eight stages remain the major
+ordering:
 
 ```text
 1. request identity and scope policy
@@ -425,6 +443,33 @@ The first-failure precedence is fixed:
 7. lifecycle status and evidence policy
 8. contradiction eligibility
 ```
+
+Within those stages, the following total order over every
+`TrustFailureCode` is authoritative; the earliest applicable condition wins:
+
+```text
+ 1. PROJECT_IDENTITY_UNRESOLVED
+ 2. PROJECT_SCOPE_MISMATCH
+ 3. DOMAIN_IDENTITY_UNSUPPORTED
+ 4. VERSION_MANIFEST_MISSING
+ 5. VERSION_MANIFEST_MISMATCH
+ 6. INDEX_VERSION_STALE
+ 7. INDEX_METADATA_MISMATCH
+ 8. HASH_ALGORITHM_UNSUPPORTED
+ 9. CANONICAL_MISSING
+10. CANONICAL_UNREADABLE
+11. MALFORMED_CANONICAL
+12. CANONICAL_IDENTITY_MISMATCH
+13. CANONICAL_HASH_MISMATCH
+14. STATUS_INELIGIBLE
+15. EVIDENCE_INSUFFICIENT
+16. CONTRADICTION_UNRESOLVED
+```
+
+An implementation evaluates all applicable conditions in this order and
+returns exactly one first code. It must not select a code from discovery tier,
+iteration order, or incidental branch order. A candidate that fails one check
+is not evaluated by later checks.
 
 Stable refusal codes are:
 
@@ -446,9 +491,6 @@ PROJECT_IDENTITY_UNRESOLVED
 DOMAIN_IDENTITY_UNSUPPORTED
 CONTRADICTION_UNRESOLVED
 ```
-
-A candidate that fails one check is not evaluated by later checks. The first
-code is therefore deterministic across implementations, telemetry, and tests.
 
 ### 5.5 Verified immutable snapshot
 
@@ -493,31 +535,43 @@ Ranking and packet construction use that exact snapshot. They never reread
 `memory_index.body`, `memory_index.title`, or other raw discovery values after
 the gate.
 
-A process-local verification cache may reuse the snapshot only when keyed by:
+A process-local verification cache may reuse a verified snapshot only after
+every trust assessment reads the bounded canonical file and calculates a
+process-local raw-byte SHA-256 digest. The cache key is:
 
 ```text
 home
 memory_id
 version
 canonical_hash
-file signature
+raw_byte_hash
 ```
 
+If the raw-byte digest matches the cache entry, the previously parsed and
+semantic-hash-verified snapshot may be reused. If it differs, the operation
+must parse, normalize, and recalculate `semantic-payload-v1` before any
+snapshot can be trusted. The raw-byte digest is a cache-freshness key only; it
+is never canonical identity evidence and is never persisted.
+
 The cache is empty after process restart. Governed writes invalidate all cache
-entries for the affected memory. A cache hit reuses a previously hash-verified
-snapshot; it never converts a filesystem signature into integrity evidence.
+entries for the affected memory. A cache hit reuses a snapshot whose raw bytes
+were read during the current trust assessment; it never converts a filesystem
+signature into integrity evidence.
 
 ### 5.6 Filesystem signatures
 
 `file_size`, `mtime_ns`, and optional platform-specific `file_identity` are
-cache invalidation signals only.
+cache invalidation and diagnostic signals only. A changed signature may
+eagerly discard a cache entry, but it does not establish corruption or
+freshness. An unchanged signature never authorizes cache reuse; the raw-byte
+digest is still required.
 
 ```text
 signature changed
-    = cached proof unusable → recompute parse/hash
+    = optionally discard cache → read bytes and calculate raw-byte digest
 
 signature unchanged
-    = cached verified snapshot may be reused in this process
+    = no trust or cache inference → read bytes and calculate raw-byte digest
 ```
 
 A signature mismatch is not corruption and does not itself generate a trust
@@ -626,9 +680,22 @@ a successful retry produces one effective delivered identity. Existing host
 adapters that cannot observe model visibility may still commit their own
 successful insertion/return boundary, but must not claim model visibility.
 
-The existing `brain_packet_delivered` Python event remains a prepared/ledger
-state, while host-side visibility telemetry remains the authority for actual
-model visibility.
+The existing `brain_packet_delivered` event is retained unchanged as a legacy
+compatibility event. V2-A does not reinterpret it as preparation, committed
+delivery, or model visibility. V2-A lifecycle telemetry uses unambiguous event
+names:
+
+```text
+brain_packet_prepared
+brain_packet_delivery_committed
+brain_packet_delivery_failed   # includes explicit retryable state
+```
+
+`brain_packet_prepared` records the prepared-intent commit. The committed event
+records the successful delivery/insertion return boundary, without claiming
+model visibility unless a host-side visibility event independently proves it.
+The failed event records serialization or host-delivery failure and whether a
+retry remains possible.
 
 ## 7. Filesystem/SQLite staged commit and recovery
 
@@ -685,14 +752,14 @@ Retrieval telemetry is additive and privacy-preserving. It records bounded
 counts and stable codes, never memory bodies, summaries, prompts, or arbitrary
 frontmatter:
 
-```text
 discovered_count
 unique_candidate_count
 scanned_count
 eligible_count
 ranked_count
 stat_checks
-hash_checks
+raw_byte_hash_checks
+semantic_hash_checks
 canonical_cache_hits
 canonical_parses
 scan_limit_hit
@@ -701,6 +768,11 @@ query_mode
 project_id
 is_delta
 ```
+
+V2-A lifecycle telemetry names are `brain_packet_prepared`,
+`brain_packet_delivery_committed`, and `brain_packet_delivery_failed`. The
+legacy `brain_packet_delivered` event remains compatibility-only and cannot be
+used to infer preparation, committed delivery, or model visibility.
 
 When candidates were discovered but none passed the gate, the compatibility
 facing decision uses a distinct `TRUST_GATE_REJECTED` outcome and includes the
@@ -720,11 +792,13 @@ ordering, syntactic spacing, body padding, and preserved meaningful spaces;
 - tag casefolding, Unicode normalization, separators, grammar, duplicate
 removal, and invalid-token rejection;
 - unknown-field rejection and `x-*` extension handling;
-- exact hash repeatability and algorithm identifier handling;
+- exact hash repeatability, rejection of unprefixed `schema_version`, and
+  algorithm identifier handling;
 - every refusal code and exact precedence when several faults coexist;
 - immutable version creation for body, title, scope, project, status, grade,
 and tag changes;
-- current manifest/index/memory agreement and contiguous version rows;
+- current manifest/index/memory agreement, including normalized tags, and
+  contiguous version rows;
 - legacy backfill refusal for malformed files and raw-byte hashes;
 - summary exclusion from discovery, ranking, and packet content;
 - optional provenance without an external-source requirement;
@@ -742,9 +816,11 @@ trust evaluation;
 - exact-ID lookup cannot bypass the gate;
 - stale/corrupt index content cannot become packet content when its canonical
 snapshot differs;
-- a canonical file changed with unchanged size/mtime is detected on a fresh
-hash verification;
-- cache hits reuse a verified snapshot only within the current process;
+- an external canonical edit preserving size, mtime, and identity is detected
+  by the raw-byte digest on the next trust assessment;
+- an equal raw-byte digest permits snapshot reuse only with the exact
+  process-local cache identity;
+- process restart empties the verification cache;
 - governed writes invalidate the verification cache;
 - linear and FTS discovery use identical gate/rank behavior;
 - optional vector candidates enter only through the common gate.
