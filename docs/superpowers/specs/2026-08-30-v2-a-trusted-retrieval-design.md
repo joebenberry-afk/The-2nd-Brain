@@ -752,6 +752,7 @@ Retrieval telemetry is additive and privacy-preserving. It records bounded
 counts and stable codes, never memory bodies, summaries, prompts, or arbitrary
 frontmatter:
 
+```text
 discovered_count
 unique_candidate_count
 scanned_count
