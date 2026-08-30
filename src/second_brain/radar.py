@@ -29,7 +29,6 @@ from .errors import BrainError
 from .fingerprints import BottleneckCategory, BottleneckFingerprintStore
 
 
-
 class InefficiencyPattern(StrEnum):
     REPEATED_READ = "REPEATED_READ"
     SEARCH_THRASH = "SEARCH_THRASH"
@@ -163,7 +162,9 @@ class ImprovementRadar:
         candidates = self._load_candidates()
         fingerprint_store = BottleneckFingerprintStore(self.home)
 
-        def project_fingerprint(alert: ImprovementAlert, refs: list[dict[str, Any]]) -> dict[str, Any]:
+        def project_fingerprint(
+            alert: ImprovementAlert, refs: list[dict[str, Any]]
+        ) -> dict[str, Any]:
             fingerprint = fingerprint_store.record_alert(
                 alert,
                 scope_id=fingerprint_scope_id,
@@ -200,7 +201,11 @@ class ImprovementRadar:
             )
             refs: list[dict[str, Any]] = []
             for filename, line_number, record in rows:
-                if record.get("kind") not in {"tool_call", "tool_result", "brain_retrieval_attempt"}:
+                if record.get("kind") not in {
+                    "tool_call",
+                    "tool_result",
+                    "brain_retrieval_attempt",
+                }:
                     continue
                 reference = {
                     "telemetry_ref": f"{filename}:{line_number}",
@@ -250,7 +255,10 @@ class ImprovementRadar:
                 existing["fingerprints"].append(fingerprint)
                 existing["fingerprints"].sort(
                     key=lambda item: (
-                        -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
+                        -(
+                            float(item.get("impact_score", 0))
+                            * int(item.get("occurrence_count", 0))
+                        ),
                         str(item.get("fingerprint_id", "")),
                     )
                 )
