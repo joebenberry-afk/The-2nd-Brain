@@ -1815,7 +1815,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(patch!.systemPrompt).toContain("MUST delegate"); // Sol contract
     expect(patch!.systemPrompt).not.toContain(MARKER); // driver contract absent
 
-    const records = await waitForLines(2);
+    const records = await waitForLines(3);
     const contract = recordOf(records, "before_agent_start");
     expect(contract.role).toBe("hard_orchestrator");
     expect(contract.driver_contract_injected).toBeUndefined();
@@ -1841,7 +1841,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
       result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
     );
 
-    const records = await waitForLines(3);
+    const records = await waitForLines(4);
     const contract = recordOf(records, "before_agent_start");
     expect(contract.role).toBe("driver");
     expect(contract.driver_contract_injected).toBe(true);
