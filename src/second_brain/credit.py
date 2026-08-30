@@ -264,9 +264,13 @@ INTERVENTION_TYPES: tuple[str, ...] = (
 VERIFICATION_OUTCOMES: tuple[str, ...] = ("passed", "failed", "unresolved")
 
 # Real telemetry counters only (brainstem/telemetry/SCHEMA.md assistant_usage
-# field names); "reasoning" is tracked separately because the current schema
-# does not always report it and must never be fabricated as 0.
-TOKEN_FIELDS: tuple[str, ...] = ("input", "cache_read", "cache_write", "output", "total")
+# field names). "reasoning" and "cache_write" are tracked separately from the
+# mandatory fields because not every harness's real usage schema reports
+# them (e.g. the Antigravity/Gemini `agy` CLI stream never includes a
+# cache-write counter at all) — they must never be fabricated as 0 when the
+# provider genuinely does not expose the concept.
+TOKEN_FIELDS: tuple[str, ...] = ("input", "cache_read", "output", "total")
+OPTIONAL_TOKEN_FIELDS: tuple[str, ...] = ("cache_write", "reasoning")
 
 STARTING_STATE_FIELDS: tuple[str, ...] = (
     "task_hash",
@@ -293,12 +297,13 @@ def _validate_tokens(tokens: object, label: str) -> dict:
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise BrainError(f"{label}.tokens.{field} must be a non-negative integer")
         out[field] = value
-    reasoning = tokens.get("reasoning")
-    if reasoning is not None and (
-        not isinstance(reasoning, int) or isinstance(reasoning, bool) or reasoning < 0
-    ):
-        raise BrainError(f"{label}.tokens.reasoning must be a non-negative integer or None")
-    out["reasoning"] = reasoning
+    for field in OPTIONAL_TOKEN_FIELDS:
+        value = tokens.get(field)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+        ):
+            raise BrainError(f"{label}.tokens.{field} must be a non-negative integer or None")
+        out[field] = value
     return out
 
 
@@ -370,13 +375,14 @@ def _validate_starting_state(starting_state: object) -> dict:
 
 def _token_deltas(with_tokens: dict, without_tokens: dict) -> dict:
     deltas = {field: with_tokens[field] - without_tokens[field] for field in TOKEN_FIELDS}
-    with_reasoning = with_tokens["reasoning"]
-    without_reasoning = without_tokens["reasoning"]
-    deltas["reasoning"] = (
-        with_reasoning - without_reasoning
-        if with_reasoning is not None and without_reasoning is not None
-        else None
-    )
+    for field in OPTIONAL_TOKEN_FIELDS:
+        with_value = with_tokens[field]
+        without_value = without_tokens[field]
+        deltas[field] = (
+            with_value - without_value
+            if with_value is not None and without_value is not None
+            else None
+        )
     return deltas
 
 
@@ -526,8 +532,7 @@ def arm_from_telemetry(
     return {
         "run_id": session_id,
         "success": success,
-        "tokens": {field: usage[field] for field in TOKEN_FIELDS}
-        | {"reasoning": usage["reasoning"]},
+        "tokens": {field: usage[field] for field in (*TOKEN_FIELDS, *OPTIONAL_TOKEN_FIELDS)},
         "tool_calls": telemetry.session_tool_calls(home, session_id),
         "wall_time_ms": wall_time_ms,
         "verification": verification,

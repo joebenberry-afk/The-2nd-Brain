@@ -419,6 +419,65 @@ def test_counterfactual_result_rejects_negative_token_counts(brain_home):
         )
 
 
+def test_counterfactual_result_accepts_none_cache_write_when_harness_never_reports_it(
+    brain_home,
+):
+    """Regression: the Antigravity/Gemini `agy` CLI usage schema never
+    reports a cache-write counter at all. Forcing it to 0 would misrepresent
+    'not exposed by this provider' as 'measured zero'; None must be accepted
+    and the delta must stay None rather than being fabricated."""
+    with_arm = _arm(
+        "run-with-cw",
+        tokens={
+            "input": 500,
+            "cache_read": 200,
+            "cache_write": None,
+            "output": 100,
+            "total": 800,
+        },
+    )
+    without_arm = _arm(
+        "run-without-cw",
+        tokens={
+            "input": 900,
+            "cache_read": 0,
+            "cache_write": None,
+            "output": 180,
+            "total": 1080,
+        },
+    )
+    result = credit.counterfactual_result(
+        brain_home,
+        evaluation_id="eval-cw-1",
+        intervention_type="skill",
+        intervention_id="lean-code",
+        intervention_hash="h" * 64,
+        starting_state=_starting_state(),
+        with_arm=with_arm,
+        without_arm=without_arm,
+    )
+    assert result["with_arm"]["tokens"]["cache_write"] is None
+    assert result["without_arm"]["tokens"]["cache_write"] is None
+    assert result["observed_effect"]["deltas"]["tokens"]["cache_write"] is None
+    # mandatory fields are unaffected by the optional cache_write field
+    assert result["observed_effect"]["deltas"]["tokens"]["total"] == 800 - 1080
+
+
+def test_counterfactual_result_rejects_negative_cache_write_when_provided(brain_home):
+    bad = _arm("w1", tokens=_tokens(input=100, output=50, total=150, cache_write=-1))
+    with pytest.raises(BrainError, match=r"cache_write.*non-negative integer or None"):
+        credit.counterfactual_result(
+            brain_home,
+            evaluation_id="eval-cw-2",
+            intervention_type="skill",
+            intervention_id="scout",
+            intervention_hash="h" * 64,
+            starting_state=_starting_state(),
+            with_arm=bad,
+            without_arm=_arm("w2"),
+        )
+
+
 def test_counterfactual_result_rejects_incomplete_starting_state(brain_home):
     incomplete = _starting_state()
     del incomplete["environment_hash"]
