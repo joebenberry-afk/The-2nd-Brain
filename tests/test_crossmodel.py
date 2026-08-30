@@ -54,7 +54,7 @@ def test_migration_0006_on_v5_brain(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [6, 7, 8, 9]
+    assert db.pending_migrations(dbfile) == [6, 7, 8, 9, 10]
     profile = crossmodel.record_model(brain_home, "flash", family="deepseek")
     assert profile["model_id"] == "flash"
     assert db.pending_migrations(dbfile) == []
