@@ -151,15 +151,15 @@ def test_restore_applies_pending_migrations(brain_home, tmp_path, monkeypatch):
 
     extra = tmp_path / "migs"
     extra.mkdir()
-    # 0010: the real migration set ends at 0009 (Phase G purge receipts); the
-    # custom migration must sort AFTER it to be "pending" on restore.
-    (extra / "0010_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
+    # 0011: the real migration set ends at 0010 (P4 operations); the custom
+    # migration must sort AFTER it to be "pending" on restore.
+    (extra / "0011_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
     monkeypatch.setattr(db, "MIGRATIONS_DIR", extra)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 10
+        assert v == 11
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "extra_table" in tables
     finally:
