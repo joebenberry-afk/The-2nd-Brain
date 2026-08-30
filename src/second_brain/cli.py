@@ -3118,9 +3118,23 @@ def _cmd_antigravity_hook(home: Path) -> int:
 
     from . import antigravity_transcript, autoinject, contracts, lean_runtime, working_set
 
+    # Read raw bytes and decode explicitly as UTF-8 (utf-8-sig tolerates a
+    # stray leading BOM) when a binary stdin buffer is available.
+    # `sys.stdin.read()` decodes through Python's locale-dependent default
+    # encoding, which on this class of Windows host resolves to a legacy
+    # code page (not UTF-8) absent PYTHONIOENCODING — the real
+    # Antigravity/PowerShell hook transport never sets that variable, so any
+    # non-ASCII byte in the JSON payload was silently mis-decoded under the
+    # ambient code page. Text-mode stdin (e.g. an `io.StringIO` in tests)
+    # has no `.buffer`; fall back to the plain text read for it.
     payload = None
     try:
-        raw = sys.stdin.read()
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        raw = (
+            stdin_buffer.read().decode("utf-8-sig")
+            if stdin_buffer is not None
+            else sys.stdin.read()
+        )
         payload = json.loads(raw) if raw.strip() else None
     except Exception:  # fail-open: never raise into the hook
         payload = None
