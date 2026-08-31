@@ -224,6 +224,8 @@ delivery_ids)` reads only the bounded `failure_code` column through a fresh
 read-only SQLite connection. Delivery tests keep the lifecycle object that
 prepared a packet so the explicit commit/fail methods operate on its
 `last_delivery_ids`; no helper silently commits a delivery.
+`_delivery_row(home, delivery_id)` reads one delivery row through a fresh
+read-only SQLite connection and returns a mapping for identity assertions.
 `_manifest_row(home, memory_id, version)` reads the requested manifest row
 through a fresh read-only SQLite connection and returns a mapping for test
 fixture assembly; it is not the verifier's source of truth.
@@ -231,8 +233,9 @@ fixture assembly; it is not the verifier's source of truth.
 The migration tests define `_legacy_memory(tmp_path, monkeypatch, evolved=False,
 with_tags=False)`. It copies only migrations `0001` through `0010` into a
 temporary migration directory, patches `db.MIGRATIONS_DIR` while
-`make_brain(...)` and the existing pre-V2 `semantic.add_memory(...)` API run,
-optionally calls the existing pre-V2 `semantic.supersede(...)` twice, and
+`make_brain(...)` and the existing pre-V2 `semantic.add_memory(...)` API run
+with `project_id="p"` and `grade="TESTED"`, optionally calls the existing
+pre-V2 `semantic.supersede(...)` twice, and
 restores the real migration directory before returning. When `with_tags=True`,
 it inserts the literal legacy `tags: Worker,worker` line into the first
 canonical Markdown file with `Path.read_text`/`write_text`; it never passes a
@@ -418,6 +421,9 @@ def test_v11_adds_tags_manifest_hash_and_delivery_state(brain_home):
         versions = {row[1] for row in conn.execute("PRAGMA table_info(memory_versions)")}
         index = {row[1] for row in conn.execute("PRAGMA table_info(memory_index)")}
         deliveries = {row[1] for row in conn.execute("PRAGMA table_info(deliveries)")}
+        delivery_info = {
+            row[1]: row for row in conn.execute("PRAGMA table_info(deliveries)")
+        }
     finally:
         conn.close()
 
@@ -427,6 +433,62 @@ def test_v11_adds_tags_manifest_hash_and_delivery_state(brain_home):
             "version_created_at"} <= versions
     assert "hash_algorithm" in index
     assert {"state", "prepared_at", "committed_at", "failure_code", "retryable"} <= deliveries
+    assert delivery_info["prepared_at"][3] == 0
+    assert delivery_info["committed_at"][3] == 0
+    assert delivery_info["delivered_at"][3] == 0
+
+def test_v11_rebuilds_legacy_delivery_as_prepared(tmp_path, monkeypatch):
+    home, mid = _legacy_memory(tmp_path, monkeypatch)
+    semantic.curate(home, mid, status="current")
+    legacy_decision = autoinject.BrainLifecycle(home).prepare_injection(
+        "legacy delivery", project_id="p", agent_id="a1",
+        role_profile="worker", session_id="s", branch_id="b",
+    )
+    assert legacy_decision.selected_ids == [mid]
+
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        old = conn.execute(
+            "SELECT * FROM deliveries "
+            "WHERE memory_id = ? AND root_session_id = ? AND branch_id = ?",
+            (mid, "s", "b"),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert old is not None
+    assert old["delivered_at"] is not None
+
+    assert db.migrate(db.db_path(home)) == [11]
+
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        delivery_info = {
+            row[1]: row for row in conn.execute("PRAGMA table_info(deliveries)")
+        }
+        migrated = conn.execute(
+            "SELECT * FROM deliveries WHERE delivery_id = ?",
+            (old["delivery_id"],),
+        ).fetchone()
+        indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list(deliveries)")
+        }
+    finally:
+        conn.close()
+
+    assert delivery_info["delivered_at"][3] == 0
+    assert delivery_info["prepared_at"][3] == 0
+    assert delivery_info["committed_at"][3] == 0
+    assert migrated["state"] == "prepared"
+    assert migrated["prepared_at"] == old["delivered_at"]
+    assert migrated["delivered_at"] is None
+    assert migrated["committed_at"] is None
+    for field in (
+        "delivery_id", "root_session_id", "agent_session_id", "branch_id",
+        "memory_id", "memory_version", "canonical_hash", "packet_id",
+        "delivered_event_id", "superseded_by_delivery_id",
+    ):
+        assert migrated[field] == old[field]
+    assert "idx_deliveries_dedupe" in indexes
 
 
 def test_backfill_uses_legacy_tags_and_is_idempotent(tmp_path, monkeypatch):
@@ -564,7 +626,7 @@ $env:PYTHONPATH = $null
 
 Expected: FAIL on missing columns/helper; existing V1 migration tests must still collect.
 
-- [ ] **Step 3: Implement `0011_trusted_retrieval.sql` transactionally.** Add `memories.tags TEXT NOT NULL DEFAULT ''`; rebuild `memory_versions` from the old table into a table with `memory_id`, `version`, `title`, `scope`, `project_id`, `status`, `evidence_grade`, `tags`, `canonical_created_at`, `body_path`, `file_hash`, `hash_algorithm`, `version_created_at`, and `change_note`; map old `created_at` to `canonical_created_at`, leave `version_created_at`, `file_hash`, and `hash_algorithm` unknown until backfill, and preserve old title/path/note values. Add `memory_index.hash_algorithm TEXT NOT NULL DEFAULT ''`. Add delivery `state`, `prepared_at`, `committed_at`, `failure_code`, and `retryable`; reclassify pre-V2 rows with non-null `delivered_at` as `prepared` with that timestamp in `prepared_at`, clear the suppressing delivery timestamp, and preserve all lineage fields. Keep SQL compatible with the existing one-migration transaction wrapper; do not add a down migration.
+- [ ] **Step 3: Implement `0011_trusted_retrieval.sql` transactionally.** Add `memories.tags TEXT NOT NULL DEFAULT ''`; rebuild `memory_versions` from the old table into a table with `memory_id`, `version`, `title`, `scope`, `project_id`, `status`, `evidence_grade`, `tags`, `canonical_created_at`, `body_path`, `file_hash`, `hash_algorithm`, `version_created_at`, and `change_note`; map old `created_at` to `canonical_created_at`, leave `version_created_at`, `file_hash`, and `hash_algorithm` unknown until backfill, and preserve old title/path/note values. Add `memory_index.hash_algorithm TEXT NOT NULL DEFAULT ''`. Rebuild `deliveries` transactionally rather than adding columns because V1 declares `delivered_at TEXT NOT NULL`: drop the old dedupe index, rename the V1 table, create the V2 table preserving `delivery_id`, `root_session_id`, `agent_session_id`, `branch_id`, `memory_id`, `memory_version`, `canonical_hash`, `packet_id`, `delivered_event_id`, and `superseded_by_delivery_id`, plus `state TEXT NOT NULL`, nullable `prepared_at`, `committed_at`, and `delivered_at`, nullable `failure_code`, and nullable `retryable`; insert legacy rows with `state='prepared'`, `prepared_at=old delivered_at`, `committed_at=NULL`, `delivered_at=NULL`, `failure_code=NULL`, and `retryable=NULL`, drop the renamed table, and recreate `idx_deliveries_dedupe` on `(root_session_id, branch_id, memory_id, memory_version)`. The whole schema replacement and schema-version insert must remain one migration transaction.
 
 - [ ] **Step 4: Implement deterministic `backfill_trusted_manifests`.** Inspect only governed `memories.body_path` and existing `memory_versions` paths; never scan arbitrary Markdown files to adopt them. For each path, read bounded bytes, parse, normalize, calculate semantic hash, and atomically populate a complete manifest row. For current version 1, create the mandatory row with unknown legacy `version_created_at`; for legacy historical rows, preserve NULL version-commit time. Update `memories.tags` and rebuild `memory_index`/FTS only from verified snapshots. Leave malformed/missing rows stored but refused, leave unrelated valid memories usable, retain stale derived rows rather than blessing bad files, and return a deterministic report with `scanned`, `valid`, `changed`, `refusal_counts`, and `orphans`. A per-memory transaction prevents interruption from leaving half-populated manifests.
 
@@ -894,7 +956,7 @@ git commit -m "feat(v2): add trusted retrieval gate"
 ```python
 
 def test_trusted_packet_uses_canonical_body_and_no_summary_guidance(brain_home):
-    mid = semantic.add_memory(
+    mid = _seed_current(
         brain_home,
         "Canonical title",
         "canonical observation",
@@ -1183,7 +1245,7 @@ git commit -m "feat(v2): add trusted telemetry and bounds"
 **Interfaces:**
 - Consumes: existing `build_corpus`, `build_labels`, `evaluate`, and trusted pipeline diagnostics.
 - Produces: legacy/trusted cold/trusted warm benchmark rows for corpus sizes 100, 1,000, and 10,000, plus a fresh-process read-only verifier and its untracked evidence bundle.
-- [ ] **Step 1: Write failing benchmark/verifier tests.** The verifier fixture must write an untracked temporary evidence bundle, never a canonical/committed/retrieval-authority artifact. The bundle consists of `bundle.json`, exact serialized `packet.bin`, and bounded diagnostic/telemetry path references under `tmp_path`; `bundle.json` contains exactly these required groups: `mode`, `commit` (`sha`, `branch`), `database_path`, `canonical_paths`, `packet_path`, `packet_sha256`, `selected` entries (`memory_id`, `version`, `canonical_hash`, `canonical_path`), `lineage` (`root_session_id`, `branch_id`, `lineage_id`, `packet_id`), `diagnostics` (fixed numeric counters plus bounded refusal-code counts), and `telemetry_paths`. Packet bytes and bundle metadata are evidence inputs only; the verifier must independently read Markdown and SQLite and must not treat them as canonical state, committed delivery state, or retrieval authority.
+- [ ] **Step 1: Write failing benchmark/verifier tests.** The verifier fixture must write an untracked temporary evidence bundle, never a canonical/committed/retrieval-authority artifact. The bundle consists of `bundle.json` and exact serialized `packet.bin` under `tmp_path`, plus bounded diagnostic/telemetry path references to actual evidence files; `bundle.json` contains exactly these required groups: `mode`, `commit` (`sha`, `branch`), `database_path`, `canonical_paths`, `packet_id`, `packet_path`, `packet_sha256`, `selected` entries (`memory_id`, `version`, `canonical_hash`, `canonical_path`), `lineage` (`delivery_id`, `root_session_id`, `agent_session_id`, `branch_id`), `diagnostics` (allowlisted numeric counters each bounded to `0..1_000_000` plus bounded refusal-code counts), and `telemetry_paths` (at least one existing path for a non-empty evidence run). Packet bytes and bundle metadata are evidence inputs only; the verifier must independently read Markdown, SQLite, and the referenced telemetry artifacts and must not treat them as canonical state, committed delivery state, or retrieval authority.
 
 ```python
 
@@ -1210,36 +1272,53 @@ def test_benchmark_reports_cold_and_warm_trusted_metrics(tmp_path):
 
 
 def test_independent_verifier_contract_mode_uses_evidence_bundle(tmp_path, brain_home):
-    mid = semantic.add_memory(brain_home, "T", "body", project_id="p")
-    decision = _inject(
-        brain_home, "body", project_id="p", session_id="s", branch_id="b"
+    mid = _seed_current(brain_home, "T", "body", project_id="p")
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+    decision = lifecycle.prepare_injection(
+        "body", project_id="p", agent_id="a1", role_profile="worker",
+        session_id="s", branch_id="b",
     )
     assert decision.selected_ids == [mid]
-    row = semantic.show_memory(brain_home, mid)["row"]
-    bundle_dir = tmp_path / "trusted-evidence"
-    bundle_dir.mkdir()
-    packet_path = bundle_dir / "packet.bin"
-    packet_bytes = autoinject.render_packet(decision).encode("utf-8")
+    packet_text = autoinject.render_packet(decision)
+    packet = BrainPacket.parse(packet_text)
+    assert decision.packet_ref == packet.packet_id
+    lifecycle.commit_prepared_delivery(host_acknowledged=True, model_visible=False)
+
+    delivery_id = lifecycle.last_delivery_ids[0]
+    delivery = _delivery_row(brain_home, delivery_id)
+    assert delivery["packet_id"] == packet.packet_id
+    manifest = _manifest_row(brain_home, mid, delivery["memory_version"])
+    telemetry_path = telemetry.telemetry_dir(brain_home) / "s.jsonl"
+    assert telemetry_path.is_file()
+    packet_path = tmp_path / "packet.bin"
+    packet_bytes = packet_text.encode("utf-8")
     packet_path.write_bytes(packet_bytes)
-    manifest = _manifest_row(brain_home, mid, row["current_version"])
+    repo_root = Path(__file__).resolve().parent.parent
+    commit_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True
+    ).strip()
+    commit_branch = subprocess.check_output(
+        ["git", "branch", "--show-current"], cwd=repo_root, text=True
+    ).strip()
     bundle = {
         "mode": "contract",
-        "commit": {"sha": "WORKTREE", "branch": "contract-test"},
+        "commit": {"sha": commit_sha, "branch": commit_branch},
         "database_path": str(db.db_path(brain_home)),
         "canonical_paths": [str(brain_home / manifest["body_path"])],
+        "packet_id": packet.packet_id,
         "packet_path": str(packet_path),
         "packet_sha256": hashlib.sha256(packet_bytes).hexdigest(),
         "selected": [{
             "memory_id": mid,
-            "version": row["current_version"],
+            "version": delivery["memory_version"],
             "canonical_hash": manifest["file_hash"],
             "canonical_path": str(brain_home / manifest["body_path"]),
         }],
         "lineage": {
-            "root_session_id": "s",
-            "branch_id": "b",
-            "lineage_id": "lineage-1",
-            "packet_id": "packet-1",
+            "delivery_id": delivery["delivery_id"],
+            "root_session_id": delivery["root_session_id"],
+            "agent_session_id": delivery["agent_session_id"],
+            "branch_id": delivery["branch_id"],
         },
         "diagnostics": {
             "candidate_pages": 1,
@@ -1251,9 +1330,9 @@ def test_independent_verifier_contract_mode_uses_evidence_bundle(tmp_path, brain
             "eligible_count": 1,
             "ranked_count": 1,
         },
-        "telemetry_paths": [],
+        "telemetry_paths": [str(telemetry_path)],
     }
-    bundle_path = bundle_dir / "bundle.json"
+    bundle_path = tmp_path / "bundle.json"
     bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
 
     result = _run_independent_verifier(bundle_path, mode="contract")
@@ -1263,13 +1342,14 @@ def test_independent_verifier_contract_mode_uses_evidence_bundle(tmp_path, brain
     assert result["canonical_hash_match"] is True
     assert result["manifest_index_agree"] is True
     assert result["packet_identity_match"] is True
-    assert result["lineage_ids_match"] is True
+    assert result["lineage_match"] is True
     assert result["diagnostics_bounded"] is True
+    assert result["telemetry_checked"] is True
     assert result["privacy_ok"] is True
     assert result["reviewed_sha_required"] is False
 ```
 
-The verifier must use a fresh Python subprocess and only stdlib plus direct SQLite/file reads. It re-derives frontmatter identity, normalized tags, semantic payload JSON/hash, manifest/index equality, delivery-state suppression, packet absence of summary/raw index values, and telemetry forbidden-field absence. It must never call `retrieve_trusted`, `semantic.search_memories`, or the packet builder.
+The verifier must use a fresh Python subprocess and only stdlib plus direct SQLite/file reads. It re-derives frontmatter identity, normalized tags, semantic payload JSON/hash, manifest/index equality, delivery-state suppression, packet absence of summary/raw index values, and telemetry forbidden-field absence. It must open every referenced telemetry JSONL, require at least one existing path for a non-empty evidence run, and fail closed on an empty or missing `telemetry_paths` list; it must never infer telemetry success from an empty fixture. It must never call `retrieve_trusted`, `semantic.search_memories`, or the packet builder.
 `tests/test_trusted_retrieval.py` defines `_run_independent_verifier(bundle_path, mode)` with `subprocess.run([sys.executable, str(Path(__file__).with_name("test_trusted_retrieval_independent.py")), "--verify", "--mode", mode, "--bundle", str(bundle_path)], check=True, capture_output=True, text=True)` and returns `json.loads(completed.stdout)`. The independent test module exposes that CLI, imports only standard-library modules, prints one JSON object, and exits nonzero on any failed check. Contract/TDD mode accepts an untracked bundle from a dirty or temporary worktree and does not require a clean HEAD or reviewed-SHA equality; promotion mode is the stricter Task 10 invocation.
 
 - [ ] **Step 2: Run benchmark/verifier tests red.**
@@ -1286,7 +1366,7 @@ Expected: FAIL on the new benchmark mode and verifier entry point.
 
 - [ ] **Step 4: Keep corpus semantics and measurement honest.** Continue using the existing real 100/1,000/10,000 corpus builder and seed. Its governed writes will create manifests; do not mutate metrics, remove refused candidates, or choose thresholds after observing results. Report legacy, trusted-cold, and trusted-warm separately with the same labels, query order, settings, and metric set, including negative quality/performance results.
 
-- [ ] **Step 5: Implement the independent verifier test harness.** The child process reads the database and canonical files directly with `sqlite3`, `hashlib`, `json`, `pathlib`, and `unicodedata`; it reads the untracked bundle's packet bytes, selected IDs/versions/hashes, lineage/packet identity, bounded diagnostics, commit identity, and paths only as claims to check, then re-derives the authoritative values independently. Contract/TDD mode is a fresh subprocess with stdlib/direct reads and no clean-worktree or reviewed-SHA requirement; it checks manifests, index, canonical bodies, packet identity, delivery suppression, telemetry/privacy, and import isolation. Promotion mode is not satisfied by contract mode: it additionally requires a clean implementation worktree at the exact reviewed SHA, a bundle generated from that worktree, and bundle `commit.sha` equal to the reviewed SHA. Neither mode imports the trusted pipeline, retrieval code, or packet builder.
+- [ ] **Step 5: Implement the independent verifier test harness.** The child process reads the database and canonical files directly with `sqlite3`, `hashlib`, `json`, `pathlib`, and `unicodedata`; it reads the untracked bundle's packet bytes, selected IDs/versions/hashes, lineage/packet identity, bounded diagnostics, commit identity, and paths only as claims to check, then re-derives the authoritative values independently. Contract/TDD mode is a fresh subprocess with stdlib/direct reads and no clean-worktree or reviewed-SHA requirement; it checks manifests, index, canonical bodies, packet identity, delivery suppression, telemetry/privacy, and import isolation. It must require every `telemetry_paths` entry to exist, open the referenced JSONL, and require at least one actual telemetry path for a non-empty evidence run; an empty list is a failure, not proof. Promotion mode is not satisfied by contract mode: it additionally requires a clean implementation worktree at the exact reviewed SHA, a bundle generated from that worktree, bundle `commit.sha` equal to the reviewed SHA, and non-empty telemetry paths from that same evidence run. Neither mode imports the trusted pipeline, retrieval code, or packet builder.
 
 - [ ] **Step 6: Run the focused benchmark and verifier tests green.**
 
@@ -1334,18 +1414,22 @@ $env:PYTHONPATH = $null
 .venv\Scripts\python.exe -m pyright
 ```
 
-- [ ] **Step 3: Run the existing labeled benchmark at all required sizes.** Keep outputs separate by engine and cache mode.
+- [ ] **Step 3: Run the existing labeled benchmark at all required sizes.** Create one uniquely named temporary proof directory outside the implementation worktree and use it for both benchmark JSON outputs; the evidence bundles and telemetry references for Step 4 use this same directory. Keep outputs separate by engine and cache mode.
 
 ```powershell
 $env:PYTHONHOME = $null
 $env:PYTHONPATH = $null
-.venv\Scripts\python.exe proof\runner\retrieval_bench.py --corpus 100 1000 10000 --queries 25 --engine trusted --seed 20260815 > trusted-retrieval-v2a.json
-.venv\Scripts\python.exe proof\runner\retrieval_bench.py --corpus 100 1000 10000 --queries 25 --engine fts --seed 20260815 > legacy-retrieval-v1.json
+$proofDir = Join-Path ([System.IO.Path]::GetTempPath()) ("second-brain-v2a-proof-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $proofDir | Out-Null
+$trustedOut = Join-Path $proofDir "trusted-retrieval-v2a.json"
+$legacyOut = Join-Path $proofDir "legacy-retrieval-v1.json"
+.venv\Scripts\python.exe proof\runner\retrieval_bench.py --corpus 100 1000 10000 --queries 25 --engine trusted --seed 20260815 | Out-File -Encoding utf8 $trustedOut
+.venv\Scripts\python.exe proof\runner\retrieval_bench.py --corpus 100 1000 10000 --queries 25 --engine fts --seed 20260815 | Out-File -Encoding utf8 $legacyOut
 ```
 
 Record candidate pages, unique scans, hash checks, cache hits, canonical parses, refusal counts, eligible/ranked counts, Recall@1/3/5, Precision@5, MRR, duplicate/stale/contradiction rates, retrieval tokens, packet tokens, p50/p95 latency, task completion, and verification result. Do not discard or reinterpret negative results.
 
-- [ ] **Step 4: Run the independent verifier in a fresh process against the benchmark/current commit evidence.** Invoke `tests/test_trusted_retrieval_independent.py --verify --mode promotion --reviewed-sha <reviewed implementation SHA> --bundle <bundle path>`. Require a clean implementation worktree at that exact reviewed SHA, require the bundle's `mode` to be `promotion`, require its `commit.sha` to equal the reviewed SHA and every referenced path to come from that worktree/evidence run, and require all verifier checks to pass. Contract/TDD mode from Task 9 is not a promotion result; only this exact-SHA promotion invocation satisfies the final gate. A verifier failure blocks activation.
+- [ ] **Step 4: Run the independent verifier in a fresh process against the benchmark/current commit evidence.** Create exactly one temporary proof directory outside the implementation worktree and keep the trusted/legacy benchmark JSON, evidence bundles, packet bytes, and actual telemetry JSONL/reference paths under that directory. Generate the promotion bundle from the exact reviewed implementation SHA; copy the actual telemetry artifacts from that same evidence run into the proof directory and set `telemetry_paths` to those existing files. Immediately before invoking `tests/test_trusted_retrieval_independent.py --verify --mode promotion --reviewed-sha <reviewed implementation SHA> --bundle <bundle path>`, run `git -C <implementation-worktree> status --porcelain=v1` and require empty output. Require the implementation worktree to be clean at that exact reviewed SHA, the bundle's `mode` to be `promotion`, its `commit.sha` to equal the reviewed SHA, every referenced path to come from that worktree or the one proof directory, every telemetry path to be non-empty/existing/independently checked, and all verifier checks to pass; an empty `telemetry_paths` list is a failure. Contract/TDD mode from Task 9 is not a promotion result; only this exact-SHA promotion invocation satisfies the final gate. A verifier failure blocks activation.
 
 - [ ] **Step 5: If dogfooding is useful, run it only after the benchmark and independent evidence are captured.** Consume the committed shadow/advisory path as an observation; label its captures as dogfood; never use Brain-derived retrieval, labels, thresholds, telemetry, or generated memories to define benchmark expectations, verifier checks, or pass/fail evidence. Discard any dogfood working-tree changes before the independent verifier reruns against the reviewed commit.
 
@@ -1358,7 +1442,7 @@ Record candidate pages, unique scans, hash checks, cache hits, canonical parses,
 ## Self-review against the frozen design
 
 - **Sections 1–3, canonical contract:** Task 1 covers exact payload fields, no `schema_version`, strict unknown-field handling, tag normalization, syntactic hash equivalence, and semantic hash naming. Task 3 makes all hash-covered metadata changes versioned.
-- **Section 4, manifests/migration:** Task 2 adds `memories.tags`, rebuilds `memory_versions`, preserves unknown legacy version times, backfills only governed paths, refuses malformed/missing files, rebuilds derived state only from verified snapshots, and tests interruption/idempotency/backup recovery.
+- **Section 4, manifests/migration:** Task 2 adds `memories.tags`, rebuilds `memory_versions` and the V1 `deliveries` table with nullable V2 timestamps, maps a real pre-V2 delivered row to `state='prepared'` while preserving delivery lineage/packet/event/supersession fields, preserves unknown legacy version times, backfills only governed paths, refuses malformed/missing files, rebuilds derived state only from verified snapshots, and tests interruption/idempotency/backup recovery.
 - **Section 5.1–5.3, discovery/consolidation/refill:** Task 4 provides exact/FTS/linear/vector ID-only pages, fixed source precedence, one read transaction, unique scan accounting, and independent page/refill bounds. Discovery applies no project/scope/status/grade/evidence/contradiction eligibility filter; every mechanically located ID reaches Task 5.
 - **Section 5.4, all refusal codes:** Task 5 defines all 16 codes in exact total order, gives a fault for each, and tests pairwise/triple precedence. Domain scope is explicitly refused because the frozen design adds no domain identity contract.
 - **Section 5.5–5.6, snapshots/cache/signatures:** Task 5 reads raw bytes before cache lookup, uses the exact five-part cache key, invalidates on governed writes, treats stat as diagnostic only, and verifies same-size/same-mtime edits.
@@ -1366,7 +1450,7 @@ Record candidate pages, unique scans, hash checks, cache hits, canonical parses,
 - **Section 6, packet/delivery:** Task 6 stops at rank → canonical materialization → delivery-lineage dedup → budget/select. Task 7 completes the exact order with PREPARED intent/row → final serialization/host send → COMMIT only on acknowledged success, with serialization/host failures retryable and delivered-only suppression.
 - **Section 7, filesystem/SQLite recovery:** Task 3 implements render → temp → fsync → parse/hash → rename → SQLite manifest/current commit → derived refresh → cache invalidation, with tests for every failure boundary and orphan non-adoption.
 - **Section 8, telemetry:** Task 8 emits every approved diagnostic field without content and retains the corrected Markdown fence.
-- **Section 9, verification/rollout:** Tasks 9–10 cover unit, adversarial, persistence, delivery, exact cold/warm benchmarks, an untracked evidence bundle, distinct contract/TDD and exact-SHA promotion verifier modes, shadow/advisory, and negative-result gates.
+- **Section 9, verification/rollout:** Tasks 9–10 cover unit, adversarial, persistence, delivery, exact cold/warm benchmarks, an untracked evidence bundle with independently derived packet/delivery identities, one external proof directory for benchmark/bundle/telemetry artifacts, non-empty telemetry verification, distinct contract/TDD and exact-SHA promotion verifier modes, shadow/advisory, and negative-result gates.
 - **Dogfood independence:** Optional Brain dogfooding occurs only after independent evidence capture and cannot define labels, thresholds, verifier expectations, or promotion evidence.
 - **Section 10, boundary:** The plan changes only the listed trusted path/schema/tests/config/telemetry contracts plus the explicitly required benchmark/verifier tests. It does not add a service, dependency, vector implementation, domain contract, activation, or unrelated cleanup.
 
@@ -1377,7 +1461,7 @@ Record candidate pages, unique scans, hash checks, cache hits, canonical parses,
 - `insert_deliveries` retains its existing name with prepared semantics; `commit_deliveries`/`fail_deliveries` and the two `BrainLifecycle` methods are the only new delivery transitions.
 - `memories.tags`, `memory_versions.tags`, and `memory_index.tags` use one storage encoding, while the canonical payload uses a sorted tuple.
 - Legacy search APIs remain available but are never called by trusted AutoInject; no compatibility alias is used as a trusted path.
-- **Dependency and test-order audit:** Task 0 creates the clean `brain/v2-a-trusted-retrieval` worktree and V1 baseline before Task 1. Task 2 uses genuine pre-0011 APIs plus manually inserted legacy tags and evolved version files; Task 4 discovers IDs without eligibility; Task 6 seeds committed ledger rows directly and never calls Task 7 transitions; Task 7 alone tests lifecycle preparation/commit/fail; Task 9 contract mode reads Markdown/SQLite independently; Task 10 alone invokes promotion mode. No earlier task test calls a later-task API.
+- **Dependency and test-order audit:** Task 0 creates the clean `brain/v2-a-trusted-retrieval` worktree and V1 baseline before Task 1. Task 2 uses genuine pre-0011 APIs plus one real pre-V2 delivery row, manually inserted legacy tags, and evolved version files; Task 4 discovers IDs without eligibility; Task 6 seeds trusted success fixtures with `_seed_current` and committed ledger rows directly without calling Task 7 transitions; Task 7 alone tests lifecycle preparation/commit/fail; Task 9 contract mode uses `_seed_current` plus independently read actual packet/delivery/telemetry identities; Task 10 alone invokes promotion mode. No earlier task test calls a later-task API.
 - The current planning session has made no implementation-code changes. The only repository change beyond this plan is the one-line Section 8 fence repair in docs-only commit `8427dea`.
 
 **Stop condition:** Present this amended plan for user review now. Do not start Task 0, Task 1, or any implementation phase until the user explicitly approves the plan.
