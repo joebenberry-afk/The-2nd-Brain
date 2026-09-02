@@ -74,9 +74,11 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
     totals: dict[str, Any] = {field: 0 for field in _REQUIRED_USAGE}
     seen: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
     nulls: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
+    models: set[str] = set()
     model: str | None = None
     model_turns = 0
     tool_calls = 0
+    saw_event = False
     stamps: list[float] = []
     for path in sorted(paths):
         try:
@@ -88,6 +90,9 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(record, dict):
+                continue
+            saw_event = True
             stamp = _parse_ts(record.get("ts"))
             if stamp is not None:
                 stamps.append(stamp)
@@ -102,6 +107,7 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
             model_turns += 1
             if isinstance(record.get("model"), str):
                 model = record["model"]
+                models.add(model)
             for field in _REQUIRED_USAGE:
                 if field not in usage or usage[field] is None:
                     nulls[field] = True
@@ -114,8 +120,10 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
         totals[field] = None if nulls[field] or not seen[field] else totals[field]
     totals.update({
         "model": model,
-        "model_turns": model_turns,
-        "tool_calls": tool_calls,
+        "models": sorted(models),
+        "mixed_model": len(models) > 1,
+        "model_turns": model_turns if saw_event else None,
+        "tool_calls": tool_calls if saw_event else None,
         "wall_ms": round(max(stamps) - min(stamps)) if len(stamps) >= 2 else None,
     })
     return totals
@@ -188,10 +196,18 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
             host_exit = _run_host(command, task["prompt"], worktree, env)
             after = _telemetry_files(telemetry_home) - before
             telemetry = aggregate_telemetry(after)
-            usage_capture = all(telemetry[field] is not None for field in _REQUIRED_USAGE)
+            usage_capture = bool(
+                telemetry["model_turns"]
+                and all(telemetry[field] is not None for field in _REQUIRED_USAGE)
+            )
             config = economics.load_config(ROOT)
             dollars = None
-            if usage_capture and telemetry["model"]:
+            dollars_reason = None
+            if not usage_capture:
+                dollars_reason = "missing_usage"
+            elif telemetry["mixed_model"]:
+                dollars_reason = "mixed_model"
+            elif telemetry["model"]:
                 dollars = economics.cost_per_run(
                     {field: telemetry[field] for field in _REQUIRED_USAGE[:4]},
                     config.prices.get(telemetry["model"]),
@@ -201,6 +217,8 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
                         "cache_write": config.cache_write,
                     },
                 )
+                if dollars is None:
+                    dollars_reason = "missing_or_null_price"
             acceptance_pass = _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
             return {
                 "run_id": run_id,
@@ -209,7 +227,7 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
                 "profile": profile,
                 "repo_fixture_commit": task["repo_fixture_commit"],
                 "host_exit": host_exit,
-                "usage_capture": usage_capture,
+                "dollars_reason": dollars_reason,
                 "acceptance_pass": acceptance_pass,
                 "telemetry": telemetry,
                 "dollars": dollars,
@@ -273,13 +291,14 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
     command = _host_command(harness)
     records: list[dict[str, Any]] = []
     if command is not None:
-        profiles = ("OFF", "ON") if requested_profile == "OFF" else ("ON", "OFF")
         for task in tasks:
-            for profile in profiles:
+            for profile in ("OFF", "ON"):
                 record = _run_one(harness, task, profile, command)
                 if record is not None:
                     RAW_DIR.mkdir(parents=True, exist_ok=True)
-                    (RAW_DIR / f"{record['run_id']}.json").write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+                    (RAW_DIR / f"{record['run_id']}.json").write_text(
+                        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
+                    )
                     records.append(record)
     pairs = _paired(records)
     summary = {

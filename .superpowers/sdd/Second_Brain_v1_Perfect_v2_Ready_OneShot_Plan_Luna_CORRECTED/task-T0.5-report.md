@@ -194,3 +194,38 @@ PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --help
 PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --harness prime --profile OFF --pairs 1
 # host_available=false, usage_capture=false, pairs_recorded=0, verdict=INSUFFICIENT
 ```
+
+## Review-fix round 2
+
+Restored the exact pre-T0.5 `qualification.json` baseline (`base_commit`, all
+gates, `source_identity`, `generation_basis`, and `phase`) and merged economics
+under a dedicated `economics.<harness>` key. The runner now preserves all
+unrelated qualification fields and always executes OFF then ON, regardless of
+the requested profile label. OFF maps to `A_BRAIN_OFF`; ON maps to
+`I_FULL_V1`.
+
+All telemetry files from one attempt are aggregated. Missing or partial usage
+counters, no-telemetry timeouts, model turns, tool calls, and wall evidence
+remain null where unobserved. Mixed models refuse a single-price calculation
+and record `dollars_reason: mixed_model`. Host `cost_total` is ignored in favor
+of the exact configured economics formula.
+
+Round-two focused proof:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_economics.py tests/test_v2_policy.py tests/test_governor.py -q
+# 61 passed
+
+PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --help
+# help rendered successfully
+
+PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --harness prime --profile ON --pairs 1
+# host_available=false, usage_capture=false, pairs_recorded=0, verdict=INSUFFICIENT
+```
+
+The round-two tests include temporary-host end-to-end normalization and
+privacy checks, OFF-before-ON assertions for both profile labels, committed
+baseline preservation, multi-file summing, null/partial counters, exact
+pricing, mixed-model refusal, strict seven-class fixture validation, and an
+exact `lambda = infinity` known-effect assertion. No synthetic test data is
+written to repository output evidence.
