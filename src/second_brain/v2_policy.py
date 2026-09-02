@@ -69,6 +69,8 @@ _TOP_KEYS = frozenset(
         "culture",
         "frontier",
         "verification",
+        "economics",
+        "prices",
     }
 )
 _SECTION_KEYS = {
@@ -82,8 +84,12 @@ _SECTION_KEYS = {
     "culture": frozenset(),
     "frontier": frozenset({"min_importance"}),
     "verification": frozenset({"floor"}),
+    "economics": frozenset({"uncached_in", "cache_read", "cache_write", "alpha", "tau"}),
+    "prices": frozenset(),
 }
-_REQUIRED_SECTIONS = frozenset(_SECTION_KEYS)
+_REQUIRED_SECTIONS = frozenset(
+    {"rollout", "admission", "retrieval", "brainstem", "learning", "culture", "frontier", "verification"}
+)
 _REQUIRED_KEYS = {
     "rollout": _SECTION_KEYS["rollout"],
     "admission": frozenset({"min_score"}),
@@ -190,7 +196,7 @@ def load_policy(home: Path) -> V2Policy:
     if schema_version != 1 or isinstance(schema_version, bool):
         raise _fail("schema_version must be 1")
     for name, allowed in _SECTION_KEYS.items():
-        if name in raw:
+        if name in raw and name != "prices":
             _check_unknown(_table(raw[name], name), allowed, name)
     missing_sections = sorted(_REQUIRED_SECTIONS - set(raw))
     if missing_sections:

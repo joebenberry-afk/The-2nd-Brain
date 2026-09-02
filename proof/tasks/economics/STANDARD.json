@@ -1,0 +1,17 @@
+{
+  "class": "STANDARD",
+  "tasks": [
+    {
+      "task_id": "standard-01",
+      "prompt": "Review governor telemetry parsing for missing and null usage values and propose a narrowly scoped test improvement.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_governor.py -q", "expect_exit": 0}
+    },
+    {
+      "task_id": "standard-02",
+      "prompt": "Review the v2 policy loader and explain its validation of rollout configuration and malformed TOML.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_v2_policy.py -q", "expect_exit": 0}
+    }
+  ]
+}

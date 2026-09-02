@@ -1,0 +1,12 @@
+{
+  "acceptance_pass": null,
+  "harness": "claude-code",
+  "host_exit": null,
+  "profile": "OFF",
+  "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+  "run_id": "claude-code-debug-01-OFF-20260902T170455659279Z",
+  "task_id": "debug-01",
+  "telemetry": null,
+  "usage_capture": false,
+  "wall_ms": null
+}

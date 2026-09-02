@@ -1,0 +1,17 @@
+{
+  "class": "REVIEW",
+  "tasks": [
+    {
+      "task_id": "review-01",
+      "prompt": "Review the governor ROI comparison path for compatibility with existing CLI JSON output and honest missing-data handling.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_governor.py tests/test_cli.py -q", "expect_exit": 0}
+    },
+    {
+      "task_id": "review-02",
+      "prompt": "Review v2 policy schema validation for unknown keys and required sections without changing rollout behavior.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_v2_policy.py -q", "expect_exit": 0}
+    }
+  ]
+}
