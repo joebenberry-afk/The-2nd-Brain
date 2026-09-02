@@ -266,9 +266,11 @@ def token_estimator_info(
                 loaded = _valid_ratio(entry.get("chars_per_token"))
                 pair_count_value = entry.get("pair_count")
                 has_measured_pairs = (
-                    isinstance(pair_count_value, int)
+                    isinstance(pair_count_value, (int, float))
                     and not isinstance(pair_count_value, bool)
+                    and math.isfinite(float(pair_count_value))
                     and pair_count_value > 0
+                    and float(pair_count_value).is_integer()
                 )
                 if (
                     loaded is not None
@@ -277,7 +279,7 @@ def token_estimator_info(
                 ):
                     ratio = loaded
                     source = "calibrated"
-                    pair_count = pair_count_value
+                    pair_count = int(pair_count_value)
             if source == "default" and data.get("source") == "default":
                 loaded = _valid_ratio(data.get("default_chars_per_token"))
                 if loaded is not None:
@@ -312,18 +314,22 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
         raw_session = record.get("session")
         if not isinstance(raw_session, str) or not raw_session.strip():
             continue
+        session = raw_session
+        kind = record.get("kind")
         raw_model = record.get("model")
         if raw_model is not None and not isinstance(raw_model, str):
-            continue
-        session = raw_session
-        model = raw_model or None
-        kind = record.get("kind")
-        if kind == "provider_request_meta":
-            measured = _positive_finite(record.get("prompt_chars"))
-            if measured is not None:
+            if kind in {"provider_request_meta", "assistant_usage"}:
                 for key in tuple(pending):
                     if key[0] == session:
                         pending.pop(key, None)
+            continue
+        model = raw_model or None
+        if kind == "provider_request_meta":
+            for key in tuple(pending):
+                if key[0] == session:
+                    pending.pop(key, None)
+            measured = _positive_finite(record.get("prompt_chars"))
+            if measured is not None:
                 pending[(session, model)] = measured
             continue
         if kind == "tool_result":

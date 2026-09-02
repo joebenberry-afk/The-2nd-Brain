@@ -5132,6 +5132,7 @@ def cmd_delta_sync(args) -> int:
     import json
 
     from . import delta_sync
+    home = _home(args)
 
     if args.delta_sync_command == "diff":
         base_item = None
@@ -5139,7 +5140,7 @@ def cmd_delta_sync(args) -> int:
             base_item = json.loads(Path(args.base_file).read_text(encoding="utf-8"))
         target_item = json.loads(Path(args.target_file).read_text(encoding="utf-8"))
 
-        delta = delta_sync.compute_memory_delta(base_item, target_item)
+        delta = delta_sync.compute_memory_delta(base_item, target_item, home=home)
         if args.json:
             print(json.dumps(delta.to_dict(), indent=2))
         else:

@@ -357,7 +357,7 @@ def _resolve_worker_context(
     home: Path, packet: contracts.WorkerTaskPacket
 ) -> tuple[list[contracts.WorkerContextResolution], dict[str, Any]]:
     resolved = worker_protocol.resolve_context_refs(home, packet)
-    return resolved, worker_protocol.context_metadata(resolved)
+    return resolved, worker_protocol.context_metadata(resolved, home=home)
 
 
 def _context_event_payload(
@@ -1182,7 +1182,7 @@ def _vmem_context(home: Path, binding: HermesBinding, task: str = "") -> dict[st
         rendered["context_changed"] = bool(faulted_in_ids)
         rendered["context_chars"] = len(rendered["rendered_text"])
         rendered["context_tokens"] = (
-            contracts.estimate_tokens(rendered["rendered_text"])
+            contracts.estimate_tokens(rendered["rendered_text"], home=home)
             if rendered["context_chars"]
             else 0
         )

@@ -15,6 +15,7 @@ Key Capabilities (§8.1 - §8.5):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -99,6 +100,8 @@ def compute_memory_delta(
     base: PacketItem | dict[str, Any] | None,
     target: PacketItem | dict[str, Any] | None,
     reason: str = "",
+    *,
+    home: Path | str | None = None,
 ) -> MemoryDeltaPacket:
     """
     Compute minimal structured delta between base and target memory items (§8.2, §8.3).
@@ -109,7 +112,7 @@ def compute_memory_delta(
     if base is None and target is not None:
         t_dict = _item_to_dict(target)
         t_hash = compute_canonical_hash(t_dict)
-        token_estimate = estimate_tokens(json.dumps(t_dict))
+        token_estimate = estimate_tokens(json.dumps(t_dict), home=home)
         return MemoryDeltaPacket(
             target_memory_id=t_dict["memory_id"],
             base_version=0,
@@ -160,7 +163,7 @@ def compute_memory_delta(
             patch[key] = val
 
     delta_type = DeltaType.SUPERSEDE if t_dict.get("supersedes") else DeltaType.MODIFY
-    token_estimate = estimate_tokens(json.dumps(patch))
+    token_estimate = estimate_tokens(json.dumps(patch), home=home)
 
     return MemoryDeltaPacket(
         target_memory_id=t_dict["memory_id"],
