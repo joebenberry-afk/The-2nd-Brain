@@ -216,14 +216,17 @@ _MIN_CHARS_PER_TOKEN = 0.25
 _MAX_CHARS_PER_TOKEN = 100.0
 
 
-def _token_calibration_path() -> Path:
-    raw_home = os.environ.get("SECOND_BRAIN_HOME")
-    home = (
-        Path(raw_home).expanduser()
-        if raw_home
-        else Path.home() / "Documents" / "The-Second-Brain"
-    )
-    return home / "state" / "calibration" / "tokens.json"
+def _token_calibration_path(home: Path | str | None = None) -> Path:
+    if home is not None:
+        resolved_home = Path(home).expanduser()
+    else:
+        raw_home = os.environ.get("SECOND_BRAIN_HOME")
+        resolved_home = (
+            Path(raw_home).expanduser()
+            if raw_home
+            else Path.home() / "Documents" / "The-Second-Brain"
+        )
+    return resolved_home / "state" / "calibration" / "tokens.json"
 
 
 def _valid_ratio(value: object) -> float | None:
@@ -237,14 +240,25 @@ def _valid_ratio(value: object) -> float | None:
         return None
     return ratio
 
+def _positive_finite(value: object) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
 
-def token_estimator_info(model: str | None = None) -> dict[str, object]:
+
+def token_estimator_info(
+    model: str | None = None, *, home: Path | str | None = None
+) -> dict[str, object]:
     """Return effective ratio and provenance without exposing any prompt data."""
     ratio = DEFAULT_CHARS_PER_TOKEN
     source = "default"
     pair_count = 0
     try:
-        data = json.loads(_token_calibration_path().read_text(encoding="utf-8"))
+        data = json.loads(_token_calibration_path(home).read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("schema_version") == TOKEN_CALIBRATION_SCHEMA_VERSION:
             models = data.get("models")
             entry = models.get(model or "default") if isinstance(models, dict) else None
@@ -273,10 +287,14 @@ def token_estimator_info(model: str | None = None) -> dict[str, object]:
     return {"chars_per_token": ratio, "source": source, "pair_count": pair_count}
 
 
-def estimate_tokens(text: str, model: str | None = None) -> int:
+def estimate_tokens(
+    text: str, model: str | None = None, *, home: Path | str | None = None
+) -> int:
     """Estimate text tokens using calibrated chars/token, defaulting explicitly to 4.0."""
-    info = token_estimator_info(model)
+    info = token_estimator_info(model, home=home)
     return max(1, int(len(text or "") / float(info["chars_per_token"])))
+
+
 
 
 def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
@@ -295,42 +313,26 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
         model = record.get("model") if isinstance(record.get("model"), str) else None
         kind = record.get("kind")
         if kind == "provider_request_meta":
-            measured = record.get("prompt_chars")
-            if (
-                isinstance(measured, (int, float))
-                and not isinstance(measured, bool)
-                and math.isfinite(float(measured))
-                and measured > 0
-            ):
+            measured = _positive_finite(record.get("prompt_chars"))
+            if measured is not None:
                 if model is not None:
                     pending.pop((session, None), None)
-                pending[(session, model)] = float(measured)
+                pending[(session, model)] = measured
             continue
         if kind == "tool_result":
-            measured = record.get("output_bytes")
-            if (
-                isinstance(measured, (int, float))
-                and not isinstance(measured, bool)
-                and math.isfinite(float(measured))
-                and measured > 0
-                and (session, model) not in pending
-            ):
-                pending[(session, model)] = float(measured)
+            measured = _positive_finite(record.get("output_bytes"))
+            if measured is not None and (session, model) not in pending:
+                pending[(session, model)] = measured
             continue
         if kind != "assistant_usage":
             continue
-        tokens = record.get("input_tokens")
-        if (
-            not isinstance(tokens, (int, float))
-            or isinstance(tokens, bool)
-            or not math.isfinite(float(tokens))
-            or tokens <= 0
-        ):
+        tokens = _positive_finite(record.get("input_tokens"))
+        if tokens is None:
             continue
         usage_key = (session, model or "default")
         previous = previous_input.get(usage_key)
-        delta = float(tokens) if previous is None or tokens < previous else float(tokens) - previous
-        previous_input[usage_key] = float(tokens)
+        delta = tokens if previous is None or tokens < previous else tokens - previous
+        previous_input[usage_key] = tokens
         if delta <= 0:
             continue
         measured = pending.pop((session, model), None)

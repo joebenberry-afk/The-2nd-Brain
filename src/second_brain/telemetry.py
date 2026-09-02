@@ -74,7 +74,7 @@ def iter_records(home: Path) -> list[tuple[str, int, dict]]:
                 continue
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
                 out.append((f.name, lineno, {"__parse_error__": line[:80]}))
                 continue
             out.append((f.name, lineno, record))
