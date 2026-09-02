@@ -108,3 +108,136 @@ def test_fixture_schema_is_valid():
             ],
         }
     )
+
+
+def test_fixture_set_is_exact_and_task_ids_are_unique():
+    import json
+    from pathlib import Path
+    from scripts import run_paired_economics as runner
+
+    paths = sorted(Path(runner.FIXTURE_DIR).glob("*.json"))
+    assert [path.stem for path in paths] == [
+        "DEBUG", "DEEP", "HANDOFF", "MICRO", "RESEARCH", "REVIEW", "STANDARD"
+    ]
+    tasks = runner.load_tasks()
+    assert len(tasks) == 14
+    assert len({task["task_id"] for task in tasks}) == 14
+    for path in paths:
+        economics.validate_fixture(json.loads(path.read_text(encoding="utf-8")))
+
+
+def test_runner_maps_both_profiles_to_explicit_governor_profiles():
+    from scripts import run_paired_economics as runner
+
+    assert runner.profile_env("OFF")["SECOND_BRAIN_GOVERNOR_BRAIN_CORE"] == "0"
+    assert runner.profile_env("ON")["SECOND_BRAIN_GOVERNOR_BRAIN_CORE"] == "1"
+    assert runner.PROFILE_TO_ABLATION["OFF"] != runner.PROFILE_TO_ABLATION["ON"]
+
+
+def test_runner_aggregates_multiple_telemetry_files():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from scripts import run_paired_economics as runner
+
+    with TemporaryDirectory() as temp:
+        paths = []
+        for index, total in enumerate((10, 20)):
+            path = Path(temp) / f"session-{index}.jsonl"
+            path.write_text(json.dumps({
+                "kind": "assistant_usage",
+                "input_tokens": total,
+                "output_tokens": 2,
+                "cache_read_tokens": 1,
+                "cache_write_tokens": 0,
+                "total_tokens": total + 3,
+            }) + "\n", encoding="utf-8")
+            paths.append(path)
+        aggregate = runner.aggregate_telemetry(paths)
+    assert aggregate["input_tokens"] == 30
+    assert aggregate["output_tokens"] == 4
+    assert aggregate["total_tokens"] == 36
+    assert aggregate["model_turns"] == 2
+
+def test_verdict_retains_partial_pairs_and_null_metric_means():
+    synthetic_runs = [
+        {"off": {"tokens": 100, "turns": 2}, "on": {"tokens": 90, "turns": 1}},
+        {"off": {"tokens": None, "turns": None}, "on": {"tokens": 80, "turns": 1}},
+    ]
+    result = economics.verdict(synthetic_runs)
+    assert result["n"] == 1
+    assert result["turns_delta"] is None
+
+
+def test_qualification_preserves_baseline_metadata(tmp_path, monkeypatch):
+    import json
+    from scripts import run_paired_economics as runner
+
+    baseline = {
+        "schema_version": 2,
+        "metadata": {"gate": "SHADOW", "source_identity": "baseline"},
+        "generation_basis": {"commit": "abc"},
+        "phase": "v2-0",
+        "economics": {"old": True},
+    }
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps(baseline), encoding="utf-8")
+    monkeypatch.setattr(runner, "QUALIFICATION", qualification)
+    monkeypatch.setattr(runner, "_host_command", lambda _: None)
+    monkeypatch.setattr(runner, "load_tasks", lambda: [])
+    runner.run("prime", "OFF", 1)
+    result = json.loads(qualification.read_text(encoding="utf-8"))
+    assert result["metadata"] == baseline["metadata"]
+    assert result["generation_basis"] == baseline["generation_basis"]
+    assert result["phase"] == "v2-0"
+    assert result["economics"]["old"] is True
+    assert result["economics"]["prime"]["usage_capture"] is False
+
+
+def test_cost_ignores_host_reported_cost_total_and_requires_all_counters():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 4,
+        "cost_total": 999.0,
+    }
+    assert economics.cost_per_run(usage, {"base_in": 2.0, "base_out": 3.0}) == 36.6
+    usage.pop("cache_write_tokens")
+    assert economics.cost_per_run(usage, {"base_in": 2.0, "base_out": 3.0}) is None
+
+
+def test_aggregate_telemetry_preserves_partial_counter_null():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from scripts import run_paired_economics as runner
+
+    with TemporaryDirectory() as temp:
+        path = Path(temp) / "partial.jsonl"
+        path.write_text(json.dumps({
+            "kind": "assistant_usage",
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_read_tokens": None,
+            "cache_write_tokens": 0,
+            "total_tokens": 12,
+        }) + "\n", encoding="utf-8")
+        aggregate = runner.aggregate_telemetry([path])
+    assert aggregate["input_tokens"] == 10
+    assert aggregate["cache_read_tokens"] is None
+
+
+def test_fixture_rejects_boolean_expect_exit():
+    import pytest
+
+    with pytest.raises(ValueError):
+        economics.validate_fixture({
+            "class": "MICRO",
+            "tasks": [
+                {"task_id": "a", "prompt": "a", "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+                 "acceptance": {"command": "x", "expect_exit": 0}},
+                {"task_id": "b", "prompt": "b", "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+                 "acceptance": {"command": "x", "expect_exit": False}},
+            ],
+        })

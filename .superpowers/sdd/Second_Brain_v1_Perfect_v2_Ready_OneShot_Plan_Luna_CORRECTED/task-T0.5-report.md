@@ -158,3 +158,39 @@ Project-wide validation, formatter, and linter were intentionally skipped per T0
 ## Concerns
 
 The environment does not provide completed Prime or Claude Code five-pair telemetry, so the qualification verdict must remain `INSUFFICIENT`; this is an evidence limitation, not a positive/negative ROI claim. Dollar calculations require both complete host usage counters and a verified model price. The runner intentionally does not infer prices, usage, run IDs, or acceptance outcomes when hosts fail or time out.
+
+## Review-fix evidence
+
+The review identified evidence-integrity risks; these were corrected in the scoped fix:
+
+- Qualification updates now preserve every existing top-level field, including metadata, gates, `source_identity`, `generation_basis`, and phase. Economics data is merged under `economics.<harness>` and an existing `results` list is updated only for that harness.
+- OFF maps explicitly to the existing `A_BRAIN_OFF` profile and ON to `I_FULL_V1`. The requested profile is honored as the first arm while both arms are still exercised.
+- Every dollar is recomputed from complete host counters with `economics.cost_per_run` and configured `[prices.<model>]`; host `cost_total` is never authoritative. Missing counters or prices produce null dollars.
+- Aggregation reads every JSONL file for an attempt and preserves each usage counter independently as null when absent/partial. Pair identity and non-token metrics are retained even when token evidence is unusable.
+- Fixture loading enforces exactly seven class files, exactly two non-empty tasks per class, unique task IDs, 40-hex fixture commits, non-empty acceptance commands, and integer `expect_exit = 0` (booleans rejected).
+- mSPRT's zero-variance branch now triggers only for exact zero variance; no tolerance-based verdict is added.
+
+Additional focused tests:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_economics.py -q
+# 16 passed
+
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_v2_policy.py tests/test_governor.py -k 'ROIClassification' -q
+# run after review fixes; no project-wide validation
+```
+
+Raw Claude timeout artifacts remain host-attempt records only: all have null telemetry and `usage_capture = false`; they contain no prompt or model output. No missing Prime/Claude pairs were fabricated.
+
+Final review-fix command results:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_economics.py tests/test_v2_policy.py tests/test_governor.py -k 'ROIClassification or not test_nonexistent_marker' -q
+# 58 passed
+
+PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --help
+# help rendered successfully
+
+PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --harness prime --profile OFF --pairs 1
+# host_available=false, usage_capture=false, pairs_recorded=0, verdict=INSUFFICIENT
+```

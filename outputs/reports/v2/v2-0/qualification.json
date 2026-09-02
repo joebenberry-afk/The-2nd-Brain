@@ -1,10 +1,37 @@
 {
-  "generated_at": "2026-09-02T17:04:08.650855+00:00",
+  "economics": {
+    "prime": {
+      "harness": "prime",
+      "host_available": false,
+      "pairs_recorded": 0,
+      "profile_mapping": {
+        "OFF": "A_BRAIN_OFF",
+        "ON": "I_FULL_V1"
+      },
+      "requested_pairs": 1,
+      "requested_profile": "OFF",
+      "usage_capture": false,
+      "verdict": {
+        "dollars_delta": null,
+        "lambda": null,
+        "n": 0,
+        "r_bar": null,
+        "success_delta": null,
+        "turns_delta": null,
+        "verdict": "INSUFFICIENT"
+      }
+    }
+  },
+  "generated_at": "2026-09-02T17:22:25.401051+00:00",
   "results": [
     {
       "harness": "prime",
       "host_available": false,
       "pairs_recorded": 0,
+      "profile_mapping": {
+        "OFF": "A_BRAIN_OFF",
+        "ON": "I_FULL_V1"
+      },
       "requested_pairs": 1,
       "requested_profile": "OFF",
       "usage_capture": false,

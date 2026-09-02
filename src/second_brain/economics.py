@@ -7,6 +7,7 @@ unknown rather than being converted to zero or an invented dollar amount.
 from __future__ import annotations
 
 import math
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,13 +154,9 @@ def cost_per_run(
 def _pairs(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     pairs: list[dict[str, Any]] = []
     for run in runs:
-        off_tokens = _number(_metric(run, "off", "tokens", "total_tokens", "total"))
-        on_tokens = _number(_metric(run, "on", "tokens", "total_tokens", "total"))
-        if off_tokens is None or on_tokens is None or off_tokens == 0:
-            continue
         pairs.append({
-            "off_tokens": off_tokens,
-            "on_tokens": on_tokens,
+            "off_tokens": _number(_metric(run, "off", "tokens", "total_tokens", "total")),
+            "on_tokens": _number(_metric(run, "on", "tokens", "total_tokens", "total")),
             "off_dollars": _number(_metric(run, "off", "dollars", "cost_total")),
             "on_dollars": _number(_metric(run, "on", "dollars", "cost_total")),
             "off_turns": _number(_metric(run, "off", "turns", "model_turns")),
@@ -173,8 +170,9 @@ def _pairs(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _mean_delta(pairs: Sequence[Mapping[str, Any]], on: str, off: str) -> float | None:
-    values = [float(pair[on]) - float(pair[off]) for pair in pairs if pair.get(on) is not None and pair.get(off) is not None]
-    return sum(values) / len(values) if values else None
+    if not pairs or any(pair.get(on) is None or pair.get(off) is None for pair in pairs):
+        return None
+    return sum(float(pair[on]) - float(pair[off]) for pair in pairs) / len(pairs)
 
 
 def verdict(
@@ -188,7 +186,13 @@ def verdict(
     if config is not None:
         alpha, tau = config.alpha, config.tau
     pairs = _pairs(runs)
-    n = len(pairs)
+    valid = [
+        pair for pair in pairs
+        if pair.get("off_tokens") is not None
+        and pair.get("on_tokens") is not None
+        and pair["off_tokens"] != 0
+    ]
+    n = len(valid)
     result: dict[str, Any] = {
         "n": n,
         "r_bar": None,
@@ -199,15 +203,15 @@ def verdict(
         "dollars_delta": _mean_delta(pairs, "on_dollars", "off_dollars"),
     }
     if n:
-        x = [float(pair["off_tokens"]) for pair in pairs]
-        deltas = [float(pair["on_tokens"]) - float(pair["off_tokens"]) for pair in pairs]
+        x = [float(pair["off_tokens"]) for pair in valid]
+        deltas = [float(pair["on_tokens"]) - float(pair["off_tokens"]) for pair in valid]
         _, adjusted = cuped(x, deltas)
         relatives = [delta / base for delta, base in zip(adjusted, x)]
         r_bar = sum(relatives) / n
         result["r_bar"] = r_bar
         if n >= 3:
             sigma2 = variance(relatives)
-            if sigma2 <= 1e-24:
+            if sigma2 == 0:
                 likelihood = float("inf") if r_bar else 1.0
             elif sigma2 > 0 and tau >= 0 and alpha > 0:
                 denominator = sigma2 + n * tau * tau
@@ -218,33 +222,39 @@ def verdict(
             result["lambda"] = likelihood
             if likelihood is not None and likelihood >= 1 / alpha:
                 result["verdict"] = "POSITIVE" if r_bar < 0 else "NEGATIVE" if r_bar > 0 else "INSUFFICIENT"
-    successes = [float(bool(pair["pass_on"])) - float(bool(pair["pass_off"])) for pair in pairs if pair.get("pass_on") is not None and pair.get("pass_off") is not None]
-    result["success_delta"] = sum(successes) / len(successes) if successes else None
+    successes = [float(bool(pair["pass_on"])) - float(bool(pair["pass_off"])) for pair in pairs]
+    if pairs and all(pair.get("pass_on") is not None and pair.get("pass_off") is not None for pair in pairs):
+        result["success_delta"] = sum(successes) / len(successes)
     return result
-
 
 def validate_fixture(data: Mapping[str, Any]) -> None:
     """Validate one economics fixture, raising ``ValueError`` on malformed data."""
+    classes = {"MICRO", "STANDARD", "DEEP", "DEBUG", "RESEARCH", "REVIEW", "HANDOFF"}
     if (
         not isinstance(data, Mapping)
-        or data.get("class") not in {"MICRO", "STANDARD", "DEEP", "DEBUG", "RESEARCH", "REVIEW", "HANDOFF"}
+        or data.get("class") not in classes
         or not isinstance(data.get("tasks"), list)
         or len(data["tasks"]) != 2
     ):
         raise ValueError("fixture requires one known class and exactly two tasks")
+    ids: set[str] = set()
     for task in data["tasks"]:
-        if (
-            not isinstance(task, Mapping)
-            or not isinstance(task.get("task_id"), str)
-            or not isinstance(task.get("prompt"), str)
-        ):
-            raise ValueError("task requires task_id and prompt")
-        if not isinstance(task.get("repo_fixture_commit"), str) or len(task["repo_fixture_commit"]) < 7:
-            raise ValueError("task requires repo_fixture_commit")
-        acceptance = task.get("acceptance")
+        task_id = task.get("task_id") if isinstance(task, Mapping) else None
+        prompt = task.get("prompt") if isinstance(task, Mapping) else None
+        commit = task.get("repo_fixture_commit") if isinstance(task, Mapping) else None
+        acceptance = task.get("acceptance") if isinstance(task, Mapping) else None
+        if not isinstance(task_id, str) or not task_id.strip() or task_id in ids:
+            raise ValueError("task_id must be unique non-empty text")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt must be non-empty text")
+        if not isinstance(commit, str) or re.fullmatch(r"[0-9a-fA-F]{40}", commit) is None:
+            raise ValueError("repo_fixture_commit must be a 40-hex commit")
         if (
             not isinstance(acceptance, Mapping)
             or not isinstance(acceptance.get("command"), str)
+            or not acceptance["command"].strip()
+            or isinstance(acceptance.get("expect_exit"), bool)
             or acceptance.get("expect_exit") != 0
         ):
-            raise ValueError("task acceptance requires command and expect_exit=0")
+            raise ValueError("task acceptance requires non-empty command and integer expect_exit=0")
+        ids.add(task_id)
