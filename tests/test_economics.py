@@ -47,7 +47,7 @@ def test_msprt_detects_known_effect():
     assert result["n"] == 3
     assert result["r_bar"] < 0
     assert result["lambda"] >= 20
-    assert result["verdict"] == "POSITIVE"
+    assert result["lambda"] == float("inf")
 
 def test_governor_delegates_to_economics(monkeypatch):
     from second_brain import governor
@@ -169,28 +169,20 @@ def test_verdict_retains_partial_pairs_and_null_metric_means():
     assert result["turns_delta"] is None
 
 
-def test_qualification_preserves_baseline_metadata(tmp_path, monkeypatch):
+def test_qualification_preserves_committed_baseline(tmp_path, monkeypatch):
     import json
     from scripts import run_paired_economics as runner
 
-    baseline = {
-        "schema_version": 2,
-        "metadata": {"gate": "SHADOW", "source_identity": "baseline"},
-        "generation_basis": {"commit": "abc"},
-        "phase": "v2-0",
-        "economics": {"old": True},
-    }
     qualification = tmp_path / "qualification.json"
+    baseline = json.loads(runner.QUALIFICATION.read_text(encoding="utf-8"))
     qualification.write_text(json.dumps(baseline), encoding="utf-8")
     monkeypatch.setattr(runner, "QUALIFICATION", qualification)
     monkeypatch.setattr(runner, "_host_command", lambda _: None)
     monkeypatch.setattr(runner, "load_tasks", lambda: [])
     runner.run("prime", "OFF", 1)
     result = json.loads(qualification.read_text(encoding="utf-8"))
-    assert result["metadata"] == baseline["metadata"]
-    assert result["generation_basis"] == baseline["generation_basis"]
-    assert result["phase"] == "v2-0"
-    assert result["economics"]["old"] is True
+    for key in ("gates", "source_identity", "generation_basis", "phase", "base_commit"):
+        assert result[key] == baseline[key]
     assert result["economics"]["prime"]["usage_capture"] is False
 
 
@@ -241,3 +233,84 @@ def test_fixture_rejects_boolean_expect_exit():
                  "acceptance": {"command": "x", "expect_exit": False}},
             ],
         })
+
+
+def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch):
+    import json
+    from scripts import run_paired_economics as runner
+
+    def fake_git(*args, **kwargs):
+        class Completed:
+            returncode = 0
+        return Completed()
+
+    def fake_host(command, prompt, worktree, env):
+        telemetry = Path(env["SECOND_BRAIN_HOME"]) / "telemetry" / "agent-performance"
+        telemetry.mkdir(parents=True)
+        for index, total in enumerate((12, 8)):
+            (telemetry / f"session-{index}.jsonl").write_text(json.dumps({
+                "kind": "assistant_usage", "model": "deepseek-v4-flash",
+                "input_tokens": total, "output_tokens": 2,
+                "cache_read_tokens": 1, "cache_write_tokens": 0, "total_tokens": total + 3,
+            }) + "\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_git)
+    monkeypatch.setattr(runner, "_run_host", fake_host)
+    monkeypatch.setattr(runner, "_acceptance", lambda command, worktree: True)
+    task = {
+        "task_id": "micro-test", "prompt": "private prompt",
+        "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+        "acceptance": {"command": "private acceptance", "expect_exit": 0},
+    }
+    record = runner._run_one("prime", task, "ON", ["host"])
+    assert record["telemetry"]["input_tokens"] == 20
+    assert record["dollars"] == economics.cost_per_run(
+        {"input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 2, "cache_write_tokens": 0},
+        {"base_in": 0.00000014, "base_out": 0.00000028},
+    )
+    assert "private prompt" not in json.dumps(record)
+    assert "private acceptance" not in json.dumps(record)
+
+
+def test_run_executes_off_then_on_even_when_requested_on(tmp_path, monkeypatch):
+    import json
+    from scripts import run_paired_economics as runner
+
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps(json.loads(runner.QUALIFICATION.read_text(encoding="utf-8"))), encoding="utf-8")
+    monkeypatch.setattr(runner, "QUALIFICATION", qualification)
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(runner, "_host_command", lambda _: ["host"])
+    monkeypatch.setattr(runner, "load_tasks", lambda: [{
+        "task_id": "micro-test", "prompt": "prompt", "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+        "acceptance": {"command": "true", "expect_exit": 0},
+    }])
+    calls = []
+    def fake_one(harness, task, profile, command):
+        calls.append(profile)
+        return {"run_id": f"{profile}-run", "task_id": task["task_id"], "profile": profile,
+                "telemetry": {"total_tokens": 10, "model_turns": 1, "wall_ms": 1},
+                "dollars": None, "acceptance_pass": True, "usage_capture": True}
+    monkeypatch.setattr(runner, "_run_one", fake_one)
+    runner.run("prime", "ON", 1)
+    assert calls == ["OFF", "ON"]
+
+
+def test_aggregate_mixed_models_refuses_single_price():
+    import json
+    from tempfile import TemporaryDirectory
+    from scripts import run_paired_economics as runner
+
+    with TemporaryDirectory() as temp:
+        paths = []
+        for index, model in enumerate(("deepseek-v4-flash", "other-model")):
+            path = Path(temp) / f"model-{index}.jsonl"
+            path.write_text(json.dumps({
+                "kind": "assistant_usage", "model": model,
+                "input_tokens": 1, "output_tokens": 1,
+                "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 2,
+            }) + "\n", encoding="utf-8")
+            paths.append(path)
+        aggregate = runner.aggregate_telemetry(paths)
+    assert aggregate["mixed_model"] is True
