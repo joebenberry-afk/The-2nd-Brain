@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 
+from second_brain import semantic
 from second_brain.hybrid_retrieval import (
     HybridCascadeRetriever,
     RetrievalTier,
@@ -85,6 +86,66 @@ class TestCascadeShortCircuitAndTiers:
         retriever.invalidate_negative_cache(project_id="p1")
         res3 = retriever.retrieve(brain_home, q, project_id="p1")
         assert res3.negative_cached is False
+    def test_negative_cache_invalidated_by_epoch_bump(self, brain_home):
+        query = "missing persisted epoch query"
+        first = HybridCascadeRetriever().retrieve(brain_home, query, project_id="p1")
+        assert first.negative_cached is False
+
+        second = HybridCascadeRetriever().retrieve(brain_home, query, project_id="p1")
+        assert second.negative_cached is True
+
+        mid = add_memory(
+            brain_home,
+            "Epoch bump memory",
+            "mutation invalidates persisted negative retrieval cache",
+            project_id="p1",
+        )
+        curate(brain_home, mid, status="current")
+
+        third = HybridCascadeRetriever().retrieve(brain_home, query, project_id="p1")
+        assert third.negative_cached is False
+    def test_missing_score_never_crosses_active_gate(self, brain_home, monkeypatch):
+        (brain_home / "config" / "retrieval.toml").write_text(
+            "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            semantic,
+            "search_memories",
+            lambda *_a, **_kw: [{"memory_id": "mem-missing", "title": "Missing score"}],
+        )
+        result = HybridCascadeRetriever().retrieve(brain_home, "missing score query")
+        assert result.decision == "NO_INJECTION"
+        assert result.reason == "LOW_CONFIDENCE"
+        assert result.matches[0].score is None
+
+    def test_policy_lane_uses_higher_floor(self, brain_home, monkeypatch):
+        (brain_home / "config" / "retrieval.toml").write_text(
+            "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            semantic,
+            "search_memories",
+            lambda *_a, **_kw: [{"memory_id": "mem-policy", "title": "Policy", "_score": 0.75}],
+        )
+        result = HybridCascadeRetriever().retrieve(
+            brain_home, "policy query", lane="policy"
+        )
+        assert result.decision == "NO_INJECTION"
+        assert result.reason == "LOW_CONFIDENCE"
+    def test_invalidate_cache_without_home_is_safe(self):
+        HybridCascadeRetriever().invalidate_negative_cache()
+
+    def test_negative_cache_infrastructure_error_fails_open(self, brain_home):
+        cache_path = brain_home / "state" / "cache" / "negative.sqlite"
+        cache_path.mkdir(parents=True)
+        result = HybridCascadeRetriever().retrieve(brain_home, "cache failure query")
+        assert result.decision == "NO_INJECTION"
+        assert result.reason == "BRAIN_UNAVAILABLE"
+        assert result.retrieval_error is True
+
+
 
     def test_tier_3_vector_fallback_when_fts_misses(self, brain_home):
         vector_called = False

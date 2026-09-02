@@ -70,6 +70,55 @@ def current_version(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version").fetchone()
     return int(row["v"])
 
+def ensure_brain_meta(conn: sqlite3.Connection) -> None:
+    """Ensure control metadata exists for older databases."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS brain_meta("
+        "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO brain_meta(key, value) VALUES ('memory_epoch', '0')"
+    )
+
+
+def memory_epoch(conn: sqlite3.Connection) -> int:
+    """Read the current canonical-memory epoch from an open connection."""
+    ensure_brain_meta(conn)
+    row = conn.execute(
+        "SELECT value FROM brain_meta WHERE key = 'memory_epoch'"
+    ).fetchone()
+    try:
+        return int(row["value"]) if row is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def bump_memory_epoch(conn: sqlite3.Connection) -> int:
+    """Increment and return the canonical-memory epoch in the open transaction."""
+    ensure_brain_meta(conn)
+    conn.execute(
+        "UPDATE brain_meta SET value = CAST(value AS INTEGER) + 1 "
+        "WHERE key = 'memory_epoch'"
+    )
+    return memory_epoch(conn)
+
+
+def read_memory_epoch(dbfile: str | Path) -> int:
+    """Read an epoch by database path without creating a write transaction."""
+    conn = connect(dbfile)
+    try:
+        row = conn.execute(
+            "SELECT value FROM brain_meta WHERE key = 'memory_epoch'"
+        ).fetchone()
+        try:
+            return int(row["value"]) if row is not None else 0
+        except (TypeError, ValueError):
+            return 0
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
+
 
 def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_at: str) -> None:
     script = path.read_text(encoding="utf-8")
@@ -96,6 +145,8 @@ def migrate(dbfile: str | Path, migrations_dir: Path | None = None) -> list[int]
 
     conn = connect(dbfile)
     try:
+        ensure_brain_meta(conn)
+        conn.commit()
         applied = current_version(conn)
         out: list[int] = []
         for path in migration_files(migrations_dir):

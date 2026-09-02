@@ -1392,7 +1392,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     cas_q.add_argument("query_text", help="query string or memory ref")
     cas_q.add_argument("--project", default=None, help="project scope ID")
-    cas_q.add_argument("--threshold", type=float, default=0.70, help="confidence threshold")
+    cas_q.add_argument("--threshold", type=float, default=None, help="confidence threshold override")
     cas_q.add_argument("--json", action="store_true", help="output JSON")
 
     cass.add_parser("clear-cache", parents=[home_parent], help="clear negative result cache")
@@ -5202,7 +5202,7 @@ def cmd_cascade(args) -> int:
         return 0
 
     if args.cascade_command == "clear-cache":
-        retriever.invalidate_negative_cache()
+        retriever.invalidate_negative_cache(home)
         print("Cleared negative result cache.")
         return 0
 

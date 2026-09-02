@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, hybrid_retrieval, registry, semantic, telemetry, working_set
+from . import db, decisions, hybrid_retrieval, registry, semantic, telemetry, working_set
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -183,6 +183,33 @@ def _now() -> str:
 
 def _task_sha256(task: str) -> str:
     return hashlib.sha256((task or "").encode("utf-8")).hexdigest()
+
+def _record_retrieval_abstention(
+    home: Path, intent: RetrievalIntent, lane: str = "semantic"
+) -> None:
+    """Record score-gap abstention without persisting task/query content."""
+    cfg = semantic.load_retrieval_config(home)
+    try:
+        decisions.record(
+            home,
+            kind="retrieval",
+            session_id=intent.session_id,
+            task_id=None,
+            chosen={"decision": "NO_INJECTION"},
+            alternatives=["INJECT"],
+            propensity=1.0,
+            randomized=False,
+            policy_version=cfg.gate.config_version,
+            stage=cfg.gate.rollout,
+            inputs={
+                "task_sha256": _task_sha256(intent.task_text),
+                "project_id": intent.project_id or "",
+                "lane": lane,
+                "gate": "score_gap",
+            },
+        )
+    except Exception:
+        logger.debug("retrieval abstention decision record failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +787,14 @@ def prepare_injection(
             NoInjectionReason.NO_RELEVANT_MEMORY,
             candidate_ids=candidate_ids,
             selected_ids=[],  # nothing passed the role filter -> nothing selected
+        )
+
+    if cascade_res.reason == "LOW_CONFIDENCE":
+        _record_retrieval_abstention(home, intent)
+        return decision(
+            NoInjectionReason.LOW_CONFIDENCE,
+            candidate_ids=candidate_ids,
+            selected_ids=[],
         )
 
     try:

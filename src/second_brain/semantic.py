@@ -546,6 +546,7 @@ def reindex_all(home: Path) -> dict:
                 conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
             conn.execute("DELETE FROM memory_index WHERE memory_id = ?", (memory_id,))
             counts["purged"] += 1
+        db.bump_memory_epoch(conn)
         conn.commit()
         return counts
     finally:
@@ -616,6 +617,7 @@ def add_memory(
             ),
         )
         _insert_sources(conn, memory_id, clean_sources, now)
+        db.bump_memory_epoch(conn)
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
@@ -706,6 +708,7 @@ def curate(
             (new_grade, new_status, now, last_verified, memory_id),
         )
         _insert_sources(conn, memory_id, clean_sources, now)
+        db.bump_memory_epoch(conn)
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
@@ -821,6 +824,7 @@ def supersede(
             (title, new_version, now, str(new_path.relative_to(home)), memory_id),
         )
         _insert_sources(conn, memory_id, clean_sources, now)
+        db.bump_memory_epoch(conn)
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
@@ -1148,17 +1152,35 @@ class RetrievalWeights:
     token_free_limit: int = _TOKEN_FREE_LIMIT
     token_penalty_cap: float = _TOKEN_PENALTY_CAP
     token_penalty_saturation: int = _TOKEN_PENALTY_SATURATION
+@dataclass(frozen=True)
+class RetrievalGate:
+    """Abstention thresholds and rollout policy for ranked retrieval."""
+
+    abs_floor: float = 0.55
+    gap_min: float = 0.08
+    rollout: str = "SHADOW"
+    lane_floors: dict[str, float] = _field(
+        default_factory=lambda: {
+            "policy": 0.80,
+            "active_state": 0.55,
+            "semantic": 0.55,
+            "repo": 0.55,
+            "decision": 0.55,
+            "skill": 0.55,
+        }
+    )
+    config_version: str = "1"
 
 
 @dataclass(frozen=True)
 class RetrievalConfig:
     """Effective retrieval policy for one search: result cap, token budget,
-    and scoring weights. `top_k` caps the returned rows; `max_tokens` is the
-    hard token ceiling (None = unlimited)."""
+    scoring weights, and abstention gate."""
 
     top_k: int = _DEFAULT_TOP_K
     max_tokens: int | None = None
     weights: RetrievalWeights = _field(default_factory=RetrievalWeights)
+    gate: RetrievalGate = _field(default_factory=RetrievalGate)
 
 
 _DEFAULT_RETRIEVAL_CONFIG = RetrievalConfig()
@@ -1185,57 +1207,83 @@ def _coerce_scores(value: object, fallback: dict[str, float]) -> dict[str, float
 
 
 def load_retrieval_config(home: Path) -> RetrievalConfig:
-    """Phase 12: read config/retrieval.toml ([scoring.weights],
-    [scoring].max_results) and config/context.toml
-    ([reserve].retrieved_memory_pct_max). Absent/invalid keys fall back to
-    the hardcoded defaults; unreadable TOML is ignored (fail open)."""
+    """Read retrieval limits, scoring weights, and the abstention gate."""
     weights = RetrievalWeights()
+    gate = RetrievalGate()
     top_k = _DEFAULT_TOP_K
     budget_pct: float | None = None
 
     rpath = Path(home) / "config" / "retrieval.toml"
     if rpath.is_file():
         try:
-            scoring = (tomllib.loads(rpath.read_text(encoding="utf-8")).get("scoring") or {})
-            raw_k = scoring.get("max_results")
-            if isinstance(raw_k, int) and not isinstance(raw_k, bool) and raw_k > 0:
-                top_k = raw_k
-            w = scoring.get("weights")
-            if isinstance(w, dict):
-                def _f(key: str, fallback: float) -> float:
-                    return _coerce_float(w.get(key), fallback)
+            raw = tomllib.loads(rpath.read_text(encoding="utf-8"))
+            version = str(raw.get("schema_version", gate.config_version))
+            scoring = raw.get("scoring") or {}
+            if isinstance(scoring, dict):
+                raw_k = scoring.get("max_results")
+                if isinstance(raw_k, int) and not isinstance(raw_k, bool) and raw_k > 0:
+                    top_k = raw_k
+                w = scoring.get("weights")
+                if isinstance(w, dict):
+                    def _f(key: str, fallback: float) -> float:
+                        return _coerce_float(w.get(key), fallback)
 
-                weights = RetrievalWeights(
-                    title_boost_exact=_f("title_boost_exact", weights.title_boost_exact),
-                    title_boost_partial=_f("title_boost_partial", weights.title_boost_partial),
-                    relevance_cap=_f("relevance_cap", weights.relevance_cap),
-                    bm25_relevance_scale=_f("bm25_relevance_scale", weights.bm25_relevance_scale),
-                    grade_scores=_coerce_scores(w.get("grade_scores"), weights.grade_scores),
-                    status_scores=_coerce_scores(w.get("status_scores"), weights.status_scores),
-                    freshness_half_life_days=_f(
-                        "freshness_half_life_days", weights.freshness_half_life_days
-                    ),
-                    freshness_max_penalty=_f(
-                        "freshness_max_penalty", weights.freshness_max_penalty
-                    ),
-                    decision_boost_per_hit=_f(
-                        "decision_boost_per_hit", weights.decision_boost_per_hit
-                    ),
-                    decision_boost_cap=_f("decision_boost_cap", weights.decision_boost_cap),
-                    negative_penalty_per_contradiction=_f(
-                        "negative_penalty_per_contradiction",
-                        weights.negative_penalty_per_contradiction,
-                    ),
-                    negative_penalty_cap=_f(
-                        "negative_penalty_cap", weights.negative_penalty_cap
-                    ),
-                    token_free_limit=_coerce_int(
-                        w.get("token_free_limit"), weights.token_free_limit
-                    ),
-                    token_penalty_cap=_f("token_penalty_cap", weights.token_penalty_cap),
-                    token_penalty_saturation=_coerce_int(
-                        w.get("token_penalty_saturation"), weights.token_penalty_saturation
-                    ),
+                    weights = RetrievalWeights(
+                        title_boost_exact=_f("title_boost_exact", weights.title_boost_exact),
+                        title_boost_partial=_f("title_boost_partial", weights.title_boost_partial),
+                        relevance_cap=_f("relevance_cap", weights.relevance_cap),
+                        bm25_relevance_scale=_f("bm25_relevance_scale", weights.bm25_relevance_scale),
+                        grade_scores=_coerce_scores(w.get("grade_scores"), weights.grade_scores),
+                        status_scores=_coerce_scores(w.get("status_scores"), weights.status_scores),
+                        freshness_half_life_days=_f("freshness_half_life_days", weights.freshness_half_life_days),
+                        freshness_max_penalty=_f("freshness_max_penalty", weights.freshness_max_penalty),
+                        decision_boost_per_hit=_f("decision_boost_per_hit", weights.decision_boost_per_hit),
+                        decision_boost_cap=_f("decision_boost_cap", weights.decision_boost_cap),
+                        negative_penalty_per_contradiction=_f(
+                            "negative_penalty_per_contradiction",
+                            weights.negative_penalty_per_contradiction,
+                        ),
+                        negative_penalty_cap=_f("negative_penalty_cap", weights.negative_penalty_cap),
+                        token_free_limit=_coerce_int(w.get("token_free_limit"), weights.token_free_limit),
+                        token_penalty_cap=_f("token_penalty_cap", weights.token_penalty_cap),
+                        token_penalty_saturation=_coerce_int(
+                            w.get("token_penalty_saturation"), weights.token_penalty_saturation
+                        ),
+                    )
+            raw_gate = raw.get("gate") or {}
+            if isinstance(raw_gate, dict):
+                metadata = raw_gate.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = raw_gate
+                calibrated = all(
+                    isinstance(metadata.get(key), str) and metadata[key].strip()
+                    for key in ("source", "reason", "version", "effective")
+                )
+                abs_floor = _coerce_float(raw_gate.get("abs_floor"), gate.abs_floor)
+                gap_min = _coerce_float(raw_gate.get("gap_min"), gate.gap_min)
+                if not calibrated:
+                    abs_floor, gap_min = gate.abs_floor, gate.gap_min
+                else:
+                    if not 0.0 <= abs_floor <= 1.0:
+                        abs_floor = gate.abs_floor
+                    if not 0.0 <= gap_min <= 1.0:
+                        gap_min = gate.gap_min
+                floors = dict(gate.lane_floors)
+                raw_floors = raw_gate.get("lane_floors")
+                if isinstance(raw_floors, dict):
+                    for lane, floor in raw_floors.items():
+                        if lane in floors and isinstance(floor, (int, float)) and not isinstance(floor, bool):
+                            if 0.0 <= float(floor) <= 1.0:
+                                floors[lane] = float(floor)
+                rollout = raw_gate.get("rollout", gate.rollout)
+                if rollout not in {"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"}:
+                    rollout = gate.rollout
+                gate = RetrievalGate(
+                    abs_floor=abs_floor,
+                    gap_min=gap_min,
+                    rollout=rollout,
+                    lane_floors=floors,
+                    config_version=version,
                 )
         except (OSError, tomllib.TOMLDecodeError):
             pass  # fail open: unreadable config keeps defaults
@@ -1250,10 +1298,8 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
         except (OSError, tomllib.TOMLDecodeError):
             pass
 
-    max_tokens = (
-        round(budget_pct / 100.0 * _CONTEXT_WINDOW_TOKENS) if budget_pct is not None else None
-    )
-    return RetrievalConfig(top_k=top_k, max_tokens=max_tokens, weights=weights)
+    max_tokens = round(budget_pct / 100.0 * _CONTEXT_WINDOW_TOKENS) if budget_pct is not None else None
+    return RetrievalConfig(top_k=top_k, max_tokens=max_tokens, weights=weights, gate=gate)
 
 
 def _estimate_retrieval_tokens(row: dict, home: Path | str | None = None) -> int:
@@ -1452,9 +1498,7 @@ def _rank_rows(
     weights: RetrievalWeights | None = None,
     home: Path | str | None = None,
 ) -> list[dict]:
-    """Phase 9: score AFTER filters+dedupe, BEFORE budget; stable ordering:
-    score desc, then original order (bm25 order on the FTS path, list order
-    on the linear path), then memory_id."""
+    """Score rows and attach the exact score components used for ordering."""
     query_tokens = _query_tokens(term)
     bm25_values = [r.get("_bm25") for r in rows]
     bm25_max = (
@@ -1463,15 +1507,14 @@ def _rank_rows(
         else None
     )
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
-    scored = [
-        (
-            row,
-            index,
-            _score_row(row, query_tokens, bm25_max, project_id, score_terms, w, home=home),
+    scored = []
+    for index, row in enumerate(rows):
+        row["_bm25"] = row.get("_bm25")
+        row["_score"] = _score_row(
+            row, query_tokens, bm25_max, project_id, score_terms, w, home=home
         )
-        for index, row in enumerate(rows)
-    ]
-    scored.sort(key=lambda item: (-item[2], item[1], item[0].get("memory_id") or ""))
+        scored.append((row, index))
+    scored.sort(key=lambda item: (-item[0]["_score"], item[1], item[0].get("memory_id") or ""))
     return [item[0] for item in scored]
 
 
