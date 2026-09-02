@@ -142,12 +142,14 @@ class SessionTokens:
     model: str | None = None
     source_kind: str | None = None
 
-    # Core token fields (from assistant_usage events)
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    total_tokens: int = 0
+    # Core token fields (from assistant_usage and Hermes usage events). A
+    # source-reported null is retained; the zero default preserves the
+    # historical value for fields never exposed by a session.
+    input_tokens: int | None = 0
+    output_tokens: int | None = 0
+    cache_read_tokens: int | None = 0
+    cache_write_tokens: int | None = 0
+    total_tokens: int | None = 0
     cost_total: float | None = None
     cost_total_seen: int = 0  # How many assistant_usage records had cost_total
 
@@ -206,6 +208,7 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
 
     session_id = session_jsonl_path.stem
     tokens = SessionTokens(session_id=session_id)
+    numeric_usage_fields: set[str] = set()
 
     with open(session_jsonl_path, encoding='utf-8') as f:
         for line in f:
@@ -249,7 +252,8 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 if 'context_window' in record:
                     tokens.context_window = record['context_window']
 
-                # Aggregate tokens (HONESTY: only count reported numeric values)
+                # Aggregate tokens (HONESTY: only count reported values;
+                # explicit null remains distinguishable from a zero).
                 for field in (
                     'input_tokens',
                     'output_tokens',
@@ -259,7 +263,15 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 ):
                     value = usage.get(field)
                     if isinstance(value, int) and not isinstance(value, bool):
-                        setattr(tokens, field, getattr(tokens, field) + value)
+                        current = getattr(tokens, field)
+                        setattr(tokens, field, (current or 0) + value)
+                        numeric_usage_fields.add(field)
+                    elif (
+                        value is None
+                        and field in usage
+                        and field not in numeric_usage_fields
+                    ):
+                        setattr(tokens, field, None)
                 if 'compaction_tokens' in usage:
                     value = usage['compaction_tokens']
                     if isinstance(value, int) and not isinstance(value, bool):

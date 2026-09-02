@@ -681,6 +681,39 @@ def test_arm_from_telemetry_uses_real_session_usage(brain_home):
     assert arm["wall_time_ms"] == pytest.approx(10000.0, abs=1.0)
 
 
+
+
+def test_arm_from_telemetry_rejects_missing_required_usage(brain_home):
+    session_id = "hermes-missing-total"
+    _write_telemetry_records(
+        brain_home,
+        session_id,
+        [
+            {"v": 2, "kind": "session_start", "ts": "2026-08-26T00:00:00.000Z"},
+            {
+                "v": 2,
+                "kind": "model_invocation_completed",
+                "ts": "2026-08-26T00:00:05.000Z",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 3,
+                    "cache_write_tokens": None,
+                },
+            },
+            {"v": 2, "kind": "session_shutdown", "ts": "2026-08-26T00:00:10.000Z"},
+        ],
+    )
+
+    with pytest.raises(BrainError, match="missing required token counters"):
+        credit.arm_from_telemetry(
+            brain_home,
+            session_id,
+            success=True,
+            verification=_verification(),
+            regressions=_regressions(0),
+        )
+
 def test_arm_from_telemetry_rejects_absent_session(brain_home):
     """A session with no (or fewer than two timestamped) telemetry records
     must be rejected, never silently reported as a zero-valued arm."""

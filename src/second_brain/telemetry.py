@@ -22,7 +22,7 @@ KNOWN_KINDS = {
     "claude_code_stop_turn", "codex_hook_shadow_decision", "context",
     "context_paging", "context_structure", "extension_error",
     "hermes_model_decision", "hermes_post_tool_call", "hermes_pre_llm_call",
-    "hermes_session_finalized", "hermes_session_started", "hermes_tool_result",
+    "hermes_session_finalized", "hermes_session_started",
     "hermes_worker_context_resolved", "hermes_worker_lifecycle",
     "hermes_worker_result_corrected", "hermes_worker_result_correction_requested",
     "hermes_worker_result_reviewed", "hermes_writeback_candidate", "lean_kernel",
