@@ -325,6 +325,8 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
             continue
         model = raw_model or None
         if kind == "provider_request_meta":
+            if "prompt_chars" not in record:
+                continue
             for key in tuple(pending):
                 if key[0] == session:
                     pending.pop(key, None)

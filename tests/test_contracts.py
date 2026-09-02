@@ -296,6 +296,21 @@ def test_invalid_provider_measurement_supersedes_pending_tool_fallback(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0
 
+def test_provider_record_without_prompt_preserves_tool_fallback(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": "provider_request_meta", "model": "m"},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
+    assert state["pair_count"] == 1
+
 
 def test_cli_calibration_home_is_used_by_estimator(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.delenv("SECOND_BRAIN_HOME", raising=False)
