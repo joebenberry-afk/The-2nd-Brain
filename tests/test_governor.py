@@ -67,6 +67,30 @@ class TestSessionTokensBasic:
         assert tokens.model_turns == 1
         assert tokens.model == "gpt-4"
 
+    def test_model_invocation_completed_preserves_null_cache_write(self, brain_home):
+        records = [
+            _rec(
+                "model_invocation_completed",
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 3,
+                    "cache_write_tokens": None,
+                },
+            )
+        ]
+        _write_session(brain_home, "hermes", records)
+
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "hermes.jsonl"
+        )
+
+        assert tokens.input_tokens == 10
+        assert tokens.output_tokens == 5
+        assert tokens.cache_read_tokens == 3
+        assert tokens.cache_write_tokens is None
+        assert tokens.source_kind == "model_invocation_completed"
+
     def test_honesty_missing_cost(self, brain_home):
         """HONESTY RULE: absent cost_total reported as None, not 0."""
         records = [

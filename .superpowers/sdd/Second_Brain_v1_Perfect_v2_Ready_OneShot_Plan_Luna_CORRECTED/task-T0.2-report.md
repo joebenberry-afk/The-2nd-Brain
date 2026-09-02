@@ -116,3 +116,90 @@ The three issues are pre-existing unparseable raw lines; none is an unknown-kind
 ## Concerns
 
 Focused telemetry and governor tests pass. Live repository validation reports zero unknown kinds without rewriting raw telemetry, but retains three pre-existing parse-error issues. The known-kind test is intentionally empty in this worktree and will inspect any live JSONL records when present. `hermes_tool_result` was identified from the live Hermes adapter emitter and added literally; no unrelated telemetry records were rewritten.
+
+## Review-fix report
+
+Addressed the review findings in one scoped fix:
+
+- Removed `hermes_tool_result` from `KNOWN_KINDS`; it is an artifact-store
+  label, while the telemetry event is `hermes_post_tool_call`.
+- Hardened `test_known_kinds_cover_live_records` to consume
+  `telemetry.iter_records()`, skip malformed/non-object/missing-kind records
+  exactly as validation does, and require at least one checked fixture record.
+  The fixture also exercises malformed and missing-kind tolerance.
+- Added a fail-closed `BrainError` in `credit.arm_from_telemetry` when required
+  counters are absent, instead of forwarding `None` into counterfactual
+  validation.
+- Made `SessionTokens` core token counters nullable when the source explicitly
+  reports `null`, while retaining the existing zero default for fields that a
+  session never exposes. Numeric values continue to sum exactly; role
+  attribution retains its existing zero-compatible derived totals.
+- Added focused governor and credit regression tests.
+
+### Fix TDD RED
+
+Governor null-preservation command:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_governor.py -k model_invocation_completed_preserves_null_cache_write -q
+```
+
+Output before the fix:
+
+```text
+F                                                                        [100%]
+AssertionError: assert 0 is None
+```
+
+Credit fail-closed command before the fix:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_credit.py -k missing_required_usage -q
+```
+
+Output before the fix:
+
+```text
+F                                                                        [100%]
+Failed: DID NOT RAISE BrainError
+```
+
+The hardened known-kind test was green against the initial implementation
+because the repository worktree has no checked-out live JSONL; its fixture
+path now proves the required tolerance and non-vacuity behavior.
+
+### Fix GREEN
+
+Focused telemetry/governor/credit command:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_telemetry.py tests/test_governor.py tests/test_credit.py -q -rA
+```
+
+Output:
+
+```text
+........................................................................ [ 93%]
+.....                                                                    [100%]
+77 passed
+```
+
+Live unknown-kind check after the fix:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -c "from pathlib import Path; from second_brain import telemetry; r=telemetry.validate(Path(r'C:/Users/assas/Documents/The-Second-Brain')); print('files',r['files'],'records',r['records'],'unknown kinds',sum('unknown kind' in issue for issue in r['issues']),'all issues',len(r['issues']))"
+```
+
+Output:
+
+```text
+files 1042 records 221409 unknown kinds 0 all issues 3
+```
+
+The three retained issues are pre-existing unparseable raw lines; no raw
+telemetry was rewritten.
+
+### Fix commit
+
+`brain(core): aggregate hermes usage, close telemetry kinds` (amended task
+commit after review fixes).

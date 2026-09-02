@@ -225,14 +225,31 @@ def test_operational_report_preserves_missing_provider_counters(brain_home):
 
 
 
-def test_known_kinds_cover_live_records():
-    from pathlib import Path
+def test_known_kinds_cover_live_records(brain_home):
+    path = telemetry.telemetry_dir(brain_home) / "live.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(_rec("model_invocation_completed", usage={})),
+                '{"v": 2, "session": "s1"}',
+                "not-json",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
-    records_dir = Path(__file__).resolve().parents[1] / "telemetry" / "agent-performance"
-    for path in records_dir.glob("*.jsonl"):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                assert json.loads(line)["kind"] in telemetry.KNOWN_KINDS
+    checked = 0
+    for _, _, record in telemetry.iter_records(brain_home):
+        if not isinstance(record, dict) or "__parse_error__" in record:
+            continue
+        kind = record.get("kind")
+        if kind is None:
+            continue
+        checked += 1
+        assert kind in telemetry.KNOWN_KINDS
+    assert checked > 0
 
 
 def test_session_usage_reads_hermes_model_invocation_completed(brain_home):

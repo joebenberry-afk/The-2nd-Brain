@@ -529,6 +529,11 @@ def arm_from_telemetry(
             "zero-valued arm."
         )
     usage = telemetry.session_usage(home, session_id)
+    missing = [field for field in TOKEN_FIELDS if usage.get(field) is None]
+    if missing:
+        raise BrainError(
+            f"Session {session_id!r} has missing required token counters: {', '.join(missing)}"
+        )
     return {
         "run_id": session_id,
         "success": success,
