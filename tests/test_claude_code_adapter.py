@@ -980,6 +980,31 @@ def test_claude_hook_malformed_surrogate_payload_fails_open(home: Path, tmp_path
     assert json.loads(result.stdout.strip() or "{}") == {}
 
 
+def test_claude_aux_hook_surrogate_prompt_and_tool_fields_fail_open(
+    home: Path, tmp_path: Path
+) -> None:
+    for event, extra in (
+        ("UserPromptSubmit", {"prompt": "\ud800"}),
+        ("PostToolUse", {"tool_name": "\ud800", "tool_response": "\ud800"}),
+    ):
+        result = _run_cli(
+            home,
+            "autoinject",
+            "claude-code-hook",
+            stdin=json.dumps(
+                {
+                    "session_id": "claude-sess-surrogate-fields",
+                    "cwd": str(tmp_path),
+                    "hook_event_name": event,
+                    **extra,
+                }
+            ),
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0
+        assert json.loads(result.stdout.strip() or "{}") == {}
+
+
 def test_claude_usage_cursor_waits_for_successful_writer(
     home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
