@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import db
+from .contracts import estimate_tokens
 from .errors import BrainError
 
 _LOG = logging.getLogger("second_brain.semantic")
@@ -1009,9 +1010,6 @@ def _score_tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
 
 
-def _token_count(text: str) -> int:
-    """Total token count (repetitions included) — for the ROI penalty."""
-    return len(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
 
 
 def _query_tokens(term: str) -> set[str]:
@@ -1164,9 +1162,7 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
 
 
 def _estimate_retrieval_tokens(row: dict) -> int:
-    """Token estimate for the retrieval budget: word-token count of the body
-    (same metric as the ranking token-cost penalty)."""
-    return _token_count(_body_text_for_dedupe(row))
+    return estimate_tokens(_body_text_for_dedupe(row))
 
 
 def _apply_budget(rows: list[dict], top_k: int | None, max_tokens: int | None) -> list[dict]:
@@ -1314,7 +1310,7 @@ def _negative_transfer_score(row: dict, weights: RetrievalWeights) -> float:
 def _token_cost_penalty(row: dict, weights: RetrievalWeights) -> float:
     """Gentle log-shaped per-token ROI penalty on very long bodies; never
     zeroes the score (max token_penalty_cap subtracted)."""
-    n = _token_count(_body_text_for_dedupe(row))
+    n = estimate_tokens(_body_text_for_dedupe(row))
     if n <= weights.token_free_limit:
         return 0.0
     return weights.token_penalty_cap * min(

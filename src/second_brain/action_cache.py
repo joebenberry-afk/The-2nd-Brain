@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from . import artifacts
+from .contracts import estimate_tokens
 from .errors import BrainError
 
 ACTION_CACHE_SCHEMA_VERSION = 1
@@ -280,9 +281,8 @@ class ActionCacheStore:
         )
         output_ref = stored_artifact["hash"]
 
-        # Compute tokens saved estimate if not provided (~ 4 chars per token)
         if tokens_saved_estimate is None:
-            tokens_saved_estimate = max(1, len(content) // 4)
+            tokens_saved_estimate = estimate_tokens(content)
 
         action_key = compute_action_key(
             action_type=act,

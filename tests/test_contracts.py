@@ -39,6 +39,128 @@ from second_brain.contracts import (
 from second_brain.errors import BrainError
 
 
+def test_estimate_tokens_uses_calibrated_ratio(tmp_path, monkeypatch) -> None:
+    """The shared estimator reads the model ratio from the calibration state."""
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path))
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    (state / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "default_chars_per_token": 4.0,
+                "models": {
+                    "test-model": {
+                        "chars_per_token": 2.0,
+                        "source": "calibrated",
+                        "pair_count": 2,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert contracts.estimate_tokens("x" * 10, model="test-model") == 5
+    assert contracts.estimate_tokens("x" * 10, model="missing-model") == 2
+
+
+
+def test_calibrate_tokens_reports_insufficient_data(tmp_path) -> None:
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+    assert state["models"] == {}
+
+
+def test_calibrate_tokens_fits_measured_pairs_without_raw_content(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
+        {"kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
+        {"kind": "assistant_usage", "model": "m", "input_tokens": 300},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "calibrated"
+    assert state["pair_count"] == 2
+    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
+    assert "prompt" not in (tmp_path / "state" / "calibration" / "tokens.json").read_text(
+        encoding="utf-8"
+    )
+
+def test_estimate_tokens_missing_or_invalid_calibration_uses_explicit_default(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path))
+    assert contracts.estimate_tokens("x" * 9) == 2
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    (state / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "default_chars_per_token": "not-a-ratio",
+                "models": {"m": {"chars_per_token": float("nan"), "source": "calibrated"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    info = contracts.token_estimator_info("m")
+    assert info == {"chars_per_token": 4.0, "source": "default", "pair_count": 0}
+    assert contracts.estimate_tokens("x" * 9, model="m") == 2
+
+
+def test_calibrate_tokens_uses_input_token_deltas_and_tool_bytes_fallback(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 300},
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 200},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 350},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
+    assert state["pair_count"] == 3
+
+
+def test_calibration_state_contains_aggregates_only(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {
+            "session": "s",
+            "kind": "provider_request_meta",
+            "model": "m",
+            "prompt_chars": 400,
+            "prompt": "DO NOT STORE THIS",
+        },
+        {
+            "session": "s",
+            "kind": "assistant_usage",
+            "model": "m",
+            "input_tokens": 100,
+            "output": "DO NOT STORE THIS",
+        },
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    contracts.calibrate_tokens(tmp_path)
+    state_text = (tmp_path / "state" / "calibration" / "tokens.json").read_text(encoding="utf-8")
+    assert "DO NOT STORE THIS" not in state_text
+    assert "prompt" not in state_text
+    assert "output" not in state_text
+
 def _item(
     memory_id: str = "mem-abc",
     version: int = 1,

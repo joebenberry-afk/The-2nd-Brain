@@ -125,8 +125,7 @@ def _now() -> str:
 
 
 def _estimate_tokens(text: str) -> int:
-    """Deterministic token estimate: roughly 4 characters per token."""
-    return max(1, len(text) // 4)
+    return contracts.estimate_tokens(text)
 
 
 def _compute_base_priority(kind: SessionObjectKind, pinned: bool) -> float:

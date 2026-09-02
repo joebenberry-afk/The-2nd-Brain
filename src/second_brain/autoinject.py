@@ -53,6 +53,7 @@ from .contracts import (
     NoInjectionReason,
     PacketItem,
     canonical_json,
+    estimate_tokens,
 )
 from .paths import db_path
 
@@ -150,10 +151,8 @@ def load_config(home: Path | str) -> AutoInjectConfig:
         delta_hard_cap_tokens=delta_cap,
     )
 
-
 def token_estimate(text: str) -> int:
-    """Rough token estimate: 4 chars per token (stdlib-only, §6.6)."""
-    return max(1, len(text or "") // 4)
+    return estimate_tokens(text)
 
 
 # ---------------------------------------------------------------------------

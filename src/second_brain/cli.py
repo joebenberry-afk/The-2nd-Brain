@@ -24,6 +24,7 @@ from . import (
     artifacts,
     capsule_runtime,
     cerebellum,
+    contracts,
     credit,
     crossmodel,
     db,
@@ -1001,6 +1002,13 @@ def _parser() -> argparse.ArgumentParser:
     trep.add_argument("--since", default=None, help="only records with ts >= value")
     trep.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     ts.add_parser("validate", help="validate telemetry records")
+
+    calibrate = sub.add_parser("calibrate", parents=[home_parent], help="calibrate measured token ratios")
+    calibrate_sub = calibrate.add_subparsers(dest="calibrate_command", required=True)
+    calibrate_tokens = calibrate_sub.add_parser(
+        "tokens", parents=[home_parent], help="fit chars-per-token from telemetry"
+    )
+    calibrate_tokens.add_argument("--json", action="store_true", dest="as_json")
 
     heartbeat_parser = sub.add_parser(
         "heartbeat", parents=[home_parent], help="event-driven local heartbeat"
@@ -4419,6 +4427,23 @@ def cmd_telemetry(args) -> int:
 
 
 
+
+
+def cmd_calibrate(args) -> int:
+    home = _home(args)
+    if args.calibrate_command != "tokens":
+        return 2
+    state = contracts.calibrate_tokens(home)
+    if args.as_json:
+        print(json.dumps(state, sort_keys=True))
+    else:
+        print(
+            f"Token calibration: {state['source']} "
+            f"({state['pair_count']} measured pair(s)); "
+            f"state={home / 'state' / 'calibration' / 'tokens.json'}"
+        )
+    return 0
+
 def cmd_governor(args) -> int:
     """Token Governor CLI: report, flags, compare."""
     import fnmatch
@@ -5274,6 +5299,7 @@ def main(argv: list[str] | None = None) -> int:
         "heartbeat": cmd_heartbeat,
         "p4": cmd_p4,
         "restore": cmd_restore,
+        "calibrate": cmd_calibrate,
         "telemetry": cmd_telemetry,
         "governor": cmd_governor,
         "firewall": cmd_firewall,

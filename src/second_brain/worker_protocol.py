@@ -23,6 +23,7 @@ from .contracts import (
     WorkerPacketError,
     WorkerTaskPacket,
     canonical_json,
+    estimate_tokens,
     stable_content_hash,
 )
 from .errors import BrainError
@@ -115,7 +116,7 @@ def context_metadata(resolved: list[WorkerContextResolution]) -> dict[str, Any]:
         "resolved_count": len(entries),
         "visible_chars": visible_chars,
         "visible_bytes": visible_bytes,
-        "visible_tokens_estimate": max(1, visible_chars // 4) if visible_chars else 0,
+        "visible_tokens_estimate": estimate_tokens("x" * visible_chars) if visible_chars else 0,
         "source_chars": sum(int(item["content_chars"]) for item in entries),
         "refs": entries,
         "resolution_sha256": stable_content_hash(entries),
@@ -322,9 +323,9 @@ def prepare_context_handoff(
         "resolved_context": full_payload,
         "context_delta": delta_payload,
         "context_handoff_bytes": handoff_bytes,
-        "context_handoff_tokens_estimate": max(1, handoff_bytes // 4),
+        "context_handoff_tokens_estimate": estimate_tokens("x" * handoff_bytes),
         "context_delta_bytes": delta_bytes,
-        "context_delta_tokens_estimate": max(1, delta_bytes // 4) if delta_bytes else 0,
+        "context_delta_tokens_estimate": estimate_tokens("x" * delta_bytes) if delta_bytes else 0,
         "changed_ref_count": len(changed),
         "removed_ref_count": len(removed),
         "jit_body_sha256": jit_info["sha256"],
