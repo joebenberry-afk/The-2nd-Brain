@@ -121,7 +121,7 @@ def _line_user_text(line: dict) -> str | None:
     return None
 
 
-def extract_latest_user_task(
+def extract_latest_task(
     transcript_path: str | Path,
     max_lines: int = DEFAULT_MAX_LINES,
     max_bytes: int = DEFAULT_MAX_BYTES,
@@ -167,8 +167,8 @@ def extract_latest_user_task(
             latest = text
     return latest
 
-# Generic name for new callers; preserve the established public API.
-extract_latest_task = extract_latest_user_task
+# Backward-compatible public alias for existing Antigravity callers.
+extract_latest_user_task = extract_latest_task
 
 _USAGE_FIELDS = (
     "input_tokens",
@@ -179,7 +179,7 @@ _USAGE_FIELDS = (
 
 
 def extract_usage_tail(
-    transcript_path: str | Path,
+    path: str | Path,
     max_bytes: int = 256 * 1024,
 ) -> list[dict]:
     """Extract assistant usage counters from a bounded JSONL transcript tail.
@@ -192,7 +192,7 @@ def extract_usage_tail(
         limit = max(0, int(max_bytes))
         if limit == 0:
             return []
-        path = Path(transcript_path)
+        path = Path(path)
         if not path.is_file():
             return []
         with path.open("rb") as fh:

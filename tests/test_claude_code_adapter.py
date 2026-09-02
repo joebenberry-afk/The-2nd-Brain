@@ -810,10 +810,11 @@ def test_claude_stop_hook_emits_assistant_usage_from_transcript(
         for record in [json.loads(line)]
         if record.get("kind") == "assistant_usage"
     ]
+    assert all(row["v"] == 3 for row in rows)
     assert len(rows) == 2
     assert [row["uuid"] for row in rows] == ["assistant-1", "assistant-2"]
     assert all(row["harness"] == "claude-code" for row in rows)
-    assert [row["cache_write_tokens"] for row in rows] == [21, 42]
+    assert all(row["cache_state"] is None for row in rows)
     assert not any("cache_creation_input_tokens" in row for row in rows)
 
     from second_brain import ledger
@@ -904,3 +905,104 @@ def test_claude_hook_config_includes_prompt_and_tool_events() -> None:
     )
     assert "UserPromptSubmit" in config["hooks"]
     assert "PostToolUse" in config["hooks"]
+
+
+def test_claude_prompt_and_tool_hooks_persist_only_telemetry(
+    home: Path, git_project: Path
+) -> None:
+    prompt = "secret prompt that must not be persisted"
+    output = "secret tool output that must not be persisted"
+    prompt_result = _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=json.dumps(
+            {
+                "session_id": "claude-sess-events",
+                "cwd": str(git_project),
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": prompt,
+            }
+        ),
+        cwd=git_project,
+    )
+    tool_result = _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=json.dumps(
+            {
+                "session_id": "claude-sess-events",
+                "cwd": str(git_project),
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_response": output,
+            }
+        ),
+        cwd=git_project,
+    )
+    assert prompt_result.returncode == tool_result.returncode == 0
+    rows = [
+        json.loads(line)
+        for line in (home / "telemetry" / "agent-performance" / "claude-sess-events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    prompt_row = next(row for row in rows if row["kind"] == "claude_code_user_prompt")
+    tool_row = next(row for row in rows if row["kind"] == "claude_code_tool_result")
+    assert prompt_row["prompt_bytes"] == len(prompt.encode())
+    assert prompt_row["prompt_sha256"]
+    assert tool_row["tool"] == "Bash"
+    assert tool_row["output_bytes"] == len(output.encode())
+    assert tool_row["output_sha256"]
+    raw = json.dumps(rows)
+    assert prompt not in raw
+    assert output not in raw
+
+
+def test_claude_hook_malformed_surrogate_payload_fails_open(home: Path, tmp_path: Path) -> None:
+    result = _run_cli(
+        home,
+        "autoinject",
+        "claude-code-hook",
+        stdin=json.dumps(
+            {
+                "session_id": "\ud800",
+                "cwd": str(tmp_path),
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "\ud800",
+            }
+        ),
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout.strip() or "{}") == {}
+
+
+def test_claude_usage_cursor_waits_for_successful_writer(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from second_brain import autoinject, cli
+
+    transcript = tmp_path / "cursor.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "retry-me",
+                "message": {"role": "assistant", "usage": {"input_tokens": 1}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(autoinject, "_append_telemetry", lambda *args, **kwargs: False)
+    cli._claude_usage_records(home, "claude-sess-writer-failure", str(transcript), None)
+    from second_brain import ledger
+
+    cursor = (
+        ledger.session_dir(home, "claude-sess-writer-failure")
+        / "claude-usage-cursor.json"
+    )
+    assert not cursor.exists()
