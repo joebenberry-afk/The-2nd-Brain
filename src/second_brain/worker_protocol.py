@@ -107,7 +107,9 @@ def resolve_context_refs(
     return resolved
 
 
-def context_metadata(resolved: list[WorkerContextResolution]) -> dict[str, Any]:
+def context_metadata(
+    resolved: list[WorkerContextResolution], home: Path | str | None = None
+) -> dict[str, Any]:
     """Return bounded, privacy-safe resolution metadata for Brain records."""
     entries = [item.validate().metadata() for item in resolved]
     visible_chars = sum(len(item.content) for item in resolved)
@@ -116,7 +118,9 @@ def context_metadata(resolved: list[WorkerContextResolution]) -> dict[str, Any]:
         "resolved_count": len(entries),
         "visible_chars": visible_chars,
         "visible_bytes": visible_bytes,
-        "visible_tokens_estimate": estimate_tokens("x" * visible_chars) if visible_chars else 0,
+        "visible_tokens_estimate": (
+            estimate_tokens("x" * visible_chars, home=home) if visible_chars else 0
+        ),
         "source_chars": sum(int(item["content_chars"]) for item in entries),
         "refs": entries,
         "resolution_sha256": stable_content_hash(entries),
@@ -253,7 +257,7 @@ def prepare_context_handoff(
     packet.validate()
     home_path = Path(home)
     resolved = resolve_context_refs(home_path, packet)
-    metadata = context_metadata(resolved)
+    metadata = context_metadata(resolved, home=home_path)
     jit_info = _jit_snapshot(home_path, packet)
     snapshot_core = {
         "packet_sha256": packet.canonical_hash(),
@@ -323,9 +327,11 @@ def prepare_context_handoff(
         "resolved_context": full_payload,
         "context_delta": delta_payload,
         "context_handoff_bytes": handoff_bytes,
-        "context_handoff_tokens_estimate": estimate_tokens("x" * handoff_bytes),
+        "context_handoff_tokens_estimate": estimate_tokens("x" * handoff_bytes, home=home_path),
         "context_delta_bytes": delta_bytes,
-        "context_delta_tokens_estimate": estimate_tokens("x" * delta_bytes) if delta_bytes else 0,
+        "context_delta_tokens_estimate": (
+            estimate_tokens("x" * delta_bytes, home=home_path) if delta_bytes else 0
+        ),
         "changed_ref_count": len(changed),
         "removed_ref_count": len(removed),
         "jit_body_sha256": jit_info["sha256"],

@@ -119,6 +119,30 @@ def test_estimate_tokens_missing_or_invalid_calibration_uses_explicit_default(
     assert info == {"chars_per_token": 4.0, "source": "default", "pair_count": 0}
     assert contracts.estimate_tokens("x" * 9, model="m") == 2
 
+def test_estimator_accepts_json_integral_pair_count_like_typescript(tmp_path) -> None:
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    (state / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": {
+                    "m": {
+                        "chars_per_token": 8.0,
+                        "source": "calibrated",
+                        "pair_count": 1.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert contracts.token_estimator_info("m", home=tmp_path) == {
+        "chars_per_token": 8.0,
+        "source": "calibrated",
+        "pair_count": 1,
+    }
+
 
 def test_calibrate_tokens_uses_input_token_deltas_and_tool_bytes_fallback(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
@@ -230,11 +254,44 @@ def test_new_provider_prompt_supersedes_all_pending_tool_fallbacks(tmp_path) -> 
     state = contracts.calibrate_tokens(tmp_path)
     assert state["models"]["m"]["chars_per_token"] == 8.0  # type: ignore[index]
 
+def test_malformed_provider_or_assistant_model_invalidates_pending(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": "provider_request_meta", "model": 123, "prompt_chars": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": "assistant_usage", "model": 123, "input_tokens": 100},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 200},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+
 
 def test_calibration_skips_invalid_utf8_telemetry_file(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
     (telemetry_dir / "bad.jsonl").write_bytes(b"{\xff")
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+
+def test_invalid_provider_measurement_supersedes_pending_tool_fallback(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": "bad"},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
     state = contracts.calibrate_tokens(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0

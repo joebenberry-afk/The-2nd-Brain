@@ -15,6 +15,7 @@ Key Capabilities (§10.1 - §10.4):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -212,7 +213,8 @@ class ToolDefinition:
 class ToolWorkingSetManager:
     """Dynamic tool working set manager and lazy activation engine."""
 
-    def __init__(self, load_defaults: bool = True) -> None:
+    def __init__(self, load_defaults: bool = True, home: Path | str | None = None) -> None:
+        self.home = Path(home) if home is not None else None
         self._tools: dict[str, ToolDefinition] = {}
         if load_defaults:
             self._load_builtins()
@@ -332,7 +334,7 @@ class ToolWorkingSetManager:
         """Estimate token footprint of active tool schemas."""
         active_schemas = self.get_active_tools(compress=True)
         raw_json = json.dumps(active_schemas)
-        return estimate_tokens(raw_json)
+        return estimate_tokens(raw_json, home=self.home)
 
     def list_all(self) -> list[dict[str, Any]]:
         """List all tools with status."""
