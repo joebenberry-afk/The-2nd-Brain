@@ -4433,6 +4433,8 @@ def cmd_calibrate(args) -> int:
     home = _home(args)
     if args.calibrate_command != "tokens":
         return 2
+    # Keep the in-process estimator pointed at the same explicit CLI home.
+    os.environ["SECOND_BRAIN_HOME"] = str(home)
     state = contracts.calibrate_tokens(home)
     if args.as_json:
         print(json.dumps(state, sort_keys=True))

@@ -179,6 +179,7 @@ const MAX_CHARS_PER_TOKEN = 100;
 
 interface TokenCalibrationState {
   schema_version?: unknown;
+  source?: unknown;
   default_chars_per_token?: unknown;
   models?: Record<string, { chars_per_token?: unknown; source?: unknown; pair_count?: unknown }>;
 }
@@ -214,7 +215,7 @@ function calibrationRatio(home?: string, model?: string): number {
     ? validCalibrationRatio(entry.chars_per_token)
     : undefined;
   return calibrated ??
-    validCalibrationRatio(state.default_chars_per_token) ??
+    (state.source === "default" ? validCalibrationRatio(state.default_chars_per_token) : undefined) ??
     DEFAULT_CHARS_PER_TOKEN;
 }
 

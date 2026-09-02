@@ -104,7 +104,13 @@ def test_estimate_tokens_missing_or_invalid_calibration_uses_explicit_default(
             {
                 "schema_version": 1,
                 "default_chars_per_token": "not-a-ratio",
-                "models": {"m": {"chars_per_token": float("nan"), "source": "calibrated"}},
+                "models": {
+                    "m": {
+                        "chars_per_token": float("nan"),
+                        "source": "calibrated",
+                        "pair_count": 1,
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -118,19 +124,66 @@ def test_calibrate_tokens_uses_input_token_deltas_and_tool_bytes_fallback(tmp_pa
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
     records = [
-        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
-        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "tool_result", "output_bytes": 400},
         {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
-        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 300},
-        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 200},
-        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 350},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "assistant_usage", "input_tokens": 200},
     ]
     (telemetry_dir / "s.jsonl").write_text(
         "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
     )
     state = contracts.calibrate_tokens(tmp_path)
-    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
-    assert state["pair_count"] == 3
+    assert state["models"]["m"]["chars_per_token"] == 8.0  # type: ignore[index]
+    assert state["pair_count"] == 1
+
+
+def test_estimator_rejects_malformed_or_overflowing_calibration(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path))
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    path = state / "tokens.json"
+    path.write_bytes(b"{\xff")
+    assert contracts.estimate_tokens("x" * 8) == 2
+    path.write_text(
+        '{"schema_version":1,"default_chars_per_token":4.0,"models":'
+        '{"m":{"chars_per_token":' + "9" * 5000 + ',"source":"calibrated","pair_count":1}}}',
+        encoding="utf-8",
+    )
+    assert contracts.estimate_tokens("x" * 8, model="m") == 2
+
+
+def test_calibrated_top_level_state_does_not_override_fixed_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path))
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    (state / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "calibrated",
+                "pair_count": 0,
+                "default_chars_per_token": 2.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert contracts.estimate_tokens("x" * 8) == 2
+
+
+def test_cli_calibration_home_is_used_by_estimator(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.delenv("SECOND_BRAIN_HOME", raising=False)
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    (telemetry_dir / "s.jsonl").write_text(
+        '{"session":"s","kind":"provider_request_meta","model":"m","prompt_chars":200}\n'
+        '{"session":"s","kind":"assistant_usage","model":"m","input_tokens":100}\n',
+        encoding="utf-8",
+    )
+    from second_brain.cli import main
+
+    assert main(["--home", str(tmp_path), "calibrate", "tokens", "--json"]) == 0
+    capsys.readouterr()
+    assert contracts.estimate_tokens("x" * 10, model="m") == 5
 
 
 def test_calibration_state_contains_aggregates_only(tmp_path) -> None:
@@ -160,6 +213,7 @@ def test_calibration_state_contains_aggregates_only(tmp_path) -> None:
     assert "DO NOT STORE THIS" not in state_text
     assert "prompt" not in state_text
     assert "output" not in state_text
+
 
 def _item(
     memory_id: str = "mem-abc",
