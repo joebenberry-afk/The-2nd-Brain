@@ -225,6 +225,44 @@ def test_operational_report_preserves_missing_provider_counters(brain_home):
 
 
 
+def test_known_kinds_cover_live_records():
+    from pathlib import Path
+
+    records_dir = Path(__file__).resolve().parents[1] / "telemetry" / "agent-performance"
+    for path in records_dir.glob("*.jsonl"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                assert json.loads(line)["kind"] in telemetry.KNOWN_KINDS
+
+
+def test_session_usage_reads_hermes_model_invocation_completed(brain_home):
+    _write_session(
+        brain_home,
+        "s1.jsonl",
+        [
+            _rec(
+                "model_invocation_completed",
+                usage={
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 3,
+                    "cache_write_tokens": None,
+                },
+            )
+        ],
+    )
+
+    usage = telemetry.session_usage(brain_home, "s1")
+
+    assert usage["input"] == 10
+    assert usage["output"] == 5
+    assert usage["cache_read"] == 3
+    assert usage["cache_write"] is None
+    assert usage["total"] is None
+    assert usage["message_count"] == 1
+    assert usage["source_kind"] == "model_invocation_completed"
+
+
 def test_telemetry_schema_has_no_reasoning_fields():
     """Cheap guard: assert SCHEMA.md doesn't declare reasoning/thinking fields."""
     from pathlib import Path

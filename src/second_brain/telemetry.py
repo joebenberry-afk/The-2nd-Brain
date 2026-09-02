@@ -22,7 +22,7 @@ KNOWN_KINDS = {
     "claude_code_stop_turn", "codex_hook_shadow_decision", "context",
     "context_paging", "context_structure", "extension_error",
     "hermes_model_decision", "hermes_post_tool_call", "hermes_pre_llm_call",
-    "hermes_session_finalized", "hermes_session_started",
+    "hermes_session_finalized", "hermes_session_started", "hermes_tool_result",
     "hermes_worker_context_resolved", "hermes_worker_lifecycle",
     "hermes_worker_result_corrected", "hermes_worker_result_correction_requested",
     "hermes_worker_result_reviewed", "hermes_writeback_candidate", "lean_kernel",
@@ -282,36 +282,58 @@ def _ts(record: dict) -> str | None:
 
 
 def session_usage(home: Path, session_id: str) -> dict:
-    """Real per-session token usage, summed from this session's
-    ``assistant_usage`` records (P3-B economics kind). Every field mirrors an
-    EXACT host-reported counter (plan §44: use current runtime evidence, do
-    not fabricate). ``reasoning`` stays ``None`` when no record in this
-    session ever reported it — omission is preserved, never invented as 0."""
-    totals: dict[str, int] = {
-        "input": 0,
-        "cache_read": 0,
-        "cache_write": 0,
-        "output": 0,
-        "total": 0,
+    """Return exact token counters reported for one session.
+
+    Prime ``assistant_usage`` records expose counters at the record root;
+    Hermes ``model_invocation_completed`` records nest the same counters under
+    ``usage``. Missing and explicitly null counters remain ``None``.
+    """
+    totals: dict[str, int | None] = {
+        "input": None,
+        "cache_read": None,
+        "cache_write": None,
+        "output": None,
+        "total": None,
     }
+    source_kind: str | None = None
     reasoning_total = 0
     reasoning_seen = False
     message_count = 0
+    field_sources = (
+        ("input", "input_tokens"),
+        ("cache_read", "cache_read_tokens"),
+        ("cache_write", "cache_write_tokens"),
+        ("output", "output_tokens"),
+        ("total", "total_tokens"),
+    )
     for _, _, record in iter_records(home):
-        if record.get("session") != session_id or record.get("kind") != "assistant_usage":
+        kind = record.get("kind")
+        if record.get("session") != session_id or kind not in {
+            "assistant_usage",
+            "model_invocation_completed",
+        }:
+            continue
+        usage = record if kind == "assistant_usage" else record.get("usage")
+        if not isinstance(usage, dict):
             continue
         message_count += 1
-        totals["input"] += int(record.get("input_tokens") or 0)
-        totals["cache_read"] += int(record.get("cache_read_tokens") or 0)
-        totals["cache_write"] += int(record.get("cache_write_tokens") or 0)
-        totals["output"] += int(record.get("output_tokens") or 0)
-        totals["total"] += int(record.get("total_tokens") or 0)
-        if "reasoning_tokens" in record:
-            reasoning_seen = True
-            reasoning_total += int(record.get("reasoning_tokens") or 0)
-    result: dict[str, int | None] = dict(totals)
+        if source_kind is None:
+            source_kind = kind
+        elif source_kind != kind:
+            source_kind = None
+        for target, source in field_sources:
+            value = usage.get(source)
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[target] = (totals[target] or 0) + value
+        if "reasoning_tokens" in usage:
+            value = usage.get("reasoning_tokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                reasoning_seen = True
+                reasoning_total += value
+    result: dict[str, int | None | str] = dict(totals)
     result["reasoning"] = reasoning_total if reasoning_seen else None
     result["message_count"] = message_count
+    result["source_kind"] = source_kind
     return result
 
 

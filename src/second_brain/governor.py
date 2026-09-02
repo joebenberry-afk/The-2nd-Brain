@@ -140,6 +140,7 @@ class SessionTokens:
     session_id: str
     provider: str | None = None
     model: str | None = None
+    source_kind: str | None = None
 
     # Core token fields (from assistant_usage events)
     input_tokens: int = 0
@@ -229,38 +230,49 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
             if kind == 'before_agent_start':
                 tokens.role = record.get('role')
 
-            # Assistant usage: aggregate token counts
-            if kind == 'assistant_usage':
+            # Usage: assistant_usage stores counters at the record root;
+            # Hermes model_invocation_completed nests the same mapping.
+            if kind in ('assistant_usage', 'model_invocation_completed'):
+                usage = record if kind == 'assistant_usage' else record.get('usage')
+                if not isinstance(usage, dict):
+                    continue
                 tokens.provider = record.get('provider')
                 # Only override model if present in record (don't clobber from session_start)
                 if 'model' in record:
                     tokens.model = record['model']
+                if tokens.source_kind is None:
+                    tokens.source_kind = kind
+                elif tokens.source_kind != kind:
+                    tokens.source_kind = None
                 tokens.model_turns += 1
 
                 if 'context_window' in record:
                     tokens.context_window = record['context_window']
 
-                # Aggregate tokens (HONESTY: only count what's present)
-                if 'input_tokens' in record:
-                    tokens.input_tokens += record['input_tokens']
-                if 'output_tokens' in record:
-                    tokens.output_tokens += record['output_tokens']
-                if 'cache_read_tokens' in record:
-                    tokens.cache_read_tokens += record['cache_read_tokens']
-                if 'cache_write_tokens' in record:
-                    tokens.cache_write_tokens += record['cache_write_tokens']
-                if 'total_tokens' in record:
-                    tokens.total_tokens += record['total_tokens']
-                if 'compaction_tokens' in record:
-                    tokens.compaction_tokens += record['compaction_tokens']
+                # Aggregate tokens (HONESTY: only count reported numeric values)
+                for field in (
+                    'input_tokens',
+                    'output_tokens',
+                    'cache_read_tokens',
+                    'cache_write_tokens',
+                    'total_tokens',
+                ):
+                    value = usage.get(field)
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        setattr(tokens, field, getattr(tokens, field) + value)
+                if 'compaction_tokens' in usage:
+                    value = usage['compaction_tokens']
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        tokens.compaction_tokens += value
 
                 # Cost (HONESTY: report missing as None, track how many had it)
                 if 'cost_total' in record:
-                    if tokens.cost_total is None:
-                        tokens.cost_total = 0.0
-                    tokens.cost_total += record['cost_total']
-                    tokens.cost_total_seen += 1
-
+                    cost_total = record['cost_total']
+                    if isinstance(cost_total, (int, float)) and not isinstance(cost_total, bool):
+                        if tokens.cost_total is None:
+                            tokens.cost_total = 0.0
+                        tokens.cost_total += cost_total
+                        tokens.cost_total_seen += 1
             # Tool calls
             if kind == 'tool_call':
                 tokens.tool_calls += 1
