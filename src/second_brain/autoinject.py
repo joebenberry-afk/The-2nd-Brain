@@ -151,8 +151,8 @@ def load_config(home: Path | str) -> AutoInjectConfig:
         delta_hard_cap_tokens=delta_cap,
     )
 
-def token_estimate(text: str) -> int:
-    return estimate_tokens(text)
+def token_estimate(text: str, home: Path | str | None = None) -> int:
+    return estimate_tokens(text, home=home)
 
 
 # ---------------------------------------------------------------------------
@@ -607,12 +607,15 @@ def _ids_only(items: list[PacketItem]) -> list[PacketItem]:
 
 
 def _fit_budget(
-    items: list[PacketItem], project: str | None, config: AutoInjectConfig
+    items: list[PacketItem],
+    project: str | None,
+    config: AutoInjectConfig,
+    home: Path | str | None = None,
 ) -> tuple[list[PacketItem], bool] | None:
     """§6.6: drop low-value tail toward target; then IDs-only; then None
     (caller emits NO_INJECTION(CONTEXT_PRESSURE)). Never exceeds hard cap."""
     def est(candidate: list[PacketItem]) -> int:
-        return token_estimate(_render_packet_text(candidate, project))
+        return token_estimate(_render_packet_text(candidate, project), home=home)
 
     best = list(items)
     while len(best) > 1 and est(best) > config.target_tokens:
@@ -814,7 +817,7 @@ def prepare_injection(
         else cfg
     )
 
-    fit = _fit_budget(fresh, intent.project_id, active_budget)
+    fit = _fit_budget(fresh, intent.project_id, active_budget, home=home)
     if fit is None:
         return decision(
             NoInjectionReason.CONTEXT_PRESSURE,
@@ -833,7 +836,7 @@ def prepare_injection(
         candidate_ids=candidate_ids,
         selected_ids=[i.memory_id for i in selected],
         packet_ref=packet_id,
-        packet_token_size=token_estimate(text),
+        packet_token_size=token_estimate(text, home=home),
     )
 
 

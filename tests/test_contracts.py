@@ -76,10 +76,10 @@ def test_calibrate_tokens_fits_measured_pairs_without_raw_content(tmp_path) -> N
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
     records = [
-        {"kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
-        {"kind": "assistant_usage", "model": "m", "input_tokens": 100},
-        {"kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
-        {"kind": "assistant_usage", "model": "m", "input_tokens": 300},
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 300},
     ]
     (telemetry_dir / "s.jsonl").write_text(
         "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
@@ -179,6 +179,62 @@ def test_calibration_skips_malformed_telemetry_numbers(tmp_path) -> None:
         + '}\n{"session":"s","kind":"assistant_usage","model":"m","input_tokens":100}\n',
         encoding="utf-8",
     )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+
+def test_calibration_ignores_records_without_session_or_valid_model(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
+        {"session": "s", "kind": "provider_request_meta", "model": 123, "prompt_chars": 400},
+        {"session": "s", "kind": "assistant_usage", "model": 123, "input_tokens": 100},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+
+def test_calibration_invalid_usage_invalidates_pending_measurement(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 400},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "provider_request_meta", "model": "m", "prompt_chars": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 200},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
+    assert state["pair_count"] == 1
+
+
+def test_new_provider_prompt_supersedes_all_pending_tool_fallbacks(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": "provider_request_meta", "prompt_chars": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["models"]["m"]["chars_per_token"] == 8.0  # type: ignore[index]
+
+
+def test_calibration_skips_invalid_utf8_telemetry_file(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    (telemetry_dir / "bad.jsonl").write_bytes(b"{\xff")
     state = contracts.calibrate_tokens(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0

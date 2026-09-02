@@ -1161,11 +1161,13 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
     return RetrievalConfig(top_k=top_k, max_tokens=max_tokens, weights=weights)
 
 
-def _estimate_retrieval_tokens(row: dict) -> int:
-    return estimate_tokens(_body_text_for_dedupe(row))
+def _estimate_retrieval_tokens(row: dict, home: Path | str | None = None) -> int:
+    return estimate_tokens(_body_text_for_dedupe(row), home=home)
 
 
-def _apply_budget(rows: list[dict], top_k: int | None, max_tokens: int | None) -> list[dict]:
+def _apply_budget(
+    rows: list[dict], top_k: int | None, max_tokens: int | None, home: Path | str | None = None
+) -> list[dict]:
     """Phase 11: cap the ranked result set. `top_k` keeps only the N
     highest-value rows; `max_tokens` trims the LOWEST-value rows (ranked
     best-first, so the tail is dropped) while always keeping at least the
@@ -1179,7 +1181,7 @@ def _apply_budget(rows: list[dict], top_k: int | None, max_tokens: int | None) -
     kept: list[dict] = []
     total = 0
     for row in rows:
-        cost = _estimate_retrieval_tokens(row)
+        cost = _estimate_retrieval_tokens(row, home=home)
         if kept and total + cost > max_tokens:
             continue
         kept.append(row)
@@ -1305,12 +1307,12 @@ def _negative_transfer_score(row: dict, weights: RetrievalWeights) -> float:
         else 0
     )
     return 1.0 - weights.negative_penalty_per_contradiction * min(contradictions, max(1, cap_count))
-
-
-def _token_cost_penalty(row: dict, weights: RetrievalWeights) -> float:
+def _token_cost_penalty(
+    row: dict, weights: RetrievalWeights, home: Path | str | None = None
+) -> float:
     """Gentle log-shaped per-token ROI penalty on very long bodies; never
     zeroes the score (max token_penalty_cap subtracted)."""
-    n = estimate_tokens(_body_text_for_dedupe(row))
+    n = estimate_tokens(_body_text_for_dedupe(row), home=home)
     if n <= weights.token_free_limit:
         return 0.0
     return weights.token_penalty_cap * min(
@@ -1327,6 +1329,7 @@ def _score_row(
     project_id: str | None,
     score_terms: frozenset[str],
     weights: RetrievalWeights | None = None,
+    home: Path | str | None = None,
 ) -> float:
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
     score = _relevance_score(row, query_tokens, bm25_max, w)
@@ -1341,7 +1344,7 @@ def _score_row(
     if "negative" in score_terms:
         score *= _negative_transfer_score(row, w)
     if "token" in score_terms:
-        score -= _token_cost_penalty(row, w)
+        score -= _token_cost_penalty(row, w, home=home)
     return score
 
 
@@ -1352,6 +1355,7 @@ def _rank_rows(
     project_id: str | None,
     score_terms: frozenset[str],
     weights: RetrievalWeights | None = None,
+    home: Path | str | None = None,
 ) -> list[dict]:
     """Phase 9: score AFTER filters+dedupe, BEFORE budget; stable ordering:
     score desc, then original order (bm25 order on the FTS path, list order
@@ -1365,7 +1369,11 @@ def _rank_rows(
     )
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
     scored = [
-        (row, index, _score_row(row, query_tokens, bm25_max, project_id, score_terms, w))
+        (
+            row,
+            index,
+            _score_row(row, query_tokens, bm25_max, project_id, score_terms, w, home=home),
+        )
         for index, row in enumerate(rows)
     ]
     scored.sort(key=lambda item: (-item[2], item[1], item[0].get("memory_id") or ""))
@@ -1443,6 +1451,7 @@ def search_memories(
                     weights=cfg.weights,
                     top_k=eff_top_k,
                     max_tokens=eff_max_tokens,
+                    home=home,
                 )
             # Index exists but is empty while memories exist: not built yet.
             # Fall through to the linear scan (fail open).
@@ -1504,6 +1513,7 @@ def _search_fts(
     weights: RetrievalWeights | None = None,
     top_k: int | None = None,
     max_tokens: int | None = None,
+    home: Path | str | None = None,
 ) -> list[dict]:
     """FTS5 query: quoted prefix tokens per word, hard filters (Phase 7),
     dedupe (Phase 8), then deterministic ranking (Phase 9) — post-filter,
@@ -1531,8 +1541,10 @@ def _search_fts(
     if len(rows) > _DEDUPE_BODY_SCAN_LIMIT:
         for row in rows:
             row.pop("_body", None)
-    ranked = _rank_rows(rows, term, project_id=project_id, score_terms=score_terms, weights=weights)
-    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens), conflicts)
+    ranked = _rank_rows(
+        rows, term, project_id=project_id, score_terms=score_terms, weights=weights, home=home
+    )
+    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens, home=home), conflicts)
 
 
 def _search_linear(
@@ -1583,5 +1595,7 @@ def _search_linear(
         out.append(row)
     conflicts = _contradiction_map(out)
     rows = _dedupe_rows(out, project_id=project_id, include_duplicates=include_duplicates)
-    ranked = _rank_rows(rows, term, project_id=project_id, score_terms=score_terms, weights=weights)
-    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens), conflicts)
+    ranked = _rank_rows(
+        rows, term, project_id=project_id, score_terms=score_terms, weights=weights, home=home
+    )
+    return _attach_contradictions(_apply_budget(ranked, top_k, max_tokens, home=home), conflicts)
