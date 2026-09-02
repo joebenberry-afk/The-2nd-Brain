@@ -229,7 +229,10 @@ def _token_calibration_path() -> Path:
 def _valid_ratio(value: object) -> float | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
-    ratio = float(value)
+    try:
+        ratio = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None
     if not math.isfinite(ratio) or not _MIN_CHARS_PER_TOKEN <= ratio <= _MAX_CHARS_PER_TOKEN:
         return None
     return ratio
@@ -261,11 +264,11 @@ def token_estimator_info(model: str | None = None) -> dict[str, object]:
                     ratio = loaded
                     source = "calibrated"
                     pair_count = pair_count_value
-            if source == "default":
+            if source == "default" and data.get("source") == "default":
                 loaded = _valid_ratio(data.get("default_chars_per_token"))
                 if loaded is not None:
                     ratio = loaded
-    except (OSError, json.JSONDecodeError, TypeError):
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
         pass
     return {"chars_per_token": ratio, "source": source, "pair_count": pair_count}
 
@@ -299,6 +302,8 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
                 and math.isfinite(float(measured))
                 and measured > 0
             ):
+                if model is not None:
+                    pending.pop((session, None), None)
                 pending[(session, model)] = float(measured)
             continue
         if kind == "tool_result":
@@ -328,12 +333,11 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
         previous_input[usage_key] = float(tokens)
         if delta <= 0:
             continue
-        measured_entry = pending.pop((session, model), None)
-        if measured_entry is None and model is not None:
-            measured_entry = pending.pop((session, None), None)
-        if measured_entry is None:
+        measured = pending.pop((session, model), None)
+        if measured is None and model is not None:
+            measured = pending.pop((session, None), None)
+        if measured is None:
             continue
-        measured = measured_entry
         pairs.setdefault(model or "default", []).append((measured, delta))
     return pairs
 
