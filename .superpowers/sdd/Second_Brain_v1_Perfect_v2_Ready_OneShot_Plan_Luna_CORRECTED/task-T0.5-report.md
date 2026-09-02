@@ -164,7 +164,7 @@ The environment does not provide completed Prime or Claude Code five-pair teleme
 The review identified evidence-integrity risks; these were corrected in the scoped fix:
 
 - Qualification updates now preserve every existing top-level field, including metadata, gates, `source_identity`, `generation_basis`, and phase. Economics data is merged under `economics.<harness>` and an existing `results` list is updated only for that harness.
-- OFF maps explicitly to the existing `A_BRAIN_OFF` profile and ON to `I_FULL_V1`. The requested profile is honored as the first arm while both arms are still exercised.
+- OFF maps explicitly to the existing `A_BRAIN_OFF` profile and ON to `I_FULL_V1`. The requested profile label is retained in metadata; execution order is always OFF then ON.
 - Every dollar is recomputed from complete host counters with `economics.cost_per_run` and configured `[prices.<model>]`; host `cost_total` is never authoritative. Missing counters or prices produce null dollars.
 - Aggregation reads every JSONL file for an attempt and preserves each usage counter independently as null when absent/partial. Pair identity and non-token metrics are retained even when token evidence is unusable.
 - Fixture loading enforces exactly seven class files, exactly two non-empty tasks per class, unique task IDs, 40-hex fixture commits, non-empty acceptance commands, and integer `expect_exit = 0` (booleans rejected).
