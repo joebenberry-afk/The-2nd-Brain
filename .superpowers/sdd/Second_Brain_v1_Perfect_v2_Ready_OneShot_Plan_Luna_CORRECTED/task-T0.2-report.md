@@ -203,3 +203,55 @@ telemetry was rewritten.
 
 `brain(core): aggregate hermes usage, close telemetry kinds` (amended task
 commit after review fixes).
+
+## Review-fix round 2 report
+
+Addressed the role-attribution null regression:
+
+- `parse_telemetry_session()` preserves explicit nulls in nullable core token
+  fields while retaining integer zero defaults for fields never exposed.
+- Derived `driver_tokens`/`worker_tokens` keep their historical integer surface
+  and contribute zero only when the source total is unknown.
+- `attribute_roles()` skips unknown nullable input/output/total counters
+  without converting the source fields themselves to fabricated values.
+- Added `test_role_attribution_handles_explicit_null_counters`.
+
+### Round 2 TDD RED
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_governor.py -k role_attribution_handles_explicit_null_counters -q
+```
+
+```text
+F                                                                        [100%]
+TypeError: unsupported operand type(s) for +=: 'int' and 'NoneType'
+```
+
+### Round 2 GREEN
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_governor.py -k role_attribution_handles_explicit_null_counters -q
+```
+
+```text
+.                                                                        [100%]
+```
+
+Focused final command:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_telemetry.py tests/test_governor.py tests/test_credit.py -q -rA
+```
+
+```text
+........................................................................ [ 92%]
+......                                                                   [100%]
+```
+
+All listed tests passed (78 total). Live validation remained `unknown kinds 0`
+with three pre-existing unparseable lines. No full suite, formatter, linter,
+or raw telemetry rewrite was performed.
+
+### Round 2 commit
+
+`fix(core): preserve Hermes telemetry nulls` (second fix commit).

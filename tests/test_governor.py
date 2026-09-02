@@ -240,6 +240,35 @@ class TestRoleAttribution:
         assert attribution["worker_turns"] == 1
         assert attribution["worker_input_tokens"] == 200
 
+    def test_role_attribution_handles_explicit_null_counters(self, brain_home):
+        _write_session(
+            brain_home,
+            "driver-null",
+            [
+                _rec("session_start", role="driver"),
+                _rec(
+                    "assistant_usage",
+                    input_tokens=None,
+                    output_tokens=None,
+                    total_tokens=None,
+                ),
+            ],
+        )
+
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "driver-null.jsonl"
+        )
+        attribution = governor.attribute_roles([tokens])
+
+        assert tokens.input_tokens is None
+        assert tokens.output_tokens is None
+        assert tokens.total_tokens is None
+        assert tokens.driver_tokens == 0
+        assert attribution["driver_turns"] == 1
+        assert attribution["driver_input_tokens"] == 0
+        assert attribution["driver_output_tokens"] == 0
+        assert attribution["driver_total_tokens"] == 0
+
 
 class TestFeatureFlags:
     """Tests for feature flag resolution."""
