@@ -55,6 +55,24 @@ candidate = 0.9
 archived = 0.8
 superseded = 0.8
 
+[gate]
+# Gate calibration and rollout. SHADOW observes without changing injection.
+abs_floor = 0.55
+gap_min = 0.08
+rollout = "SHADOW"
+source = "config/retrieval.toml"
+reason = "initial score-gap calibration"
+version = "1"
+effective = "2026-09-02"
+
+[gate.lane_floors]
+policy = 0.80
+active_state = 0.55
+semantic = 0.55
+repo = 0.55
+decision = 0.55
+skill = 0.55
+
 [lateral_inhibition]
 # NOT WIRED — dedupe is always on (semantic._dedupe_rows); these keys are
 # documented plan defaults only.

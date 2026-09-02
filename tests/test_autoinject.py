@@ -117,6 +117,37 @@ def test_no_relevant_memory_yields_no_injection(brain_home) -> None:
     assert d.selected_ids == []
     assert d.packet_ref is None
 
+def test_gate_uses_computed_score_not_fallback_constant(brain_home, monkeypatch):
+    mid = _seed_current(brain_home, "Low score gate memory", "low score gate query")
+    config = brain_home / "config" / "retrieval.toml"
+    config.write_text(
+        "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+        encoding="utf-8",
+    )
+
+    def low_score_rank(rows, *args, **kwargs):
+        for row in rows:
+            row["_score"] = 0.2
+        return rows
+
+    monkeypatch.setattr(semantic, "_rank_rows", low_score_rank)
+    d = _inject(brain_home, "low score gate query", session_id="low-score-gate")
+    assert d.decision is InjectionDecision.NO_INJECTION
+    assert d.reason is NoInjectionReason.LOW_CONFIDENCE
+    assert d.selected_ids == []
+    assert mid in d.candidate_ids
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT kind, propensity FROM decisions WHERE session_id = ?",
+            ("low-score-gate",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["kind"] == "retrieval"
+    assert row["propensity"] == 1.0
+
 
 def test_wrong_project_memory_not_injected(brain_home) -> None:
     _seed_current(brain_home, "WAL restore safety", "never leave -wal next to restored db")
