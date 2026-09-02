@@ -1,0 +1,35 @@
+# Shared v2 policy defaults. Adaptive features remain observational until promoted.
+schema_version = 1
+
+[rollout]
+admission = "SHADOW"
+retrieval = "SHADOW"
+brainstem = "SHADOW"
+learning = "SHADOW"
+culture = "SHADOW"
+frontier = "SHADOW"
+verification = "SHADOW"
+
+[admission]
+min_score = 0.75
+
+[retrieval]
+max_candidates = 20
+top_k = 5
+token_budget = 1200
+
+[brainstem]
+context_char_budget = 12000
+worker_slots = 1
+premium_model_turns = 1
+
+[learning]
+surprise_threshold = 0.8
+
+[culture]
+
+[frontier]
+min_importance = 0.7
+
+[verification]
+floor = "targeted"

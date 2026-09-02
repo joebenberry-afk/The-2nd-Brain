@@ -1,0 +1,196 @@
+"""Deterministic policy decisions and durable outcomes."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+import random
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from . import contracts, db
+from .errors import BrainError
+
+_ROLLOUT_STAGES = frozenset({"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"})
+
+
+def _dbfile(home: Path | str) -> Path:
+    return db.db_path(Path(home))
+
+
+def _ensure_migrated(home: Path | str) -> None:
+    dbfile = _dbfile(home)
+    if db.pending_migrations(dbfile):
+        db.migrate(dbfile)
+
+
+def _canonical(value: Any, name: str) -> str:
+    try:
+        return contracts.canonical_json(value)
+    except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+        raise BrainError(f"{name} must be JSON-serializable") from exc
+
+
+def _text(value: Any, name: str, *, nullable: bool = False) -> str | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str):
+        raise BrainError(f"{name} must be a string")
+    return value
+
+
+def _propensity(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BrainError("propensity must be a number between 0 and 1")
+    result = float(value)
+    if not math.isfinite(result) or not 0.0 <= result <= 1.0:
+        raise BrainError("propensity must be a number between 0 and 1")
+    return result
+
+
+def _reward(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BrainError("reward must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise BrainError("reward must be a finite number")
+    return result
+
+
+def record(
+    home: Path | str,
+    *,
+    kind: str,
+    session_id: str | None,
+    task_id: str | None,
+    chosen: Any,
+    alternatives: Any,
+    propensity: float,
+    randomized: bool,
+    policy_version: str,
+    stage: str,
+    inputs: Any,
+) -> str:
+    """Record a policy choice, returning its deterministic identity.
+
+    Re-recording the same decision is a no-op: the first stored decision and
+    its eventual caller-supplied outcome remain intact.
+    """
+    kind = _text(kind, "kind") or ""
+    session_id = _text(session_id, "session_id", nullable=True)
+    task_id = _text(task_id, "task_id", nullable=True)
+    policy_version = _text(policy_version, "policy_version") or ""
+    stage = _text(stage, "stage") or ""
+    if stage not in _ROLLOUT_STAGES:
+        raise BrainError(f"stage must be one of {sorted(_ROLLOUT_STAGES)}")
+    if not isinstance(randomized, bool):
+        raise BrainError("randomized must be a boolean")
+    propensity = _propensity(propensity)
+    chosen_json = _canonical(chosen, "chosen")
+    alternatives_json = _canonical(alternatives, "alternatives")
+    inputs_json = _canonical(inputs, "inputs")
+    inputs_hash = contracts.stable_content_hash(inputs)
+    decision_id = hashlib.sha256(
+        (inputs_json + (session_id or "") + kind).encode("utf-8")
+    ).hexdigest()[:24]
+
+    _ensure_migrated(home)
+    conn = db.connect(_dbfile(home))
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO decisions(
+                decision_id, session_id, task_id, kind, chosen_json,
+                alternatives_json, propensity, randomized, policy_version,
+                rollout_stage, inputs_hash, outcome_json, reward, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
+            (
+                decision_id,
+                session_id,
+                task_id,
+                kind,
+                chosen_json,
+                alternatives_json,
+                propensity,
+                1 if randomized else 0,
+                policy_version,
+                stage,
+                inputs_hash,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        if isinstance(exc, BrainError):
+            raise
+        raise BrainError(f"Could not record decision: {exc}") from exc
+    finally:
+        conn.close()
+    return decision_id
+
+
+def set_outcome(
+    home: Path | str,
+    decision_id: str,
+    outcome: dict[str, Any],
+    reward: float | None,
+) -> None:
+    """Persist the caller-supplied outcome and optional reward for a decision."""
+    decision_id = _text(decision_id, "decision_id") or ""
+    if not isinstance(outcome, dict):
+        raise BrainError("outcome must be a dict")
+    outcome_json = _canonical(outcome, "outcome")
+    if reward is not None:
+        reward = _reward(reward)
+
+    _ensure_migrated(home)
+    conn = db.connect(_dbfile(home))
+    try:
+        cursor = conn.execute(
+            "UPDATE decisions SET outcome_json = ?, reward = ? WHERE decision_id = ?",
+            (outcome_json, reward, decision_id),
+        )
+        if cursor.rowcount != 1:
+            raise BrainError(f"Unknown decision_id {decision_id!r}")
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        if isinstance(exc, BrainError):
+            raise
+        raise BrainError(f"Could not set decision outcome: {exc}") from exc
+    finally:
+        conn.close()
+
+
+def randomize(
+    policy_choice: Any,
+    alternatives: Sequence[Any],
+    epsilon: float,
+    rng_seed: Any,
+) -> tuple[Any, float, bool]:
+    """Epsilon-randomize a policy choice with its exact action propensity."""
+    if isinstance(alternatives, (str, bytes)) or not isinstance(alternatives, Sequence):
+        raise BrainError("alternatives must be a non-empty sequence")
+    if not alternatives:
+        raise BrainError("alternatives must be a non-empty sequence")
+    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float)):
+        raise BrainError("epsilon must be a number between 0 and 1")
+    epsilon = float(epsilon)
+    if not math.isfinite(epsilon) or not 0.0 <= epsilon <= 1.0:
+        raise BrainError("epsilon must be a number between 0 and 1")
+
+    n = len(alternatives)
+    rng = random.Random(rng_seed)
+    randomized = rng.random() < epsilon
+    choice = rng.choice(alternatives) if randomized else policy_choice
+    alternative_propensity = epsilon / n
+    propensity = (
+        1.0 - epsilon + alternative_propensity
+        if choice == policy_choice and policy_choice in alternatives
+        else alternative_propensity
+        if randomized
+        else 1.0 - epsilon
+    )
+    return choice, propensity, randomized
