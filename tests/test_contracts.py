@@ -170,6 +170,20 @@ def test_calibrated_top_level_state_does_not_override_fixed_default(tmp_path, mo
     assert contracts.estimate_tokens("x" * 8) == 2
 
 
+def test_calibration_skips_malformed_telemetry_numbers(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    (telemetry_dir / "s.jsonl").write_text(
+        '{"session":"s","kind":"provider_request_meta","model":"m","prompt_chars":'
+        + "9" * 5000
+        + '}\n{"session":"s","kind":"assistant_usage","model":"m","input_tokens":100}\n',
+        encoding="utf-8",
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["source"] == "default"
+    assert state["pair_count"] == 0
+
+
 def test_cli_calibration_home_is_used_by_estimator(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.delenv("SECOND_BRAIN_HOME", raising=False)
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"

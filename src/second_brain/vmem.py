@@ -124,8 +124,8 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _estimate_tokens(text: str) -> int:
-    return contracts.estimate_tokens(text)
+def _estimate_tokens(text: str, home: Path | str | None = None) -> int:
+    return contracts.estimate_tokens(text, home=home)
 
 
 def _compute_base_priority(kind: SessionObjectKind, pinned: bool) -> float:
@@ -202,7 +202,7 @@ class VMemStore:
             content_sha = stored_artifact["hash"]
         obj_id = f"obj-{content_sha[:12]}"
         now = _now()
-        tokens = _estimate_tokens(content)
+        tokens = _estimate_tokens(content, self.home)
         base_priority = _compute_base_priority(kind, pinned)
         meta_dict = metadata or {}
         meta_json = json.dumps(meta_dict)

@@ -21,6 +21,25 @@ from second_brain.vmem import (
 
 _CLEAN_ENV = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
 
+def test_vmem_store_uses_its_custom_home_calibration(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path / "default"))
+    calibration = tmp_path / "custom" / "state" / "calibration"
+    calibration.mkdir(parents=True)
+    (calibration / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "default",
+                "default_chars_per_token": 2.0,
+                "models": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = VMemStore(tmp_path / "custom", "session-custom")
+    obj = store.store_object(SessionObjectKind.GENERIC, "title", "x" * 10)
+    assert obj.token_estimate == 5
+
 
 def _run_vmem_cli(
     args: list[str], brain_home, stdin: str | None = None
