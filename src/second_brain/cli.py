@@ -5162,7 +5162,7 @@ def cmd_delta_sync(args) -> int:
 
     if args.delta_sync_command == "sync":
         target_items = json.loads(Path(args.target_file).read_text(encoding="utf-8"))
-        engine = delta_sync.DeltaSyncEngine()
+        engine = delta_sync.DeltaSyncEngine(home=home)
         deltas, rendered = engine.sync_memories(
             args.session_id, target_items, recipient=args.recipient
         )
@@ -5214,7 +5214,7 @@ def cmd_tool_set(args) -> int:
 
     from . import tool_working_set
 
-    mgr = tool_working_set.ToolWorkingSetManager()
+    mgr = tool_working_set.ToolWorkingSetManager(home=_home(args))
 
     if args.tool_set_command == "list":
         if args.active:

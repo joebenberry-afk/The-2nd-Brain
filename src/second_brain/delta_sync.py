@@ -260,10 +260,10 @@ def render_delta_sync_text(deltas: list[MemoryDeltaPacket]) -> str:
 class DeltaSyncEngine:
     """Session-level Delta Sync tracker (§8.4)."""
 
-    def __init__(self) -> None:
+    def __init__(self, home: Path | str | None = None) -> None:
+        self.home = Path(home) if home is not None else None
         # (session_id, recipient, memory_id) -> dict[str, Any] (last delivered state)
         self._delivered: dict[tuple[str, str, str], dict[str, Any]] = {}
-
     def sync_memories(
         self,
         session_id: str,
@@ -280,7 +280,7 @@ class DeltaSyncEngine:
             key = (session_id, recipient, mem_id)
             base_dict = self._delivered.get(key)
 
-            delta = compute_memory_delta(base_dict, t_dict)
+            delta = compute_memory_delta(base_dict, t_dict, home=self.home)
             deltas.append(delta)
 
             # Update delivered memory state
