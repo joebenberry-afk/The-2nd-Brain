@@ -175,6 +175,26 @@ def test_estimator_rejects_malformed_or_overflowing_calibration(tmp_path, monkey
     )
     assert contracts.estimate_tokens("x" * 8, model="m") == 2
 
+def test_estimator_rejects_huge_pair_count_without_crashing(tmp_path) -> None:
+    state = tmp_path / "state" / "calibration"
+    state.mkdir(parents=True)
+    (state / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": {
+                    "m": {
+                        "chars_per_token": 8.0,
+                        "source": "calibrated",
+                        "pair_count": int("9" * 400),
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert contracts.estimate_tokens("x" * 8, model="m", home=tmp_path) == 2
+
 
 def test_calibrated_top_level_state_does_not_override_fixed_default(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path))
@@ -295,6 +315,21 @@ def test_invalid_provider_measurement_supersedes_pending_tool_fallback(tmp_path)
     state = contracts.calibrate_tokens(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0
+
+def test_calibration_ignores_unhashable_telemetry_kind(tmp_path) -> None:
+    telemetry_dir = tmp_path / "telemetry" / "agent-performance"
+    telemetry_dir.mkdir(parents=True)
+    records = [
+        {"session": "s", "kind": "tool_result", "model": "m", "output_bytes": 400},
+        {"session": "s", "kind": [], "model": "m", "output_bytes": 800},
+        {"session": "s", "kind": "assistant_usage", "model": "m", "input_tokens": 100},
+    ]
+    (telemetry_dir / "s.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+    state = contracts.calibrate_tokens(tmp_path)
+    assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
+    assert state["pair_count"] == 1
 
 def test_provider_record_without_prompt_preserves_tool_fallback(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
