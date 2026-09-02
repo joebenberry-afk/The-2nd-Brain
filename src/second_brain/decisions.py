@@ -14,6 +14,19 @@ from . import contracts, db
 from .errors import BrainError
 
 _ROLLOUT_STAGES = frozenset({"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"})
+_DECISION_KINDS = frozenset(
+    {"retrieval", "routing", "eviction", "budget", "verification",
+     "admission", "reread", "reconsolidation", "brainstem"}
+)
+_FORBIDDEN_METADATA_FIELDS = frozenset(
+    {"prompt", "payload", "secret", "content", "text", "query", "input",
+     "output", "body", "message", "token", "thought", "reasoning"}
+)
+MAX_METADATA_TEXT_CHARS = 512
+_MAX_METADATA_DEPTH = 4
+_MAX_METADATA_KEYS = 32
+_MAX_METADATA_ITEMS = 16
+_MAX_METADATA_BYTES = 4096
 
 
 def _dbfile(home: Path | str) -> Path:
@@ -32,6 +45,39 @@ def _canonical(value: Any, name: str) -> str:
     except (TypeError, ValueError, OverflowError, RecursionError) as exc:
         raise BrainError(f"{name} must be JSON-serializable") from exc
 
+def _validate_metadata(value: Any, name: str, depth: int = 0) -> None:
+    if depth > _MAX_METADATA_DEPTH:
+        raise BrainError(f"{name} exceeds metadata nesting bound")
+    if isinstance(value, dict):
+        if len(value) > _MAX_METADATA_KEYS:
+            raise BrainError(f"{name} exceeds metadata key bound")
+        for key, item in value.items():
+            if not isinstance(key, str) or not key or len(key) > 128:
+                raise BrainError(f"{name} has an invalid metadata key")
+            if key.casefold() in _FORBIDDEN_METADATA_FIELDS:
+                raise BrainError(f"{name} contains forbidden metadata field {key!r}")
+            _validate_metadata(item, name, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        if len(value) > _MAX_METADATA_ITEMS:
+            raise BrainError(f"{name} exceeds metadata item bound")
+        for item in value:
+            _validate_metadata(item, name, depth + 1)
+    elif isinstance(value, str):
+        if len(value) > MAX_METADATA_TEXT_CHARS:
+            raise BrainError(f"{name} exceeds metadata text bound")
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise BrainError(f"{name} contains a non-finite number")
+    elif not isinstance(value, (int, bool, type(None))):
+        raise BrainError(f"{name} must contain metadata-safe JSON values")
+
+
+def _metadata_json(value: Any, name: str) -> str:
+    _validate_metadata(value, name)
+    serialized = _canonical(value, name)
+    if len(serialized.encode("utf-8")) > _MAX_METADATA_BYTES:
+        raise BrainError(f"{name} exceeds metadata byte bound")
+    return serialized
 
 def _text(value: Any, name: str, *, nullable: bool = False) -> str | None:
     if value is None and nullable:
@@ -79,21 +125,29 @@ def record(
     its eventual caller-supplied outcome remain intact.
     """
     kind = _text(kind, "kind") or ""
-    session_id = _text(session_id, "session_id", nullable=True)
+    if kind not in _DECISION_KINDS:
+        raise BrainError(f"kind must be one of {sorted(_DECISION_KINDS)}")
+    session_id = _text(session_id, "session_id")
+    if not session_id:
+        raise BrainError("session_id must be non-empty")
     task_id = _text(task_id, "task_id", nullable=True)
+    if task_id == "":
+        raise BrainError("task_id must be non-empty when provided")
     policy_version = _text(policy_version, "policy_version") or ""
+    if not policy_version:
+        raise BrainError("policy_version must be non-empty")
     stage = _text(stage, "stage") or ""
     if stage not in _ROLLOUT_STAGES:
         raise BrainError(f"stage must be one of {sorted(_ROLLOUT_STAGES)}")
     if not isinstance(randomized, bool):
         raise BrainError("randomized must be a boolean")
     propensity = _propensity(propensity)
-    chosen_json = _canonical(chosen, "chosen")
-    alternatives_json = _canonical(alternatives, "alternatives")
+    chosen_json = _metadata_json(chosen, "chosen")
+    alternatives_json = _metadata_json(alternatives, "alternatives")
     inputs_json = _canonical(inputs, "inputs")
     inputs_hash = contracts.stable_content_hash(inputs)
     decision_id = hashlib.sha256(
-        (inputs_json + (session_id or "") + kind).encode("utf-8")
+        (inputs_json + session_id + kind).encode("utf-8")
     ).hexdigest()[:24]
 
     _ensure_migrated(home)
@@ -139,9 +193,11 @@ def set_outcome(
 ) -> None:
     """Persist the caller-supplied outcome and optional reward for a decision."""
     decision_id = _text(decision_id, "decision_id") or ""
+    if not decision_id:
+        raise BrainError("decision_id must be non-empty")
     if not isinstance(outcome, dict):
         raise BrainError("outcome must be a dict")
-    outcome_json = _canonical(outcome, "outcome")
+    outcome_json = _metadata_json(outcome, "outcome")
     if reward is not None:
         reward = _reward(reward)
 
@@ -175,6 +231,9 @@ def randomize(
         raise BrainError("alternatives must be a non-empty sequence")
     if not alternatives:
         raise BrainError("alternatives must be a non-empty sequence")
+    for index, candidate in enumerate(alternatives):
+        if any(candidate == prior for prior in alternatives[:index]):
+            raise BrainError("alternatives must not contain duplicate choices")
     if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float)):
         raise BrainError("epsilon must be a number between 0 and 1")
     epsilon = float(epsilon)
