@@ -229,3 +229,35 @@ baseline preservation, multi-file summing, null/partial counters, exact
 pricing, mixed-model refusal, strict seven-class fixture validation, and an
 exact `lambda = infinity` known-effect assertion. No synthetic test data is
 written to repository output evidence.
+
+## Review-fix round 3
+
+The final evidence-integrity fixes require each fixture's JSON `class` to
+match its filename stem, rejecting renamed or duplicate class content. Each
+normalized raw run now records `usage_capture`; it is true only when every
+required host counter and model-turn count was observed. Summary capture is
+true only when both arms of every recorded pair have complete capture.
+
+Model identity is conservative: a usage event with a missing or non-string
+model marks the attempt mixed/unknown, so dollars remain null even when
+another event names a priced model. The Windows command override parser
+preserves executable paths for bounded temporary-host integration.
+
+Round-three focused proof:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_economics.py -q
+# 22 passed
+
+PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_economics.py tests/test_v2_policy.py tests/test_governor.py -q
+# 64 passed
+
+PYTHONPATH=src .venv/Scripts/python.exe scripts/run_paired_economics.py --help
+# help rendered successfully
+```
+
+The public `run()` integration test uses a temporary host script and
+temporary fixture/output paths. It exercises the real bounded subprocess,
+OFF-then-ON arms, telemetry normalization, configured dollar pricing,
+qualification merging, and prompt/tool-output exclusion without writing
+synthetic data to repository outputs.

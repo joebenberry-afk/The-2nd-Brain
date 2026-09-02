@@ -126,6 +126,22 @@ def test_fixture_set_is_exact_and_task_ids_are_unique():
         economics.validate_fixture(json.loads(path.read_text(encoding="utf-8")))
 
 
+
+
+def test_fixture_loader_rejects_renamed_class_content(tmp_path, monkeypatch):
+    import json
+    from scripts import run_paired_economics as runner
+
+    source = Path(runner.FIXTURE_DIR)
+    for path in source.glob("*.json"):
+        target = tmp_path / path.name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if path.stem == "MICRO":
+            payload["class"] = "STANDARD"
+        target.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(runner, "FIXTURE_DIR", tmp_path)
+    with __import__("pytest").raises(ValueError):
+        runner.load_tasks()
 def test_runner_maps_both_profiles_to_explicit_governor_profiles():
     from scripts import run_paired_economics as runner
 
@@ -291,10 +307,11 @@ def test_run_executes_off_then_on_even_when_requested_on(tmp_path, monkeypatch):
         calls.append(profile)
         return {"run_id": f"{profile}-run", "task_id": task["task_id"], "profile": profile,
                 "telemetry": {"total_tokens": 10, "model_turns": 1, "wall_ms": 1},
-                "dollars": None, "acceptance_pass": True, "usage_capture": True}
+                "dollars": None, "acceptance_pass": True, "usage_capture": profile == "OFF"}
     monkeypatch.setattr(runner, "_run_one", fake_one)
-    runner.run("prime", "ON", 1)
+    summary = runner.run("prime", "ON", 1)
     assert calls == ["OFF", "ON"]
+    assert summary["usage_capture"] is False
 
 
 def test_aggregate_mixed_models_refuses_single_price():
@@ -314,3 +331,93 @@ def test_aggregate_mixed_models_refuses_single_price():
             paths.append(path)
         aggregate = runner.aggregate_telemetry(paths)
     assert aggregate["mixed_model"] is True
+
+
+def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch):
+    import json
+    from scripts import run_paired_economics as runner
+
+    def fake_git(*args, **kwargs):
+        class Completed:
+            returncode = 0
+        return Completed()
+
+    def fake_host(command, prompt, worktree, env):
+        telemetry = Path(env["SECOND_BRAIN_HOME"]) / "telemetry" / "agent-performance"
+        telemetry.mkdir(parents=True)
+        rows = [
+            {"kind": "assistant_usage", "model": "deepseek-v4-flash"},
+            {"kind": "assistant_usage"},
+        ]
+        for row in rows:
+            row.update({"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0,
+                        "cache_write_tokens": 0, "total_tokens": 2})
+        (telemetry / "session.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+        )
+        return 0
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_git)
+    monkeypatch.setattr(runner, "_run_host", fake_host)
+    monkeypatch.setattr(runner, "_acceptance", lambda command, worktree: True)
+    task = {
+        "task_id": "model-test", "prompt": "private prompt",
+        "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+        "acceptance": {"command": "private acceptance", "expect_exit": 0},
+    }
+    record = runner._run_one("prime", task, "ON", ["host"])
+    assert record["usage_capture"] is True
+    assert record["telemetry"]["mixed_model"] is True
+    assert record["dollars"] is None
+    assert record["dollars_reason"] == "mixed_or_unknown_model"
+
+
+def test_public_run_with_temporary_host_writes_real_shaped_artifacts(tmp_path, monkeypatch):
+    import json
+    import shutil
+    import sys
+    from scripts import run_paired_economics as runner
+
+    fixture_dir = tmp_path / "fixtures"
+    shutil.copytree(runner.FIXTURE_DIR, fixture_dir)
+    for path in fixture_dir.glob("*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["tasks"] = [
+            {**task, "acceptance": {"command": f'"{sys.executable}" -c "print(\'PRIVATE_TOOL_OUTPUT\')"', "expect_exit": 0}}
+            for task in payload["tasks"]
+        ]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(runner.QUALIFICATION.read_text(encoding="utf-8"), encoding="utf-8")
+    host = tmp_path / "host.py"
+    host.write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "p=Path(os.environ['SECOND_BRAIN_HOME'])/'telemetry'/'agent-performance'\n"
+        "p.mkdir(parents=True)\n"
+        "print('PRIVATE_HOST_OUTPUT')\n"
+        "(p/'host.jsonl').write_text(json.dumps({'kind':'assistant_usage','model':'deepseek-v4-flash','input_tokens':10,'output_tokens':2,'cache_read_tokens':3,'cache_write_tokens':0,'total_tokens':15})+'\\n', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "FIXTURE_DIR", fixture_dir)
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(runner, "QUALIFICATION", qualification)
+    monkeypatch.setenv("SECOND_BRAIN_PRIME_COMMAND", f"{sys.executable} {host}")
+    summary = runner.run("prime", "ON", 1)
+    assert summary["profile_mapping"] == {"OFF": "A_BRAIN_OFF", "ON": "I_FULL_V1"}
+    assert summary["pairs_recorded"] == 1
+    assert summary["usage_capture"] is True
+    raw = list((tmp_path / "raw").glob("*.json"))
+    assert len(raw) == 2
+    for path in raw:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["usage_capture"] is True
+        assert record["telemetry"]["total_tokens"] == 15
+        assert record["dollars"] == economics.cost_per_run(
+            {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 3, "cache_write_tokens": 0},
+            {"base_in": 0.00000014, "base_out": 0.00000028},
+        )
+        text = json.dumps(record)
+        assert "Inspect" not in text
+        assert "PRIVATE_HOST_OUTPUT" not in text
+        assert "PRIVATE_TOOL_OUTPUT" not in text

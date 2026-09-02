@@ -47,6 +47,8 @@ def load_tasks() -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
     for path in paths:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("class") != path.stem:
+            raise ValueError(f"fixture class must match filename: {path.name}")
         economics.validate_fixture(data)
         tasks.extend(data["tasks"])
     ids = [task["task_id"] for task in tasks]
@@ -75,6 +77,7 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
     seen: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
     nulls: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
     models: set[str] = set()
+    unknown_model = False
     model: str | None = None
     model_turns = 0
     tool_calls = 0
@@ -105,9 +108,12 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
             if not isinstance(usage, dict):
                 continue
             model_turns += 1
-            if isinstance(record.get("model"), str):
-                model = record["model"]
-                models.add(model)
+            raw_model = record.get("model")
+            if isinstance(raw_model, str) and raw_model:
+                model = raw_model
+                models.add(raw_model)
+            else:
+                unknown_model = True
             for field in _REQUIRED_USAGE:
                 if field not in usage or usage[field] is None:
                     nulls[field] = True
@@ -121,18 +127,18 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
     totals.update({
         "model": model,
         "models": sorted(models),
-        "mixed_model": len(models) > 1,
+        "mixed_model": unknown_model or len(models) > 1,
         "model_turns": model_turns if saw_event else None,
         "tool_calls": tool_calls if saw_event else None,
         "wall_ms": round(max(stamps) - min(stamps)) if len(stamps) >= 2 else None,
     })
     return totals
 
-
 def _host_command(harness: str) -> list[str] | None:
     override = os.environ.get(f"SECOND_BRAIN_{harness.upper().replace('-', '_')}_COMMAND")
     if override:
-        return shlex.split(override)
+        parts = shlex.split(override, posix=False)
+        return [part.strip('"') for part in parts]
     located = shutil.which(HARNESS_EXECUTABLES[harness])
     if not located:
         return None
@@ -206,7 +212,7 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
             if not usage_capture:
                 dollars_reason = "missing_usage"
             elif telemetry["mixed_model"]:
-                dollars_reason = "mixed_model"
+                dollars_reason = "mixed_or_unknown_model"
             elif telemetry["model"]:
                 dollars = economics.cost_per_run(
                     {field: telemetry[field] for field in _REQUIRED_USAGE[:4]},
@@ -219,6 +225,8 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
                 )
                 if dollars is None:
                     dollars_reason = "missing_or_null_price"
+            elif not telemetry["model"]:
+                dollars_reason = "unknown_model"
             acceptance_pass = _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
             return {
                 "run_id": run_id,
@@ -229,6 +237,7 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
                 "host_exit": host_exit,
                 "dollars_reason": dollars_reason,
                 "acceptance_pass": acceptance_pass,
+                "usage_capture": usage_capture,
                 "telemetry": telemetry,
                 "dollars": dollars,
             }
@@ -260,7 +269,12 @@ def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "wall_ms": tel.get("wall_ms"),
                 "pass": record.get("acceptance_pass"),
             }
-        pairs.append({"off": metrics(arms["OFF"]), "on": metrics(arms["ON"])})
+        pairs.append({
+            "off": metrics(arms["OFF"]),
+            "on": metrics(arms["ON"]),
+            "off_usage_capture": bool(arms["OFF"].get("usage_capture")),
+            "on_usage_capture": bool(arms["ON"].get("usage_capture")),
+        })
     return pairs
 
 
@@ -307,7 +321,9 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
         "profile_mapping": PROFILE_TO_ABLATION,
         "requested_pairs": pair_count,
         "host_available": command is not None,
-        "usage_capture": any(pair["off"]["tokens"] is not None and pair["on"]["tokens"] is not None for pair in pairs),
+        "usage_capture": bool(pairs) and all(
+            pair["off_usage_capture"] and pair["on_usage_capture"] for pair in pairs
+        ),
         "pairs_recorded": len(pairs),
         "verdict": economics.verdict(pairs, config=economics.load_config(ROOT)),
     }
