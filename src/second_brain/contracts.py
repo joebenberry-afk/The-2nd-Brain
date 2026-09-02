@@ -309,14 +309,21 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
     for _, _, record in telemetry.iter_records(home):
         if not isinstance(record, dict):
             continue
-        session = record.get("session") if isinstance(record.get("session"), str) else ""
-        model = record.get("model") if isinstance(record.get("model"), str) else None
+        raw_session = record.get("session")
+        if not isinstance(raw_session, str) or not raw_session.strip():
+            continue
+        raw_model = record.get("model")
+        if raw_model is not None and not isinstance(raw_model, str):
+            continue
+        session = raw_session
+        model = raw_model or None
         kind = record.get("kind")
         if kind == "provider_request_meta":
             measured = _positive_finite(record.get("prompt_chars"))
             if measured is not None:
-                if model is not None:
-                    pending.pop((session, None), None)
+                for key in tuple(pending):
+                    if key[0] == session:
+                        pending.pop(key, None)
                 pending[(session, model)] = measured
             continue
         if kind == "tool_result":
@@ -326,6 +333,9 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
             continue
         if kind != "assistant_usage":
             continue
+        measured = pending.pop((session, model), None)
+        if measured is None and model is not None:
+            measured = pending.pop((session, None), None)
         tokens = _positive_finite(record.get("input_tokens"))
         if tokens is None:
             continue
@@ -333,12 +343,7 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
         previous = previous_input.get(usage_key)
         delta = tokens if previous is None or tokens < previous else tokens - previous
         previous_input[usage_key] = tokens
-        if delta <= 0:
-            continue
-        measured = pending.pop((session, model), None)
-        if measured is None and model is not None:
-            measured = pending.pop((session, None), None)
-        if measured is None:
+        if delta <= 0 or measured is None:
             continue
         pairs.setdefault(model or "default", []).append((measured, delta))
     return pairs

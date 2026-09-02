@@ -69,7 +69,12 @@ def iter_records(home: Path) -> list[tuple[str, int, dict]]:
     if not tdir.is_dir():
         return out
     for f in sorted(tdir.glob("*.jsonl")):
-        for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), start=1):
+        try:
+            lines = f.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            out.append((f.name, 0, {"__parse_error__": "invalid utf-8"}))
+            continue
+        for lineno, line in enumerate(lines, start=1):
             if not line.strip():
                 continue
             try:

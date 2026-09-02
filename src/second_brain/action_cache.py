@@ -282,7 +282,7 @@ class ActionCacheStore:
         output_ref = stored_artifact["hash"]
 
         if tokens_saved_estimate is None:
-            tokens_saved_estimate = estimate_tokens(content)
+            tokens_saved_estimate = estimate_tokens(content, home=self.home)
 
         action_key = compute_action_key(
             action_type=act,
