@@ -249,6 +249,17 @@ def _positive_finite(value: object) -> float | None:
         return None
     return number if math.isfinite(number) and number > 0 else None
 
+def _positive_integer(value: object) -> int | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError, TypeError):
+        return None
+    if not math.isfinite(number) or number <= 0 or not number.is_integer():
+        return None
+    return int(number)
+
 
 def token_estimator_info(
     model: str | None = None, *, home: Path | str | None = None
@@ -264,22 +275,15 @@ def token_estimator_info(
             entry = models.get(model or "default") if isinstance(models, dict) else None
             if isinstance(entry, dict):
                 loaded = _valid_ratio(entry.get("chars_per_token"))
-                pair_count_value = entry.get("pair_count")
-                has_measured_pairs = (
-                    isinstance(pair_count_value, (int, float))
-                    and not isinstance(pair_count_value, bool)
-                    and math.isfinite(float(pair_count_value))
-                    and pair_count_value > 0
-                    and float(pair_count_value).is_integer()
-                )
+                pair_count_value = _positive_integer(entry.get("pair_count"))
                 if (
                     loaded is not None
                     and entry.get("source") == "calibrated"
-                    and has_measured_pairs
+                    and pair_count_value is not None
                 ):
                     ratio = loaded
                     source = "calibrated"
-                    pair_count = int(pair_count_value)
+                    pair_count = pair_count_value
             if source == "default" and data.get("source") == "default":
                 loaded = _valid_ratio(data.get("default_chars_per_token"))
                 if loaded is not None:
@@ -316,6 +320,8 @@ def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
             continue
         session = raw_session
         kind = record.get("kind")
+        if not isinstance(kind, str):
+            continue
         raw_model = record.get("model")
         if raw_model is not None and not isinstance(raw_model, str):
             if kind in {"provider_request_meta", "assistant_usage"}:
