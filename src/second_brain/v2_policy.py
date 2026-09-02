@@ -181,7 +181,7 @@ def load_policy(home: Path) -> V2Policy:
         raise _fail(f"missing policy file: {path}")
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise _fail(f"cannot read {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise _fail("root must be a TOML table")
