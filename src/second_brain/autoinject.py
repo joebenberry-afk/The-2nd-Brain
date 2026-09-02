@@ -850,15 +850,25 @@ def _sanitize_stem(session: str) -> str:
     return f"anon-{_task_sha256(session or '')[:12]}"
 
 
-def _append_telemetry(home: Path | str, session: str, kind: str, extra: dict[str, Any]) -> None:
+def _append_telemetry(
+    home: Path | str, session: str, kind: str, extra: dict[str, Any]
+) -> bool:
     try:
         tdir = telemetry.telemetry_dir(Path(home))
         tdir.mkdir(parents=True, exist_ok=True)
-        record = {"v": _TELEMETRY_V, "ts": _now(), "kind": kind, "session": session, **extra}
+        record = {
+            "v": telemetry.KIND_SCHEMA_VERSION.get(kind, _TELEMETRY_V),
+            "ts": _now(),
+            "kind": kind,
+            "session": session,
+            **extra,
+        }
         with open(tdir / f"{_sanitize_stem(session)}.jsonl", "a", encoding="utf-8") as f:
             f.write(canonical_json(record) + "\n")
+        return True
     except OSError as exc:
         logger.warning("AutoInject telemetry append failed (ignored): %s", exc)
+        return False
 
 
 def _has_session_started(home: Path | str, host_session_id: str) -> bool:

@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -3490,7 +3491,8 @@ def _claude_usage_records(
         ):
             if source in record:
                 fields[target] = record[source]
-        autoinject._append_telemetry(home, session_id, "assistant_usage", fields)
+        if autoinject._append_telemetry(home, session_id, "assistant_usage", fields) is not True:
+            continue
         try:
             _write_claude_usage_cursor(cursor_path, uuid)
         except Exception:
@@ -3548,8 +3550,13 @@ def _cmd_claude_code_hook(home: Path) -> int:
         payload = None
     payload_dict = payload if isinstance(payload, dict) else {}
 
-    event = str(payload_dict.get("hook_event_name") or "SessionStart")
-    session_id = str(payload_dict.get("session_id") or "claude-anon")
+    try:
+        event = str(payload_dict.get("hook_event_name") or "SessionStart")
+        session_id = str(payload_dict.get("session_id") or "claude-anon")
+        session_hash = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    except Exception:
+        print("{}")
+        return 0
     cwd = payload_dict.get("cwd")
 
     try:
@@ -3560,7 +3567,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
         resolved_project = "default"
 
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12],
+        internal_session_id="is-" + session_hash[:12],
         host="claude-code",
         host_session_id=session_id,
         project_id=resolved_project,
@@ -3587,7 +3594,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
         goal = None
         if transcript_path:
             try:
-                goal = antigravity_transcript.extract_latest_user_task(str(transcript_path))
+                goal = antigravity_transcript.extract_latest_task(str(transcript_path))
             except Exception:
                 goal = None
         custom_instructions = payload_dict.get("custom_instructions")
@@ -3664,8 +3671,11 @@ def _cmd_claude_code_hook(home: Path) -> int:
 
     if event == "UserPromptSubmit":
         prompt = payload_dict.get("prompt")
-        if isinstance(prompt, str):
-            prompt_bytes = prompt.encode("utf-8")
+        try:
+            prompt_bytes = prompt.encode("utf-8") if isinstance(prompt, str) else None
+        except Exception:
+            prompt_bytes = None
+        if prompt_bytes is not None:
             with contextlib.suppress(Exception):
                 autoinject._append_telemetry(
                     home,
@@ -3685,15 +3695,15 @@ def _cmd_claude_code_hook(home: Path) -> int:
         output = payload_dict.get("tool_response")
         if output is None:
             output = payload_dict.get("output")
-        if isinstance(output, str):
-            output_bytes = output.encode("utf-8")
-        else:
-            try:
+        try:
+            if isinstance(output, str):
+                output_bytes = output.encode("utf-8")
+            else:
                 output_bytes = json.dumps(
                     output, separators=(",", ":"), sort_keys=True, default=str
                 ).encode("utf-8")
-            except Exception:
-                output_bytes = b""
+        except Exception:
+            output_bytes = b""
         with contextlib.suppress(Exception):
             autoinject._append_telemetry(
                 home,
