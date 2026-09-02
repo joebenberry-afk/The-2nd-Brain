@@ -1,0 +1,4 @@
+
+> second-brain-observability@0.1.0 test
+> vitest run --reporter=dot
+

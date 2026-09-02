@@ -1,0 +1,4 @@
+
+> second-brain-observability@0.1.0 typecheck
+> tsc --noEmit
+

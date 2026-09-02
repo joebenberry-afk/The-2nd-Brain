@@ -1,0 +1,457 @@
+{
+  "generated_by": "Python source-and-output evidence generator",
+  "pytest": {
+    "failure_count": 4,
+    "gate_exit_code": 1,
+    "in_process_code_regression": [
+      {
+        "basis": "The failing assertion executes promotion.promote in-process; no subprocess environment boundary is involved.",
+        "classification": "code_regression",
+        "nodeid": "tests/test_promotion.py::test_guard_combos_match_reference",
+        "pytest_output_lines": [
+          71,
+          98,
+          125,
+          157
+        ],
+        "source": {
+          "lines": [
+            {
+              "line": 347,
+              "text": "def test_guard_combos_match_reference("
+            },
+            {
+              "line": 348,
+              "text": "    brain_home, to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict"
+            },
+            {
+              "line": 349,
+              "text": "):"
+            },
+            {
+              "line": 350,
+              "text": "    home = _fresh(brain_home)"
+            },
+            {
+              "line": 351,
+              "text": "    _skill(home)"
+            },
+            {
+              "line": 352,
+              "text": "    if has_evidence:"
+            },
+            {
+              "line": 353,
+              "text": "        _evidence(home, \"scout\")"
+            },
+            {
+              "line": 354,
+              "text": "    if frontier_ok:"
+            },
+            {
+              "line": 355,
+              "text": "        _approve(home, \"scout\")"
+            },
+            {
+              "line": 356,
+              "text": "    if rolled_back:"
+            },
+            {
+              "line": 357,
+              "text": "        _rollback_record(home, \"scout\")"
+            },
+            {
+              "line": 358,
+              "text": "    if bound:"
+            },
+            {
+              "line": 359,
+              "text": "        _bind(home, \"scout\")"
+            },
+            {
+              "line": 360,
+              "text": "    if dest_conflict:"
+            },
+            {
+              "line": 361,
+              "text": "        _skill(home, name=\"scout\", level=\"candidate\")"
+            },
+            {
+              "line": 362,
+              "text": "    result = promotion.promote(home, \"scout\", \"shadow\", to)"
+            },
+            {
+              "line": 363,
+              "text": "    expected = _reference(to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict)"
+            },
+            {
+              "line": 364,
+              "text": "    if expected == \"promoted\":"
+            },
+            {
+              "line": 365,
+              "text": "        assert result[\"promoted\"] is True"
+            },
+            {
+              "line": 366,
+              "text": "        assert (home / \"skills\" / \"candidates\" / \"scout\").is_dir()"
+            },
+            {
+              "line": 367,
+              "text": "    else:"
+            },
+            {
+              "line": 368,
+              "text": "        assert result[\"promoted\"] is False"
+            },
+            {
+              "line": 369,
+              "text": "        assert result[\"reason\"] == expected"
+            }
+          ],
+          "path": "tests/test_promotion.py"
+        }
+      }
+    ],
+    "raw_stderr": "outputs/reports/v2/v2-0/gates/pytest.stderr.txt",
+    "raw_stdout": "outputs/reports/v2/v2-0/gates/pytest.stdout.txt",
+    "subprocess_environment_drift": [
+      {
+        "basis": "The helper removes PYTHONHOME and PYTHONPATH before launching python -m second_brain, so the subprocess can resolve the stale parent checkout; this observed failure is not evidence against the worktree source.",
+        "classification": "env_drift",
+        "nodeid": "tests/test_antigravity_adapter.py::test_preinvocation_bom_prefixed_bytes_still_binds_real_identity",
+        "pytest_output_lines": [
+          22,
+          27,
+          155
+        ],
+        "source": {
+          "lines": [
+            {
+              "line": 370,
+              "text": "def _run_cli_bytes("
+            },
+            {
+              "line": 371,
+              "text": "    home: Path,"
+            },
+            {
+              "line": 372,
+              "text": "    *args: str,"
+            },
+            {
+              "line": 373,
+              "text": "    stdin_bytes: bytes,"
+            },
+            {
+              "line": 374,
+              "text": "    env_extra: dict[str, str] | None = None,"
+            },
+            {
+              "line": 375,
+              "text": ") -> subprocess.CompletedProcess:"
+            },
+            {
+              "line": 376,
+              "text": "    env = dict(os.environ)"
+            },
+            {
+              "line": 377,
+              "text": "    for k in (\"PYTHONHOME\", \"PYTHONPATH\", \"UV_INTERNAL__PYTHONHOME\", \"PYTHONSTARTUP\"):"
+            },
+            {
+              "line": 378,
+              "text": "        env.pop(k, None)"
+            },
+            {
+              "line": 379,
+              "text": "    if env_extra:"
+            },
+            {
+              "line": 380,
+              "text": "        env.update(env_extra)"
+            },
+            {
+              "line": 381,
+              "text": "    return subprocess.run("
+            },
+            {
+              "line": 382,
+              "text": "        [sys.executable, \"-m\", \"second_brain\", \"--home\", str(home), *args],"
+            },
+            {
+              "line": 383,
+              "text": "        capture_output=True,"
+            },
+            {
+              "line": 384,
+              "text": "        env=env,"
+            },
+            {
+              "line": 385,
+              "text": "        cwd=home,"
+            },
+            {
+              "line": 386,
+              "text": "        input=stdin_bytes,"
+            },
+            {
+              "line": 387,
+              "text": "        timeout=120,"
+            },
+            {
+              "line": 388,
+              "text": "    )"
+            }
+          ],
+          "path": "tests/test_antigravity_adapter.py"
+        }
+      },
+      {
+        "basis": "The helper removes PYTHONHOME and PYTHONPATH before launching the CLI; observed schema v9 contradicts the worktree migration set whose expected schema is v10.",
+        "classification": "env_drift",
+        "nodeid": "tests/test_cli.py::test_init_doctor_status_flow",
+        "pytest_output_lines": [
+          47,
+          49,
+          51,
+          67,
+          68,
+          156
+        ],
+        "source": {
+          "lines": [
+            {
+              "line": 10,
+              "text": "def _env():"
+            },
+            {
+              "line": 11,
+              "text": "    env = dict(os.environ)"
+            },
+            {
+              "line": 12,
+              "text": "    for k in (\"PYTHONHOME\", \"PYTHONPATH\", \"UV_INTERNAL__PYTHONHOME\", \"PYTHONSTARTUP\"):"
+            },
+            {
+              "line": 13,
+              "text": "        env.pop(k, None)"
+            },
+            {
+              "line": 14,
+              "text": "    return env"
+            },
+            {
+              "line": 15,
+              "text": ""
+            },
+            {
+              "line": 16,
+              "text": ""
+            },
+            {
+              "line": 17,
+              "text": "def run_cli("
+            },
+            {
+              "line": 18,
+              "text": "    home: Path, *args: str, cwd: Path | None = None, stdin: str | None = None"
+            },
+            {
+              "line": 19,
+              "text": ") -> subprocess.CompletedProcess:"
+            },
+            {
+              "line": 20,
+              "text": "    home.mkdir(parents=True, exist_ok=True)"
+            },
+            {
+              "line": 21,
+              "text": "    return subprocess.run("
+            },
+            {
+              "line": 22,
+              "text": "        [sys.executable, \"-m\", \"second_brain\", \"--home\", str(home), *args],"
+            },
+            {
+              "line": 23,
+              "text": "        capture_output=True,"
+            },
+            {
+              "line": 24,
+              "text": "        text=True,"
+            }
+          ],
+          "path": "tests/test_cli.py"
+        }
+      },
+      {
+        "basis": "The qualification runner explicitly strips PYTHONHOME and PYTHONPATH for its subprocess scenarios; the fresh_session JSONDecodeError therefore exercises the stale parent package/environment rather than proving a worktree regression.",
+        "classification": "env_drift",
+        "nodeid": "tests/test_v1_p4_qualification.py::test_every_scenario_carries_required_contract_fields",
+        "pytest_output_lines": [
+          139,
+          143,
+          158
+        ],
+        "source": {
+          "lines": [
+            {
+              "line": 45,
+              "text": ""
+            },
+            {
+              "line": 46,
+              "text": "_ENV_STRIP = (\"PYTHONHOME\", \"PYTHONPATH\")"
+            },
+            {
+              "line": 47,
+              "text": ""
+            },
+            {
+              "line": 48,
+              "text": ""
+            },
+            {
+              "line": 49,
+              "text": "def sanitized_env(home: Path | None) -> dict[str, str]:"
+            },
+            {
+              "line": 50,
+              "text": "    \"\"\"Brief Step 2's exact sanitized subprocess environment.\"\"\""
+            },
+            {
+              "line": 51,
+              "text": "    env = {key: value for key, value in os.environ.items() if key not in _ENV_STRIP}"
+            },
+            {
+              "line": 52,
+              "text": "    if home is not None:"
+            },
+            {
+              "line": 53,
+              "text": "        env[\"SECOND_BRAIN_HOME\"] = str(home)"
+            },
+            {
+              "line": 54,
+              "text": "    return env"
+            }
+          ],
+          "path": "scripts/run_v1_p4_qualification.py"
+        }
+      }
+    ]
+  },
+  "source_identity": [
+    "outputs/reports/v2/v2-0/gates/source-identity.stdout.txt",
+    "outputs/reports/v2/v2-0/gates/subprocess-source-identity.stdout.txt"
+  ],
+  "subprocess_source_identity": "outputs/reports/v2/v2-0/gates/subprocess-source-identity.stdout.txt",
+  "telemetry_validate": {
+    "basis": "The three malformed lines are in live mutable telemetry; no source-writer evidence ties their bytes to this commit, so classify as env_drift rather than code_regression.",
+    "classification": "env_drift",
+    "gate_exit_code": 1,
+    "issues": [
+      "  01a003e2-c6e4-71a8-8a36-53d88ffc786a.jsonl:34: unparseable JSON line",
+      "  01a008bb-ae53-7120-a995-cdc0ade001f6.jsonl:4258: unparseable JSON line",
+      "  01a008c2-7713-719d-a014-369c12638428.jsonl:1256: unparseable JSON line"
+    ],
+    "raw_stderr": "outputs/reports/v2/v2-0/gates/telemetry-validate.stderr.txt",
+    "raw_stdout": "outputs/reports/v2/v2-0/gates/telemetry-validate.stdout.txt",
+    "source_writer_evidence": false,
+    "validator_source": {
+      "lines": [
+        {
+          "line": 265,
+          "text": "def validate(home: Path) -> dict:"
+        },
+        {
+          "line": 266,
+          "text": "    \"\"\"Check every record. Returns {'files', 'records', 'issues': [..]}.\"\"\""
+        },
+        {
+          "line": 267,
+          "text": "    issues: list[str] = []"
+        },
+        {
+          "line": 268,
+          "text": "    n_records = 0"
+        },
+        {
+          "line": 269,
+          "text": "    seen_files: set[str] = set()"
+        },
+        {
+          "line": 270,
+          "text": "    for fname, lineno, rec in iter_records(home):"
+        },
+        {
+          "line": 271,
+          "text": "        seen_files.add(fname)"
+        },
+        {
+          "line": 272,
+          "text": "        n_records += 1"
+        },
+        {
+          "line": 273,
+          "text": "        if isinstance(rec, dict) and \"__parse_error__\" in rec:"
+        },
+        {
+          "line": 274,
+          "text": "            issues.append(f\"{fname}:{lineno}: unparseable JSON line\")"
+        },
+        {
+          "line": 275,
+          "text": "            continue"
+        },
+        {
+          "line": 276,
+          "text": "        issues.extend(_record_issues(rec, f\"{fname}:{lineno}\"))"
+        }
+      ],
+      "path": "src/second_brain/telemetry.py"
+    },
+    "writer_source": {
+      "lines": [
+        {
+          "line": 853,
+          "text": "def _append_telemetry(home: Path | str, session: str, kind: str, extra: dict[str, Any]) -> None:"
+        },
+        {
+          "line": 854,
+          "text": "    try:"
+        },
+        {
+          "line": 855,
+          "text": "        tdir = telemetry.telemetry_dir(Path(home))"
+        },
+        {
+          "line": 856,
+          "text": "        tdir.mkdir(parents=True, exist_ok=True)"
+        },
+        {
+          "line": 857,
+          "text": "        record = {\"v\": _TELEMETRY_V, \"ts\": _now(), \"kind\": kind, \"session\": session, **extra}"
+        },
+        {
+          "line": 858,
+          "text": "        with open(tdir / f\"{_sanitize_stem(session)}.jsonl\", \"a\", encoding=\"utf-8\") as f:"
+        },
+        {
+          "line": 859,
+          "text": "            f.write(canonical_json(record) + \"\\n\")"
+        },
+        {
+          "line": 860,
+          "text": "    except OSError as exc:"
+        },
+        {
+          "line": 861,
+          "text": "        logger.warning(\"AutoInject telemetry append failed (ignored): %s\", exc)"
+        }
+      ],
+      "path": "src/second_brain/autoinject.py"
+    }
+  }
+}
