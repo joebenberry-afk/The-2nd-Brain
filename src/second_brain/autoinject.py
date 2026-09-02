@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, hybrid_retrieval, registry, semantic, telemetry
+from . import db, hybrid_retrieval, registry, semantic, telemetry, working_set
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -270,29 +270,23 @@ def _resolve_project_id(
     return "default"
 
 
-def _search_or_fallback(
-    home: Path | str, term: str, top_k: int, project_id: str | None = None
-) -> list[dict]:
-    """OR-fallback recall: when the primary AND query returns zero candidates,
-    union per-token matches (sorted token order, first-seen wins). Every token
-    search runs the SAME hard filters + ranking inside semantic.search_memories;
-    the union is capped at ``top_k``. Deterministic.
-    """
-    home_path = Path(home)
-    tokens = sorted(semantic._query_tokens(term))
-    seen: dict[str, dict] = {}
-    for token in tokens:
-        for row in semantic.search_memories(
-            home_path,
-            token,
-            project_id=project_id,
-            include_history=False,
-            top_k=top_k,
-            max_tokens=None,
-        ):
-            seen.setdefault(str(row.get("memory_id")), row)
-    return list(seen.values())[:top_k]
 
+
+def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
+    """Use active capsule intent when available; otherwise use task text."""
+    try:
+        capsule = working_set.show_capsule(home, intent.session_id)
+    except Exception:
+        capsule = None
+    if capsule:
+        parts = [
+            value.strip()
+            for value in (capsule.get("objective"), capsule.get("next_action"))
+            if isinstance(value, str) and value.strip()
+        ]
+        if parts:
+            return " ".join(parts)
+    return intent.task_text
 
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
     """§6.3.1 hard filters:
@@ -673,7 +667,8 @@ def prepare_injection(
             selected_ids=list(selected_ids) if selected_ids is not None else [],
         )
 
-    query_mode = "and"
+    query_mode = "idf"
+    query_text = _retrieval_query_text(home, intent)
     proj_filter = (
         intent.project_id
         if intent.project_id and intent.project_id not in ("default", "unknown")
@@ -685,44 +680,32 @@ def prepare_injection(
         # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
         cascade_res = _CASCADE.retrieve(
             home,
-            intent.task_text,
+            query_text,
             project_id=proj_filter,
             top_k=_MAX_CANDIDATES,
         )
-        if cascade_res.matches:
-            rows = [
-                m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-                for m in cascade_res.matches
-            ]
-            query_mode = "and"
-        else:
-            rows = []
-
-        if not rows:
-            # OR-fallback within project scope
-            query_mode = "or_fallback"
-            rows = _search_or_fallback(
-                home, intent.task_text, _MAX_CANDIDATES, project_id=proj_filter
-            )
+        if cascade_res.retrieval_error:
+            raise RuntimeError("semantic retrieval unavailable")
+        rows = [
+            m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+            for m in cascade_res.matches
+        ]
 
         # If zero candidates found within scope, check if matches existed outside scope
         # (to distinguish WRONG_PROJECT from NO_RELEVANT_MEMORY)
         if not rows and proj_filter is not None:
             unscoped_cascade = _CASCADE.retrieve(
                 home,
-                intent.task_text,
+                query_text,
                 project_id=None,
                 top_k=_MAX_CANDIDATES,
             )
-            if unscoped_cascade.matches:
-                unscoped_candidates = [
-                    m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-                    for m in unscoped_cascade.matches
-                ]
-            else:
-                unscoped_candidates = _search_or_fallback(
-                    home, intent.task_text, _MAX_CANDIDATES, project_id=None
-                )
+            if unscoped_cascade.retrieval_error:
+                raise RuntimeError("semantic retrieval unavailable")
+            unscoped_candidates = [
+                m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+                for m in unscoped_cascade.matches
+            ]
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
         _append_telemetry(

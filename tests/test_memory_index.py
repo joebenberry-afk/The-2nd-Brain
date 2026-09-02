@@ -199,10 +199,14 @@ def test_search_parity_fts_vs_linear(brain_home, monkeypatch):
         ("sleep", ["Sleep consolidation"]),
         ("quarantine", ["Immune quarantine"]),
         ("zzz", []),
-        ("WAL lesson", []),  # AND of prefixes: no doc has both
+        ("WAL lesson", ["WAL hygiene"]),  # OR with min-should-match=.5
     ]:
         fts = semantic.search_memories(brain_home, term)
         assert {r["title"] for r in fts} == set(expected_titles), term
+        # The IDF FTS query intentionally differs from the legacy linear
+        # fallback for multi-token ASCII input.
+        if term == "WAL lesson":
+            continue
         # parity with the linear engine on word/prefix terms
         linear = semantic._search_linear(brain_home, term)
         assert {r["memory_id"] for r in fts} == {r["memory_id"] for r in linear}, term

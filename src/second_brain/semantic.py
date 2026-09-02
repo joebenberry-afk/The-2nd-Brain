@@ -234,6 +234,123 @@ _FTS5_CREATE = (
     "memory_id UNINDEXED, title, summary, body, project_id, status, "
     "evidence_grade, tags, tokenize = 'unicode61')"
 )
+# FTS5 vocabulary is derived lazily with the index.  It is intentionally not
+# part of a migration: older databases get it the first time FTS is touched.
+_FTS5_VOCAB_CREATE = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_vocab "
+    "USING fts5vocab(memory_fts, 'row')"
+)
+
+# Keep this list literal and local to the query builder so token selection is
+# deterministic and does not depend on an optional NLP package.
+_QUERY_STOPWORDS = frozenset(
+    """
+    a about above after again against all am an and any are aren't as at be
+    because been before being below between both but by can can't cannot could
+    couldn't did didn't do does doesn't doing don't down during each few for
+    from further had hadn't has hasn't have haven't having he he'd he'll he's
+    her here here's hers herself him himself his how how's i i'd i'll i'm i've
+    if in into is isn't it it'd it'll it's its itself let's me more most mustn't
+    my myself no nor not of off on once only or other ought our ours ourselves
+    out over own same shan't she she'd she'll she's should shouldn't so some
+    such than that that's the their theirs them themselves then there there's
+    these they they'd they'll they're they've this those through to too under
+    until up very was wasn't we we'd we'll we're we've were weren't what what's
+    when when's where where's which while who who's whom why why's will with
+    won't would wouldn't you you'd you'll you're you've your yours yourself
+    yourselves able absolutely according accordingly across actually afterwards
+    anyhow anything anyway anyways anywhere apparently appreciate appropriate
+    aside away became become becomes becoming believe
+    """
+    .split()
+)
+
+# Apply the same tokenizer to literal entries so contractions such as
+# ``couldn't`` suppress their ASCII fragments (``couldn``), too.
+_QUERY_STOPWORD_TOKENS = frozenset(
+    fragment
+    for word in _QUERY_STOPWORDS
+    for fragment in re.findall(r"[a-z0-9]{3,}", word.casefold())
+)
+
+
+def _query_candidates(text: str) -> list[str]:
+    if not isinstance(text, str) or re.search(r"[^\x00-\x7f]", text):
+        return []
+    return list(
+        dict.fromkeys(
+            token
+            for token in re.findall(r"[a-z0-9]{3,}", text.casefold())
+            if token not in _QUERY_STOPWORD_TOKENS
+        )
+    )
+
+
+def _query_plan(
+    text: str, *, k: int = 8, msm: float = 0.5, conn: sqlite3.Connection | None = None
+) -> tuple[str | None, tuple[str, ...], int]:
+    candidates = _query_candidates(text)
+    if len(candidates) < 2:
+        return None, (), 0
+    frequencies: dict[str, int] = {}
+    if conn is not None:
+        if not _fts_available(conn):
+            return None, (), 0
+        placeholders = ",".join("?" for _ in candidates)
+        try:
+            rows = conn.execute(
+                f"SELECT term, doc FROM memory_fts_vocab WHERE term IN ({placeholders})",
+                candidates,
+            ).fetchall()
+            frequencies = {str(row["term"]): int(row["doc"]) for row in rows}
+            total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+        except sqlite3.Error:
+            total = 0
+        candidates = [token for token in candidates if token in frequencies]
+        if not candidates:
+            return None, (), 0
+    else:
+        total = 0
+    positions = {token: index for index, token in enumerate(candidates)}
+    try:
+        limit = max(1, int(k))
+    except (TypeError, ValueError):
+        limit = 8
+    limit = min(limit, len(candidates))
+    idf = {
+        token: math.log((total + 1) / (frequencies.get(token, 0) + 1))
+        for token in candidates
+    }
+    selected = tuple(
+        sorted(candidates, key=lambda token: (-idf[token], positions[token]))[:limit]
+    )
+    try:
+        ratio = min(1.0, max(0.0, float(msm)))
+    except (TypeError, ValueError):
+        ratio = 0.5
+    required = math.ceil(ratio * len(selected))
+    expression = "(" + " OR ".join(f'"{token}"*' for token in selected) + ")"
+    return expression, selected, required
+
+
+def build_query(
+    text: str, k: int = 8, msm: float = 0.5, *, conn: sqlite3.Connection | None = None
+) -> str | list:
+    """Build a bounded, parameter-safe FTS5 OR query using IDF-ranked terms."""
+    expression, query_terms, _required = _query_plan(text, k=k, msm=msm, conn=conn)
+    return expression if len(query_terms) >= 2 else []
+
+
+
+
+def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
+    haystack = " ".join(
+        str(row.get(field) or "")
+        for field in ("title", "summary", "_body", "body")
+    ).casefold()
+    haystack_tokens = re.findall(r"[a-z0-9]{3,}", haystack)
+    return sum(any(value.startswith(term) for value in haystack_tokens) for term in terms)
+
 # Process-global FTS5 module availability. SQLite's FTS5 support is a
 # property of the sqlite3 build, identical for every database, and cannot
 # change mid-process. A single flag (not a per-path cache) avoids any hazard
@@ -244,18 +361,13 @@ _FTS_MODULE_OK = False
 
 
 def _fts_available(conn: sqlite3.Connection) -> bool:
-    """Whether the memory_fts virtual table is usable on this database.
-
-    Review N-C: only "no such module: fts5" permanently degrades the process
-    to linear; ANY OTHER OperationalError (transient disk/I-O, per-db issue)
-    reports False for this call but is NOT cached, so the next call retries
-    the CREATE instead of poisoning the whole process.
-    """
+    """Whether the memory_fts and its vocabulary table are usable."""
     global _FTS_MODULE_CHECKED, _FTS_MODULE_OK
     if _FTS_MODULE_CHECKED and not _FTS_MODULE_OK:
         return False
     try:
         conn.execute(_FTS5_CREATE)
+        conn.execute(_FTS5_VOCAB_CREATE)
         _FTS_MODULE_CHECKED = True
         _FTS_MODULE_OK = True
         return True
@@ -271,23 +383,6 @@ def _fts_count(conn: sqlite3.Connection) -> int:
     return int(conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0])
 
 
-def _fts_query(term: str) -> str | None:
-    """FTS5 MATCH expression: every ASCII alphanumeric token as a quoted
-    prefix (`"wal"* "lesson"*`, AND), quoted so FTS5 special characters can
-    never break the query.
-
-    Returns None when FTS5 tokenization cannot faithfully represent the term
-    (Phase 7 review F2): non-ASCII text (unicode61 would treat "deja" as one
-    token, but the ASCII regex would split "déjà" into fragments "d" "j" —
-    never emit a MATCH built from fragments) or a term with no tokens
-    (punctuation-only). The caller falls back to the linear scan.
-    """
-    if re.search(r"[^\x00-\x7f]", term):
-        return None
-    tokens = re.findall(r"[a-z0-9]+", term.lower())
-    if not tokens:
-        return None
-    return " ".join(f'"{token}"*' for token in tokens)
 
 
 def _body_text(home: Path, row: dict) -> str:
@@ -1433,17 +1528,27 @@ def search_memories(
     eff_top_k = top_k if top_k is not None else cfg.top_k
     eff_max_tokens = max_tokens if max_tokens is not None else cfg.max_tokens
     _ensure_migrated(home)
-    match_expr = _fts_query(term)
     conn = db.connect(_dbfile(home))
     try:
-        if match_expr is not None and _fts_available(conn):
+        if _fts_available(conn):
+            match_expr, query_terms, msm_required = _query_plan(term, conn=conn)
+            # Public build_query deliberately declines one-term input.  Keep
+            # the established single-token FTS path for search_memories.
+            if match_expr is None:
+                single = _query_candidates(term)
+                if len(single) == 1:
+                    query_terms = (single[0],)
+                    msm_required = 1
+                    match_expr = f'"{single[0]}"*'
             total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
             indexed = _fts_count(conn)
-            if indexed > 0 or total == 0:
+            if match_expr is not None and (indexed > 0 or total == 0):
                 return _search_fts(
                     conn,
                     match_expr,
                     term,
+                    query_terms=query_terms,
+                    msm_required=msm_required,
                     project_id=project_id,
                     include_history=include_history,
                     include_duplicates=include_duplicates,
@@ -1453,8 +1558,8 @@ def search_memories(
                     max_tokens=eff_max_tokens,
                     home=home,
                 )
-            # Index exists but is empty while memories exist: not built yet.
-            # Fall through to the linear scan (fail open).
+            # Empty/small/non-ASCII queries and an unbuilt index use the
+            # existing linear fallback.
     except sqlite3.Error:
         pass  # FTS path broken for any reason -> linear fallback below
     finally:
@@ -1505,6 +1610,8 @@ def _search_fts(
     conn: sqlite3.Connection,
     match_expr: str,
     term: str,
+    query_terms: tuple[str, ...] = (),
+    msm_required: int | None = None,
     *,
     project_id: str | None = None,
     include_history: bool = False,
@@ -1531,6 +1638,9 @@ def _search_fts(
         [match_expr, *params],
     ).fetchall()
     rows = [dict(row) for row in rows]
+    if query_terms:
+        required = msm_required if msm_required is not None else math.ceil(0.5 * len(query_terms))
+        rows = [row for row in rows if _query_term_hits(row, query_terms) >= required]
     # Phase 10: conflict map BEFORE dedupe (family collapse must not hide a
     # conflicting sibling; the surviving row carries the marker).
     conflicts = _contradiction_map(rows)

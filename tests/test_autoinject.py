@@ -448,9 +448,7 @@ def test_role_filter_only_role_tagged_memory_available(brain_home) -> None:
     assert orch_mem not in d.selected_ids
 
 
-# ---------------------------------------------------------------------------
-# Phase C2 fixes: cwd project resolution, OR-fallback recall, telemetry honesty
-# ---------------------------------------------------------------------------
+# Phase C2 fixes: cwd project resolution and telemetry honesty
 
 
 def _attempt_records(home: Path) -> list[dict]:
@@ -576,23 +574,21 @@ def test_cwd_unregistered_falls_back_to_env_then_default(
     assert d_global.selected_ids
 
 
-def test_or_fallback_recall_and_query_mode(brain_home) -> None:
+def test_idf_recall_and_query_mode(brain_home) -> None:
     mid = _seed_current(
         brain_home, "Adaptive fan-out", "adaptive fan-out replaces the hard two worker cap"
     )
     decoy = _seed_current(brain_home, "Neapolitan pizza", "pizza has three flavors")
-    # AND would return 0 candidates ("policy" absent from every body)
     d = _inject(brain_home, "adaptive fan-out policy", session_id="s-or1")
     assert d.decision is InjectionDecision.INJECT
     assert mid in d.selected_ids
-    assert decoy not in d.selected_ids  # irrelevant decoy still not injected
+    assert decoy not in d.selected_ids
     modes = [
         r.get("query_mode")
         for r in _attempt_records(brain_home)
         if r.get("session") == "s-or1"
     ]
-    assert modes and modes[-1] == "or_fallback"
-    # AND-first unchanged: exact words -> and mode
+    assert modes and modes[-1] == "idf"
     d2 = _inject(brain_home, "adaptive fan-out", session_id="s-or2")
     assert d2.decision is InjectionDecision.INJECT
     modes2 = [
@@ -600,10 +596,10 @@ def test_or_fallback_recall_and_query_mode(brain_home) -> None:
         for r in _attempt_records(brain_home)
         if r.get("session") == "s-or2"
     ]
-    assert modes2 and modes2[-1] == "and"
+    assert modes2 and modes2[-1] == "idf"
 
 
-def test_no_relevant_only_when_both_modes_empty(brain_home) -> None:
+def test_no_relevant_only_when_query_empty(brain_home) -> None:
     d = _inject(brain_home, "zzzqqqx unknown gibberish", session_id="s-none1")
     assert d.decision is InjectionDecision.NO_INJECTION
     assert d.reason is NoInjectionReason.NO_RELEVANT_MEMORY
@@ -612,8 +608,7 @@ def test_no_relevant_only_when_both_modes_empty(brain_home) -> None:
         for r in _attempt_records(brain_home)
         if r.get("session") == "s-none1"
     ]
-    assert modes and modes[-1] == "or_fallback"
-
+    assert modes and modes[-1] == "idf"
 
 def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
     """Phase C3 FIX 2: no --cwd -> registry lookup uses the Brain home path
