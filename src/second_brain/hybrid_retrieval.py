@@ -82,6 +82,7 @@ class CascadeResult:
     short_circuited: bool = True
     negative_cached: bool = False
     decision: str = "INJECT"  # "INJECT" or "NO_INJECTION"
+    retrieval_error: bool = False
     reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -97,6 +98,7 @@ class CascadeResult:
             "latency_ms": round(self.latency_ms, 3),
             "match_count": len(self.matches),
             "matches": [m.to_dict() for m in self.matches],
+            "retrieval_error": self.retrieval_error,
         }
 
 
@@ -205,8 +207,7 @@ class HybridCascadeRetriever:
             except BrainError:
                 pass  # not found as exact ID, continue cascade
 
-        # Step 3: Tier 1 & 2 — Lexical / FTS5 BM25 Token Search (§9.1)
-        fts_matches: list[dict[str, Any]] = []
+        retrieval_error = False
         try:
             fts_matches = semantic.search_memories(
                 home_path,
@@ -215,6 +216,7 @@ class HybridCascadeRetriever:
                 top_k=top_k,
             )
         except Exception:
+            retrieval_error = True
             fts_matches = []
 
         if fts_matches:
@@ -274,6 +276,22 @@ class HybridCascadeRetriever:
                     reason="VECTOR_FALLBACK_MATCH",
                 )
 
+        # Infrastructure failures must not poison the negative cache or look
+        # like a genuine no-match to the AutoInject fail-open gate.
+        if retrieval_error:
+            lat = (time.perf_counter() - t0) * 1000.0
+            return CascadeResult(
+                query=query,
+                project_id=project_id,
+                tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
+                matches=[],
+                vector_invoked=vector_searcher is not None,
+                latency_ms=lat,
+                short_circuited=True,
+                decision="NO_INJECTION",
+                reason="BRAIN_UNAVAILABLE",
+                retrieval_error=True,
+            )
         # Step 5: No Matches Found -> Record Negative Cache (§9.3)
         self._negative_cache[cache_key] = datetime.now(UTC).isoformat()
         lat = (time.perf_counter() - t0) * 1000.0
