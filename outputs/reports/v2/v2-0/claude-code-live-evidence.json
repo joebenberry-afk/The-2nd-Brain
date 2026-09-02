@@ -28,12 +28,8 @@
       "total_tokens": 0
     }
   ],
-  "governor_report_stderr": "",
-  "governor_report_stdout": "[\n  {\n    \"session_id\": \"v2-real-claude-1788365218\",\n    \"provider\": null,\n    \"model\": null,\n    \"input_tokens\": 130,\n    \"output_tokens\": 34592,\n    \"cache_read_tokens\": 9737036,\n    \"cache_write_tokens\": 52095,\n    \"total_tokens\": 0,\n    \"cost_total\": null,\n    \"cost_total_seen\": 0,\n    \"context_peak\": null,\n    \"model_turns\": 65,\n    \"tool_calls\": 0,\n    \"tool_input_bytes\": 0,\n    \"tool_output_bytes\": 0,\n    \"brain_injected_tokens\": 0,\n    \"brain_packets_delivered\": 0,\n    \"brain_packets_shadow\": 0,\n    \"autoinject_cache_hits\": 0,\n    \"autoinject_cache_misses\": 0,\n    \"autoinject_cache_hit_rate\": 0.0,\n    \"lean_kernel_dedup_hits\": 0,\n    \"compactions\": 0,\n    \"role\": null\n  }\n]\n",
   "home": "C:\\Users\\assas\\AppData\\Local\\Temp\\v2-claude-live-jsczhcuk",
   "hook_exit": 0,
-  "hook_stderr": "",
-  "hook_stdout": "{}",
   "init_exit": 0,
   "other_rows": [
     {
