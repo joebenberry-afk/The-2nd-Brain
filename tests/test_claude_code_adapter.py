@@ -27,6 +27,7 @@ def _run_cli(
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     return subprocess.run(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],
         capture_output=True,
@@ -743,3 +744,163 @@ def test_precompact_brain_unavailable_fails_open(tmp_path: Path, git_project: Pa
     )
     assert result.returncode == 0
     assert json.loads(result.stdout.strip() or "{}") == {}
+
+def test_claude_stop_hook_emits_assistant_usage_from_transcript(
+    home: Path, git_project: Path, tmp_path: Path
+) -> None:
+    transcript = tmp_path / "claude-session.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": "assistant-1",
+                        "message": {
+                            "role": "assistant",
+                            "usage": {
+                                "input_tokens": 101,
+                                "output_tokens": 17,
+                                "cache_read_input_tokens": 80,
+                                "cache_creation_input_tokens": 21,
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": "assistant-2",
+                        "message": {
+                            "role": "assistant",
+                            "usage": {
+                                "input_tokens": 202,
+                                "output_tokens": 19,
+                                "cache_read_input_tokens": 160,
+                                "cache_creation_input_tokens": 42,
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    payload = json.dumps(
+        {
+            "session_id": "claude-sess-usage",
+            "cwd": str(git_project),
+            "hook_event_name": "Stop",
+            "transcript_path": str(transcript),
+        }
+    )
+
+    first = _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=git_project)
+    second = _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=git_project)
+    assert first.returncode == second.returncode == 0
+    assert json.loads(first.stdout.strip() or "{}") == {}
+    assert json.loads(second.stdout.strip() or "{}") == {}
+
+    telem = home / "telemetry" / "agent-performance" / "claude-sess-usage.jsonl"
+    rows = [
+        record
+        for line in telem.read_text(encoding="utf-8").splitlines()
+        if line
+        for record in [json.loads(line)]
+        if record.get("kind") == "assistant_usage"
+    ]
+    assert len(rows) == 2
+    assert [row["uuid"] for row in rows] == ["assistant-1", "assistant-2"]
+    assert all(row["harness"] == "claude-code" for row in rows)
+    assert [row["cache_write_tokens"] for row in rows] == [21, 42]
+    assert not any("cache_creation_input_tokens" in row for row in rows)
+
+    from second_brain import ledger
+
+    cursor = (
+        home
+        / "state"
+        / "sessions"
+        / ledger.internal_session_id("claude-sess-usage")
+        / "claude-usage-cursor.json"
+    )
+    assert json.loads(cursor.read_text(encoding="utf-8")) == {"last_uuid": "assistant-2"}
+
+
+def test_extract_usage_tail_is_bounded_and_preserves_only_usage(
+    tmp_path: Path,
+) -> None:
+    from second_brain.antigravity_transcript import extract_usage_tail
+
+    transcript = tmp_path / "large.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "large",
+                "message": {
+                    "role": "assistant",
+                    "content": "secret transcript " * 30_000,
+                    "usage": {"input_tokens": 1},
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "tail",
+                "message": {"role": "assistant", "usage": {"output_tokens": 7}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    records = extract_usage_tail(transcript)
+    assert records == [{"uuid": "tail", "output_tokens": 7}]
+
+
+def test_claude_stop_maps_optional_cache_state(home: Path, git_project: Path, tmp_path: Path) -> None:
+    transcript = tmp_path / "cache.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "cached",
+                "message": {"role": "assistant", "usage": {"input_tokens": 3}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    payload = json.dumps(
+        {
+            "session_id": "claude-sess-cache",
+            "cwd": str(git_project),
+            "hook_event_name": "Stop",
+            "transcript_path": str(transcript),
+            "cache_hit_ratio": 0.75,
+            "re_cached_tokens": 12,
+        }
+    )
+    result = _run_cli(home, "autoinject", "claude-code-hook", stdin=payload, cwd=git_project)
+    assert result.returncode == 0
+    rows = [
+        json.loads(line)
+        for line in (home / "telemetry" / "agent-performance" / "claude-sess-cache.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and json.loads(line).get("kind") == "assistant_usage"
+    ]
+    assert rows[0]["cache_state"] == {"cache_hit_ratio": 0.75, "re_cached_tokens": 12}
+
+
+def test_claude_hook_config_includes_prompt_and_tool_events() -> None:
+    config = json.loads(
+        (REPO_ROOT / "brainstem" / "adapters" / "claude-code" / "hooks.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "UserPromptSubmit" in config["hooks"]
+    assert "PostToolUse" in config["hooks"]
