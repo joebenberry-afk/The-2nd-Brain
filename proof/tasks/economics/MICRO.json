@@ -1,0 +1,17 @@
+{
+  "class": "MICRO",
+  "tasks": [
+    {
+      "task_id": "micro-01",
+      "prompt": "Inspect src/second_brain/governor.py and identify where session model turns are counted.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_governor.py -q", "expect_exit": 0}
+    },
+    {
+      "task_id": "micro-02",
+      "prompt": "Inspect src/second_brain/telemetry.py and summarize the session usage fields it exposes.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_telemetry.py -q", "expect_exit": 0}
+    }
+  ]
+}

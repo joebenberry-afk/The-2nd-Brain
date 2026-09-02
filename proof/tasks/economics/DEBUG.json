@@ -1,0 +1,17 @@
+{
+  "class": "DEBUG",
+  "tasks": [
+    {
+      "task_id": "debug-01",
+      "prompt": "Diagnose how a missing cost_total record is represented by parse_telemetry_session and verify the honesty rule.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_governor.py -q", "expect_exit": 0}
+    },
+    {
+      "task_id": "debug-02",
+      "prompt": "Diagnose malformed v2.toml handling and identify the expected BrainError boundary.",
+      "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+      "acceptance": {"command": "python -m pytest tests/test_v2_policy.py -q", "expect_exit": 0}
+    }
+  ]
+}

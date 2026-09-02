@@ -33,3 +33,15 @@ min_importance = 0.7
 
 [verification]
 floor = "targeted"
+# Experimental paired economics defaults. Prices are USD per token; null means
+# the host does not expose a verified price and dollars must remain null.
+[economics]
+uncached_in = 1.0
+cache_read = 0.10
+cache_write = 1.25
+alpha = 0.05
+tau = 0.05
+
+[prices.deepseek-v4-flash]
+base_in = 0.00000014
+base_out = 0.00000028

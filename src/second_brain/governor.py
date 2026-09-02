@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from . import economics
+
 DEFAULT_FEATURES: dict[str, bool] = {
     'brain_core': True,
     'autoinject': True,
@@ -579,80 +581,58 @@ def classify_roi(
     min_sessions: int = 3,
     neutral_band: float = 0.02,
 ) -> ROIVerdict:
-    """
-    Classify ROI by comparing token cost of Brain ON vs. Brain OFF sessions.
-
-    Args:
-        on: SessionTokens for Brain ON arm
-        off: SessionTokens for Brain OFF arm
-        min_sessions: minimum sessions per arm to make a verdict
-        neutral_band: tolerance band (e.g., 0.02 = ±2% is NEUTRAL)
-
-    Returns:
-        ROIVerdict with status and supporting numbers.
-
-    HONESTY RULE: if cost_total is absent from any session,
-    return INSUFFICIENT_EVIDENCE.
-    """
+    """Delegate paired ROI evidence to :mod:`second_brain.economics`."""
     verdict = ROIVerdict(
-        status='INSUFFICIENT_EVIDENCE',
+        status="INSUFFICIENT_EVIDENCE",
         on_sessions=len(on),
         off_sessions=len(off),
         neutral_band=neutral_band,
     )
-
-    # Check minimum session counts
     if len(on) < min_sessions or len(off) < min_sessions:
-        msg = (
+        verdict.reason = (
             f"on_sessions={len(on)} < min={min_sessions} "
             f"or off_sessions={len(off)} < min={min_sessions}"
         )
-        verdict.reason = msg
         return verdict
 
-    # Collect costs (HONESTY: if any cost is absent, insufficient evidence)
-    on_costs = []
-    for session in on:
-        if session.cost_total is None or session.cost_total_seen == 0:
-            verdict.reason = f"on arm has session {session.session_id} with missing cost_total"
-            return verdict
-        on_costs.append(session.cost_total)
-
-    off_costs = []
-    for session in off:
-        if session.cost_total is None or session.cost_total_seen == 0:
-            verdict.reason = f"off arm has session {session.session_id} with missing cost_total"
-            return verdict
-        off_costs.append(session.cost_total)
-
-    on_total = sum(on_costs)
-    off_total = sum(off_costs)
-
-    verdict.on_tokens = on_total
-    verdict.off_tokens = off_total
-    verdict.savings = on_total - off_total  # negative = savings (good)
-
-    # Compute ratio
-    if off_total == 0:
-        if on_total == 0:
-            verdict.status = 'NEUTRAL'
-            verdict.reason = "both arms cost 0"
-        else:
-            verdict.status = 'NEGATIVE_ROI'
-            verdict.reason = f"off_total=0, on_total={on_total}"
+    runs: list[dict[str, object]] = []
+    for on_session, off_session in zip(on, off):
+        runs.append(
+            {
+                "off": {
+                    "tokens": off_session.cost_total
+                    if off_session.cost_total_seen
+                    else off_session.total_tokens,
+                },
+                "on": {
+                    "tokens": on_session.cost_total
+                    if on_session.cost_total_seen
+                    else on_session.total_tokens,
+                },
+            }
+        )
+    result = economics.verdict(runs)
+    status = result.get("verdict")
+    if (
+        isinstance(status, str)
+        and status == "NEGATIVE"
+        and abs(result.get("r_bar") or 0) <= neutral_band + 1e-9
+    ):
+        verdict.status = "NEUTRAL"
     else:
-        ratio = on_total / off_total
-        delta_pct = (ratio - 1.0)  # e.g., +0.05 = +5% overhead
-
-        tolerance = 1e-9
-        if delta_pct < -neutral_band - tolerance:
-            verdict.status = 'POSITIVE_ROI'
-            verdict.reason = f"{delta_pct*100:.1f}% savings"
-        elif abs(delta_pct) <= neutral_band + tolerance:
-            verdict.status = 'NEUTRAL'
-            verdict.reason = f"{delta_pct*100:.1f}% within ±{neutral_band*100:.1f}% band"
-        else:
-            verdict.status = 'NEGATIVE_ROI'
-            verdict.reason = f"{delta_pct*100:.1f}% overhead"
-
+        verdict.status = {
+            "POSITIVE": "POSITIVE_ROI",
+            "NEGATIVE": "NEGATIVE_ROI",
+        }.get(status, "INSUFFICIENT_EVIDENCE")
+    if any(session.cost_total is None or session.cost_total_seen == 0 for session in (*on, *off)):
+        verdict.status = "INSUFFICIENT_EVIDENCE"
+        verdict.reason = "cost_total missing from host telemetry"
+    on_costs = [session.cost_total for session in on if session.cost_total is not None]
+    off_costs = [session.cost_total for session in off if session.cost_total is not None]
+    if len(on_costs) == len(on) and len(off_costs) == len(off):
+        verdict.on_tokens = sum(on_costs)
+        verdict.off_tokens = sum(off_costs)
+        verdict.savings = verdict.on_tokens - verdict.off_tokens
+    if not verdict.reason:
+        verdict.reason = f"mSPRT verdict={status}; n={result.get('n', 0)}"
     return verdict
