@@ -814,8 +814,9 @@ def test_claude_stop_hook_emits_assistant_usage_from_transcript(
     assert len(rows) == 2
     assert [row["uuid"] for row in rows] == ["assistant-1", "assistant-2"]
     assert all(row["harness"] == "claude-code" for row in rows)
-    assert all(row["cache_state"] is None for row in rows)
+    assert [row["cache_write_tokens"] for row in rows] == [21, 42]
     assert not any("cache_creation_input_tokens" in row for row in rows)
+    assert all(row["cache_state"] is None for row in rows)
 
     from second_brain import ledger
 
