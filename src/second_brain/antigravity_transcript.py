@@ -166,3 +166,80 @@ def extract_latest_user_task(
         if text is not None:
             latest = text
     return latest
+
+# Generic name for new callers; preserve the established public API.
+extract_latest_task = extract_latest_user_task
+
+_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def extract_usage_tail(
+    transcript_path: str | Path,
+    max_bytes: int = 256 * 1024,
+) -> list[dict]:
+    """Extract assistant usage counters from a bounded JSONL transcript tail.
+
+    Only UUIDs and the four source usage counters are returned.  Transcript
+    content is never returned or persisted by this helper.  Malformed lines,
+    non-assistant records, and all I/O failures are ignored (fail-open).
+    """
+    try:
+        limit = max(0, int(max_bytes))
+        if limit == 0:
+            return []
+        path = Path(transcript_path)
+        if not path.is_file():
+            return []
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - limit))
+            raw_tail = fh.read(limit)
+    except (OSError, TypeError, ValueError):
+        return []
+
+    if size > limit:
+        newline = raw_tail.find(b"\n")
+        if newline < 0:
+            return []
+        raw_tail = raw_tail[newline + 1 :]
+
+    try:
+        text = raw_tail.decode("utf-8", errors="replace")
+    except (UnicodeError, AttributeError):
+        return []
+
+    results: list[dict] = []
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        try:
+            line = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(line, dict):
+            continue
+        message = line.get("message")
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        line_type = str(line.get("type") or "").strip().lower()
+        if role != "assistant" and line_type != "assistant":
+            continue
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        uuid = line.get("uuid")
+        if not isinstance(uuid, str) or not uuid.strip():
+            continue
+        result = {"uuid": uuid}
+        for field in _USAGE_FIELDS:
+            if field in usage:
+                result[field] = usage[field]
+        results.append(result)
+    return results

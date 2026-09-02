@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
-import os
+import json
 import re
 import subprocess
 import sys
@@ -3423,14 +3423,97 @@ def _extract_candidate_marker(text: str) -> tuple[str, str, str] | None:
     return title, observation, evidence
 
 
+def _claude_usage_cursor_path(home: Path, session_id: str) -> Path | None:
+    try:
+        from . import ledger
+
+        return ledger.session_dir(home, session_id) / "claude-usage-cursor.json"
+    except Exception:
+        return None
+
+
+def _read_claude_usage_cursor(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        cursor = value.get("last_uuid") if isinstance(value, dict) else None
+        return cursor if isinstance(cursor, str) and cursor else None
+    except Exception:
+        return None
+
+
+def _write_claude_usage_cursor(path: Path | None, uuid: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"last_uuid": uuid}, separators=(",", ":")), encoding="utf-8")
+
+
+def _claude_usage_records(
+    home: Path,
+    session_id: str,
+    transcript_path: object,
+    cache_state: dict | None,
+) -> None:
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return
+    from . import antigravity_transcript, autoinject
+
+    records = antigravity_transcript.extract_usage_tail(transcript_path)
+    if not records:
+        return
+    cursor_path = _claude_usage_cursor_path(home, session_id)
+    cursor = _read_claude_usage_cursor(cursor_path)
+    start = 0
+    if cursor:
+        for index, record in enumerate(records):
+            if record.get("uuid") == cursor:
+                start = index + 1
+                break
+    seen: set[str] = set()
+    for record in records[start:]:
+        uuid = record.get("uuid")
+        if not isinstance(uuid, str) or not uuid or uuid in seen:
+            continue
+        seen.add(uuid)
+        fields: dict[str, object] = {
+            "harness": "claude-code",
+            "uuid": uuid,
+            "cache_state": cache_state,
+        }
+        for source, target in (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("cache_read_input_tokens", "cache_read_tokens"),
+            ("cache_creation_input_tokens", "cache_write_tokens"),
+        ):
+            if source in record:
+                fields[target] = record[source]
+        autoinject._append_telemetry(home, session_id, "assistant_usage", fields)
+        try:
+            _write_claude_usage_cursor(cursor_path, uuid)
+        except Exception:
+            pass
+
+
+def _claude_cache_state(payload: dict) -> dict | None:
+    state: dict[str, object] = {}
+    for field in ("cache_hit_ratio", "re_cached_tokens"):
+        if field in payload:
+            state[field] = payload[field]
+    return state or None
+
+
 def _cmd_claude_code_hook(home: Path) -> int:
     """Claude Code native lifecycle hook adapter (P3a).
 
     Reads ONE JSON object from stdin - Claude Code's own hook payload
     shape: {session_id, cwd, hook_event_name, transcript_path,
-    last_assistant_message (Stop only), source (SessionStart only, one of
-    startup/resume/clear/compact/fork), trigger (PreCompact only, manual/
-    auto), custom_instructions (PreCompact only)}.
+    last_assistant_message (Stop only), prompt (UserPromptSubmit only),
+    tool_name/tool_response (PostToolUse only), source (SessionStart only,
+    one of startup/resume/clear/compact/fork), trigger (PreCompact only,
+    manual/auto), custom_instructions (PreCompact only)}.
 
     SessionStart: register the harness (host="claude-code") via the same
     telemetry-based BrainLifecycle used by Antigravity/Codex - no ledger
@@ -3444,9 +3527,10 @@ def _cmd_claude_code_hook(home: Path) -> int:
 
     Stop: fires once per assistant turn (Claude Code's SessionEnd, not
     Stop, is the real once-per-session event; out of scope for P3a).
-    Records a lightweight claude_code_stop_turn telemetry record every call. Writes a
-    candidate memory only when the assistant's last message carries the
-    opt-in `<!--second-brain-candidate-->` marker with non-empty evidence.
+    Records usage counters from the bounded transcript tail and a lightweight
+    claude_code_stop_turn telemetry record every call. Writes a candidate
+    memory only when the assistant's last message carries the opt-in
+    `<!--second-brain-candidate-->` marker with non-empty evidence.
 
     Fail-open: any error or malformed input -> "{}", exit 0. Claude Code
     must never fail to start, compact, or finish a turn because the Brain
@@ -3532,9 +3616,8 @@ def _cmd_claude_code_hook(home: Path) -> int:
             "trigger": str(payload_dict.get("trigger") or "auto"),
             # Fields the P3a spec asks for that a mechanical hook cannot
             # honestly derive without model participation (no PreToolUse/
-            # PostToolUse in this pass, so nothing populates a Requirement
-            # Ledger during the turn). Left explicit and empty rather than
-            # fabricated - see brainstem/adapters/claude-code/README.md.
+            # Requirement Ledger inference occurs here). Left explicit and
+            # empty rather than fabricated - see brainstem/adapters/claude-code/README.md.
             "decisions": [],
             "blockers": [],
             "open_questions": [],
@@ -3579,10 +3662,63 @@ def _cmd_claude_code_hook(home: Path) -> int:
         print("{}")
         return 0
 
+    if event == "UserPromptSubmit":
+        prompt = payload_dict.get("prompt")
+        if isinstance(prompt, str):
+            prompt_bytes = prompt.encode("utf-8")
+            with contextlib.suppress(Exception):
+                autoinject._append_telemetry(
+                    home,
+                    session_id,
+                    "claude_code_user_prompt",
+                    {
+                        "harness": "claude-code",
+                        "prompt_bytes": len(prompt_bytes),
+                        "prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
+                    },
+                )
+        print("{}")
+        return 0
+
+    if event == "PostToolUse":
+        tool_name = payload_dict.get("tool_name") or payload_dict.get("tool")
+        output = payload_dict.get("tool_response")
+        if output is None:
+            output = payload_dict.get("output")
+        if isinstance(output, str):
+            output_bytes = output.encode("utf-8")
+        else:
+            try:
+                output_bytes = json.dumps(
+                    output, separators=(",", ":"), sort_keys=True, default=str
+                ).encode("utf-8")
+            except Exception:
+                output_bytes = b""
+        with contextlib.suppress(Exception):
+            autoinject._append_telemetry(
+                home,
+                session_id,
+                "claude_code_tool_result",
+                {
+                    "harness": "claude-code",
+                    "tool": str(tool_name) if tool_name is not None else "unknown",
+                    "output_bytes": len(output_bytes),
+                    "output_sha256": hashlib.sha256(output_bytes).hexdigest(),
+                },
+            )
+        print("{}")
+        return 0
+
     if event == "Stop":
         with contextlib.suppress(Exception):
-            autoinject.BrainLifecycle(home, session).start_session(session)
+            _claude_usage_records(
+                home,
+                session_id,
+                payload_dict.get("transcript_path"),
+                _claude_cache_state(payload_dict),
+            )
         with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).start_session(session)
             autoinject._append_telemetry(
                 home,
                 session_id,
