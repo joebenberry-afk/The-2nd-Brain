@@ -149,7 +149,8 @@ transcript. The transcript content was not copied or persisted by this task.
   `C:\Users\assas\AppData\Local\Temp\v2-claude-live-jsczhcuk`
 - Evidence artifact:
   `outputs/reports/v2/v2-0/claude-code-live-evidence.json`
-- Hook exit: `0`; hook stdout: `{}`; hook stderr: empty.
+- Hook exit: `0`; raw hook stdout/stderr are intentionally omitted from the
+  staged artifact.
 - Telemetry file:
   `C:\Users\assas\AppData\Local\Temp\v2-claude-live-jsczhcuk\telemetry\agent-performance\v2-real-claude-1788365218.jsonl`
 - The evidence artifact records 65 non-null `assistant_usage` rows with
@@ -171,4 +172,22 @@ PYTHONPATH=src .venv/Scripts/python.exe -m pytest tests/test_claude_code_adapter
 ```text
 .................................................                        [100%]
 49 passed
+```
+
+## Review-fix round 4: evidence artifact privacy
+
+Removed raw `governor_report_stdout`, `governor_report_stderr`, `hook_stdout`,
+and `hook_stderr` fields from
+`outputs/reports/v2/v2-0/claude-code-live-evidence.json`. The artifact now
+retains only exit codes, paths, parsed numeric governor counters, usage-row
+metadata, and other structured metadata; no raw stream is staged.
+
+Focused privacy assertion:
+
+```text
+PYTHONPATH=src .venv/Scripts/python.exe -c "import json; from pathlib import Path; p=Path('outputs/reports/v2/v2-0/claude-code-live-evidence.json'); d=json.loads(p.read_text(encoding='utf-8')); forbidden={'governor_report_stdout','governor_report_stderr','hook_stdout','hook_stderr'}; assert not forbidden.intersection(d); assert d['hook_exit']==0 and d['governor_report_exit']==0 and len(d['usage_rows'])==65; print('privacy assertion passed: no raw streams; usage_rows=65')"
+```
+
+```text
+privacy assertion passed: no raw streams; usage_rows=65
 ```
