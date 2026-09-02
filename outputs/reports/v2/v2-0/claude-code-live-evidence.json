@@ -1,0 +1,635 @@
+{
+  "governor_report_exit": 0,
+  "governor_report_json": [
+    {
+      "autoinject_cache_hit_rate": 0.0,
+      "autoinject_cache_hits": 0,
+      "autoinject_cache_misses": 0,
+      "brain_injected_tokens": 0,
+      "brain_packets_delivered": 0,
+      "brain_packets_shadow": 0,
+      "cache_read_tokens": 9737036,
+      "cache_write_tokens": 52095,
+      "compactions": 0,
+      "context_peak": null,
+      "cost_total": null,
+      "cost_total_seen": 0,
+      "input_tokens": 130,
+      "lean_kernel_dedup_hits": 0,
+      "model": null,
+      "model_turns": 65,
+      "output_tokens": 34592,
+      "provider": null,
+      "role": null,
+      "session_id": "v2-real-claude-1788365218",
+      "tool_calls": 0,
+      "tool_input_bytes": 0,
+      "tool_output_bytes": 0,
+      "total_tokens": 0
+    }
+  ],
+  "governor_report_stderr": "",
+  "governor_report_stdout": "[\n  {\n    \"session_id\": \"v2-real-claude-1788365218\",\n    \"provider\": null,\n    \"model\": null,\n    \"input_tokens\": 130,\n    \"output_tokens\": 34592,\n    \"cache_read_tokens\": 9737036,\n    \"cache_write_tokens\": 52095,\n    \"total_tokens\": 0,\n    \"cost_total\": null,\n    \"cost_total_seen\": 0,\n    \"context_peak\": null,\n    \"model_turns\": 65,\n    \"tool_calls\": 0,\n    \"tool_input_bytes\": 0,\n    \"tool_output_bytes\": 0,\n    \"brain_injected_tokens\": 0,\n    \"brain_packets_delivered\": 0,\n    \"brain_packets_shadow\": 0,\n    \"autoinject_cache_hits\": 0,\n    \"autoinject_cache_misses\": 0,\n    \"autoinject_cache_hit_rate\": 0.0,\n    \"lean_kernel_dedup_hits\": 0,\n    \"compactions\": 0,\n    \"role\": null\n  }\n]\n",
+  "home": "C:\\Users\\assas\\AppData\\Local\\Temp\\v2-claude-live-jsczhcuk",
+  "hook_exit": 0,
+  "hook_stderr": "",
+  "hook_stdout": "{}",
+  "init_exit": 0,
+  "other_rows": [
+    {
+      "harness": null,
+      "kind": "claude_code_stop_turn"
+    }
+  ],
+  "telemetry_files": [
+    "C:\\Users\\assas\\AppData\\Local\\Temp\\v2-claude-live-jsczhcuk\\telemetry\\agent-performance\\v2-real-claude-1788365218.jsonl"
+  ],
+  "transcript": "C:\\Users\\assas\\.claude\\projects\\C--Users-assas-Documents-The-Second-Brain\\459595be-f0d7-4fcc-800e-bd65ff23d411.jsonl",
+  "usage_rows": [
+    {
+      "cache_read_tokens": 134792,
+      "cache_write_tokens": 334,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 214,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 134792,
+      "cache_write_tokens": 334,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 214,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 135126,
+      "cache_write_tokens": 326,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 193,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 135452,
+      "cache_write_tokens": 359,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 390,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 135452,
+      "cache_write_tokens": 359,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 390,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 135811,
+      "cache_write_tokens": 2230,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 140,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 135811,
+      "cache_write_tokens": 2230,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 140,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 138041,
+      "cache_write_tokens": 582,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 179,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 138623,
+      "cache_write_tokens": 355,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 217,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 138623,
+      "cache_write_tokens": 355,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 217,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 138978,
+      "cache_write_tokens": 403,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 172,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 138978,
+      "cache_write_tokens": 403,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 172,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 139381,
+      "cache_write_tokens": 183,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 173,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 139564,
+      "cache_write_tokens": 568,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 249,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 139564,
+      "cache_write_tokens": 568,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 249,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 140132,
+      "cache_write_tokens": 389,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 198,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 140132,
+      "cache_write_tokens": 389,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 198,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 140521,
+      "cache_write_tokens": 661,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 376,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 140521,
+      "cache_write_tokens": 661,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 376,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 141182,
+      "cache_write_tokens": 630,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 445,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 141182,
+      "cache_write_tokens": 630,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 445,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 141812,
+      "cache_write_tokens": 533,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 2118,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 141812,
+      "cache_write_tokens": 533,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 2118,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 142345,
+      "cache_write_tokens": 2139,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 745,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 144484,
+      "cache_write_tokens": 818,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 552,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 144484,
+      "cache_write_tokens": 818,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 552,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 144484,
+      "cache_write_tokens": 818,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 552,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 145302,
+      "cache_write_tokens": 1138,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1166,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 145302,
+      "cache_write_tokens": 1138,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1166,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 147606,
+      "cache_write_tokens": 1808,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1722,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 147606,
+      "cache_write_tokens": 1808,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1722,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 149414,
+      "cache_write_tokens": 2294,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 783,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 149414,
+      "cache_write_tokens": 2294,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 783,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 151708,
+      "cache_write_tokens": 1129,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1167,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 151708,
+      "cache_write_tokens": 1129,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1167,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 152837,
+      "cache_write_tokens": 1316,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 367,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 152837,
+      "cache_write_tokens": 1316,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 367,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 154153,
+      "cache_write_tokens": 785,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1677,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 154153,
+      "cache_write_tokens": 785,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1677,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 154938,
+      "cache_write_tokens": 1867,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 162,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 156805,
+      "cache_write_tokens": 442,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 175,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 157247,
+      "cache_write_tokens": 600,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 504,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 157247,
+      "cache_write_tokens": 600,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 504,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 157247,
+      "cache_write_tokens": 600,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 504,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 157847,
+      "cache_write_tokens": 667,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 113,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 158514,
+      "cache_write_tokens": 140,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 194,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 158514,
+      "cache_write_tokens": 140,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 194,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 158654,
+      "cache_write_tokens": 515,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 183,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 159169,
+      "cache_write_tokens": 369,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 244,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 159538,
+      "cache_write_tokens": 730,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 197,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 160268,
+      "cache_write_tokens": 592,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 353,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 160268,
+      "cache_write_tokens": 592,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 353,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 160268,
+      "cache_write_tokens": 592,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 353,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 160860,
+      "cache_write_tokens": 423,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 307,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 161283,
+      "cache_write_tokens": 973,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 264,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 161283,
+      "cache_write_tokens": 973,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 264,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 162256,
+      "cache_write_tokens": 567,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 206,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 162256,
+      "cache_write_tokens": 567,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 206,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 162823,
+      "cache_write_tokens": 382,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 178,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 163205,
+      "cache_write_tokens": 509,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 333,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 163714,
+      "cache_write_tokens": 1218,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 144,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 163714,
+      "cache_write_tokens": 1218,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 144,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 164932,
+      "cache_write_tokens": 203,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 762,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 164932,
+      "cache_write_tokens": 203,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 762,
+      "source_kind": null
+    },
+    {
+      "cache_read_tokens": 165135,
+      "cache_write_tokens": 865,
+      "harness": "claude-code",
+      "input_tokens": 2,
+      "kind": "assistant_usage",
+      "output_tokens": 1241,
+      "source_kind": null
+    }
+  ]
+}
