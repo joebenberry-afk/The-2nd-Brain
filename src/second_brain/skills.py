@@ -128,12 +128,14 @@ def resolve_visibility_mode(home: Path) -> str:
     return "enforced" if value == "enforced" else "shadow"
 
 
-def _body_stats(skill_id: str, eligible: dict[str, dict]) -> tuple[int, int]:
+def _body_stats(
+    skill_id: str, eligible: dict[str, dict], home: Path | str | None = None
+) -> tuple[int, int]:
     try:
         text = eligible[skill_id]["path"].read_text(encoding="utf-8")
     except OSError:
         return 0, 0
-    return len(text), autoinject.token_estimate(text)
+    return len(text), autoinject.token_estimate(text, home=home)
 
 
 def build_plan(
@@ -169,13 +171,14 @@ def build_plan(
     descriptor_refs = {skill_id: described[skill_id]["descriptor_ref"] for skill_id in eligible}
     descriptor_chars = sum(len(described[skill_id]["descriptor_text"]) for skill_id in eligible)
     descriptor_tokens = sum(
-        autoinject.token_estimate(described[skill_id]["descriptor_text"]) for skill_id in eligible
+        autoinject.token_estimate(described[skill_id]["descriptor_text"], home=home)
+        for skill_id in eligible
     )
 
     avoided_full_chars = 0
     avoided_full_tokens = 0
     for skill_id in eligible:
-        chars, tokens = _body_stats(skill_id, eligible)
+        chars, tokens = _body_stats(skill_id, eligible, home=home)
         avoided_full_chars += chars
         avoided_full_tokens += tokens
 
@@ -293,7 +296,7 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
     avoided_full_tokens = plan["avoided_full_tokens"]
     for body in hydrated_bodies.values():
         chars = len(body)
-        tokens = autoinject.token_estimate(body)
+        tokens = autoinject.token_estimate(body, home=home)
         hydrated_chars += chars
         hydrated_tokens += tokens
         avoided_full_chars -= chars

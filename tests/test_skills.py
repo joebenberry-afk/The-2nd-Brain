@@ -67,6 +67,33 @@ def test_build_plan_selects_and_caps_at_three(brain_home, monkeypatch):
     assert "d" in plan["rejected_skill_ids"]
     assert plan["rejected_skill_ids"]["d"] == "over_cap"
 
+def test_build_plan_uses_selected_home_for_token_estimates(brain_home, monkeypatch):
+    _make_skill(brain_home, "a", "shadow")
+    calibration = brain_home / "state" / "calibration"
+    calibration.mkdir(parents=True)
+    (calibration / "tokens.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": "default",
+                "default_chars_per_token": 8.0,
+                "models": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "second_brain.router.route",
+        lambda home, task, max_active=None, skills=None: {
+            "selected": ["a"],
+            "scores": {},
+            "shadow": True,
+        },
+    )
+    plan = skills.build_plan(brain_home, "task", session_id="s1", project_id="p1")
+    descriptor_text = skills.descriptors(brain_home)["a"]["descriptor_text"]
+    assert plan["descriptor_tokens"] == max(1, len(descriptor_text) // 8)
+
 
 def test_build_plan_zero_selection_is_legitimate(brain_home, monkeypatch):
     monkeypatch.setattr(
