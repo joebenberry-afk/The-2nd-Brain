@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -126,7 +127,6 @@ class TestToolSetCLI:
         data = json.loads(res_list.stdout)
         assert data["token_estimate"] <= 500
         assert len(data["active_tools"]) == 4
-
         # 2. Detect
         res_det = subprocess.run(
             [
@@ -145,3 +145,38 @@ class TestToolSetCLI:
         assert res_det.returncode == 0
         det_data = json.loads(res_det.stdout)
         assert "database_migrate_query" in det_data["activated"]
+
+    def test_cli_uses_custom_home_calibration(self, tmp_path):
+        calibration = tmp_path / "state" / "calibration"
+        calibration.mkdir(parents=True)
+        (calibration / "tokens.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source": "default",
+                    "default_chars_per_token": 8.0,
+                    "models": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        res = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "second_brain",
+                "--home",
+                str(tmp_path),
+                "tool-set",
+                "list",
+                "--active",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
+        )
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert data["token_estimate"] == ToolWorkingSetManager(home=tmp_path).estimate_active_tokens()
+

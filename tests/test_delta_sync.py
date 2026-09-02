@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -249,3 +250,53 @@ class TestDeltaSyncCLI:
         updated_data = json.loads(apply_res.stdout)
         assert updated_data["version"] == 2
         assert updated_data["guidance"] == "New advice"
+
+    def test_cli_sync_uses_custom_home_calibration(self, tmp_path):
+        calibration = tmp_path / "state" / "calibration"
+        calibration.mkdir(parents=True)
+        (calibration / "tokens.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source": "default",
+                    "default_chars_per_token": 8.0,
+                    "models": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        target = {
+            "memory_id": "mem-sync-home",
+            "version": 1,
+            "status": "current",
+            "confidence": "high",
+            "title": "Custom home",
+            "observation": "Observed",
+            "guidance": "Guidance",
+            "evidence": "Evidence",
+        }
+        target_file = tmp_path / "target.json"
+        target_file.write_text(json.dumps([target]), encoding="utf-8")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "second_brain",
+                "--home",
+                str(tmp_path),
+                "delta-sync",
+                "sync",
+                "session-home",
+                str(target_file),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        expected, _ = DeltaSyncEngine(home=tmp_path).sync_memories(
+            "session-home", [target]
+        )
+        assert data[0]["token_size_estimate"] == expected[0].token_size_estimate
