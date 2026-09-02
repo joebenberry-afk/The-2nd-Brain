@@ -360,11 +360,13 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 if 'compaction_tokens' in record:
                     tokens.compaction_tokens += record['compaction_tokens']
 
-    # Compute derived metrics
+    # Derived role totals retain the historical integer surface. A null
+    # source total contributes no known tokens; it is not converted in the
+    # source field itself.
     if tokens.role == 'driver':
-        tokens.driver_tokens = tokens.total_tokens
+        tokens.driver_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
     elif tokens.role == 'worker':
-        tokens.worker_tokens = tokens.total_tokens
+        tokens.worker_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
 
     if tokens.autoinject_cache_hits + tokens.autoinject_cache_misses > 0:
         total_decisions = (
@@ -469,9 +471,15 @@ def attribute_roles(sessions: list[SessionTokens]) -> dict[str, int]:
             continue
 
         result[f'{role_key}_turns'] += session.model_turns
-        result[f'{role_key}_input_tokens'] += session.input_tokens
-        result[f'{role_key}_output_tokens'] += session.output_tokens
-        result[f'{role_key}_total_tokens'] += session.total_tokens
+        result[f'{role_key}_input_tokens'] += (
+            session.input_tokens if session.input_tokens is not None else 0
+        )
+        result[f'{role_key}_output_tokens'] += (
+            session.output_tokens if session.output_tokens is not None else 0
+        )
+        result[f'{role_key}_total_tokens'] += (
+            session.total_tokens if session.total_tokens is not None else 0
+        )
 
     return result
 
