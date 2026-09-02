@@ -1182,7 +1182,9 @@ def _vmem_context(home: Path, binding: HermesBinding, task: str = "") -> dict[st
         rendered["context_changed"] = bool(faulted_in_ids)
         rendered["context_chars"] = len(rendered["rendered_text"])
         rendered["context_tokens"] = (
-            max(1, rendered["context_chars"] // 4) if rendered["context_chars"] else 0
+            contracts.estimate_tokens(rendered["rendered_text"])
+            if rendered["context_chars"]
+            else 0
         )
         return rendered
     except Exception:

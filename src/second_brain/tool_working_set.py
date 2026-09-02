@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from .contracts import estimate_tokens
 from .errors import BrainError
 
 
@@ -331,7 +332,7 @@ class ToolWorkingSetManager:
         """Estimate token footprint of active tool schemas."""
         active_schemas = self.get_active_tools(compress=True)
         raw_json = json.dumps(active_schemas)
-        return max(1, len(raw_json) // 4)
+        return estimate_tokens(raw_json)
 
     def list_all(self) -> list[dict[str, Any]]:
         """List all tools with status."""

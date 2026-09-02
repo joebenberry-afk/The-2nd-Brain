@@ -26,10 +26,14 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
+import os
 import typing
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Any, TypeVar
 
 from .errors import BrainError
@@ -200,6 +204,169 @@ def canonical_json(obj: Any) -> str:
 def stable_content_hash(obj: Any) -> str:
     """sha256 hex of the canonical JSON bytes of ``obj`` (stable content only)."""
     return hashlib.sha256(canonical_json(obj).encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Shared calibrated token estimator.
+# ---------------------------------------------------------------------------
+
+TOKEN_CALIBRATION_SCHEMA_VERSION = 1
+DEFAULT_CHARS_PER_TOKEN = 4.0
+_MIN_CHARS_PER_TOKEN = 0.25
+_MAX_CHARS_PER_TOKEN = 100.0
+
+
+def _token_calibration_path() -> Path:
+    raw_home = os.environ.get("SECOND_BRAIN_HOME")
+    home = (
+        Path(raw_home).expanduser()
+        if raw_home
+        else Path.home() / "Documents" / "The-Second-Brain"
+    )
+    return home / "state" / "calibration" / "tokens.json"
+
+
+def _valid_ratio(value: object) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    ratio = float(value)
+    if not math.isfinite(ratio) or not _MIN_CHARS_PER_TOKEN <= ratio <= _MAX_CHARS_PER_TOKEN:
+        return None
+    return ratio
+
+
+def token_estimator_info(model: str | None = None) -> dict[str, object]:
+    """Return effective ratio and provenance without exposing any prompt data."""
+    ratio = DEFAULT_CHARS_PER_TOKEN
+    source = "default"
+    pair_count = 0
+    try:
+        data = json.loads(_token_calibration_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("schema_version") == TOKEN_CALIBRATION_SCHEMA_VERSION:
+            models = data.get("models")
+            entry = models.get(model or "default") if isinstance(models, dict) else None
+            if isinstance(entry, dict):
+                loaded = _valid_ratio(entry.get("chars_per_token"))
+                pair_count_value = entry.get("pair_count")
+                has_measured_pairs = (
+                    isinstance(pair_count_value, int)
+                    and not isinstance(pair_count_value, bool)
+                    and pair_count_value > 0
+                )
+                if (
+                    loaded is not None
+                    and entry.get("source") == "calibrated"
+                    and has_measured_pairs
+                ):
+                    ratio = loaded
+                    source = "calibrated"
+                    pair_count = pair_count_value
+            if source == "default":
+                loaded = _valid_ratio(data.get("default_chars_per_token"))
+                if loaded is not None:
+                    ratio = loaded
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return {"chars_per_token": ratio, "source": source, "pair_count": pair_count}
+
+
+def estimate_tokens(text: str, model: str | None = None) -> int:
+    """Estimate text tokens using calibrated chars/token, defaulting explicitly to 4.0."""
+    info = token_estimator_info(model)
+    return max(1, int(len(text or "") / float(info["chars_per_token"])))
+
+
+def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
+    from . import telemetry
+
+    # Telemetry counters may be cumulative across a session. Keep only the
+    # measured size and the immediately following usage delta; no raw payload
+    # ever enters the calibration state.
+    pending: dict[tuple[str, str | None], float] = {}
+    previous_input: dict[tuple[str, str], float] = {}
+    pairs: dict[str, list[tuple[float, float]]] = {}
+    for _, _, record in telemetry.iter_records(home):
+        if not isinstance(record, dict):
+            continue
+        session = record.get("session") if isinstance(record.get("session"), str) else ""
+        model = record.get("model") if isinstance(record.get("model"), str) else None
+        kind = record.get("kind")
+        if kind == "provider_request_meta":
+            measured = record.get("prompt_chars")
+            if (
+                isinstance(measured, (int, float))
+                and not isinstance(measured, bool)
+                and math.isfinite(float(measured))
+                and measured > 0
+            ):
+                pending[(session, model)] = float(measured)
+            continue
+        if kind == "tool_result":
+            measured = record.get("output_bytes")
+            if (
+                isinstance(measured, (int, float))
+                and not isinstance(measured, bool)
+                and math.isfinite(float(measured))
+                and measured > 0
+                and (session, model) not in pending
+            ):
+                pending[(session, model)] = float(measured)
+            continue
+        if kind != "assistant_usage":
+            continue
+        tokens = record.get("input_tokens")
+        if (
+            not isinstance(tokens, (int, float))
+            or isinstance(tokens, bool)
+            or not math.isfinite(float(tokens))
+            or tokens <= 0
+        ):
+            continue
+        usage_key = (session, model or "default")
+        previous = previous_input.get(usage_key)
+        delta = float(tokens) if previous is None or tokens < previous else float(tokens) - previous
+        previous_input[usage_key] = float(tokens)
+        if delta <= 0:
+            continue
+        measured_entry = pending.pop((session, model), None)
+        if measured_entry is None and model is not None:
+            measured_entry = pending.pop((session, None), None)
+        if measured_entry is None:
+            continue
+        measured = measured_entry
+        pairs.setdefault(model or "default", []).append((measured, delta))
+    return pairs
+
+
+def calibrate_tokens(home: Path) -> dict[str, object]:
+    """Fit chars/token from measured telemetry pairs and persist only aggregates."""
+    pairs = _calibration_pairs(home)
+    models: dict[str, dict[str, object]] = {}
+    total_pairs = 0
+    for model, observations in pairs.items():
+        denominator = sum(tokens * tokens for _, tokens in observations)
+        numerator = sum(chars * tokens for chars, tokens in observations)
+        ratio = _valid_ratio(numerator / denominator) if denominator else None
+        if ratio is None:
+            continue
+        count = len(observations)
+        models[model] = {
+            "chars_per_token": round(ratio, 6),
+            "source": "calibrated",
+            "pair_count": count,
+        }
+        total_pairs += count
+    state: dict[str, object] = {
+        "schema_version": TOKEN_CALIBRATION_SCHEMA_VERSION,
+        "default_chars_per_token": DEFAULT_CHARS_PER_TOKEN,
+        "source": "calibrated" if models else "default",
+        "pair_count": total_pairs,
+        "models": models,
+    }
+    path = home / "state" / "calibration" / "tokens.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    return state
 
 
 # ---------------------------------------------------------------------------

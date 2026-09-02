@@ -11,8 +11,11 @@
  * replacement patch is ever constructed — see context-paging.ts's module
  * docstring for the exact 8-step ordering this file verifies.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { pageContext, type PageContextOptions } from "../src/context-paging";
+import { estimateTokens, pageContext, type PageContextOptions } from "../src/context-paging";
 import { AUTOINJECT_CUSTOM_TYPE } from "../src/autoinject";
 import type { ContextPagingFileConfig } from "../src/config";
 import type {
@@ -100,6 +103,32 @@ function baseOptions(overrides: Partial<PageContextOptions> = {}): PageContextOp
     claimPages: autoClaim(),
     ...overrides,
   };
+}
+
+describe("shared token calibration reader", () => {
+  it("accepts only calibrated model entries and defaults invalid provenance", () => {
+    const home = mkdtempSync(join(tmpdir(), "sb-token-calibration-"));
+    try {
+      mkdirCalibration(home, {
+        schema_version: 1,
+        default_chars_per_token: 4,
+        models: {
+          m: { chars_per_token: 2, source: "default", pair_count: 1 },
+          calibrated: { chars_per_token: 2, source: "calibrated", pair_count: 1 },
+        },
+      });
+      expect(estimateTokens("x".repeat(10), "m", home)).toBe(3);
+      expect(estimateTokens("x".repeat(10), "calibrated", home)).toBe(6);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+function mkdirCalibration(home: string, state: unknown): void {
+  const dir = join(home, "state", "calibration");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "tokens.json"), JSON.stringify(state), "utf8");
 }
 
 describe("pageContext — disabled / zero-mutation baselines", () => {

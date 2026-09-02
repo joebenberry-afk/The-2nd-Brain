@@ -162,6 +162,8 @@
  */
 import { AUTOINJECT_CUSTOM_TYPE } from "./autoinject";
 import type { ContextPagingFileConfig } from "./config";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { serializedSize } from "./rtd";
 import {
   runVmemClaimPagesSync,
@@ -171,10 +173,53 @@ import {
   type VmemPrePageObject,
 } from "./vmem";
 
-/** ~4 chars/token heuristic (VMem's own vmem.py `_estimate_tokens` style) —
- * no new tokenizer, matches the existing codebase convention. */
-function estimateTokens(value: unknown): number {
-  return Math.max(1, Math.floor(serializedSize(value) / 4));
+const DEFAULT_CHARS_PER_TOKEN = 4;
+const MIN_CHARS_PER_TOKEN = 0.25;
+const MAX_CHARS_PER_TOKEN = 100;
+
+interface TokenCalibrationState {
+  schema_version?: unknown;
+  default_chars_per_token?: unknown;
+  models?: Record<string, { chars_per_token?: unknown; source?: unknown; pair_count?: unknown }>;
+}
+
+function validCalibrationRatio(value: unknown): number | undefined {
+  return typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= MIN_CHARS_PER_TOKEN &&
+      value <= MAX_CHARS_PER_TOKEN
+    ? value
+    : undefined;
+}
+
+function readCalibrationState(home: string): TokenCalibrationState | undefined {
+  try {
+    return JSON.parse(
+      readFileSync(join(home, "state", "calibration", "tokens.json"), "utf8"),
+    ) as TokenCalibrationState;
+  } catch {
+    return undefined;
+  }
+}
+
+function calibrationRatio(home?: string, model?: string): number {
+  if (!home) return DEFAULT_CHARS_PER_TOKEN;
+  const state = readCalibrationState(home);
+  if (state?.schema_version !== 1) return DEFAULT_CHARS_PER_TOKEN;
+  const entry = state.models?.[model ?? "default"];
+  const calibrated = entry?.source === "calibrated" &&
+      typeof entry.pair_count === "number" &&
+      Number.isInteger(entry.pair_count) &&
+      entry.pair_count > 0
+    ? validCalibrationRatio(entry.chars_per_token)
+    : undefined;
+  return calibrated ??
+    validCalibrationRatio(state.default_chars_per_token) ??
+    DEFAULT_CHARS_PER_TOKEN;
+}
+
+export function estimateTokens(value: unknown, model?: string, home?: string): number {
+  return Math.max(1, Math.floor(serializedSize(value) / calibrationRatio(home, model)));
 }
 
 /** Structural check ONLY — a non-empty string, nothing more. */
@@ -385,9 +430,10 @@ export function pageContext(options: PageContextOptions): PageContextResult {
     // total size of eligible OLD content (the actual model-visible message,
     // never the tiny VMem metadata blob) exceeds the configured budget.
     let estimatedTotal = 0;
-    for (const candidate of candidates) estimatedTotal += estimateTokens(messages[candidate.index]);
+    for (const candidate of candidates) {
+      estimatedTotal += estimateTokens(messages[candidate.index], undefined, options.home);
+    }
     if (estimatedTotal <= options.cfg.residentTokenBudget) return noop;
-
     // Step 3 (Defect B): at most ONE vmem-list call per context event,
     // never once per element, only reached once there is real over-budget
     // old content — now targeting PRE-PAGE states (RESIDENT/FAULTED_IN),
@@ -554,11 +600,11 @@ export function pageContext(options: PageContextOptions): PageContextResult {
         candidate.elementKind === "toolResult" ? [{ type: "text", text: pointerText }] : pointerText;
       const replacement = { ...original, content: replacementContent };
 
-      tokensBefore += estimateTokens(original);
-      tokensAfter += estimateTokens(replacement);
+      tokensBefore += estimateTokens(original, undefined, options.home);
+      tokensAfter += estimateTokens(replacement, undefined, options.home);
+      statesAfterPaged.add(isReprojection ? "EVICTED_REPROJECTED" : "EVICTED");
       kindsPaged.add(match.kind);
       if (match.residencyState) statesBeforePaged.add(match.residencyState);
-      statesAfterPaged.add(isReprojection ? "EVICTED_REPROJECTED" : "EVICTED");
 
       if (patched === undefined) patched = messages.slice();
       patched[candidate.index] = replacement;

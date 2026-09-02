@@ -21,6 +21,7 @@ from typing import Any
 
 from .contracts import (
     PacketItem,
+    estimate_tokens,
     stable_content_hash,
 )
 from .errors import BrainError
@@ -108,7 +109,7 @@ def compute_memory_delta(
     if base is None and target is not None:
         t_dict = _item_to_dict(target)
         t_hash = compute_canonical_hash(t_dict)
-        token_estimate = max(1, len(json.dumps(t_dict)) // 4)
+        token_estimate = estimate_tokens(json.dumps(t_dict))
         return MemoryDeltaPacket(
             target_memory_id=t_dict["memory_id"],
             base_version=0,
@@ -159,7 +160,7 @@ def compute_memory_delta(
             patch[key] = val
 
     delta_type = DeltaType.SUPERSEDE if t_dict.get("supersedes") else DeltaType.MODIFY
-    token_estimate = max(1, len(json.dumps(patch)) // 4)
+    token_estimate = estimate_tokens(json.dumps(patch))
 
     return MemoryDeltaPacket(
         target_memory_id=t_dict["memory_id"],
