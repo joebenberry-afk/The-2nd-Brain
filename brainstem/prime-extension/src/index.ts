@@ -66,11 +66,13 @@ import { appendLeanKernel, decideLeanRuntime, LEAN_KERNEL_MARKER } from "./lean-
 import {
   loadContextPagingConfig,
   loadContextStructureConfig,
+  loadModelConfig,
+  loadProviderConfig,
   loadRtdConfig,
   loadVmemAdmissionConfig,
   loadVmemConfig,
 } from "./config";
-import { pageContext } from "./context-paging";
+import { estimateTokens, pageContext } from "./context-paging";
 import { join } from "node:path";
 import {
   cliArtifactPreserver,
@@ -108,7 +110,7 @@ import {
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
-import { runVmemCompactPrep, runVmemHotContext, runVmemStore } from "./vmem";
+import { runVmemCompactPrep, runVmemEvictSync, runVmemHotContext, runVmemStore } from "./vmem";
 import {
   createTelemetryDirEnsurer,
   sanitizeSessionStem,
@@ -502,6 +504,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const rereadRunner = options.rereadHintRunner ?? runRereadHint;
   const pendingRereads = new Map<string, { path: string }>();
   const readySessions = new Set<string>();
+  const lastToolResultBytes = new Map<string, number>();
+  const lastContextProvider = new Map<string, string | null>();
+  const lastContextModel = new Map<string, string | null>();
+  const lastProvider = new Map<string, string | null>();
+  const lastModel = new Map<string, string | null>();
+  const lastCacheReadTokens = new Map<string, number | null>();
+  const previousRenderedView = new Map<string, unknown>();
+  const sessionBeforeCompactOccurred = new Set<string>();
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
@@ -1447,13 +1457,66 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       const pagingCfg = loadContextPagingConfig(config.home);
       if (pagingCfg.enabled && Array.isArray(event.messages)) {
+        // T2.3 Cache break-point gate (a)-(e)
+        // (a) previous tool_result bytes > [rtd].threshold_chars (default 8000)
+        const rtdCfg = loadRtdConfig(config.home);
+        const thresholdChars = parseThreshold(
+          process.env.SECOND_BRAIN_RTD_THRESHOLD,
+          rtdCfg.thresholdChars,
+        );
+        const toolBytes = lastToolResultBytes.get(session) ?? 0;
+        const condA = toolBytes > thresholdChars;
+
+        // (b) session_before_compact event occurred
+        const condB = sessionBeforeCompactOccurred.has(session);
+
+        // (c) model/provider changed since last request
+        const currentIdentity = sensors.splitProviderModel(sensors.modelToString(ctx.model));
+        const prevProv = lastContextProvider.get(session);
+        const prevMod = lastContextModel.get(session);
+        const condC =
+          prevProv !== undefined &&
+          prevMod !== undefined &&
+          (currentIdentity.provider !== prevProv || currentIdentity.model !== prevMod);
+
+        // (d) last assistant_usage.cache_read_tokens == 0
+        const lastCache = lastCacheReadTokens.get(session);
+        const condD = lastCache !== undefined && lastCache === 0;
+
+        // (e) resident tokens > capacity_hard (default 6000 or 1.5 * budget)
+        const capacityHard = Math.max(6000, Math.floor(pagingCfg.residentTokenBudget * 1.5));
+        let residentTokens = 0;
+        for (const msg of event.messages) {
+          residentTokens += estimateTokens(msg, currentIdentity.model ?? undefined, config.home ?? undefined);
+        }
+        const condE = residentTokens > capacityHard;
+
+        const breakPoint = condA || condB || condC || condD || condE;
+        const prevView = previousRenderedView.get(session);
+
+        if (!breakPoint) {
+          // Skip paging: return previous view unchanged if available, else undefined
+          return prevView !== undefined && Array.isArray(prevView) ? { messages: prevView } : undefined;
+        }
+
         const paged = pageContext({
           home: config.home ?? "",
           hostSessionId: session,
           messages: event.messages,
           cfg: pagingCfg,
         });
-        // RC4 CVM closure repair (Repair B): a claim-subprocess failure for
+
+        // Reset one-shot break flags
+        sessionBeforeCompactOccurred.delete(session);
+        lastToolResultBytes.delete(session);
+        lastContextProvider.set(session, currentIdentity.provider);
+        lastContextModel.set(session, currentIdentity.model);
+
+        if (paged.messages !== undefined) {
+          previousRenderedView.set(session, paged.messages);
+        } else {
+          previousRenderedView.set(session, event.messages);
+        }
         // the RESIDENT/FAULTED_IN group no longer forces the WHOLE event to
         // discard its patch — `paged.messages` can be defined (Path B
         // reprojection succeeded independently) AT THE SAME TIME as
@@ -1579,6 +1642,120 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         }
       }
       const effectiveIdentity = payloadIdentity(effective, ctx);
+
+      // T2.3 Model-switch preflight (Deep Upgrade Plan U6 §7.4, literal order 1-8)
+      const prevProv = lastProvider.get(session);
+      const prevMod = lastModel.get(session);
+      const isSwitch =
+        prevMod !== undefined &&
+        (effectiveIdentity.provider !== prevProv || effectiveIdentity.model !== prevMod);
+
+      if (isSwitch) {
+        const targetModel = effectiveIdentity.model ?? "default";
+        const targetProvider = effectiveIdentity.provider ?? "default";
+
+        // Step 1: Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000)
+        const modelCfg = loadModelConfig(config.home, targetModel);
+        const targetCapacity = modelCfg.contextTokens;
+
+        // Step 2: Resolve cache scope from config/v2.toml [providers].<id>.cache_scope (default model)
+        const providerCfg = loadProviderConfig(config.home, targetProvider);
+        const cacheScope = providerCfg.cacheScope;
+
+        // Step 3: If model-scoped, mark prefix cache cold (cache_read_tokens = 0)
+        const cacheCold = cacheScope === "model";
+        if (cacheCold) {
+          lastCacheReadTokens.set(session, 0);
+        }
+
+        // Step 4: Recompute resident load with T0.6 estimator
+        const payloadObj =
+          effective != null && typeof effective === "object"
+            ? (effective as Record<string, unknown>)
+            : {};
+        const messages = Array.isArray(payloadObj.messages) ? payloadObj.messages : [];
+        let load = 0;
+        for (const msg of messages) {
+          load += estimateTokens(msg, targetModel, config.home ?? undefined);
+        }
+        const loadBefore = load;
+
+        // Step 5: If load > target capacity * 0.85: run T2.0/T2.1 reclaim
+        const reclaimThreshold = Math.floor(targetCapacity * 0.85);
+        let reclaimedCount = 0;
+        if (load > reclaimThreshold) {
+          const reclaimResult = runVmemEvictSync({
+            home: config.home ?? "",
+            hostSessionId: session,
+            budgetTokens: reclaimThreshold,
+          });
+          reclaimedCount = reclaimResult.evictedCount ?? 0;
+          if (reclaimResult.evictedTokens !== undefined && reclaimResult.evictedTokens > 0) {
+            load = Math.max(0, load - reclaimResult.evictedTokens);
+          } else {
+            const paged = pageContext({
+              home: config.home ?? "",
+              hostSessionId: session,
+              messages,
+              cfg: loadContextPagingConfig(config.home),
+            });
+            if (paged.messages !== undefined) {
+              payloadObj.messages = paged.messages;
+              effective = { ...payloadObj };
+            }
+            load = 0;
+            for (const msg of (paged.messages ?? messages)) {
+              load += estimateTokens(msg, targetModel, config.home ?? undefined);
+            }
+          }
+        }
+
+        // Step 6: Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW)
+        if (load > targetCapacity) {
+          return {
+            status: "INPUT_REQUIRED",
+            error: "CONTEXT_OVERFLOW",
+            reason: "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
+            target_capacity: targetCapacity,
+            load,
+          };
+        }
+
+        // Step 7: Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0)
+        getStore(session)?.append(
+          sensors.modelRouteTransition(session, {
+            current_provider: prevProv ?? null,
+            current_model: prevMod ?? null,
+            target_provider: targetProvider,
+            target_model: targetModel,
+            target_capacity: targetCapacity,
+            cache_scope: cacheScope,
+            cache_cold: cacheCold,
+            load_before: loadBefore,
+            load_after: load,
+            reclaimed_count: reclaimedCount,
+          }),
+        );
+        mirror(
+          session,
+          "decision",
+          {
+            routing_event: "MODEL_ROUTE_TRANSITION",
+            kind: "routing",
+            propensity: 1.0,
+            current_provider: prevProv ?? null,
+            current_model: prevMod ?? null,
+            target_provider: targetProvider,
+            target_model: targetModel,
+          },
+          { cwd: ctxCwd(ctx), agentId: sensors.modelToString(ctx.model) ?? "omp" },
+        );
+
+        // Step 8: Send / proceed
+      }
+
+      lastProvider.set(session, effectiveIdentity.provider);
+      lastModel.set(session, effectiveIdentity.model);
       lastEffectiveProvider = effectiveIdentity.provider;
       lastEffectiveModel = effectiveIdentity.model;
       getStore(session)?.append(
@@ -1669,6 +1846,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       session = resolveSessionId(ctx, anonSession);
       const message = event.message;
       if (message != null && message.usage != null) {
+        const u = message.usage as unknown as Record<string, unknown>;
+        const cr = sensors.usageCounter(u.cacheRead);
+        if (cr !== undefined) {
+          lastCacheReadTokens.set(session, cr);
+        }
         const routed =
           latestRoutingSession === session && lastEffectiveProvider && lastEffectiveModel
             ? { provider: lastEffectiveProvider, model: lastEffectiveModel }
@@ -2035,6 +2217,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           measurement.outputBytes,
         ),
       );
+      lastToolResultBytes.set(session, measurement.outputBytes);
       return rereadPatch ?? rtd.patch;
     } catch (error) {
       try {
@@ -2092,6 +2275,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      sessionBeforeCompactOccurred.add(session);
       mirror(
         session,
         "compaction_started",
