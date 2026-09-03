@@ -66,8 +66,7 @@ import { appendLeanKernel, decideLeanRuntime, LEAN_KERNEL_MARKER } from "./lean-
 import {
   loadContextPagingConfig,
   loadContextStructureConfig,
-  loadModelConfig,
-  loadProviderConfig,
+  loadProviderCapabilities,
   loadRtdConfig,
   loadVmemAdmissionConfig,
   loadVmemConfig,
@@ -1732,13 +1731,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         const targetModel = effectiveIdentity.model ?? "default";
         const targetProvider = effectiveIdentity.provider ?? "default";
 
-        // Step 1: Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000)
-        const modelCfg = loadModelConfig(config.home, targetModel);
-        const targetCapacity = modelCfg.contextTokens;
-
-        // Step 2: Resolve cache scope from config/v2.toml [providers].<id>.cache_scope (default model)
-        const providerCfg = loadProviderConfig(config.home, targetProvider);
-        const cacheScope = providerCfg.cacheScope;
+        // Step 1 & 2 (T2.6): resolve target context_tokens (config/v2.toml
+        // [models].<id>, default 128_000) and cache scope (config/v2.toml
+        // [providers].<id>.cache_scope, default "model") through the one
+        // canonical provider-capability lookup.
+        const preflightCaps = loadProviderCapabilities(config.home, targetModel, targetProvider);
+        const targetCapacity = preflightCaps.contextTokens;
+        const cacheScope = preflightCaps.cacheScope;
 
         // Step 3: If model-scoped, mark prefix cache cold (cache_read_tokens = 0)
         const cacheCold = cacheScope === "model";

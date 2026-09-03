@@ -29,7 +29,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, contracts, db, decisions, ledger, semantic, working_set
+from . import artifacts, capabilities, contracts, db, decisions, ledger, semantic, working_set
 from .errors import BrainError
 from .paths import db_path as _control_db_path
 
@@ -190,9 +190,18 @@ def _compute_base_priority(kind: SessionObjectKind, pinned: bool) -> float:
     return 10.0
 
 
-def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
+def _load_economics_parameters(
+    home: Path | str, provider_id: str | None = None
+) -> dict[str, float | int]:
     """Read cache pricing multipliers and cost model parameters from
-    `config/v2.toml [economics]` or provider table if present; fallback to standard defaults."""
+    `config/v2.toml [economics]` or provider table if present; fallback to standard defaults.
+
+    When `provider_id` is given and its T2.6 capability row reports
+    `cache_support == "none"`, `cache_write` is forced equal to `cache_read`
+    in the returned dict -- a provider that does not support prompt caching
+    must not be charged the cache-write cost penalty. In every other case
+    (no `provider_id`, no capability row, or `cache_support` is `implicit`/
+    `explicit`) the existing pricing above is returned unchanged."""
     path = Path(home) / "config" / "v2.toml"
     cache_read = 0.10
     cache_write = 1.25
@@ -234,13 +243,18 @@ def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
                 if isinstance(pcw, (int, float)) and not isinstance(pcw, bool):
                     cache_write = float(pcw)
 
-    return {
+    result: dict[str, float | int] = {
         "cache_read": cache_read,
         "cache_write": cache_write,
         "fault_in_turn_cost_tokens": fault_in_turn_cost_tokens,
         "default_remaining_turns": default_remaining_turns,
         "faulted_in_pin_turns": faulted_in_pin_turns,
     }
+    if provider_id is not None:
+        caps = capabilities.get_provider_capabilities(home, provider_id)
+        if caps["cache_support"] == "none":
+            result["cache_write"] = result["cache_read"]
+    return result
 
 
 def remaining_turns_estimate(
