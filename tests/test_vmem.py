@@ -1500,3 +1500,128 @@ class TestVMemFaultInDbWriteFailOpen:
 
         after = _snapshot(store, obj.obj_id)
         assert after == before  # zero mutation despite a fully-succeeded read-only resolution
+
+
+class TestCostModelEvictionT21:
+    """T2.1 Cost-model eviction tests (Deep Upgrade Plan U4 §5.3-5.7)."""
+
+    def test_recent_large_cold_object_evicted_before_old_one(self, brain_home):
+        """Recent large cold object (low suffix, high tokens -> high benefit,
+        low invalidation cost) evicts before an older object with high suffix
+        invalidation, even if the older object had lower base priority."""
+        store = VMemStore(brain_home, "sess-cost-1")
+        # Old object A: base priority 10 (tool observation), smaller tokens (200)
+        obj_a = store.store_object(
+            kind=SessionObjectKind.TOOL_OBSERVATION,
+            title="Old tool observation",
+            content="a" * 800,  # ~200 tokens
+            pinned=False,
+        )
+        # Recent object B: base priority 50 (research result), larger tokens (400)
+        obj_b = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Recent research result",
+            content="b" * 1600,  # ~400 tokens
+            pinned=False,
+        )
+        total = obj_a.token_estimate + obj_b.token_estimate
+        # Set budget so exactly one object needs to be evicted to fit
+        budget = max(obj_a.token_estimate, obj_b.token_estimate)
+        assert total > budget
+
+        evicted = store.evict_to_budget(max_tokens=budget)
+
+        # Cost model: obj_b has suffix 0, benefit = 400 * 8 * 0.1 = 320, cost ~ 22.5 -> net ~ +297.5
+        # obj_a has suffix 400, cost = 400 * 1.15 + ... ~ 470, benefit = 160 -> net < 0
+        # Therefore obj_b must be evicted before obj_a!
+        assert len(evicted) == 1
+        assert evicted[0].obj_id == obj_b.obj_id
+        assert store.get_object(obj_a.obj_id).residency_state == ResidencyState.RESIDENT
+        assert store.get_object(obj_b.obj_id).residency_state == ResidencyState.EVICTED
+
+    def test_no_positive_net_means_no_eviction_under_budget_slack(self, brain_home):
+        """Under-budget session performs no evictions even if candidates exist."""
+        store = VMemStore(brain_home, "sess-cost-slack")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Cold result",
+            content="some result content",
+            pinned=False,
+        )
+        # Budget is well above resident tokens (budget slack)
+        budget = obj.token_estimate + 1000
+        evicted = store.evict_to_budget(max_tokens=budget)
+        assert evicted == []
+        assert store.get_object(obj.obj_id).residency_state == ResidencyState.RESIDENT
+
+    def test_forced_eviction_logged_when_over_budget(self, brain_home, caplog):
+        """When all candidates have net <= 0 but session is over budget,
+        fallback eviction occurs and logs forced_eviction=1."""
+        import logging
+        store = VMemStore(brain_home, "sess-forced-evict")
+        # Store objects where net <= 0 for all
+        # (e.g. decision/blocker with high p_fault and very low tokens or R=0)
+        obj_1 = store.store_object(
+            kind=SessionObjectKind.DECISION,
+            title="Decision 1",
+            content="small 1",
+            pinned=False,
+        )
+        obj_2 = store.store_object(
+            kind=SessionObjectKind.DECISION,
+            title="Decision 2",
+            content="small 2",
+            pinned=False,
+        )
+        with caplog.at_level(logging.INFO):
+            # Force budget to 0 so we must evict despite net <= 0
+            evicted = store.evict_to_budget(max_tokens=0)
+
+        assert len(evicted) > 0
+        # forced_eviction=1 must appear in logs
+        assert "forced_eviction=1" in caplog.text
+
+    def test_eviction_records_decision_with_top_5_alternatives(self, brain_home):
+        """Record decisions(kind='eviction', propensity=1.0) with chosen
+        objects and top-5 alternative candidates by net score."""
+        store = VMemStore(brain_home, "sess-decision-rec")
+        # Store 7 candidates
+        objs = []
+        for i in range(7):
+            o = store.store_object(
+                kind=SessionObjectKind.RESEARCH_RESULT,
+                title=f"Result {i}",
+                content=f"content {i} " * 50,
+                pinned=False,
+            )
+            objs.append(o)
+
+        total = sum(o.token_estimate for o in objs)
+        # Budget to evict top 1 or 2
+        budget = total - objs[-1].token_estimate
+        evicted = store.evict_to_budget(max_tokens=budget)
+        assert len(evicted) >= 1
+
+        conn = db.connect(db.db_path(brain_home), readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM decisions WHERE session_id = ? AND kind = 'eviction'",
+                ("sess-decision-rec",),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        assert len(rows) >= 1
+        row = rows[0]
+        assert row["propensity"] == 1.0
+        chosen_data = json.loads(row["chosen_json"])
+        alt_data = json.loads(row["alternatives_json"])
+        # chosen should contain the evicted obj_ids
+        evicted_ids = {e.obj_id for e in evicted}
+        if isinstance(chosen_data, list):
+            chosen_ids = {c["obj_id"] if isinstance(c, dict) else c for c in chosen_data}
+            assert evicted_ids.issubset(chosen_ids) or chosen_ids == evicted_ids
+        elif isinstance(chosen_data, dict):
+            assert "chosen_ids" in chosen_data or "obj_ids" in chosen_data
+        # alternatives should have at most 5 items
+        assert len(alt_data) <= 5

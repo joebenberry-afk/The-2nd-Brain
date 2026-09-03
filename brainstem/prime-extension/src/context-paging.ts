@@ -223,6 +223,52 @@ export function estimateTokens(value: unknown, model?: string, home?: string): n
   return Math.max(1, Math.floor(serializedSize(value) / calibrationRatio(home, model)));
 }
 
+export interface EconomicsPagingParams {
+  cacheRead: number;
+  cacheWrite: number;
+  faultCost: number;
+  remainingTurns: number;
+}
+
+export function loadEconomicsPagingParams(home?: string): EconomicsPagingParams {
+  let cacheRead = 0.10;
+  let cacheWrite = 1.25;
+  let faultCost = 50;
+  let remainingTurns = 8;
+  if (!home) return { cacheRead, cacheWrite, faultCost, remainingTurns };
+  try {
+    const text = readFileSync(join(home, "config", "v2.toml"), "utf8");
+    let currentSection = "";
+    for (const rawLine of text.split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (line.startsWith("[") && line.endsWith("]")) {
+        currentSection = line.slice(1, -1).trim();
+        continue;
+      }
+      if (currentSection === "economics") {
+        const [k, v] = line.split("=").map((s) => s.trim());
+        if (k === "cache_read") {
+          const val = parseFloat(v);
+          if (Number.isFinite(val)) cacheRead = val;
+        } else if (k === "cache_write") {
+          const val = parseFloat(v);
+          if (Number.isFinite(val)) cacheWrite = val;
+        } else if (k === "fault_in_turn_cost_tokens") {
+          const val = parseInt(v, 10);
+          if (Number.isInteger(val)) faultCost = val;
+        } else if (k === "default_remaining_turns") {
+          const val = parseInt(v, 10);
+          if (Number.isInteger(val)) remainingTurns = val;
+        }
+      }
+    }
+  } catch {
+    // fallback to defaults
+  }
+  return { cacheRead, cacheWrite, faultCost, remainingTurns };
+}
+
 /** Structural check ONLY — a non-empty string, nothing more. */
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
@@ -507,11 +553,42 @@ export function pageContext(options: PageContextOptions): PageContextResult {
     }
     if (correlated.length === 0) return noop;
 
-    // Step 5: bounded, deterministic selection — up to
-    // max_pages_per_context_event, in message-index order. Both Path A
-    // (RESIDENT/FAULTED_IN) and Path B (already-EVICTED) candidates share
-    // this SAME bound, combined, exactly as any other candidate would.
-    const selected = correlated.slice(0, options.cfg.maxPagesPerContextEvent);
+    // Step 5: Bounded selection using cache-priced cost model (T2.1 Prime parity):
+    // Net benefit = benefit - cost for each correlated candidate o:
+    //   tokens_o = estimateTokens(messages[candidate.index])
+    //   suffix_o = sum of tokens of subsequent candidates in messages
+    //   benefit = tokens_o * R * cache_read
+    //   cost = suffix_o * (cache_write - cache_read) + p_fault(o) * (tokens_o + fault_cost)
+    //   p_fault = 0.5 if kind in (DECISION, BLOCKER) else 0.2 if accessCount > 1 else 0.05
+    //   net = benefit - cost
+    // Candidates with net > 0 are sorted descending by net score, followed by non-positive
+    // candidates in message-index order as fallback, bounded by max_pages_per_context_event.
+    const econ = loadEconomicsPagingParams(options.home);
+    const candidateTokens = correlated.map((c) =>
+      estimateTokens(messages[c.candidate.index], undefined, options.home),
+    );
+    const scored = correlated.map((item, idx) => {
+      const tokens_o = candidateTokens[idx];
+      const suffix_o = candidateTokens.slice(idx + 1).reduce((sum, t) => sum + t, 0);
+      const matchKind = item.match.kind;
+      const accessCount = (item.match as unknown as Record<string, unknown>).accessCount;
+      const pFault =
+        matchKind === "DECISION" || matchKind === "BLOCKER"
+          ? 0.5
+          : typeof accessCount === "number" && accessCount > 1
+            ? 0.2
+            : 0.05;
+      const benefit = tokens_o * econ.remainingTurns * econ.cacheRead;
+      const cost = suffix_o * (econ.cacheWrite - econ.cacheRead) + pFault * (tokens_o + econ.faultCost);
+      const net = benefit - cost;
+      return { item, net, originalIndex: idx };
+    });
+
+    const positive = scored.filter((s) => s.net > 0);
+    positive.sort((a, b) => b.net - a.net || a.originalIndex - b.originalIndex);
+    const nonPositive = scored.filter((s) => s.net <= 0);
+    const ordered = [...positive, ...nonPositive];
+    const selected = ordered.slice(0, options.cfg.maxPagesPerContextEvent).map((s) => s.item);
 
     // Repair B split: Path A (needs a real claim) vs Path B (already
     // EVICTED, proof-backed, reprojected directly — no claim, no DB write).
