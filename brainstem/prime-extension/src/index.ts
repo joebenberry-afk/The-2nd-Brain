@@ -127,6 +127,22 @@ import {
   type OmpRoutingResult,
 } from "./routing-bridge";
 import {
+  type BudgetCheckOptions,
+  type BudgetCheckResult,
+  type BudgetRunner,
+  type BudgetState,
+  BUDGET_HARD_LINE,
+  runBudgetCheck,
+} from "./budget-bridge";
+export {
+  type BudgetCheckOptions,
+  type BudgetCheckResult,
+  type BudgetRunner,
+  type BudgetState,
+  BUDGET_HARD_LINE,
+  runBudgetCheck,
+};
+import {
   OMP_VISIBILITY_MAX_INJECTED_CHARS,
   ompVisibilityRecord,
   runOmpVisibility,
@@ -408,6 +424,10 @@ export interface ExtensionOptions {
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
   rereadHintRunner?: RereadHintRunner;
+  /** Budget check runner seam; production uses governor check-budget CLI bridge. */
+  budgetRunner?: BudgetRunner;
+  /** Test seam to pre-seed session budget states. */
+  sessionBudgetStates?: Map<string, BudgetState>;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -516,6 +536,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
+  const sessionBudgetStates = options.sessionBudgetStates ?? new Map<string, BudgetState>();
+  const budgetRunner = options.budgetRunner ?? runBudgetCheck;
   const safeWorkerContextRunner = async (
     workerOptions: OmpWorkerContextOptions,
   ): Promise<OmpWorkerContextResult> => {
@@ -540,6 +562,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session: string,
   ): Promise<ToolCallEventResult | undefined> => {
     if (event.toolName !== "task") return undefined;
+    const parentSession = workerParentSessions.get(session) ?? session;
+    if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(parentSession) === "HARD") {
+      getStore(session)?.append(
+        ompRoutingRecord("omp_worker_context_failure", session, {
+          task_id: "omp-budget-blocked",
+          failure_code: "BUDGET_EXCEEDED",
+        }),
+      );
+      return { block: true, reason: BUDGET_HARD_LINE };
+    }
     const input = event.input;
     const batchItems = Array.isArray(input.tasks) ? input.tasks : [];
     const items: Array<Record<string, unknown>> =
@@ -700,6 +732,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     role: string,
   ): OmpRoutingOptions => {
     const model = ctx.model;
+    const budgetState = sessionBudgetStates.get(session);
     return {
       home: config.home ?? "",
       task,
@@ -710,6 +743,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       model: typeof model?.id === "string" ? model.id : "",
       cwd: ctxCwd(ctx),
       candidates: modelCandidates(ctx),
+      ...(budgetState === "SOFT" ? { minimumTier: "efficient" } : {}),
     };
   };
 
@@ -1141,6 +1175,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
   }
 
+  /** T3.1: merge the hard budget warning into the TAIL custom message slot. */
+  function mergeBudgetWarningMessage(primary: unknown, warning: string): unknown {
+    if (primary === undefined || primary === null) {
+      return { content: warning, details: { budget_warning: true } };
+    }
+    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
+      const primaryDetails =
+        "details" in primary && typeof primary.details === "object" && primary.details !== null
+          ? primary.details
+          : {};
+      return {
+        ...primary,
+        content: `${primary.content}\n\n${warning}`,
+        details: { ...primaryDetails, budget_warning: true },
+      };
+    }
+    return primary;
+  }
+
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
@@ -1328,6 +1381,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         loadDriverOrchestratorConfig(),
         guardCfg.orchestratorModels,
       );
+      const budgetCheck = await budgetRunner({
+        home: config.home ?? "",
+        sessionId: session,
+        role,
+      }).catch(() => ({ state: "OK" as const, used: 0, cap: 0 }));
+      sessionBudgetStates.set(session, budgetCheck.state);
       const task = typeof event.prompt === "string" ? event.prompt.slice(0, 2048) : "";
       if (task.length > 0) {
         await ensureRoutingDecision(session, task, ctx, role);
@@ -1447,6 +1506,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           turnMessage = mergeRecallBriefMessage(turnMessage, brief);
         }
       }
+      if (sessionBudgetStates.get(session) === "HARD") {
+        turnMessage = mergeBudgetWarningMessage(turnMessage, BUDGET_HARD_LINE);
+      }
       if (role === "driver" && patched !== undefined) {
         return withMessage({ systemPrompt: patched }, turnMessage);
       }
@@ -1464,10 +1526,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // is NEVER dropped by a later handler failure (role resolution, config
       // load, prompt getter). Return it bare in advisory/active; shadow/off
       // keep returning undefined (aiMessage is undefined there).
-      const message = mergeActiveStateMessage(aiMessage, activeMessage);
+      let message = mergeActiveStateMessage(aiMessage, activeMessage);
+      if (sessionBudgetStates.get(session) === "HARD") {
+        message = mergeBudgetWarningMessage(message, BUDGET_HARD_LINE);
+      }
       if (
         message !== undefined &&
-        (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+        (aiCfg.mode === "advisory" || aiCfg.mode === "active" || sessionBudgetStates.get(session) === "HARD")
       ) {
         return { message };
       }
@@ -1991,11 +2056,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      const parentSession = workerParentSessions.get(session) ?? session;
+      if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(parentSession) === "HARD") {
+        return { block: true, reason: BUDGET_HARD_LINE };
+      }
       const command =
         typeof event.input?.command === "string" ? event.input.command : "";
       const isStopControl =
         event.toolName === "bash" && STOP_CONTROL_COMMAND.test(command);
-      const parentSession = workerParentSessions.get(session) ?? session;
       const rewrittenCommand =
         isStopControl || rewriteSessionPlaceholders(command, session, parentSession) !== command
           ? (isStopControl

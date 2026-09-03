@@ -847,3 +847,141 @@ class TestCacheEpochAttribution:
             brain_home / "telemetry" / "agent-performance" / "zero_writes.jsonl"
         )
         assert tokens.cache_epochs == []
+
+
+class TestCheckBudget:
+    """T3.1 hard/soft budget caps: governor.check_budget."""
+
+    def test_ok_below_soft_threshold(self, brain_home):
+        """Usage below cap * soft_ratio is OK."""
+        records = [_rec("assistant_usage", input_tokens=100, output_tokens=100, total_tokens=200)]
+        _write_session(brain_home, "budget-ok", records)
+        result = governor.check_budget(brain_home, "budget-ok", "driver")
+        assert result == {"state": "OK", "used": 200, "cap": 400000}
+
+    def test_soft_cap_at_boundary(self, brain_home):
+        """Usage exactly at cap * soft_ratio is SOFT (>= boundary)."""
+        # worker cap defaults to 120000; soft_ratio 0.8 -> soft threshold 96000.
+        records = [_rec("assistant_usage", total_tokens=96000)]
+        _write_session(brain_home, "budget-soft", records)
+        result = governor.check_budget(brain_home, "budget-soft", "worker")
+        assert result == {"state": "SOFT", "used": 96000, "cap": 120000}
+
+    def test_soft_cap_just_below_boundary_is_ok(self, brain_home):
+        """One token below the soft threshold stays OK."""
+        records = [_rec("assistant_usage", total_tokens=95999)]
+        _write_session(brain_home, "budget-soft-under", records)
+        result = governor.check_budget(brain_home, "budget-soft-under", "worker")
+        assert result["state"] == "OK"
+
+    def test_hard_cap_at_boundary(self, brain_home):
+        """Usage exactly at cap is HARD (>= boundary)."""
+        records = [_rec("assistant_usage", total_tokens=120000)]
+        _write_session(brain_home, "budget-hard", records)
+        result = governor.check_budget(brain_home, "budget-hard", "worker")
+        assert result == {"state": "HARD", "used": 120000, "cap": 120000}
+
+    def test_worker_role_uses_worker_cap(self, brain_home):
+        """role == 'worker' caps at worker_tokens, not session_tokens."""
+        result = governor.check_budget(brain_home, "no-telemetry-worker", "worker")
+        assert result["cap"] == 120000
+
+    def test_non_worker_role_uses_session_cap(self, brain_home):
+        """Any non-'worker' role caps at session_tokens."""
+        result = governor.check_budget(brain_home, "no-telemetry-driver", "driver")
+        assert result["cap"] == 400000
+
+    def test_missing_telemetry_fails_open_to_ok(self, brain_home):
+        """No telemetry file for the session -> used=0, state=OK (fail-open)."""
+        result = governor.check_budget(brain_home, "never-existed", "driver")
+        assert result == {"state": "OK", "used": 0, "cap": 400000}
+
+    def test_malformed_config_falls_back_to_defaults(self, brain_home):
+        """Malformed governor.toml never raises; defaults apply."""
+        (brain_home / "config" / "governor.toml").write_text("not valid toml [[[", encoding="utf-8")
+        result = governor.check_budget(brain_home, "malformed-cfg", "worker")
+        assert result["cap"] == 120000
+
+    def test_custom_budget_config_overrides_defaults(self, brain_home):
+        """[budgets] in governor.toml overrides the hardcoded defaults."""
+        (brain_home / "config" / "governor.toml").write_text(
+            "[budgets]\nsession_tokens = 1000\nworker_tokens = 500\nsoft_ratio = 0.5\n",
+            encoding="utf-8",
+        )
+        records = [_rec("assistant_usage", total_tokens=500)]
+        _write_session(brain_home, "budget-custom", records)
+        result = governor.check_budget(brain_home, "budget-custom", "driver")
+        assert result == {"state": "SOFT", "used": 500, "cap": 1000}
+
+    def test_descendant_usage_counts_toward_parent(self, brain_home):
+        """A worker session rooted at the parent contributes its total_tokens
+        to the parent's `used` via the parent's root_parent_session_id link
+        in the descendant's own ledger.sqlite `sessions` row."""
+        from second_brain import contracts, ledger
+
+        parent_host_id = "parent-session-descendant-test"
+        child_host_id = "child-worker-session-descendant-test"
+        parent_internal = ledger.internal_session_id(parent_host_id)
+
+        _write_session(
+            brain_home,
+            parent_host_id,
+            [_rec("assistant_usage", total_tokens=1000, session="parent")],
+        )
+        _write_session(
+            brain_home,
+            child_host_id,
+            [_rec("assistant_usage", total_tokens=2500, session="child")],
+        )
+
+        with ledger.LedgerStore(brain_home, child_host_id).open(create=True) as store:
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=ledger.internal_session_id(child_host_id),
+                    host="hermes",
+                    host_session_id=child_host_id,
+                    project_id="default",
+                    created_at="2026-08-18T10:00:00.000Z",
+                    status="active",
+                    pinned=False,
+                    schema_version=1,
+                    root_parent_session_id=parent_internal,
+                )
+            )
+
+        result = governor.check_budget(brain_home, parent_host_id, "driver")
+        assert result["used"] == 3500  # 1000 (own) + 2500 (descendant)
+
+    def test_unrelated_sibling_session_not_counted(self, brain_home):
+        """A ledger session with a DIFFERENT root_parent_session_id must
+        never leak into this parent's usage total."""
+        from second_brain import contracts, ledger
+
+        parent_host_id = "parent-session-unrelated-test"
+        other_host_id = "other-unrelated-parent-test"
+        stray_host_id = "stray-child-of-other-parent"
+
+        _write_session(
+            brain_home, parent_host_id, [_rec("assistant_usage", total_tokens=10)]
+        )
+        _write_session(
+            brain_home, stray_host_id, [_rec("assistant_usage", total_tokens=99999)]
+        )
+
+        with ledger.LedgerStore(brain_home, stray_host_id).open(create=True) as store:
+            store.create_session(
+                contracts.BrainSessionIdentity(
+                    internal_session_id=ledger.internal_session_id(stray_host_id),
+                    host="hermes",
+                    host_session_id=stray_host_id,
+                    project_id="default",
+                    created_at="2026-08-18T10:00:00.000Z",
+                    status="active",
+                    pinned=False,
+                    schema_version=1,
+                    root_parent_session_id=ledger.internal_session_id(other_host_id),
+                )
+            )
+
+        result = governor.check_budget(brain_home, parent_host_id, "driver")
+        assert result["used"] == 10

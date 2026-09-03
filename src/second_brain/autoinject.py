@@ -45,6 +45,7 @@ from . import (
     db,
     decisions,
     freshness,
+    governor,
     hybrid_retrieval,
     reconsolidation,
     registry,
@@ -217,6 +218,46 @@ def _record_retrieval_abstention(
         )
     except Exception:
         logger.debug("retrieval abstention decision record failed", exc_info=True)
+
+_BUDGET_POLICY_VERSION = "v3.1"
+
+
+def _budget_rollout_stage(home: Path) -> str:
+    """config/v2.toml [rollout] brainstem; SHADOW default (matches the
+    routing/eviction decisions(kind=...) stage-resolution pattern)."""
+    stage = "SHADOW"
+    try:
+        v2_path = Path(home) / "config" / "v2.toml"
+        if v2_path.is_file():
+            v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
+            candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
+            if candidate in decisions._ROLLOUT_STAGES:
+                stage = candidate
+    except Exception:
+        pass
+    return stage
+
+
+def _record_budget_soft(home: Path, intent: RetrievalIntent, used: int, cap: int) -> None:
+    """Record the SOFT budget determination (T3.1) without persisting
+    task/query content, following the exact pattern of
+    `_record_retrieval_abstention`."""
+    try:
+        decisions.record(
+            home,
+            kind="budget",
+            session_id=intent.session_id,
+            task_id=None,
+            chosen={"decision": "NO_INJECTION", "state": "SOFT"},
+            alternatives=["INJECT"],
+            propensity=1.0,
+            randomized=False,
+            policy_version=_BUDGET_POLICY_VERSION,
+            stage=_budget_rollout_stage(home),
+            inputs={"used": used, "cap": cap},
+        )
+    except Exception:
+        logger.debug("budget SOFT decision record failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +770,13 @@ def prepare_injection(
             candidate_ids=list(candidate_ids) if candidate_ids is not None else [],
             selected_ids=list(selected_ids) if selected_ids is not None else [],
         )
+
+    # T3.1: SOFT budget check, after intent validation (the `empty`/
+    # `decision` scaffolding above), before any retrieval work begins.
+    budget = governor.check_budget(home, intent.session_id, intent.role_profile)
+    if budget.get("state") == "SOFT":
+        _record_budget_soft(home, intent, budget.get("used", 0), budget.get("cap", 0))
+        return decision(NoInjectionReason.BUDGET_SOFT)
 
     query_mode = "idf"
     query_text = (

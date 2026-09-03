@@ -25,6 +25,7 @@ from . import (
     contracts,
     decisions,
     firewall,
+    governor,
     handoff,
     injection_slots,
     ledger,
@@ -61,6 +62,25 @@ _TOOL_RESULT_MAX_CHARS = 4000
 _ATTRIBUTION_FIELD_MAX_CHARS = 64
 _MODEL_CANDIDATE_KEYS = ("candidates", "model_candidates", "candidate_metadata", "models")
 _MODEL_ROUTING_MAX_ERROR_CHARS = 128
+
+# T3.1 hard/soft budget caps.
+_BUDGET_HARD_LINE = "[SECOND_BRAIN_BUDGET] hard cap reached; state INPUT_REQUIRED"
+_BUDGET_POLICY_VERSION = "v3.1"
+
+
+def _budget_rollout_stage(home: Path) -> str:
+    """config/v2.toml [rollout] brainstem; SHADOW default (same
+    stage-resolution pattern used by the "routing"/"eviction" decisions()
+    call sites in this module and in vmem.py)."""
+    stage = "SHADOW"
+    try:
+        v2_raw = tomllib.loads((home / "config" / "v2.toml").read_text(encoding="utf-8"))
+        candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
+        if candidate in decisions._ROLLOUT_STAGES:
+            stage = candidate
+    except Exception:
+        pass
+    return stage
 
 
 _VMEM_CACHE_BREAKPOINT_FILE = "cache_breakpoints.json"
@@ -633,6 +653,15 @@ def request_worker_task(
             **_response_base(binding, "worker_task_request"),
             "status": "failed",
             "failure_code": "UNAUTHORIZED_COORDINATOR",
+        }
+    # T3.1 §4: check the PARENT (dispatching) session's budget state before
+    # spawning; a HARD cap fails the dispatch instead of creating the task.
+    parent_budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
+    if parent_budget.get("state") == "HARD":
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": "failed",
+            "failure_code": "BUDGET_EXCEEDED",
         }
     try:
         packet = contracts.WorkerTaskPacket.from_dict(packet_data)
@@ -1813,6 +1842,11 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
             }
 
     vmem_context = _vmem_context(home, binding, task, payload=payload)
+    # T3.1: HARD budget determination for this turn. Hermes exposes no
+    # pre_tool_call blocking primitive (see report), so the only action
+    # taken here is the exact tail warning line plus one decision record.
+    budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
+    budget_is_hard = budget.get("state") == "HARD"
     selected_routes, routing_error = _route_task(home, task) if task else ([], False)
     visibility_plan, hydrated_bodies = (
         _visibility_task(home, task, binding.host_session_id, binding.project_id)
@@ -1860,7 +1894,25 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         delta_context=visible_packet,
         hot_context_refs=vmem_context.get("rendered_text") if isinstance(vmem_context, dict) else None,
         hydrated_skills=hydrated_bodies if enforced_visible else None,
+        budget_warning=_BUDGET_HARD_LINE if budget_is_hard else None,
     )
+    if budget_is_hard:
+        try:
+            decisions.record(
+                home,
+                kind="budget",
+                session_id=binding.host_session_id,
+                task_id=turn_id,
+                chosen={"decision": "BLOCK", "state": "HARD"},
+                alternatives=["ALLOW"],
+                propensity=1.0,
+                randomized=False,
+                policy_version=_BUDGET_POLICY_VERSION,
+                stage=_budget_rollout_stage(home),
+                inputs={"used": budget.get("used", 0), "cap": budget.get("cap", 0)},
+            )
+        except Exception:
+            pass
     reason = decision.reason.value if decision.reason is not None else None
     attribution = _injection_attribution(binding, task, turn_id, decision)
     event_type = (
@@ -1987,6 +2039,7 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     return {
         **_response_base(binding, "pre_llm_call"),
         "status": "ok",
+        "budget_state": budget.get("state"),
         "turn_id": turn_id,
         "decision": decision.decision.value,
         "reason": reason,
