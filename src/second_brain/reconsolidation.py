@@ -63,9 +63,14 @@ def _validate_session(session_id: str | None) -> None:
         raise BrainError("session_id must be a string or None")
 
 
-def record_retrieval(home: Path, memory_id: str, session_id: str | None = None) -> int:
-    """Record a retrieval: inserts a memory_retrievals row and bumps
-    retrieval_count + last_retrieved_at on the memory."""
+def record_retrieval(
+    home: Path, memory_id: str, session_id: str | None = None, *, idempotent: bool = False
+) -> int:
+    """Record a retrieval, optionally deduplicated per memory/session.
+
+    ``idempotent`` is reserved for repeated host-hook feedback. The default
+    remains append-only for callers that intentionally record each retrieval.
+    """
     if not isinstance(memory_id, str) or not memory_id.strip():
         raise BrainError("memory_id must be a non-empty string")
     _validate_session(session_id)
@@ -73,6 +78,16 @@ def record_retrieval(home: Path, memory_id: str, session_id: str | None = None) 
     now = _utcnow()
     conn = db.connect(_dbfile(home))
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if idempotent and session_id is not None:
+            existing = conn.execute(
+                "SELECT retrieval_id FROM memory_retrievals "
+                "WHERE memory_id = ? AND session_id = ? ORDER BY retrieval_id LIMIT 1",
+                (memory_id, session_id),
+            ).fetchone()
+            if existing is not None:
+                conn.commit()
+                return int(existing["retrieval_id"])
         cursor = conn.execute(
             "INSERT INTO memory_retrievals (memory_id, session_id, created_at) VALUES (?, ?, ?)",
             (memory_id, session_id, now),
@@ -92,11 +107,14 @@ def record_retrieval(home: Path, memory_id: str, session_id: str | None = None) 
 
 
 def record_activation(
-    home: Path, memory_id: str, outcome: str, session_id: str | None = None
+    home: Path,
+    memory_id: str,
+    outcome: str,
+    session_id: str | None = None,
+    *,
+    idempotent: bool = False,
 ) -> int:
-    """Record an activation outcome (plan §49). 'correct' bumps
-    successful_retrieval_count; 'contradicted' bumps contradiction_count and
-    moves the memory to COLD + labile (reconsolidation event)."""
+    """Record an activation outcome; optionally deduplicate host-hook repeats."""
     if not isinstance(memory_id, str) or not memory_id.strip():
         raise BrainError("memory_id must be a non-empty string")
     if outcome not in ACTIVATION_OUTCOMES:
@@ -105,6 +123,17 @@ def record_activation(
     _memory_row(home, memory_id)  # existence check + lazy migration
     conn = db.connect(_dbfile(home))
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        if idempotent and session_id is not None:
+            existing = conn.execute(
+                "SELECT activation_id FROM memory_activations "
+                "WHERE memory_id = ? AND session_id = ? AND outcome = ? "
+                "ORDER BY activation_id LIMIT 1",
+                (memory_id, session_id, outcome),
+            ).fetchone()
+            if existing is not None:
+                conn.commit()
+                return int(existing["activation_id"])
         cursor = conn.execute(
             "INSERT INTO memory_activations (memory_id, session_id, outcome, created_at) "
             "VALUES (?, ?, ?, ?)",
@@ -129,7 +158,6 @@ def record_activation(
         raise BrainError(f"Could not record activation: {exc}") from exc
     finally:
         conn.close()
-
 
 def apply_heat(home: Path, memory_id: str, heat: str) -> dict:
     """Set a memory's heat state with plan §52 guardrails:

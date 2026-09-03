@@ -83,6 +83,27 @@ def test_record_activation_outcomes(brain_home):
         reconsolidation.record_activation(brain_home, mid, "bogus")
 
 
+def test_feedback_idempotency_is_opt_in_and_atomic(brain_home):
+    mid = _memory(brain_home)
+    first = reconsolidation.record_retrieval(
+        brain_home, mid, session_id="hook-s1", idempotent=True
+    )
+    second = reconsolidation.record_retrieval(
+        brain_home, mid, session_id="hook-s1", idempotent=True
+    )
+    assert first == second
+    assert _row(brain_home, mid)["retrieval_count"] == 1
+
+    activation_first = reconsolidation.record_activation(
+        brain_home, mid, "correct", session_id="hook-s1", idempotent=True
+    )
+    activation_second = reconsolidation.record_activation(
+        brain_home, mid, "correct", session_id="hook-s1", idempotent=True
+    )
+    assert activation_first == activation_second
+    assert _row(brain_home, mid)["successful_retrieval_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # apply_heat guardrails
 # ---------------------------------------------------------------------------

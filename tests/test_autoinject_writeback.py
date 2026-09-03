@@ -2,9 +2,9 @@
 
 `brainctl autoinject writeback` creates a CANDIDATE memory (never promoted
 to truth): status candidate, grade OBSERVED, provenance pointing at the
-session. The validity gate keeps unverified candidates out of retrieval;
-VERIFIED/TESTED candidates become retrievable; the delivery ledger keeps the
-same session lineage from re-injecting.
+session. T1.3 admits OBSERVED candidates as low-confidence context;
+VERIFIED/TESTED candidates render HIGH confidence; the delivery ledger keeps
+the same session lineage from re-injecting.
 """
 
 import json
@@ -95,15 +95,13 @@ def test_writeback_creates_candidate_with_provenance(tmp_path) -> None:
     assert any(s["ref"] == "tests/test_verify.py" for s in sources)
 
 
-def test_unverified_candidate_not_retrievable_as_current(tmp_path) -> None:
+def test_observed_candidate_is_retrievable_with_low_confidence(tmp_path) -> None:
     home = tmp_path / "brain"
     _init(home)
     out = _writeback(home, observation="verify external state before retry")
-    # A DIFFERENT (fresh) session tries to retrieve the lesson: the candidate
-    # is unverified -> gate withholds it (never presented as current truth).
     d = _inject(home, "verify external state before retry", session_id="fresh-s1")
-    assert d.decision.value == "NO_INJECTION"
-    assert out["memory_id"] not in d.selected_ids
+    assert d.decision.value == "INJECT"
+    assert d.selected_ids == [out["memory_id"]]
 
 
 def test_verified_candidate_is_retrievable_fresh_session_g10(tmp_path) -> None:
@@ -119,7 +117,7 @@ def test_verified_candidate_is_retrievable_fresh_session_g10(tmp_path) -> None:
     assert d.selected_ids == [out["memory_id"]]
 
 
-def test_writeback_does_not_reinject_same_lineage(tmp_path) -> None:
+def test_writeback_does_not_reinject_same_memory_lineage(tmp_path) -> None:
     home = tmp_path / "brain"
     _init(home)
     mid = semantic.add_memory(
@@ -129,14 +127,13 @@ def test_writeback_does_not_reinject_same_lineage(tmp_path) -> None:
     semantic.curate(home, mid, status="current")
     first = _inject(home, "migration ordering", session_id="s1")
     assert first.decision.value == "INJECT"
-    _writeback(home, session_id="s1", title="Outcome note", observation="migration ran clean")
-    # Same session lineage: the delivered memory stays deduped (ledger).
+    out = _writeback(home, session_id="s1", title="Outcome note", observation="migration ran clean")
+    # Same session lineage: the delivered memory stays deduped, while the new
+    # observed candidate is independently eligible under T1.3.
     second = _inject(home, "migration ordering", session_id="s1")
-    assert second.decision.value == "NO_INJECTION"
-    assert second.reason is not None and second.reason.value == "ALREADY_DELIVERED"
-    # The write-back candidate itself is unverified -> also withheld.
-    assert second.selected_ids == [mid]
-
+    assert second.decision.value == "INJECT"
+    assert mid not in second.selected_ids
+    assert out["memory_id"] in second.selected_ids
 
 def test_writeback_evidence_dict_normalized(tmp_path) -> None:
     """T-G6-F4: --evidence accepts a plain dict {ref: kind} and normalizes to

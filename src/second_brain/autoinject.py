@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, decisions, hybrid_retrieval, registry, semantic, telemetry, working_set
+from . import db, decisions, hybrid_retrieval, reconsolidation, registry, semantic, telemetry, working_set
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -316,48 +316,59 @@ def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
     return intent.task_text
 
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
-    """§6.3.1 hard filters:
-    - wrong project (unless global scope);
-    - superseded / archived / REJECTED never presented as current;
-    - unverified write-back candidates (candidate status) require VERIFIED or TESTED;
-    - unresolved project identity ("default" / None / "unknown") allows ONLY scope == "global"
-      (never injects project-scoped memories, even if tagged project_id="default");
-    - delta strictness: mid-session delta requires current status and VERIFIED/TESTED grade.
+    """Apply the literal corpus admission policy before ranking/rendering.
+
+    Missing or unknown metadata is rejected rather than assigned a default.
+    Domain memories are usable when their project is known and matches, or
+    when either side explicitly has no project identity; global memories are
+    always eligible.
     """
+    allowed_statuses = {"current", "candidate", "labile"}
+    allowed_grades = {"VERIFIED", "TESTED", "OBSERVED"}
+    unknown_projects = {"", "default", "unknown"}
     out: list[dict] = []
     for row in rows:
-        if row.get("status") in ("superseded", "archived"):
-            continue
-        if row.get("evidence_grade") == "REJECTED":
-            continue
-        # P0-G9 gate (§6.3.1): unverified write-back candidates are NOT
-        # current truth. Only VERIFIED/TESTED candidates may be retrieved.
-        if row.get("status") == "candidate" and row.get("evidence_grade") not in (
-            "VERIFIED",
-            "TESTED",
+        status = row.get("status")
+        grade = row.get("evidence_grade")
+        scope = row.get("scope")
+        if (
+            not isinstance(status, str)
+            or status not in allowed_statuses
+            or not isinstance(grade, str)
+            or grade not in allowed_grades
+            or not isinstance(scope, str)
+            or scope not in {"project", "domain", "global"}
         ):
             continue
-
-        row_scope = str(row.get("scope") or "project")
-        row_project = str(row.get("project_id") or "")
-
-        if row_scope == "global":
+        if scope == "global":
             scope_ok = True
-        elif intent.project_id and intent.project_id not in ("default", "unknown"):
-            scope_ok = (row_scope == "project" and row_project == intent.project_id)
         else:
-            scope_ok = False
-
+            if "project_id" not in row:
+                continue
+            row_project = row.get("project_id")
+            row_project = str(row_project or "").strip().lower()
+            intent_project = str(intent.project_id or "").strip().lower()
+            if scope == "project":
+                scope_ok = (
+                    bool(intent_project)
+                    and intent_project not in unknown_projects
+                    and bool(row_project)
+                    and row_project == intent_project
+                )
+            else:
+                scope_ok = (
+                    (intent_project in unknown_projects)
+                    or (row_project in unknown_projects)
+                    or (row_project == intent_project and bool(row_project))
+                )
         if not scope_ok:
             continue
-
-        # Delta strictness: delta injection requires current status and verified/tested grade
-        if intent.is_delta:
-            if row.get("status") != "current":
-                continue
-            if row.get("evidence_grade") not in ("VERIFIED", "TESTED"):
-                continue
-
+        # Delta injection remains intentionally strict: only current,
+        # high-confidence truth can be introduced mid-session.
+        if intent.is_delta and (
+            status != "current" or grade not in {"VERIFIED", "TESTED"}
+        ):
+            continue
         out.append(row)
     return out
 
@@ -420,28 +431,17 @@ def _role_filter(home: Path | str, rows: list[dict], role_profile: str) -> list[
 def _grade_confidence(
     grade: str | None, strength: float | None, contradicted: bool
 ) -> tuple[MemoryItemStatus, Confidence]:
-    """Provenance/validation strength -> status + confidence (§6.3.2)."""
-    mapping: dict[str, Confidence] = {
-        "VERIFIED": Confidence.HIGH,
-        "TESTED": Confidence.HIGH,
-        "OBSERVED": Confidence.MEDIUM,
-        "INFERRED": Confidence.LOW,
-        "HISTORICAL": Confidence.LOW,
-    }
-    confidence = mapping.get(grade or "", Confidence.MEDIUM)
+    """Map admitted evidence grades to their fixed packet confidence."""
+    del strength  # admission confidence is grade-based, never fabricated
     if contradicted:
         return MemoryItemStatus.CONTRADICTED, Confidence.LOW
-    if grade == "HISTORICAL":
-        return MemoryItemStatus.UNCERTAIN, confidence
-    if strength is not None and strength < 0.5:
-        demote = {
-            Confidence.HIGH: Confidence.MEDIUM,
-            Confidence.MEDIUM: Confidence.LOW,
-        }
-        confidence = demote.get(confidence, confidence)
-    if confidence is Confidence.LOW:
-        return MemoryItemStatus.UNCERTAIN, confidence
-    return MemoryItemStatus.CURRENT, confidence
+    if grade in {"VERIFIED", "TESTED"}:
+        return MemoryItemStatus.CURRENT, Confidence.HIGH
+    if grade == "OBSERVED":
+        return MemoryItemStatus.UNCERTAIN, Confidence.LOW
+    # This is unreachable after _valid_candidates; keep malformed direct
+    # callers conservative rather than manufacturing medium confidence.
+    return MemoryItemStatus.UNCERTAIN, Confidence.LOW
 
 
 def _canonical_line(text: str | None) -> str:
@@ -718,9 +718,10 @@ def prepare_injection(
             for m in cascade_res.matches
         ]
 
-        # If zero candidates found within scope, check if matches existed outside scope
-        # (to distinguish WRONG_PROJECT from NO_RELEVANT_MEMORY)
-        if not rows and proj_filter is not None:
+        # The semantic project prefilter excludes domain memories whose
+        # project is unknown. Supplement known-project searches with the
+        # unscoped result; _valid_candidates remains the security boundary.
+        if proj_filter is not None:
             unscoped_cascade = _CASCADE.retrieve(
                 home,
                 query_text,
@@ -729,10 +730,16 @@ def prepare_injection(
             )
             if unscoped_cascade.retrieval_error:
                 raise RuntimeError("semantic retrieval unavailable")
-            unscoped_candidates = [
+            supplement = [
                 m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
                 for m in unscoped_cascade.matches
             ]
+            seen_ids = {str(row.get("memory_id")) for row in rows}
+            rows.extend(
+                row
+                for row in supplement
+                if row.get("memory_id") and str(row["memory_id"]) not in seen_ids
+            )
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
         _append_telemetry(
@@ -920,6 +927,93 @@ def _has_session_started(home: Path | str, host_session_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+
+def _feedback_exists(
+    home: Path | str, table: str, memory_id: str, session_id: str
+) -> bool:
+    """Check one session-bound feedback row without exposing its contents."""
+    if table not in {"memory_retrievals", "memory_activations"}:
+        return False
+    conn = db.connect(db_path(home), readonly=True)
+    try:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE memory_id = ? AND session_id = ? LIMIT 1",
+            (memory_id, session_id),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _record_delivery_feedback(
+    home: Path | str, memory_ids: list[str], session_id: str
+) -> None:
+    """Record one retrieval per delivered memory, best-effort and idempotently."""
+    for memory_id in dict.fromkeys(memory_ids):
+        try:
+            if not _feedback_exists(home, "memory_retrievals", memory_id, session_id):
+                reconsolidation.record_retrieval(
+                    home, memory_id, session_id=session_id, idempotent=True
+                )
+        except Exception:
+            logger.debug("retrieval feedback failed", exc_info=True)
+
+
+def _mention_text(value: object) -> str:
+    """Extract only tool-call argument text for deterministic ID matching."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_mention_text(item) for item in value)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key in ("args", "arguments", "input", "command", "query"):
+            if key in value:
+                parts.append(_mention_text(value[key]))
+        if parts:
+            return "\n".join(parts)
+        return "\n".join(_mention_text(item) for item in value.values())
+    return ""
+
+
+def _record_activation_feedback(
+    home: Path | str,
+    memory_ids: list[str],
+    session_id: str,
+    tool_call_args: object,
+    final_message: object,
+) -> None:
+    """Record correct activation for delivered IDs mentioned by the host."""
+    tool_text = _mention_text(tool_call_args)
+    final_text = final_message if isinstance(final_message, str) else ""
+    for memory_id in dict.fromkeys(memory_ids):
+        if memory_id not in tool_text and memory_id not in final_text:
+            continue
+        try:
+            if not _feedback_exists(home, "memory_activations", memory_id, session_id):
+                reconsolidation.record_activation(
+                    home,
+                    memory_id,
+                    "correct",
+                    session_id=session_id,
+                    idempotent=True,
+                )
+        except Exception:
+            logger.debug("activation feedback failed", exc_info=True)
+
+def _delivered_memory_ids(home: Path | str, session_id: str) -> list[str]:
+    conn = db.connect(db_path(home), readonly=True)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT memory_id FROM deliveries WHERE root_session_id = ?",
+            (session_id,),
+        ).fetchall()
+        return [str(row["memory_id"]) for row in rows if row["memory_id"]]
+    finally:
+        conn.close()
+
+
+
 class BrainLifecycle:
     """Control/storage adapter for the AutoInject pipeline (§6.9).
 
@@ -930,6 +1024,9 @@ class BrainLifecycle:
     def __init__(self, home: Path | str, session: BrainSessionIdentity | None = None) -> None:
         self._home = Path(home)
         self._session = session
+        self._feedback_session_id: str | None = (
+            session.host_session_id if session is not None else None
+        )
         self._last_delivery_ids: list[str] = []
 
     @property
@@ -976,6 +1073,7 @@ class BrainLifecycle:
         effective_session = session_id or (
             self._session.host_session_id if self._session is not None else "anon"
         )
+        self._feedback_session_id = effective_session
         effective_project = _resolve_project_id(self._home, cwd, project_id)
         intent = RetrievalIntent(
             task_text=task,
@@ -1002,11 +1100,6 @@ class BrainLifecycle:
                     # The Python pipeline only PREPARES deliveries; actual
                     # model-visible injection happens via the host adapter's
                     # custom-message path (shadow semantics, SCHEMA.md).
-                    # P3 §0A.8/§5.2: delivery_prepared makes the
-                    # prepared/ledger semantics explicit; model_visible stays
-                    # False because Python cannot observe host insertion (the
-                    # host's autoinject_shadow_decision.model_visible is the
-                    # authoritative mode-aware visibility signal).
                     "model_visible": False,
                     "delivery_prepared": True,
                     "packet_id": decision.packet_ref,
@@ -1023,6 +1116,10 @@ class BrainLifecycle:
                     "selected_ids": decision.selected_ids,
                 },
             )
+            if self._last_delivery_ids:
+                _record_delivery_feedback(
+                    self._home, decision.selected_ids, effective_session
+                )
         else:
             _append_telemetry(
                 self._home,
@@ -1053,7 +1150,26 @@ class BrainLifecycle:
             },
         )
 
-    def finalize_session(self) -> None:
+    def finalize_session(
+        self,
+        *,
+        tool_call_args: object = None,
+        final_message: object = None,
+        session_id: str | None = None,
+    ) -> None:
+        feedback_session = session_id or self._feedback_session_id
+        if feedback_session:
+            try:
+                delivered = _delivered_memory_ids(self._home, feedback_session)
+                _record_activation_feedback(
+                    self._home,
+                    delivered,
+                    feedback_session,
+                    tool_call_args,
+                    final_message,
+                )
+            except Exception:
+                logger.debug("activation feedback lookup failed", exc_info=True)
         if self._session is not None:
             _append_telemetry(
                 self._home,
@@ -1076,9 +1192,9 @@ class BrainLifecycle:
 
         Uses semantic.add_memory with default status ``candidate`` and grade
         ``OBSERVED``; provenance points at the session (first source) plus any
-        caller-supplied evidence refs. The validity gate (§6.3.1) keeps
-        unverified candidates OUT of retrieval; only after curation to
-        VERIFIED/TESTED does the candidate become retrievable (G10). Raises
+        caller-supplied evidence refs. The validity gate (§6.3.1) admits
+        OBSERVED candidates as low-confidence context; curation to VERIFIED/
+        TESTED upgrades the rendered confidence to HIGH. Raises
         BrainError on invalid input — the CLI applies fail-open.
         """
         sources: list[dict] = [{"ref": f"session:{session_id}", "kind": "episode"}]

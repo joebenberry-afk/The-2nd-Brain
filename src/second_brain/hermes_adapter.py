@@ -1714,10 +1714,31 @@ def _handle_api_lifecycle(
     }
 
 
-def _handle_session_end(home: Path, binding: HermesBinding) -> dict[str, Any]:
+def _handle_session_end(
+    home: Path, binding: HermesBinding, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     _register_binding(home, binding)
+    payload = payload or {}
+    tool_args = payload.get("tool_call_args") or payload.get("tool_calls")
+    if tool_args is None:
+        transcript_path = (
+            payload.get("transcript_path")
+            or payload.get("transcriptPath")
+            or payload.get("transcript")
+        )
+        if transcript_path:
+            try:
+                from .cli import _claude_tool_call_args
+
+                tool_args = _claude_tool_call_args(transcript_path)
+            except Exception:
+                tool_args = []
     lifecycle = autoinject.BrainLifecycle(home, binding.session)
-    lifecycle.finalize_session()
+    lifecycle.finalize_session(
+        tool_call_args=tool_args,
+        final_message=payload.get("final_message")
+        or payload.get("last_assistant_message"),
+    )
     _append_event(
         home,
         binding,
@@ -1934,7 +1955,7 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
             return _handle_handoff_create(home_path, binding, payload)
         if event == "handoff_read":
             return _handle_handoff_read(home_path, binding, payload)
-        return _handle_session_end(home_path, binding)
+        return _handle_session_end(home_path, binding, payload)
     except Exception:
         return {
             "adapter_version": ADAPTER_VERSION,

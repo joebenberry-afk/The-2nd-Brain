@@ -3036,7 +3036,11 @@ def _cmd_codex_shadow(home: Path) -> int:
                     pinned=False,
                     schema_version=1,
                 )
-                autoinject.BrainLifecycle(home, session).finalize_session()
+                autoinject.BrainLifecycle(home, session).finalize_session(
+                    tool_call_args=payload_dict.get("tool_call_args")
+                    or payload_dict.get("tool_calls"),
+                    final_message=payload_dict.get("last_assistant_message"),
+                )
             except Exception:  # fail-open: never break the hook
                 pass
         bad = contracts.BrainInjectionDecision(
@@ -3246,6 +3250,14 @@ def _cmd_antigravity_hook(home: Path) -> int:
         normal = fully_idle or not (termination_reason or error)
         check = working_set.check_requirements(home, conversation_id)
         unresolved = check["entries"]
+        with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).finalize_session(
+                tool_call_args=hook_args.get("tool_call_args")
+                or hook_args.get("tool_calls")
+                or _claude_tool_call_args(transcript_path),
+                final_message=hook_args.get("last_assistant_message")
+                or payload_dict.get("last_assistant_message"),
+            )
         if normal and unresolved:
             reasons = "; ".join(
                 str(e.get("requirement") or e.get("text") or e.get("id") or "")[:120]
@@ -3263,8 +3275,6 @@ def _cmd_antigravity_hook(home: Path) -> int:
             }
             print(contracts.canonical_json(out))
             return 0
-        with contextlib.suppress(Exception):
-            autoinject.BrainLifecycle(home, session).finalize_session()
         _log_telem(
             "stop_allowed",
             material_unverified=len(unresolved),
@@ -3506,6 +3516,56 @@ def _claude_usage_records(
         except Exception:
             pass
 
+def _claude_tool_call_args(transcript_path: object) -> list[object]:
+    """Extract bounded tool-call argument fields without persisting content."""
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return []
+    try:
+        path = Path(transcript_path)
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 128 * 1024))
+            raw = fh.read(128 * 1024)
+        if size > 128 * 1024:
+            raw = raw[raw.find(b"\n") + 1 :]
+        lines = raw.decode("utf-8", errors="replace").splitlines()[-200:]
+    except (OSError, ValueError):
+        return []
+    args: list[object] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, dict):
+            kind = str(node.get("type") or "").lower()
+            if kind in {"tool", "tool_call", "tool_use"}:
+                for key in ("args", "arguments", "input"):
+                    if key in node:
+                        args.append(node[key])
+                        break
+            for key in ("tool_calls", "toolCalls", "toolCall"):
+                calls = node.get(key)
+                if isinstance(calls, dict):
+                    calls = [calls]
+                if isinstance(calls, list):
+                    for call in calls:
+                        if isinstance(call, dict):
+                            for arg_key in ("args", "arguments", "input"):
+                                if arg_key in call:
+                                    args.append(call[arg_key])
+                                    break
+            for child in node.values():
+                collect(child)
+        elif isinstance(node, list):
+            for child in node:
+                collect(child)
+
+    for line in lines:
+        try:
+            collect(json.loads(line))
+        except (TypeError, ValueError):
+            continue
+    return args
+
 
 def _claude_cache_state(payload: dict) -> dict | None:
     state: dict[str, object] = {}
@@ -3745,6 +3805,13 @@ def _cmd_claude_code_hook(home: Path) -> int:
             )
 
         last_message = payload_dict.get("last_assistant_message")
+        with contextlib.suppress(Exception):
+            autoinject.BrainLifecycle(home, session).finalize_session(
+                tool_call_args=payload_dict.get("tool_call_args")
+                or payload_dict.get("tool_calls")
+                or _claude_tool_call_args(payload_dict.get("transcript_path")),
+                final_message=last_message,
+            )
         if isinstance(last_message, str) and last_message.strip():
             candidate = _extract_candidate_marker(last_message)
             if candidate is not None:
