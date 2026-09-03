@@ -14,6 +14,7 @@ from second_brain.errors import BrainError
 from second_brain.paths import db_path
 from second_brain.vmem import (
     ResidencyState,
+    SessionObject,
     SessionObjectKind,
     VMemStore,
     resolve_object,
@@ -1625,3 +1626,228 @@ class TestCostModelEvictionT21:
             assert "chosen_ids" in chosen_data or "obj_ids" in chosen_data
         # alternatives should have at most 5 items
         assert len(alt_data) <= 5
+
+
+class TestFaultInHysteresisT22:
+    """T2.2 Fault-in hysteresis tests."""
+
+    def test_faulted_in_object_not_evictable_for_n_turns(self, brain_home):
+        """RED test: fault-in an object at turn T; verify pinned_until_turn == T + 3;
+        advance turns to T+1, T+2; verify evict_to_budget skips it under budget pressure;
+        at turn T+3 verify it is now evictable."""
+        store = VMemStore(brain_home, "sess-hysteresis-1")
+        # Store two objects
+        obj1 = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Obj 1",
+            content="content 1 " * 50,
+            pinned=False,
+        )
+        obj2 = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Obj 2",
+            content="content 2 " * 50,
+            pinned=False,
+        )
+        # Evict obj1 via claim_pages
+        claimed = store.claim_pages([{"obj_id": obj1.obj_id, "kind": obj1.kind.value}])
+        assert obj1.obj_id in claimed
+        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
+
+        # Advance session to turn T=2 by inserting 2 turn_start events
+        with sqlite3.connect(store._dbfile) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS events ("
+                "seq INTEGER PRIMARY KEY, "
+                "event_id TEXT, "
+                "internal_session_id TEXT, "
+                "event_type TEXT"
+                ")"
+            )
+            conn.execute(
+                "INSERT INTO events (event_id, internal_session_id, event_type) VALUES (?, ?, ?)",
+                ("evt-1", store.internal_id, "turn_start"),
+            )
+            conn.execute(
+                "INSERT INTO events (event_id, internal_session_id, event_type) VALUES (?, ?, ?)",
+                ("evt-2", store.internal_id, "turn_start"),
+            )
+            conn.commit()
+
+        assert store.current_turn() == 2
+
+        # Fault-in obj1 at turn T=2
+        faulted, _ = store.fault_in(obj1.obj_id)
+        assert faulted.residency_state == ResidencyState.FAULTED_IN
+        # Pinned until T + 3 = 2 + 3 = 5
+        assert faulted.pinned_until_turn == 5
+        persisted = store.get_object(obj1.obj_id)
+        assert persisted.pinned_until_turn == 5
+
+        # Turn T+1 = 3: insert 1 more turn_start
+        with sqlite3.connect(store._dbfile) as conn:
+            conn.execute(
+                "INSERT INTO events (event_id, internal_session_id, event_type) VALUES (?, ?, ?)",
+                ("evt-3", store.internal_id, "turn_start"),
+            )
+            conn.commit()
+        assert store.current_turn() == 3
+
+        # Under severe budget pressure (max_tokens=0), evict_to_budget must skip obj1
+        evicted = store.evict_to_budget(max_tokens=0)
+        evicted_ids = {e.obj_id for e in evicted}
+        assert obj1.obj_id not in evicted_ids
+        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
+
+        # Turn T+2 = 4: insert 1 more turn_start
+        with sqlite3.connect(store._dbfile) as conn:
+            conn.execute(
+                "INSERT INTO events (event_id, internal_session_id, event_type) VALUES (?, ?, ?)",
+                ("evt-4", store.internal_id, "turn_start"),
+            )
+            conn.commit()
+        assert store.current_turn() == 4
+
+        # Still pinned: 5 > 4 -> must skip obj1
+        evicted = store.evict_to_budget(max_tokens=0)
+        evicted_ids = {e.obj_id for e in evicted}
+        assert obj1.obj_id not in evicted_ids
+        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
+
+        # Turn T+3 = 5: insert 1 more turn_start
+        with sqlite3.connect(store._dbfile) as conn:
+            conn.execute(
+                "INSERT INTO events (event_id, internal_session_id, event_type) VALUES (?, ?, ?)",
+                ("evt-5", store.internal_id, "turn_start"),
+            )
+            conn.commit()
+        assert store.current_turn() == 5
+
+        # Now pinned_until_turn (5) > current_turn (5) is False!
+        # obj1 is no longer pinned and is evictable
+        evicted = store.evict_to_budget(max_tokens=0)
+        evicted_ids = {e.obj_id for e in evicted}
+        assert obj1.obj_id in evicted_ids
+        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
+
+    def test_pinned_until_turn_schema_idempotency(self, brain_home, tmp_path):
+        """Fresh and existing DBs get pinned_until_turn INTEGER DEFAULT 0 idempotently."""
+        # 1. Fresh DB
+        store = VMemStore(brain_home, "sess-fresh-hysteresis")
+        with sqlite3.connect(store._dbfile) as conn:
+            cols = {row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()}
+            assert "pinned_until_turn" in cols
+            assert "INTEGER" in str(cols["pinned_until_turn"][2]).upper()
+            assert str(cols["pinned_until_turn"][4]) == "0"
+
+        # 2. Re-running _init_db is idempotent
+        store._init_db()
+        with sqlite3.connect(store._dbfile) as conn:
+            cols = {row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()}
+            assert "pinned_until_turn" in cols
+
+        # 3. Existing DB without pinned_until_turn column gets upgraded via guarded ALTER
+        custom_db = tmp_path / "legacy_vmem" / "ledger.sqlite"
+        custom_db.parent.mkdir(parents=True)
+        with sqlite3.connect(custom_db) as conn:
+            conn.execute(
+                """
+                CREATE TABLE session_vmem (
+                    obj_id TEXT PRIMARY KEY,
+                    internal_session_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL,
+                    token_estimate INTEGER NOT NULL,
+                    residency_state TEXT NOT NULL,
+                    priority_score REAL NOT NULL DEFAULT 1.0,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    access_count INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    last_accessed_at TEXT NOT NULL,
+                    segment_id TEXT,
+                    metadata_json TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO session_vmem (
+                    obj_id, internal_session_id, kind, title, summary,
+                    content_sha256, token_estimate, residency_state,
+                    priority_score, pinned, access_count, created_at,
+                    last_accessed_at, segment_id, metadata_json
+                ) VALUES (
+                    'obj-legacy', 'sess-legacy', 'RESEARCH_RESULT', 'Title', 'Summary',
+                    'sha256', 100, 'RESIDENT', 1.0, 0, 1, 'now', 'now', NULL, '{}'
+                )
+                """
+            )
+            conn.commit()
+
+        store_legacy = VMemStore(tmp_path / "legacy_vmem_home", "sess-legacy")
+        store_legacy._dbfile = custom_db
+        store_legacy._init_db()
+
+        with sqlite3.connect(custom_db) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM session_vmem WHERE obj_id = 'obj-legacy'").fetchone()
+            assert row["pinned_until_turn"] == 0
+
+    def test_session_object_serialization_pinned_until_turn(self):
+        """SessionObject dataclass and to_dict preserve pinned_until_turn with default 0."""
+        obj = SessionObject(
+            obj_id="obj-test",
+            session_id="sess-test",
+            kind=SessionObjectKind.GENERIC,
+            title="Test",
+            summary="Summary",
+            content_sha256="abc",
+            token_estimate=50,
+            residency_state=ResidencyState.RESIDENT,
+        )
+        assert obj.pinned_until_turn == 0
+        d = obj.to_dict()
+        assert d["pinned_until_turn"] == 0
+
+        obj.pinned_until_turn = 7
+        d2 = obj.to_dict()
+        assert d2["pinned_until_turn"] == 7
+
+    def test_current_turn_telemetry_fallback(self, brain_home):
+        """When events table is missing/empty, fallback to telemetry turn_start count, or 0."""
+        store = VMemStore(brain_home, "sess-turn-fallback")
+        assert store.current_turn() == 0
+
+        from second_brain import telemetry
+        tdir = telemetry.telemetry_dir(brain_home)
+        tdir.mkdir(parents=True, exist_ok=True)
+        records = [
+            {"v": 2, "session": "sess-turn-fallback", "kind": "turn_start", "ts": "2026-09-03T00:00:00Z"},
+            {"v": 2, "session": "sess-turn-fallback", "kind": "turn_start", "ts": "2026-09-03T00:01:00Z"},
+        ]
+        (tdir / "sess-turn-fallback.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        assert store.current_turn() == 2
+
+    def test_faulted_in_pin_turns_config_override(self, brain_home):
+        """faulted_in_pin_turns in config/v2.toml overrides default 3."""
+        config_dir = brain_home / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "v2.toml").write_text(
+            "[economics]\nfaulted_in_pin_turns = 5\n",
+            encoding="utf-8",
+        )
+        store = VMemStore(brain_home, "sess-custom-pin")
+        obj = store.store_object(
+            kind=SessionObjectKind.RESEARCH_RESULT,
+            title="Obj Custom Pin",
+            content="test custom pin",
+            pinned=False,
+        )
+        store.claim_pages([{"obj_id": obj.obj_id, "kind": obj.kind.value}])
+        faulted, _ = store.fault_in(obj.obj_id)
+        assert faulted.pinned_until_turn == 5
