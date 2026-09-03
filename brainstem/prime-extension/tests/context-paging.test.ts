@@ -753,11 +753,12 @@ describe("pageContext — Part E guardrails", () => {
     const patched = result.messages as Array<Record<string, unknown>>;
     expect(typeof patched[0]?.content).toBe("string");
     expect((patched[0]?.content as string)).toContain("obj-1");
-    expect(typeof patched[1]?.content).toBe("string");
-    expect((patched[1]?.content as string)).toContain("obj-2");
+    // Cost model prioritizes obj-4 (lowest suffix invalidation) + fallback obj-1
+    expect(typeof patched[3]?.content).toBe("string");
+    expect((patched[3]?.content as string)).toContain("obj-4");
     // Beyond the cap: untouched (still the original object identity).
+    expect(patched[1]).toBe(messages[1]);
     expect(patched[2]).toBe(messages[2]);
-    expect(patched[3]).toBe(messages[3]);
   });
 
   it("fail-open on a simulated vmem-list failure: undefined + error, never throws", () => {
@@ -1089,5 +1090,42 @@ describe("pageContext — Repair B: already-EVICTED reprojection (RC4 CVM closur
     const patched = result.messages as Array<Record<string, unknown>>;
     expect(patched[0]).toBe(residentMsg); // untouched: lost the CAS race
     expect((patched[1]?.content as string)).toContain("obj-evicted-cas");
+  });
+});
+
+describe("pageContext — T2.1 cost-model candidate scoring/sorting", () => {
+  it("selects recent large cold candidate before older candidate with high suffix invalidation", () => {
+    const smallOldMsg = autoinjectMessage("del-small-old", "s".repeat(800)); // ~200 tokens
+    const largeRecentMsg = autoinjectMessage("del-large-recent", "l".repeat(4000)); // ~1000 tokens
+
+    const messages = [smallOldMsg, largeRecentMsg, assistantMessage(), assistantMessage(), assistantMessage()];
+    const result = pageContext(
+      baseOptions({
+        messages,
+        cfg: { ...ENABLED_CFG, pinRecentMessages: 3, maxPagesPerContextEvent: 1, residentTokenBudget: 500 },
+        listPrePage: fakeListPrePage([
+          prePageObj({
+            objId: "obj-small-old",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-small-old", packetArtifactRef: "art-s", packetSha256: "1".repeat(64) },
+          }),
+          prePageObj({
+            objId: "obj-large-recent",
+            kind: "RESEARCH_RESULT",
+            residencyState: "RESIDENT",
+            metadata: { deliveryId: "del-large-recent", packetArtifactRef: "art-l", packetSha256: "2".repeat(64) },
+          }),
+        ]),
+        claimPages: fakeClaim(["obj-large-recent", "obj-small-old"]),
+      }),
+    );
+
+    expect(result.pagedCount).toBe(1);
+    const patched = result.messages as Array<Record<string, unknown>>;
+    // Cost model must select obj-large-recent (index 1), NOT obj-small-old (index 0)
+    expect(patched[0]).toBe(smallOldMsg); // smallOldMsg should be untouched!
+    expect(typeof patched[1]?.content).toBe("string");
+    expect((patched[1]?.content as string)).toContain("obj-large-recent");
   });
 });

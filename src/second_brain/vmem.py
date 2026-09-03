@@ -19,17 +19,21 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import re
 import sqlite3
+import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, contracts, db, ledger, semantic, working_set
+from . import artifacts, contracts, db, decisions, ledger, semantic, working_set
 from .errors import BrainError
 from .paths import db_path as _control_db_path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HOT_CONTEXT_BUDGET_TOKENS = 1500
 MAX_REF_TABLE_ENTRIES = 25
@@ -183,6 +187,85 @@ def _compute_base_priority(kind: SessionObjectKind, pinned: bool) -> float:
         return 50.0
     return 10.0
 
+
+def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
+    """Read cache pricing multipliers and cost model parameters from
+    `config/v2.toml [economics]` or provider table if present; fallback to standard defaults."""
+    path = Path(home) / "config" / "v2.toml"
+    cache_read = 0.10
+    cache_write = 1.25
+    fault_in_turn_cost_tokens = 50
+    default_remaining_turns = 8
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        raw = {}
+
+    section = raw.get("economics") if isinstance(raw, dict) else None
+    if isinstance(section, dict):
+        cr = section.get("cache_read")
+        if isinstance(cr, (int, float)) and not isinstance(cr, bool):
+            cache_read = float(cr)
+        cw = section.get("cache_write")
+        if isinstance(cw, (int, float)) and not isinstance(cw, bool):
+            cache_write = float(cw)
+        fc = section.get("fault_in_turn_cost_tokens")
+        if isinstance(fc, (int, float)) and not isinstance(fc, bool):
+            fault_in_turn_cost_tokens = int(fc)
+        rt = section.get("default_remaining_turns")
+        if isinstance(rt, (int, float)) and not isinstance(rt, bool):
+            default_remaining_turns = int(rt)
+
+    # Provider table override if present: config/v2.toml [providers.<id>]
+    providers = raw.get("providers") if isinstance(raw, dict) else None
+    if isinstance(providers, dict):
+        for _, pcfg in providers.items():
+            if isinstance(pcfg, dict):
+                pcr = pcfg.get("cache_read")
+                if isinstance(pcr, (int, float)) and not isinstance(pcr, bool):
+                    cache_read = float(pcr)
+                pcw = pcfg.get("cache_write")
+                if isinstance(pcw, (int, float)) and not isinstance(pcw, bool):
+                    cache_write = float(pcw)
+
+    return {
+        "cache_read": cache_read,
+        "cache_write": cache_write,
+        "fault_in_turn_cost_tokens": fault_in_turn_cost_tokens,
+        "default_remaining_turns": default_remaining_turns,
+    }
+
+
+def remaining_turns_estimate(
+    home: Path | str,
+    session_id: str,
+    default_turns: int = 8,
+) -> int:
+    """Resolve remaining turns estimate from session telemetry or task class,
+    falling back to default_remaining_turns."""
+    internal_id = ledger.internal_session_id(session_id)
+    sdir = Path(home) / "state" / "sessions" / internal_id
+    for fname in ("routing.json", "active-state.json", "manifest.json"):
+        fpath = sdir / fname
+        if fpath.exists():
+            try:
+                data = json.loads(fpath.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    rt = data.get("remaining_turns")
+                    if isinstance(rt, (int, float)) and not isinstance(rt, bool) and rt > 0:
+                        return int(rt)
+                    task_class = data.get("task_class")
+                    if isinstance(task_class, str):
+                        tpath = Path(home) / "state" / "telemetry" / "task_classes.json"
+                        if tpath.exists():
+                            tdata = json.loads(tpath.read_text(encoding="utf-8"))
+                            if isinstance(tdata, dict) and task_class in tdata:
+                                med = tdata[task_class].get("median_remaining_turns")
+                                if isinstance(med, (int, float)) and med > 0:
+                                    return int(med)
+            except Exception:
+                pass
+    return default_turns
 
 class VMemStore:
     """Context Virtual Memory manager for a session."""
@@ -761,15 +844,26 @@ class VMemStore:
     def evict_to_budget(
         self,
         max_tokens: int = DEFAULT_HOT_CONTEXT_BUDGET_TOKENS,
+        pin_recent_messages: int = 0,
+        remaining_turns: int | None = None,
     ) -> list[SessionObject]:
         """
-        Deterministic admission/eviction policy (§6.6), now coverage-gated
-        (plan U4 §5.5): PREPARE selects the lowest-scoring unpinned
-        victims needed to fit the budget (no writes yet); `_reclaim`'s
-        COVERAGE/COMMIT/VERIFY then only ACTUALLY evicts the ones that
-        prove durably recoverable elsewhere. An uncovered victim stays
-        resident/DIRTY -- the budget may end up not fully met, by design;
-        data is never destroyed just to satisfy a token budget.
+        Cache-priced cost-model eviction (plan T2.1, Deep Upgrade Plan U4 §5.3-5.7):
+        Net benefit = benefit - cost for each unpinned resident candidate:
+          R = remaining_turns_estimate(session) or default_remaining_turns
+          suffix_o = sum(tokens of resident objects created after o)
+          benefit = o.tokens * R * cache_read_multiplier
+          cost = suffix_o * (cache_write_multiplier - cache_read_multiplier)
+                 + p_fault(o) * (o.tokens + fault_in_turn_cost_tokens)
+          p_fault = 0.5 if kind in (DECISION, BLOCKER) else 0.2 if access_count > 1 else 0.05
+          net = benefit - cost
+
+        Candidates with net > 0 are sorted descending by net and evicted until under budget.
+        If still over budget and no candidates have net > 0, fallback to old sort order
+        (priority_score, access_count, -token_estimate) and log forced_eviction=1.
+        Under budget slack: do not evict.
+        Record decisions(kind="eviction", propensity=1.0) with chosen and top 5 alternatives.
+        Preserves T2.0 coverage-before-reclaim four-phase flow via self._reclaim.
         """
         resident_objects = self.list_objects()
         resident_active = [
@@ -781,22 +875,198 @@ class VMemStore:
         if total_tokens <= max_tokens:
             return []
 
-        # Sort eviction candidates: unpinned first, lowest priority score, lowest access count
-        sorted_candidates = sorted(
-            [o for o in resident_active if not o.pinned],
-            key=lambda o: (o.priority_score, o.access_count, -o.token_estimate),
+        # Load economics configuration
+        econ = _load_economics_parameters(self.home)
+        cache_read = float(econ["cache_read"])
+        cache_write = float(econ["cache_write"])
+        fault_turn_cost = int(econ["fault_in_turn_cost_tokens"])
+        default_r = int(econ["default_remaining_turns"])
+
+        r_turns = (
+            remaining_turns
+            if remaining_turns is not None and remaining_turns > 0
+            else remaining_turns_estimate(self.home, self.session_id, default_turns=default_r)
         )
 
-        # PREPARE: select victims up to budget -- no writes yet.
+        # Determine creation order using rowid from SQLite
+        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT rowid, obj_id FROM session_vmem "
+                "WHERE internal_session_id = ? "
+                "ORDER BY rowid ASC",
+                (self.internal_id,),
+            ).fetchall()
+        creation_seq: dict[str, int] = {r["obj_id"]: r["rowid"] for r in rows}
+
+        # Order resident objects by creation sequence
+        resident_by_creation = sorted(
+            resident_active,
+            key=lambda o: creation_seq.get(o.obj_id, 0),
+        )
+
+        # Suffix invalidation tokens: sum of tokens of resident objects created AFTER o
+        suffix_map: dict[str, int] = {}
+        running_suffix = 0
+        for o in reversed(resident_by_creation):
+            suffix_map[o.obj_id] = running_suffix
+            running_suffix += o.token_estimate
+
+        # Identify candidate pool: resident, unpinned, not within pin_recent_messages
+        all_unpinned = [o for o in resident_active if not o.pinned]
+        if pin_recent_messages > 0:
+            pinned_recent_ids = {
+                o.obj_id for o in resident_by_creation[-pin_recent_messages:]
+            }
+            candidates = [o for o in all_unpinned if o.obj_id not in pinned_recent_ids]
+        else:
+            candidates = all_unpinned
+
+        if not candidates:
+            return []
+
+        # Compute cost-model net score for each candidate
+        net_map: dict[str, float] = {}
+        for o in candidates:
+            if o.kind in (
+                SessionObjectKind.DECISION,
+                SessionObjectKind.BLOCKER,
+                "DECISION",
+                "BLOCKER",
+            ):
+                p_fault = 0.5
+            elif o.access_count > 1:
+                p_fault = 0.2
+            else:
+                p_fault = 0.05
+
+            tok = o.token_estimate
+            suf = suffix_map.get(o.obj_id, 0)
+            benefit = tok * r_turns * cache_read
+            cost = suf * (cache_write - cache_read) + p_fault * (tok + fault_turn_cost)
+            net_map[o.obj_id] = benefit - cost
+
+        # Step 1: Candidates with net > 0 sorted in descending net order
+        positive_candidates = sorted(
+            [o for o in candidates if net_map[o.obj_id] > 0],
+            key=lambda o: (
+                -net_map[o.obj_id],
+                o.priority_score,
+                o.access_count,
+                -o.token_estimate,
+            ),
+        )
+
         victims: list[SessionObject] = []
         running_total = total_tokens
-        for obj in sorted_candidates:
+        for obj in positive_candidates:
             if running_total <= max_tokens:
                 break
             victims.append(obj)
             running_total -= obj.token_estimate
 
-        return self._reclaim(victims, reason="evict_to_budget")
+        # Step 2: If no candidates with net > 0 or still over budget, fallback to old sort order
+        forced_eviction = 0
+        if running_total > max_tokens:
+            forced_eviction = 1
+            logger.warning(
+                "forced_eviction=1 session=%s over_budget=%d tokens_remaining=%d",
+                self.session_id,
+                running_total - max_tokens,
+                running_total,
+            )
+            fallback_candidates = sorted(
+                [o for o in candidates if o not in victims],
+                key=lambda o: (
+                    o.priority_score,
+                    o.access_count,
+                    -o.token_estimate,
+                    creation_seq.get(o.obj_id, 0),
+                ),
+            )
+            for obj in fallback_candidates:
+                if running_total <= max_tokens:
+                    break
+                victims.append(obj)
+                running_total -= obj.token_estimate
+
+        # Step 3: Record decision
+        unchosen = [o for o in candidates if o not in victims]
+        unchosen_sorted = sorted(
+            unchosen,
+            key=lambda o: (
+                -net_map.get(o.obj_id, 0.0),
+                o.priority_score,
+                o.access_count,
+            ),
+        )
+        alternatives = [
+            {
+                "obj_id": o.obj_id,
+                "kind": o.kind.value,
+                "net": round(net_map.get(o.obj_id, 0.0), 3),
+            }
+            for o in unchosen_sorted[:5]
+        ]
+        chosen = [
+            {
+                "obj_id": o.obj_id,
+                "kind": o.kind.value,
+                "net": round(net_map.get(o.obj_id, 0.0), 3),
+            }
+            for o in victims
+        ]
+        # Resolve rollout stage from config/v2.toml [rollout] brainstem or default SHADOW
+        rollout_stage = "SHADOW"
+        try:
+            v2_raw = tomllib.loads(
+                (self.home / "config" / "v2.toml").read_text(encoding="utf-8")
+            )
+            stage_val = (
+                (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
+                if isinstance(v2_raw, dict)
+                else "SHADOW"
+            )
+            if stage_val in decisions._ROLLOUT_STAGES:
+                rollout_stage = stage_val
+        except Exception:
+            pass
+
+        try:
+            decisions.record(
+                self.home,
+                kind="eviction",
+                session_id=self.session_id,
+                task_id=None,
+                chosen=chosen,
+                alternatives=alternatives,
+                propensity=1.0,
+                randomized=False,
+                policy_version="v2.1",
+                stage=rollout_stage,
+                inputs={
+                    "max_tokens": max_tokens,
+                    "resident_tokens_before": total_tokens,
+                    "candidate_count": len(candidates),
+                    "forced_eviction": forced_eviction,
+                    "remaining_turns": r_turns,
+                },
+            )
+        except Exception:
+            logger.debug("Eviction decision recording failed", exc_info=True)
+
+        self.last_eviction_telemetry = {
+            "forced_eviction": forced_eviction,
+            "chosen_count": len(victims),
+            "candidate_count": len(candidates),
+            "resident_tokens_before": total_tokens,
+            "max_tokens": max_tokens,
+        }
+
+        reclaim_reason = (
+            "evict_to_budget:forced_eviction" if forced_eviction else "evict_to_budget"
+        )
+        return self._reclaim(victims, reason=reclaim_reason)
 
     def render_hot_context(
         self,
