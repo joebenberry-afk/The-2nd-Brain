@@ -765,3 +765,85 @@ class TestAblationProfiles:
         """Invalid profile name raises KeyError."""
         with pytest.raises(KeyError, match="Unknown ablation profile"):
             governor.get_ablation_profile("NONEXISTENT_PROFILE")
+
+
+class TestCacheEpochAttribution:
+    """Tests for T2.5 cache-epoch cause attribution (governor.SessionTokens.cache_epochs)."""
+
+    def test_cache_epoch_cause_attribution(self, brain_home):
+        """Covers all 5 named cause-attribution scenarios from the T2.5 brief."""
+        # Scenario: system_prefix_sha changes between two cache-write turns -> brain_prefix.
+        # The first epoch in any session has no prior baseline -> unknown (scenario 5).
+        records = [
+            _rec("turn_start", turn=1),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=100),
+            _rec("turn_start", turn=2),
+            _rec("provider_request_meta", system_prefix_sha="p2", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=50),
+        ]
+        _write_session(brain_home, "prefix_change", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "prefix_change.jsonl"
+        )
+        assert tokens.cache_epochs == [
+            {"turn": 1, "cause": "unknown", "write_tokens": 100},
+            {"turn": 2, "cause": "brain_prefix", "write_tokens": 50},
+        ]
+
+        # Scenario: only tool_surface_sha changes -> tool_surface.
+        records = [
+            _rec("turn_start", turn=1),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=100),
+            _rec("turn_start", turn=2),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t2"),
+            _rec("assistant_usage", cache_write_tokens=50),
+        ]
+        _write_session(brain_home, "tool_surface_change", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "tool_surface_change.jsonl"
+        )
+        assert tokens.cache_epochs[1] == {"turn": 2, "cause": "tool_surface", "write_tokens": 50}
+
+        # Scenario: neither sha changes between two cache-write turns -> harness.
+        records = [
+            _rec("turn_start", turn=1),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=100),
+            _rec("turn_start", turn=2),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=50),
+        ]
+        _write_session(brain_home, "no_change", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "no_change.jsonl"
+        )
+        assert tokens.cache_epochs[1] == {"turn": 2, "cause": "harness", "write_tokens": 50}
+
+        # Scenario: cache writes with no provider_request_meta at all (Claude Code path) -> unknown.
+        records = [
+            _rec("turn_start", turn=1),
+            _rec("assistant_usage", cache_write_tokens=100),
+        ]
+        _write_session(brain_home, "no_provider_meta", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "no_provider_meta.jsonl"
+        )
+        assert tokens.cache_epochs == [{"turn": 1, "cause": "unknown", "write_tokens": 100}]
+
+    def test_cache_epoch_excludes_zero_and_absent_write_turns(self, brain_home):
+        """Turns with cache_write_tokens == 0 or absent are not included in cache_epochs."""
+        records = [
+            _rec("turn_start", turn=1),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", cache_write_tokens=0),
+            _rec("turn_start", turn=2),
+            _rec("provider_request_meta", system_prefix_sha="p1", tool_surface_sha="t1"),
+            _rec("assistant_usage", input_tokens=10),  # cache_write_tokens absent
+        ]
+        _write_session(brain_home, "zero_writes", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "zero_writes.jsonl"
+        )
+        assert tokens.cache_epochs == []

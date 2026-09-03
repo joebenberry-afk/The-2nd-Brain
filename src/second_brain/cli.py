@@ -4803,6 +4803,7 @@ def cmd_governor(args) -> int:
                     'lean_kernel_dedup_hits': session.lean_kernel_dedup_hits,
                     'compactions': session.compactions,
                     'role': session.role,
+                    'cache_epochs': session.cache_epochs,
                 }
                 output.append(d)
             print(json.dumps(output, indent=2, default=str))
