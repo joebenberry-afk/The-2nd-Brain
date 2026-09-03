@@ -5,7 +5,8 @@ lives under ``<home>/state/sessions/<session-id>/``:
 
 - ``active-state.json`` — the Active State Capsule (plan §17);
 - ``requirements.json`` — the requirement-to-evidence ledger (plan §18);
-- ``read-ledger.json`` — append-only record of file reads (plan §73).
+- ``read-ledger.json`` — append-only record of file reads (plan §73), including
+  content blob hashes and optional distilled artifact references.
 
 Every write is atomic (temp file + ``os.replace``). Every load validates the
 stored shape: a missing ledger file yields an empty default, a missing capsule
@@ -26,7 +27,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import BrainError
-
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 TASK_MODES: tuple[str, ...] = (
@@ -94,14 +94,13 @@ def session_dir(home: Path, session_id: str) -> Path:
     if session_id in (".", ".."):
         raise BrainError(f"Invalid session id {session_id!r}: path traversal")
     root = Path(home) / "state" / "sessions"
-    raw = root / session_id
     from .ledger import internal_session_id
 
+    raw = root / session_id
     hashed = root / internal_session_id(session_id)
     if hashed.exists() and not raw.exists():
         return hashed
     return raw
-
 
 # ---------------------------------------------------------------------------
 # JSON I/O
@@ -412,7 +411,9 @@ def _validate_read_entry(path: Path, index: int, entry: object) -> None:
             raise BrainError(f"{err}: entry {index} field {key!r} invalid")
     if entry.get("hash") is not None and not isinstance(entry["hash"], str):
         raise BrainError(f"{err}: entry {index} hash must be a string or null")
-    for key in ("range", "artifact"):
+    if entry.get("blob_sha") is not None and not isinstance(entry["blob_sha"], str):
+        raise BrainError(f"{err}: entry {index} blob_sha must be a string or null")
+    for key in ("range", "artifact", "distilled_ref"):
         if entry.get(key) is not None and not isinstance(entry[key], str):
             raise BrainError(f"{err}: entry {index} {key} must be a string or null")
     turn = entry.get("turn")
@@ -429,8 +430,6 @@ def _load_reads(path: Path) -> list[dict]:
     for index, entry in enumerate(data):
         _validate_read_entry(path, index, entry)
     return data
-
-
 def record_read(
     home: Path,
     session_id: str,
@@ -439,31 +438,73 @@ def record_read(
     turn: int | None = None,
     range_text: str | None = None,
     artifact: str | None = None,
+    distilled_ref: str | None = None,
 ) -> dict:
-    """Append one read entry. ``hash`` is the file's sha256 (null if missing)."""
+    """Append one read entry with a content blob hash and optional RTD ref."""
     if not isinstance(path, str) or not path.strip():
         raise BrainError("path must be a non-empty string")
     if not isinstance(purpose, str) or not purpose.strip():
         raise BrainError("purpose must be a non-empty string")
     if turn is not None and (not isinstance(turn, int) or isinstance(turn, bool)):
         raise BrainError("turn must be an integer or None")
-    for name, value in (("range_text", range_text), ("artifact", artifact)):
+    for name, value in (
+        ("range_text", range_text),
+        ("artifact", artifact),
+        ("distilled_ref", distilled_ref),
+    ):
         if value is not None and not isinstance(value, str):
             raise BrainError(f"{name} must be a string or None")
 
     ledger_path = session_dir(home, session_id) / "read-ledger.json"
     entries = _load_reads(ledger_path)
     target = Path(path)
-    content_hash = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
+    try:
+        blob_sha = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
+    except OSError:
+        blob_sha = None
+    ref = distilled_ref if distilled_ref is not None else artifact
     entry = {
         "path": path,
-        "hash": content_hash,
+        "hash": blob_sha,
+        "blob_sha": blob_sha,
         "range": range_text,
         "purpose": purpose,
         "turn": turn,
         "artifact": artifact,
+        "distilled_ref": ref,
         "ts": _utcnow(),
     }
+    entries.append(entry)
+    _atomic_write_json(ledger_path, entries)
+    return entry
+
+
+def reread_hint(home: Path, session_id: str, path: str) -> dict | None:
+    """Return a hint only when the latest recorded blob for ``path`` is unchanged."""
+    if not isinstance(path, str) or not path.strip():
+        raise BrainError("path must be a non-empty string")
+    entries = _load_reads(session_dir(home, session_id) / "read-ledger.json")
+    target = Path(path)
+    try:
+        if not target.is_file():
+            return None
+        current_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    for entry in reversed(entries):
+        if entry.get("path") != path:
+            continue
+        if entry.get("range") not in (None, ""):
+            return None
+        prior_sha = entry.get("blob_sha", entry.get("hash"))
+        if prior_sha is None or prior_sha != current_sha:
+            return None
+        return {
+            "unchanged": True,
+            "prior_artifact": entry.get("distilled_ref", entry.get("artifact")),
+            "prior_turn": entry.get("turn"),
+        }
+    return None
     entries.append(entry)
     _atomic_write_json(ledger_path, entries)
     return entry

@@ -234,6 +234,7 @@ def test_record_read_hash_matches_content(brain_home, tmp_path):
     entry = ws.show_reads(brain_home, "s1")[0]
     expected = hashlib.sha256(target.read_bytes()).hexdigest()
     assert entry["hash"] == expected
+    assert entry["blob_sha"] == expected
     assert entry["path"] == str(target)
     assert entry["purpose"] == "understand"
 
@@ -243,6 +244,7 @@ def test_record_read_missing_file_null_hash(brain_home, tmp_path):
     ws.record_read(brain_home, "s1", str(missing), "probe", turn=2)
     entry = ws.show_reads(brain_home, "s1")[0]
     assert entry["hash"] is None
+    assert entry["blob_sha"] is None
     assert entry["turn"] == 2
 
 
@@ -264,7 +266,46 @@ def test_record_read_artifact(brain_home, tmp_path):
     p = tmp_path / "f.txt"
     p.write_text("x", encoding="utf-8")
     ws.record_read(brain_home, "s1", str(p), "scan", artifact="tool-result-3")
-    assert ws.show_reads(brain_home, "s1")[0]["artifact"] == "tool-result-3"
+    entry = ws.show_reads(brain_home, "s1")[0]
+    assert entry["artifact"] == "tool-result-3"
+    assert entry["distilled_ref"] == "tool-result-3"
+
+
+def test_reread_hint_on_unchanged_blob(brain_home, tmp_path):
+    target = tmp_path / "stable.txt"
+    target.write_text("same", encoding="utf-8")
+    ws.record_read(brain_home, "s1", str(target), "inspect", turn=7, artifact="sha256:abc")
+    assert ws.reread_hint(brain_home, "s1", str(target)) == {
+        "unchanged": True,
+        "prior_artifact": "sha256:abc",
+        "prior_turn": 7,
+    }
+
+
+def test_reread_hint_changed_missing_and_traversal(brain_home, tmp_path):
+    target = tmp_path / "mutable.txt"
+    target.write_text("before", encoding="utf-8")
+    ws.record_read(brain_home, "s1", str(target), "inspect", turn=1, artifact="ref")
+    target.write_text("after", encoding="utf-8")
+    assert ws.reread_hint(brain_home, "s1", str(target)) is None
+    target.unlink()
+    assert ws.reread_hint(brain_home, "s1", str(target)) is None
+    with pytest.raises(BrainError, match="Invalid session id"):
+        ws.reread_hint(brain_home, "../escape", str(target))
+
+def test_reread_hint_rejects_prior_selected_read(brain_home, tmp_path):
+    target = tmp_path / "selected.txt"
+    target.write_text("same", encoding="utf-8")
+    ws.record_read(
+        brain_home,
+        "s1",
+        str(target),
+        "inspect",
+        turn=2,
+        range_text="1-2",
+        artifact="partial-ref",
+    )
+    assert ws.reread_hint(brain_home, "s1", str(target)) is None
 
 
 def test_record_read_validates(brain_home):

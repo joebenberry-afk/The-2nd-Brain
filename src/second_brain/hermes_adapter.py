@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from . import (
     artifacts,
     autoinject,
     contracts,
+    decisions,
     firewall,
     handoff,
     ledger,
@@ -30,14 +32,15 @@ from . import (
     skills,
     vmem,
     worker_protocol,
+    working_set,
 )
 from .errors import BrainError
-
 ADAPTER_VERSION = "0.1.0"
 _HOST = "hermes"
 _SUPPORTED_EVENTS = {
     "session_start",
     "pre_llm_call",
+    "pre_tool_call",
     "post_tool_call",
     "post_api_request",
     "api_request_error",
@@ -155,6 +158,100 @@ def _command_from_args(value: Any) -> str:
                 return command
     return _bounded_text(value, 1000)
 
+
+def _reread_path(tool_name: str, payload: dict[str, Any]) -> str | None:
+    if tool_name.casefold() not in {"read", "cat", "grep"}:
+        return None
+    for value in (
+        payload.get("path"),
+        payload.get("file"),
+        payload.get("file_path"),
+        payload.get("args", {}).get("path")
+        if isinstance(payload.get("args"), dict)
+        else None,
+    ):
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _reread_mode(home: Path) -> str:
+    value = os.environ.get("SECOND_BRAIN_REREAD_AVOIDANCE")
+    if value:
+        mode = value.strip().upper()
+        if mode in {"OFF", "SHADOW", "ACTIVE"}:
+            return mode
+    try:
+        raw = tomllib.loads((home / "config" / "context.toml").read_text(encoding="utf-8"))
+        rollout = raw.get("rollout")
+        mode = rollout.get("reread_avoidance") if isinstance(rollout, dict) else None
+        if isinstance(mode, str) and mode.strip().upper() in {"OFF", "SHADOW", "ACTIVE"}:
+            return mode.strip().upper()
+    except (OSError, tomllib.TOMLDecodeError):
+        pass
+    return "SHADOW"
+
+
+def _reread_hint(
+    home: Path, binding: HermesBinding, payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    tool_name = _first_text(payload, "tool_name", "tool", default="")
+    mode = _reread_mode(home)
+    if mode == "OFF":
+        return None
+    path = _reread_path(tool_name, payload)
+    if path is None:
+        return None
+    hint = working_set.reread_hint(home, binding.brain_session_id, path)
+    if hint is None:
+        return None
+    path_sha = _sha256(path)
+    try:
+        decisions.record(
+            home,
+            kind="reread",
+            session_id=binding.host_session_id,
+            task_id=_first_text(payload, "tool_call_id", default="") or None,
+            chosen={"action": "reread_avoidable"},
+            alternatives={"mode": mode},
+            propensity=1.0,
+            randomized=False,
+            policy_version="reread-1",
+            stage=mode,
+            inputs={"path_sha256": path_sha},
+        )
+    except Exception:
+        pass
+    autoinject._append_telemetry(
+        home,
+        binding.host_session_id,
+        "reread_avoidable",
+        {"tool": tool_name or "unknown", "path_sha256": path_sha},
+    )
+    args = payload.get("args")
+    selector_keys = ("range", "start", "end", "query", "pattern")
+    has_selector = any(payload.get(key) not in (None, "") for key in selector_keys)
+    if isinstance(args, dict):
+        has_selector = has_selector or any(args.get(key) not in (None, "") for key in selector_keys)
+    replaceable = tool_name.casefold() in {"read", "cat"} and not has_selector
+    return {
+        "path": path,
+        "path_sha256": path_sha,
+        "hint": hint,
+        "mode": mode,
+        "replaceable": replaceable,
+    }
+
+
+def _reread_replacement(info: dict[str, Any], current_sha: str) -> str | None:
+    hint = info["hint"]
+    ref = hint.get("prior_artifact")
+    if not isinstance(ref, str) or not ref:
+        return None
+    return (
+        f"[SECOND_BRAIN_UNCHANGED {info['path']} {current_sha} {ref}]\n"
+        f"Prior distilled view reference: {ref}"
+    )
 
 def _default_role(bot_name: str) -> str:
     return {
@@ -1240,6 +1337,7 @@ def _handle_post_tool_call(
         )
     old_hint = artifacts.recover_hint(reduction.raw_object_ref)
     visible_text = visible_text.replace(old_hint, artifacts.recover_hint(raw_sha))
+
     recovery_line = (
         f"Raw Artifact: {raw_artifact['handle']}\n{artifacts.recover_hint(raw_sha)}"
     )
@@ -1325,6 +1423,27 @@ def _handle_post_tool_call(
         "recovery_handle": raw_artifact["handle"],
         "visible_result_bytes": visible_bytes,
         "reduction_ratio": round(reduction_ratio, 6),
+    }
+def _handle_pre_tool_call(
+    home: Path, binding: HermesBinding, payload: dict[str, Any]
+) -> dict[str, Any]:
+    _register_binding(home, binding)
+    info = _reread_hint(home, binding, payload)
+    if info is None:
+        return {**_response_base(binding, "pre_tool_call"), "status": "ok"}
+    replacement = None
+    if info["mode"] == "ACTIVE" and info["replaceable"]:
+        try:
+            current_sha = hashlib.sha256(Path(info["path"]).read_bytes()).hexdigest()
+            replacement = _reread_replacement(info, current_sha)
+        except OSError:
+            replacement = None
+    return {
+        **_response_base(binding, "pre_tool_call"),
+        "status": "ok",
+        "reread_hint": info["hint"],
+        "replacement": replacement,
+        "reread_mode": info["mode"],
     }
 
 
@@ -1863,6 +1982,8 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
             return _handle_session_start(home_path, binding)
         if event == "pre_llm_call":
             return _handle_pre_llm(home_path, binding, payload)
+        if event == "pre_tool_call":
+            return _handle_pre_tool_call(home_path, binding, payload)
         if event == "post_tool_call":
             return _handle_post_tool_call(home_path, binding, payload)
         if event == "writeback":

@@ -15,6 +15,9 @@ Key Capabilities (§8.1 - §8.5):
 from __future__ import annotations
 
 import json
+import os
+import re
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -257,13 +260,109 @@ def render_delta_sync_text(deltas: list[MemoryDeltaPacket]) -> str:
     return "\n".join(lines)
 
 
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _delta_state_path(home: Path, session_id: str) -> Path:
+    if (
+        not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or session_id in (".", "..")
+    ):
+        raise BrainError(f"Invalid session id {session_id!r}: path traversal")
+    return home / "state" / "sessions" / session_id / "delta-sync.json"
+
+
+def _load_delta_state(
+    path: Path, session_id: str
+) -> dict[tuple[str, str, str], dict[str, Any]] | None:
+    """Load state; ``None`` means malformed and must not be overwritten."""
+    if not path.is_file():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if not isinstance(raw, dict) or raw.get("version") != 1:
+            return None
+        stored_session = raw.get("session_id")
+        if stored_session is not None and stored_session != session_id:
+            return None
+        rows = raw.get("delivered")
+        if not isinstance(rows, list):
+            return None
+        result: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            recipient = row.get("recipient")
+            memory_id = row.get("memory_id")
+            item = row.get("item")
+            if (
+                not isinstance(recipient, str)
+                or not isinstance(memory_id, str)
+                or not isinstance(item, dict)
+            ):
+                return None
+            result[(session_id, recipient, memory_id)] = dict(item)
+        return result
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _save_delta_state(
+    path: Path,
+    session_id: str,
+    delivered: dict[tuple[str, str, str], dict[str, Any]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"recipient": recipient, "memory_id": memory_id, "item": item}
+        for (sid, recipient, memory_id), item in delivered.items()
+        if sid == session_id
+    ]
+    payload = {"version": 1, "session_id": session_id, "delivered": rows}
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 class DeltaSyncEngine:
     """Session-level Delta Sync tracker (§8.4)."""
 
-    def __init__(self, home: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        home: Path | str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.home = Path(home) if home is not None else None
         # (session_id, recipient, memory_id) -> dict[str, Any] (last delivered state)
         self._delivered: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._loaded_sessions: set[str] = set()
+        self._corrupt_sessions: set[str] = set()
+        if self.home is not None and session_id is not None:
+            self._load_session(session_id)
+
+    def _load_session(self, session_id: str) -> None:
+        if self.home is None or session_id in self._loaded_sessions:
+            return
+        path = _delta_state_path(self.home, session_id)
+        loaded = _load_delta_state(path, session_id)
+        if loaded is None:
+            self._corrupt_sessions.add(session_id)
+        else:
+            self._delivered.update(loaded)
+        self._loaded_sessions.add(session_id)
+
     def sync_memories(
         self,
         session_id: str,
@@ -273,6 +372,8 @@ class DeltaSyncEngine:
         """
         Compute deltas for a batch of target items against what was previously delivered.
         """
+        if self.home is not None:
+            self._load_session(session_id)
         deltas: list[MemoryDeltaPacket] = []
         for item in target_items:
             t_dict = _item_to_dict(item)
@@ -286,6 +387,8 @@ class DeltaSyncEngine:
             # Update delivered memory state
             self._delivered[key] = t_dict
 
+        if self.home is not None and session_id not in self._corrupt_sessions:
+            _save_delta_state(_delta_state_path(self.home, session_id), session_id, self._delivered)
         rendered = render_delta_sync_text(deltas)
         return deltas, rendered
 

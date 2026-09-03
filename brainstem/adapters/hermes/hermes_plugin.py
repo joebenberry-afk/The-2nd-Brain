@@ -608,11 +608,30 @@ def register(ctx: Any) -> None:
             | {"event": "session_start"}
         )
 
-    def capture_tool_session(session_id: str | None = None, **kwargs: Any) -> None:
-        del kwargs
-        if session_id:
-            current_session.set(session_id)
-
+    def pre_tool_call(
+        tool_name: str | None = None,
+        args: Any = None,
+        session_id: str | None = None,
+        tool_call_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any] | None:
+        active_session = session_id or current_session.get() or os.environ.get("HERMES_SESSION_ID")
+        current_session.set(active_session)
+        name = str(tool_name or "unknown")[:200]
+        if name.casefold() not in {"read", "cat", "grep"}:
+            return None
+        response = client.request(
+            _common(settings, active_session, kwargs.get("model"), kwargs.get("provider"))
+            | {
+                "event": "pre_tool_call",
+                "tool_name": name,
+                "args": args,
+                "tool_call_id": str(tool_call_id or "")[:200],
+            }
+        )
+        if isinstance(response, dict) and isinstance(response.get("replacement"), str):
+            return {"replacement": response["replacement"]}
+        return None
     def pre_llm_call(
         session_id: str | None = None,
         user_message: str | None = None,
@@ -1019,7 +1038,7 @@ def register(ctx: Any) -> None:
         )
 
     ctx.register_hook("on_session_start", on_session_start)
-    ctx.register_hook("pre_tool_call", capture_tool_session)
+    ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("post_tool_call", post_tool_call)
     ctx.register_hook("post_api_request", post_api_request)
