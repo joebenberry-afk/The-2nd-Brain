@@ -40,7 +40,10 @@ import type {
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
-import { loadConfig, resolveBrainHome } from "./config";
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
   isOrchestratorModel,
@@ -272,6 +275,104 @@ function safeHandler<E extends PrimeEvent>(
       }
     }
   };
+
+}
+type RereadHint = {
+  unchanged: true;
+  prior_artifact: string | null;
+  prior_turn: number | null;
+};
+
+type RereadHintRunner = (
+  home: string,
+  session: string,
+  path: string,
+  mode?: "OFF" | "SHADOW" | "ACTIVE",
+  toolName?: string,
+  toolCallId?: string,
+) => Promise<RereadHint | null>;
+
+function rereadPath(toolName: string, input: Record<string, unknown>): string | undefined {
+  if (!["read", "cat", "grep"].includes(toolName.toLowerCase())) return undefined;
+  const args = input.args;
+  const values = [
+    input.path,
+    input.file,
+    input.file_path,
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>).path
+      : undefined,
+  ];
+  return values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function rereadReplacementAllowed(toolName: string, input: Record<string, unknown>): boolean {
+  if (!["read", "cat"].includes(toolName.toLowerCase())) return false;
+  const args = input.args;
+  const selectors = [input.range, input.start, input.end, input.query, input.pattern];
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const values = args as Record<string, unknown>;
+    selectors.push(values.range, values.start, values.end, values.query, values.pattern);
+  }
+  return !selectors.some((value) => value !== undefined && value !== null && value !== "");
+}
+export function runRereadHint(
+  home: string,
+  session: string,
+  path: string,
+  mode: "OFF" | "SHADOW" | "ACTIVE" = "SHADOW",
+  toolName = "read",
+  toolCallId?: string,
+): Promise<RereadHint | null> {
+  const python = process.env.SECOND_BRAIN_PYTHON ?? join(home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env, SECOND_BRAIN_HOME: home };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  return new Promise((resolve) => {
+    execFile(
+      python,
+      [
+        "-m", "second_brain", "--home", home, "working-set", "reread-hint", session, path,
+        "--mode", mode, "--tool", toolName, ...(toolCallId ? ["--tool-call-id", toolCallId] : []),
+      ],
+      { cwd: home, env, timeout: 5000, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(stdout) as unknown;
+          if (
+            parsed !== null &&
+            typeof parsed === "object" &&
+            (parsed as Record<string, unknown>).unchanged === true
+          ) {
+            const value = parsed as Record<string, unknown>;
+            resolve({
+              unchanged: true,
+              prior_artifact: typeof value.prior_artifact === "string" ? value.prior_artifact : null,
+              prior_turn: typeof value.prior_turn === "number" ? value.prior_turn : null,
+            });
+            return;
+          }
+        } catch {
+          // fail open
+        }
+        resolve(null);
+      },
+    );
+  });
+}
+
+function unchangedMarker(path: string, hint: RereadHint): string | undefined {
+  if (!hint.prior_artifact) return undefined;
+  try {
+    const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
+    return `[SECOND_BRAIN_UNCHANGED ${path} ${sha} ${hint.prior_artifact}]\nPrior distilled view reference: ${hint.prior_artifact}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ExtensionOptions {
@@ -302,6 +403,8 @@ export interface ExtensionOptions {
   ompWorkerContextRunner?: (options: OmpWorkerContextOptions) => Promise<OmpWorkerContextResult>;
   ompRoutingRunner?: (options: OmpRoutingOptions) => Promise<OmpRoutingResult>;
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
+  /** Read-ledger reread hint seam; production invokes brainctl. */
+  rereadHintRunner?: RereadHintRunner;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -396,6 +499,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     stopStates.set(session, created);
     return created;
   };
+  const rereadRunner = options.rereadHintRunner ?? runRereadHint;
+  const pendingRereads = new Map<string, { path: string }>();
   const readySessions = new Set<string>();
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
@@ -1690,6 +1795,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           return { block: true, reason: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" };
         });
       }
+      const readPath = rereadPath(event.toolName, event.input ?? {});
+      if (readPath && config.home) {
+        const configuredMode = process.env.SECOND_BRAIN_REREAD_AVOIDANCE?.trim().toUpperCase();
+        const mode =
+          configuredMode === "ACTIVE" || configuredMode === "SHADOW" || configuredMode === "OFF"
+            ? configuredMode
+            : loadRereadAvoidance(config.home);
+        if (mode !== "OFF") {
+          return rereadRunner(config.home, session, readPath, mode, event.toolName, event.toolCallId).then((hint) => {
+            if (hint?.unchanged === true && mode === "ACTIVE" &&
+                rereadReplacementAllowed(event.toolName, event.input ?? {})) {
+              pendingRereads.set(`${session}\u0000${event.toolCallId}`, { path: readPath });
+            }
+            return rewrittenCommand !== command ? { input: { ...event.input, command: rewrittenCommand } } : undefined;
+          }).catch(() => undefined);
+        }
+      }
       if (rewrittenCommand !== command) {
         return { input: { ...event.input, command: rewrittenCommand } };
       }
@@ -1725,6 +1847,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      let rereadPatch: { content: Array<{ type: "text"; text: string }> } | undefined;
+      const rereadKey = `${session}\u0000${event.toolCallId}`;
+      const pending = pendingRereads.get(rereadKey);
+      if (pending) {
+        pendingRereads.delete(rereadKey);
+        const configuredMode = process.env.SECOND_BRAIN_REREAD_AVOIDANCE?.trim().toUpperCase();
+        const mode =
+          configuredMode === "ACTIVE" || configuredMode === "SHADOW" || configuredMode === "OFF"
+            ? configuredMode
+            : loadRereadAvoidance(config.home);
+        if (mode === "ACTIVE" && !event.isError && config.home) {
+          const hint = await rereadRunner(config.home, session, pending.path);
+          const marker = hint ? unchangedMarker(pending.path, hint) : undefined;
+          if (marker) rereadPatch = { content: [{ type: "text", text: marker }] };
+        }
+      }
       const stopState = stopStateFor(session);
       if (stopState.shouldBlock(event.toolName)) {
         getStore(session)?.append({
@@ -1897,7 +2035,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           measurement.outputBytes,
         ),
       );
-      return rtd.patch;
+      return rereadPatch ?? rtd.patch;
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));

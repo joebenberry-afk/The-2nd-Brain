@@ -183,6 +183,57 @@ class TestDeltaSyncEngine:
         assert deltas_t3[0].delta_type == DeltaType.MODIFY
         assert "[MODIFY] mem-201 (v1 -> v2)" in rendered_t3
 
+    def test_delta_sync_state_survives_process(self, tmp_path):
+        home = tmp_path / "brain"
+        first = DeltaSyncEngine(home=home, session_id="sess-persist")
+        item = {
+            "memory_id": "mem-persist",
+            "version": 1,
+            "status": "current",
+            "confidence": "high",
+            "title": "Persisted",
+            "observation": "Obs",
+            "guidance": "Guidance",
+            "evidence": "Ev",
+        }
+        first.sync_memories("sess-persist", [item])
+        second = DeltaSyncEngine(home=home, session_id="sess-persist")
+        deltas, rendered = second.sync_memories("sess-persist", [item])
+        assert deltas[0].delta_type == DeltaType.UNCHANGED
+        assert rendered == ""
+        assert (home / "state" / "sessions" / "sess-persist" / "delta-sync.json").is_file()
+
+    def test_engine_without_constructor_session_persists_per_sync_session(self, tmp_path):
+        home = tmp_path / "brain"
+        item = {"memory_id": "mem-persist-default", "version": 1, "status": "current", "title": "Persisted"}
+        first = DeltaSyncEngine(home=home)
+        first.sync_memories("sess-default", [item])
+        second = DeltaSyncEngine(home=home)
+        deltas, rendered = second.sync_memories("sess-default", [item])
+        assert deltas[0].delta_type == DeltaType.UNCHANGED
+        assert rendered == ""
+
+    def test_delta_sync_rejects_dot_session_without_escape(self, tmp_path):
+        home = tmp_path / "brain"
+        with pytest.raises(BrainError, match="Invalid session id"):
+            DeltaSyncEngine(home=home).sync_memories(
+                "..",
+                [{"memory_id": "m", "version": 1, "status": "current", "title": "x"}],
+            )
+        assert not (home.parent / "state" / "sessions" / "delta-sync.json").exists()
+    def test_malformed_delta_sync_state_fails_open_without_overwrite(self, tmp_path):
+        home = tmp_path / "brain"
+        state = home / "state" / "sessions" / "sess-malformed" / "delta-sync.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("{not-json", encoding="utf-8")
+        engine = DeltaSyncEngine(home=home, session_id="sess-malformed")
+        assert engine._delivered == {}
+        engine.sync_memories(
+            "sess-malformed",
+            [{"memory_id": "m", "version": 1, "status": "current", "title": "x"}],
+        )
+        assert state.read_text(encoding="utf-8") == "{not-json"
+
 
 class TestDeltaSyncCLI:
     """CLI tests for brainctl delta-sync subcommands."""
@@ -294,9 +345,25 @@ class TestDeltaSyncCLI:
             text=True,
             env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
         )
-        assert result.returncode == 0
         data = json.loads(result.stdout)
-        expected, _ = DeltaSyncEngine(home=tmp_path).sync_memories(
-            "session-home", [target]
+        expected = compute_memory_delta(None, target, home=tmp_path)
+        assert data[0]["token_size_estimate"] == expected.token_size_estimate
+        second = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "second_brain",
+                "--home",
+                str(tmp_path),
+                "delta-sync",
+                "sync",
+                "session-home",
+                str(target_file),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
         )
-        assert data[0]["token_size_estimate"] == expected[0].token_size_estimate
+        assert second.returncode == 0
+        assert json.loads(second.stdout)[0]["delta_type"] == "UNCHANGED"

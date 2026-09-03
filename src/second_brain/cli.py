@@ -247,8 +247,18 @@ def _parser() -> argparse.ArgumentParser:
     rrec.add_argument("--turn", type=int, default=None)
     rrec.add_argument("--range", dest="range_text", default=None)
     rrec.add_argument("--artifact", default=None)
+    rrec.add_argument("--distilled-ref", default=None)
     rlshow = rls.add_parser("show", parents=[home_parent], help="show the read ledger")
     rlshow.add_argument("session_id")
+
+    wset = sub.add_parser("working-set", parents=[home_parent], help="Working-set read hints")
+    wsets = wset.add_subparsers(dest="working_set_command", required=True)
+    rhint = wsets.add_parser("reread-hint", parents=[home_parent], help="check whether a file is unchanged")
+    rhint.add_argument("session_id")
+    rhint.add_argument("path")
+    rhint.add_argument("--mode", choices=("OFF", "SHADOW", "ACTIVE"), default="SHADOW")
+    rhint.add_argument("--tool", default="read")
+    rhint.add_argument("--tool-call-id", default=None)
 
     cc = sub.add_parser("context", parents=[home_parent], help="JIT Context Compiler (Phase 4)")
     ccs = cc.add_subparsers(dest="context_command", required=True)
@@ -2961,6 +2971,7 @@ def cmd_read_ledger(args) -> int:
             turn=args.turn,
             range_text=args.range_text,
             artifact=args.artifact,
+            distilled_ref=args.distilled_ref,
         )
         hash_part = f" (hash {entry['hash'][:12]}...)" if entry.get("hash") else " (file missing)"
         print(f"Recorded read: {entry['path']}{hash_part}")
@@ -2974,6 +2985,44 @@ def cmd_read_ledger(args) -> int:
             print("(no reads recorded)")
         return 0
     return 2
+
+def cmd_working_set(args) -> int:
+    import json
+    from . import autoinject, decisions
+
+    if args.working_set_command != "reread-hint":
+        return 2
+    home = _home(args)
+    if args.mode == "OFF":
+        print("null")
+        return 0
+    hint = working_set.reread_hint(home, args.session_id, args.path)
+    if hint is not None:
+        try:
+            path_sha = hashlib.sha256(Path(args.path).read_bytes()).hexdigest()
+            decisions.record(
+                home,
+                kind="reread",
+                session_id=args.session_id,
+                task_id=args.tool_call_id,
+                chosen={"action": "reread_avoidable"},
+                alternatives={"mode": args.mode},
+                propensity=1.0,
+                randomized=False,
+                policy_version="reread-1",
+                stage=args.mode,
+                inputs={"path_sha256": path_sha},
+            )
+            autoinject._append_telemetry(
+                home,
+                args.session_id,
+                "reread_avoidable",
+                {"tool": args.tool, "path_sha256": path_sha},
+            )
+        except (OSError, BrainError):
+            pass
+    print(json.dumps(hint, sort_keys=True))
+    return 0
 
 
 def cmd_context(args) -> int:
@@ -5235,7 +5284,7 @@ def cmd_delta_sync(args) -> int:
 
     if args.delta_sync_command == "sync":
         target_items = json.loads(Path(args.target_file).read_text(encoding="utf-8"))
-        engine = delta_sync.DeltaSyncEngine(home=home)
+        engine = delta_sync.DeltaSyncEngine(home=home, session_id=args.session_id)
         deltas, rendered = engine.sync_memories(
             args.session_id, target_items, recipient=args.recipient
         )
@@ -5401,6 +5450,7 @@ def main(argv: list[str] | None = None) -> int:
         "skills": cmd_skills,
         "reconsolidation": cmd_reconsolidation,
         "sleep": cmd_sleep,
+        "working-set": cmd_working_set,
         "plasticity": cmd_plasticity,
         "cerebellum": cmd_cerebellum,
         "metacog": cmd_metacog,

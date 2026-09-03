@@ -114,6 +114,40 @@ export function rtdThresholdFromConfig(home: string | null): number | undefined 
   }
 }
 
+/** Parse the safe-by-default read-avoidance rollout stage. */
+export function rereadAvoidanceFromContextToml(text: string): "OFF" | "SHADOW" | "ACTIVE" {
+  let section = "";
+  let value: "OFF" | "SHADOW" | "ACTIVE" = "SHADOW";
+  try {
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line.startsWith("[")) {
+        section = line.slice(1, -1).trim();
+        continue;
+      }
+      if (section !== "rollout") continue;
+      const eq = line.indexOf("=");
+      if (!line.startsWith("reread_avoidance") || eq <= 0) continue;
+      const candidate = line.slice(eq + 1).split("#")[0].trim().replace(/^"|"$/g, "").toUpperCase();
+      if (candidate === "OFF" || candidate === "SHADOW" || candidate === "ACTIVE") value = candidate;
+    }
+  } catch {
+    return "SHADOW";
+  }
+  return value;
+}
+
+/** Read `[rollout] reread_avoidance`, defaulting to SHADOW for compatibility. */
+export function loadRereadAvoidance(home: string | null): "OFF" | "SHADOW" | "ACTIVE" {
+  if (!home) return "SHADOW";
+  try {
+    const text = readFileSync(join(home, "config", "context.toml"), "utf8");
+    return rereadAvoidanceFromContextToml(text);
+  } catch {
+    return "SHADOW";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // P3-F: full [rtd] config surface (plan §11.3) — the documented-but-unwired
 // fields become real for the RTD substitution surface ONLY. Same tiny
