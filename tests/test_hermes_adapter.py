@@ -21,7 +21,16 @@ from typing import Any
 
 import pytest
 
-from second_brain import artifacts, contracts, hermes_adapter, ledger, semantic, vmem, working_set
+from second_brain import (
+    artifacts,
+    contracts,
+    hermes_adapter,
+    ledger,
+    semantic,
+    vmem,
+    worker_protocol,
+    working_set,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HERMES_PLUGIN = REPO_ROOT / "brainstem" / "adapters" / "hermes" / "hermes_plugin.py"
@@ -154,6 +163,15 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
 ) -> None:
     start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
     binding = hermes_adapter.resolve_binding(brain_home, start)
+    worker_protocol.register_task(
+        brain_home,
+        "review-task",
+        "b" * 64,
+        session_id=binding.host_session_id,
+    )
+    worker_protocol.record_worker_event(
+        brain_home, "review-task", "b" * 64, "accepted", session_id=binding.host_session_id
+    )
     result = contracts.WorkerResultPacket(
         "review-task",
         contracts.AgentIdentity(
@@ -169,9 +187,25 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
         "completed",
         summary="done",
     )
+    worker_protocol.record_worker_event(
+        brain_home,
+        "review-task",
+        "b" * 64,
+        "completed",
+        payload={"result_sha256": result.canonical_hash()},
+        session_id=binding.host_session_id,
+    )
 
+    review_data = json.loads(result.canonical_json())
+    review_data.update(
+        {"packet_sha256": "b" * 64, "result_sha256": result.canonical_hash()}
+    )
     response = hermes_adapter.review_worker_result(
-        brain_home, binding, json.loads(result.canonical_json()), approved=True
+        brain_home,
+        binding,
+        review_data,
+        approved=True,
+        evidence={"tests": [{"name": "pytest", "exit_code": 0}]},
     )
 
     assert response["status"] == "reviewed"
@@ -179,7 +213,20 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
     ledger_payload = json.loads(
         next(row for row in events if row["event_type"] == "result_reviewed")["payload_json"]
     )
+    assert response["settled"] is True
     assert ledger_payload["approved"] is True
+    other_binding = hermes_adapter.resolve_binding(
+        brain_home, start | {"hermes_session_id": "reviewer-other"}
+    )
+    cross_session = hermes_adapter.review_worker_result(
+        brain_home,
+        other_binding,
+        review_data,
+        approved=True,
+        evidence={"tests": [{"name": "pytest", "exit_code": 0}]},
+    )
+    assert cross_session["status"] == "failed"
+    assert cross_session["failure_code"] == "UNAUTHORIZED_COORDINATOR"
     telemetry_path = (
         brain_home
         / "telemetry"
@@ -192,7 +239,145 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
         if json.loads(line)["kind"] == "hermes_worker_result_reviewed"
     )
     assert telemetry_payload["approved"] is True
+    assert telemetry_payload["worker_role"] == "dev"
 
+def test_review_rejects_unknown_task_before_ledger(brain_home: Path) -> None:
+    start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+    result = contracts.WorkerResultPacket(
+        "unknown-review-task",
+        contracts.AgentIdentity(
+            agent_id="worker-agent",
+            internal_session_id="worker-session",
+            host_agent_id="Brain-Dev",
+            parent_agent_id=None,
+            role_profile="dev",
+            model="test-model",
+            provider="test-provider",
+            created_at="2026-08-22T00:00:00Z",
+        ),
+        "completed",
+        summary="synthetic",
+    )
+    review_data = json.loads(result.canonical_json())
+    review_data.update(
+        {"packet_sha256": "a" * 64, "result_sha256": result.canonical_hash()}
+    )
+    response = hermes_adapter.review_worker_result(
+        brain_home,
+        binding,
+        review_data,
+        approved=False,
+        evidence={"diff_sha256": "b" * 64},
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "ORPHAN_TASK"
+
+def test_approved_worker_review_without_real_evidence_stays_unsettled(
+    brain_home: Path,
+) -> None:
+    start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+    result = contracts.WorkerResultPacket(
+        "no-evidence-task",
+        contracts.AgentIdentity(
+            agent_id="worker-agent",
+            internal_session_id="worker-session",
+            host_agent_id="Brain-Dev",
+            parent_agent_id=None,
+            role_profile="dev",
+            model="test-model",
+            provider="test-provider",
+            created_at="2026-08-22T00:00:00Z",
+        ),
+        "completed",
+        summary="done",
+    )
+    response = hermes_adapter.review_worker_result(
+        brain_home, binding, json.loads(result.canonical_json()), approved=True
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "SETTLEMENT_REJECTED"
+    coerced = hermes_adapter.review_worker_result(
+        brain_home, binding, json.loads(result.canonical_json()), approved="false"
+    )
+    assert coerced["status"] == "failed"
+    assert coerced["failure_code"] == "PROTOCOL_ERROR"
+
+def test_approved_worker_review_rejects_unbounded_raw_evidence(
+    brain_home: Path,
+) -> None:
+    start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+    result = contracts.WorkerResultPacket(
+        "raw-evidence-task",
+        contracts.AgentIdentity(
+            agent_id="worker-agent",
+            internal_session_id="worker-session",
+            host_agent_id="Brain-Dev",
+            parent_agent_id=None,
+            role_profile="dev",
+            model="test-model",
+            provider="test-provider",
+            created_at="2026-08-22T00:00:00Z",
+        ),
+        "completed",
+        summary="done",
+    )
+    response = hermes_adapter.review_worker_result(
+        brain_home,
+        binding,
+        json.loads(result.canonical_json()),
+        approved=True,
+        evidence={"tests": [{"name": "pytest", "exit_code": 0, "raw": "x" * 5000}]},
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "SETTLEMENT_REJECTED"
+
+
+def test_review_evidence_rejects_bool_exit_and_canonicalizes_diff_alias() -> None:
+    assert hermes_adapter._bounded_review_evidence(
+        {"tests": [{"name": "pytest", "exit_code": False}]}
+    ) is None
+    assert hermes_adapter._bounded_review_evidence({"diff_hash": "a" * 64}) == {
+        "diff_sha256": "a" * 64
+    }
+    assert hermes_adapter._bounded_review_evidence(
+        {"tests": [{"name": "", "exit_code": 0}]}
+    ) is None
+    assert hermes_adapter._bounded_review_evidence(
+        {"tests": [{"command": "", "exit_code": 0}]}
+    ) is None
+    assert hermes_adapter._bounded_review_evidence(
+        {"diff_sha256": "invalid", "diff_hash": "a" * 64}
+    ) is None
+    assert hermes_adapter._bounded_review_evidence(
+        {"diff_sha256": None, "diff_hash": "a" * 64}
+    ) is None
+    assert hermes_adapter._bounded_review_evidence([]) is None
+    assert hermes_adapter._bounded_review_evidence(
+        {"tests": [{"name": 7, "command": "pytest", "exit_code": 0}]}
+    ) is None
+
+def test_handoff_create_preserves_machine_readable_error_code(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
+    _run_hook(brain_home, start)
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+
+    def raise_handoff_error(*args: Any, **kwargs: Any) -> Any:
+        raise contracts.HandoffError("HANDOFF_MALFORMED", "bad envelope")
+
+    monkeypatch.setattr(
+        hermes_adapter.handoff, "create_handoff_envelope", raise_handoff_error
+    )
+    response = hermes_adapter._handle_handoff_create(
+        brain_home,
+        binding,
+        {"target_harness": "hermes", "target_role": "dev", "task_id": "handoff-task"},
+    )
+    assert response["failure_code"] == "HANDOFF_MALFORMED"
 
 def test_pre_llm_uses_real_bounded_brain_packet_when_mode_is_active(brain_home: Path) -> None:
     _current_memory(brain_home)
@@ -1029,6 +1214,111 @@ def test_hermes_plugin_registers_hooks_and_real_context_callback(brain_home: Pat
     assert "Hermes integration rule" in result["context"]
 
 
+def test_handle_request_preserves_raw_correction_attempt(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts: list[Any] = []
+
+    def capture(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        attempts.append(args[-1])
+        return {"status": "captured"}
+
+    monkeypatch.setattr(hermes_adapter, "request_worker_correction", capture)
+    start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
+    for value in (1.5, True):
+        output = hermes_adapter.handle_request(
+            brain_home,
+            start
+            | {
+                "event": "worker_result_correction",
+                "packet": {},
+                "result": {},
+                "correction_attempt": value,
+            },
+        )
+        assert output["status"] == "captured"
+    assert attempts == [1.5, True]
+
+def test_hermes_plugin_forwards_review_evidence(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = _load_plugin()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(payload)
+        return {"status": "reviewed"}
+
+    monkeypatch.setattr(plugin._BrainClient, "request", fake_request)
+    ctx = _FakeContext(
+        {
+            "brain_home": str(brain_home),
+            "brain_python": sys.executable,
+            "bot_name": "Brain-Integrator",
+            "bot_role": "integrator",
+            "project_id": "proj-hermes",
+            "repo_root": str(REPO_ROOT),
+        }
+    )
+    plugin.register(ctx)
+    ctx.tools["second_brain_review_worker_result"]["handler"](
+        {
+            "result": {"task_id": "plugin-review-task"},
+            "approved": True,
+            "evidence": {"diff_hash": "a" * 64},
+        },
+        session_id="hermes-plugin-review",
+    )
+    assert calls[-1]["event"] == "worker_result_review"
+    assert calls[-1]["evidence"] == {"diff_hash": "a" * 64}
+    ctx.tools["second_brain_review_worker_result"]["handler"](
+        {
+            "result": {"task_id": "plugin-review-task"},
+            "approved": "false",
+        },
+        session_id="hermes-plugin-review",
+    )
+    assert calls[-1]["approved"] == "false"
+
+
+def test_hermes_plugin_terminal_delegate_does_not_invoke_worker(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = _load_plugin()
+    calls: list[dict[str, Any]] = []
+
+    def fake_request(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        calls.append(payload)
+        return {
+            "status": "prepared",
+            "duplicate": True,
+            "terminal_noop": True,
+            "state": "completed",
+        }
+
+    def fail_worker(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("terminal retry must not invoke worker")
+
+    monkeypatch.setattr(plugin._BrainClient, "request", fake_request)
+    monkeypatch.setattr(plugin, "_invoke_persistent_worker", fail_worker)
+    ctx = _FakeContext(
+        {
+            "brain_home": str(brain_home),
+            "brain_python": sys.executable,
+            "bot_name": "Brain-Integrator",
+            "bot_role": "integrator",
+            "project_id": "proj-hermes",
+            "repo_root": str(REPO_ROOT),
+        }
+    )
+    plugin.register(ctx)
+    output = ctx.tools["second_brain_delegate"]["handler"](
+        {"packet": {"task_id": "terminal-retry"}},
+        session_id="hermes-terminal-retry",
+    )
+    assert json.loads(output)["terminal_noop"] is True
+    assert len(calls) == 1
 def test_hermes_plugin_forwards_pre_tool_call_to_brain(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1607,3 +1897,74 @@ def test_pre_tool_call_off_skips_lookup_and_telemetry(brain_home: Path, monkeypa
     assert result["status"] == "ok"
     assert "replacement" not in result
     assert "reread_avoidable" not in telemetry
+
+def test_hermes_plugin_correction_cache_preserves_result_identity(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plugin = _load_plugin()
+    calls: list[dict[str, Any]] = []
+    packet_sha = "p" * 64
+    result_sha = "r" * 64
+    correction = {"task_id": "plugin-correction", "correction_attempt": 1}
+    corrected = {"task_id": "plugin-correction", "summary": "corrected"}
+
+    def fake_request(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        del self
+        calls.append(payload)
+        if payload["event"] == "worker_task_prepare":
+            return {"status": "prepared", "context_handoff": {}}
+        if payload["event"] == "worker_result_correction":
+            return {"status": "correction_requested", "correction": correction}
+        if payload["event"] == "worker_result_corrected":
+            return {
+                "status": "completed",
+                "task_id": corrected["task_id"],
+                "packet_sha256": packet_sha,
+                "result_sha256": result_sha,
+                "result": corrected,
+            }
+        if payload["event"] == "worker_result_review":
+            return {"status": "reviewed"}
+        raise AssertionError(payload)
+
+    monkeypatch.setattr(plugin._BrainClient, "request", fake_request)
+    monkeypatch.setattr(plugin, "_invoke_persistent_worker", lambda *args: dict(corrected))
+    ctx = _FakeContext(
+        {
+            "brain_home": str(brain_home),
+            "brain_python": sys.executable,
+            "bot_name": "Brain-Integrator",
+            "bot_role": "integrator",
+            "project_id": "proj-hermes",
+            "repo_root": str(REPO_ROOT),
+        }
+    )
+    plugin.register(ctx)
+    correct = ctx.tools["second_brain_correct_worker_result"]["handler"]
+    review = ctx.tools["second_brain_review_worker_result"]["handler"]
+
+    output = json.loads(
+        correct(
+            {
+                "packet": {"task_id": corrected["task_id"]},
+                "result": {"task_id": corrected["task_id"]},
+                "reason": "fix",
+                "requested_changes": ["summary"],
+            },
+            session_id="plugin-correction-session",
+        )
+    )
+    assert output["status"] == "completed"
+    assert output["packet_sha256"] == packet_sha
+    assert output["result_sha256"] == result_sha
+
+    review_output = json.loads(
+        review(
+            {"result": corrected, "approved": False},
+            session_id="plugin-correction-session",
+        )
+    )
+    assert review_output == {"status": "reviewed"}
+    review_request = next(call for call in calls if call["event"] == "worker_result_review")
+    assert review_request["result"]["packet_sha256"] == packet_sha
+    assert review_request["result"]["result_sha256"] == result_sha

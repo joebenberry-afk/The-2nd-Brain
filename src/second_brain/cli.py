@@ -1359,6 +1359,10 @@ def _parser() -> argparse.ArgumentParser:
     wp_status.add_argument("session_id", help="host session ID")
     wp_status.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
     wp_status.add_argument("--json", action="store_true", help="output JSON")
+    wp_reap = wps.add_parser(
+        "reap", parents=[home_parent], help="fail expired or unacknowledged worker tasks"
+    )
+    wp_reap.add_argument("--json", action="store_true", help="output JSON")
 
     # Phase R9: the "prepare" half of fresh-verifier plumbing already exists
     # as `second_brain verify <session_id> <repo>` (verify.build_verifier_brief,
@@ -4671,7 +4675,7 @@ def cmd_autoinject(args) -> int:
 def cmd_heartbeat(args) -> int:
     import json
 
-    from . import heartbeat, telemetry
+    from . import heartbeat, telemetry, worker_protocol
 
     home = _home(args)
     result = heartbeat.HeartbeatCoordinator(home).run_if_due(
@@ -4680,6 +4684,9 @@ def cmd_heartbeat(args) -> int:
         args.repo,
         force=args.force,
     )
+    # Worker lease maintenance rides the same zero-token pulse as heartbeat.
+    with contextlib.suppress(Exception):
+        result["worker_reaped"] = worker_protocol.reap(home)
     with contextlib.suppress(OSError, ValueError):
         telemetry.append_record(
             home,
@@ -4705,7 +4712,7 @@ def cmd_heartbeat(args) -> int:
 def cmd_p4(args) -> int:
     import json
 
-    from . import p4
+    from . import p4, worker_protocol
 
     home = _home(args)
     result = p4.pulse(
@@ -4717,6 +4724,10 @@ def cmd_p4(args) -> int:
         force=args.force,
         emit_telemetry=args.emit_telemetry,
     )
+    # Prime invokes this command for session_start/turn_start. Reaping is
+    # local and fail-open just like the surrounding P4 bridge.
+    with contextlib.suppress(Exception):
+        result["worker_reaped"] = worker_protocol.reap(home)
     if args.json:
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     else:
@@ -5363,6 +5374,7 @@ def cmd_worker_plane(args) -> int:
     """
     import json
 
+    from . import worker_protocol
     from .repository_intelligence import (
         DEFAULT_MAX_WORKERS,
         WorkerPlaneManager,
@@ -5371,6 +5383,24 @@ def cmd_worker_plane(args) -> int:
     )
 
     home = _home(args)
+    if args.worker_plane_command == "reap":
+        error = None
+        try:
+            results = worker_protocol.reap(home)
+        except Exception as exc:
+            results = []
+            error = f"{type(exc).__name__}: {exc}"
+        output = {"reaped": results}
+        if error:
+            output["error"] = error
+        if args.json:
+            print(json.dumps(output, indent=2))
+        elif error:
+            print(f"worker-plane reap unavailable: {error}")
+        else:
+            for item in results:
+                print(f"{item['task_id']}: {item['action']} ({item['state']})")
+        return 0
     requested_max = getattr(args, "max_workers", None)
     max_workers = requested_max if requested_max is not None else DEFAULT_MAX_WORKERS
     plane = WorkerPlaneManager(home, args.session_id, max_concurrent_workers=max_workers)
