@@ -698,6 +698,10 @@ def _parser() -> argparse.ArgumentParser:
     mcur.add_argument("memory_id")
     mcur.add_argument("--grade", default=None, choices=semantic.GRADES)
     mcur.add_argument("--status", default=None, choices=semantic.STATUSES)
+    mcur.add_argument(
+        "--authority-ceiling", dest="authority_ceiling", default=None,
+        choices=semantic.AUTHORITY_CEILINGS,
+    )
     mcur.add_argument("--source", dest="sources", action="append", default=None)
     mcur.add_argument("--no-verify", action="store_true")
     mlist = mms.add_parser("list", parents=[home_parent], help="list memories")
@@ -2108,6 +2112,11 @@ def cmd_remember(args) -> int:
         project_id=_remember_project(home),
         grade=args.grade,
         sources=source_rows,
+        origin_class="USER_AUTHORED",
+        origin_root_sha=next(
+            (row.get("origin_root_sha") for row in source_rows if row.get("origin_root_sha")),
+            None,
+        ),
     )
     print(memory_id)
     return 0
@@ -2174,6 +2183,10 @@ def cmd_memory(args) -> int:
             if source_rows is None:
                 source_rows = []
             source_rows.append(captured)
+        captured_root = next(
+            (row.get("origin_root_sha") for row in source_rows or [] if row.get("origin_root_sha")),
+            None,
+        )
         mid = semantic.add_memory(
             home,
             args.title,
@@ -2182,6 +2195,8 @@ def cmd_memory(args) -> int:
             project_id=project_id,
             grade=args.grade,
             sources=source_rows,
+            origin_class="LOCAL_REPO" if captured_root else "MODEL_INFERENCE",
+            origin_root_sha=captured_root,
         )
         print(f"Memory added: {mid} [{args.grade}/candidate]")
         return 0
@@ -2193,6 +2208,7 @@ def cmd_memory(args) -> int:
             status=args.status,
             sources=_parse_sources(args.sources),
             verify=not args.no_verify,
+            authority_ceiling=args.authority_ceiling,
         )
         print(f"{row['memory_id']} -> grade={row['evidence_grade']} status={row['status']}")
         return 0

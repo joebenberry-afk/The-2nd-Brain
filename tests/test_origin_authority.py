@@ -1,0 +1,247 @@
+import hashlib
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from second_brain import autoinject, db, ledger as ledger_mod, semantic
+from second_brain.contracts import (
+    BrainLifecycleEvent,
+    BrainSessionIdentity,
+    InjectionDecision,
+    LifecycleEventType,
+    SurfaceVisibility,
+)
+from second_brain.errors import BrainError
+
+
+def _root(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def test_summary_of_web_source_stays_advisory(brain_home: Path) -> None:
+    mid = semantic.add_memory(
+        brain_home,
+        "Web summary",
+        "summarized web claim",
+        scope="global",
+        summary="short summary",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha=_root("https://example.test/source"),
+    )
+    row = semantic._row(brain_home, mid)
+    assert row is not None
+    assert row["origin_class"] == "EXTERNAL_WEB"
+    assert row["origin_root_sha"] == _root("https://example.test/source")
+    assert row["authority_ceiling"] == "advisory"
+
+
+def test_two_summaries_same_root_count_as_one_corroboration(brain_home: Path) -> None:
+    root = _root("https://example.test/source")
+    first = semantic.add_memory(
+        brain_home, "One", "summary one", scope="global", origin_class="EXTERNAL_WEB", origin_root_sha=root
+    )
+    second = semantic.add_memory(
+        brain_home, "Two", "summary two", scope="global", origin_class="EXTERNAL_WEB", origin_root_sha=root
+    )
+    rows = [semantic._row(brain_home, first), semantic._row(brain_home, second)]
+    assert semantic.corroboration_count(rows) == 1
+
+
+def test_policy_lane_rejects_advisory_items(brain_home: Path) -> None:
+    advisory = semantic.add_memory(
+        brain_home,
+        "Policy fact",
+        "advisory claim",
+        scope="global",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha=_root("web"),
+    )
+    intent = autoinject.RetrievalIntent(
+        task_text="policy fact",
+        project_id=None,
+        agent_id="a1",
+        role_profile="cli",
+        session_id="policy-test",
+        lane="policy",
+    )
+    rows = semantic.search_memories(brain_home, "policy fact", top_k=10)
+    assert advisory in {row["memory_id"] for row in rows}
+    assert autoinject._valid_candidates(intent, rows) == []
+
+
+def test_invalid_origin_class_and_ceiling_rejected(brain_home: Path) -> None:
+    with pytest.raises(BrainError):
+        semantic.add_memory(brain_home, "Bad", "body", origin_class="NOT_REAL")
+    mid = semantic.add_memory(brain_home, "Good", "body", scope="global", origin_class="USER_AUTHORED")
+    with pytest.raises(BrainError):
+        semantic.curate(brain_home, mid, authority_ceiling="NOT_REAL")
+
+
+def test_curate_can_only_lower_authority_ceiling(brain_home: Path) -> None:
+    mid = semantic.add_memory(brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED")
+    assert semantic._row(brain_home, mid)["authority_ceiling"] == "project_rule"
+    with pytest.raises(BrainError):
+        semantic.curate(brain_home, mid, authority_ceiling="policy")
+    semantic.curate(brain_home, mid, authority_ceiling="advisory")
+    assert semantic._row(brain_home, mid)["authority_ceiling"] == "advisory"
+
+
+def test_origin_columns_migrate_fresh_database(tmp_path: Path) -> None:
+    dbfile = tmp_path / "brain.sqlite"
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        names = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        assert {"origin_class", "origin_root_sha", "authority_ceiling"} <= names
+        row = conn.execute(
+            "SELECT origin_class, origin_root_sha, authority_ceiling FROM memories LIMIT 0"
+        )
+        assert row is not None
+    finally:
+        conn.close()
+
+
+def test_origin_columns_migrate_existing_0012_database(tmp_path: Path) -> None:
+    dbfile = tmp_path / "brain.sqlite"
+    conn = sqlite3.connect(dbfile)
+    conn.executescript(
+        """
+        CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        CREATE TABLE memories(memory_id TEXT PRIMARY KEY, title TEXT NOT NULL, scope TEXT NOT NULL,
+          project_id TEXT, status TEXT NOT NULL, evidence_grade TEXT NOT NULL, current_version INTEGER NOT NULL,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_verified_at TEXT, strength REAL NOT NULL,
+          stability REAL NOT NULL, summary TEXT, body_path TEXT);
+        CREATE TABLE memory_sources(id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT,
+          source_ref TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'evidence', added_at TEXT NOT NULL);
+        INSERT INTO schema_version VALUES (12, 'old');
+        INSERT INTO memories VALUES ('mem-preexisting', 'Old fact', 'global', NULL, 'current',
+          'OBSERVED', 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 1.0, 1.0, NULL, NULL);
+        """
+    )
+    conn.commit()
+    conn.close()
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        names = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        assert {"origin_class", "origin_root_sha", "authority_ceiling"} <= names
+        # Pre-existing row survives non-destructively and gets safe defaults.
+        row = conn.execute(
+            "SELECT origin_class, origin_root_sha, authority_ceiling FROM memories "
+            "WHERE memory_id = 'mem-preexisting'"
+        ).fetchone()
+        assert row["origin_class"] == "MODEL_INFERENCE"
+        assert row["origin_root_sha"] is None
+        assert row["authority_ceiling"] == "advisory"
+    finally:
+        conn.close()
+
+
+def test_origin_columns_migration_is_idempotent(tmp_path: Path) -> None:
+    dbfile = tmp_path / "brain.sqlite"
+    first = db.migrate(dbfile)
+    assert first  # first run applies migrations
+    second = db.migrate(dbfile)
+    assert second == []  # nothing pending, no re-application, no error
+    conn = db.connect(dbfile)
+    try:
+        names = {row["name"] for row in conn.execute("PRAGMA table_info(memories)")}
+        assert {"origin_class", "origin_root_sha", "authority_ceiling"} <= names
+    finally:
+        conn.close()
+
+
+def test_writeback_candidate_binds_model_inference(brain_home: Path) -> None:
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+    memory_id = lifecycle.writeback_candidate(
+        session_id="sess-writeback-origin",
+        project_id="proj-writeback",
+        title="Observed retry pattern",
+        observation="The tool always retries twice on timeout",
+    )
+    row = semantic._row(brain_home, memory_id)
+    assert row is not None
+    assert row["origin_class"] == "MODEL_INFERENCE"
+    assert row["authority_ceiling"] == "advisory"
+
+
+def test_extract_durable_binds_tool_observation(tmp_path: Path) -> None:
+    host = "host-origin-extract"
+    identity = BrainSessionIdentity(
+        internal_session_id=ledger_mod.internal_session_id(host),
+        host="prime",
+        host_session_id=host,
+        project_id="proj-extract",
+        created_at="2026-01-01T00:00:00Z",
+        status="active",
+        pinned=False,
+        schema_version=1,
+    )
+    with ledger_mod.LedgerStore(tmp_path, host).open(create=True) as store:
+        store.create_session(identity)
+        store.append_events(
+            [
+                BrainLifecycleEvent(
+                    seq=1,
+                    event_id="dec-1",
+                    internal_session_id=ledger_mod.internal_session_id(host),
+                    agent_id="a1",
+                    parent_event_id=None,
+                    host_entry_id="h-dec-1",
+                    host_parent_entry_id=None,
+                    segment_id="seg-1",
+                    event_type=LifecycleEventType.DECISION,
+                    timestamp="2026-01-01T00:00:00Z",
+                    surface_visibility=SurfaceVisibility.RAW_ONLY,
+                    ignorable=False,
+                    payload={"decision": "Use bounded retries", "rationale": "avoid runaway loops"},
+                    artifact_sha256=None,
+                    source_event_ids=[],
+                )
+            ]
+        )
+    life = ledger_mod.SessionLifecycle(tmp_path, host)
+    ids = life.extract_durable(project_id="proj-extract")
+    assert len(ids) == 1
+    row = semantic._row(tmp_path, ids[0])
+    assert row is not None
+    assert row["origin_class"] == "TOOL_OBSERVATION"
+    assert row["authority_ceiling"] == "advisory"
+
+
+def test_policy_lane_renders_lower_authority_contradiction_without_withholding(
+    brain_home: Path,
+) -> None:
+    # The lower-authority memory is created and curated first so the
+    # deterministic dedupe representative (most-recently-updated wins,
+    # `semantic._dedupe_representative_key`) picks the higher-authority one;
+    # dedupe collapses same-title rows to a single representative regardless
+    # of authority, so this ordering is required for the scenario to occur.
+    low = semantic.add_memory(
+        brain_home, "Timeout policy", "retry forever", scope="global",
+        origin_class="EXTERNAL_WEB", origin_root_sha=_root("web-timeout"),
+    )
+    semantic.curate(brain_home, low, status="current")
+    high = semantic.add_memory(
+        brain_home, "Timeout policy", "retry once then fail", scope="global",
+        origin_class="USER_AUTHORED",
+    )
+    semantic.curate(brain_home, high, grade="TESTED", status="current")
+
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+    decision = lifecycle.prepare_injection(
+        "timeout policy",
+        project_id=None,
+        agent_id="a1",
+        role_profile="worker",
+        session_id="sess-policy-contradiction",
+        lane="policy",
+    )
+    assert decision.decision is InjectionDecision.INJECT
+    assert decision.selected_ids == [high]
+    packet = autoinject.render_packet(decision)
+    assert packet is not None
+    assert f"ITEM {high}@1" in packet
+    assert f"contradicts: {low}" in packet
+    assert f"ITEM {low}@1" not in packet

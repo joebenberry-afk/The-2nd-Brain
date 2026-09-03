@@ -172,11 +172,7 @@ def token_estimate(text: str, home: Path | str | None = None) -> int:
 
 @dataclass(frozen=True)
 class RetrievalIntent:
-    """Structured retrieval intent (plan §6.1): task text stays ephemeral.
-
-    ``task_text`` is used only to query; it is never persisted to the
-    canonical DB or telemetry (only its sha256 is recorded).
-    """
+    """Structured retrieval intent (plan §6.1): task text stays ephemeral."""
 
     task_text: str
     project_id: str | None
@@ -186,6 +182,7 @@ class RetrievalIntent:
     branch_id: str = "main"
     is_delta: bool = False
     cwd: str | None = None
+    lane: str = "semantic"
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -373,6 +370,11 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
                 )
         if not scope_ok:
             continue
+        if intent.lane == "policy":
+            # Policy context is a hard authority boundary. Missing or
+            # unknown metadata is rejected rather than defaulted.
+            if row.get("authority_ceiling") not in {"project_rule", "policy"}:
+                continue
         # Delta injection remains intentionally strict: only current,
         # high-confidence truth can be introduced mid-session.
         if intent.is_delta and (
@@ -459,16 +461,28 @@ def _canonical_line(text: str | None) -> str:
     return " ".join((text or "").split())
 
 
-def _build_items(home: Path | str, rows: list[dict]) -> list[PacketItem]:
-    """Rows (already validity-gated, search-ranked) -> canonical packet items."""
+def _build_items(
+    home: Path | str, rows: list[dict], *, lane: str = "semantic"
+) -> list[PacketItem]:
+    """Rows (already validity-gated, search-ranked) -> canonical packet items.
+
+    Policy lane (§T1.7): a contradiction from a memory that did not itself
+    clear the policy admission gate (lower authority_ceiling, excluded from
+    ``rows``) is rendered via ``contradicts`` but never flips this item's
+    status to CONTRADICTED/withholds it -- only contradictions between two
+    memories that both cleared admission are treated as unresolved conflicts.
+    """
     home = Path(home)
+    admitted_ids = {str(r.get("memory_id") or "") for r in rows}
     items: list[PacketItem] = []
     for row in rows:
         memory_id = str(row.get("memory_id") or "")
         version = int(row.get("current_version") or 1)
-        contradicted = bool(row.get("contradiction_with")) or (
-            row.get("_freshness_state") == freshness.CONTRADICTED
+        contradiction_ids = {str(i) for i in (row.get("contradiction_with") or [])}
+        conflicting = (
+            (contradiction_ids & admitted_ids) if lane == "policy" else contradiction_ids
         )
+        contradicted = bool(conflicting) or (row.get("_freshness_state") == freshness.CONTRADICTED)
         status, confidence = _grade_confidence(
             row.get("evidence_grade"), row.get("strength"), contradicted
         )
@@ -480,6 +494,9 @@ def _build_items(home: Path | str, rows: list[dict]) -> list[PacketItem]:
         verified = row.get("_verified_evidence")
         if isinstance(verified, str) and verified:
             evidence += f" {verified}"
+        contradictions = ()
+        if lane == "policy":
+            contradictions = tuple(sorted(contradiction_ids))
         items.append(
             PacketItem(
                 memory_id=memory_id,
@@ -492,11 +509,10 @@ def _build_items(home: Path | str, rows: list[dict]) -> list[PacketItem]:
                 evidence=evidence,
                 supersedes=supersedes,
                 freshness=str(row.get("_freshness_state") or freshness.UNKNOWN),
+                contradicts=contradictions,
             )
         )
     return items
-
-
 # ---------------------------------------------------------------------------
 # Canonical hashing + delivery ledger dedupe (§6.5).
 # ---------------------------------------------------------------------------
@@ -613,14 +629,14 @@ def _packet_id(items: list[PacketItem]) -> str:
         "\n".join(f"{i.memory_id}@{i.version}" for i in items).encode("utf-8")
     ).hexdigest()
     return f"pkt-{digest[:16]}"
-
-
-def _render_packet_text(items: list[PacketItem], project: str | None) -> str:
+def _render_packet_text(
+    items: list[PacketItem], project: str | None, *, lane: str = "semantic"
+) -> str:
     pkt = BrainPacket(
         packet_id=_packet_id(items),
         project=project or "global",
         scope="task",
-        authority="advisory",
+        authority="policy" if lane == "policy" else "advisory",
         items=items,
     )
     return pkt.render()
@@ -640,25 +656,26 @@ def _ids_only(items: list[PacketItem]) -> list[PacketItem]:
             evidence=i.evidence,
             supersedes=i.supersedes,
             freshness=i.freshness,
+            contradicts=i.contradicts,
         )
         for i in items
     ]
-
 
 def _fit_budget(
     items: list[PacketItem],
     project: str | None,
     config: AutoInjectConfig,
     home: Path | str | None = None,
+    *,
+    lane: str = "semantic",
 ) -> tuple[list[PacketItem], bool] | None:
-    """§6.6: drop low-value tail toward target; then IDs-only; then None
-    (caller emits NO_INJECTION(CONTEXT_PRESSURE)). Never exceeds hard cap."""
+    """§6.6: fit packets within target and hard token budgets."""
     def est(candidate: list[PacketItem]) -> int:
-        return token_estimate(_render_packet_text(candidate, project), home=home)
+        return token_estimate(_render_packet_text(candidate, project, lane=lane), home=home)
 
     best = list(items)
     while len(best) > 1 and est(best) > config.target_tokens:
-        best = best[:-1]  # ranked best-first; tail = lowest value
+        best = best[:-1]
     if est(best) <= config.hard_cap_tokens:
         return best, False
     ids = _ids_only(best)
@@ -731,6 +748,7 @@ def prepare_injection(
             query_text,
             project_id=proj_filter,
             top_k=_MAX_CANDIDATES,
+            lane=intent.lane,
         )
         if cascade_res.retrieval_error:
             raise RuntimeError("semantic retrieval unavailable")
@@ -748,6 +766,7 @@ def prepare_injection(
                 query_text,
                 project_id=None,
                 top_k=_MAX_CANDIDATES,
+                lane=intent.lane,
             )
             if unscoped_cascade.retrieval_error:
                 raise RuntimeError("semantic retrieval unavailable")
@@ -870,7 +889,7 @@ def prepare_injection(
         logger.warning("AutoInject ledger read failed (fail-open): %s", exc)
         return decision(NoInjectionReason.BRAIN_UNAVAILABLE, candidate_ids=candidate_ids)
 
-    items = _build_items(home, role_rows)
+    items = _build_items(home, role_rows, lane=intent.lane)
     fresh = [
         item
         for item in items
@@ -902,7 +921,7 @@ def prepare_injection(
         else cfg
     )
 
-    fit = _fit_budget(fresh, intent.project_id, active_budget, home=home)
+    fit = _fit_budget(fresh, intent.project_id, active_budget, home=home, lane=intent.lane)
     if fit is None:
         return decision(
             NoInjectionReason.CONTEXT_PRESSURE,
@@ -911,7 +930,7 @@ def prepare_injection(
         )
     selected, ids_only = fit
     del ids_only  # shadow phase: caller sees the same canonical shape either way
-    text = _render_packet_text(selected, intent.project_id)
+    text = _render_packet_text(selected, intent.project_id, lane=intent.lane)
     packet_id = _packet_id(selected)
     _cache_packet(packet_id, text, selected)
     return dataclasses.replace(
@@ -1122,6 +1141,7 @@ class BrainLifecycle:
         cwd: str | None = None,
         is_delta: bool = False,
         context: dict[str, Any] | None = None,
+        lane: str = "semantic",
     ) -> BrainInjectionDecision:
         """Decision + ledger/telemetry record. Never raises.
 
@@ -1144,6 +1164,7 @@ class BrainLifecycle:
             branch_id=branch_id,
             is_delta=is_delta,
             cwd=cwd,
+            lane=lane,
         )
         decision = prepare_injection(self._home, intent)
         self._last_delivery_ids = []
@@ -1276,6 +1297,7 @@ class BrainLifecycle:
             grade="OBSERVED",
             sources=sources,
             summary=guidance or None,
+            origin_class="MODEL_INFERENCE",
         )
         _append_telemetry(
             self._home,
