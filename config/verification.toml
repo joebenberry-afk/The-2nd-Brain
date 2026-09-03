@@ -23,3 +23,22 @@ backward_reconstruction_first = true   # infer intent from patch before task (pl
 statuses = ["unverified", "partially_verified", "verified",
             "not_applicable", "blocked"]
 material_unverified_blocks_completion = true
+
+[risk]
+central_paths = [
+    "src/second_brain/db.py",
+    "src/second_brain/ledger.py",
+    "src/second_brain/contracts.py",
+    "migrations/",
+]
+
+[risk_weights]
+blast_radius = 1.0
+centrality = 1.0
+concurrency = 1.0
+persistence = 1.0
+security_boundary = 1.0
+public_api = 1.0
+data_loss = 1.0
+config_scope = 1.0
+hotspot = 1.0
