@@ -795,6 +795,7 @@ class PacketItem:
     guidance: str
     evidence: str
     supersedes: tuple[str, int] | None = None
+    freshness: str = "UNKNOWN"
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PacketItem:
@@ -811,6 +812,7 @@ class PacketItem:
             guidance=data["guidance"],
             evidence=data["evidence"],
             supersedes=supersedes,
+            freshness=str(data.get("freshness") or "UNKNOWN"),
         )
 
 
@@ -869,6 +871,7 @@ class BrainPacket:
                     f"observation: {item.observation}",
                     f"guidance: {item.guidance}",
                     f"evidence: {item.evidence}",
+                    f"freshness: {item.freshness}",
                     "",
                 ]
             )
@@ -916,6 +919,10 @@ class BrainPacket:
                 key, _, value = lines[idx].partition(": ")
                 item_fields[key] = value
                 idx += 1
+            if idx < len(lines) and lines[idx].startswith("freshness: "):
+                key, _, value = lines[idx].partition(": ")
+                item_fields[key] = value
+                idx += 1
             items.append(
                 PacketItem(
                     memory_id=mid,
@@ -927,6 +934,7 @@ class BrainPacket:
                     guidance=item_fields["guidance"],
                     evidence=item_fields["evidence"],
                     supersedes=supersedes,
+                    freshness=item_fields.get("freshness", "UNKNOWN"),
                 )
             )
         return cls(
