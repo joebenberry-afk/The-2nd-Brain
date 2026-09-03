@@ -123,6 +123,21 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
     )
     assert full_response["context_metadata"]["mode"] == "full"
     assert len(full_response["context_handoff"]["resolved_context"]) == 1
+    forged = json.loads(json.dumps(first))
+    forged["resolved_context"][0]["content"] = "forged context"
+    forged["context_handoff_bytes"] = len(
+        contracts.canonical_json(
+            {
+                "mode": forged["mode"],
+                "resolved_context": forged["resolved_context"],
+                "context_delta": forged["context_delta"],
+                "context_fingerprint": forged["context_fingerprint"],
+                "jit_context": forged["jit_context"],
+            }
+        ).encode("utf-8")
+    )
+    with pytest.raises(contracts.WorkerPacketError, match="CONTEXT_HANDOFF_MISMATCH"):
+        worker_protocol.validate_context_handoff(brain_home, packet, forged)
 
     unchanged = worker_protocol.prepare_context_handoff(brain_home, packet)
     assert unchanged["mode"] == "unchanged"
@@ -139,9 +154,9 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
         json.loads(initial.canonical_json()),
         unchanged,
     )
-    assert unchanged_response["context_metadata"]["mode"] == "unchanged"
-    assert unchanged_response["context_metadata"]["cache_hit"] is True
-    assert unchanged_response["context_handoff"]["resolved_context"] == []
+    assert unchanged_response["status"] == "completed"
+    assert unchanged_response["terminal_noop"] is True
+    assert "context_metadata" not in unchanged_response
 
     semantic.supersede(
         brain_home,
@@ -165,9 +180,9 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
         json.loads(initial.canonical_json()),
         changed,
     )
-    assert changed_response["context_metadata"]["mode"] == "delta"
-    assert changed_response["context_handoff"]["resolved_context"] == []
-    assert len(changed_response["context_handoff"]["context_delta"]["changed_refs"]) == 1
+    assert changed_response["status"] == "completed"
+    assert changed_response["terminal_noop"] is True
+    assert "context_handoff" not in changed_response
 
     ledger_path = hermes_adapter.ledger.LedgerStore(
         brain_home, binding.host_session_id
@@ -179,7 +194,7 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
                 "SELECT payload_json FROM events WHERE event_type = 'task_context_resolved'"
             )
         ]
-    assert {payload["context_mode"] for payload in payloads} >= {"full", "delta"}
+    assert {payload["context_mode"] for payload in payloads} == {"full"}
     assert all('"content":' not in json.dumps(payload) for payload in payloads)
     telemetry_path = (
         brain_home
@@ -192,14 +207,12 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
         for line in telemetry_path.read_text(encoding="utf-8").splitlines()
         if json.loads(line).get("kind") == "hermes_worker_context_resolved"
     ]
-    assert {payload["context_mode"] for payload in telemetry_payloads} >= {
-        "full",
-        "unchanged",
-        "delta",
-    }
+    assert {payload["context_mode"] for payload in telemetry_payloads} == {"full"}
 
 
-def test_result_hash_and_correction_lifecycle_are_canonical(brain_home: Path) -> None:
+def test_result_hash_and_correction_lifecycle_are_canonical(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     memory_id = semantic.add_memory(
         brain_home,
         "P12 lifecycle fixture",
@@ -219,6 +232,22 @@ def test_result_hash_and_correction_lifecycle_are_canonical(brain_home: Path) ->
             "repo_root": str(REPO_ROOT),
         },
     )
+    bad_packet = contracts.WorkerTaskPacket(
+        **{**packet.__dict__, "task_id": "p12-role-mismatch"}
+    ).validate()
+    bad_result = contracts.WorkerResultPacket(
+        task_id=bad_packet.task_id,
+        worker_identity=_identity("integrator", session="wrong-worker", bot="Brain-Integrator"),
+        status="completed",
+    )
+    bad_response = hermes_adapter.request_worker_task(
+        brain_home,
+        binding,
+        json.loads(bad_packet.canonical_json()),
+        json.loads(bad_result.canonical_json()),
+    )
+    assert bad_response["status"] == "failed"
+    assert bad_response["failure_code"] == "UNAUTHORIZED_WORKER"
     initial = contracts.WorkerResultPacket(
         task_id=packet.task_id,
         worker_identity=_identity(
@@ -244,6 +273,24 @@ def test_result_hash_and_correction_lifecycle_are_canonical(brain_home: Path) ->
     assert first["status"] == "completed"
     assert first["result_sha256"] == initial_hash
     assert first["context_metadata"]["resolved_count"] == 1
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("terminal duplicate resolved context")
+
+    monkeypatch.setattr(
+        hermes_adapter.worker_protocol, "validate_context_handoff", unexpected
+    )
+    duplicate = hermes_adapter.request_worker_task(
+        brain_home,
+        binding,
+        json.loads(packet.canonical_json()),
+        json.loads(initial.canonical_json()),
+        context_handoff_data=first["context_handoff"],
+    )
+    assert duplicate["status"] == "completed"
+    assert duplicate["terminal_noop"] is True
+    assert "context_handoff" not in duplicate
 
     correction_request = hermes_adapter.request_worker_correction(
         brain_home,
@@ -281,9 +328,88 @@ def test_result_hash_and_correction_lifecycle_are_canonical(brain_home: Path) ->
     assert returned["status"] == "completed"
     assert returned["result_sha256"] == corrected.canonical_hash()
     assert returned["result_sha256"] != initial_hash
+    replayed_correction = {
+        **correction,
+        "reviewer_identity": {
+            **correction["reviewer_identity"],
+            "agent_id": "hermes:Brain-Other",
+        },
+    }
+    replayed = hermes_adapter.return_corrected_worker_result(
+        brain_home,
+        binding,
+        json.loads(packet.canonical_json()),
+        json.loads(initial.canonical_json()),
+        replayed_correction,
+        json.loads(corrected.canonical_json()),
+    )
+    assert replayed["status"] == "failed"
+    assert replayed["failure_code"] == "UNAUTHORIZED_COORDINATOR"
+    mismatched_provenance = hermes_adapter.return_corrected_worker_result(
+        brain_home,
+        binding,
+        json.loads(packet.canonical_json()),
+        json.loads(initial.canonical_json()),
+        {**correction, "original_result_sha256": "f" * 64},
+        json.loads(corrected.canonical_json()),
+    )
+    assert mismatched_provenance["status"] == "failed"
+    assert mismatched_provenance["failure_code"] == "CORRECTION_MISMATCH"
+    other_binding = hermes_adapter.resolve_binding(
+        brain_home,
+        {
+            "bot_name": "Brain-Integrator",
+            "bot_role": "integrator",
+            "hermes_session_id": "other-reviewer",
+            "project_id": "second-brain",
+            "repo_root": str(REPO_ROOT),
+        },
+    )
+    other_reviewer = _identity(
+        "integrator", session=other_binding.brain_session_id, bot="Brain-Integrator"
+    )
+    cross_session = hermes_adapter.return_corrected_worker_result(
+        brain_home,
+        other_binding,
+        json.loads(packet.canonical_json()),
+        json.loads(initial.canonical_json()),
+        {**correction, "reviewer_identity": json.loads(contracts.canonical_json(other_reviewer))},
+        json.loads(corrected.canonical_json()),
+    )
+    assert cross_session["status"] == "failed"
+    assert cross_session["failure_code"] == "UNAUTHORIZED_COORDINATOR"
 
+    failed_corrected = contracts.WorkerResultPacket(
+        **{
+            **corrected.__dict__,
+            "status": "failed",
+            "failure_code": "WORKER_FAILED",
+        }
+    ).validate()
+    failed_return = hermes_adapter.return_corrected_worker_result(
+        brain_home,
+        binding,
+        json.loads(packet.canonical_json()),
+        json.loads(initial.canonical_json()),
+        correction,
+        json.loads(failed_corrected.canonical_json()),
+    )
+    assert failed_return["status"] == "failed"
+    assert failed_return["failure_code"] == "MALFORMED_RESULT"
+
+    corrected_review = json.loads(corrected.canonical_json())
+    corrected_review.update(
+        {
+            "packet_sha256": packet.canonical_hash(),
+            "result_sha256": corrected.canonical_hash(),
+        }
+    )
     approved = hermes_adapter.review_worker_result(
-        brain_home, binding, json.loads(corrected.canonical_json()), approved=True
+        brain_home,
+        binding,
+        corrected_review,
+        approved=True,
+        evidence={"tests": [{"name": "pytest tests/test_worker_protocol.py", "exit_code": 0}]},
     )
     assert approved["status"] == "reviewed"
     assert approved["result_sha256"] == corrected.canonical_hash()
@@ -329,3 +455,56 @@ def test_result_hash_and_correction_lifecycle_are_canonical(brain_home: Path) ->
         for record in records
         if record["kind"].startswith("hermes_worker")
     )
+
+
+def test_worker_numeric_fields_reject_bool_and_float(brain_home: Path) -> None:
+    packet = _packet(brain_home, "memory:none")
+    for field, value in (("fanout", 4.0), ("fanout_index", True), ("depth", 1.0)):
+        with pytest.raises(contracts.WorkerPacketError):
+            contracts.WorkerTaskPacket(
+                **{**packet.__dict__, field: value}
+            ).validate()
+
+    result = contracts.WorkerResultPacket(
+        task_id="numeric-result",
+        worker_identity=_identity("dev", session="worker", bot="Brain-Dev"),
+        status="completed",
+        correction_of_hash="a" * 64,
+        correction_attempt=1,
+    )
+    for value in (1.0, True):
+        with pytest.raises(contracts.WorkerPacketError):
+            contracts.WorkerResultPacket(
+                **{**result.__dict__, "correction_attempt": value}
+            ).validate()
+    with pytest.raises(contracts.WorkerPacketError, match="retryable"):
+        contracts.WorkerResultPacket(
+            **{**result.__dict__, "correction_attempt": 0, "correction_of_hash": None, "retryable": 1}
+        ).validate()
+
+    correction = contracts.WorkerCorrectionPacket(
+        task_id="numeric-correction",
+        parent_session_id="driver",
+        worker_identity=_identity("dev", session="worker", bot="Brain-Dev"),
+        reviewer_identity=_identity("integrator", session="driver", bot="Brain-Integrator"),
+        original_result_sha256="a" * 64,
+        reason="fix",
+    )
+    for value in (1.0, True):
+        with pytest.raises(contracts.WorkerPacketError):
+            contracts.WorkerCorrectionPacket(
+                **{**correction.__dict__, "correction_attempt": value}
+            ).validate()
+
+    task_data = json.loads(packet.canonical_json())
+    task_data["constraints"] = "read-only"
+    with pytest.raises(contracts.WorkerPacketError, match="MALFORMED_TASK"):
+        contracts.WorkerTaskPacket.from_dict(task_data)
+    result_data = json.loads(result.canonical_json())
+    result_data["evidence_refs"] = "not-a-list"
+    with pytest.raises(contracts.WorkerPacketError, match="MALFORMED_RESULT"):
+        contracts.WorkerResultPacket.from_dict(result_data)
+    correction_data = json.loads(correction.canonical_json())
+    correction_data["requested_changes"] = "not-a-list"
+    with pytest.raises(contracts.WorkerPacketError, match="MALFORMED_CORRECTION"):
+        contracts.WorkerCorrectionPacket.from_dict(correction_data)

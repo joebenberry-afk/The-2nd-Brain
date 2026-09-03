@@ -514,6 +514,91 @@ class WorkerPacketError(BrainError):
         super().__init__(f"{code}: {message or code}")
 
 
+
+class WorkerLifecycle:
+    """A2A-aligned worker state machine (Phase R4/T4.1)."""
+
+    SUBMITTED = "SUBMITTED"
+    WORKING = "WORKING"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    AUTH_REQUIRED = "AUTH_REQUIRED"
+    COMPLETED = "COMPLETED"
+    CANCELED = "CANCELED"
+    FAILED = "FAILED"
+    REJECTED = "REJECTED"
+
+    STATES = frozenset({
+        SUBMITTED,
+        WORKING,
+        INPUT_REQUIRED,
+        AUTH_REQUIRED,
+        COMPLETED,
+        CANCELED,
+        FAILED,
+        REJECTED,
+    })
+
+    TERMINAL_STATES = frozenset({
+        COMPLETED,
+        CANCELED,
+        FAILED,
+        REJECTED,
+    })
+
+    TRANSITIONS = {
+        SUBMITTED: frozenset({WORKING, REJECTED, CANCELED}),
+        WORKING: frozenset({INPUT_REQUIRED, AUTH_REQUIRED, COMPLETED, FAILED, CANCELED}),
+        INPUT_REQUIRED: frozenset({WORKING, CANCELED, FAILED}),
+        AUTH_REQUIRED: frozenset({WORKING, CANCELED, FAILED}),
+    }
+
+    _SYNONYMS = {
+        "CANCELLED": "CANCELED",
+        "WORKER_STARTED": "WORKING",
+        "WORKER_COMPLETED": "COMPLETED",
+        "TASK_COMPLETED": "COMPLETED",
+        "WORKER_FAILED": "FAILED",
+        "TASK_FAILED": "FAILED",
+        "WORKER_CANCELLED": "CANCELED",
+        "WORKER_CANCELED": "CANCELED",
+    }
+
+    def __init__(self, initial_state: str = SUBMITTED) -> None:
+        self.state = self.normalize_state(initial_state)
+        if self.state not in self.STATES:
+            raise WorkerPacketError("INVALID_TRANSITION", f"unknown initial state: {initial_state!r}")
+
+    @classmethod
+    def normalize_state(cls, state: str) -> str:
+        s = str(state).strip().upper()
+        return cls._SYNONYMS.get(s, s)
+
+    @classmethod
+    def transition(cls, cur: str, evt: str) -> str:
+        cur_norm = cls.normalize_state(cur)
+        evt_norm = cls.normalize_state(evt)
+
+        if cur_norm not in cls.STATES:
+            raise WorkerPacketError(
+                "INVALID_TRANSITION", f"unknown current state: {cur!r}"
+            )
+        if cur_norm in cls.TERMINAL_STATES:
+            raise WorkerPacketError(
+                "INVALID_TRANSITION", f"cannot transition from terminal state: {cur_norm}"
+            )
+
+        allowed = cls.TRANSITIONS.get(cur_norm, frozenset())
+        if evt_norm not in allowed:
+            raise WorkerPacketError(
+                "INVALID_TRANSITION",
+                f"invalid transition from {cur_norm} to {evt_norm} (allowed: {sorted(allowed)})",
+            )
+        return evt_norm
+
+    def step(self, evt: str) -> str:
+        self.state = self.transition(self.state, evt)
+        return self.state
+
 def _check_worker_text(value: Any, field_name: str, limit: int = WORKER_TEXT_MAX_CHARS) -> None:
     if not isinstance(value, str) or not value or len(value) > limit:
         raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
@@ -526,6 +611,13 @@ def _check_worker_list(values: Any, field_name: str) -> None:
         not isinstance(item, str) or not item or len(item) > WORKER_REF_MAX_CHARS for item in values
     ):
         raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
+
+def _check_wire_lists(
+    values: Mapping[str, Any], fields: tuple[str, ...], code: str
+) -> None:
+    for field in fields:
+        if field in values and not isinstance(values[field], list):
+            raise WorkerPacketError(code, f"invalid {field}")
 
 
 def _check_sha256(value: Any, field_name: str, code: str = "MALFORMED_RESULT") -> None:
@@ -567,6 +659,10 @@ class WorkerTaskPacket:
             raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "driver role is not authorized")
         if self.requested_role not in WORKER_ROLES:
             raise WorkerPacketError("UNAUTHORIZED_WORKER", "requested role is not a worker role")
+        if type(self.fanout) is not int or type(self.fanout_index) is not int:
+            raise WorkerPacketError("FANOUT_EXCEEDED", "fanout fields must be integers")
+        if type(self.depth) is not int:
+            raise WorkerPacketError("DEPTH_EXCEEDED", "depth must be an integer")
         if self.fanout != WORKER_DEFAULT_FANOUT and not 1 <= self.fanout <= WORKER_MAX_FANOUT:
             raise WorkerPacketError("FANOUT_EXCEEDED", "fanout outside bounded range")
         if not 0 <= self.fanout_index < self.fanout or self.fanout > WORKER_MAX_FANOUT:
@@ -584,15 +680,19 @@ class WorkerTaskPacket:
 
     def canonical_json(self) -> str:
         return canonical_json(self)
-
     def canonical_hash(self) -> str:
-        """sha256 of this packet's canonical wire representation."""
         return stable_content_hash(self)
+
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> WorkerTaskPacket:
         try:
             values = dict(data)
+            _check_wire_lists(
+                values,
+                ("constraints", "evidence_requirements", "context_refs"),
+                "MALFORMED_TASK",
+            )
             values["driver_identity"] = AgentIdentity.from_dict(values["driver_identity"])
             packet = _from_dict(cls, values)
             packet.validate()
@@ -632,19 +732,22 @@ class WorkerResultPacket:
                 _check_worker_list(getattr(self, name), name)
             except WorkerPacketError as exc:
                 raise WorkerPacketError("MALFORMED_RESULT", str(exc)) from exc
+        if not isinstance(self.retryable, bool):
+            raise WorkerPacketError("MALFORMED_RESULT", "retryable must be boolean")
         if self.status == "failed" and not self.failure_code:
             raise WorkerPacketError("MALFORMED_FAILURE", "failed result requires failure_code")
         if self.status != "failed" and self.failure_code is not None:
             raise WorkerPacketError(
                 "MALFORMED_RESULT", "failure_code only belongs to failed results"
             )
-        if not isinstance(self.retryable, bool):
-            raise WorkerPacketError("MALFORMED_RESULT", "retryable must be boolean")
         if self.correction_of_hash is not None:
             _check_sha256(self.correction_of_hash, "correction_of_hash")
-            if not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS:
+            if (
+                type(self.correction_attempt) is not int
+                or not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS
+            ):
                 raise WorkerPacketError("MALFORMED_RESULT", "invalid correction_attempt")
-        elif self.correction_attempt != 0:
+        elif type(self.correction_attempt) is not int or self.correction_attempt != 0:
             raise WorkerPacketError(
                 "MALFORMED_RESULT", "correction_attempt requires correction_of_hash"
             )
@@ -656,13 +759,17 @@ class WorkerResultPacket:
         return canonical_json(self)
 
     def canonical_hash(self) -> str:
-        """sha256 of this result's canonical wire representation."""
         return stable_content_hash(self)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> WorkerResultPacket:
         try:
             values = dict(data)
+            _check_wire_lists(
+                values,
+                ("evidence_refs", "files_changed", "artifacts", "tests_run", "limitations"),
+                "MALFORMED_RESULT",
+            )
             values["worker_identity"] = AgentIdentity.from_dict(values["worker_identity"])
             result = _from_dict(cls, values)
             result.validate()
@@ -733,7 +840,10 @@ class WorkerCorrectionPacket:
             raise WorkerPacketError("UNAUTHORIZED_WORKER", "correction target is not a worker role")
         if self.reviewer_identity.role_profile not in COORDINATOR_ROLES:
             raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "reviewer role is not authorized")
-        if not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS:
+        if (
+            type(self.correction_attempt) is not int
+            or not 1 <= self.correction_attempt <= WORKER_MAX_CORRECTION_ATTEMPTS
+        ):
             raise WorkerPacketError("CORRECTION_LIMIT_EXCEEDED", "correction attempt outside bound")
         if len(self.canonical_json().encode("utf-8")) > WORKER_RESULT_MAX_BYTES:
             raise WorkerPacketError("CORRECTION_TOO_LARGE", "correction packet exceeds byte bound")
@@ -741,7 +851,6 @@ class WorkerCorrectionPacket:
 
     def canonical_json(self) -> str:
         return canonical_json(self)
-
     def canonical_hash(self) -> str:
         return stable_content_hash(self)
 
@@ -749,6 +858,9 @@ class WorkerCorrectionPacket:
     def from_dict(cls, data: Mapping[str, Any]) -> WorkerCorrectionPacket:
         try:
             values = dict(data)
+            _check_wire_lists(
+                values, ("requested_changes", "evidence_requirements"), "MALFORMED_CORRECTION"
+            )
             values["worker_identity"] = AgentIdentity.from_dict(values["worker_identity"])
             values["reviewer_identity"] = AgentIdentity.from_dict(values["reviewer_identity"])
             packet = _from_dict(cls, values)

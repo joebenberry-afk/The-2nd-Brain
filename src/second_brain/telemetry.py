@@ -23,6 +23,7 @@ KNOWN_KINDS = {
     "codex_hook_shadow_decision", "context", "context_paging", "context_structure",
     "extension_error",
     "hermes_model_decision", "hermes_post_tool_call", "hermes_pre_llm_call",
+    "handoff_sent", "handoff_received", "handoff_accepted", "handoff_result", "handoff_settled",
     "hermes_session_finalized", "hermes_session_started",
     "hermes_worker_context_resolved", "hermes_worker_lifecycle",
     "hermes_worker_result_corrected", "hermes_worker_result_correction_requested",
@@ -554,6 +555,17 @@ _APPEND_FIELDS = {
         "impact_score", "evidence_count", "evidence_hash",
     },
 }
+for _handoff_kind in (
+    "handoff_sent",
+    "handoff_received",
+    "handoff_accepted",
+    "handoff_result",
+    "handoff_settled",
+):
+    _APPEND_FIELDS[_handoff_kind] = {
+        "task_id", "packet_sha256", "state", "duplicate", "approved",
+        "settled", "failure_code", "evidence_hash",
+    }
 for _optimization_kind in _P4_OPTIMIZATION_KINDS:
     _APPEND_FIELDS[_optimization_kind] = {
         "proposal_id", "status", "intervention_hash", "evidence_hash",

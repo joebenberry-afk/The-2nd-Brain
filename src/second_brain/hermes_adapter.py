@@ -51,6 +51,7 @@ _SUPPORTED_EVENTS = {
     "session_end",
     "worker_task_prepare",
     "worker_task_request",
+    "worker_event",
     "worker_result_review",
     "worker_result_correction",
     "worker_result_corrected",
@@ -610,7 +611,11 @@ def _unavailable_result(packet: contracts.WorkerTaskPacket) -> contracts.WorkerR
 
 
 def prepare_worker_task(
-    home: Path | str, binding: HermesBinding, packet_data: dict[str, Any]
+    home: Path | str,
+    binding: HermesBinding,
+    packet_data: dict[str, Any],
+    *,
+    allow_terminal_reprepare: bool = False,
 ) -> dict[str, Any]:
     """Validate and resolve a task before a host invokes its worker."""
     if binding.bot_role not in contracts.COORDINATOR_ROLES:
@@ -622,6 +627,23 @@ def prepare_worker_task(
     home_path = Path(home)
     try:
         packet = contracts.WorkerTaskPacket.from_dict(packet_data)
+        existing = worker_protocol.lookup_task(
+            home_path, packet.task_id, packet.canonical_hash()
+        )
+        if (
+            existing
+            and existing.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
+            and not allow_terminal_reprepare
+        ):
+            return {
+                **_response_base(binding, "worker_task_prepare"),
+                "status": "terminal_noop",
+                "state": existing["state"],
+                "duplicate": True,
+                "terminal_noop": True,
+                "task_id": packet.task_id,
+                "packet_sha256": packet.canonical_hash(),
+            }
         _register_binding(home_path, binding)
         handoff = worker_protocol.prepare_context_handoff(home_path, packet)
     except contracts.WorkerPacketError as exc:
@@ -629,6 +651,39 @@ def prepare_worker_task(
             **_response_base(binding, "worker_task_prepare"),
             "status": "failed",
             "failure_code": exc.code,
+        }
+    try:
+        registration = worker_protocol.register_task(
+            home_path,
+            packet.task_id,
+            packet.canonical_hash(),
+            session_id=binding.host_session_id,
+            dispatch_payload=packet_data,
+        )
+        if registration.get("duplicate") and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES:
+            return {
+                **_response_base(binding, "worker_task_prepare"),
+                "status": "prepared",
+                "state": registration["state"],
+                "duplicate": True,
+                "task_id": packet.task_id,
+                "packet_sha256": packet.canonical_hash(),
+                "context_metadata": worker_protocol.handoff_metadata(handoff),
+                "context_handoff": handoff,
+            }
+        worker_protocol.record_worker_event(
+            home_path,
+            packet.task_id,
+            packet.canonical_hash(),
+            "delivered",
+            session_id=binding.host_session_id,
+        )
+    except contracts.WorkerPacketError as exc:
+        return {
+            **_response_base(binding, "worker_task_prepare"),
+            "status": "failed",
+            "failure_code": exc.code,
+            "task_id": packet.task_id,
         }
     return {
         **_response_base(binding, "worker_task_prepare"),
@@ -654,15 +709,6 @@ def request_worker_task(
             "status": "failed",
             "failure_code": "UNAUTHORIZED_COORDINATOR",
         }
-    # T3.1 §4: check the PARENT (dispatching) session's budget state before
-    # spawning; a HARD cap fails the dispatch instead of creating the task.
-    parent_budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
-    if parent_budget.get("state") == "HARD":
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": "BUDGET_EXCEEDED",
-        }
     try:
         packet = contracts.WorkerTaskPacket.from_dict(packet_data)
     except contracts.WorkerPacketError as exc:
@@ -672,6 +718,35 @@ def request_worker_task(
             "failure_code": exc.code,
         }
     home_path = Path(home)
+    try:
+        existing = worker_protocol.lookup_task(
+            home_path, packet.task_id, packet.canonical_hash()
+        )
+    except contracts.WorkerPacketError as exc:
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": "failed",
+            "failure_code": exc.code,
+            "task_id": packet.task_id,
+        }
+    if existing and existing.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES:
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": str(existing["state"]).lower(),
+            "duplicate": True,
+            "terminal_noop": True,
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+        }
+    # T3.1 §4: check the PARENT (dispatching) session's budget state before
+    # spawning; a HARD cap fails the dispatch instead of creating the task.
+    parent_budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
+    if parent_budget.get("state") == "HARD":
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": "failed",
+            "failure_code": "BUDGET_EXCEEDED",
+        }
     _register_binding(home_path, binding)
     try:
         if context_handoff_data is None:
@@ -724,6 +799,51 @@ def request_worker_task(
             "task_id": packet.task_id,
         }
 
+    try:
+        registration = worker_protocol.register_task(
+            home_path,
+            packet.task_id,
+            packet.canonical_hash(),
+            session_id=binding.host_session_id,
+            dispatch_payload=packet_data,
+        )
+        duplicate_terminal = bool(
+            registration.get("duplicate")
+            and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
+        )
+        if not duplicate_terminal:
+            worker_protocol.record_worker_event(
+                home_path,
+                packet.task_id,
+                packet.canonical_hash(),
+                "worker_started",
+                session_id=binding.host_session_id,
+            )
+    except contracts.WorkerPacketError as exc:
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": "failed",
+            "failure_code": exc.code,
+            "task_id": packet.task_id,
+        }
+    if duplicate_terminal:
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": str(registration["state"]).lower(),
+            "duplicate": True,
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+        }
+    autoinject._append_telemetry(
+        home_path,
+        binding.host_session_id,
+        "handoff_sent",
+        {
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+            "state": contracts.WorkerLifecycle.SUBMITTED,
+        },
+    )
     base = _worker_payload(binding, packet, context_metadata=context_metadata)
     _append_event(
         home_path,
@@ -747,6 +867,18 @@ def request_worker_task(
         base,
         key=f"{packet.task_id}:started",
     )
+    autoinject._append_telemetry(
+        home_path,
+        binding.host_session_id,
+        "handoff_received",
+        {"task_id": packet.task_id, "packet_sha256": packet.canonical_hash(), "state": contracts.WorkerLifecycle.WORKING},
+    )
+    autoinject._append_telemetry(
+        home_path,
+        binding.host_session_id,
+        "handoff_accepted",
+        {"task_id": packet.task_id, "packet_sha256": packet.canonical_hash(), "state": contracts.WorkerLifecycle.WORKING},
+    )
     if result_data is None:
         result = _unavailable_result(packet)
     else:
@@ -754,23 +886,58 @@ def request_worker_task(
             result = contracts.WorkerResultPacket.from_dict(result_data)
             if result.task_id != packet.task_id:
                 raise contracts.WorkerPacketError("MALFORMED_RESULT", "task_id does not correlate")
+            if result.worker_identity.role_profile != packet.requested_role:
+                raise contracts.WorkerPacketError(
+                    "UNAUTHORIZED_WORKER", "result role does not match requested role"
+                )
         except contracts.WorkerPacketError as exc:
+            unavailable = _unavailable_result(packet)
             result = contracts.WorkerResultPacket(
-                packet.task_id, _agent_identity(binding), "failed", failure_code=exc.code
+                **{**unavailable.__dict__, "failure_code": exc.code}
             ).validate()
-    event_type = (
-        contracts.LifecycleEventType.WORKER_COMPLETED
-        if result.status == "completed"
-        else contracts.LifecycleEventType.WORKER_CANCELLED
-        if result.status == "cancelled"
-        else contracts.LifecycleEventType.WORKER_FAILED
+    try:
+        event_payload = (
+            {**result_data, "result_sha256": result.canonical_hash()}
+            if isinstance(result_data, dict)
+            else {"result_sha256": result.canonical_hash()}
+        )
+        worker_protocol.record_worker_event(
+            home_path,
+            packet.task_id,
+            packet.canonical_hash(),
+            result.status,
+            payload=event_payload,
+            session_id=binding.host_session_id,
+        )
+    except contracts.WorkerPacketError as exc:
+        return {
+            **_response_base(binding, "worker_task_request"),
+            "status": "failed",
+            "failure_code": exc.code,
+            "task_id": packet.task_id,
+        }
+    autoinject._append_telemetry(
+        home_path,
+        binding.host_session_id,
+        "handoff_result",
+        {
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+            "state": result.status,
+            "evidence_hash": result.canonical_hash(),
+        },
+    )
+    result_evidence = _review_evidence(
+        result, result_data if isinstance(result_data, dict) else {}
     )
     result_payload = _worker_payload(
         binding, packet, result, result.status, context_metadata=context_metadata
     )
-    _append_event(
-        home_path, binding, event_type, result_payload, key=f"{packet.task_id}:{result.status}"
-    )
+    if result_evidence is not None:
+        result_payload["evidence"] = result_evidence
+    result_wire = json.loads(result.canonical_json())
+    if result_evidence is not None:
+        result_wire["evidence"] = result_evidence
     _append_event(
         home_path,
         binding,
@@ -791,18 +958,168 @@ def request_worker_task(
         "result_sha256": result.canonical_hash(),
         "context_metadata": context_metadata,
         "context_handoff": context_handoff,
-        "result": json.loads(result.canonical_json()),
+        "result": result_wire,
     }
+
+def handle_worker_event(
+    home: Path | str,
+    binding: HermesBinding,
+    event_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a worker transport event without running a model."""
+    try:
+        event = dict(event_data)
+        event.setdefault("session_id", binding.host_session_id)
+        result = worker_protocol.process_worker_event(Path(home), event)
+    except contracts.WorkerPacketError as exc:
+        return {
+            **_response_base(binding, "worker_event"),
+            "status": "failed",
+            "failure_code": exc.code,
+        }
+    safe = {
+        key: result.get(key)
+        for key in (
+            "task_id",
+            "state",
+            "lease_expires_at",
+            "accepted_at",
+            "settled_at",
+            "packet_sha256",
+            "duplicate",
+        )
+    }
+    event_kind = str(event_data.get("event") or event_data.get("type") or event_data.get("status") or "")
+    telemetry_kind = (
+        "handoff_accepted"
+        if event_kind.casefold() in {
+            "accepted",
+            "worker_accepted",
+            "started",
+            "worker_started",
+            "working",
+        }
+        else "handoff_result"
+        if event_kind.casefold() in {
+            "completed",
+            "worker_completed",
+            "task_completed",
+            "failed",
+            "worker_failed",
+            "task_failed",
+            "rejected",
+            "worker_rejected",
+            "cancelled",
+            "canceled",
+            "worker_cancelled",
+            "worker_canceled",
+        }
+        else "handoff_received"
+    )
+    autoinject._append_telemetry(
+        Path(home), binding.host_session_id, telemetry_kind, safe
+    )
+    return {**_response_base(binding, "worker_event"), "status": "ok", **safe}
+
+_REVIEW_EVIDENCE_MAX_BYTES = 4_096
+
+
+def _bounded_review_evidence(evidence: Any) -> Any:
+    if evidence is None:
+        return None
+    if isinstance(evidence, dict):
+        tests = evidence.get("tests")
+        if set(evidence) == {"tests"} and isinstance(tests, list) and len(tests) <= 16:
+            valid_tests = all(
+                isinstance(item, dict)
+                and set(item).issubset({"name", "command", "exit_code"})
+                and type(item.get("exit_code")) is int
+                and any(key in item for key in ("name", "command"))
+                and all(
+                    isinstance(item[key], str) and 0 < len(item[key]) <= 512
+                    for key in ("name", "command")
+                    if key in item
+                )
+                for item in tests
+            )
+            candidate = {"tests": tests} if valid_tests and any(
+                type(item["exit_code"]) is int and item["exit_code"] == 0
+                for item in tests
+            ) else None
+        elif (
+            set(evidence).issubset({"diff_sha256", "diff_hash"})
+            and worker_protocol._is_sha256(evidence.get("diff_sha256"))
+            and (
+                "diff_hash" not in evidence
+                or evidence.get("diff_hash") == evidence.get("diff_sha256")
+            )
+        ):
+            candidate = {"diff_sha256": evidence["diff_sha256"]}
+        elif (
+            set(evidence).issubset({"diff_hash"})
+            and worker_protocol._is_sha256(evidence.get("diff_hash"))
+        ):
+            candidate = {"diff_sha256": evidence["diff_hash"]}
+        else:
+            candidate = None
+    elif isinstance(evidence, list) and evidence and len(evidence) <= 16:
+        candidate = []
+        for item in evidence:
+            if not isinstance(item, dict) or set(item) - {"diff_sha256", "diff_hash"}:
+                candidate = None
+                break
+            sha = item.get("diff_sha256") or item.get("diff_hash")
+            if not worker_protocol._is_sha256(sha):
+                candidate = None
+                break
+            if (
+                "diff_sha256" in item
+                and "diff_hash" in item
+                and item["diff_sha256"] != item["diff_hash"]
+            ):
+                candidate = None
+                break
+            candidate.append({"diff_sha256": sha})
+    else:
+        candidate = None
+    if candidate is None:
+        return None
+    if len(worker_protocol.canonical_json(candidate).encode("utf-8")) > _REVIEW_EVIDENCE_MAX_BYTES:
+        return None
+    return candidate
+
+
+def _review_evidence(
+    result: contracts.WorkerResultPacket, result_data: dict[str, Any]
+) -> Any:
+    evidence = _bounded_review_evidence(result_data.get("evidence"))
+    if evidence is None and result.evidence_refs and all(
+        worker_protocol._is_sha256(ref) for ref in result.evidence_refs
+    ):
+        evidence = _bounded_review_evidence(
+            [{"diff_sha256": ref} for ref in result.evidence_refs]
+        )
+    return evidence
 
 
 def review_worker_result(
-    home: Path | str, binding: HermesBinding, result_data: dict[str, Any], approved: bool = True
+    home: Path | str,
+    binding: HermesBinding,
+    result_data: dict[str, Any],
+    approved: bool = True,
+    evidence: Any = None,
 ) -> dict[str, Any]:
     if binding.bot_role not in contracts.COORDINATOR_ROLES:
         return {
             **_response_base(binding, "worker_result_review"),
             "status": "failed",
             "failure_code": "UNAUTHORIZED_COORDINATOR",
+        }
+    if type(approved) is not bool:
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": "PROTOCOL_ERROR",
         }
     try:
         result = contracts.WorkerResultPacket.from_dict(result_data)
@@ -811,6 +1128,61 @@ def review_worker_result(
             **_response_base(binding, "worker_result_review"),
             "status": "failed",
             "failure_code": exc.code,
+        }
+    preliminary_evidence = (
+        _bounded_review_evidence(evidence)
+        if evidence is not None
+        else _review_evidence(result, result_data)
+    )
+    if approved and preliminary_evidence is None and (
+        not worker_protocol._is_sha256(result_data.get("packet_sha256"))
+        or not worker_protocol._is_sha256(result_data.get("result_sha256"))
+    ):
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": "SETTLEMENT_REJECTED",
+        }
+    packet_sha256 = result_data.get("packet_sha256")
+    result_sha256 = result_data.get("result_sha256")
+    if (
+        not worker_protocol._is_sha256(packet_sha256)
+        or not worker_protocol._is_sha256(result_sha256)
+        or result_sha256 != result.canonical_hash()
+    ):
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": "PROTOCOL_ERROR",
+        }
+    binding_error = worker_protocol.verify_result_binding(
+        Path(home), result.task_id, packet_sha256, result_sha256
+    )
+    if binding_error is not None:
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": binding_error,
+        }
+    owner_session = worker_protocol.task_owner_session(
+        Path(home), result.task_id, packet_sha256
+    )
+    if owner_session != binding.host_session_id:
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": "UNAUTHORIZED_COORDINATOR",
+        }
+    review_evidence = (
+        _bounded_review_evidence(evidence)
+        if evidence is not None
+        else _review_evidence(result, result_data)
+    )
+    if approved and review_evidence is None:
+        return {
+            **_response_base(binding, "worker_result_review"),
+            "status": "failed",
+            "failure_code": "SETTLEMENT_REJECTED",
         }
     payload = {
         **_identity_fields(binding),
@@ -825,6 +1197,7 @@ def review_worker_result(
         "reviewed": True,
         "approved": bool(approved),
         "status": "reviewed" if approved else "rejected",
+        "evidence": review_evidence,
     }
     _append_event(
         Path(home),
@@ -833,6 +1206,33 @@ def review_worker_result(
         payload,
         key=f"{result.task_id}:review:{int(approved)}:{result.canonical_hash()}",
     )
+    settled = False
+    settlement_failure: str | None = None
+    if approved:
+        try:
+            worker_protocol.settle_task(
+                Path(home),
+                result.task_id,
+                approved=True,
+                evidence=review_evidence,
+            )
+            settled = True
+        except contracts.WorkerPacketError as exc:
+            settlement_failure = exc.code
+    payload["settled"] = settled
+    if settlement_failure:
+        payload["settlement_failure"] = settlement_failure
+    if settled:
+        autoinject._append_telemetry(
+            Path(home),
+            binding.host_session_id,
+            "handoff_settled",
+            {
+                "task_id": result.task_id,
+                "packet_sha256": result_data.get("packet_sha256", ""),
+                "settled": True,
+            },
+        )
     autoinject._append_telemetry(
         Path(home), binding.host_session_id, "hermes_worker_result_reviewed", payload
     )
@@ -841,6 +1241,8 @@ def review_worker_result(
         "status": payload["status"],
         "task_id": result.task_id,
         "result_sha256": result.canonical_hash(),
+        "settled": settled,
+        "settlement_failure": settlement_failure,
     }
 
 
@@ -884,7 +1286,12 @@ def request_worker_correction(
             "failure_code": exc.code,
         }
 
-    rejected = review_worker_result(home, binding, result_data, approved=False)
+    review_data = {
+        **result_data,
+        "packet_sha256": packet.canonical_hash(),
+        "result_sha256": result.canonical_hash(),
+    }
+    rejected = review_worker_result(home, binding, review_data, approved=False)
     if rejected.get("status") != "rejected":
         return rejected
     payload = {
@@ -951,7 +1358,21 @@ def return_corrected_worker_result(
             )
         if correction.original_result_sha256 != original_hash:
             raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "original result hash does not match"
+                "CORRECTION_MISMATCH", "correction original hash does not match"
+            )
+        if correction.parent_session_id != packet.parent_session_id:
+            raise contracts.WorkerPacketError(
+                "CORRECTION_MISMATCH", "correction parent session does not correlate"
+            )
+        reviewer = correction.reviewer_identity
+        if (
+            reviewer.agent_id != binding.agent_id
+            or reviewer.internal_session_id != binding.brain_session_id
+            or reviewer.host_agent_id != binding.bot_name
+            or reviewer.role_profile != binding.bot_role
+        ):
+            raise contracts.WorkerPacketError(
+                "UNAUTHORIZED_COORDINATOR", "correction reviewer does not match binding"
             )
         if corrected.correction_of_hash != original_hash:
             raise contracts.WorkerPacketError(
@@ -961,6 +1382,10 @@ def return_corrected_worker_result(
             raise contracts.WorkerPacketError(
                 "CORRECTION_MISMATCH", "correction attempt does not correlate"
             )
+        if corrected.status != "completed":
+            raise contracts.WorkerPacketError(
+                "MALFORMED_RESULT", "corrected result must have completed status"
+            )
         if (
             corrected.worker_identity.host_agent_id != correction.worker_identity.host_agent_id
             or corrected.worker_identity.role_profile != correction.worker_identity.role_profile
@@ -968,6 +1393,27 @@ def return_corrected_worker_result(
             raise contracts.WorkerPacketError(
                 "CORRECTION_MISMATCH", "corrected worker identity does not correlate"
             )
+        task = worker_protocol.lookup_task(
+            Path(home), packet.task_id, packet.canonical_hash()
+        )
+        if task is None:
+            raise contracts.WorkerPacketError("ORPHAN_TASK", "unknown worker task")
+        if task["state"] != contracts.WorkerLifecycle.COMPLETED:
+            raise contracts.WorkerPacketError(
+                "INVALID_TRANSITION", "corrected result requires COMPLETED task"
+            )
+        owner_session = worker_protocol.task_owner_session(
+            Path(home), packet.task_id, packet.canonical_hash()
+        )
+        if owner_session != binding.host_session_id:
+            raise contracts.WorkerPacketError(
+                "UNAUTHORIZED_COORDINATOR", "correction binding is not task owner"
+            )
+        binding_error = worker_protocol.verify_result_binding(
+            Path(home), packet.task_id, packet.canonical_hash(), original_hash
+        )
+        if binding_error is not None:
+            raise contracts.WorkerPacketError(binding_error, "original result is not durable")
         if context_handoff_data is None:
             context_handoff = worker_protocol.prepare_context_handoff(Path(home), packet)
         else:
@@ -1011,6 +1457,7 @@ def return_corrected_worker_result(
         **_response_base(binding, "worker_result_corrected"),
         "status": "completed",
         "task_id": packet.task_id,
+        "packet_sha256": packet.canonical_hash(),
         "result_sha256": corrected.canonical_hash(),
         "correction_sha256": correction.canonical_hash(),
         "context_metadata": context_metadata,
@@ -2356,6 +2803,7 @@ def _handle_handoff_create(
             **_response_base(binding, "handoff_create"),
             "status": "failed",
             "failure_code": exc.code,
+            "error": str(exc)[:128],
         }
     except BrainError as exc:
         return {
@@ -2429,6 +2877,11 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
             return {**_response_base(binding, "session_before_compact"), "status": "ok"}
         if event == "writeback":
             return _handle_writeback(home_path, binding, payload)
+        if event == "worker_event":
+            worker_event = payload.get("worker_event")
+            if not isinstance(worker_event, dict):
+                worker_event = payload
+            return handle_worker_event(home_path, binding, worker_event)
         if event == "worker_task_prepare":
             packet = payload.get("packet")
             if not isinstance(packet, dict):
@@ -2437,7 +2890,12 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
                     "status": "failed",
                     "failure_code": "MALFORMED_TASK",
                 }
-            return prepare_worker_task(home_path, binding, packet)
+            return prepare_worker_task(
+                home_path,
+                binding,
+                packet,
+                allow_terminal_reprepare=payload.get("purpose") == "correction",
+            )
         if event == "post_api_request":
             return _handle_api_lifecycle(home_path, binding, payload)
         if event == "api_request_error":
@@ -2466,7 +2924,11 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
                     "failure_code": "MALFORMED_RESULT",
                 }
             return review_worker_result(
-                home_path, binding, result, bool(payload.get("approved", True))
+                home_path,
+                binding,
+                result,
+                payload.get("approved", True),
+                payload.get("evidence"),
             )
         if event == "worker_result_correction":
             packet = payload.get("packet")
@@ -2485,7 +2947,7 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
                 _first_text(payload, "reason"),
                 payload.get("requested_changes"),
                 payload.get("evidence_requirements"),
-                int(payload.get("correction_attempt", 1)),
+                payload.get("correction_attempt", 1),
             )
         if event == "worker_result_corrected":
             packet = payload.get("packet")
@@ -2518,6 +2980,14 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
         if event == "handoff_read":
             return _handle_handoff_read(home_path, binding, payload)
         return _handle_session_end(home_path, binding, payload)
+    except contracts.HandoffError as exc:
+        return {
+            "adapter_version": ADAPTER_VERSION,
+            "event": event,
+            "status": "failed",
+            "failure_code": exc.code,
+            "error": str(exc),
+        }
     except Exception:
         return {
             "adapter_version": ADAPTER_VERSION,

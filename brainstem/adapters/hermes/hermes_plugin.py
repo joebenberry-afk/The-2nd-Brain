@@ -82,7 +82,14 @@ _REVIEW_SCHEMA = {
     "description": "Record coordinator review of one bounded Brain WorkerResultPacket.",
     "parameters": {
         "type": "object",
-        "properties": {"result": {"type": "object"}, "approved": {"type": "boolean"}},
+        "properties": {
+            "result": {"type": "object"},
+            "approved": {"type": "boolean"},
+            "evidence": {
+                "oneOf": [{"type": "object"}, {"type": "array"}],
+                "description": "Bounded postcondition evidence: an exit-0 test or SHA-256 diff.",
+            },
+        },
         "required": ["result"],
     },
 }
@@ -446,10 +453,7 @@ def _invoke_persistent_worker(
         },
         "status": "completed",
         "summary": output[:4096],
-        "evidence_refs": [
-            f"hermes-session:{worker_hermes_session}",
-            *[str(ref) for ref in packet.get("context_refs", [])],
-        ][:16],
+        "evidence_refs": [],
         "limitations": ["worker response is bounded to 4096 characters"],
         "failure_code": None,
         "retryable": False,
@@ -887,6 +891,12 @@ def register(ctx: Any) -> None:
             _common(settings, active_session, kwargs.get("model"), kwargs.get("provider"))
             | {"event": "worker_task_prepare", "packet": packet}
         )
+        if prepared and prepared.get("terminal_noop"):
+            return json.dumps(
+                prepared,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         if not prepared or prepared.get("status") != "prepared":
             return json.dumps(
                 prepared or {"status": "failed", "failure_code": "CONTEXT_REF_UNRESOLVED"},
@@ -906,6 +916,14 @@ def register(ctx: Any) -> None:
                 "context_handoff": prepared.get("context_handoff", {}),
             }
         )
+        if isinstance(response, dict) and isinstance(result, dict):
+            cached = dict(result)
+            for key in ("packet_sha256", "result_sha256"):
+                if response.get(key):
+                    cached[key] = response[key]
+            if isinstance(response.get("result"), dict) and response["result"].get("evidence") is not None:
+                cached["evidence"] = response["result"]["evidence"]
+            remember_result(cached)
         return json.dumps(
             response or {"status": "failed", "failure_code": "WORKER_UNAVAILABLE"},
             sort_keys=True,
@@ -928,11 +946,21 @@ def register(ctx: Any) -> None:
             result = dict(cached_result)
         prepared = client.request(
             _common(settings, active_session, kwargs.get("model"), kwargs.get("provider"))
-            | {"event": "worker_task_prepare", "packet": packet}
+            | {
+                "event": "worker_task_prepare",
+                "packet": packet,
+                "purpose": "correction",
+            }
         )
         if not prepared or prepared.get("status") != "prepared":
             return json.dumps(
                 prepared or {"status": "failed", "failure_code": "CONTEXT_REF_UNRESOLVED"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        if prepared.get("duplicate") and "context_handoff" not in prepared:
+            return json.dumps(
+                prepared,
                 sort_keys=True,
                 separators=(",", ":"),
             )
@@ -983,6 +1011,14 @@ def register(ctx: Any) -> None:
                 "context_handoff": prepared.get("context_handoff", {}),
             }
         )
+        if isinstance(response, dict) and isinstance(corrected, dict):
+            cached = dict(corrected)
+            for key in ("packet_sha256", "result_sha256"):
+                if response.get(key):
+                    cached[key] = response[key]
+            if isinstance(response.get("result"), dict) and response["result"].get("evidence") is not None:
+                cached["evidence"] = response["result"]["evidence"]
+            remember_result(cached)
         return json.dumps(
             response or {"status": "failed", "failure_code": "BRAIN_UNAVAILABLE"},
             sort_keys=True,
@@ -1003,7 +1039,8 @@ def register(ctx: Any) -> None:
             | {
                 "event": "worker_result_review",
                 "result": result,
-                "approved": bool(params.get("approved", True)),
+                "approved": params.get("approved", True),
+                "evidence": params.get("evidence"),
             }
         )
         return json.dumps(
