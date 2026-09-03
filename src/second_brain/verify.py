@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import json
 import subprocess
 import tempfile
 import time
@@ -30,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import crossmodel, db
 from .contracts import stable_content_hash
 from .errors import BrainError
 from .risk import assess_risk
@@ -334,6 +336,10 @@ def evaluate_accuracy_gate(
     evidence_set_hash: str = "",
     environment_evidence: dict[str, object] | None = None,
     environment_required: bool = False,
+    model_id: str | None = None,
+    skill_name: str | None = None,
+    task_class: str | None = None,
+    task: str = "",
 ) -> dict[str, Any]:
     """Evaluate completion against the existing risk ladder and evidence ledger."""
     started_at = time.perf_counter()
@@ -483,6 +489,78 @@ def evaluate_accuracy_gate(
         if isinstance(raw_verification_reasons, list)
         else [independent_reason] if independent_reason else []
     )
+    effective_model_id = model_id
+    if not effective_model_id and independent_verification:
+        effective_model_id = (
+            independent_verification.get("model_id")
+            or independent_verification.get("model")
+            or independent_verification.get("verifier_model_id")
+        )
+    if not effective_model_id:
+        try:
+            db_path = db.db_path(Path(home))
+            if db_path.is_file():
+                conn_d = db.connect(db_path)
+                try:
+                    row_d = conn_d.execute(
+                        "SELECT chosen_json FROM decisions WHERE session_id = ? AND kind = 'routing' ORDER BY created_at DESC LIMIT 1",
+                        (session_id,),
+                    ).fetchone()
+                    if row_d and row_d[0]:
+                        d_info = json.loads(row_d[0])
+                        effective_model_id = d_info.get("model") or d_info.get("selected_model")
+                finally:
+                    conn_d.close()
+        except Exception:
+            pass
+
+    if effective_model_id and isinstance(effective_model_id, str) and effective_model_id.strip():
+        try:
+            home_path = Path(home)
+            dbfile = db.db_path(home_path)
+            if dbfile.is_file():
+                if db.pending_migrations(dbfile):
+                    db.migrate(dbfile)
+                conn_o = db.connect(dbfile)
+                try:
+                    now_str = datetime.now(UTC).isoformat()
+                    conn_o.execute(
+                        """INSERT OR IGNORE INTO model_profiles (model_id, family, capabilities, first_seen_at)
+                           VALUES (?, ?, '', ?)""",
+                        (
+                            effective_model_id,
+                            effective_model_id.split("-")[0] if "-" in effective_model_id else "",
+                            now_str,
+                        ),
+                    )
+                    effective_skill = skill_name or task_class or "verification"
+                    effective_task_hash = (
+                        task_hash
+                        or (crossmodel.task_hash(task) if task else "")
+                        or f"gate-{session_id[:11]}"
+                    )
+                    success_int = 1 if completion_allowed else 0
+                    f1_float = 1.0 if completion_allowed else 0.0
+                    conn_o.execute(
+                        """INSERT INTO model_skill_outcomes
+                           (model_id, skill_name, task_hash, success, noise, f1, session_id, created_at)
+                           VALUES (?, ?, ?, ?, 0, ?, ?, ?)""",
+                        (
+                            effective_model_id,
+                            effective_skill,
+                            effective_task_hash,
+                            success_int,
+                            f1_float,
+                            session_id,
+                            now_str,
+                        ),
+                    )
+                    conn_o.commit()
+                finally:
+                    conn_o.close()
+        except Exception:
+            pass
+
     return {
         "accuracy_gate_id": f"gate-{accuracy_gate_id[:24]}",
         "task_id": task_id,

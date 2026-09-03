@@ -22,11 +22,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+import os
 from pathlib import Path
 from typing import Any
 
-from . import contracts, crossmodel, risk, router
+from . import contracts, crossmodel, db, decisions, risk, router
 from .errors import BrainError
 
 MODEL_ROUTING_SCHEMA_VERSION = 1
@@ -41,6 +43,55 @@ RISK_CLASSES: tuple[str, ...] = risk.RISK_LEVELS
 _TIER_RANK = {value: index for index, value in enumerate(TIERS)}
 _COST_RANK = {value: index for index, value in enumerate(COST_CLASSES)}
 _RISK_RANK = {value: index for index, value in enumerate(RISK_CLASSES)}
+_PRICE_CLASS_RANK = {"low": 1, "medium": 2, "high": 3}
+
+class TaskClass(StrEnum):
+    TRIVIAL = "trivial"
+    NAVIGATION = "navigation"
+    IMPLEMENTATION = "implementation"
+    DEBUGGING = "debugging"
+    VERIFICATION = "verification"
+    EXPLORATION = "exploration"
+    HIGH_RISK = "high_risk"
+    CONTINUATION = "continuation"
+
+TASK_CLASSES: tuple[str, ...] = tuple(item.value for item in TaskClass)
+
+
+def classify_task(task_or_hash: str, *, risk_class: str | None = None) -> TaskClass:
+    """Map 16-hex task hash or task content to a TaskClass."""
+    if isinstance(task_or_hash, TaskClass):
+        return task_or_hash
+    text_val = str(task_or_hash).strip()
+    lower_val = text_val.lower()
+    for item in TaskClass:
+        if lower_val == item.value:
+            return item
+    if risk_class in ("HIGH", "CRITICAL"):
+        return TaskClass.HIGH_RISK
+    if len(text_val) == 16 and all(c in "0123456789abcdefABCDEF" for c in text_val):
+        idx = int(text_val, 16) % len(TASK_CLASSES)
+        return TaskClass(TASK_CLASSES[idx])
+    if any(w in lower_val for w in ("continue", "continuation", "resume", "pick up")):
+        return TaskClass.CONTINUATION
+    if any(w in lower_val for w in ("verify", "verification", "check", "assert", "audit", "lint", "gate")):
+        return TaskClass.VERIFICATION
+    if any(w in lower_val for w in ("debug", "debugging", "fix", "bug", "error", "failure", "trace", "issue", "crash")):
+        return TaskClass.DEBUGGING
+    if any(w in lower_val for w in ("navigate", "navigation", "find", "search", "locate", "where", "list", "grep", "glob")):
+        return TaskClass.NAVIGATION
+    if any(w in lower_val for w in ("explore", "exploration", "investigate", "research", "survey", "discover")):
+        return TaskClass.EXPLORATION
+    if any(w in lower_val for w in ("critical", "high risk", "security", "permission", "drop table", "destroy", "root")):
+        return TaskClass.HIGH_RISK
+    if any(w in lower_val for w in ("trivial", "summarize", "summary", "readme", "ping", "hello", "echo", "typo")):
+        return TaskClass.TRIVIAL
+    if any(w in lower_val for w in ("implement", "implementation", "build", "create", "write", "add", "develop", "refactor", "code")):
+        return TaskClass.IMPLEMENTATION
+    return TaskClass.IMPLEMENTATION
+
+
+map_task_class = classify_task
 # Only integrator/validator adapters may supply policy overrides.  Worker and
 # normal requests still use objective task/file risk signals, but cannot raise
 # their own minimum tier or premium justification.
@@ -398,6 +449,7 @@ class ModelDecision:
     failure_code: str | None
     routing_error: bool
     created_at: str
+    escalation: bool = False
 
     def validate(self) -> ModelDecision:
         if len(self.eligible_candidates) > MAX_CANDIDATES:
@@ -410,6 +462,8 @@ class ModelDecision:
             )
         if not isinstance(self.risk_score, int) or self.risk_score < 0:
             raise ModelRoutingError("MALFORMED_DECISION", "risk_score must be non-negative")
+        if not isinstance(self.escalation, bool):
+            raise ModelRoutingError("MALFORMED_DECISION", "escalation must be a boolean")
         _label(self.risk_class, "risk_class", RISK_CLASSES)
         if self.status not in {"selected", "failed"}:
             raise ModelRoutingError("MALFORMED_DECISION", "invalid decision status")
@@ -511,6 +565,7 @@ class ModelDecision:
             "status": self.status,
             "failure_code": self.failure_code,
             "routing_error": self.routing_error,
+            "escalation": self.escalation,
             "created_at": self.created_at,
         }
 
@@ -564,6 +619,7 @@ class ModelDecision:
                 status=data["status"],
                 failure_code=data.get("failure_code"),
                 routing_error=bool(data.get("routing_error", False)),
+                escalation=bool(data.get("escalation", False)),
                 created_at=_text(data["created_at"], "created_at"),
             )
             return decision.validate()
@@ -689,39 +745,156 @@ def _route_skills(home: Path | None, task: str) -> tuple[tuple[str, ...], bool]:
         return (), True
 
 
+def p_success(
+    model_or_home: Any = None,
+    task_or_model: Any = None,
+    task_signature_arg: Any = None,
+    *,
+    home: Path | str | None = None,
+    min_samples: int = 1,
+) -> float:
+    """Beta posterior mean (s + 1) / (n + 2) over outcomes from last 90 days.
+
+    Fallback hierarchy:
+    1. Exact (model_id, task_signature)
+    2. (model_family, *)
+    3. Default 0.5
+    """
+    resolved_home: Path | str | None = home
+    resolved_model: Any = model_or_home
+    resolved_sig: Any = task_or_model
+
+    if task_signature_arg is not None:
+        resolved_home = model_or_home
+        resolved_model = task_or_model
+        resolved_sig = task_signature_arg
+    elif home is None and isinstance(model_or_home, Path):
+        resolved_home = model_or_home
+        resolved_model = task_or_model
+        resolved_sig = None
+
+    if isinstance(resolved_model, ModelCandidate):
+        model_id = resolved_model.model
+    else:
+        model_id = str(resolved_model or "").strip()
+
+    if not model_id:
+        return 0.5
+
+    if resolved_sig is not None:
+        sig_str = str(resolved_sig.value if isinstance(resolved_sig, TaskClass) else resolved_sig).strip()
+    else:
+        sig_str = "implementation"
+
+    if resolved_home is None:
+        env_home = os.environ.get("SECOND_BRAIN_HOME")
+        if env_home:
+            resolved_home = Path(env_home)
+
+    if resolved_home is None:
+        return 0.5
+
+    home_path = Path(resolved_home)
+    dbfile = db.db_path(home_path)
+    if not dbfile.is_file():
+        return 0.5
+
+    try:
+        if db.pending_migrations(dbfile):
+            db.migrate(dbfile)
+        conn = db.connect(dbfile)
+        try:
+            cutoff = (datetime.now(UTC) - timedelta(days=90)).isoformat()
+            row = conn.execute(
+                """SELECT SUM(success), COUNT(*)
+                   FROM model_skill_outcomes
+                   WHERE model_id = ? AND (skill_name = ? OR task_hash = ?) AND created_at >= ?""",
+                (model_id, sig_str, sig_str, cutoff),
+            ).fetchone()
+            s = row[0] or 0
+            n = row[1] or 0
+            if n >= min_samples:
+                return round((s + 1) / (n + 2), 4)
+
+            fam_row = conn.execute(
+                "SELECT family FROM model_profiles WHERE model_id = ?",
+                (model_id,),
+            ).fetchone()
+            family = fam_row[0] if (fam_row and fam_row[0]) else (model_id.split("-")[0] if "-" in model_id else "")
+            if family:
+                row_fam = conn.execute(
+                    """SELECT SUM(mso.success), COUNT(*)
+                       FROM model_skill_outcomes mso
+                       JOIN model_profiles mp ON mso.model_id = mp.model_id
+                       WHERE (mp.family = ? OR mso.model_id LIKE ?) AND mso.created_at >= ?""",
+                    (family, f"{family}%", cutoff),
+                ).fetchone()
+                s_fam = row_fam[0] or 0
+                n_fam = row_fam[1] or 0
+                if n_fam >= min_samples:
+                    return round((s_fam + 1) / (n_fam + 2), 4)
+
+            return 0.5
+        finally:
+            conn.close()
+    except Exception:
+        return 0.5
+
+
 def _quality_score(
     home: Path | None,
     candidate: ModelCandidate,
     selected_routes: Sequence[str],
     ambiguous_models: frozenset[str] = frozenset(),
+    task_signature: str | TaskClass | None = None,
 ) -> float | None:
     if candidate.quality_score is not None:
         return candidate.quality_score
-    # model_skill_report is keyed only by model_id.  Never apply one
-    # provider's aggregate stats to another provider with the same model.
     if candidate.model in ambiguous_models:
         return None
-    if home is None or not selected_routes or not (home / "db" / "brain.sqlite").is_file():
+    if home is None:
         return None
-    rates: list[float] = []
-    for skill_name in selected_routes:
+    db_file = db.db_path(Path(home))
+    if not db_file.is_file():
+        return None
+
+    sig = task_signature
+    if sig is None and selected_routes:
+        sig = selected_routes[0]
+
+    try:
+        if db.pending_migrations(db_file):
+            db.migrate(db_file)
+        conn = db.connect(db_file)
         try:
-            report = crossmodel.model_skill_report(home, candidate.model, skill_name)
-        except Exception:
-            continue
-        for model in report.get("models", []):
-            outcomes = model.get("outcomes", 0)
-            if (
-                model.get("model_id") == candidate.model
-                and isinstance(outcomes, int)
-                and outcomes >= 2
-            ):
-                successes = model.get("successes", 0)
-                if isinstance(successes, int):
-                    rates.append(successes / outcomes)
-    if not rates:
-        return None
-    return round(sum(rates) / len(rates), 4)
+            cutoff = (datetime.now(UTC) - timedelta(days=90)).isoformat()
+            sig_str = str(sig.value if isinstance(sig, TaskClass) else (sig or "implementation")).strip()
+            row = conn.execute(
+                """SELECT COUNT(*) FROM model_skill_outcomes
+                   WHERE model_id = ? AND (skill_name = ? OR task_hash = ?) AND created_at >= ?""",
+                (candidate.model, sig_str, sig_str, cutoff),
+            ).fetchone()
+            if row and row[0] > 0:
+                return p_success(candidate.model, sig_str, home=home)
+            fam_row = conn.execute(
+                "SELECT family FROM model_profiles WHERE model_id = ?",
+                (candidate.model,),
+            ).fetchone()
+            family = fam_row[0] if (fam_row and fam_row[0]) else (candidate.model.split("-")[0] if "-" in candidate.model else "")
+            if family:
+                fam_cnt = conn.execute(
+                    """SELECT COUNT(*) FROM model_skill_outcomes mso
+                       JOIN model_profiles mp ON mso.model_id = mp.model_id
+                       WHERE (mp.family = ? OR mso.model_id LIKE ?) AND mso.created_at >= ?""",
+                    (family, f"{family}%", cutoff),
+                ).fetchone()
+                if fam_cnt and fam_cnt[0] > 0:
+                    return p_success(candidate.model, sig_str, home=home)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None
 
 
 def _assessment(
@@ -788,12 +961,13 @@ def _assessment(
     )
 
 
-def _sort_key(candidate: CandidateAssessment) -> tuple[int, int, float, str, str]:
-    quality = candidate.quality_score if candidate.quality_score is not None else 0.0
+def _sort_key(candidate: CandidateAssessment) -> tuple[float, int, str, str]:
+    p = candidate.quality_score if candidate.quality_score is not None and candidate.quality_score > 0 else 0.5
+    price_rank = _PRICE_CLASS_RANK.get(candidate.cost_class, 1)
+    expected_cost = price_rank / p
     return (
-        _COST_RANK[candidate.cost_class],
+        expected_cost,
         _TIER_RANK[candidate.tier],
-        -quality,
         candidate.provider,
         candidate.model,
     )
@@ -842,6 +1016,13 @@ def route_model(
     ambiguity: bool = False,
     min_quality_score: float | None = None,
     created_at: str | None = None,
+    verifier_failed: bool = False,
+    previous_tier: str | None = None,
+    previous_model: str | None = None,
+    previous_decision: ModelDecision | None = None,
+    stage: str | None = None,
+    rollout_stage: str | None = None,
+    task_class: str | TaskClass | None = None,
 ) -> ModelDecision:
     """Select one deterministic model decision from bounded candidate metadata.
 
@@ -857,6 +1038,7 @@ def route_model(
     if len(candidates) > MAX_CANDIDATES:
         raise ModelRoutingError("ROUTING_INPUT_TOO_LARGE", "candidate list exceeds bound")
     normalized = tuple(_normalise_candidate(value) for value in candidates)
+    candidate_hash = _candidate_set_hash(normalized)
     identities = [(candidate.provider, candidate.model) for candidate in normalized]
     if len(set(identities)) != len(identities):
         raise ModelRoutingError("DUPLICATE_CANDIDATE", "provider/model candidates must be unique")
@@ -914,18 +1096,51 @@ def route_model(
         # premium request.  Keep the value observable only through the outcome,
         # not as a second policy path.
         premium_reasons = ()
-    minimum = (
+    if previous_decision is not None:
+        verifier_failed = True
+        if previous_tier is None:
+            previous_tier = previous_decision.selected_tier
+        if previous_model is None:
+            previous_model = previous_decision.selected_model
+
+    t_class = (
+        classify_task(task)
+        if task_class is None
+        else (task_class.value if isinstance(task_class, TaskClass) else str(task_class))
+    )
+    risk_floor = (
         _label(minimum_tier, "minimum_tier", TIERS)
         if trusted_policy and minimum_tier
         else _minimum_tier(task, risk_value, role_value, capabilities, None)
     )
+
+    minimum = risk_floor
+    escalation = False
     cost_limit = _label(max_cost_class, "max_cost_class", COST_CLASSES)
+
+    if verifier_failed and previous_tier:
+        prev_idx = _TIER_RANK.get(previous_tier, 0)
+        escalated_idx = min(prev_idx + 1, len(TIERS) - 1)
+        higher_tier_candidates = [
+            c
+            for c in normalized
+            if _TIER_RANK[c.tier] > prev_idx and _COST_RANK[c.cost_class] <= _COST_RANK[cost_limit]
+        ]
+        if higher_tier_candidates:
+            effective_min_idx = max(_TIER_RANK[risk_floor], escalated_idx)
+            minimum = TIERS[effective_min_idx]
+            if _TIER_RANK[minimum] > prev_idx:
+                escalation = True
+                premium_reasons = tuple(sorted(set(premium_reasons) | {"repeated_failure"}))
+
     maximum = _label(max_tier or _ROLE_MAXIMUM_TIER.get(role_value, "premium"), "max_tier", TIERS)
     if _TIER_RANK[maximum] < _TIER_RANK[minimum]:
         raise ModelRoutingError("ROLE_POLICY_CONFLICT", "max_tier is below minimum_tier")
     assessed: list[CandidateAssessment] = []
     for candidate in normalized:
-        quality = _quality_score(home_path, candidate, selected_routes, ambiguous_models)
+        quality = _quality_score(
+            home_path, candidate, selected_routes, ambiguous_models, task_signature=t_class
+        )
         assessed.append(
             _assessment(
                 candidate,
@@ -962,7 +1177,9 @@ def route_model(
     failure_code = None
     if chosen is None:
         failure_code = "NO_AVAILABLE_MODEL" if original is not None else "NO_ELIGIBLE_MODEL"
-    if fallback_used:
+    if escalation:
+        reason_code = "VERIFIER_FAILURE_CASCADE"
+    elif fallback_used:
         reason_code = "MODEL_UNAVAILABLE_FALLBACK"
     elif failure_code:
         reason_code = failure_code
@@ -978,9 +1195,54 @@ def route_model(
     else:
         reason_code = "LOWEST_COST_ELIGIBLE"
 
+    effective_stage = stage or rollout_stage or "OFF"
+    if (
+        chosen is not None
+        and not fallback_used
+        and not escalation
+        and t_class in {TaskClass.TRIVIAL, TaskClass.NAVIGATION, "trivial", "navigation"}
+        and effective_stage in {"CANARY", "ACTIVE"}
+    ):
+        eligible_candidates = [item for item in assessments if item.eligible]
+        if len(eligible_candidates) > 1:
+            rand_choice, propensity, randomized = decisions.randomize(
+                chosen,
+                eligible_candidates,
+                epsilon=0.05,
+                rng_seed=contracts.stable_content_hash({"task": task, "candidates": candidate_hash}),
+            )
+            chosen = rand_choice
+            if randomized:
+                reason_code = "EXPLORATION_RANDOMIZED"
+
+    if escalation and home_path is not None and brain_session_id:
+        try:
+            decisions.record(
+                home_path,
+                kind="routing",
+                session_id=brain_session_id,
+                task_id=task_id or None,
+                chosen={
+                    "escalation": True,
+                    "model": chosen.model if chosen else None,
+                    "tier": chosen.tier if chosen else None,
+                    "escalated_from_tier": previous_tier,
+                },
+                alternatives=[
+                    {"model": c.model, "tier": c.tier, "cost_class": c.cost_class}
+                    for c in assessments
+                ],
+                propensity=1.0,
+                randomized=False,
+                policy_version="v2.0",
+                stage=effective_stage if effective_stage in decisions._ROLLOUT_STAGES else "OFF",
+                inputs={"task_hash": crossmodel.task_hash(task), "escalation": True},
+            )
+        except Exception:
+            pass
+
     timestamp = created_at or datetime.now(UTC).isoformat()
     _text(timestamp, "created_at")
-    candidate_hash = _candidate_set_hash(normalized)
     seed = {
         "schema_version": MODEL_ROUTING_SCHEMA_VERSION,
         "task_hash": crossmodel.task_hash(task),
@@ -1004,6 +1266,7 @@ def route_model(
         "selected_model": chosen.model if chosen else None,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
+        "escalation": escalation,
     }
     decision = ModelDecision(
         decision_id=_decision_id(seed),
@@ -1037,6 +1300,7 @@ def route_model(
         status=status,
         failure_code=failure_code,
         routing_error=routing_error,
+        escalation=escalation,
         created_at=timestamp,
     )
     return decision.validate()
@@ -1046,16 +1310,59 @@ def route_model(
 select_model = route_model
 select_model_decision = route_model
 
+def route_cascade(
+    task_or_decision: str | ModelDecision,
+    candidates: Sequence[ModelCandidate | Mapping[str, Any]],
+    *,
+    verifier_failed: bool = True,
+    verifier_result: dict[str, Any] | None = None,
+    previous_tier: str | None = None,
+    previous_model: str | None = None,
+    **kwargs: Any,
+) -> ModelDecision:
+    """Cascade routing retry one tier up following a verifier failure."""
+    if verifier_result is not None:
+        verifier_failed = not verifier_result.get("completion_allowed", True)
+
+    if isinstance(task_or_decision, ModelDecision):
+        task_text = kwargs.pop("task", "") or task_or_decision.task_hash
+        prev_tier = previous_tier or task_or_decision.selected_tier
+        prev_model = previous_model or task_or_decision.selected_model
+        return route_model(
+            task_text,
+            candidates,
+            verifier_failed=verifier_failed,
+            previous_tier=prev_tier,
+            previous_model=prev_model,
+            previous_decision=task_or_decision,
+            **kwargs,
+        )
+    return route_model(
+        str(task_or_decision),
+        candidates,
+        verifier_failed=verifier_failed,
+        previous_tier=previous_tier,
+        previous_model=previous_model,
+        **kwargs,
+    )
+
+
 __all__ = [
     "COST_CLASSES",
     "MAX_CANDIDATES",
     "MODEL_ROUTING_SCHEMA_VERSION",
     "RISK_CLASSES",
     "TIERS",
+    "TASK_CLASSES",
+    "TaskClass",
     "CandidateAssessment",
     "ModelCandidate",
     "ModelDecision",
     "ModelRoutingError",
+    "classify_task",
+    "map_task_class",
+    "p_success",
+    "route_cascade",
     "route_model",
     "select_model",
     "select_model_decision",
