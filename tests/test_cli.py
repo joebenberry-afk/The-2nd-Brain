@@ -64,6 +64,9 @@ def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
     assert row["title"] == "Use bounded memory I/O"
     assert row["project_id"] == "demo"
     assert row["evidence_grade"] == "OBSERVED"
+    assert row["origin_class"] == "USER_AUTHORED"
+    assert row["authority_ceiling"] == "project_rule"
+    assert row["origin_root_sha"] == hashlib.sha256(source.read_bytes()).hexdigest()
     conn = sqlite3.connect(home / "db" / "brain.sqlite")
     try:
         source_row = conn.execute(

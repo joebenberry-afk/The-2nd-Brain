@@ -796,12 +796,16 @@ class PacketItem:
     evidence: str
     supersedes: tuple[str, int] | None = None
     freshness: str = "UNKNOWN"
+    contradicts: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PacketItem:
         supersedes = data.get("supersedes")
         if supersedes is not None:
             supersedes = (supersedes[0], int(supersedes[1]))
+        contradictions = data.get("contradicts") or ()
+        if isinstance(contradictions, str):
+            contradictions = (contradictions,)
         return cls(
             memory_id=data["memory_id"],
             version=int(data["version"]),
@@ -813,6 +817,7 @@ class PacketItem:
             evidence=data["evidence"],
             supersedes=supersedes,
             freshness=str(data.get("freshness") or "UNKNOWN"),
+            contradicts=tuple(str(item) for item in contradictions),
         )
 
 
@@ -872,9 +877,11 @@ class BrainPacket:
                     f"guidance: {item.guidance}",
                     f"evidence: {item.evidence}",
                     f"freshness: {item.freshness}",
-                    "",
                 ]
             )
+            if item.contradicts:
+                lines.append(f"contradicts: {', '.join(item.contradicts)}")
+            lines.append("")
         return "\n".join(lines)
 
     @classmethod
@@ -923,6 +930,11 @@ class BrainPacket:
                 key, _, value = lines[idx].partition(": ")
                 item_fields[key] = value
                 idx += 1
+            contradicts: tuple[str, ...] = ()
+            if idx < len(lines) and lines[idx].startswith("contradicts: "):
+                _, _, value = lines[idx].partition(": ")
+                contradicts = tuple(item for item in value.split(", ") if item)
+                idx += 1
             items.append(
                 PacketItem(
                     memory_id=mid,
@@ -935,6 +947,7 @@ class BrainPacket:
                     evidence=item_fields["evidence"],
                     supersedes=supersedes,
                     freshness=item_fields.get("freshness", "UNKNOWN"),
+                    contradicts=contradicts,
                 )
             )
         return cls(

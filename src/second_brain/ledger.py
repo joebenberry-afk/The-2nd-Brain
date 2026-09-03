@@ -1513,6 +1513,7 @@ class SessionLifecycle:
                     {"ref": f"ledger:{decision.get('event_id')}", "kind": "evidence"},
                 ],
                 summary="Extracted at session finalization (plan §12.2)",
+                origin_class="TOOL_OBSERVATION",
             )
             created.append(mid)
         return created

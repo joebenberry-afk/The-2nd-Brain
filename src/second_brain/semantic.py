@@ -40,6 +40,18 @@ GRADES: tuple[str, ...] = ("OBSERVED", "TESTED", "VERIFIED", "INFERRED", "HISTOR
 STATUSES: tuple[str, ...] = ("candidate", "current", "labile", "superseded", "archived")
 SCOPES: tuple[str, ...] = ("project", "domain", "global")
 SOURCE_KINDS: tuple[str, ...] = ("evidence", "episode", "test", "decision", "import")
+ORIGIN_CLASSES: tuple[str, ...] = (
+    "USER_AUTHORED",
+    "LOCAL_REPO",
+    "TRUSTED_TEST",
+    "TOOL_OBSERVATION",
+    "EXTERNAL_WEB",
+    "MODEL_INFERENCE",
+    "IMPORTED_FOREIGN",
+)
+AUTHORITY_CEILINGS: tuple[str, ...] = ("advisory", "project_rule", "policy")
+_AUTHORITY_RANK = {"advisory": 0, "project_rule": 1, "policy": 2}
+_PROJECT_RULE_ORIGINS = frozenset({"USER_AUTHORED", "LOCAL_REPO", "TRUSTED_TEST"})
 
 # Rank for upgrade/downgrade decisions; HISTORICAL/REJECTED sit below everything.
 _GRADE_RANK = {
@@ -157,6 +169,10 @@ def capture_evidence(repo_root: Path | str, specification: str) -> dict:
     except ValueError as exc:
         raise BrainError("evidence path is outside git repository") from exc
     selected = lines[(start or 1) - 1 : end if end is not None else len(lines)]
+    try:
+        origin_root_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+    except (OSError, IOError) as exc:
+        raise BrainError("evidence path is not readable") from exc
     return {
         "ref": rel,
         "kind": "evidence",
@@ -171,6 +187,7 @@ def capture_evidence(repo_root: Path | str, specification: str) -> dict:
         if start is not None
         else None,
         "verified_at": _utcnow(),
+        "origin_root_sha": origin_root_sha,
     }
 
 
@@ -278,6 +295,33 @@ def _validate_sources(sources: list[dict] | None) -> list[dict]:
     return out
 
 
+def _validate_origin(origin_class: str, origin_root_sha: str | None) -> tuple[str, str | None, str]:
+    if origin_class not in ORIGIN_CLASSES:
+        raise BrainError(f"origin_class must be one of {', '.join(ORIGIN_CLASSES)}")
+    if origin_root_sha is not None:
+        if not isinstance(origin_root_sha, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", origin_root_sha
+        ):
+            raise BrainError("origin_root_sha must be a 64-character hexadecimal sha256 or None")
+        origin_root_sha = origin_root_sha.lower()
+    ceiling = "project_rule" if origin_class in _PROJECT_RULE_ORIGINS else "advisory"
+    return origin_class, origin_root_sha, ceiling
+
+
+def corroboration_count(rows: object) -> int:
+    """Count independent corroboration roots, ignoring missing roots."""
+    if not isinstance(rows, (list, tuple, set, frozenset)):
+        rows = list(rows) if rows is not None else []
+    roots = {
+        str(row.get("origin_root_sha")).lower()
+        for row in rows
+        if isinstance(row, dict)
+        and isinstance(row.get("origin_root_sha"), str)
+        and row.get("origin_root_sha").strip()
+    }
+    return len(roots)
+
+
 def _validate_new(title: str, body: str, scope: str, grade: str) -> None:
     if not isinstance(title, str) or not title.strip():
         raise BrainError("title must be a non-empty string")
@@ -287,8 +331,6 @@ def _validate_new(title: str, body: str, scope: str, grade: str) -> None:
         raise BrainError(f"scope must be one of {', '.join(SCOPES)}")
     if grade not in GRADES:
         raise BrainError(f"grade must be one of {', '.join(GRADES)}")
-
-
 def _render_file(
     memory_id: str,
     title: str,
@@ -678,10 +720,15 @@ def add_memory(
     grade: str = "OBSERVED",
     sources: list[dict] | None = None,
     summary: str | None = None,
+    origin_class: str = "MODEL_INFERENCE",
+    origin_root_sha: str | None = None,
 ) -> str:
-    """Create a semantic memory (v1 file first, then DB row + sources)."""
+    """Create a semantic memory with immutable write-time origin authority."""
     _validate_new(title, body, scope, grade)
     clean_sources = _validate_sources(sources)
+    origin_class, origin_root_sha, authority_ceiling = _validate_origin(
+        origin_class, origin_root_sha
+    )
     if summary is not None and not isinstance(summary, str):
         raise BrainError("summary must be a string or None")
     _ensure_migrated(home)
@@ -715,8 +762,10 @@ def add_memory(
             """INSERT INTO memories
                (memory_id, title, scope, project_id, status, evidence_grade,
                 current_version, created_at, updated_at, last_verified_at,
-                strength, stability, summary, body_path)
-               VALUES (?, ?, ?, ?, 'candidate', ?, 1, ?, ?, NULL, ?, ?, ?, ?)""",
+                strength, stability, summary, body_path,
+                origin_class, origin_root_sha, authority_ceiling)
+               VALUES (?, ?, ?, ?, 'candidate', ?, 1, ?, ?, NULL, ?, ?, ?, ?,
+                       ?, ?, ?)""",
             (
                 memory_id,
                 title,
@@ -729,6 +778,9 @@ def add_memory(
                 DEFAULT_STABILITY,
                 summary,
                 str(path.relative_to(home)),
+                origin_class,
+                origin_root_sha,
+                authority_ceiling,
             ),
         )
         _insert_sources(conn, memory_id, clean_sources, now)
@@ -795,8 +847,9 @@ def curate(
     status: str | None = None,
     sources: list[dict] | None = None,
     verify: bool = True,
+    authority_ceiling: str | None = None,
 ) -> dict:
-    """Curate one memory: grade/status transitions, sources, verification."""
+    """Curate one memory; authority may only move toward advisory."""
     row = _row(home, memory_id)
     if row is None:
         raise BrainError(f"Unknown memory {memory_id!r}")
@@ -806,6 +859,15 @@ def curate(
         _check_grade_transition(row["evidence_grade"], grade)
     if status is not None and status not in STATUSES:
         raise BrainError(f"status must be one of {', '.join(STATUSES)}")
+    new_ceiling = row.get("authority_ceiling") or "advisory"
+    if authority_ceiling is not None:
+        if authority_ceiling not in AUTHORITY_CEILINGS:
+            raise BrainError(
+                f"authority_ceiling must be one of {', '.join(AUTHORITY_CEILINGS)}"
+            )
+        if _AUTHORITY_RANK[authority_ceiling] > _AUTHORITY_RANK[new_ceiling]:
+            raise BrainError("authority_ceiling may only be lowered")
+        new_ceiling = authority_ceiling
     clean_sources = _validate_sources(sources)
 
     now = _utcnow()
@@ -819,8 +881,8 @@ def curate(
     try:
         conn.execute(
             "UPDATE memories SET evidence_grade = ?, status = ?, updated_at = ?, "
-            "last_verified_at = ? WHERE memory_id = ?",
-            (new_grade, new_status, now, last_verified, memory_id),
+            "last_verified_at = ?, authority_ceiling = ? WHERE memory_id = ?",
+            (new_grade, new_status, now, last_verified, new_ceiling, memory_id),
         )
         _insert_sources(conn, memory_id, clean_sources, now)
         db.bump_memory_epoch(conn)

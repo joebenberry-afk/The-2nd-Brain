@@ -398,6 +398,7 @@ def _item(
     status: MemoryItemStatus = MemoryItemStatus.CURRENT,
     confidence: Confidence = Confidence.HIGH,
     supersedes: tuple[str, int] | None = None,
+    contradicts: tuple[str, ...] = (),
 ) -> PacketItem:
     return PacketItem(
         memory_id=memory_id,
@@ -409,6 +410,7 @@ def _item(
         guidance="Verify schema_version before applying.",
         evidence=f"brain://{memory_id}/{version}",
         supersedes=supersedes,
+        contradicts=contradicts,
     )
 
 
@@ -460,6 +462,18 @@ def test_new_version_renders_supersedes_delta() -> None:
     assert "UPDATE mem-abc v4 supersedes mem-abc v3" in text
     assert "mem-abc@3" not in text  # old version never presented
     assert "status: current" in text
+
+
+def test_contradicts_renders_and_parses_without_leading_space() -> None:
+    pkt = _packet(
+        items=[_item(contradicts=("mem-xyz", "mem-def"))]
+    )
+    text = pkt.render()
+    assert "contradicts: mem-xyz, mem-def" in text
+    parsed = BrainPacket.parse(text)
+    assert parsed.items[0].contradicts == ("mem-xyz", "mem-def")
+    assert parsed.items[0].contradicts[0] == "mem-xyz"  # no leading space from the prefix slice
+    assert parsed.render() == text  # byte-identical round trip
 
 
 def test_contradicted_item_is_labeled() -> None:

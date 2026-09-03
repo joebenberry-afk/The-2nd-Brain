@@ -175,12 +175,28 @@ def migrate(dbfile: str | Path, migrations_dir: Path | None = None) -> list[int]
         conn.commit()
         applied = current_version(conn)
         out: list[int] = []
-        for path in migration_files(migrations_dir):
+        files = migration_files(migrations_dir)
+        for path in files:
             version = int(path.name[:4])
             if version <= applied:
                 continue
             apply_migration(conn, path, version, datetime.now(UTC).isoformat())
             out.append(version)
+        # Migration 0012 was already marked applied by some installations
+        # before its additive origin extension shipped. Replay only its
+        # guarded ALTER statements so those databases converge without a
+        # version bump or destructive table rewrite.
+        extension = next((p for p in files if p.name.startswith("0012_")), None)
+        if extension is not None and applied >= 12:
+            statements = split_statements(extension.read_text(encoding="utf-8"))
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for stmt in statements:
+                    _execute_migration_statement(conn, stmt, version=12)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         return out
     finally:
         conn.close()
