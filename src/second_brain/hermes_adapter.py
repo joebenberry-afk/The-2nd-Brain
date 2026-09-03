@@ -26,6 +26,7 @@ from . import (
     decisions,
     firewall,
     handoff,
+    injection_slots,
     ledger,
     model_routing,
     router,
@@ -1769,7 +1770,18 @@ def _handle_pre_tool_call(
 
 def _handle_session_start(home: Path, binding: HermesBinding) -> dict[str, Any]:
     _register_binding(home, binding)
-    return {**_response_base(binding, "session_start"), "status": "registered"}
+    prefix = injection_slots.assemble_prefix(
+        home=home,
+        project_id=binding.project_id or "default",
+        role=binding.bot_role,
+    )
+    injection_slots.record_and_check_prefix_drift(home, binding.host_session_id, prefix)
+    return {
+        **_response_base(binding, "session_start"),
+        "status": "registered",
+        "prefix": prefix,
+        "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
+    }
 
 
 def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1835,6 +1847,20 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
             visible_packet = f"{visible_packet}\n\n{specialist_text}"
         else:
             visible_packet = specialist_text
+    prefix = injection_slots.assemble_prefix(
+        home=home,
+        project_id=binding.project_id or "default",
+        role=binding.bot_role,
+        task=task,
+    )
+    prefix_drift = injection_slots.record_and_check_prefix_drift(
+        home, binding.host_session_id, prefix
+    )
+    tail = injection_slots.assemble_tail(
+        delta_context=visible_packet,
+        hot_context_refs=vmem_context.get("rendered_text") if isinstance(vmem_context, dict) else None,
+        hydrated_skills=hydrated_bodies if enforced_visible else None,
+    )
     reason = decision.reason.value if decision.reason is not None else None
     attribution = _injection_attribution(binding, task, turn_id, decision)
     event_type = (
@@ -1853,6 +1879,8 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "mode": mode,
         "model_visible": visible_packet is not None,
         "delivery_count": len(lifecycle.last_delivery_ids),
+        "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
+        "prefix_drift": 1 if prefix_drift else 0,
         "turn_id": turn_id,
         "attribution": attribution,
         "selected_routes": selected_routes,
@@ -1963,6 +1991,10 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "decision": decision.decision.value,
         "reason": reason,
         "attribution": attribution,
+        "prefix": prefix,
+        "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
+        "prefix_drift": 1 if prefix_drift else 0,
+        "tail": tail,
         "selected_ids": decision.selected_ids,
         "packet": visible_packet,
         "packet_tokens": decision.packet_token_size,
