@@ -1281,4 +1281,29 @@ def test_supported_events_are_explicit(brain_home: Path, event: str) -> None:
         )
     response = hermes_adapter.handle_request(brain_home, payload)
     assert response["event"] == event
+
     assert response["status"] in {"registered", "ok", "candidate", "finalized"}
+
+def test_session_end_records_activation_from_tool_args(brain_home: Path) -> None:
+    mid = _current_memory(brain_home)
+    start = _start_payload() | {
+        "event": "pre_llm_call",
+        "task": "Hermes retrieves bounded project context",
+        "turn_id": "turn-feedback",
+    }
+    prepared = hermes_adapter.handle_request(brain_home, start)
+    assert mid in prepared["selected_ids"]
+    end = _start_payload() | {
+        "event": "session_end",
+        "tool_call_args": [{"input": {"command": f"echo {mid}"}}],
+        "final_message": "Used the retrieved context.",
+    }
+    hermes_adapter.handle_request(brain_home, end)
+    hermes_adapter.handle_request(brain_home, end)
+    import sqlite3
+
+    with sqlite3.connect(brain_home / "db" / "brain.sqlite") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+            (mid, "hermes:Brain-Dev:hermes-session-1"),
+        ).fetchone()[0] == 1

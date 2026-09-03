@@ -1032,3 +1032,50 @@ def test_claude_usage_cursor_waits_for_successful_writer(
         / "claude-usage-cursor.json"
     )
     assert not cursor.exists()
+
+
+def test_claude_tool_call_args_extracts_nested_assistant_tool_use(tmp_path: Path) -> None:
+    from second_brain import cli
+
+    memory_id = "mem-nested-tool"
+    transcript = tmp_path / "nested-tool.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "bash",
+                            "input": {"command": f"echo {memory_id}"},
+                        }
+                    ],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    args = cli._claude_tool_call_args(str(transcript))
+    assert args == [{"command": f"echo {memory_id}"}]
+
+
+def test_transcript_tool_calls_extracts_antigravity_model_record(tmp_path: Path) -> None:
+    from second_brain import cli
+
+    memory_id = "mem-model-tool"
+    transcript = tmp_path / "model-tool.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "source": "MODEL",
+                "type": "PLANNER_RESPONSE",
+                "tool_calls": [{"name": "view_file", "args": {"memory_id": memory_id}}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert cli._claude_tool_call_args(str(transcript)) == [{"memory_id": memory_id}]

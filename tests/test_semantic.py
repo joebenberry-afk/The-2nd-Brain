@@ -210,8 +210,35 @@ def test_search_title_summary_body(brain_home):
     assert len(semantic.search_memories(brain_home, "SAFETY")) == 1  # summary
     assert len(semantic.search_memories(brain_home, "sidecar")) == 1  # body
     assert len(semantic.search_memories(brain_home, "zzz")) == 0
+
     with pytest.raises(BrainError, match="term"):
         semantic.search_memories(brain_home, " ")
+
+def test_project_search_retains_unknown_domain_for_fts_and_linear(
+    brain_home, monkeypatch
+):
+    mid = _add(
+        brain_home,
+        title="Domain fallback retrieval",
+        body="domain fallback remains valid without a project identifier",
+        scope="domain",
+        project_id=None,
+        grade="TESTED",
+    )
+    assert mid in {
+        row["memory_id"]
+        for row in semantic.search_memories(
+            brain_home, "domain fallback retrieval", project_id="proj-a"
+        )
+    }
+
+    monkeypatch.setattr(semantic, "_fts_available", lambda conn: False)
+    assert mid in {
+        row["memory_id"]
+        for row in semantic.search_memories(
+            brain_home, "domain fallback retrieval", project_id="proj-a"
+        )
+    }
 
 
 def test_list_filters(brain_home):

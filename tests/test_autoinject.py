@@ -6,6 +6,7 @@ budget caps, fail-open, migration 0008, and the `brainctl autoinject shadow`
 CLI. SHADOW means: decide + record only, never mutate model context.
 """
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from second_brain.contracts import (
     BrainPacket,
     InjectionDecision,
     NoInjectionReason,
+    PacketItem,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -658,3 +660,164 @@ def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
         "self project rule", agent_id="a1", session_id="s-self2", cwd=None
     )
     assert d2.decision is InjectionDecision.INJECT
+
+def test_observed_candidate_admitted_as_low_confidence(brain_home) -> None:
+    mid = _add(
+        brain_home,
+        "Observed candidate",
+        "candidate observation remains useful context",
+        grade="OBSERVED",
+    )
+    row = semantic._row(brain_home, mid)
+    assert row is not None and row["status"] == "candidate"
+    intent = autoinject.RetrievalIntent(
+        task_text="candidate observation",
+        project_id="proj-a",
+        agent_id="a1",
+        role_profile="worker",
+        session_id="observed-candidate",
+        branch_id="main",
+    )
+    valid = autoinject._valid_candidates(intent, [row])
+    assert [r["memory_id"] for r in valid] == [mid]
+    item = autoinject._build_items(brain_home, valid)[0]
+    assert item.confidence.value == "low"
+
+
+def test_delivery_records_retrieval_and_is_idempotent(brain_home) -> None:
+    mid = _seed_current(brain_home, "Retrieval feedback", "record one retrieval")
+    first = _inject(brain_home, "record one retrieval", session_id="feedback-s1")
+    assert first.decision is InjectionDecision.INJECT
+    second = _inject(brain_home, "record one retrieval", session_id="feedback-s1")
+    assert second.reason is NoInjectionReason.ALREADY_DELIVERED
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM memory_retrievals WHERE memory_id = ? AND session_id = ?",
+            (mid, "feedback-s1"),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+
+
+def test_mention_records_activation_once(brain_home) -> None:
+    mid = _seed_current(brain_home, "Activation feedback", "record correct activation")
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+    decision = lifecycle.prepare_injection(
+        "record correct activation",
+        project_id="proj-a",
+        agent_id="a1",
+        role_profile="worker",
+        session_id="feedback-s2",
+    )
+    assert decision.decision is InjectionDecision.INJECT
+    lifecycle.finalize_session(
+        tool_call_args=[{"name": "echo", "args": f"used {mid}"}],
+        final_message="used the retrieved memory",
+    )
+    lifecycle.finalize_session(
+        tool_call_args=[{"name": "echo", "args": f"used {mid}"}],
+        final_message="used the retrieved memory",
+    )
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+            (mid, "feedback-s2"),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert count == 1
+@pytest.mark.parametrize(
+    ("status", "grade"),
+    [
+        ("superseded", "VERIFIED"),
+        ("archived", "VERIFIED"),
+        ("current", "INFERRED"),
+        ("current", "HISTORICAL"),
+        ("current", "REJECTED"),
+        ("unknown", "VERIFIED"),
+    ],
+)
+def test_admission_rejects_non_literal_status_and_grade(status, grade) -> None:
+    intent = autoinject.RetrievalIntent(
+        task_text="policy",
+        project_id="proj-a",
+        agent_id="a1",
+        role_profile="worker",
+        session_id="policy-boundary",
+        branch_id="main",
+    )
+    row = {
+        "memory_id": "mem-boundary",
+        "status": status,
+        "evidence_grade": grade,
+        "scope": "project",
+        "project_id": "proj-a",
+    }
+    assert autoinject._valid_candidates(intent, [row]) == []
+
+
+def test_admission_rejects_missing_metadata() -> None:
+    intent = autoinject.RetrievalIntent(
+        task_text="policy",
+        project_id="proj-a",
+        agent_id="a1",
+        role_profile="worker",
+        session_id="policy-missing",
+        branch_id="main",
+    )
+    assert autoinject._valid_candidates(
+        intent,
+        [{"memory_id": "mem-missing", "status": "current", "evidence_grade": "OBSERVED"}],
+    ) == []
+
+def test_fit_budget_uses_configured_estimator_target(monkeypatch) -> None:
+    item_a = PacketItem(
+        memory_id="mem-budget-a",
+        version=1,
+        status=autoinject.MemoryItemStatus.CURRENT,
+        confidence=autoinject.Confidence.HIGH,
+        title="A",
+        observation="A",
+        guidance="",
+        evidence="brain://mem-budget-a/1",
+    )
+    item_b = dataclasses.replace(item_a, memory_id="mem-budget-b")
+    estimates: list[int] = []
+
+    def estimate(text: str, *, home=None) -> int:
+        del home
+        value = 11 if "mem-budget-b" in text else 10
+        estimates.append(value)
+        return value
+
+    monkeypatch.setattr(autoinject, "token_estimate", estimate)
+    fit = autoinject._fit_budget(
+        [item_a, item_b],
+        "proj-a",
+        autoinject.AutoInjectConfig(target_tokens=10, hard_cap_tokens=20),
+    )
+    assert fit is not None
+
+
+    assert [item.memory_id for item in fit[0]] == ["mem-budget-a"]
+    assert estimates
+def test_domain_unknown_project_survives_known_project_prefilter(brain_home) -> None:
+    mid = _seed_current(
+        brain_home,
+        "Domain fallback rule",
+        "domain rule with unknown project remains available",
+        scope="domain",
+        project_id=None,
+    )
+    decision = _inject(
+        brain_home,
+        "domain rule with unknown project",
+        project_id="proj-a",
+        session_id="domain-unknown",
+    )
+    assert decision.decision is InjectionDecision.INJECT
+    assert decision.selected_ids == [mid]

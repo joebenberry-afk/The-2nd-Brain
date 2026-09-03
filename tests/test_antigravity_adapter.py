@@ -29,6 +29,7 @@ skill file through the harness-neutral lean_runtime helper.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -37,8 +38,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from second_brain import lean_runtime, semantic, working_set
+from second_brain import cli, lean_runtime, semantic, working_set
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE_SKILL = REPO_ROOT / "skills" / "candidates" / "lean-code" / "SKILL.md"
@@ -332,6 +332,118 @@ def test_stop_non_normal_termination_no_forced_loop(brain: Path) -> None:
     }
     out = _hook(brain, payload)
     assert out["decision"] == "stop"
+
+
+def test_stop_records_activation_before_unresolved_continue(
+    brain: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mid = semantic.list_memories(brain, scope="project")[0]["memory_id"]
+    transcript = _transcript(tmp_path, "migration ordering rules")
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "tool_calls": [{"name": "view_file", "args": {"command": f"echo {mid}"}}],
+                }
+            )
+            + "\n"
+        )
+    conversation = "agy-feedback"
+
+    def invoke(payload: dict) -> dict:
+        monkeypatch.setattr(cli.sys, "stdin", io.StringIO(json.dumps(payload)))
+        assert cli._cmd_antigravity_hook(brain) == 0
+        return json.loads(capsys.readouterr().out)
+
+    monkeypatch.setenv("SECOND_BRAIN_AUTOINJECT_MODE", "active")
+    prepared = invoke(
+        _pre_invocation_payload(conversation=conversation, transcript=str(transcript))
+    )
+    assert "injectSteps" in prepared
+    working_set.add_requirement(
+        brain, conversation, "verify nested tool activation", importance="critical"
+    )
+    stopped = invoke(
+        {
+            "conversationId": conversation,
+            "workspacePaths": [str(WORKSPACE)],
+            "transcriptPath": str(transcript),
+            "stopHookArgs": {
+                "executionNum": 1,
+                "terminationReason": "",
+                "error": "",
+                "fullyIdle": True,
+            },
+        }
+    )
+    assert stopped["decision"] == "continue"
+    import sqlite3
+
+    with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+            (mid, conversation),
+        ).fetchone()[0] == 1
+    return
+
+
+def test_stop_records_activation_from_nested_transcript_tool_use(
+    brain: Path, tmp_path: Path
+) -> None:
+    mid = semantic.list_memories(brain, scope="project")[0]["memory_id"]
+    transcript = _transcript(tmp_path, "migration ordering rules")
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "input": {"command": f"echo {mid}"},
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+    conversation = "agy-feedback"
+    prepared = _hook(
+        brain,
+        _pre_invocation_payload(conversation=conversation, transcript=str(transcript)),
+        {"SECOND_BRAIN_AUTOINJECT_MODE": "active"},
+    )
+    assert "injectSteps" in prepared
+    working_set.add_requirement(
+        brain, conversation, "verify nested tool activation", importance="critical"
+    )
+    stopped = _hook(
+        brain,
+        {
+            "conversationId": conversation,
+            "workspacePaths": [str(WORKSPACE)],
+            "transcriptPath": str(transcript),
+            "stopHookArgs": {
+                "executionNum": 1,
+                "terminationReason": "",
+                "error": "",
+                "fullyIdle": True,
+            },
+        },
+    )
+    assert stopped["decision"] == "continue"
+    import sqlite3
+
+    with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+            (mid, conversation),
+        ).fetchone()[0] == 1
 
 
 # ---------------------------------------------------------------- Fail open
