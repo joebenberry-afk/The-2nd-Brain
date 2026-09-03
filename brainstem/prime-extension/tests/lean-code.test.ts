@@ -504,11 +504,12 @@ ${CANONICAL_KERNEL}`);
 });
 
 describe("wiring: before_agent_start integration (real factory)", () => {
-  it("candidate + no env -> no patch and lean_kernel omit/off record", async () => {
+  it("candidate + no env -> lean omit/off, PREFIX extras still delivered (no kernel)", async () => {
     writeCandidate();
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(result).toBeUndefined();
+    expect(promptOf(result)).toContain("Project: default");
+    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -571,7 +572,8 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     process.env.SECOND_BRAIN_LEAN = "off";
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(result).toBeUndefined();
+    expect(promptOf(result)).toContain("Project: default");
+    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -606,7 +608,8 @@ describe("wiring: before_agent_start integration (real factory)", () => {
   it("missing skill -> fail open: no patch + lean_kernel skill-missing + extension_error", async () => {
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(result).toBeUndefined();
+    expect(promptOf(result)).toContain("Project: default");
+    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
     const lines = await waitForLines(3);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -634,7 +637,8 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     process.env.SECOND_BRAIN_LEAN = "off";
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(result).toBeUndefined();
+    expect(promptOf(result)).toContain("Project: default");
+    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");

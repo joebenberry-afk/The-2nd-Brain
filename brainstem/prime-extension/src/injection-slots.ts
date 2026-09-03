@@ -1,0 +1,197 @@
+/**
+ * T2.4 Injection placement slots: stable PREFIX and per-turn TAIL for Prime extension.
+ *
+ * Two slots only:
+ * 1. PREFIX (session-constant):
+ *    (1) Lean kernel (from lean-code)
+ *    (2) Skill descriptors (from visibility plan)
+ *    (3) The two T1.6 commands
+ *    (4) Project identity line: Project: <project_id>
+ *    Rendered once at session start and never changed across turns.
+ *    sha256(PREFIX) stored at session start; comparing later turns detects drift
+ *    and logs prefix_drift=1.
+ *
+ * 2. TAIL (per-turn):
+ *    [BRAIN_CONTEXT_DELTA], hot-context refs (VMem), freshness lines, Skill hydration bodies.
+ *    Appended after the latest user message in the turn context.
+ */
+
+import { createHash } from "node:crypto";
+
+export const MEMORY_COMMANDS_TEXT =
+  'To remember: run `brainctl remember "<claim>" --evidence <path>`.\n' +
+  'To check: `brainctl recall "<question>"`.\n';
+
+const sessionPrefixHashes = new Map<string, string>();
+
+/** Test seam: clear in-process prefix hash store. */
+export function resetPrefixDriftStore(): void {
+  sessionPrefixHashes.clear();
+}
+
+export function formatSkillDescriptors(
+  descriptors?: string | Record<string, string> | null,
+): string {
+  if (!descriptors) return "";
+  if (typeof descriptors === "string") return descriptors.trim();
+  const parts: string[] = [];
+  for (const skillId of Object.keys(descriptors).sort()) {
+    const text = descriptors[skillId]?.trim();
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+export function formatHydratedSkills(
+  skills?: string | Record<string, string> | null,
+): string {
+  if (!skills) return "";
+  if (typeof skills === "string") return skills.trim();
+  const parts: string[] = [];
+  for (const skillId of Object.keys(skills).sort()) {
+    const text = skills[skillId]?.trim();
+    if (text) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+export interface AssemblePrefixOptions {
+  projectId: string;
+  leanKernel?: string | null;
+  skillDescriptors?: string | Record<string, string> | null;
+}
+
+export function assemblePrefix(options: AssemblePrefixOptions): string {
+  const parts: string[] = [];
+
+  // (1) Lean kernel
+  if (options.leanKernel && options.leanKernel.trim()) {
+    parts.push(options.leanKernel.trim());
+  }
+
+  // (2) Skill descriptors
+  const descText = formatSkillDescriptors(options.skillDescriptors);
+  if (descText) {
+    parts.push(descText);
+  }
+
+  // (3) The two T1.6 commands
+  parts.push(MEMORY_COMMANDS_TEXT.trim());
+
+  // (4) Project identity line
+  const proj = (options.projectId || "default").trim();
+  parts.push(`Project: ${proj}`);
+
+  return parts.join("\n\n");
+}
+
+/** Stable dedup marker for the PREFIX "extras" block (T1.6 memory commands +
+ * project identity line) -- mirrors LEAN_KERNEL_MARKER / DRIVER_CONTRACT_MARKER
+ * (lean-code.ts / driver-orchestrator.ts): never inject the block twice. */
+export const PREFIX_EXTRAS_MARKER = "second-brain-prefix-extras";
+
+/**
+ * Deliver the T1.6 memory commands + project identity line (PREFIX
+ * components 3-4) into a base system prompt. Returns undefined when the
+ * base is undefined/empty (never invent a prompt, matching
+ * appendLeanKernel/appendDriverContract) and returns the base UNCHANGED
+ * when it already contains PREFIX_EXTRAS_MARKER (dedup: PREFIX is
+ * session-constant, never duplicated across turns).
+ */
+export function appendPrefixExtras(base: string | undefined, projectId: string): string | undefined {
+  if (base === undefined || base.trim() === "") return undefined;
+  if (base.includes(PREFIX_EXTRAS_MARKER)) return base;
+  const proj = (projectId || "default").trim();
+  const extras = `${MEMORY_COMMANDS_TEXT.trim()}\n\nProject: ${proj}`;
+  return `${base}\n\n[${PREFIX_EXTRAS_MARKER}]\n${extras}`;
+}
+
+export interface DriftCheckResult {
+  drift: boolean;
+  hash: string;
+}
+
+export function checkPrefixDrift(session: string, prefix: string): DriftCheckResult {
+  const currentHash = createHash("sha256").update(prefix).digest("hex");
+  const storedHash = sessionPrefixHashes.get(session);
+
+  if (storedHash === undefined) {
+    sessionPrefixHashes.set(session, currentHash);
+    return { drift: false, hash: currentHash };
+  }
+
+  if (storedHash !== currentHash) {
+    return { drift: true, hash: currentHash };
+  }
+
+  return { drift: false, hash: currentHash };
+}
+
+export interface AssembleTailOptions {
+  deltaContext?: string | null;
+  hotContextRefs?: string | null;
+  freshnessLines?: string | null;
+  hydratedSkills?: string | Record<string, string> | null;
+}
+
+export function assembleTail(options: AssembleTailOptions): string {
+  const parts: string[] = [];
+
+  if (options.deltaContext && options.deltaContext.trim()) {
+    parts.push(options.deltaContext.trim());
+  }
+
+  if (options.hotContextRefs && options.hotContextRefs.trim()) {
+    parts.push(options.hotContextRefs.trim());
+  }
+
+  if (options.freshnessLines && options.freshnessLines.trim()) {
+    const trimmed = options.freshnessLines.trim();
+    if (!options.deltaContext || !options.deltaContext.includes(trimmed)) {
+      parts.push(trimmed);
+    }
+  }
+
+  const skillsText = formatHydratedSkills(options.hydratedSkills);
+  if (skillsText) {
+    parts.push(skillsText);
+  }
+
+  return parts.join("\n\n");
+}
+
+export function appendTailAfterUserMessage(
+  messages: unknown[],
+  tail: string,
+): unknown[] {
+  if (!tail || !tail.trim()) {
+    return [...messages];
+  }
+
+  const result = [...messages];
+  let lastUserIdx = -1;
+
+  for (let i = result.length - 1; i >= 0; i--) {
+    const item = result[i];
+    if (item && typeof item === "object" && "role" in item && item.role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  const tailMessage = {
+    role: "custom",
+    customType: "brain.tail",
+    content: tail,
+  };
+  if (lastUserIdx >= 0) {
+    result.splice(lastUserIdx + 1, 0, tailMessage);
+  } else {
+    result.push(tailMessage);
+  }
+
+  return result;
+}

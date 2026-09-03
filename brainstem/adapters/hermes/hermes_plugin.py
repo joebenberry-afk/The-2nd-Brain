@@ -248,6 +248,10 @@ class _BrainClient:
         for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
             env.pop(key, None)
         env["SECOND_BRAIN_HOME"] = str(self.settings.brain_home)
+        if self.settings.repo_root:
+            src_path = Path(self.settings.repo_root) / "src"
+            if src_path.is_dir():
+                env["PYTHONPATH"] = str(src_path)
         if Path(self.settings.brain_python).name.lower().startswith("brainctl"):
             command = [
                 self.settings.brain_python,
@@ -594,6 +598,8 @@ def register(ctx: Any) -> None:
         delegated_results[str(result["task_id"])] = dict(result)
         while len(delegated_results) > 16:
             delegated_results.pop(next(iter(delegated_results)))
+    prefix_seen_sessions: set[str] = set()
+
 
     def on_session_start(
         session_id: str | None = None,
@@ -602,7 +608,10 @@ def register(ctx: Any) -> None:
         **kwargs: Any,
     ) -> None:
         del platform
-        current_session.set(session_id or os.environ.get("HERMES_SESSION_ID"))
+        active_session = session_id or os.environ.get("HERMES_SESSION_ID")
+        current_session.set(active_session)
+        if active_session:
+            prefix_seen_sessions.discard(active_session)
         client.request(
             _common(settings, session_id, model, kwargs.get("provider"))
             | {"event": "session_start"}
@@ -668,12 +677,23 @@ def register(ctx: Any) -> None:
                 host_provider=provider,
                 host_model=model,
             )
-        packet = response.get("packet") if response else None
-        vmem_block = response.get("vmem_context", {}).get("rendered_text") if response else None
-        blocks = [block for block in (packet, vmem_block) if isinstance(block, str) and block]
-        if blocks:
-            return {"context": "\n\n".join(blocks)}
-        return None
+        prefix = response.get("prefix") if response else None
+        tail = response.get("tail") if response else None
+        if not tail and response:
+            packet = response.get("packet")
+            vmem_block = response.get("vmem_context", {}).get("rendered_text")
+            blocks = [block for block in (packet, vmem_block) if isinstance(block, str) and block]
+            tail = "\n\n".join(blocks) if blocks else None
+
+        result: dict[str, str] = {}
+        is_first_turn = active_session not in prefix_seen_sessions
+        if is_first_turn:
+            prefix_seen_sessions.add(active_session)
+            if isinstance(prefix, str) and prefix:
+                result["system_prompt"] = prefix
+        if isinstance(tail, str) and tail:
+            result["context"] = tail
+        return result if result else None
 
     def llm_request_middleware(
         request: dict[str, Any] | None = None,

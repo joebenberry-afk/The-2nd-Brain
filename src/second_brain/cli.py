@@ -3170,7 +3170,7 @@ def _cmd_codex_shadow(home: Path) -> int:
     """
     import json
 
-    from . import autoinject, contracts
+    from . import autoinject, contracts, injection_slots
 
     payload = None
     try:
@@ -3254,17 +3254,38 @@ def _cmd_codex_shadow(home: Path) -> int:
     )
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
+    source = str(payload_dict.get("source") or "")
+    is_start = source in ("SessionStart", "session_start") or not bool(
+        payload_dict.get("is_delta") or payload_dict.get("turn_index", 0) > 0
+    )
+    prefix = injection_slots.assemble_prefix(
+        home=home,
+        project_id=project_id,
+        role=role,
+        task=task,
+    )
+    prefix_drift = injection_slots.record_and_check_prefix_drift(
+        home, session_id, prefix
+    )
+    tail = injection_slots.assemble_tail(delta_context=packet)
     mode = os.environ.get("SECOND_BRAIN_AUTOINJECT_MODE", "shadow").strip().lower()
     if mode in ("advisory", "active"):
-        # Hook response for Codex 0.147.0 UserPromptSubmit/SubagentStart:
-        # {"additionalContext": "<text>"} appends low-authority context (the
-        # packet itself carries "authority: advisory"). NO_INJECTION -> {} so
-        # nothing is ever added. Task text only ever appears inside the packet.
-        if packet is not None:
-            print(contracts.canonical_json({"additionalContext": packet}))
+        if source in ("SessionStart", "session_start"):
+            print(contracts.canonical_json({"additionalContext": prefix, "prefix": prefix}))
+        elif is_start:
+            ctx_text = f"{prefix}\n\n{tail}" if (prefix and tail) else (tail or prefix)
+            print(contracts.canonical_json({"additionalContext": ctx_text}))
         else:
-            print("{}")
+            if tail:
+                print(contracts.canonical_json({"additionalContext": tail}))
+            else:
+                print("{}")
     else:
+        # SHADOW: deterministic output contract is unchanged by T2.4 --
+        # assemble_prefix/record_and_check_prefix_drift above still run (so
+        # drift telemetry is recorded every turn), but the JSON shape stays
+        # exactly the pre-T2.4 {decision, reason, packet, packet_tokens,
+        # candidate_ids, selected_ids, delivery_id} contract.
         print(contracts.canonical_json(_autoinject_output(decision, packet, delivery_id)))
     return 0
 
@@ -3281,13 +3302,20 @@ def _cmd_antigravity_hook(home: Path) -> int:
     error, fullyIdle}, preToolHookArgs{...}).
 
     Writes ONE JSON object to stdout per the official result contracts:
-      PreInvocation -> {"injectSteps":[{"ephemeralMessage": "..."}]} or {}
+      SessionStart   -> {"systemPrompt": "<PREFIX>", "injectSteps":
+                         [{"ephemeralMessage": "<PREFIX>"}], "prefix": "<PREFIX>"}
+                         or {} on any failure (fail-open). PREFIX (T2.4: the
+                         lean kernel + T1.6 memory commands + project
+                         identity line) is rendered here, once, at session
+                         start; sha256(PREFIX) is recorded for later
+                         prefix_drift comparison (telemetry only, never in
+                         the hook response).
+      PreInvocation  -> {"injectSteps":[{"ephemeralMessage": "..."}]} or {}
       PostInvocation -> {} (telemetry only)
       PostToolUse    -> {}
       Stop           -> {"decision": "continue"|"stop", "reason": "..."}
     PreToolUse is intentionally NOT installed (no permission bypass); if one
     ever arrives, the handler returns {} without a decision.
-
     AutoInject visibility comes ONLY from the existing Brain mode resolution
     (SECOND_BRAIN_AUTOINJECT_* env override > config/autoinject.toml > default),
     never from a wrapper-local default. Lean runtime influence is resolved by
@@ -3299,7 +3327,7 @@ def _cmd_antigravity_hook(home: Path) -> int:
     import contextlib
     import json
 
-    from . import antigravity_transcript, autoinject, contracts, lean_runtime, working_set
+    from . import antigravity_transcript, autoinject, contracts, injection_slots, lean_runtime, working_set
 
     # Read raw bytes and decode explicitly as UTF-8 (utf-8-sig tolerates a
     # stray leading BOM) when a binary stdin buffer is available.
@@ -3332,6 +3360,7 @@ def _cmd_antigravity_hook(home: Path) -> int:
     # --- Event: prefer the args-block contract, fall back to legacy event tag ---
     args_key = None
     for candidate, ev in (
+        ("sessionStartHookArgs", "SessionStart"),
         ("preInvocationHookArgs", "PreInvocation"),
         ("postInvocationHookArgs", "PostInvocation"),
         ("postToolHookArgs", "PostToolUse"),
@@ -3411,6 +3440,40 @@ def _cmd_antigravity_hook(home: Path) -> int:
             }
             with (tdir / "antigravity-hooks.jsonl").open("a", encoding="utf-8") as f:
                 f.write(contracts.canonical_json(rec) + "\n")
+    # ---------- SessionStart: session-constant PREFIX ----------
+    if event in ("SessionStart", "session_start"):
+        try:
+            lean_outcome = lean_runtime.decide_lean_runtime(home, role, "SessionStart")
+            lean_block = (
+                lean_runtime.compose_lean_kernel_block(lean_outcome.kernel)
+                if lean_outcome.decision == "inject" and lean_outcome.kernel
+                else None
+            )
+            prefix = injection_slots.assemble_prefix(
+                home=home,
+                project_id=resolved_project,
+                role=role,
+                lean_kernel=lean_block,
+            )
+            prefix_drift = injection_slots.record_and_check_prefix_drift(
+                home, conversation_id, prefix
+            )
+            _log_telem(
+                "session_start",
+                prefix_drift=1 if prefix_drift else 0,
+                prefix_sha256=hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
+            )
+            out = {
+                "systemPrompt": prefix,
+                "injectSteps": [{"ephemeralMessage": prefix}],
+                "prefix": prefix,
+            }
+            print(contracts.canonical_json(out))
+        except Exception:
+            _log_telem("session_start_fail_open")
+            print("{}")
+        return 0
+
 
     # ---------- Stop: real P3-H Requirement Ledger decision ----------
     if event == "Stop":
@@ -3532,16 +3595,33 @@ def _cmd_antigravity_hook(home: Path) -> int:
             else None
         )
 
-        # Compose the model-visible ephemeral message.
+        prefix = injection_slots.assemble_prefix(
+            home=home,
+            project_id=resolved_project,
+            role=role,
+            lean_kernel=lean_block,
+            task=task,
+        )
+        prefix_drift = injection_slots.record_and_check_prefix_drift(
+            home, conversation_id, prefix
+        )
+        tail = injection_slots.assemble_tail(delta_context=packet)
+
+        # Compose the model-visible ephemeral message. PREFIX (lean kernel +
+        # T1.6 commands + project line) is bounded/always-non-empty by
+        # construction, so it must never be sent bare -- only alongside real
+        # substance: the lean kernel itself (lean_block truthy, matching the
+        # pre-T2.4 gate exactly) or a non-empty TAIL (the AutoInject
+        # packet). An irrelevant task with no packet and no lean kernel
+        # still yields NO ephemeral message, same as before T2.4.
         ephemeral = None
         if mode in ("active", "advisory"):
-            if packet and lean_block:
-                ephemeral = packet + "\n\n" + lean_block
-            elif packet:
-                ephemeral = packet
+            if lean_block and tail:
+                ephemeral = prefix + "\n\n" + tail
             elif lean_block:
-                ephemeral = lean_block
-
+                ephemeral = prefix
+            elif tail:
+                ephemeral = tail
         _log_telem(
             "preinvocation",
             decision=decision.decision.value,
@@ -3558,6 +3638,8 @@ def _cmd_antigravity_hook(home: Path) -> int:
             autoinject_mode=mode,
             model_visible=bool(ephemeral),
             is_delta=is_delta,
+            prefix_drift=1 if prefix_drift else 0,
+            prefix_sha256=hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
         )
 
         if ephemeral is None:

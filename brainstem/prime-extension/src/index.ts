@@ -84,10 +84,12 @@ import {
 } from "./rtd";
 import {
   loadAutoInjectHostConfig,
+  resolveProject,
   runAdvisoryAutoInject,
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
+import { appendPrefixExtras, assemblePrefix, checkPrefixDrift } from "./injection-slots";
 import {
   activeStateMessage,
   renderActiveState,
@@ -1116,6 +1118,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
   }
 
+  /** T2.4: merge the dynamic Brain recall brief (TAIL slot -- hot-context
+   * refs appended after the latest user message) into any existing custom
+   * message, under its own "recall_brief" details flag. Never routed into
+   * systemPrompt: PREFIX must stay session-constant/byte-stable across
+   * turns (injection-slots.ts / the prefix-drift check in
+   * before_agent_start). */
+  function mergeRecallBriefMessage(primary: unknown, brief: string): unknown {
+    if (primary === undefined || primary === null) {
+      return { content: brief, details: { recall_brief: true } };
+    }
+    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
+      const primaryDetails =
+        "details" in primary && typeof primary.details === "object" && primary.details !== null
+          ? primary.details
+          : {};
+      return {
+        ...primary,
+        content: `${primary.content}\n\n${brief}`,
+        details: { ...primaryDetails, recall_brief: true },
+      };
+    }
+    return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
+  }
+
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
@@ -1339,6 +1365,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         marker: `[${LEAN_KERNEL_MARKER}]`,
         kernel: lean.kernel,
       });
+      // T2.4 (injection-slots): the session-constant PREFIX slot is the
+      // lean kernel + the two T1.6 memory commands + the project identity
+      // line (skill descriptors are added when a global descriptor source
+      // is wired). checkPrefixDrift seeds the baseline sha256 on the FIRST
+      // before_agent_start call for a session (effectively "session start"
+      // in this host's event model, since session_start carries no task/
+      // role yet) and flags prefix_drift=1 on every later call whose
+      // recomputed PREFIX differs byte-for-byte — mirrored (not the
+      // telemetry store, so existing fixed-record-count assertions are
+      // untouched) only when drift actually occurs.
+      const prefix = assemblePrefix({
+        projectId: resolveProject(),
+        leanKernel: lean.decision === "inject" ? lean.kernel : undefined,
+      });
+      const prefixDrift = checkPrefixDrift(session, prefix);
+      if (prefixDrift.drift) {
+        mirror(
+          session,
+          "prefix_drift",
+          { prefix_drift: 1, prefix_sha256: prefixDrift.hash },
+          { cwd: ctxCwd(ctx) },
+        );
+      }
       if (isOrchestratorModel(modelId, guardCfg)) {
         getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
         return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, mergeActiveStateMessage(aiMessage, activeMessage));
@@ -1366,17 +1415,46 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           patched = merged;
         }
       }
+      // T2.4: deliver the remaining PREFIX components (the two T1.6 memory
+      // commands + the project identity line) into the same systemPrompt
+      // patch, right after the lean kernel -- PREFIX order is kernel,
+      // skill descriptors (not yet wired on the TS side, see report),
+      // T1.6 commands, project line. PREFIX must be session-constant on
+      // EVERY session (Core Rule), so this is unconditional whenever a
+      // real base prompt exists -- never gated on whether the driver
+      // contract or lean kernel already modified `patched` (a worker/
+      // normal-role turn that gets no other patch still needs PREFIX
+      // delivered). appendPrefixExtras itself never invents a prompt
+      // (returns undefined when base is undefined/empty) and dedups on
+      // its own stable marker, so this is only ever delivered once per
+      // accumulated base, exactly like the lean kernel and driver
+      // contract above it.
+      const withExtras = appendPrefixExtras(patched, resolveProject());
+      if (withExtras !== undefined) {
+        patched = withExtras;
+      }
+      // T2.4: the recall brief is dynamic per-turn content (hot-context
+      // refs), so it belongs in the TAIL message slot appended after the
+      // latest user message -- never in systemPrompt (PREFIX must stay
+      // session-constant/byte-stable; see injection-slots.ts / the
+      // prefix-drift check above). Evaluated independently of the
+      // driver-contract/lean-kernel systemPrompt patch below, so a recall
+      // miss (no rows, spawn failure) never drops that patch.
       const recallCfg = loadRecallGateConfig();
+      let turnMessage: unknown = mergeActiveStateMessage(aiMessage, activeMessage);
       if (shouldAttemptRecall(event.prompt, recallCfg)) {
-        return withMessage(await recallBrief(event.prompt, session, recallCfg, patched), mergeActiveStateMessage(aiMessage, activeMessage));
+        const brief = await recallBrief(event.prompt, session, recallCfg);
+        if (brief !== undefined) {
+          turnMessage = mergeRecallBriefMessage(turnMessage, brief);
+        }
       }
       if (role === "driver" && patched !== undefined) {
-        return withMessage({ systemPrompt: patched }, mergeActiveStateMessage(aiMessage, activeMessage));
+        return withMessage({ systemPrompt: patched }, turnMessage);
       }
       if (patched !== undefined && patched !== base) {
-        return withMessage({ systemPrompt: patched }, mergeActiveStateMessage(aiMessage, activeMessage));
+        return withMessage({ systemPrompt: patched }, turnMessage);
       }
-      return withMessage(undefined, mergeActiveStateMessage(aiMessage, activeMessage));
+      return withMessage(undefined, turnMessage);
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -1880,26 +1958,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   });
 
   /**
-   * Phase 14: run ONE bounded Brain recall for a substantial non-Sol prompt
-   * and append the Brain Brief AFTER `base` (the already-composed prompt —
-   * for driver sessions this is the driver contract appended to the system
-   * prompt, so contract + brief land in ONE patch). Fail silent on every
-   * error path (never throws, never returns a brief-only prompt).
+   * Phase 14 / T2.4: run ONE bounded Brain recall for a substantial non-Sol
+   * prompt and return the rendered Brain Brief text for the TAIL message
+   * slot (appended after the latest user message, never merged into
+   * systemPrompt -- PREFIX must stay session-constant/byte-stable). Fail
+   * silent on every error path (never throws, never returns partial text).
    */
   async function recallBrief(
     prompt: string,
     session: string,
     cfg: RecallGateConfig,
-    base: string | undefined,
-  ): Promise<{ systemPrompt: string } | undefined> {
+  ): Promise<string | undefined> {
     try {
       const home = resolveBrainHome();
       if (!home) return undefined;
       const rows = (await runBrainRecall({ home, query: prompt, cfg })) ?? [];
-      const brief = buildBrainBrief(rows, cfg.maxRows);
-      if (brief === undefined) return undefined;
-      if (base === undefined || base.trim() === "") return undefined; // never REPLACE the base prompt
-      return { systemPrompt: `${base}\n\n${brief}` };
+      return buildBrainBrief(rows, cfg.maxRows);
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));

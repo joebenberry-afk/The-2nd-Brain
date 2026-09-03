@@ -371,7 +371,18 @@ describe("factory wiring (src/index.ts)", () => {
       const handler = handlers.get(name);
       expect(handler, `handler for ${name}`).toBeDefined();
       const result = await handler!(event, ctx);
-      if (name === "message_end") {
+      if (name === "before_agent_start") {
+        // T2.4: PREFIX (T1.6 commands + project line) is delivered
+        // whenever a base prompt exists (makeCtx() always provides one),
+        // so this now returns a systemPrompt patch, not undefined.
+        const hasPrefixPatch =
+          result !== undefined &&
+          result !== null &&
+          typeof result === "object" &&
+          "systemPrompt" in result &&
+          typeof result.systemPrompt === "string";
+        expect(hasPrefixPatch, `${name} handler should return a PREFIX systemPrompt patch`).toBe(true);
+      } else if (name === "message_end") {
         // P3-B: message_end MUST return the finalized message unchanged
         // (role preserved — the runtime replaces the message in place).
         expect(result).toEqual({
@@ -1599,11 +1610,15 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
     expect(recordOf(records, "lean_kernel").reason).toBe("role");
   });
 
-  it("before_agent_start: non-Sol model -> undefined, no systemPrompt", async () => {
+  it("before_agent_start: non-Sol model -> no guard contract, PREFIX extras still delivered", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek/deepseek-v4-flash
-    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result!.systemPrompt).not.toContain("MUST delegate"); // no Sol guard contract
 
     // P3-D: venv-less test home has no lean-code skill -> fail-open records
     const records = await waitForLines(4);
@@ -1629,8 +1644,12 @@ describe("minimal-orchestrator guard (src/index.ts)", () => {
       SOL_CTX,
     );
     expect(solBash).toBeUndefined();
-    const patch = await handlers.get("before_agent_start")!({ prompt: "hi" }, SOL_CTX);
-    expect(patch).toBeUndefined();
+    const patch = (await handlers.get("before_agent_start")!({ prompt: "hi" }, SOL_CTX)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.systemPrompt).toContain("Project: default"); // no longer the orchestrator -> PREFIX extras, not the Sol contract
+    expect(patch!.systemPrompt).not.toContain("MUST delegate");
 
     await settle(); // drain fire-and-forget writes before the tmp dir is removed
   });
@@ -1644,18 +1663,21 @@ const RECALL_PROMPT =
   "the sqlite migration failed on the second run with a schema version mismatch and now the upgrade is blocked";
 
 describe("Phase 14 recall gate (src/index.ts)", () => {
-  it("default OFF: before_agent_start performs ZERO spawns and returns undefined", async () => {
+  it("default OFF: before_agent_start performs ZERO spawns; PREFIX extras still delivered", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek, non-Sol
-    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
     expect(recallRunMock).not.toHaveBeenCalled();
     // measurement records still appended (P3-D lean fail-open on missing skill)
     const records = await waitForLines(4);
     expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
   });
 
-  it("enabled + substantial prompt: spawns ONCE and appends the brief to the full system prompt", async () => {
+  it("enabled + substantial prompt: spawns ONCE and appends the brief to the TAIL message, never systemPrompt", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockResolvedValue([
@@ -1666,6 +1688,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const ctx = makeCtx();
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as {
       systemPrompt?: string;
+      message?: { content?: string };
     } | undefined;
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     const [options] = recallRunMock.mock.calls[0]! as [
@@ -1675,33 +1698,37 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     expect(options.query).toBe(RECALL_PROMPT);
     expect(options.cfg.maxRows).toBe(3);
     expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("BASE SYSTEM PROMPT"); // base preserved, not replaced
-    expect(result!.systemPrompt).toContain("## Brain Brief (retrieved)");
-    expect(result!.systemPrompt).toContain("**sqlite migration failure recovery**");
-    expect(result!.systemPrompt!.indexOf("BASE SYSTEM PROMPT")).toBeLessThan(
-      result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
-    );
+    expect(result!.systemPrompt).toContain("Project: default"); // PREFIX still delivered
+    expect(result!.systemPrompt).not.toContain("## Brain Brief (retrieved)"); // dynamic recall content never touches PREFIX
+    expect(result!.message?.content).toContain("## Brain Brief (retrieved)");
+    expect(result!.message?.content).toContain("**sqlite migration failure recovery**");
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + trivial prompt: no spawn, no injection", async () => {
+  it("enabled + trivial prompt: no recall spawn; PREFIX extras still delivered", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     const handlers = loadFactory();
     const ctx = makeCtx();
-    const result = await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
     expect(recallRunMock).not.toHaveBeenCalled();
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + recall spawn fails: silent, no injection, no throw", async () => {
+  it("enabled + recall spawn fails: silent, no recall injection, no throw; PREFIX extras still delivered", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockRejectedValue(new Error("spawn boom"));
     const handlers = loadFactory();
     const ctx = makeCtx();
-    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain fire-and-forget telemetry writes before teardown
   });
@@ -1720,14 +1747,17 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     expect(recallRunMock).not.toHaveBeenCalled();
   });
 
-  it("enabled + brief builder yields nothing (no valid rows): no injection", async () => {
+  it("enabled + brief builder yields nothing (no valid rows): no recall injection; PREFIX extras still delivered", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockResolvedValue([{ summary: "no title" }, "garbage"]);
     const handlers = loadFactory();
     const ctx = makeCtx();
-    const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
@@ -1762,6 +1792,22 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(contract.driver_contract_injected).toBe(true);
   });
 
+  it("before_agent_start: PREFIX (T1.6 memory commands + project identity line) is actually delivered to the model, not just hashed for drift", async () => {
+    const handlers = loadFactory();
+    const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, DRIVER_CTX);
+    const patch = result as { systemPrompt?: string } | undefined;
+    expect(patch).toBeDefined();
+    expect(patch!.systemPrompt).toContain(
+      'To remember: run `brainctl remember "<claim>" --evidence <path>`.',
+    );
+    expect(patch!.systemPrompt).toContain('To check: `brainctl recall "<question>"`.');
+    expect(patch!.systemPrompt).toContain("Project: default");
+    // PREFIX order: driver contract, then the T1.6 commands + project line
+    expect(patch!.systemPrompt!.indexOf(MARKER)).toBeLessThan(
+      patch!.systemPrompt!.indexOf("Project: default"),
+    );
+  });
+
   it("before_agent_start: driver model with base already containing the marker -> no duplicate append", async () => {
     const handlers = loadFactory();
     const seeded = makeCtx({
@@ -1771,7 +1817,10 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, seeded);
     const patch = result as { systemPrompt?: string } | undefined;
     expect(patch).toBeDefined();
-    expect(patch!.systemPrompt).toBe(`SEEDED BASE\n\n[${MARKER}] already there`); // stable prompt returned, no duplicate append
+    expect(patch!.systemPrompt).toContain(`SEEDED BASE\n\n[${MARKER}] already there`);
+    expect(patch!.systemPrompt).toContain("Project: default"); // PREFIX extras still delivered
+    // exactly one occurrence of the driver-contract marker -- no duplicate append
+    expect(patch!.systemPrompt!.split(MARKER).length - 1).toBe(1);
 
     const records = await waitForLines(4);
     const contract = recordOf(records, "before_agent_start");
@@ -1783,11 +1832,15 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(after.map((l) => JSON.parse(l).kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
   });
 
-  it("before_agent_start: worker model -> no contract, record role=worker", async () => {
+  it("before_agent_start: worker model -> no driver contract, PREFIX extras still delivered, record role=worker", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek/deepseek-v4-flash
-    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result!.systemPrompt).not.toContain(MARKER);
 
     const records = await waitForLines(4);
     expect(records.map((r) => r.kind)).toEqual(["omp_visibility_plan", "extension_error", "lean_kernel", "before_agent_start"]);
@@ -1797,12 +1850,16 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(JSON.stringify(records)).not.toContain(MARKER);
   });
 
-  it("before_agent_start: normal model -> no contract, record role=normal", async () => {
+  it("before_agent_start: normal model -> no driver contract, PREFIX extras still delivered, record role=normal", async () => {
     const handlers = loadFactory();
-    const result = await handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX);
-    expect(result).toBeUndefined();
+    const result = (await handlers.get("before_agent_start")!({ prompt: "hello" }, TERRA_CTX)) as
+      | { systemPrompt?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result!.systemPrompt).not.toContain(MARKER);
 
-    const records = await waitForLines(2);
+    const records = await waitForLines(3);
     expect(recordOf(records, "before_agent_start").role).toBe("normal");
     expect(JSON.stringify(records)).not.toContain(MARKER);
   });
@@ -1821,7 +1878,7 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(contract.driver_contract_injected).toBeUndefined();
   });
 
-  it("driver + recall enabled: ONE patch with the Brain Brief AFTER the contract", async () => {
+  it("driver + recall enabled: driver contract stays in systemPrompt, Brain Brief goes to the TAIL message", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockResolvedValue([
@@ -1830,16 +1887,14 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     const handlers = loadFactory();
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, DRIVER_CTX)) as {
       systemPrompt?: string;
+      message?: { content?: string };
     } | undefined;
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     expect(result).toBeDefined();
     expect(result!.systemPrompt).toContain("BASE SYSTEM PROMPT");
     expect(result!.systemPrompt).toContain(MARKER);
-    expect(result!.systemPrompt).toContain("## Brain Brief (retrieved)");
-    // ordering: contract before brief, in ONE patch
-    expect(result!.systemPrompt!.indexOf(MARKER)).toBeLessThan(
-      result!.systemPrompt!.indexOf("## Brain Brief (retrieved)"),
-    );
+    expect(result!.systemPrompt).not.toContain("## Brain Brief (retrieved)"); // PREFIX (systemPrompt) never carries dynamic recall content
+    expect(result!.message?.content).toContain("## Brain Brief (retrieved)");
 
     const records = await waitForLines(4);
     const contract = recordOf(records, "before_agent_start");
