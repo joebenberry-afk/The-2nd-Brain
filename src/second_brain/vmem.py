@@ -117,6 +117,7 @@ _VMEM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("durability", "TEXT NOT NULL DEFAULT 'DIRTY'"),
     ("recovery_class", "TEXT"),
     ("covered_at", "TEXT"),
+    ("pinned_until_turn", "INTEGER DEFAULT 0"),
 )
 
 
@@ -141,6 +142,7 @@ class SessionObject:
     durability: str = DURABILITY_DIRTY
     recovery_class: str | None = None
     covered_at: str | None = None
+    pinned_until_turn: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,8 +164,8 @@ class SessionObject:
             "durability": self.durability,
             "recovery_class": self.recovery_class,
             "covered_at": self.covered_at,
+            "pinned_until_turn": self.pinned_until_turn,
         }
-
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -201,6 +203,7 @@ def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         raw = {}
 
+    faulted_in_pin_turns = 3
     section = raw.get("economics") if isinstance(raw, dict) else None
     if isinstance(section, dict):
         cr = section.get("cache_read")
@@ -216,6 +219,9 @@ def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
         if isinstance(rt, (int, float)) and not isinstance(rt, bool):
             default_remaining_turns = int(rt)
 
+        fpt = section.get("faulted_in_pin_turns")
+        if isinstance(fpt, (int, float)) and not isinstance(fpt, bool):
+            faulted_in_pin_turns = int(fpt)
     # Provider table override if present: config/v2.toml [providers.<id>]
     providers = raw.get("providers") if isinstance(raw, dict) else None
     if isinstance(providers, dict):
@@ -233,6 +239,7 @@ def _load_economics_parameters(home: Path | str) -> dict[str, float | int]:
         "cache_write": cache_write,
         "fault_in_turn_cost_tokens": fault_in_turn_cost_tokens,
         "default_remaining_turns": default_remaining_turns,
+        "faulted_in_pin_turns": faulted_in_pin_turns,
     }
 
 
@@ -394,6 +401,7 @@ class VMemStore:
         return obj
 
     def _row_to_session_object(self, r: sqlite3.Row) -> SessionObject:
+        keys = r.keys()
         return SessionObject(
             obj_id=r["obj_id"],
             session_id=self.session_id,
@@ -410,9 +418,10 @@ class VMemStore:
             last_accessed_at=r["last_accessed_at"],
             segment_id=r["segment_id"],
             metadata=json.loads(r["metadata_json"] or "{}"),
-            durability=r["durability"],
-            recovery_class=r["recovery_class"],
-            covered_at=r["covered_at"],
+            durability=r["durability"] if "durability" in keys else DURABILITY_DIRTY,
+            recovery_class=r["recovery_class"] if "recovery_class" in keys else None,
+            covered_at=r["covered_at"] if "covered_at" in keys else None,
+            pinned_until_turn=int(r["pinned_until_turn"]) if "pinned_until_turn" in keys and r["pinned_until_turn"] is not None else 0,
         )
 
     def list_objects(
@@ -486,12 +495,15 @@ class VMemStore:
         content = raw_bytes.decode("utf-8", errors="replace")
         return obj, content
 
-    def _mutate_fault_in(self, obj: SessionObject) -> SessionObject:
+    def _mutate_fault_in(
+        self, obj: SessionObject, pin_turns: int | None = None
+    ) -> SessionObject:
         """The ONE DB write of the fault-in path (RC4 Part D safety pass):
         residency EVICTED->FAULTED_IN (unchanged otherwise), access_count++,
-        priority_score boosted. Callers must only invoke this AFTER every
-        read-only verification/resolution step for the requested recovery
-        has already succeeded — this method itself does not verify anything."""
+        priority_score boosted, pinned_until_turn set to current_turn + faulted_in_pin_turns.
+        Callers must only invoke this AFTER every read-only verification/resolution
+        step for the requested recovery has already succeeded — this method itself
+        does not verify anything."""
         now = _now()
         new_state = (
             ResidencyState.FAULTED_IN
@@ -501,14 +513,20 @@ class VMemStore:
         new_count = obj.access_count + 1
         new_priority = obj.priority_score + 5.0  # Boost priority on page-in
 
+        if pin_turns is None:
+            econ = _load_economics_parameters(self.home)
+            pin_turns = int(econ.get("faulted_in_pin_turns", 3))
+
+        pinned_until = self.current_turn() + pin_turns
+
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.execute(
                 """
                 UPDATE session_vmem
-                SET residency_state = ?, access_count = ?, last_accessed_at = ?, priority_score = ?
+                SET residency_state = ?, access_count = ?, last_accessed_at = ?, priority_score = ?, pinned_until_turn = ?
                 WHERE internal_session_id = ? AND obj_id = ?
                 """,
-                (new_state.value, new_count, now, new_priority, self.internal_id, obj.obj_id),
+                (new_state.value, new_count, now, new_priority, pinned_until, self.internal_id, obj.obj_id),
             )
             conn.commit()
 
@@ -516,6 +534,7 @@ class VMemStore:
         obj.access_count = new_count
         obj.last_accessed_at = now
         obj.priority_score = new_priority
+        obj.pinned_until_turn = pinned_until
         return obj
 
     def fault_in(self, obj_id: str) -> tuple[SessionObject, str]:
@@ -840,6 +859,46 @@ class VMemStore:
 
         return evicted
 
+    def current_turn(self) -> int:
+        """Count turn_start events for this session in the session ledger events table,
+        falling back to telemetry turn_start count, or 0."""
+        if self._dbfile.exists():
+            with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+                conn.row_factory = sqlite3.Row
+                table_check = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='events'"
+                ).fetchone()
+                if table_check:
+                    row = conn.execute(
+                        "SELECT COUNT(*) AS cnt FROM events WHERE internal_session_id = ? AND event_type = 'turn_start'",
+                        (self.internal_id,),
+                    ).fetchone()
+                    if row and row["cnt"] is not None and int(row["cnt"]) > 0:
+                        return int(row["cnt"])
+
+        # Fallback to telemetry agent-performance logs if available
+        try:
+            from . import telemetry
+
+            t_cnt = sum(
+                1
+                for _, _, rec in telemetry.iter_records(self.home)
+                if (
+                    rec.get("session") in (self.session_id, self.internal_id)
+                    or rec.get("session_id") in (self.session_id, self.internal_id)
+                )
+                and (
+                    rec.get("kind") == "turn_start"
+                    or rec.get("event") == "turn_start"
+                )
+            )
+            if t_cnt > 0:
+                return t_cnt
+        except Exception:
+            pass
+
+        return 0
+
 
     def evict_to_budget(
         self,
@@ -912,8 +971,13 @@ class VMemStore:
             suffix_map[o.obj_id] = running_suffix
             running_suffix += o.token_estimate
 
-        # Identify candidate pool: resident, unpinned, not within pin_recent_messages
-        all_unpinned = [o for o in resident_active if not o.pinned]
+        # Identify candidate pool: resident, unpinned, not within pin_recent_messages,
+        # and not temporarily pinned via fault-in hysteresis (pinned_until_turn > current_turn).
+        curr_turn = self.current_turn()
+        all_unpinned = [
+            o for o in resident_active
+            if not o.pinned and not (o.pinned_until_turn > curr_turn)
+        ]
         if pin_recent_messages > 0:
             pinned_recent_ids = {
                 o.obj_id for o in resident_by_creation[-pin_recent_messages:]
@@ -921,7 +985,6 @@ class VMemStore:
             candidates = [o for o in all_unpinned if o.obj_id not in pinned_recent_ids]
         else:
             candidates = all_unpinned
-
         if not candidates:
             return []
 
