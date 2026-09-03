@@ -7,12 +7,18 @@ import factory from "../src/index";
 import { resetAutoInjectEmitCache } from "../src/autoinject";
 import {
   appendLeanKernel,
+  applyLeanCooldown,
+  computeLeanSeverity,
   decideLeanRuntime,
+  evaluateLeanOpportunity,
   extractRuntimeKernel,
+  extractRuntimeNudge,
   LEAN_KERNEL_MARKER,
+  LEAN_NUDGE_TEXT,
   leanEvalFromSkillsToml,
   leanKernelCacheSize,
   loadLeanKernel,
+  resetLeanCooldown,
   resetLeanKernelCache,
   resolveLeanSkillFile,
 } from "../src/lean-code";
@@ -644,5 +650,129 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lean?.decision).toBe("omit");
     expect(lean?.reason).toBe("off");
     expect(lines.some((l) => l.kind === "extension_error")).toBe(false);
+  });
+});
+
+describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
+  beforeEach(() => {
+    resetLeanCooldown();
+  });
+
+  afterEach(() => {
+    resetLeanCooldown();
+  });
+
+  it("extractRuntimeNudge extracts exact frozen nudge text from skill markdown", () => {
+    const sample = `# Header\n\n# Nudge\n\n${LEAN_NUDGE_TEXT}\n\n# Other`;
+    const extracted = extractRuntimeNudge(sample);
+    expect(extracted).toBe(LEAN_NUDGE_TEXT);
+  });
+
+  it("NOOP when 0 reasons -> level NOOP, decision omit, 0 tokens", () => {
+    writeCandidate();
+    const out = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      reasons: [],
+    });
+    expect(out.level).toBe("NOOP");
+    expect(out.decision).toBe("omit");
+    expect(out.kernel).toBeUndefined();
+    expect(out.kernelChars).toBe(0);
+    expect(out.placement).toBe("tail");
+  });
+
+  it("NUDGE when 1 reason -> level NUDGE, placement tail, byte-stable nudge", () => {
+    writeCandidate();
+    const out = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      reasons: ["REPEAT_READ"],
+    });
+    expect(out.level).toBe("NUDGE");
+    expect(out.decision).toBe("inject");
+    expect(out.kernel).toBe(LEAN_NUDGE_TEXT);
+    expect(out.nudge).toBe(LEAN_NUDGE_TEXT);
+    expect(out.placement).toBe("tail");
+    expect(out.reasons).toEqual(["REPEAT_READ"]);
+  });
+
+  it("FULL when TEST_WEAKENING_RISK -> level FULL, placement tail, kernel text", () => {
+    writeCandidate();
+    const out = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      reasons: ["TEST_WEAKENING_RISK"],
+    });
+    expect(out.level).toBe("FULL");
+    expect(out.decision).toBe("inject");
+    expect(out.kernel).toBe(CANONICAL_KERNEL);
+    expect(out.placement).toBe("tail");
+    expect(out.reasons).toEqual(["TEST_WEAKENING_RISK"]);
+  });
+
+  it("cooldown blocks repeat reason and enforces 1 nudge per phase", () => {
+    writeCandidate();
+    // First emit
+    const out1 = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      sessionId: "ts-sess-1",
+      phase: "phase-1",
+      reasons: ["REPEAT_READ"],
+    });
+    expect(out1.level).toBe("NUDGE");
+
+    // Same reason, same phase -> suppressed to NOOP
+    const out2 = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      sessionId: "ts-sess-1",
+      phase: "phase-1",
+      reasons: ["REPEAT_READ"],
+    });
+    expect(out2.level).toBe("NOOP");
+
+    // Different reason, same phase -> blocked by 1 nudge per phase
+    const out3 = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      sessionId: "ts-sess-1",
+      phase: "phase-1",
+      reasons: ["NEW_DEPENDENCY"],
+    });
+    expect(out3.level).toBe("NOOP");
+
+    // New phase -> NUDGE allowed
+    const out4 = decideLeanRuntime({
+      home: tmp,
+      role: "driver",
+      base: "BASE",
+      env: { SECOND_BRAIN_LEAN: "advisory" },
+      opportunity: true,
+      sessionId: "ts-sess-1",
+      phase: "phase-2",
+      reasons: ["NEW_DEPENDENCY"],
+    });
+    expect(out4.level).toBe("NUDGE");
+    expect(out4.reasons).toEqual(["NEW_DEPENDENCY"]);
   });
 });

@@ -137,6 +137,7 @@ export interface AssembleTailOptions {
   freshnessLines?: string | null;
   hydratedSkills?: string | Record<string, string> | null;
   budgetWarning?: string | null;
+  leanContent?: string | null;
 }
 
 export function assembleTail(options: AssembleTailOptions): string {
@@ -166,6 +167,9 @@ export function assembleTail(options: AssembleTailOptions): string {
     parts.push(options.budgetWarning.trim());
   }
 
+  if (options.leanContent && options.leanContent.trim()) {
+    parts.push(options.leanContent.trim());
+  }
   return parts.join("\n\n");
 }
 

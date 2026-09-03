@@ -38,4 +38,7 @@ mode = "shadow"     # SHADOW/REPORT-ONLY default (plan §56/§113 "shadow route 
 # ENFORCED — lean_runtime.py reads [lean] eval per event (fallback inert)
 [lean]
 eval = "advisory"
+# Lean Opportunity Controller (T3.4 / Deep Upgrade Plan U1)
+# Levels: NOOP (0 tokens), NUDGE (frozen line), FULL (runtime kernel) in TAIL slot
+opportunity = true
 

@@ -1194,6 +1194,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return primary;
   }
 
+  /** T3.4: merge the lean opportunity injection (NUDGE / FULL) into the TAIL custom message slot. */
+  function mergeLeanMessage(primary: unknown, leanText: string): unknown {
+    if (primary === undefined || primary === null) {
+      return { content: leanText, details: { lean: true } };
+    }
+    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
+      const primaryDetails =
+        "details" in primary && typeof primary.details === "object" && primary.details !== null
+          ? primary.details
+          : {};
+      return {
+        ...primary,
+        content: `${primary.content}\n\n${leanText}`,
+        details: { ...primaryDetails, lean: true },
+      };
+    }
+    return primary;
+  }
+
   pi.on("before_agent_start", async (event, ctx) => {
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
@@ -1435,7 +1454,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // untouched) only when drift actually occurs.
       const prefix = assemblePrefix({
         projectId: resolveProject(),
-        leanKernel: lean.decision === "inject" ? lean.kernel : undefined,
+        leanKernel: lean.decision === "inject" && lean.placement !== "tail" ? lean.kernel : undefined,
       });
       const prefixDrift = checkPrefixDrift(session, prefix);
       if (prefixDrift.drift) {
@@ -1467,7 +1486,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // host after the task; real assembly order is documented in
       // src/lean-code.ts). appendLeanKernel dedups on the stable marker and
       // never invents a prompt (undefined base stays undefined).
-      if (lean.decision === "inject" && lean.kernel !== undefined) {
+      if (lean.decision === "inject" && lean.kernel !== undefined && lean.placement !== "tail") {
         const merged = appendLeanKernel(patched, lean.kernel);
         if (merged !== patched) {
           patched = merged;
@@ -1508,6 +1527,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       if (sessionBudgetStates.get(session) === "HARD") {
         turnMessage = mergeBudgetWarningMessage(turnMessage, BUDGET_HARD_LINE);
+      }
+      if (lean.decision === "inject" && lean.kernel !== undefined && lean.placement === "tail") {
+        turnMessage = mergeLeanMessage(turnMessage, lean.kernel);
       }
       if (role === "driver" && patched !== undefined) {
         return withMessage({ systemPrompt: patched }, turnMessage);
