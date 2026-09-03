@@ -1248,6 +1248,11 @@ def _parser() -> argparse.ArgumentParser:
     vm_cr.add_argument("session_id", help="host session ID")
     vm_cr.add_argument("--budget", type=int, default=1500, help="token budget")
 
+    vm_ev = vms.add_parser("evict", parents=[home_parent], help="evict unpinned objects to budget")
+    vm_ev.add_argument("session_id", help="host session ID")
+    vm_ev.add_argument("--budget", type=int, default=1500, help="token budget ceiling")
+    vm_ev.add_argument("--json", action="store_true", help="output JSON")
+
     ac = sub.add_parser(
         "action-cache",
         parents=[home_parent],
@@ -5023,6 +5028,14 @@ def cmd_vmem(args) -> int:
     if args.vmem_command == "compact-resume":
         res_text = store.resume_after_compaction(max_tokens=args.budget)
         print(res_text)
+        return 0
+
+    if args.vmem_command == "evict":
+        victims = store.evict_to_budget(max_tokens=args.budget)
+        if args.json:
+            print(json.dumps([v.to_dict() for v in victims], indent=2))
+        else:
+            print(f"Evicted {len(victims)} objects to budget {args.budget}")
         return 0
 
     return 2

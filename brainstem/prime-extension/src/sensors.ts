@@ -1009,7 +1009,7 @@ export function splitProviderModel(value: string | null): {
 
 /** Numeric usage counter when the host reported one; undefined otherwise
  * (zero vs missing preserved — never invent values). */
-function usageCounter(value: unknown): number | undefined {
+export function usageCounter(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
@@ -1209,6 +1209,28 @@ export function providerRequestMeta(
     if (toolsJson !== undefined) extra.tool_surface_sha = sha256Hex(toolsJson);
   }
   return baseV3("provider_request_meta", session, extra) as unknown as ProviderRequestMetaRecord;
+}
+
+export interface ModelRouteTransitionRecord extends BaseRecord {
+  v: 3;
+  kind: "MODEL_ROUTE_TRANSITION";
+  current_provider: string | null;
+  current_model: string | null;
+  target_provider: string | null;
+  target_model: string | null;
+  target_capacity: number;
+  cache_scope: string;
+  cache_cold: boolean;
+  load_before: number;
+  load_after: number;
+  reclaimed_count?: number;
+}
+
+export function modelRouteTransition(
+  session: string,
+  extra: Omit<ModelRouteTransitionRecord, "v" | "ts" | "kind" | "session">,
+): ModelRouteTransitionRecord {
+  return baseV3("MODEL_ROUTE_TRANSITION", session, extra as Record<string, unknown>) as unknown as ModelRouteTransitionRecord;
 }
 
 /** Header entries permitted into telemetry: cache/rate-limit diagnostics only. */

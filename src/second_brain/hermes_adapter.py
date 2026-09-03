@@ -44,6 +44,7 @@ _SUPPORTED_EVENTS = {
     "post_tool_call",
     "post_api_request",
     "api_request_error",
+    "session_before_compact",
     "writeback",
     "session_end",
     "worker_task_prepare",
@@ -60,6 +61,52 @@ _ATTRIBUTION_FIELD_MAX_CHARS = 64
 _MODEL_CANDIDATE_KEYS = ("candidates", "model_candidates", "candidate_metadata", "models")
 _MODEL_ROUTING_MAX_ERROR_CHARS = 128
 
+
+_VMEM_CACHE_BREAKPOINT_FILE = "cache_breakpoints.json"
+_SESSION_CACHE_STATE: dict[str, dict[str, Any]] = {}
+
+
+def _load_vmem_cache_state(home: Path, host_session_id: str) -> dict[str, Any]:
+    if host_session_id in _SESSION_CACHE_STATE:
+        return dict(_SESSION_CACHE_STATE[host_session_id])
+    internal_id = ledger.internal_session_id(host_session_id)
+    sdir = home / "state" / "sessions" / internal_id
+    fpath = sdir / _VMEM_CACHE_BREAKPOINT_FILE
+    if fpath.is_file():
+        try:
+            data = json.loads(fpath.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _SESSION_CACHE_STATE[host_session_id] = data
+                return dict(data)
+        except Exception:
+            pass
+    state = {
+        "previous_rendered_context": None,
+        "last_tool_result_bytes": 0,
+        "session_before_compact": False,
+        "last_provider": None,
+        "last_model": None,
+        "last_cache_read_tokens": None,
+    }
+    _SESSION_CACHE_STATE[host_session_id] = state
+    return dict(state)
+
+
+def _save_vmem_cache_state(home: Path, host_session_id: str, state: dict[str, Any]) -> None:
+    _SESSION_CACHE_STATE[host_session_id] = dict(state)
+    internal_id = ledger.internal_session_id(host_session_id)
+    sdir = home / "state" / "sessions" / internal_id
+    sdir.mkdir(parents=True, exist_ok=True)
+    fpath = sdir / _VMEM_CACHE_BREAKPOINT_FILE
+    tmp = sdir / f"{_VMEM_CACHE_BREAKPOINT_FILE}.tmp.{os.getpid()}"
+    try:
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        tmp.replace(fpath)
+    except Exception:
+        try:
+            fpath.write_text(json.dumps(state), encoding="utf-8")
+        except Exception:
+            pass
 
 @dataclass(frozen=True)
 class HermesBinding:
@@ -1231,22 +1278,282 @@ def _model_decision_event_payload(
     }
 
 
-def _vmem_context(home: Path, binding: HermesBinding, task: str = "") -> dict[str, Any]:
-    """Render existing VMem and fault in a task-referenced cold object."""
+def _estimate_resident_load(home: Path, objects: list[vmem.SessionObject], model: str) -> int:
+    total = 0
+    for o in objects:
+        try:
+            content_bytes = artifacts.expand(home, o.content_sha256)
+            text = content_bytes.decode("utf-8", errors="replace")
+            total += contracts.estimate_tokens(text, model=model, home=home)
+        except Exception:
+            if o.summary:
+                total += contracts.estimate_tokens(o.summary, model=model, home=home)
+            else:
+                total += o.token_estimate
+    return total
+
+
+def model_switch_preflight(
+    home: Path | str,
+    session_id: str,
+    target_provider: str,
+    target_model: str,
+    current_provider: str | None = None,
+    current_model: str | None = None,
+    *,
+    task_id: str | None = None,
+    binding: HermesBinding | None = None,
+) -> dict[str, Any]:
+    """Execute model-switch preflight (Deep Upgrade Plan U6 §7.4, literal order 1-8).
+
+    1. Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000);
+    2. Resolve cache scope from config/v2.toml [providers].<id>.cache_scope = model|account (default model);
+    3. If model-scoped: mark prefix cache cold (set cache cold flag / cache_read_tokens = 0);
+    4. Recompute resident load with T0.6 estimator (contracts.estimate_tokens);
+    5. If load > target capacity * 0.85: run T2.0/T2.1 reclaim (evict_to_budget to target capacity * 0.85);
+    6. Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW);
+    7. Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0);
+    8. Send / proceed. Never compare pressure against the previous model's capacity.
+    """
+    home_path = Path(home)
+
+    # Step 1: Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000)
+    target_capacity = 128_000
+    cache_scope = "model"
+    v2_toml = home_path / "config" / "v2.toml"
+    if v2_toml.is_file():
+        try:
+            v2_data = tomllib.loads(v2_toml.read_text(encoding="utf-8"))
+            models_cfg = v2_data.get("models")
+            if isinstance(models_cfg, dict):
+                m_entry = models_cfg.get(target_model) or models_cfg.get("default")
+                if isinstance(m_entry, dict) and "context_tokens" in m_entry:
+                    val = m_entry["context_tokens"]
+                    if isinstance(val, (int, float)) and val > 0:
+                        target_capacity = int(val)
+            providers_cfg = v2_data.get("providers")
+            if isinstance(providers_cfg, dict):
+                p_entry = providers_cfg.get(target_provider) or providers_cfg.get("default")
+                if isinstance(p_entry, dict) and "cache_scope" in p_entry:
+                    val = str(p_entry["cache_scope"]).strip().lower()
+                    if val in ("model", "account"):
+                        cache_scope = val
+        except Exception:
+            pass
+
+    # Step 2: Resolve cache scope from config/v2.toml [providers].<id>.cache_scope (default model)
+    # (resolved above as cache_scope)
+
+    # Step 3: If model-scoped: mark prefix cache cold (set cache cold flag / cache_read_tokens = 0)
+    cache_cold = False
+    if cache_scope == "model":
+        cache_cold = True
+        state = _load_vmem_cache_state(home_path, session_id)
+        state["last_cache_read_tokens"] = 0
+        state["last_provider"] = target_provider
+        state["last_model"] = target_model
+        _save_vmem_cache_state(home_path, session_id, state)
+
+    # Step 4: Recompute resident load with T0.6 estimator (contracts.estimate_tokens)
+    store = vmem.VMemStore(home_path, session_id)
+    resident_objects = [
+        o for o in store.list_objects()
+        if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
+    ]
+    load = _estimate_resident_load(home_path, resident_objects, target_model)
+    load_before = load
+
+    # Step 5: If load > target capacity * 0.85: run T2.0/T2.1 reclaim (evict_to_budget to target capacity * 0.85)
+    reclaimed_objects = []
+    reclaim_threshold = int(target_capacity * 0.85)
+    if load > reclaim_threshold:
+        reclaimed_objects = store.evict_to_budget(max_tokens=reclaim_threshold)
+        resident_after = [
+            o for o in store.list_objects()
+            if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
+        ]
+        load = _estimate_resident_load(home_path, resident_after, target_model)
+
+    # Step 6: Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW)
+    if load > target_capacity:
+        return {
+            "status": "INPUT_REQUIRED",
+            "error": "CONTEXT_OVERFLOW",
+            "reason": "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
+            "target_capacity": target_capacity,
+            "load": load,
+            "step": 6,
+        }
+
+    # Step 7: Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0)
+    transition_telemetry = {
+        "kind": "MODEL_ROUTE_TRANSITION",
+        "session": session_id,
+        "current_provider": current_provider,
+        "current_model": current_model,
+        "target_provider": target_provider,
+        "target_model": target_model,
+        "target_capacity": target_capacity,
+        "cache_scope": cache_scope,
+        "cache_cold": cache_cold,
+        "load_before": load_before,
+        "load_after": load,
+        "reclaimed_count": len(reclaimed_objects),
+    }
+    autoinject._append_telemetry(home_path, session_id, "MODEL_ROUTE_TRANSITION", transition_telemetry)
+
+    rollout_stage = "SHADOW"
+    if v2_toml.is_file():
+        try:
+            v2_raw = tomllib.loads(v2_toml.read_text(encoding="utf-8"))
+            st = v2_raw.get("rollout", {}).get("brainstem", "SHADOW")
+            if st in decisions._ROLLOUT_STAGES:
+                rollout_stage = st
+        except Exception:
+            pass
+
+    try:
+        decisions.record(
+            home_path,
+            kind="routing",
+            session_id=session_id,
+            task_id=task_id,
+            chosen={"provider": target_provider, "model": target_model},
+            alternatives=[{"provider": current_provider, "model": current_model}] if current_model else [],
+            propensity=1.0,
+            randomized=False,
+            policy_version="v2.3",
+            stage=rollout_stage,
+            inputs={
+                "target_capacity": target_capacity,
+                "cache_scope": cache_scope,
+                "load": load,
+                "transition": f"{current_provider}/{current_model}->{target_provider}/{target_model}",
+            },
+        )
+    except Exception:
+        pass
+
+    # Step 8: Send / proceed. Never compare pressure against the previous model's capacity.
+    return {
+        "status": "ok",
+        "proceed": True,
+        "target_provider": target_provider,
+        "target_model": target_model,
+        "target_capacity": target_capacity,
+        "cache_scope": cache_scope,
+        "cache_cold": cache_cold,
+        "load": load,
+        "reclaimed_count": len(reclaimed_objects),
+    }
+
+
+def _vmem_context(
+    home: Path,
+    binding: HermesBinding,
+    task: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Render existing VMem and fault in a task-referenced cold object.
+
+    Enforces cache break-point gate (a)-(e):
+    (a) previous tool_result bytes > [rtd].threshold_chars (default 8000);
+    (b) session_before_compact event occurred;
+    (c) model/provider changed since last request;
+    (d) last assistant_usage.cache_read_tokens == 0;
+    (e) resident tokens > capacity_hard (default 6000).
+
+    If NONE hold and a previous rendered view exists, return the previous
+    view byte-identical without running eviction or fault-in.
+    """
     try:
         store = vmem.VMemStore(home, binding.host_session_id)
+        state = _load_vmem_cache_state(home, binding.host_session_id)
+
+        # (a) Previous tool_result bytes > threshold_chars
+        threshold_chars = 8000
+        try:
+            cpath = home / "config" / "context.toml"
+            if cpath.is_file():
+                cdata = tomllib.loads(cpath.read_text(encoding="utf-8"))
+                threshold_chars = int(cdata.get("rtd", {}).get("threshold_chars", 8000))
+        except Exception:
+            pass
+        env_th = os.environ.get("SECOND_BRAIN_RTD_THRESHOLD")
+        if env_th and env_th.isdigit():
+            threshold_chars = int(env_th)
+
+        tool_bytes = state.get("last_tool_result_bytes", 0)
+        if payload and "previous_tool_result_bytes" in payload:
+            tool_bytes = payload["previous_tool_result_bytes"]
+        elif payload and "tool_result_bytes" in payload:
+            tool_bytes = payload["tool_result_bytes"]
+        cond_a = tool_bytes > threshold_chars
+
+        # (b) session_before_compact event occurred
+        cond_b = bool(state.get("session_before_compact", False))
+        if payload and payload.get("session_before_compact"):
+            cond_b = True
+
+        # (c) model/provider changed since last request
+        current_provider = None
+        current_model = None
+        if payload:
+            current_provider = payload.get("provider") or payload.get("selected_provider")
+            current_model = payload.get("model") or payload.get("selected_model")
+        if not current_provider:
+            current_provider = binding.provider
+        if not current_model:
+            current_model = binding.model
+
+        last_prov = state.get("last_provider")
+        last_mod = state.get("last_model")
+        cond_c = False
+        if last_prov is not None and current_provider is not None and last_prov != current_provider:
+            cond_c = True
+        if last_mod is not None and current_model is not None and last_mod != current_model:
+            cond_c = True
+
+        # (d) last assistant_usage.cache_read_tokens == 0
+        last_cache_read = state.get("last_cache_read_tokens")
+        if payload and "cache_read_tokens" in payload:
+            last_cache_read = payload["cache_read_tokens"]
+        elif payload and "last_cache_read_tokens" in payload:
+            last_cache_read = payload["last_cache_read_tokens"]
+        cond_d = last_cache_read is not None and last_cache_read == 0
+
+        # (e) resident tokens > capacity_hard (default 6000 or 1.5 * budget)
+        capacity_hard = 6000
+        current_resident = [
+            o for o in store.list_objects()
+            if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
+        ]
+        resident_tokens = sum(o.token_estimate for o in current_resident)
+        cond_e = resident_tokens > capacity_hard
+
+        break_point = cond_a or cond_b or cond_c or cond_d or cond_e
+        previous_view = state.get("previous_rendered_context")
+
+        if not break_point and previous_view is not None:
+            # Skip eviction and return byte-identical rendered context
+            result = dict(previous_view)
+            result["context_changed"] = False
+            return result
+
+        # Break-point triggered or initial render: perform full rendering & eviction
         rendered = store.render_hot_context(max_tokens=_VMEM_HOT_CONTEXT_BUDGET)
-        lowered = task.casefold()
+        lowered = task.casefold() if task else ""
         faulted_in_ids: list[str] = []
         faulted_content: list[str] = []
-        for obj in store.list_objects():
-            if obj.residency_state == vmem.ResidencyState.EVICTED and (
-                obj.obj_id.casefold() in lowered or obj.title.casefold() in lowered
-            ):
-                faulted, content = store.fault_in(obj.obj_id)
-                faulted_in_ids.append(faulted.obj_id)
-                faulted_content.append(_bounded_text(content, _VMEM_HOT_CONTEXT_BUDGET * 4))
-                break
+        if lowered:
+            for obj in store.list_objects():
+                if obj.residency_state == vmem.ResidencyState.EVICTED and (
+                    obj.obj_id.casefold() in lowered or obj.title.casefold() in lowered
+                ):
+                    faulted, content = store.fault_in(obj.obj_id)
+                    faulted_in_ids.append(faulted.obj_id)
+                    faulted_content.append(_bounded_text(content, _VMEM_HOT_CONTEXT_BUDGET * 4))
+                    break
         if faulted_in_ids:
             current_objects = store.list_objects()
             resident_objects = [
@@ -1283,6 +1590,15 @@ def _vmem_context(home: Path, binding: HermesBinding, task: str = "") -> dict[st
             if rendered["context_chars"]
             else 0
         )
+
+        # Update cache state and reset one-shot break flags
+        state["previous_rendered_context"] = rendered
+        state["last_tool_result_bytes"] = 0
+        state["session_before_compact"] = False
+        state["last_provider"] = current_provider
+        state["last_model"] = current_model
+        _save_vmem_cache_state(home, binding.host_session_id, state)
+
         return rendered
     except Exception:
         return {
@@ -1375,8 +1691,12 @@ def _handle_post_tool_call(
         artifact_ref=raw_sha,
         metadata=vmem_metadata,
     )
-    evicted = store.render_hot_context(max_tokens=_VMEM_HOT_CONTEXT_BUDGET).get("evicted_refs", [])
+    # T2.3: Drop per-tool-call eviction. Only store the object. Record tool_result bytes for condition (a).
+    evicted: list[dict[str, Any]] = []
     stored = store.get_object(obj.obj_id)
+    state = _load_vmem_cache_state(home, binding.host_session_id)
+    state["last_tool_result_bytes"] = len(raw_bytes)
+    _save_vmem_cache_state(home, binding.host_session_id, state)
     event_payload = {
         **_identity_fields(binding),
         "obj_id": obj.obj_id,
@@ -1396,7 +1716,7 @@ def _handle_post_tool_call(
         "visible_result_bytes": visible_bytes,
         "reduction_ratio": round(reduction_ratio, 6),
         "distilled": True,
-        "evicted_count": len(evicted),
+        "evicted_count": 0,
         "residency_state": stored.residency_state.value if stored else "UNKNOWN",
         "vmem_budget_tokens": _VMEM_HOT_CONTEXT_BUDGET,
     }
@@ -1416,7 +1736,7 @@ def _handle_post_tool_call(
         "obj_id": obj.obj_id,
         "kind": obj.kind.value,
         "residency_state": stored.residency_state.value if stored else "UNKNOWN",
-        "evicted_count": len(evicted),
+        "evicted_count": 0,
         "original_result_bytes": len(raw_bytes),
         "original_result_sha256": raw_sha,
         "artifact_ref": raw_sha,
@@ -1456,7 +1776,31 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     _register_binding(home, binding)
     task = _first_text(payload, "task", "user_message", "prompt")
     turn_id = _first_text(payload, "turn_id", default="") or None
-    vmem_context = _vmem_context(home, binding, task)
+    current_provider = payload.get("provider") or payload.get("selected_provider") or binding.provider
+    current_model = payload.get("model") or payload.get("selected_model") or binding.model
+    state = _load_vmem_cache_state(home, binding.host_session_id)
+    last_prov = state.get("last_provider")
+    last_mod = state.get("last_model")
+    if last_prov is not None and last_mod is not None and (current_provider != last_prov or current_model != last_mod):
+        preflight_res = model_switch_preflight(
+            home,
+            binding.host_session_id,
+            target_provider=current_provider,
+            target_model=current_model,
+            current_provider=last_prov,
+            current_model=last_mod,
+            binding=binding,
+        )
+        if preflight_res.get("status") == "INPUT_REQUIRED":
+            return {
+                **_response_base(binding, "pre_llm_call"),
+                "status": "INPUT_REQUIRED",
+                "error": "CONTEXT_OVERFLOW",
+                "reason": "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
+                "preflight": preflight_res,
+            }
+
+    vmem_context = _vmem_context(home, binding, task, payload=payload)
     selected_routes, routing_error = _route_task(home, task) if task else ([], False)
     visibility_plan, hydrated_bodies = (
         _visibility_task(home, task, binding.host_session_id, binding.project_id)
@@ -1725,6 +2069,13 @@ def _handle_api_lifecycle(
 ) -> dict[str, Any]:
     """Record bounded model invocation facts without retaining response content."""
     _register_binding(home, binding)
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        cache_read = usage.get("cache_read_tokens")
+        if cache_read is not None and isinstance(cache_read, (int, float)):
+            state = _load_vmem_cache_state(home, binding.host_session_id)
+            state["last_cache_read_tokens"] = int(cache_read)
+            _save_vmem_cache_state(home, binding.host_session_id, state)
     event = _first_text(payload, "event", default="api_request_error")
     selected_raw = payload.get("selected_identity")
     if isinstance(selected_raw, dict):
@@ -1986,6 +2337,11 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
             return _handle_pre_tool_call(home_path, binding, payload)
         if event == "post_tool_call":
             return _handle_post_tool_call(home_path, binding, payload)
+        if event == "session_before_compact":
+            state = _load_vmem_cache_state(home_path, binding.host_session_id)
+            state["session_before_compact"] = True
+            _save_vmem_cache_state(home_path, binding.host_session_id, state)
+            return {**_response_base(binding, "session_before_compact"), "status": "ok"}
         if event == "writeback":
             return _handle_writeback(home_path, binding, payload)
         if event == "worker_task_prepare":

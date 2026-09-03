@@ -481,6 +481,53 @@ export function runVmemClaimPagesSync(options: {
   }
 }
 
+export interface VmemEvictResult {
+  ok: boolean;
+  evictedCount?: number;
+  evictedTokens?: number;
+  error?: string;
+}
+
+export function runVmemEvictSync(options: {
+  home: string;
+  hostSessionId: string;
+  budgetTokens: number;
+  python?: string;
+  timeoutMs?: number;
+}): VmemEvictResult {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) {
+    return { ok: false, error: "no brain venv (vmem evict unavailable)" };
+  }
+  const args = ["-m", "second_brain", "vmem", "evict", options.hostSessionId, "--budget", String(options.budgetTokens), "--json"];
+  try {
+    const stdout = execFileSync(python, args, {
+      cwd: options.home,
+      env: runEnv(options.home),
+      timeout: options.timeoutMs ?? VMEM_LIST_SYNC_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf8",
+    });
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) {
+      return { ok: false, error: "evict returned non-array output" };
+    }
+    let evictedTokens = 0;
+    for (const item of parsed) {
+      if (item !== null && typeof item === "object") {
+        const est = (item as Record<string, unknown>).token_estimate;
+        if (typeof est === "number" && Number.isFinite(est)) {
+          evictedTokens += est;
+        }
+      }
+    }
+    return { ok: true, evictedCount: parsed.length, evictedTokens };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "vmem evict failed" };
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Part D (RC4 pass): explicit fault-in bridge. `second_brain vmem resolve`

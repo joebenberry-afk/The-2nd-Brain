@@ -490,3 +490,72 @@ export function loadContextPagingConfig(home: string | null): ContextPagingFileC
   }
 }
 
+export interface ModelFileConfig {
+  contextTokens: number;
+}
+
+export interface ProviderFileConfig {
+  cacheScope: string;
+}
+
+export function loadModelConfig(home: string | null | undefined, modelId: string): ModelFileConfig {
+  let contextTokens = 128_000;
+  if (!home) return { contextTokens };
+  try {
+    const text = readFileSync(join(home, "config", "v2.toml"), "utf8");
+    let currentSection = "";
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (line.startsWith("[") && line.endsWith("]")) {
+        currentSection = line.slice(1, -1).trim();
+        continue;
+      }
+      if (currentSection === `models.${modelId}` || (currentSection === "models.default" && contextTokens === 128_000)) {
+        const eq = line.indexOf("=");
+        if (eq > 0) {
+          const key = line.slice(0, eq).trim();
+          const value = line.slice(eq + 1).split("#")[0].trim();
+          if (key === "context_tokens") {
+            const parsed = Number.parseInt(value, 10);
+            if (Number.isFinite(parsed) && parsed > 0) contextTokens = parsed;
+          }
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return { contextTokens };
+}
+
+export function loadProviderConfig(home: string | null | undefined, providerId: string): ProviderFileConfig {
+  let cacheScope = "model";
+  if (!home) return { cacheScope };
+  try {
+    const text = readFileSync(join(home, "config", "v2.toml"), "utf8");
+    let currentSection = "";
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (line.startsWith("[") && line.endsWith("]")) {
+        currentSection = line.slice(1, -1).trim();
+        continue;
+      }
+      if (currentSection === `providers.${providerId}` || (currentSection === "providers.default" && cacheScope === "model")) {
+        const eq = line.indexOf("=");
+        if (eq > 0) {
+          const key = line.slice(0, eq).trim();
+          const value = line.slice(eq + 1).split("#")[0].trim().replace(/["']/g, "").toLowerCase();
+          if (key === "cache_scope" && (value === "model" || value === "account")) {
+            cacheScope = value;
+          }
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return { cacheScope };
+}
+

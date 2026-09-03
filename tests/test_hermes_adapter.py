@@ -1123,7 +1123,14 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
     store = vmem.VMemStore(brain_home, binding.host_session_id)
     objects = store.list_objects(kind=vmem.SessionObjectKind.TOOL_OBSERVATION)
     assert len(objects) == 2
-    cold = next(obj for obj in objects if obj.residency_state == vmem.ResidencyState.EVICTED)
+    # T2.3: post_tool_call does not evict. Eviction occurs at cache break-points in _vmem_context.
+    initial = hermes_adapter.handle_request(
+        brain_home,
+        first_payload | {"event": "pre_llm_call", "task": "Initial render"},
+    )
+    assert initial["status"] == "ok"
+    objects_after_break = store.list_objects(kind=vmem.SessionObjectKind.TOOL_OBSERVATION)
+    cold = next(obj for obj in objects_after_break if obj.residency_state == vmem.ResidencyState.EVICTED)
     assert cold.residency_state == vmem.ResidencyState.EVICTED
     assert cold.metadata["tool_call_id"] in {"tool-1", "tool-2"}
 
@@ -1134,6 +1141,7 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
             "event": "pre_llm_call",
             "task": f"Please inspect {cold.title} ({cold.obj_id})",
             "turn_id": "turn-readback",
+            "cache_read_tokens": 0,
         },
     )
     assert readback["status"] == "ok"
@@ -1182,8 +1190,8 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
         and item["tool_call_id"] == cold.metadata["tool_call_id"]
     )
     assert observed["bot_role"] == "dev"
-    assert observed["residency_state"] == "EVICTED"
-    assert observed["evicted_count"] >= 1
+    assert observed["residency_state"] == "RESIDENT"
+    assert observed["evicted_count"] == 0
     assert expected_marker not in json.dumps(observed)
 
 
