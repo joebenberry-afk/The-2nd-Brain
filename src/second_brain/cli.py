@@ -657,6 +657,22 @@ def _parser() -> argparse.ArgumentParser:
     ea.add_argument("episode_id")
     ea.add_argument("note")
 
+    remember_parser = sub.add_parser(
+        "remember", parents=[home_parent], help="remember one evidence-backed claim"
+    )
+    remember_parser.add_argument("claim")
+    remember_parser.add_argument(
+        "--evidence",
+        action="append",
+        default=None,
+        help="capture local git evidence path[:start-end] (repeatable)",
+    )
+    remember_parser.add_argument(
+        "--grade", choices=("OBSERVED", "TESTED", "VERIFIED"), default="OBSERVED"
+    )
+    recall_parser = sub.add_parser("recall", parents=[home_parent], help="recall relevant memories")
+    recall_parser.add_argument("question")
+
     mm = sub.add_parser("memory", parents=[home_parent], help="semantic memory (Phase 10)")
     mms = mm.add_subparsers(dest="memory_command", required=True)
     madd = mms.add_parser("add", parents=[home_parent], help="add a semantic memory (candidate)")
@@ -2064,6 +2080,78 @@ def _project_from_cwd(home: Path) -> str | None:
     except Exception:  # fail open: registry errors -> unresolved -> caller errors
         return None
     return None
+
+
+def _remember_project(home: Path) -> str:
+    """Resolve the project using the shared cwd/environment ladder."""
+    from . import autoinject
+
+    return autoinject._resolve_project_id(home, str(Path.cwd()), None)
+
+
+def cmd_remember(args) -> int:
+    claim = args.claim
+    if not isinstance(claim, str) or not claim.strip():
+        raise BrainError("claim must be a non-empty one-line string")
+    if "\r" in claim or "\n" in claim:
+        raise BrainError("claim must be a single line")
+    home = _home(args)
+    source_rows = [
+        semantic.capture_evidence(Path.cwd(), specification)
+        for specification in args.evidence or []
+    ]
+    memory_id = semantic.add_memory(
+        home,
+        claim[:80],
+        claim,
+        scope="project",
+        project_id=_remember_project(home),
+        grade=args.grade,
+        sources=source_rows,
+    )
+    print(memory_id)
+    return 0
+
+
+def cmd_recall(args) -> int:
+    from . import autoinject, contracts, freshness
+
+    home = _home(args)
+    question = args.question
+    if not isinstance(question, str) or not question.strip():
+        raise BrainError("question must be a non-empty string")
+    project_id = _remember_project(home)
+    intent = autoinject.RetrievalIntent(
+        task_text=question,
+        project_id=project_id,
+        agent_id="brainctl",
+        role_profile="cli",
+        session_id="brainctl-recall-" + hashlib.sha256(question.encode("utf-8")).hexdigest()[:16],
+        cwd=str(Path.cwd()),
+    )
+    decision = autoinject.prepare_injection(home, intent, retrieval_text=question)
+    if decision.decision is not contracts.InjectionDecision.INJECT:
+        reason = decision.reason.value if decision.reason is not None else "BRAIN_UNAVAILABLE"
+        print(f"NO_INJECTION {reason}")
+        return 0
+
+    rendered = 0
+    for memory_id in decision.selected_ids[:3]:
+        row = semantic._row(home, memory_id)
+        if row is None:
+            continue
+        source = next((item for item in semantic._sources(home, memory_id) if item.get("path")), None)
+        repo_root = (source or {}).get("repo_id") or str(Path.cwd()) or str(home)
+        state = freshness.resolve(home, memory_id, repo_root).get("state", freshness.UNKNOWN)
+        body = " ".join(semantic._body_text(home, row).split())[:200]
+        title = " ".join(str(row.get("title") or "").split())
+        print(f"[{state}] {title} — {body} ({memory_id})")
+        rendered += 1
+    if rendered == 0:
+        print("NO_INJECTION NO_RELEVANT_MEMORY")
+    return 0
+
+
 
 
 def cmd_memory(args) -> int:
@@ -5454,6 +5542,8 @@ def main(argv: list[str] | None = None) -> int:
         "plasticity": cmd_plasticity,
         "cerebellum": cmd_cerebellum,
         "metacog": cmd_metacog,
+        "remember": cmd_remember,
+        "recall": cmd_recall,
         "memory": cmd_memory,
         "episodes": cmd_episodes,
         "env": cmd_env,

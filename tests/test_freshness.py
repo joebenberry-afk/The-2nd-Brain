@@ -133,6 +133,21 @@ def test_no_sources_is_unknown_and_still_admitted_low(brain_home: Path) -> None:
     assert item.confidence is contracts.Confidence.LOW
 
 
+def test_capture_evidence_from_nested_cwd_uses_git_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    nested = repo / "nested"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (nested / "note.txt").write_text("one\n", encoding="utf-8")
+    _commit(repo)
+
+    captured = semantic.capture_evidence(nested, "note.txt")
+
+    assert captured["repo_id"] == str(repo.resolve())
+    assert captured["path"] == "nested/note.txt"
+    assert captured["blob_sha"]
+
+
 def test_capture_evidence_rejects_out_of_bounds_range(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

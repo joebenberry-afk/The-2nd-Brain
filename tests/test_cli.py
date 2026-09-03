@@ -1,18 +1,22 @@
 """End-to-end CLI tests: run brainctl as a subprocess with a sanitized env."""
 
+import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 
+from second_brain import semantic, working_set
+
 def _env():
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
+    env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
     return env
-
 
 def run_cli(
     home: Path, *args: str, cwd: Path | None = None, stdin: str | None = None
@@ -27,6 +31,155 @@ def run_cli(
         timeout=120,
         input=stdin,
     )
+def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
+    home = tmp_path / "brain"
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    source = repo / "notes.txt"
+    source.write_text("first line\nsecond line\n", encoding="utf-8")
+    subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        cwd=repo,
+        check=True,
+    )
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "demo")
+    initialized = run_cli(home, "init", cwd=repo)
+    assert initialized.returncode == 0, initialized.stderr
+
+    result = run_cli(
+        home,
+        "remember",
+        "Use bounded memory I/O",
+        "--evidence",
+        "notes.txt:1-2",
+        cwd=repo,
+    )
+
+    assert result.returncode == 0, result.stderr
+    memory_id = result.stdout.strip()
+    assert memory_id.startswith("mem-")
+    row = semantic.show_memory(home, memory_id)["row"]
+    assert row["title"] == "Use bounded memory I/O"
+    assert row["project_id"] == "demo"
+    assert row["evidence_grade"] == "OBSERVED"
+    conn = sqlite3.connect(home / "db" / "brain.sqlite")
+    try:
+        source_row = conn.execute(
+            "SELECT path, range_start, range_end FROM memory_sources WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert source_row is not None
+    assert source_row[0] == "notes.txt"
+    assert source_row[1:] == (1, 2)
+
+
+def test_recall_prints_freshness_state(tmp_path, monkeypatch):
+    home = tmp_path / "brain"
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    source = repo / "notes.txt"
+    source.write_text("bounded memory I/O\n", encoding="utf-8")
+    subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        cwd=repo,
+        check=True,
+    )
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "demo")
+    initialized = run_cli(home, "init", cwd=repo)
+    assert initialized.returncode == 0, initialized.stderr
+    added = run_cli(home, "remember", "Use bounded memory I/O", "--evidence", "notes.txt", cwd=repo)
+    assert added.returncode == 0, added.stderr
+    memory_id = added.stdout.strip()
+
+    result = run_cli(home, "recall", "bounded memory I/O", cwd=repo)
+    assert result.stdout.count("\n") <= 3
+    assert f"VERIFIED_CURRENT" in result.stdout
+    assert memory_id in result.stdout
+    assert "Use bounded memory I/O" in result.stdout
+
+
+
+def test_remember_rejects_multiline_and_unsupported_flags(tmp_path):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    multiline = run_cli(home, "remember", "first\nsecond")
+    unsupported = run_cli(home, "remember", "claim", "--project", "demo")
+    assert multiline.returncode == 2
+    assert "single line" in multiline.stderr
+    assert unsupported.returncode == 2
+    assert "unrecognized arguments" in unsupported.stderr
+
+
+def test_remember_validates_grade_and_evidence_range(tmp_path):
+    home = tmp_path / "brain"
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "notes.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        cwd=repo,
+        check=True,
+    )
+    assert run_cli(home, "init", cwd=repo).returncode == 0
+    bad_grade = run_cli(home, "remember", "claim", "--grade", "INFERRED", cwd=repo)
+    bad_range = run_cli(home, "remember", "claim", "--evidence", "notes.txt:1-2", cwd=repo)
+    assert bad_grade.returncode == 2
+    assert bad_range.returncode == 2
+    assert "invalid choice" in bad_grade.stderr
+    assert "exceeds file line count" in bad_range.stderr
+
+
+def test_recall_abstains_and_truncates_body(tmp_path, monkeypatch):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "demo")
+    semantic.add_memory(
+        home,
+        "Long body fact",
+        "longbody " + ("x" * 300),
+        scope="project",
+        project_id="demo",
+    )
+    recalled = run_cli(home, "recall", "longbody", cwd=home)
+    assert recalled.returncode == 0
+    line = recalled.stdout.strip()
+    assert line.startswith("[UNKNOWN] ")
+    assert len(line.split(" — ", 1)[1].split(" (mem-", 1)[0]) == 200
+    absent = run_cli(home, "recall", "unmatched gibberish", cwd=home)
+    assert absent.returncode == 0
+    assert absent.stdout.startswith("NO_INJECTION ")
+
+
+def test_recall_question_wins_over_unrelated_capsule(tmp_path, monkeypatch):
+    home = tmp_path / "brain"
+    assert run_cli(home, "init").returncode == 0
+    monkeypatch.setenv("SECOND_BRAIN_PROJECT", "demo")
+    semantic.add_memory(
+        home,
+        "Beta memory",
+        "beta-only retrieval fact",
+        scope="project",
+        project_id="demo",
+    )
+    recall_session = "brainctl-recall-" + hashlib.sha256(
+        "beta-only retrieval".encode("utf-8")
+    ).hexdigest()[:16]
+    working_set.init_capsule(home, recall_session, "alpha-only objective")
+
+    result = run_cli(home, "recall", "beta-only retrieval", cwd=home)
+
+    assert result.returncode == 0, result.stderr
+    assert "Beta memory" in result.stdout
+    assert "alpha-only objective" not in result.stdout
+
 
 def test_simplification_review_cli_persists_defer_and_deduplicates(tmp_path):
     home = tmp_path / "brain"

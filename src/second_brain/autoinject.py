@@ -684,6 +684,7 @@ def prepare_injection(
     intent: RetrievalIntent,
     *,
     config: AutoInjectConfig | None = None,
+    retrieval_text: str | None = None,
 ) -> BrainInjectionDecision:
     """Decision pipeline. NEVER raises: every failure degrades to
     NO_INJECTION(BRAIN_UNAVAILABLE) (§6.8). No model-visible mutation."""
@@ -713,7 +714,9 @@ def prepare_injection(
         )
 
     query_mode = "idf"
-    query_text = _retrieval_query_text(home, intent)
+    query_text = (
+        retrieval_text if retrieval_text is not None else _retrieval_query_text(home, intent)
+    )
     proj_filter = (
         intent.project_id
         if intent.project_id and intent.project_id not in ("default", "unknown")

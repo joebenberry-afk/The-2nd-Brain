@@ -148,6 +148,9 @@ def capture_evidence(repo_root: Path | str, specification: str) -> dict:
 
     root_text = git("rev-parse", "--show-toplevel")
     root_path = Path(root_text).resolve()
+    # Subsequent git calls must run from the repository root because ``rel``
+    # is rooted there even when capture started in a nested cwd.
+    repo = root_path
     # Recompute relative path if caller supplied a subdirectory as repo_root.
     try:
         rel = target.relative_to(root_path).as_posix()
