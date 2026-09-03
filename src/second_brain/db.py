@@ -9,10 +9,10 @@ pending migrations (idempotent).
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import UTC
 from pathlib import Path
-
 from .errors import MigrationError
 from .paths import db_path  # noqa: F401  (re-export; used as db.db_path)
 
@@ -120,6 +120,33 @@ def read_memory_epoch(dbfile: str | Path) -> int:
         conn.close()
 
 
+def _execute_migration_statement(
+    conn: sqlite3.Connection, stmt: str, *, version: int
+) -> None:
+    """Execute one migration statement, guarding additive column changes.
+
+    SQLite has no portable ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``.
+    Inspecting ``table_info`` before the narrow additive form keeps migration
+    0012 restartable if a manually-created database already has some columns.
+    """
+    del version  # reserved for future migration-specific guards
+    match = re.match(
+        r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
+        r"([A-Za-z_][A-Za-z0-9_]*)\b",
+        stmt,
+        re.IGNORECASE,
+    )
+    if match:
+        table, column = match.groups()
+        existing = {
+            str(row["name"]).casefold()
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column.casefold() in existing:
+            return
+    conn.execute(stmt)
+
+
 def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_at: str) -> None:
     script = path.read_text(encoding="utf-8")
     statements = split_statements(script)
@@ -128,7 +155,7 @@ def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_
     try:
         conn.execute("BEGIN IMMEDIATE")
         for stmt in statements:
-            conn.execute(stmt)
+            _execute_migration_statement(conn, stmt, version=version)
         conn.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (version, applied_at),
@@ -137,7 +164,6 @@ def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_
     except Exception:
         conn.rollback()
         raise
-
 
 def migrate(dbfile: str | Path, migrations_dir: Path | None = None) -> list[int]:
     """Apply all pending migrations. Returns the versions applied (empty if current)."""

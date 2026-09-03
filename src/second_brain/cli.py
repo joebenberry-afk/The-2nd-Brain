@@ -660,6 +660,12 @@ def _parser() -> argparse.ArgumentParser:
     madd.add_argument("--project", dest="project_id", default=None)
     madd.add_argument("--grade", default="OBSERVED", choices=semantic.GRADES)
     madd.add_argument("--source", dest="sources", action="append", default=None)
+    madd.add_argument(
+        "--evidence",
+        action="append",
+        default=None,
+        help="capture local git evidence path[:start-end] (repeatable)",
+    )
     mcur = mms.add_parser(
         "curate", parents=[home_parent], help="curate: set grade/status with rules"
     )
@@ -2064,6 +2070,12 @@ def cmd_memory(args) -> int:
                     "(no registered project root contains the working directory)"
                 )
                 return 2
+        source_rows = _parse_sources(args.sources)
+        for specification in getattr(args, "evidence", None) or []:
+            captured = semantic.capture_evidence(Path.cwd(), specification)
+            if source_rows is None:
+                source_rows = []
+            source_rows.append(captured)
         mid = semantic.add_memory(
             home,
             args.title,
@@ -2071,7 +2083,7 @@ def cmd_memory(args) -> int:
             scope=args.scope,
             project_id=project_id,
             grade=args.grade,
-            sources=_parse_sources(args.sources),
+            sources=source_rows,
         )
         print(f"Memory added: {mid} [{args.grade}/candidate]")
         return 0
@@ -3417,23 +3429,17 @@ def _git_capture(cwd: object, args: list[str]) -> str | None:
     except Exception:
         return None
 
-
 def _extract_candidate_marker(text: str) -> tuple[str, str, str] | None:
-    """Parse an opt-in `<!--second-brain-candidate ... -->` block.
-
-    Deterministic, no NLP: only fires when Claude itself explicitly emitted
-    the marker (see brainstem/adapters/claude-code/rules/second-brain-core.md).
-    Returns (title, observation, evidence) or None if absent/malformed.
-    """
+    """Parse an opt-in ``second-brain-candidate`` block deterministically."""
     m = re.search(r"<!--second-brain-candidate\s*(.*?)-->", text, re.S)
     if not m:
         return None
-    body = m.group(1)
     fields: dict[str, str] = {}
-    for line in body.splitlines():
+    for line in m.group(1).splitlines():
         key, sep, value = line.partition(":")
-        if sep and key.strip() in ("title", "observation", "evidence"):
-            fields[key.strip()] = value.strip()
+        normalized = key.strip().lower()
+        if sep and normalized in ("title", "observation", "evidence"):
+            fields[normalized] = value.strip()
     title = fields.get("title", "")
     observation = fields.get("observation", "")
     evidence = fields.get("evidence", "")

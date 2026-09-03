@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -108,6 +109,68 @@ def _version_created_at(home: Path, memory_id: str, version: int, fallback: str)
         conn.close()
 
 
+def capture_evidence(repo_root: Path | str, specification: str) -> dict:
+    """Capture a bounded path/range fingerprint from a local git repository."""
+    if not isinstance(specification, str) or not specification.strip():
+        raise BrainError("evidence must be a non-empty path[:start-end]")
+    repo = Path(repo_root).resolve()
+    match = re.fullmatch(r"(.+?)(?::([0-9]+)-([0-9]+))?", specification.strip())
+    if match is None:
+        raise BrainError("evidence must be a path[:start-end]")
+    raw_path, raw_start, raw_end = match.groups()
+    candidate = Path(raw_path)
+    try:
+        target = (candidate if candidate.is_absolute() else repo / candidate).resolve()
+        rel = target.relative_to(repo).as_posix()
+    except (OSError, ValueError) as exc:
+        raise BrainError("evidence path must be inside the repository") from exc
+    if not target.is_file() or not rel:
+        raise BrainError("evidence path does not exist")
+    start = int(raw_start) if raw_start is not None else None
+    end = int(raw_end) if raw_end is not None else None
+    if start is not None and (start < 1 or end is None or start > end):
+        raise BrainError("evidence range must be positive start-end")
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeError) as exc:
+        raise BrainError("evidence path is not readable UTF-8") from exc
+    if end is not None and end > len(lines):
+        raise BrainError("evidence range exceeds file line count")
+
+    def git(*args: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True, timeout=5
+            )
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            raise BrainError("evidence git capture failed") from exc
+        return result.stdout.strip()
+
+    root_text = git("rev-parse", "--show-toplevel")
+    root_path = Path(root_text).resolve()
+    # Recompute relative path if caller supplied a subdirectory as repo_root.
+    try:
+        rel = target.relative_to(root_path).as_posix()
+    except ValueError as exc:
+        raise BrainError("evidence path is outside git repository") from exc
+    selected = lines[(start or 1) - 1 : end if end is not None else len(lines)]
+    return {
+        "ref": rel,
+        "kind": "evidence",
+        "repo_id": str(root_path),
+        "path": rel,
+        "symbol": None,
+        "commit_sha": git("rev-parse", "HEAD"),
+        "blob_sha": git("hash-object", "--", rel),
+        "range_start": start,
+        "range_end": end,
+        "range_sha": hashlib.sha256("".join(selected).encode("utf-8")).hexdigest()
+        if start is not None
+        else None,
+        "verified_at": _utcnow(),
+    }
+
+
 def _row(home: Path, memory_id: str) -> dict | None:
     conn = db.connect(_dbfile(home))
     try:
@@ -121,16 +184,43 @@ def _sources(home: Path, memory_id: str) -> list[dict]:
     conn = db.connect(_dbfile(home))
     try:
         rows = conn.execute(
-            "SELECT source_ref, source_kind, added_at FROM memory_sources "
+            "SELECT source_ref, source_kind, added_at, repo_id, path, symbol, commit_sha, "
+            "blob_sha, range_start, range_end, range_sha, verified_at FROM memory_sources "
             "WHERE memory_id = ? ORDER BY id",
             (memory_id,),
         ).fetchall()
         return [
-            {"ref": r["source_ref"], "kind": r["source_kind"], "added_at": r["added_at"]}
+            {
+                "ref": r["source_ref"],
+                "kind": r["source_kind"],
+                "added_at": r["added_at"],
+                "repo_id": r["repo_id"],
+                "path": r["path"],
+                "symbol": r["symbol"],
+                "commit_sha": r["commit_sha"],
+                "blob_sha": r["blob_sha"],
+                "range_start": r["range_start"],
+                "range_end": r["range_end"],
+                "range_sha": r["range_sha"],
+                "verified_at": r["verified_at"],
+            }
             for r in rows
         ]
     finally:
         conn.close()
+
+
+_SOURCE_METADATA = (
+    "repo_id",
+    "path",
+    "symbol",
+    "commit_sha",
+    "blob_sha",
+    "range_start",
+    "range_end",
+    "range_sha",
+    "verified_at",
+)
 
 
 def _insert_sources(
@@ -138,11 +228,18 @@ def _insert_sources(
 ) -> None:
     for source in sources:
         conn.execute(
-            "INSERT INTO memory_sources (memory_id, source_ref, source_kind, added_at) "
-            "VALUES (?, ?, ?, ?)",
-            (memory_id, source["ref"], source["kind"], now),
+            "INSERT INTO memory_sources "
+            "(memory_id, source_ref, source_kind, added_at, repo_id, path, symbol, commit_sha, "
+            "blob_sha, range_start, range_end, range_sha, verified_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                memory_id,
+                source["ref"],
+                source["kind"],
+                now,
+                *(source.get(key) for key in _SOURCE_METADATA),
+            ),
         )
-
 
 def _validate_sources(sources: list[dict] | None) -> list[dict]:
     if sources is None:
@@ -159,7 +256,22 @@ def _validate_sources(sources: list[dict] | None) -> list[dict]:
             raise BrainError(f"source ref must be a non-empty string: {source!r}")
         if kind not in SOURCE_KINDS:
             raise BrainError(f"source kind must be one of {', '.join(SOURCE_KINDS)}")
-        out.append({"ref": ref, "kind": kind})
+        clean = {"ref": ref.strip(), "kind": kind}
+        for key in _SOURCE_METADATA:
+            if key in source:
+                clean[key] = source[key]
+        start, end = clean.get("range_start"), clean.get("range_end")
+        if start is not None and (
+            isinstance(start, bool) or not isinstance(start, int) or start < 1
+        ):
+            raise BrainError("source range_start must be a positive integer or None")
+        if end is not None and (
+            isinstance(end, bool) or not isinstance(end, int) or end < 1
+        ):
+            raise BrainError("source range_end must be a positive integer or None")
+        if start is not None and end is not None and start > end:
+            raise BrainError("source range_start must not exceed range_end")
+        out.append(clean)
     return out
 
 

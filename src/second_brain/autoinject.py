@@ -41,7 +41,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, decisions, hybrid_retrieval, reconsolidation, registry, semantic, telemetry, working_set
+from . import (
+    db,
+    decisions,
+    freshness,
+    hybrid_retrieval,
+    reconsolidation,
+    registry,
+    semantic,
+    telemetry,
+    working_set,
+)
 from .contracts import (
     BrainInjectionDecision,
     BrainLifecycleEvent,
@@ -175,7 +185,7 @@ class RetrievalIntent:
     session_id: str
     branch_id: str = "main"
     is_delta: bool = False
-
+    cwd: str | None = None
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -445,8 +455,7 @@ def _grade_confidence(
 
 
 def _canonical_line(text: str | None) -> str:
-    """Collapse whitespace to single spaces (the packet format is fixed-line;
-    memory bodies may carry surrounding blank lines / markdown newlines)."""
+    """Collapse whitespace to the packet's deterministic one-line format."""
     return " ".join((text or "").split())
 
 
@@ -457,14 +466,20 @@ def _build_items(home: Path | str, rows: list[dict]) -> list[PacketItem]:
     for row in rows:
         memory_id = str(row.get("memory_id") or "")
         version = int(row.get("current_version") or 1)
-        contradicted = bool(row.get("contradiction_with"))
+        contradicted = bool(row.get("contradiction_with")) or (
+            row.get("_freshness_state") == freshness.CONTRADICTED
+        )
         status, confidence = _grade_confidence(
             row.get("evidence_grade"), row.get("strength"), contradicted
         )
         body = row.get("_body") or semantic._body_text(home, row)
         supersedes: tuple[str, int] | None = None
         if version > 1:
-            supersedes = (memory_id, version - 1)  # §6.4/6.5: new delta supersedes old
+            supersedes = (memory_id, version - 1)
+        evidence = f"brain://{memory_id}/{version}"
+        verified = row.get("_verified_evidence")
+        if isinstance(verified, str) and verified:
+            evidence += f" {verified}"
         items.append(
             PacketItem(
                 memory_id=memory_id,
@@ -474,8 +489,9 @@ def _build_items(home: Path | str, rows: list[dict]) -> list[PacketItem]:
                 title=_canonical_line(row.get("title")),
                 observation=_canonical_line(body),
                 guidance=_canonical_line(row.get("summary")),
-                evidence=f"brain://{memory_id}/{version}",
+                evidence=evidence,
                 supersedes=supersedes,
+                freshness=str(row.get("_freshness_state") or freshness.UNKNOWN),
             )
         )
     return items
@@ -506,6 +522,7 @@ def item_canonical_hash(item: PacketItem) -> str:
             f"observation: {item.observation}",
             f"guidance: {item.guidance}",
             f"evidence: {item.evidence}",
+            f"freshness: {item.freshness}",
         ]
     )
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
@@ -622,6 +639,7 @@ def _ids_only(items: list[PacketItem]) -> list[PacketItem]:
             guidance="",
             evidence=i.evidence,
             supersedes=i.supersedes,
+            freshness=i.freshness,
         )
         for i in items
     ]
@@ -785,15 +803,54 @@ def prepare_injection(
             return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
         return decision(NoInjectionReason.NO_RELEVANT_MEMORY)
 
-    valid = _valid_candidates(intent, rows)
-    if not valid:
+    admitted = _valid_candidates(intent, rows)
+    if not admitted:
         return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
+    fresh_valid: list[dict] = []
+    for row in admitted:
+        try:
+            memory_id = str(row.get("memory_id") or "")
+            source_rows = semantic._sources(home, memory_id)
+            source = next((item for item in source_rows if item.get("path")), None)
+            repo_root = (source or {}).get("repo_id") or intent.cwd or home
+            freshness_result = freshness.resolve(home, memory_id, repo_root)
+            state = freshness_result.get("state", freshness.UNKNOWN)
+            if state in {freshness.STALE, freshness.SOURCE_MISSING}:
+                continue
+            enriched = dict(row)
+            enriched["_freshness_state"] = state
+            if state == freshness.VERIFIED_CURRENT:
+                verified_source = freshness.current_source(home, memory_id, repo_root)
+                verified_source = verified_source or source
+                if verified_source is not None:
+                    path = verified_source.get("path")
+                    blob = verified_source.get("blob_sha")
+                    verified_at = verified_source.get("verified_at")
+                    if path and blob and verified_at:
+                        enriched["_verified_evidence"] = (
+                            f"Evidence: {path}@{str(blob)[:12]} unchanged since {verified_at}"
+                        )
+            fresh_valid.append(enriched)
+        except Exception as exc:
+            logger.warning("AutoInject freshness failed (fail-open): %s", exc)
+            return decision(
+                NoInjectionReason.BRAIN_UNAVAILABLE,
+                candidate_ids=candidate_ids,
+                selected_ids=[],
+            )
+    valid = fresh_valid
+    if not valid:
+        return decision(
+            NoInjectionReason.NO_RELEVANT_MEMORY,
+            candidate_ids=candidate_ids,
+            selected_ids=[],
+        )
     role_rows = _role_filter(home, valid, intent.role_profile)
     if not role_rows:
         return decision(
             NoInjectionReason.NO_RELEVANT_MEMORY,
             candidate_ids=candidate_ids,
-            selected_ids=[],  # nothing passed the role filter -> nothing selected
+            selected_ids=[],
         )
 
     if cascade_res.reason == "LOW_CONFIDENCE":
@@ -1083,6 +1140,7 @@ class BrainLifecycle:
             session_id=effective_session,
             branch_id=branch_id,
             is_delta=is_delta,
+            cwd=cwd,
         )
         decision = prepare_injection(self._home, intent)
         self._last_delivery_ids = []
