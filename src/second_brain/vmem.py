@@ -27,12 +27,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, contracts, db, ledger, working_set
+from . import artifacts, contracts, db, ledger, semantic, working_set
 from .errors import BrainError
 from .paths import db_path as _control_db_path
 
 DEFAULT_HOT_CONTEXT_BUDGET_TOKENS = 1500
 MAX_REF_TABLE_ENTRIES = 25
+
+# Coverage-before-reclaim (Deep Upgrade Plan U4 §5.3-5.7).
+DURABILITY_DIRTY = "DIRTY"
+DURABILITY_CLEAN = "CLEAN"
 
 
 class ResidencyState(StrEnum):
@@ -54,6 +58,23 @@ class SessionObjectKind(StrEnum):
     BLOCKER = "BLOCKER"
     RESEARCH_RESULT = "RESEARCH_RESULT"
     GENERIC = "GENERIC"
+
+class RecoveryClass(StrEnum):
+    EXACT_ARTIFACT = "EXACT_ARTIFACT"
+    CANONICAL_STATE = "CANONICAL_STATE"
+    DISPOSABLE_DERIVED = "DISPOSABLE_DERIVED"
+
+
+# Never allowed to be marked durability=CLEAN via DISPOSABLE_DERIVED coverage
+# (plan U4 §5.4): these kinds always carry material session truth.
+_MATERIAL_KINDS = frozenset(
+    {SessionObjectKind.DECISION, SessionObjectKind.BLOCKER, SessionObjectKind.WORKER_FINDING}
+)
+
+# DISPOSABLE_DERIVED coverage additionally requires an explicit
+# ``metadata["derived_kind"]`` tag naming one of these low-value, easily
+# reproduced kinds (plan U4 §5.4) -- never inferred from `SessionObjectKind`.
+_DISPOSABLE_DERIVED_TAGS = frozenset({"DIRECTORY_LISTING", "SEARCH_OUTPUT", "SUPERSEDED_RESULT"})
 
 
 _VMEM_SCHEMA = """
@@ -78,7 +99,21 @@ CREATE INDEX IF NOT EXISTS idx_vmem_residency
     ON session_vmem (internal_session_id, residency_state);
 CREATE INDEX IF NOT EXISTS idx_vmem_kind
     ON session_vmem (internal_session_id, kind);
+CREATE TABLE IF NOT EXISTS ledger_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+# Coverage-before-reclaim additive columns (plan U4 §5.3), applied via the
+# SAME guarded PRAGMA-table_info-then-ALTER convention already used by
+# db.py's migration 0012 and gardener.py's skill_roi_ledger extension --
+# never a destructive rewrite, always idempotent on reopen.
+_VMEM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("durability", "TEXT NOT NULL DEFAULT 'DIRTY'"),
+    ("recovery_class", "TEXT"),
+    ("covered_at", "TEXT"),
+)
 
 
 @dataclass
@@ -99,6 +134,9 @@ class SessionObject:
     last_accessed_at: str = ""
     segment_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    durability: str = DURABILITY_DIRTY
+    recovery_class: str | None = None
+    covered_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +155,9 @@ class SessionObject:
             "last_accessed_at": self.last_accessed_at,
             "segment_id": self.segment_id,
             "metadata": self.metadata,
+            "durability": self.durability,
+            "recovery_class": self.recovery_class,
+            "covered_at": self.covered_at,
         }
 
 
@@ -162,6 +203,13 @@ class VMemStore:
             conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(_VMEM_SCHEMA)
+            existing_columns = {
+                str(row[1]).casefold()
+                for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
+            }
+            for column, ddl in _VMEM_ADDITIVE_COLUMNS:
+                if column.casefold() not in existing_columns:
+                    conn.execute(f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl}")
             conn.commit()
 
     def store_object(
@@ -262,6 +310,28 @@ class VMemStore:
 
         return obj
 
+    def _row_to_session_object(self, r: sqlite3.Row) -> SessionObject:
+        return SessionObject(
+            obj_id=r["obj_id"],
+            session_id=self.session_id,
+            kind=SessionObjectKind(r["kind"]),
+            title=r["title"],
+            summary=r["summary"],
+            content_sha256=r["content_sha256"],
+            token_estimate=r["token_estimate"],
+            residency_state=ResidencyState(r["residency_state"]),
+            priority_score=r["priority_score"],
+            pinned=bool(r["pinned"]),
+            access_count=r["access_count"],
+            created_at=r["created_at"],
+            last_accessed_at=r["last_accessed_at"],
+            segment_id=r["segment_id"],
+            metadata=json.loads(r["metadata_json"] or "{}"),
+            durability=r["durability"],
+            recovery_class=r["recovery_class"],
+            covered_at=r["covered_at"],
+        )
+
     def list_objects(
         self,
         residency_state: ResidencyState | str | None = None,
@@ -291,28 +361,7 @@ class VMemStore:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, params).fetchall()
 
-        results = []
-        for r in rows:
-            results.append(
-                SessionObject(
-                    obj_id=r["obj_id"],
-                    session_id=self.session_id,
-                    kind=SessionObjectKind(r["kind"]),
-                    title=r["title"],
-                    summary=r["summary"],
-                    content_sha256=r["content_sha256"],
-                    token_estimate=r["token_estimate"],
-                    residency_state=ResidencyState(r["residency_state"]),
-                    priority_score=r["priority_score"],
-                    pinned=bool(r["pinned"]),
-                    access_count=r["access_count"],
-                    created_at=r["created_at"],
-                    last_accessed_at=r["last_accessed_at"],
-                    segment_id=r["segment_id"],
-                    metadata=json.loads(r["metadata_json"] or "{}"),
-                )
-            )
-        return results
+        return [self._row_to_session_object(r) for r in rows]
 
     def get_object(self, obj_id: str) -> SessionObject | None:
         """Get object by ID."""
@@ -326,23 +375,7 @@ class VMemStore:
         if not r:
             return None
 
-        return SessionObject(
-            obj_id=r["obj_id"],
-            session_id=self.session_id,
-            kind=SessionObjectKind(r["kind"]),
-            title=r["title"],
-            summary=r["summary"],
-            content_sha256=r["content_sha256"],
-            token_estimate=r["token_estimate"],
-            residency_state=ResidencyState(r["residency_state"]),
-            priority_score=r["priority_score"],
-            pinned=bool(r["pinned"]),
-            access_count=r["access_count"],
-            created_at=r["created_at"],
-            last_accessed_at=r["last_accessed_at"],
-            segment_id=r["segment_id"],
-            metadata=json.loads(r["metadata_json"] or "{}"),
-        )
+        return self._row_to_session_object(r)
 
     def _verify_and_load(self, obj_id: str) -> tuple[SessionObject, str]:
         """Read-only verify+load step (RC4 Part D safety pass): confirm the
@@ -497,13 +530,246 @@ class VMemStore:
 
         return claimed
 
+    def _resolve_recovery_class(self, obj: SessionObject) -> str:
+        """The recovery_class governing coverage for `obj` (plan U4 §5.3):
+        an explicit `metadata["recovery_class"]` hint set at store time,
+        else EXACT_ARTIFACT -- every session object is already
+        content-addressed and artifact-backed at `store_object()` time, so
+        EXACT_ARTIFACT is the default, trivially-satisfiable coverage path
+        as long as its own backing artifact stays intact."""
+        explicit = obj.metadata.get("recovery_class") if isinstance(obj.metadata, dict) else None
+        if explicit in (
+            RecoveryClass.EXACT_ARTIFACT.value,
+            RecoveryClass.CANONICAL_STATE.value,
+            RecoveryClass.DISPOSABLE_DERIVED.value,
+        ):
+            return explicit
+        return RecoveryClass.EXACT_ARTIFACT.value
+
+    def _canonical_state_exists(self, obj: SessionObject) -> bool:
+        """CANONICAL_STATE coverage (plan U4 §5.3): true iff
+        `metadata["canonical_ref"]` (`{"type": "capsule"|"requirement"|
+        "memory", "id": ...}`) still resolves to a live capsule,
+        requirement, or memory row -- the durable source this object's
+        content is a transient reflection of."""
+        ref = obj.metadata.get("canonical_ref") if isinstance(obj.metadata, dict) else None
+        if not isinstance(ref, dict):
+            return False
+        ref_type = ref.get("type")
+        if ref_type == "capsule":
+            try:
+                working_set.show_capsule(self.home, self.session_id)
+                return True
+            except BrainError:
+                return False
+        if ref_type == "requirement":
+            req_id = ref.get("id")
+            if not isinstance(req_id, str) or not req_id:
+                return False
+            try:
+                entries = working_set.show_requirements(self.home, self.session_id)
+            except BrainError:
+                return False
+            return any(entry.get("id") == req_id for entry in entries)
+        if ref_type == "memory":
+            memory_id = ref.get("id")
+            if not isinstance(memory_id, str) or not memory_id:
+                return False
+            try:
+                semantic.show_memory(self.home, memory_id)
+                return True
+            except BrainError:
+                return False
+        return False
+
+    def _check_coverage(self, obj: SessionObject, recovery_class: str) -> bool:
+        if recovery_class == RecoveryClass.EXACT_ARTIFACT.value:
+            try:
+                raw = artifacts.expand(self.home, obj.content_sha256)
+            except BrainError:
+                return False
+            return hashlib.sha256(raw).hexdigest() == obj.content_sha256
+        if recovery_class == RecoveryClass.CANONICAL_STATE.value:
+            return self._canonical_state_exists(obj)
+        if recovery_class == RecoveryClass.DISPOSABLE_DERIVED.value:
+            # Never allowed for material kinds, regardless of any metadata
+            # hint (plan U4 §5.4) -- decisions/blockers/worker findings are
+            # never disposable.
+            if obj.kind in _MATERIAL_KINDS:
+                return False
+            derived_kind = (
+                obj.metadata.get("derived_kind") if isinstance(obj.metadata, dict) else None
+            )
+            return derived_kind in _DISPOSABLE_DERIVED_TAGS
+        return False
+
+    def cover(self, obj: SessionObject) -> bool:
+        """Coverage check (plan U4 §5.3): verify `obj`'s recovery_class
+        contract. Success marks `durability=CLEAN` (mutating both the DB
+        row and `obj` in place) and returns True. Failure leaves the
+        object completely untouched -- still resident, still DIRTY, never
+        destroyed."""
+        recovery_class = self._resolve_recovery_class(obj)
+        if not self._check_coverage(obj, recovery_class):
+            return False
+        now = _now()
+        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+            conn.execute(
+                """
+                UPDATE session_vmem
+                SET durability = ?, recovery_class = ?, covered_at = ?
+                WHERE internal_session_id = ? AND obj_id = ?
+                """,
+                (DURABILITY_CLEAN, recovery_class, now, self.internal_id, obj.obj_id),
+            )
+            conn.commit()
+        obj.durability = DURABILITY_CLEAN
+        obj.recovery_class = recovery_class
+        obj.covered_at = now
+        return True
+
+    def _advance_watermark(self, conn: sqlite3.Connection) -> int:
+        """Advance `ledger_meta.durable_through_seq` (plan U4 §5.5) to the
+        largest `session_vmem.rowid` such that EVERY row up to and
+        including it is durability=CLEAN -- a cumulative-ack watermark
+        over this session's own object insertion order. A single DIRTY
+        row halts the advance right before it; the watermark itself never
+        moves backward."""
+        row = conn.execute(
+            "SELECT value FROM ledger_meta WHERE key = 'durable_through_seq'"
+        ).fetchone()
+        current = int(row[0]) if row and row[0] is not None else 0
+
+        rows = conn.execute(
+            "SELECT rowid, durability FROM session_vmem "
+            "WHERE internal_session_id = ? ORDER BY rowid",
+            (self.internal_id,),
+        ).fetchall()
+
+        watermark = current
+        for rowid, durability in rows:
+            if rowid <= current:
+                continue
+            if durability != DURABILITY_CLEAN:
+                break
+            watermark = rowid
+
+        if watermark > current:
+            conn.execute(
+                "INSERT INTO ledger_meta (key, value) VALUES ('durable_through_seq', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(watermark),),
+            )
+        return watermark
+
+    def get_durable_through_seq(self) -> int:
+        """The current `durable_through_seq` watermark (plan U4 §5.5):
+        every `session_vmem` row with rowid <= this value is
+        durability=CLEAN."""
+        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+            row = conn.execute(
+                "SELECT value FROM ledger_meta WHERE key = 'durable_through_seq'"
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def _append_reclaim_manifest(self, rows: list[dict[str, Any]]) -> None:
+        """Append one line per committed reclaim to `reclaim_manifest.jsonl`
+        under this session's own directory (plan U4 §5.5) -- same
+        per-session jsonl-append convention used elsewhere (e.g.
+        autoinject.py's per-session telemetry mirror)."""
+        path = self._sdir / "reclaim_manifest.jsonl"
+        with open(path, "a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(contracts.canonical_json(row) + "\n")
+
+    def _reclaim(self, candidates: list[SessionObject], reason: str) -> list[SessionObject]:
+        """The COVERAGE -> COMMIT -> VERIFY tail of the four-phase reclaim
+        flow (plan U4 §5.5); PREPARE (victim selection) is the caller's
+        own responsibility. COVERAGE: `cover()` each candidate --
+        uncovered candidates are left completely alone (still resident,
+        still DIRTY). COMMIT: one atomic CAS UPDATE per covered candidate,
+        scoped to `durability='CLEAN'` on top of `claim_pages`'s existing
+        residency_state/pinned CAS guard -- a lost race (already claimed
+        by a concurrent `claim_pages` call) is silently skipped, never an
+        error. VERIFY: re-read each committed row, append one
+        `reclaim_manifest.jsonl` row, then advance `durable_through_seq`
+        over the resulting contiguous CLEAN prefix. Returns the objects
+        THIS call actually evicted."""
+        covered = [obj for obj in candidates if self.cover(obj)]
+
+        evicted: list[SessionObject] = []
+        manifest_rows: list[dict[str, Any]] = []
+        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
+            conn.row_factory = sqlite3.Row
+            for obj in covered:
+                cur = conn.execute(
+                    """
+                    UPDATE session_vmem
+                    SET residency_state = ?
+                    WHERE internal_session_id = ?
+                      AND obj_id = ?
+                      AND residency_state IN (?, ?)
+                      AND pinned = 0
+                      AND durability = ?
+                    """,
+                    (
+                        ResidencyState.EVICTED.value,
+                        self.internal_id,
+                        obj.obj_id,
+                        ResidencyState.RESIDENT.value,
+                        ResidencyState.FAULTED_IN.value,
+                        DURABILITY_CLEAN,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    continue  # lost the CAS race, or no longer eligible -- skip, no error
+
+                row = conn.execute(
+                    "SELECT rowid FROM session_vmem WHERE internal_session_id = ? "
+                    "AND obj_id = ? AND residency_state = ? AND durability = ?",
+                    (
+                        self.internal_id,
+                        obj.obj_id,
+                        ResidencyState.EVICTED.value,
+                        DURABILITY_CLEAN,
+                    ),
+                ).fetchone()
+                if row is None:
+                    continue  # VERIFY failed defensively: never fabricate a manifest row
+
+                obj.residency_state = ResidencyState.EVICTED
+                evicted.append(obj)
+                manifest_rows.append(
+                    {
+                        "obj_id": obj.obj_id,
+                        "sha": obj.content_sha256,
+                        "recovery_class": obj.recovery_class,
+                        "seq": row["rowid"],
+                        "reason": reason,
+                    }
+                )
+
+            self._advance_watermark(conn)
+            conn.commit()
+
+        if manifest_rows:
+            self._append_reclaim_manifest(manifest_rows)
+
+        return evicted
+
+
     def evict_to_budget(
         self,
         max_tokens: int = DEFAULT_HOT_CONTEXT_BUDGET_TOKENS,
     ) -> list[SessionObject]:
         """
-        Deterministic admission/eviction policy (§6.6).
-        Evicts lowest-scoring unpinned items until resident tokens <= max_tokens.
+        Deterministic admission/eviction policy (§6.6), now coverage-gated
+        (plan U4 §5.5): PREPARE selects the lowest-scoring unpinned
+        victims needed to fit the budget (no writes yet); `_reclaim`'s
+        COVERAGE/COMMIT/VERIFY then only ACTUALLY evicts the ones that
+        prove durably recoverable elsewhere. An uncovered victim stays
+        resident/DIRTY -- the budget may end up not fully met, by design;
+        data is never destroyed just to satisfy a token budget.
         """
         resident_objects = self.list_objects()
         resident_active = [
@@ -516,30 +782,21 @@ class VMemStore:
             return []
 
         # Sort eviction candidates: unpinned first, lowest priority score, lowest access count
-        candidates = sorted(
+        sorted_candidates = sorted(
             [o for o in resident_active if not o.pinned],
             key=lambda o: (o.priority_score, o.access_count, -o.token_estimate),
         )
 
-        evicted: list[SessionObject] = []
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            for obj in candidates:
-                if total_tokens <= max_tokens:
-                    break
-                conn.execute(
-                    """
-                    UPDATE session_vmem
-                    SET residency_state = ?
-                    WHERE internal_session_id = ? AND obj_id = ?
-                    """,
-                    (ResidencyState.EVICTED.value, self.internal_id, obj.obj_id),
-                )
-                obj.residency_state = ResidencyState.EVICTED
-                evicted.append(obj)
-                total_tokens -= obj.token_estimate
-            conn.commit()
+        # PREPARE: select victims up to budget -- no writes yet.
+        victims: list[SessionObject] = []
+        running_total = total_tokens
+        for obj in sorted_candidates:
+            if running_total <= max_tokens:
+                break
+            victims.append(obj)
+            running_total -= obj.token_estimate
 
-        return evicted
+        return self._reclaim(victims, reason="evict_to_budget")
 
     def render_hot_context(
         self,
@@ -614,32 +871,47 @@ class VMemStore:
 
     def prepare_compaction(self) -> dict[str, Any]:
         """
-        Compaction barrier interaction (§6.7).
-        Snapshots working state and transitions unpinned resident items to EVICTED.
+        Compaction barrier interaction (§6.7), now coverage-gated (plan U4
+        §5.5-5.7): unpinned resident items go through the same PREPARE ->
+        COVERAGE -> COMMIT -> VERIFY reclaim as `evict_to_budget`. Pinned
+        items are NEVER evicted, but a coverage sweep still runs over them
+        -- a real host-level compaction can discard live context this
+        method never touches, so `cancel` reports True (Python-side
+        contract only; Prime TS wiring is a later task) whenever ANY
+        pinned or material (DECISION/BLOCKER/WORKER_FINDING) object is
+        still resident and DIRTY after VERIFY -- i.e. still at risk of
+        unrecoverable loss.
         """
         all_objs = self.list_objects()
-        unpinned_residents = [
+        resident_all = [
             o for o in all_objs
-            if not o.pinned
-            and o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
+            if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
         ]
+        pinned_resident = [o for o in resident_all if o.pinned]
+        unpinned_victims = [o for o in resident_all if not o.pinned]
 
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            for obj in unpinned_residents:
-                conn.execute(
-                    """
-                    UPDATE session_vmem
-                    SET residency_state = ?
-                    WHERE internal_session_id = ? AND obj_id = ?
-                    """,
-                    (ResidencyState.EVICTED.value, self.internal_id, obj.obj_id),
-                )
-            conn.commit()
+        # COVERAGE sweep on pinned objects: never evicted, but their
+        # durability must still be known for the cancel contract below.
+        for obj in pinned_resident:
+            self.cover(obj)
+
+        evicted = self._reclaim(unpinned_victims, reason="prepare_compaction")
+
+        # VERIFY: re-read every still-resident pinned/material object.
+        still_resident = [
+            o for o in self.list_objects()
+            if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
+        ]
+        dirty_material_or_pinned = [
+            o for o in still_resident
+            if (o.pinned or o.kind in _MATERIAL_KINDS) and o.durability != DURABILITY_CLEAN
+        ]
 
         return {
             "session_id": self.session_id,
-            "evicted_at_compaction": len(unpinned_residents),
+            "evicted_at_compaction": len(evicted),
             "pinned_preserved": len([o for o in all_objs if o.pinned]),
+            "cancel": bool(dirty_material_or_pinned),
             "timestamp": _now(),
         }
 
