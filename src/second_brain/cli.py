@@ -1114,6 +1114,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     gov_prof.add_argument("--json", action="store_true", help="machine-readable output")
 
+    gov_budget = govs.add_parser(
+        "check-budget",
+        parents=[home_parent],
+        help="T3.1: hard/soft session or worker token budget state",
+    )
+    gov_budget.add_argument("--session", required=True, help="host session id")
+    gov_budget.add_argument(
+        "--role", default="driver", help="role profile; 'worker' uses [budgets] worker_tokens"
+    )
+    gov_budget.add_argument("--json", action="store_true", help="machine-readable output")
+
     fw = sub.add_parser(
         "firewall",
         parents=[home_parent],
@@ -4923,6 +4934,49 @@ def cmd_governor(args) -> int:
         except KeyError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
+
+    if args.governor_command == "check-budget":
+        result = governor.check_budget(home, args.session, args.role)
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print(f"state={result['state']} used={result['used']} cap={result['cap']}")
+        # T3.1 §4: record the HARD/BLOCK determination once per invocation
+        # (Prime calls this CLI subcommand at most once per turn -- never
+        # per tool call -- so this satisfies "cache/dedupe per session+turn"
+        # without extra state).
+        if result["state"] == "HARD":
+            import tomllib
+
+            from . import decisions
+
+            stage = "SHADOW"
+            try:
+                v2_path = home / "config" / "v2.toml"
+                if v2_path.is_file():
+                    v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
+                    candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
+                    if candidate in decisions._ROLLOUT_STAGES:
+                        stage = candidate
+            except Exception:
+                pass
+            try:
+                decisions.record(
+                    home,
+                    kind="budget",
+                    session_id=args.session,
+                    task_id=None,
+                    chosen={"decision": "BLOCK", "state": "HARD"},
+                    alternatives=["ALLOW"],
+                    propensity=1.0,
+                    randomized=False,
+                    policy_version="v3.1",
+                    stage=stage,
+                    inputs={"used": result["used"], "cap": result["cap"]},
+                )
+            except Exception:
+                pass
+        return 0
 
     return 2
 

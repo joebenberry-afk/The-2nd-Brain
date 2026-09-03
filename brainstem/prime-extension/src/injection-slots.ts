@@ -136,6 +136,7 @@ export interface AssembleTailOptions {
   hotContextRefs?: string | null;
   freshnessLines?: string | null;
   hydratedSkills?: string | Record<string, string> | null;
+  budgetWarning?: string | null;
 }
 
 export function assembleTail(options: AssembleTailOptions): string {
@@ -159,6 +160,10 @@ export function assembleTail(options: AssembleTailOptions): string {
   const skillsText = formatHydratedSkills(options.hydratedSkills);
   if (skillsText) {
     parts.push(skillsText);
+  }
+
+  if (options.budgetWarning && options.budgetWarning.trim()) {
+    parts.push(options.budgetWarning.trim());
   }
 
   return parts.join("\n\n");

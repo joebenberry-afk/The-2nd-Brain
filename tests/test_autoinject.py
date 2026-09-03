@@ -274,6 +274,81 @@ def test_budget_hard_cap_never_exceeded(brain_home, monkeypatch) -> None:
         assert autoinject.render_packet(d) != ""  # truncated packet still renders
 
 
+def _write_telemetry_usage(home: Path, session_id: str, total_tokens: int) -> None:
+    """Minimal `assistant_usage` telemetry record for governor.check_budget."""
+    tdir = home / "telemetry" / "agent-performance"
+    tdir.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "v": 2,
+        "ts": "2026-08-18T10:00:00.000Z",
+        "kind": "assistant_usage",
+        "session": session_id,
+        "total_tokens": total_tokens,
+    }
+    (tdir / f"{session_id}.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def test_soft_cap_disables_retrieval_and_lowers_tier(brain_home) -> None:
+    """T3.1: usage at/above cap*soft_ratio (worker cap 120000 * 0.8 = 96000)
+    but below cap -> NO_INJECTION(BUDGET_SOFT), no retrieval work performed,
+    and a decisions(kind="budget", state=SOFT) row is recorded (the signal
+    the Prime tier-floor mechanism reads via `brainctl governor check-budget`)."""
+    _seed_current(brain_home, "Soft budget memory", "should never be retrieved under SOFT")
+    _write_telemetry_usage(brain_home, "soft-budget-test", 100000)
+    d = _inject(
+        brain_home,
+        "soft budget memory",
+        role_profile="worker",
+        session_id="soft-budget-test",
+    )
+    assert d.decision is InjectionDecision.NO_INJECTION
+    assert d.reason is NoInjectionReason.BUDGET_SOFT
+    assert d.candidate_ids == []  # no retrieval work was performed
+    assert d.selected_ids == []
+
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT kind, chosen_json, propensity FROM decisions WHERE session_id = ?",
+            ("soft-budget-test",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["kind"] == "budget"
+    assert row["propensity"] == 1.0
+    chosen = json.loads(row["chosen_json"])
+    assert chosen == {"decision": "NO_INJECTION", "state": "SOFT"}
+
+
+def test_below_soft_threshold_injects_normally(brain_home) -> None:
+    """Usage below the SOFT threshold never triggers BUDGET_SOFT."""
+    _seed_current(brain_home, "Under budget memory", "under budget memory query")
+    _write_telemetry_usage(brain_home, "under-budget-test", 1000)
+    d = _inject(
+        brain_home,
+        "under budget memory",
+        role_profile="worker",
+        session_id="under-budget-test",
+    )
+    assert d.decision is InjectionDecision.INJECT
+    assert d.reason is None
+
+
+def test_hard_cap_does_not_block_injection(brain_home) -> None:
+    """T3.1 §3 only specifies SOFT behavior for prepare_injection; HARD is
+    enforced at the tool/worker-dispatch layer, not the injection layer."""
+    _seed_current(brain_home, "Hard budget memory", "hard budget memory query")
+    _write_telemetry_usage(brain_home, "hard-budget-test", 500000)
+    d = _inject(
+        brain_home,
+        "hard budget memory",
+        role_profile="worker",
+        session_id="hard-budget-test",
+    )
+    assert d.decision is InjectionDecision.INJECT
+
+
 # ---------------------------------------------------------------------------
 # Fail-open
 # ---------------------------------------------------------------------------

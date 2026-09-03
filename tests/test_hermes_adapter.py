@@ -499,6 +499,176 @@ def test_pre_llm_records_bounded_model_decision_with_identity_correlation(
     assert telemetry_decision["task_hash"] == model_decision["task_hash"]
 
 
+# ---------------------------------------------------------------------------
+# T3.1 hard/soft budget caps
+# ---------------------------------------------------------------------------
+
+
+def _write_budget_telemetry(home: Path, host_session_id: str, total_tokens: int) -> None:
+    tdir = home / "telemetry" / "agent-performance"
+    tdir.mkdir(parents=True, exist_ok=True)
+    stem = hermes_adapter.telemetry_stem(host_session_id)
+    rec = {
+        "v": 2,
+        "ts": "2026-08-18T10:00:00.000Z",
+        "kind": "assistant_usage",
+        "session": host_session_id,
+        "total_tokens": total_tokens,
+    }
+    (tdir / f"{stem}.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def test_hard_cap_blocks_worker_dispatch_with_budget_exceeded(brain_home: Path) -> None:
+    """T3.1 §4: HARD parent budget fails worker dispatch before it starts,
+    same status="failed"/failure_code shape as UNAUTHORIZED_COORDINATOR."""
+    start = _start_payload(session="budget-hard-dispatch", bot="Brain-Integrator") | {
+        "bot_role": "integrator"
+    }
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+    # session_tokens cap defaults to 400000 for a non-worker role.
+    _write_budget_telemetry(brain_home, binding.host_session_id, 500000)
+
+    packet = contracts.WorkerTaskPacket(
+        task_id="budget-hard-task",
+        parent_session_id=binding.host_session_id,
+        driver_identity=contracts.AgentIdentity(
+            agent_id=binding.agent_id,
+            internal_session_id=binding.brain_session_id,
+            host_agent_id=binding.bot_name,
+            parent_agent_id=None,
+            role_profile=binding.bot_role,
+            model=binding.model,
+            provider=binding.provider,
+            created_at="2026-08-18T10:00:00Z",
+        ),
+        requested_role="dev",
+        objective="do work under a HARD budget",
+        scope="repository",
+        constraints=[],
+        evidence_requirements=[],
+        completion_condition="return evidence",
+        context_refs=[],
+        project_id=binding.project_id,
+        repo_root=binding.repo_root,
+    ).validate()
+
+    response = hermes_adapter.request_worker_task(
+        brain_home, binding, json.loads(packet.canonical_json())
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "BUDGET_EXCEEDED"
+
+
+def test_below_hard_cap_worker_dispatch_proceeds(brain_home: Path) -> None:
+    """No BUDGET_EXCEEDED short-circuit when usage is below the cap."""
+    start = _start_payload(session="budget-ok-dispatch", bot="Brain-Integrator") | {
+        "bot_role": "integrator"
+    }
+    binding = hermes_adapter.resolve_binding(brain_home, start)
+    _write_budget_telemetry(brain_home, binding.host_session_id, 100)
+
+    packet = contracts.WorkerTaskPacket(
+        task_id="budget-ok-task",
+        parent_session_id=binding.host_session_id,
+        driver_identity=contracts.AgentIdentity(
+            agent_id=binding.agent_id,
+            internal_session_id=binding.brain_session_id,
+            host_agent_id=binding.bot_name,
+            parent_agent_id=None,
+            role_profile=binding.bot_role,
+            model=binding.model,
+            provider=binding.provider,
+            created_at="2026-08-18T10:00:00Z",
+        ),
+        requested_role="dev",
+        objective="do work under an OK budget",
+        scope="repository",
+        constraints=[],
+        evidence_requirements=[],
+        completion_condition="return evidence",
+        context_refs=[],
+        project_id=binding.project_id,
+        repo_root=binding.repo_root,
+    ).validate()
+
+    response = hermes_adapter.request_worker_task(
+        brain_home, binding, json.loads(packet.canonical_json())
+    )
+    assert response.get("failure_code") != "BUDGET_EXCEEDED"
+
+
+def test_pre_llm_hard_cap_injects_exact_budget_warning_tail(brain_home: Path) -> None:
+    """T3.1 §4 Hermes fallback: no pre_tool_call blocking primitive exists
+    (verified against hermes_plugin.py's host contract), so the exact
+    `[SECOND_BRAIN_BUDGET]` line must appear in the rendered TAIL instead,
+    and a decisions(kind="budget", state="HARD") row is recorded once."""
+    payload = {
+        **_start_payload(session="budget-hard-tail", bot="Brain-Dev"),
+        "event": "pre_llm_call",
+        "task": "keep working past the hard cap",
+        "turn_id": "budget-hard-turn",
+    }
+    binding = hermes_adapter.resolve_binding(brain_home, payload)
+    # role "dev" is not "worker" -> session_tokens cap (400000 default).
+    _write_budget_telemetry(brain_home, binding.host_session_id, 500000)
+
+    out = hermes_adapter.handle_request(brain_home, payload)
+
+    assert out["status"] == "ok"
+    assert out["budget_state"] == "HARD"
+    assert "[SECOND_BRAIN_BUDGET] hard cap reached; state INPUT_REQUIRED" in out["tail"]
+
+    conn = sqlite3.connect(brain_home / "db" / "brain.sqlite")
+    try:
+        row = conn.execute(
+            "SELECT kind, chosen_json FROM decisions WHERE session_id = ? AND kind = 'budget'",
+            (binding.host_session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    chosen = json.loads(row[1])
+    assert chosen == {"decision": "BLOCK", "state": "HARD"}
+
+
+def test_pre_llm_soft_cap_never_writes_hard_budget_tail(brain_home: Path) -> None:
+    """Usage below HARD (even if SOFT) never adds the hard-cap warning line."""
+    payload = {
+        **_start_payload(session="budget-soft-tail", bot="Brain-Dev"),
+        "event": "pre_llm_call",
+        "task": "keep working under a soft cap",
+        "turn_id": "budget-soft-turn",
+    }
+    binding = hermes_adapter.resolve_binding(brain_home, payload)
+    # 96000 = 400000 * 0.8 (SOFT threshold for a non-worker role), below cap.
+    _write_budget_telemetry(brain_home, binding.host_session_id, 350000)
+
+    out = hermes_adapter.handle_request(brain_home, payload)
+
+    assert out["status"] == "ok"
+    assert out["budget_state"] == "SOFT"
+    assert "[SECOND_BRAIN_BUDGET]" not in (out["tail"] or "")
+
+
+def test_pre_tool_call_unaffected_by_hard_budget(brain_home: Path) -> None:
+    """Documented limitation: Hermes' pre_tool_call host contract only
+    understands {"replacement": str} (no deny/block field exists), so a HARD
+    budget state never changes pre_tool_call's read/cat/grep behavior."""
+    start_payload = _start_payload(session="budget-hard-tool", bot="Brain-Dev")
+    binding = hermes_adapter.resolve_binding(brain_home, start_payload)
+    _write_budget_telemetry(brain_home, binding.host_session_id, 500000)
+    target = brain_home / "stable.txt"
+    target.write_text("stable content", encoding="utf-8")
+
+    result = hermes_adapter.handle_request(
+        brain_home,
+        start_payload | {"event": "pre_tool_call", "tool_name": "read", "path": str(target)},
+    )
+    assert result["status"] == "ok"
+    assert "block" not in result
+
+
+
 def test_pre_llm_model_decision_records_unavailable_fallback(brain_home: Path) -> None:
     payload = {
         **_start_payload(session="routing-fallback", bot="Brain-Dev"),

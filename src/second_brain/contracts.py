@@ -61,7 +61,7 @@ class NoInjectionReason(StrEnum):
     TRIVIAL_TASK = "TRIVIAL_TASK"
     CLEAN_ROOM_REQUEST = "CLEAN_ROOM_REQUEST"
     BRAIN_UNAVAILABLE = "BRAIN_UNAVAILABLE"
-
+    BUDGET_SOFT = "BUDGET_SOFT"
 
 class MemoryItemStatus(StrEnum):
     CURRENT = "current"

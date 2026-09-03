@@ -28,6 +28,7 @@ export interface OmpRoutingOptions {
   candidates?: OmpModelCandidate[];
   python?: string;
   timeoutMs?: number;
+  minimumTier?: string;
 }
 
 export interface OmpRoutingDecision {
@@ -182,6 +183,7 @@ export function runOmpRouting(options: OmpRoutingOptions): Promise<OmpRoutingRes
     model,
     cwd: bounded(options.cwd, OMP_ROUTING_MAX_IDENTITY_CHARS),
     candidates,
+    ...(options.minimumTier ? { minimum_tier: bounded(options.minimumTier, OMP_ROUTING_MAX_IDENTITY_CHARS) } : {}),
   };
   return new Promise((resolve) => {
     const child = execFile(

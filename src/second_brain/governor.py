@@ -13,12 +13,17 @@ how many records contributed (e.g., cost_total_seen=N of M).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from . import economics
+from . import economics, ledger
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_FEATURES: dict[str, bool] = {
     'brain_core': True,
@@ -705,3 +710,130 @@ def classify_roi(
     if not verdict.reason:
         verdict.reason = f"mSPRT verdict={status}; n={result.get('n', 0)}"
     return verdict
+
+
+# ---------------------------------------------------------------------------
+# T3.1 hard/soft budget caps (plan §... token governor enforcement).
+#
+# `used` is this session's own telemetry `total_tokens` plus every
+# descendant worker session's `total_tokens`. Descendants are discovered by
+# scanning `home/state/sessions/*/ledger.sqlite` for `sessions` rows whose
+# `root_parent_session_id` equals this session's internal id -- a real
+# filesystem scan, bounded to that one directory, every unreadable/missing
+# file skipped rather than raised.
+#
+# T3.1-brief investigation note: `assistant_usage`/`session_start` and every
+# other kind in SCHEMA.md were checked for a field that already reports
+# rolled-up child/descendant usage (which would let a session skip its own
+# child-directory scan). No such field exists anywhere in the current
+# telemetry schema, so that shortcut branch is dormant by construction; the
+# descendant scan below is the only path.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_BUDGETS: dict[str, float] = {
+    'session_tokens': 400000,
+    'worker_tokens': 120000,
+    'soft_ratio': 0.8,
+}
+
+
+def _budget_config(home: Path) -> dict[str, float]:
+    """config/governor.toml [budgets]; defaults on absence/malformed input."""
+    result = dict(_DEFAULT_BUDGETS)
+    config_path = Path(home) / "config" / "governor.toml"
+    if not config_path.exists():
+        return result
+    try:
+        import tomllib
+
+        with open(config_path, 'rb') as f:
+            config_data = tomllib.load(f)
+    except Exception:
+        return dict(_DEFAULT_BUDGETS)
+    budgets = config_data.get('budgets') if isinstance(config_data, dict) else None
+    if not isinstance(budgets, dict):
+        return result
+    for key, default in _DEFAULT_BUDGETS.items():
+        if key not in budgets:
+            continue
+        try:
+            result[key] = type(default)(budgets[key])
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def _telemetry_stem(session_id: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_-]", "-", session_id or "")
+    return stem or "unknown"
+
+
+def _session_total_tokens(home: Path, session_id: str) -> int:
+    """This session's own `total_tokens`; 0 if its telemetry is absent/unparseable."""
+    path = home / "telemetry" / "agent-performance" / f"{_telemetry_stem(session_id)}.jsonl"
+    try:
+        tokens = parse_telemetry_session(path)
+    except Exception:
+        return 0
+    return tokens.total_tokens or 0
+
+
+def _descendant_total_tokens(home: Path, session_id: str) -> int:
+    """Sum `total_tokens` for every ledger session rooted at `session_id`."""
+    root_id = ledger.internal_session_id(session_id)
+    sessions_dir = home / "state" / "sessions"
+    total = 0
+    try:
+        children = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
+    except OSError:
+        return 0
+    for child in children:
+        dbfile = child / "ledger.sqlite"
+        if not dbfile.is_file():
+            continue
+        try:
+            conn = sqlite3.connect(dbfile, timeout=1.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    "SELECT host_session_id, root_parent_session_id FROM sessions"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            if row["root_parent_session_id"] != root_id:
+                continue
+            descendant_host_id = row["host_session_id"]
+            if not descendant_host_id:
+                continue
+            total += _session_total_tokens(home, descendant_host_id)
+    return total
+
+
+def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]:
+    """T3.1 hard/soft budget caps.
+
+    Returns ``{"state": "OK"|"SOFT"|"HARD", "used": int, "cap": int}``.
+    Fail-open (§ brief): any read/parse error anywhere in the computation
+    returns OK rather than blocking on an infrastructure failure.
+    """
+    try:
+        home_path = Path(home)
+        budgets = _budget_config(home_path)
+        cap = int(budgets['worker_tokens'] if role == 'worker' else budgets['session_tokens'])
+        soft_ratio = float(budgets['soft_ratio'])
+        used = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
+            home_path, session_id
+        )
+        if used >= cap:
+            state = "HARD"
+        elif used >= cap * soft_ratio:
+            state = "SOFT"
+        else:
+            state = "OK"
+        return {"state": state, "used": used, "cap": cap}
+    except Exception:
+        logger.debug("check_budget failed (fail-open -> OK)", exc_info=True)
+        return {"state": "OK", "used": 0, "cap": 0}
