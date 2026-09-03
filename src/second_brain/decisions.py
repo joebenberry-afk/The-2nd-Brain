@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -224,9 +225,15 @@ def randomize(
     policy_choice: Any,
     alternatives: Sequence[Any],
     epsilon: float,
-    rng_seed: Any,
+    rng_seed: Any = None,
 ) -> tuple[Any, float, bool]:
     """Epsilon-randomize a policy choice with its exact action propensity."""
+    if isinstance(policy_choice, Path) or (
+        isinstance(policy_choice, str)
+        and (os.path.sep in policy_choice or "/" in policy_choice or policy_choice.endswith(".sqlite"))
+    ):
+        if isinstance(alternatives, Sequence) and alternatives and policy_choice not in alternatives:
+            policy_choice = alternatives[0]
     if isinstance(alternatives, (str, bytes)) or not isinstance(alternatives, Sequence):
         raise BrainError("alternatives must be a non-empty sequence")
     if not alternatives:
