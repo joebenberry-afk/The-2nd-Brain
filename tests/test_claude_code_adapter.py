@@ -18,6 +18,21 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def test_session_memory_commands_are_in_each_static_adapter_prefix():
+    expected = (
+        'To remember: run `brainctl remember "<claim>" --evidence <path>.`',
+        'To check: `brainctl recall "<question>"`.',
+    )
+    sources = (
+        REPO_ROOT / "brainstem" / "adapters" / "claude-code" / "rules" / "second-brain-core.md",
+        REPO_ROOT / "brainstem" / "codex-hooks" / "README.md",
+        REPO_ROOT / "brainstem" / "adapters" / "antigravity" / "rules" / "second-brain-core.md",
+    )
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        assert all(text.count(line) == 1 for line in expected), path
+
+
 def _run_cli(
     home: Path,
     *args: str,

@@ -28,6 +28,9 @@ inside the packet / `additionalContext`, never in argv or logs.
 | SubagentStart      | worker-specific AutoInject decision                       |
 | Stop / SessionEnd  | same launcher; records decision / finalization events     |
 
+To remember: run `brainctl remember "<claim>" --evidence <path>.`
+To check: `brainctl recall "<question>"`.
+
 Every call runs `brainctl autoinject codex-shadow`: one JSON object on
 stdin, one JSON object on stdout, decision + delivery recorded in the
 canonical DB and in `<brain>/telemetry/agent-performance/codex-hooks.jsonl`
