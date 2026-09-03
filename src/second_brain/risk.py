@@ -13,6 +13,7 @@ detail "unavailable".
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from .errors import BrainError
@@ -39,6 +40,42 @@ _SCORE_LEVELS = (
     (6, "MEDIUM"),
     (3, "LOW"),
 )  # score<3 LOW, <6 MEDIUM, <9 HIGH, else CRITICAL
+
+DEFAULT_CENTRAL_PATHS: tuple[str, ...] = (
+    "src/second_brain/db.py",
+    "src/second_brain/ledger.py",
+    "src/second_brain/contracts.py",
+    "migrations/",
+)
+
+
+def _load_verification_config(
+    home: Path | str | None = None,
+    repo: Path | str | None = None,
+) -> dict:
+    candidates: list[Path] = []
+    if home is not None:
+        candidates.append(Path(home) / "config" / "verification.toml")
+    if repo is not None:
+        candidates.append(Path(repo) / "config" / "verification.toml")
+    try:
+        from .paths import resolve_home
+
+        candidates.append(resolve_home() / "config" / "verification.toml")
+    except Exception:
+        pass
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    candidates.append(repo_root / "config" / "verification.toml")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                import tomllib
+
+                return tomllib.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+    return {}
 
 
 def _norm(path: str) -> str:
@@ -101,15 +138,19 @@ def _hotspot_signal(repo: Path, files: list[str]) -> dict:
     return _signal("hotspot", max_commits, points, detail)
 
 
-def _compute_signals(repo: Path, files: list[str]) -> list[dict]:
+def _compute_signals(
+    repo: Path,
+    files: list[str],
+    central_paths: Sequence[str] | None = None,
+) -> list[dict]:
     n = len(files)
     blast_points = 0 if n < _BLAST_THRESHOLDS[0] else (1 if n <= _BLAST_THRESHOLDS[1] else 2)
     signals = [
         _signal("blast_radius", n, blast_points, f"{n} file(s) touched"),
         _binary_signal(
             "centrality",
-            [f for f in files if _is_central(f)],
-            "central paths (db/ registry constitution config src/second_brain)",
+            [f for f in files if _is_central(f, central_paths=central_paths)],
+            "central paths",
         ),
         _binary_signal(
             "concurrency",
@@ -146,17 +187,23 @@ def _compute_signals(repo: Path, files: list[str]) -> list[dict]:
     return signals
 
 
-def _is_central(path: str) -> bool:
+def _is_central(path: str, central_paths: Sequence[str] | None = None) -> bool:
+    if central_paths is None:
+        cfg = _load_verification_config()
+        configured = cfg.get("risk", {}).get("central_paths")
+        if configured is not None and isinstance(configured, (list, tuple)):
+            central_paths = configured
+        else:
+            central_paths = DEFAULT_CENTRAL_PATHS
     p = _norm(path)
     parts = _parts(path)
-    return (
-        _has_part(path, "db")
-        or _has_part(path, "registry")
-        or _has_part(path, "constitution")
-        or _has_part(path, "config")
-        or "registry" in p
-        or parts[:2] == ["src", "second_brain"]
-    )
+    for target in central_paths:
+        t = _norm(target)
+        if not t:
+            continue
+        if t in p or p.startswith(t) or t.strip("/") in parts:
+            return True
+    return False
 
 
 def _is_persistent(path: str) -> bool:
@@ -172,6 +219,7 @@ def assess_risk(
     repo: Path,
     files_touched: list[str],
     user_criticality: str | None = None,
+    home: Path | str | None = None,
 ) -> dict:
     """Score the risk of touching `files_touched` in `repo`.
 
@@ -183,8 +231,29 @@ def assess_risk(
         not isinstance(item, str) for item in files_touched
     ):
         raise BrainError("files_touched must be a list of strings")
-    signals = _compute_signals(Path(repo), files_touched)
-    score = sum(signal["points"] for signal in signals)
+
+    cfg = _load_verification_config(home=home, repo=repo)
+    configured_central = cfg.get("risk", {}).get("central_paths")
+    if configured_central is not None and isinstance(configured_central, (list, tuple)):
+        central_paths = configured_central
+    else:
+        central_paths = DEFAULT_CENTRAL_PATHS
+
+    signals = _compute_signals(Path(repo), files_touched, central_paths=central_paths)
+
+    risk_weights = cfg.get("risk_weights")
+    if risk_weights and isinstance(risk_weights, dict):
+        score = sum(
+            float(risk_weights.get(signal["name"], 1.0)) * signal["points"]
+            for signal in signals
+        )
+        if isinstance(score, float) and score.is_integer():
+            score = int(score)
+        elif isinstance(score, float):
+            score = round(score, 2)
+    else:
+        score = sum(signal["points"] for signal in signals)
+
     level = "CRITICAL"
     for threshold, name in _SCORE_LEVELS:  # descending: 9->HIGH, 6->MEDIUM, 3->LOW
         if score < threshold:

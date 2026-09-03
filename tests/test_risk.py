@@ -48,11 +48,11 @@ def test_blast_radius_points(tmp_path):
 @pytest.mark.parametrize(
     "path",
     [
-        "db/brain.sqlite",
-        "src/second_brain/registry.py",
-        "constitution/change-control.md",
-        "config/brain.toml",
         "src/second_brain/db.py",
+        "src/second_brain/ledger.py",
+        "src/second_brain/contracts.py",
+        "migrations/0001_x.sql",
+        "db/migrations/0001_x.sql",
     ],
 )
 def test_centrality_signal(tmp_path, path):
@@ -62,7 +62,9 @@ def test_centrality_signal(tmp_path, path):
 
 
 def test_centrality_no_match(tmp_path):
-    result = risk.assess_risk(tmp_path, ["README.md", "src/app/main.py"])
+    result = risk.assess_risk(
+        tmp_path, ["README.md", "src/app/main.py", "src/second_brain/monitor.py"]
+    )
     assert _signal(result, "centrality")["points"] == 0
 
 
@@ -144,14 +146,14 @@ def test_level_thresholds(tmp_path):
     # blast 1 + concurrency 2 = 3 -> MEDIUM (lower boundary).
     assert risk.assess_risk(tmp_path, ["a.py", "b.py", "state/locks/x.lock"])["level"] == "MEDIUM"
     # blast 1 + centrality 2 + persistence 2 = 5 -> MEDIUM (upper boundary).
-    assert risk.assess_risk(tmp_path, ["a.py", "b.py", "db/x.sql"])["level"] == "MEDIUM"
+    assert risk.assess_risk(tmp_path, ["a.py", "b.py", "migrations/0001.sql"])["level"] == "MEDIUM"
     # blast 1 + centrality 2 + persistence 2 + hotspot 1 = 6 -> HIGH (lower boundary).
     repo = _make_repo(tmp_path, commits=2)
-    assert risk.assess_risk(repo, ["db/x.sql", "hot.py"])["level"] == "HIGH"
+    assert risk.assess_risk(repo, ["migrations/0001.sql", "hot.py"])["level"] == "HIGH"
     # blast 1 + centrality 2 + persistence 2 + config 2 = 7 -> HIGH.
-    assert risk.assess_risk(tmp_path, ["a.py", "db/x.sql", "config/y.toml"])["level"] == "HIGH"
+    assert risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml"])["level"] == "HIGH"
     # blast 1 + centrality 2 + persistence 2 + config 2 + security 2 = 9 -> CRITICAL.
-    result = risk.assess_risk(tmp_path, ["a.py", "db/x.sql", "config/y.toml", "constitution/z.md"])
+    result = risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml", "constitution/z.md"])
     assert result["level"] == "CRITICAL"
     assert result["score"] == 9
 
@@ -166,13 +168,13 @@ def test_override_raises_not_lowers(tmp_path):
     assert risk.assess_risk(tmp_path, ["readme.md"], user_criticality="HIGH")["level"] == "HIGH"
 
     critical = risk.assess_risk(
-        tmp_path, ["a.py", "db/x.sql", "config/y.toml", "constitution/z.md"]
+        tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml", "constitution/z.md"]
     )  # CRITICAL
     assert critical["level"] == "CRITICAL"
     assert (
         risk.assess_risk(
             tmp_path,
-            ["a.py", "db/x.sql", "config/y.toml", "constitution/z.md"],
+            ["a.py", "migrations/0001.sql", "config/y.toml", "constitution/z.md"],
             user_criticality="LOW",
         )["level"]
         == "CRITICAL"
@@ -188,7 +190,7 @@ def test_override_invalid_ignored(tmp_path):
 
 
 def test_score_is_sum_of_points(tmp_path):
-    result = risk.assess_risk(tmp_path, ["a.py", "db/x.sql", "config/y.toml"])
+    result = risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml"])
     assert result["score"] == sum(s["points"] for s in result["signals"])
     assert [s["name"] for s in result["signals"]] == list(risk.SIGNAL_NAMES)
 
