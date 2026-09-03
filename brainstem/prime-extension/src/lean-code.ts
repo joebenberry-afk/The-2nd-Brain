@@ -49,7 +49,7 @@
  * append is a no-op when the base prompt already carries the marker, so one
  * assembled prompt never receives the kernel twice.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
 import { join } from "node:path";
 import type { AgentRole } from "./driver-orchestrator";
 
@@ -62,6 +62,27 @@ export const LEAN_ENV = "SECOND_BRAIN_LEAN";
 /** Exact section heading of the single canonical kernel source (plan §7.1). */
 export const LEAN_KERNEL_HEADING = "# Runtime Kernel";
 
+/** Exact section heading of the single canonical nudge source (plan T3.4). */
+export const LEAN_NUDGE_HEADING = "# Nudge";
+
+/** Frozen byte-stable 30-token nudge line (plan T3.4). */
+export const LEAN_NUDGE_TEXT =
+  "LEAN NUDGE: make the minimum sufficient change to meet acceptance; reuse existing code, avoid new abstractions or dependencies, and stop at acceptance.";
+
+/** Literal rule table reasons (T3.4). */
+export const LEAN_OPPORTUNITY_REASONS = [
+  "REPEAT_READ",
+  "SCOPE_EXPANSION",
+  "NEW_DEPENDENCY",
+  "NEW_ABSTRACTION",
+  "POST_ACCEPTANCE_WORK",
+  "UNRELATED_DIFF",
+  "TEST_WEAKENING_RISK",
+] as const;
+
+export type LeanOpportunityReason = (typeof LEAN_OPPORTUNITY_REASONS)[number];
+
+export type LeanLevel = "NOOP" | "NUDGE" | "FULL";
 /** Skill directory name (mirrors the Skill Forge lifecycle). */
 export const LEAN_SKILL_NAME = "lean-code";
 
@@ -86,7 +107,15 @@ export type LeanEvalMode = "advisory" | "off";
 export type LeanSkillStatus = "active" | "shadow" | "candidate" | "retired" | "missing";
 
 /** Enumerated reason for every lean decision (SCHEMA.md `lean_kernel`). */
-export type LeanReason = "active" | "advisory" | "off" | "role" | "skill-missing";
+export type LeanReason =
+  | "active"
+  | "advisory"
+  | "off"
+  | "role"
+  | "skill-missing"
+  | "noop"
+  | LeanOpportunityReason
+  | string;
 
 /** Final lean decision for one `before_agent_start`. */
 export interface LeanRuntimeOutcome {
@@ -110,6 +139,14 @@ export interface LeanRuntimeOutcome {
   error: string | undefined;
   /** Canonical kernel text; set only when decision === "inject". */
   kernel: string | undefined;
+  /** Opportunity controller level (T3.4): NOOP | NUDGE | FULL. */
+  level?: LeanLevel;
+  /** Placement slot (T3.4): TAIL (never prefix). */
+  placement?: "tail";
+  /** Active reasons triggered. */
+  reasons?: string[];
+  /** Frozen byte-stable nudge line if level === "NUDGE". */
+  nudge?: string;
 }
 
 /** In-process kernel cache entry (plan §8.6). */
@@ -119,9 +156,9 @@ interface LeanSkillCacheEntry {
   size: number;
   status: LeanSkillStatus;
   kernel: string | undefined;
+  nudge: string | undefined;
   error: string | undefined;
 }
-
 /**
  * Process-scoped kernel cache (scoped to the extension lifecycle: the
  * extension is loaded once per Prime process). Keyed by resolved path with
@@ -165,6 +202,27 @@ export function extractRuntimeKernel(skillText: string): string | undefined {
   return kernel.length > 0 ? kernel : undefined;
 }
 
+/**
+ * Extract the "# Nudge" section from a skill file's text (plan T3.4).
+ */
+export function extractRuntimeNudge(skillText: string): string | undefined {
+  const lines = skillText.split(/\r?\n/);
+  let inNudge = false;
+  const body: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!inNudge) {
+      if (line === LEAN_NUDGE_HEADING) inNudge = true;
+      continue;
+    }
+    if (/^#\s/.test(line)) break;
+    body.push(raw);
+  }
+  if (!inNudge) return undefined;
+  const nudge = body.join("\n").trim();
+  return nudge.length > 0 ? nudge : undefined;
+}
+
 /** Resolve the canonical skill file path for the current lifecycle level. */
 export function resolveLeanSkillFile(home: string): { path: string; status: LeanSkillStatus } | undefined {
   for (const level of LEAN_LEVEL_DIRS) {
@@ -188,13 +246,13 @@ export function resolveLeanSkillFile(home: string): { path: string; status: Lean
 export function loadLeanKernel(home: string): LeanSkillCacheEntry {
   const resolved = resolveLeanSkillFile(home);
   if (resolved === undefined) {
-    return { path: "", mtimeMs: -1, size: -1, status: "missing", kernel: undefined, error: "lean-code skill file not found under skills/active|shadow|candidates|retired" };
+    return { path: "", mtimeMs: -1, size: -1, status: "missing", kernel: undefined, nudge: undefined, error: "lean-code skill file not found under skills/active|shadow|candidates|retired" };
   }
-  let stat: ReturnType<typeof statSync> | undefined;
+  let stat: Stats | undefined;
   try {
     stat = statSync(resolved.path);
   } catch {
-    return { path: resolved.path, mtimeMs: -1, size: -1, status: resolved.status, kernel: undefined, error: `cannot stat lean-code skill file: ${resolved.path}` };
+    return { path: resolved.path, mtimeMs: -1, size: -1, status: resolved.status, kernel: undefined, nudge: undefined, error: `cannot stat lean-code skill file: ${resolved.path}` };
   }
   const cached = leanSkillCache.get(resolved.path);
   if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
@@ -210,18 +268,21 @@ export function loadLeanKernel(home: string): LeanSkillCacheEntry {
       size: stat.size,
       status: resolved.status,
       kernel: undefined,
+      nudge: undefined,
       error: `cannot read lean-code skill file: ${error instanceof Error ? error.message : String(error)}`,
     };
     leanSkillCache.set(resolved.path, entry);
     return entry;
   }
   const kernel = extractRuntimeKernel(text);
+  const nudge = extractRuntimeNudge(text) ?? LEAN_NUDGE_TEXT;
   const entry: LeanSkillCacheEntry = {
     path: resolved.path,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     status: resolved.status,
     kernel,
+    nudge,
     error:
       kernel === undefined
         ? `lean-code skill file has no parsable '# Runtime Kernel' section (${resolved.path})`
@@ -272,6 +333,123 @@ export function leanEvalFromSkillsToml(text: string): LeanEvalMode | undefined {
   return undefined;
 }
 
+/**
+ * Parse `[lean] opportunity` from config/skills.toml text (plan T3.4).
+ */
+export function leanOpportunityFromSkillsToml(text: string): boolean {
+  let inLean = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inLean = line.startsWith("[lean]");
+      continue;
+    }
+    if (!inLean || line === "" || line.startsWith("#")) continue;
+    if (!line.includes("=")) continue;
+    const [key, ...rest] = line.split("=");
+    if (key.trim() !== "opportunity") continue;
+    const val = rest.join("=").split("#")[0].trim().replace(/^["']|["']$/g, "").toLowerCase();
+    return val === "true" || val === "1" || val === "yes" || val === "on" || val === "active";
+  }
+  return false;
+}
+
+export interface LeanCooldownState {
+  currentPhase: string;
+  nudgesEmittedInPhase: number;
+  emittedReasons: Set<string>;
+  lastSeverity: LeanLevel;
+}
+
+const sessionCooldownStates = new Map<string, LeanCooldownState>();
+
+export function resetLeanCooldown(): void {
+  sessionCooldownStates.clear();
+}
+
+export function computeLeanSeverity(reasons: string[]): LeanLevel {
+  const distinct = new Set(reasons);
+  if (distinct.size === 0) return "NOOP";
+  if (distinct.has("TEST_WEAKENING_RISK") || distinct.size >= 2) return "FULL";
+  return "NUDGE";
+}
+
+export function applyLeanCooldown(
+  reasons: string[],
+  opts?: { sessionId?: string; phase?: string },
+): { finalLevel: LeanLevel; activeReasons: string[] } {
+  const key = opts?.sessionId ?? "default";
+  let state = sessionCooldownStates.get(key);
+  if (!state) {
+    state = {
+      currentPhase: "default",
+      nudgesEmittedInPhase: 0,
+      emittedReasons: new Set(),
+      lastSeverity: "NOOP",
+    };
+    sessionCooldownStates.set(key, state);
+  }
+
+  const taskPhase = opts?.phase ?? "default";
+  if (taskPhase !== state.currentPhase) {
+    state.currentPhase = taskPhase;
+    state.nudgesEmittedInPhase = 0;
+  }
+
+  const candidateReasons = reasons.filter((r) => !state!.emittedReasons.has(r));
+  if (candidateReasons.length === 0) {
+    state.lastSeverity = "NOOP";
+    return { finalLevel: "NOOP", activeReasons: [] };
+  }
+
+  const targetSeverity = computeLeanSeverity(candidateReasons);
+  if (targetSeverity === "NUDGE") {
+    if (state.nudgesEmittedInPhase >= 1) {
+      state.lastSeverity = "NOOP";
+      return { finalLevel: "NOOP", activeReasons: [] };
+    }
+    state.nudgesEmittedInPhase++;
+    for (const r of candidateReasons) {
+      state.emittedReasons.add(r);
+    }
+    state.lastSeverity = "NUDGE";
+    return { finalLevel: "NUDGE", activeReasons: candidateReasons };
+  }
+
+  if (targetSeverity === "FULL") {
+    if (state.lastSeverity === "FULL") {
+      return { finalLevel: "NOOP", activeReasons: [] };
+    }
+    for (const r of candidateReasons) {
+      state.emittedReasons.add(r);
+    }
+    state.lastSeverity = "FULL";
+    return { finalLevel: "FULL", activeReasons: candidateReasons };
+  }
+
+  state.lastSeverity = "NOOP";
+  return { finalLevel: "NOOP", activeReasons: [] };
+}
+
+export interface DecideLeanRuntimeOptions {
+  home: string | null;
+  role: AgentRole;
+  base: string | undefined;
+  env?: Record<string, string | undefined>;
+  sessionId?: string;
+  phase?: string;
+  opportunity?: boolean;
+  reasons?: string[];
+  readLedger?: Array<{ blob_sha?: string; hash?: string; path?: string }>;
+  diff?: string;
+  capsule?: { files_touched?: string[] };
+  requirements?: Array<{ id?: string; requirement?: string; status?: string; importance?: string; refs?: string[]; evidence?: string[] }>;
+  modifiedFiles?: string[];
+  requirementRefs?: string[];
+  toolCalls?: unknown[];
+  postAcceptanceWork?: boolean;
+}
+
 export interface LeanEvalResolution {
   mode: LeanEvalMode | null;
   source: "env" | "file" | null;
@@ -313,12 +491,7 @@ export function resolveLeanEvalFromFile(
     : { mode, source: "file", error: undefined };
 }
 
-export function decideLeanRuntime(opts: {
-  home: string | null;
-  role: AgentRole;
-  base: string | undefined;
-  env?: Record<string, string | undefined>;
-}): LeanRuntimeOutcome {
+export function decideLeanRuntime(opts: DecideLeanRuntimeOptions): LeanRuntimeOutcome {
   const env = opts.env ?? process.env;
   const rawEnv = (env[LEAN_ENV] ?? "").trim().toLowerCase() || null;
 
@@ -330,6 +503,7 @@ export function decideLeanRuntime(opts: {
     error: string | undefined,
     mode: string | null,
     evalSource: "env" | "file" | null,
+    nudge?: string,
   ): LeanRuntimeOutcome => ({
     decision: "omit",
     reason,
@@ -340,16 +514,16 @@ export function decideLeanRuntime(opts: {
     dedupHit,
     error,
     kernel: undefined,
+    level: "NOOP",
+    placement: "tail",
+    reasons: [],
+    nudge,
   });
 
-  // Sol hard-orchestrator (plan §8.3) and non-code roles: NEVER inject —
-  // resolved before any env/file gate access (no config I/O on those paths).
   if (opts.role === "hard_orchestrator" || (opts.role !== "driver" && opts.role !== "worker")) {
     return omit("role", null, 0, false, undefined, null, null);
   }
 
-  // Eval gate: env advisory/off OVERRIDES; unrecognized env falls through to
-  // the file; file advisory/off applies; absent => inert.
   let mode: LeanEvalMode | null = null;
   let evalSource: "env" | "file" | null = null;
   if (rawEnv !== null && LEAN_ADVISORY_VALUES.has(rawEnv)) {
@@ -361,14 +535,12 @@ export function decideLeanRuntime(opts: {
   } else {
     const file = resolveLeanEvalFromFile(opts.home);
     if (file.error !== undefined) {
-      // Fail-open: unreadable config -> inert + one bounded error.
       return omit("off", null, 0, false, file.error, null, null);
     }
     mode = file.mode;
     evalSource = file.source;
   }
 
-  // Explicit off (env or file): forces inert (plan §8.2 env=off).
   if (mode === "off") {
     return omit("off", null, 0, false, undefined, mode, evalSource);
   }
@@ -379,20 +551,97 @@ export function decideLeanRuntime(opts: {
   if (loaded.error !== undefined || loaded.kernel === undefined) {
     return omit("skill-missing", loaded.status, 0, false, loaded.error, mode, evalSource);
   }
-  // Retired disables runtime behavior (plan §26.1) — even under advisory.
   if (loaded.status === "retired") {
-    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
+    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource, loaded.nudge);
   }
   const lifecycleActive = loaded.status === "active";
   const advisory = mode === "advisory";
   if (!lifecycleActive && !advisory) {
-    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
+    return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource, loaded.nudge);
   }
+
+  const isOpportunity =
+    opts.opportunity === true ||
+    opts.reasons !== undefined ||
+    opts.readLedger !== undefined ||
+    opts.diff !== undefined ||
+    opts.capsule !== undefined ||
+    opts.requirements !== undefined ||
+    opts.modifiedFiles !== undefined ||
+    opts.requirementRefs !== undefined ||
+    opts.toolCalls !== undefined ||
+    opts.postAcceptanceWork === true;
+
+  const nudgeText = loaded.nudge ?? LEAN_NUDGE_TEXT;
+
+  if (isOpportunity) {
+    const reasons = opts.reasons ?? [];
+    const cooldown = applyLeanCooldown(reasons, {
+      sessionId: opts.sessionId,
+      phase: opts.phase,
+    });
+    const base = opts.base;
+    const dedupHit = base !== undefined && base.includes(LEAN_KERNEL_MARKER);
+
+    if (cooldown.finalLevel === "NOOP" || dedupHit) {
+      return {
+        decision: "omit",
+        reason: dedupHit ? (lifecycleActive ? "active" : "advisory") : "noop",
+        mode,
+        evalSource,
+        skillStatus: loaded.status,
+        kernelChars: 0,
+        dedupHit,
+        error: undefined,
+        kernel: undefined,
+        level: "NOOP",
+        placement: "tail",
+        reasons: cooldown.activeReasons,
+        nudge: nudgeText,
+      };
+    }
+
+    if (cooldown.finalLevel === "NUDGE") {
+      return {
+        decision: "inject",
+        reason: cooldown.activeReasons[0] ?? (lifecycleActive ? "active" : "advisory"),
+        mode,
+        evalSource,
+        skillStatus: loaded.status,
+        kernelChars: nudgeText.length,
+        dedupHit: false,
+        error: undefined,
+        kernel: nudgeText,
+        level: "NUDGE",
+        placement: "tail",
+        reasons: cooldown.activeReasons,
+        nudge: nudgeText,
+      };
+    }
+
+    // FULL
+    return {
+      decision: "inject",
+      reason: cooldown.activeReasons[0] ?? (lifecycleActive ? "active" : "advisory"),
+      mode,
+      evalSource,
+      skillStatus: loaded.status,
+      kernelChars: loaded.kernel.length,
+      dedupHit: false,
+      error: undefined,
+      kernel: loaded.kernel,
+      level: "FULL",
+      placement: "tail",
+      reasons: cooldown.activeReasons,
+      nudge: nudgeText,
+    };
+  }
+
+  // Classic mode
   const reason: LeanReason = lifecycleActive ? "active" : "advisory";
   const base = opts.base;
   if (base === undefined || base.trim() === "") {
-    // Never invent a prompt: nothing to append to.
-    return omit(reason, loaded.status, loaded.kernel.length, false, undefined, mode, evalSource);
+    return omit(reason, loaded.status, loaded.kernel.length, false, undefined, mode, evalSource, nudgeText);
   }
   const dedupHit = base.includes(LEAN_KERNEL_MARKER);
   return {
@@ -405,7 +654,14 @@ export function decideLeanRuntime(opts: {
     dedupHit,
     error: undefined,
     kernel: dedupHit ? undefined : loaded.kernel,
+    level: dedupHit ? "NOOP" : "FULL",
+    reasons: [],
+    nudge: nudgeText,
   };
+}
+
+export function evaluateLeanOpportunity(opts: DecideLeanRuntimeOptions): LeanRuntimeOutcome {
+  return decideLeanRuntime({ ...opts, opportunity: true });
 }
 
 /**
