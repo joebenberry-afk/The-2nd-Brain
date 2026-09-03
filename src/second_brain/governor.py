@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -197,6 +197,7 @@ class SessionTokens:
     # Computed values
     autoinject_cache_hit_rate: float = 0.0
     net_brain_cost: int = 0  # model_turns cost minus brain_injected_tokens offset
+    cache_epochs: list[dict] = field(default_factory=list)
 
 
 def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
@@ -211,6 +212,14 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
     session_id = session_jsonl_path.stem
     tokens = SessionTokens(session_id=session_id)
     numeric_usage_fields: set[str] = set()
+    turn_fallback_counter = 0
+    saw_turn_start = False
+    current_turn = 0
+    current_system_prefix_sha: str | None = None
+    current_tool_surface_sha: str | None = None
+    last_observed_system_prefix_sha: str | None = None
+    last_observed_tool_surface_sha: str | None = None
+    has_prior_cache_epoch = False
 
     with open(session_jsonl_path, encoding='utf-8') as f:
         for line in f:
@@ -235,6 +244,25 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
             if kind == 'before_agent_start':
                 tokens.role = record.get('role')
 
+            # Turn start: track turn number (cache-epoch attribution, T2.5)
+            if kind == 'turn_start':
+                saw_turn_start = True
+                turn_value = record.get('turn')
+                if isinstance(turn_value, int) and not isinstance(turn_value, bool):
+                    current_turn = turn_value
+                else:
+                    turn_fallback_counter += 1
+                    current_turn = turn_fallback_counter
+                current_system_prefix_sha = None
+                current_tool_surface_sha = None
+
+            # Provider request meta: capture prefix/tool-surface shas for this turn
+            if kind == 'provider_request_meta':
+                if 'system_prefix_sha' in record:
+                    current_system_prefix_sha = record['system_prefix_sha']
+                if 'tool_surface_sha' in record:
+                    current_tool_surface_sha = record['tool_surface_sha']
+
             # Usage: assistant_usage stores counters at the record root;
             # Hermes model_invocation_completed nests the same mapping.
             if kind in ('assistant_usage', 'model_invocation_completed'):
@@ -250,6 +278,47 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 elif tokens.source_kind != kind:
                     tokens.source_kind = None
                 tokens.model_turns += 1
+
+                # Cache-epoch attribution (T2.5): each assistant_usage/
+                # model_invocation_completed record is one model turn.
+                if not saw_turn_start:
+                    turn_fallback_counter += 1
+                    current_turn = turn_fallback_counter
+                raw_cache_write = usage.get('cache_write_tokens')
+                if (
+                    isinstance(raw_cache_write, int)
+                    and not isinstance(raw_cache_write, bool)
+                    and raw_cache_write > 0
+                ):
+                    if current_system_prefix_sha is None and current_tool_surface_sha is None:
+                        cause = 'unknown'
+                    elif not has_prior_cache_epoch:
+                        cause = 'unknown'
+                    elif (
+                        current_system_prefix_sha is not None
+                        and current_system_prefix_sha != last_observed_system_prefix_sha
+                    ):
+                        cause = 'brain_prefix'
+                    elif (
+                        current_tool_surface_sha is not None
+                        and current_tool_surface_sha != last_observed_tool_surface_sha
+                    ):
+                        cause = 'tool_surface'
+                    else:
+                        cause = 'harness'
+                    tokens.cache_epochs.append({
+                        'turn': current_turn,
+                        'cause': cause,
+                        'write_tokens': raw_cache_write,
+                    })
+                    has_prior_cache_epoch = True
+                    if current_system_prefix_sha is not None:
+                        last_observed_system_prefix_sha = current_system_prefix_sha
+                    if current_tool_surface_sha is not None:
+                        last_observed_tool_surface_sha = current_tool_surface_sha
+                if not saw_turn_start:
+                    current_system_prefix_sha = None
+                    current_tool_surface_sha = None
 
                 if 'context_window' in record:
                     tokens.context_window = record['context_window']
