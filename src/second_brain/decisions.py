@@ -18,7 +18,7 @@ from .errors import BrainError
 _ROLLOUT_STAGES = frozenset({"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"})
 _DECISION_KINDS = frozenset(
     {"retrieval", "routing", "eviction", "budget", "verification",
-     "admission", "reread", "reconsolidation", "brainstem", "learning"}
+     "admission", "reread", "reconsolidation", "brainstem", "learning", "frontier"}
 )
 _FORBIDDEN_METADATA_FIELDS = frozenset(
     {"prompt", "payload", "secret", "content", "text", "query", "input",
