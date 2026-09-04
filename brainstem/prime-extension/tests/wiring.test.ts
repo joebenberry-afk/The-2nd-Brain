@@ -369,9 +369,11 @@ describe("factory wiring (src/index.ts)", () => {
     const status = JSON.parse(readFileSync(statusPath, "utf8")) as {
       home: string;
       runtime_python: string;
+      brain_version: string | null;
       identity_hash: string;
     };
     expect(status.home).toBe(tmp);
+    expect(status.brain_version).toBeNull(); // no VERSION file in this fixture home
     expect(status.identity_hash).toMatch(/^[0-9a-f]{64}$/);
 
     // A later env change never silently retargets a running instance:
@@ -381,6 +383,15 @@ describe("factory wiring (src/index.ts)", () => {
     loadFactory();
     const reloaded = JSON.parse(readFileSync(statusPath, "utf8")) as { runtime_python: string };
     expect(reloaded.runtime_python).toBe("R:/other/python.exe");
+  });
+
+  it("frozen-per-lifecycle: reads the Brain's own VERSION file into the status record", () => {
+    writeFileSync(join(tmp, "VERSION"), "2.0.0-rc.1\n");
+    loadFactory();
+    const status = JSON.parse(
+      readFileSync(join(tmp, "state", "extension-runtime-ready.json"), "utf8"),
+    ) as { brain_version: string | null };
+    expect(status.brain_version).toBe("2.0.0-rc.1");
   });
 
   it("every handler returns undefined (void) and still writes one record each", async () => {

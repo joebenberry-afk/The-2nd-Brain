@@ -479,6 +479,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // rewrites this file. Best-effort: a write failure never disables the
   // extension (fail-open, same policy as telemetry persistence).
   try {
+    const brainVersion = (() => {
+      try {
+        return readFileSync(join(config.home ?? "", "VERSION"), "utf8").trim();
+      } catch {
+        return null;
+      }
+    })();
     const identityHash = createHash("sha256")
       .update(JSON.stringify({ home: config.home, runtimePython: config.runtimePython }))
       .digest("hex");
@@ -491,6 +498,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           resolved_at: new Date().toISOString(),
           home: config.home,
           runtime_python: config.runtimePython,
+          brain_version: brainVersion,
           identity_hash: identityHash,
         },
         null,

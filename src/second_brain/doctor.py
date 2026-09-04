@@ -14,7 +14,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, db, envsteward, paths
+from . import __version__, build_identity, db, envsteward, paths
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -186,6 +186,20 @@ def check_git(home: Path, checks: list[Check]) -> None:
         checks.append(Check("git repo", STATUS_OK, out))
 
 
+def check_build_identity(home: Path, checks: list[Check]) -> None:
+    identity = build_identity.describe(home)
+    sha = identity["git_sha"] or "unknown"
+    dirty = "dirty" if identity["dirty"] else "clean" if identity["dirty"] is False else "unknown"
+    fingerprint = identity["adapter_build_fingerprint"]
+    detail = (
+        f"version={identity['package_version']} sha={sha[:12]} ({dirty}) "
+        f"schema={identity['db_schema_version']} "
+        f"adapter={fingerprint[:12] if fingerprint else 'unavailable'} "
+        f"qualified_baseline={identity['qualification_baseline_sha'][:12]}"
+    )
+    checks.append(Check("build identity", STATUS_OK, detail))
+
+
 def check_db(home: Path, checks: list[Check]) -> None:
     dbf = db.db_path(home)
     if not dbf.exists():
@@ -296,6 +310,7 @@ def run_doctor(
         check_identity(home, checks)
         check_git(home, checks)
         check_db(home, checks)
+        check_build_identity(home, checks)
         check_tools(checks)
         check_environment(home, repo, session_id, checks)
     return DoctorResult(home=home, checks=checks)

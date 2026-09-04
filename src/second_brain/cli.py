@@ -59,6 +59,7 @@ from . import (
     working_set,
 )
 from . import backup as backup_mod
+from . import build_identity as build_identity_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
 from .errors import BrainError
@@ -1590,6 +1591,16 @@ def cmd_status(args) -> int:
     print(f"Brain home:  {home}")
     vf = home / "VERSION"
     print(f"Version:     {vf.read_text(encoding='utf-8').strip() if vf.exists() else 'unknown'}")
+    identity = build_identity_mod.describe(home)
+    print(
+        "Build:       "
+        f"pkg={identity['package_version']} "
+        f"sha={(identity['git_sha'] or 'unknown')[:12]} "
+        f"dirty={identity['dirty']} "
+        f"schema={identity['db_schema_version']} "
+        f"adapter={(identity['adapter_build_fingerprint'] or 'unavailable')[:12]} "
+        f"qualified_baseline={identity['qualification_baseline_sha'][:12]}"
+    )
     try:
         conn = db.connect(db.db_path(home))
         try:
