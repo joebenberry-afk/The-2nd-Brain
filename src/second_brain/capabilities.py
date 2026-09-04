@@ -389,3 +389,31 @@ def tier_behavior(home: Path | str, harness_id: str) -> str:
     computation is proven to actually gate caller-visible behavior (T4.3
     tests), without wiring tier-gating into unrelated adapters."""
     return TIER_BEHAVIOR[harness_tier(home, harness_id)]
+
+
+def generate_capability_matrix(
+    home: Path | str,
+    harnesses: tuple[str, ...] = ("prime", "claude-code", "codex", "antigravity", "hermes"),
+) -> dict[str, Any]:
+    """Generate a full capability matrix across all supported and available harnesses."""
+    home_p = Path(home)
+    matrix: dict[str, Any] = {
+        "harnesses": {},
+        "generated_at": _now_iso(),
+    }
+    for h in harnesses:
+        state = list_capabilities(home_p, h)
+        tier = harness_tier(home_p, h)
+        behavior = tier_behavior(home_p, h)
+        supported = [name for name, row in state.items() if row["supported"] is True]
+        unsupported = [name for name, row in state.items() if row["supported"] is False]
+        unknown = [name for name, row in state.items() if row["supported"] is None]
+        matrix["harnesses"][h] = {
+            "tier": tier,
+            "behavior": behavior,
+            "capabilities": state,
+            "supported_count": len(supported),
+            "unsupported_count": len(unsupported),
+            "unknown_count": len(unknown),
+        }
+    return matrix
