@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, working_set
+from . import artifacts, ledger, working_set
 from .contracts import (
     HANDOFF_LIST_MAX_ITEMS,
     HANDOFF_SCHEMA_VERSION,
@@ -266,6 +266,9 @@ def create_handoff_envelope(
     stored = artifacts.store_text(
         home_path, payload_text, kind="handoff_payload",
         tool="second_brain.handoff", session=session_id,
+    )
+    artifacts.add_ref(
+        home_path, stored["hash"], owner=f"handoff:{ledger.internal_session_id(session_id)}"
     )
     payload_ref = artifacts.make_handle(stored["hash"])
 

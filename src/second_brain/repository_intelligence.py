@@ -370,6 +370,9 @@ class WorkerPlaneManager:
         stored = artifacts.store_text(
             self.home, result_json, kind="worker_result", session=self.session_id
         )
+        artifacts.add_ref(
+            self.home, stored["hash"], owner=f"repository_intelligence:{self.session_id}"
+        )
 
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.execute(

@@ -521,6 +521,9 @@ def reduce_observation(
             )
             raw_ref = stored["hash"]
             handle = stored["handle"]
+            artifacts.add_ref(
+                home, stored["hash"], owner=f"firewall:{session}" if session else "firewall:none"
+            )
         except Exception:
             # Backing store error must not crash execution (fail-open)
             pass

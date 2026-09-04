@@ -83,7 +83,7 @@ def test_init_manifest_and_header(tmp_path) -> None:
         assert s.dbfile.is_file()
         assert (s.session_path / "manifest.json").is_file()
         header = s.header()
-        assert header["schema_version"] == "1"
+        assert header["schema_version"] == str(ledger_mod.LEDGER_SCHEMA_VERSION)
         assert header["adapter_name"] == "second-brain"
     manifest = json.loads((s.session_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["internal_id"] == ledger_mod.internal_session_id(HOST)
@@ -191,7 +191,7 @@ def test_schema_versioning(tmp_path) -> None:
     internal = ledger_mod.internal_session_id(HOST)
     dbfile = tmp_path / "state" / "sessions" / internal / "ledger.sqlite"
     conn = sqlite3.connect(dbfile)
-    conn.execute("UPDATE ledger_meta SET value = '2' WHERE key = 'schema_version'")
+    conn.execute("UPDATE ledger_meta SET value = '99' WHERE key = 'schema_version'")
     conn.commit()
     conn.close()
     with pytest.raises(BrainError, match="unsupported"):
@@ -703,6 +703,121 @@ def test_checkpoint_ok_and_failure_flag(tmp_path) -> None:
         assert bad["integrity"]["seq_contiguous"] is False
 
 
+# ---------------------------------------------------------------------------
+# Hash chain (T6.3)
+# ---------------------------------------------------------------------------
+
+
+def test_hash_chain_verified_on_append(store) -> None:
+    _seed(store, 3)
+    result = store.integrity()
+    assert result["hash_chain_ok"] is True
+    assert result["hash_chain_verified_through_seq"] == 3
+    assert result["hash_chain_break_seq"] is None
+
+
+def test_hash_chain_detects_in_place_edit(store) -> None:
+    # checkpoint through seq 2, then append seq 3 UNVERIFIED by that checkpoint
+    _seed(store, 2)
+    first = store.integrity()
+    assert first["hash_chain_ok"] is True
+    assert first["hash_chain_verified_through_seq"] == 2
+    store.append_events([_ev(3, "e-3", LifecycleEventType.USER_TASK, parent="e-2")])
+
+    # in-place edit (matching test_replay_detects_payload_tamper_via_compare's
+    # tamper style): direct sqlite3 UPDATE of a row's payload_json
+    conn = sqlite3.connect(store.dbfile)
+    row = conn.execute("SELECT payload_json FROM events WHERE seq = 3").fetchone()
+    payload = json.loads(row[0])
+    payload["tampered"] = True
+    conn.execute("UPDATE events SET payload_json = ? WHERE seq = 3", (json.dumps(payload),))
+    conn.commit()
+    conn.close()
+
+    second = store.integrity()
+    assert second["hash_chain_ok"] is False
+    assert second["hash_chain_break_seq"] == 3
+
+
+def test_integrity_incremental(store) -> None:
+    _seed(store, 3)
+    first = store.integrity()
+    assert first["hash_chain_ok"] is True
+    assert first["hash_chain_verified_through_seq"] == 3
+
+    conn = sqlite3.connect(store.dbfile)
+    persisted = conn.execute(
+        "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
+    ).fetchone()
+    conn.close()
+    assert persisted is not None and int(persisted[0]) == 3
+
+    store.append_events(
+        [
+            _ev(4, "e-4", LifecycleEventType.USER_TASK, parent="e-3"),
+            _ev(5, "e-5", LifecycleEventType.USER_TASK, parent="e-4"),
+        ]
+    )
+
+    # Negative proof of incrementality: tamper an ALREADY-checkpointed row
+    # (seq=2, covered by the first integrity() call above) AFTER that
+    # checkpoint. If the second call re-verified from seq 1 it would catch
+    # this; genuinely incremental verification resumes from last_verified_seq
+    # forward only and must NOT catch it.
+    conn = sqlite3.connect(store.dbfile)
+    row = conn.execute("SELECT payload_json FROM events WHERE seq = 2").fetchone()
+    payload = json.loads(row[0])
+    payload["tampered"] = True
+    conn.execute("UPDATE events SET payload_json = ? WHERE seq = 2", (json.dumps(payload),))
+    conn.commit()
+    conn.close()
+
+    second = store.integrity()
+    assert second["hash_chain_ok"] is True
+    assert second["hash_chain_verified_through_seq"] == 5
+
+
+def test_purge_removes_artifact_refs_before_rmtree(tmp_path) -> None:
+    from second_brain import artifacts
+    from second_brain import db as db_mod
+
+    internal = ledger_mod.internal_session_id(HOST)
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
+        _create(s, project="proj-a")
+        s.append_events(
+            [
+                _ev(1, "task", LifecycleEventType.USER_TASK, payload={"task_sha256": "abc"}),
+                _ev(
+                    2,
+                    "dec",
+                    LifecycleEventType.DECISION,
+                    payload={"decision": "use X", "rationale": "because Y"},
+                ),
+            ]
+        )
+    info = artifacts.store_text(tmp_path, "session-scoped payload", "handoff_payload", session=HOST)
+    artifacts.add_ref(tmp_path, info["hash"], owner=f"handoff:{internal}")
+    artifacts.add_ref(tmp_path, info["hash"], owner=f"vmem:{internal}")
+    other = artifacts.store_text(tmp_path, "other session payload", "generic")
+    artifacts.add_ref(tmp_path, other["hash"], owner="vmem:other-internal-id")
+
+    life = ledger_mod.SessionLifecycle(tmp_path, HOST)
+    life.mark_status("inactive_grace")
+    retention = ledger_mod.load_retention_config(tmp_path)
+    life.purge(inactive=True, retention=retention)
+
+    conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+    remaining = conn.execute(
+        "SELECT owner FROM artifact_refs WHERE owner LIKE ?", (f"%:{internal}",)
+    ).fetchall()
+    assert remaining == []
+    survivor = conn.execute(
+        "SELECT owner FROM artifact_refs WHERE owner = 'vmem:other-internal-id'"
+    ).fetchall()
+    assert len(survivor) == 1
+    conn.close()
+
+
 def test_continuation_capsule_from_events(store) -> None:
     store.append_events(
         [
@@ -1054,7 +1169,7 @@ def test_ledger_store_requires_explicit_host_on_first_init(tmp_path) -> None:
     with ledger_mod.LedgerStore(
         tmp_path, "never-initialized-session", host="hermes"
     ).open(create=True) as s:
-        assert s.header()["schema_version"] == "1"
+        assert s.header()["schema_version"] == str(ledger_mod.LEDGER_SCHEMA_VERSION)
     manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["host"] == "hermes"
 
@@ -1063,7 +1178,7 @@ def test_ledger_store_requires_explicit_host_on_first_init(tmp_path) -> None:
     with ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(
         create=True
     ) as s:
-        assert s.header()["schema_version"] == "1"
+        assert s.header()["schema_version"] == str(ledger_mod.LEDGER_SCHEMA_VERSION)
     manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["host"] == "hermes"
 

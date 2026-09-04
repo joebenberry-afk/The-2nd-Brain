@@ -90,6 +90,7 @@ def iter_records(home: Path) -> list[tuple[str, int, dict]]:
 _HEARTBEAT_FIELDS = (
     "mode", "event", "due", "ran", "healthy", "db_ok", "cache_pruned_count",
     "git_dirty", "issue_codes", "latency_ms", "model_tokens_used",
+    "artifacts_gc_count",
 )
 _HEARTBEAT_MODES = frozenset({"off", "shadow", "active"})
 _P4_OPTIMIZATION_KINDS = frozenset({
@@ -142,7 +143,7 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             value = values[field]
             if field in record and not isinstance(value, bool):
                 issues.append(_field_issue(identity, field, "must be boolean"))
-        for field in ("cache_pruned_count", "latency_ms", "model_tokens_used"):
+        for field in ("cache_pruned_count", "latency_ms", "model_tokens_used", "artifacts_gc_count"):
             value = values[field]
             if field in record and (
                 isinstance(value, bool) or not isinstance(value, int) or value < 0
@@ -609,6 +610,7 @@ def append_record(
         safe.setdefault("issue_codes", [])
         safe.setdefault("latency_ms", 0)
         safe.setdefault("model_tokens_used", 0)
+        safe.setdefault("artifacts_gc_count", 0)
     record = {
         "v": KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION),
         "kind": kind,

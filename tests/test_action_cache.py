@@ -329,3 +329,74 @@ class TestActionCacheCLI:
         )
         assert inv_res.returncode == 0
         assert "Invalidated 1 entries" in inv_res.stdout
+
+
+class TestActionCacheArtifactRefs:
+    """T6.3: action_cache pairs artifact_refs registration/removal with its
+    own store/delete lifecycle so artifacts.gc() can reap orphaned blobs."""
+
+    def test_lru_eviction_removes_artifact_ref(self, tmp_path):
+        from second_brain import db as db_mod
+
+        cache = ActionCacheStore(tmp_path, max_entries=2)
+        proof = ActionProof()
+        e1 = cache.put(
+            action_type=ActionType.FILE_READ, target="f1.py", content="c1",
+            proof=proof, params={"p": 1},
+        )
+        time.sleep(0.01)
+        e2 = cache.put(
+            action_type=ActionType.FILE_READ, target="f2.py", content="c2",
+            proof=proof, params={"p": 2},
+        )
+        time.sleep(0.01)
+        e3 = cache.put(
+            action_type=ActionType.FILE_READ, target="f3.py", content="c3",
+            proof=proof, params={"p": 3},
+        )
+        conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+        owners = {r["owner"] for r in conn.execute("SELECT owner FROM artifact_refs").fetchall()}
+        conn.close()
+        assert f"action_cache:{e1.action_key}" not in owners  # evicted
+        assert f"action_cache:{e2.action_key}" in owners
+        assert f"action_cache:{e3.action_key}" in owners
+
+    def test_invalidate_by_key_removes_artifact_ref(self, tmp_path):
+        from second_brain import db as db_mod
+
+        cache = ActionCacheStore(tmp_path)
+        entry = cache.put(
+            action_type=ActionType.FILE_READ, target="f1.py", content="c1",
+            proof=ActionProof(),
+        )
+        owner = f"action_cache:{entry.action_key}"
+        conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+        before = conn.execute(
+            "SELECT COUNT(*) FROM artifact_refs WHERE owner = ?", (owner,)
+        ).fetchone()[0]
+        conn.close()
+        assert before == 1
+
+        cache.invalidate_by_key(entry.action_key)
+
+        conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+        after = conn.execute(
+            "SELECT COUNT(*) FROM artifact_refs WHERE owner = ?", (owner,)
+        ).fetchone()[0]
+        conn.close()
+        assert after == 0
+
+    def test_clear_bulk_removes_all_action_cache_refs(self, tmp_path):
+        from second_brain import db as db_mod
+
+        cache = ActionCacheStore(tmp_path)
+        cache.put(action_type=ActionType.FILE_READ, target="f1.py", content="c1", proof=ActionProof())
+        cache.put(action_type=ActionType.FILE_READ, target="f2.py", content="c2", proof=ActionProof())
+        cache.clear()
+
+        conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM artifact_refs WHERE owner LIKE 'action_cache:%'"
+        ).fetchone()[0]
+        conn.close()
+        assert remaining == 0

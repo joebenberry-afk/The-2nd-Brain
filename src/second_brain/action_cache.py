@@ -27,7 +27,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts
+from . import artifacts, db
 from .contracts import estimate_tokens
 from .errors import BrainError
 
@@ -297,6 +297,7 @@ class ActionCacheStore:
             env_fingerprint=act_proof.env_fingerprint,
             verification_predicate=act_proof.verification_predicate,
         )
+        artifacts.add_ref(self.home, output_ref, owner=f"action_cache:{action_key}")
 
         now = _now()
         entry = ActionCacheEntry(
@@ -348,11 +349,20 @@ class ActionCacheStore:
             count = count_row["c"] if count_row else 0
             if count > effective_max:
                 excess = count - effective_max
+                evicted = conn.execute(
+                    "SELECT action_key, output_ref FROM action_cache "
+                    "ORDER BY last_accessed_at ASC LIMIT ?",
+                    (excess,),
+                ).fetchall()
                 conn.execute(
                     "DELETE FROM action_cache WHERE action_key IN "
                     "(SELECT action_key FROM action_cache ORDER BY last_accessed_at ASC LIMIT ?)",
                     (excess,),
                 )
+                for row in evicted:
+                    artifacts.remove_ref(
+                        self.home, row["output_ref"], owner=f"action_cache:{row['action_key']}"
+                    )
         conn.commit()
 
         return entry
@@ -546,8 +556,13 @@ class ActionCacheStore:
     def invalidate_by_key(self, action_key: str) -> None:
         """Invalidate single entry by action_key."""
         conn = self._get_conn()
+        row = conn.execute(
+            "SELECT output_ref FROM action_cache WHERE action_key = ?", (action_key,)
+        ).fetchone()
         conn.execute("DELETE FROM action_cache WHERE action_key = ?", (action_key,))
         conn.commit()
+        if row is not None:
+            artifacts.remove_ref(self.home, row["output_ref"], owner=f"action_cache:{action_key}")
 
     def invalidate_by_path(self, path: Path | str) -> int:
         """
@@ -567,25 +582,29 @@ class ActionCacheStore:
         candidates = {str(path), resolved_str}
         conn = self._get_conn()
         placeholders = ",".join("?" for _ in candidates)
-        to_delete: set[str] = {
-            r["action_key"]
+        to_delete: dict[str, str] = {
+            r["action_key"]: r["output_ref"]
             for r in conn.execute(
-                f"SELECT action_key FROM action_cache WHERE target IN ({placeholders})",
+                f"SELECT action_key, output_ref FROM action_cache WHERE target IN ({placeholders})",
                 tuple(candidates),
             ).fetchall()
         }
 
-        for r in conn.execute("SELECT action_key, proof_json FROM action_cache").fetchall():
+        for r in conn.execute(
+            "SELECT action_key, output_ref, proof_json FROM action_cache"
+        ).fetchall():
             proof_dict = json.loads(r["proof_json"])
             input_hashes = proof_dict.get("input_hashes", {})
             for p in input_hashes:
                 if str(Path(p).resolve()) == resolved_str:
-                    to_delete.add(r["action_key"])
+                    to_delete[r["action_key"]] = r["output_ref"]
                     break
 
         for key in to_delete:
             conn.execute("DELETE FROM action_cache WHERE action_key = ?", (key,))
         conn.commit()
+        for key, output_ref in to_delete.items():
+            artifacts.remove_ref(self.home, output_ref, owner=f"action_cache:{key}")
         return len(to_delete)
 
     def get_stats(self) -> dict[str, Any]:
@@ -612,18 +631,39 @@ class ActionCacheStore:
         """Prune entries whose expires_at is past the current time."""
         now = _now()
         conn = self._get_conn()
+        expired = conn.execute(
+            "SELECT action_key, output_ref FROM action_cache "
+            "WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now,),
+        ).fetchall()
         res = conn.execute(
             "DELETE FROM action_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
             (now,),
         )
         conn.commit()
+        for row in expired:
+            artifacts.remove_ref(
+                self.home, row["output_ref"], owner=f"action_cache:{row['action_key']}"
+            )
         return res.rowcount
 
     def clear(self) -> None:
-        """Clear all entries."""
+        """Clear all entries. Bulk-clears every action_cache-owned artifact
+        ref in one statement (every owner under this store is being cleared
+        at once, so a single bulk delete is correct and avoids an N-row
+        round trip)."""
         conn = self._get_conn()
         conn.execute("DELETE FROM action_cache")
         conn.commit()
+        dbfile = db.db_path(self.home)
+        if db.pending_migrations(dbfile):
+            db.migrate(dbfile)
+        refs_conn = db.connect(dbfile)
+        try:
+            refs_conn.execute("DELETE FROM artifact_refs WHERE owner LIKE 'action_cache:%'")
+            refs_conn.commit()
+        finally:
+            refs_conn.close()
 
     put = store_action
 

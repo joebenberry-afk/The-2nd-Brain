@@ -2122,6 +2122,11 @@ def _handle_post_tool_call(
         tool=tool_name,
         session=binding.host_session_id,
     )
+    artifacts.add_ref(
+        home,
+        raw_artifact["hash"],
+        owner=f"rtd:{ledger.internal_session_id(binding.host_session_id)}",
+    )
     if raw_artifact["hash"] != raw_sha or artifacts.expand(home, raw_sha) != raw_bytes:
         raise ValueError("preserve-first Hermes artifact verification failed")
 

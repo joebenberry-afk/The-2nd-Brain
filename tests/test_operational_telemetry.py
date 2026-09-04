@@ -28,6 +28,7 @@ def _heartbeat(**fields: object) -> dict:
         "issue_codes": [],
         "latency_ms": 0,
         "model_tokens_used": 0,
+        "artifacts_gc_count": 0,
     }
     record.update(fields)
     return record

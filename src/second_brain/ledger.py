@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import semantic
+from . import artifacts, semantic
 from .contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
@@ -47,7 +47,11 @@ from .contracts import (
 from .errors import BrainError
 from .security.paths import assert_safe_recursive_delete, resolve_under
 
-LEDGER_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION = 2
+
+# T6.3 hash chain: fixed seed for the first event's prev_hash (64 zero hex
+# chars — no prior row exists to derive from).
+_GENESIS_HASH = "0" * 64
 
 _DEFAULT_RETENTION: dict[str, Any] = {
     "inactive_grace_minutes": 10080,
@@ -126,7 +130,8 @@ CREATE TABLE IF NOT EXISTS events (
     ignorable INTEGER NOT NULL DEFAULT 0,
     payload_json TEXT NOT NULL,
     artifact_sha256 TEXT,
-    source_event_ids TEXT
+    source_event_ids TEXT,
+    prev_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS request_epochs (
     epoch_id TEXT PRIMARY KEY,
@@ -508,14 +513,22 @@ class LedgerStore:
                             f"invalid parent_event_id: {event.parent_event_id!r}"
                         )
             seqs: list[int] = []
+            prior_row_hash = self._conn.execute(
+                "SELECT prev_hash FROM events ORDER BY seq DESC LIMIT 1"
+            ).fetchone()
+            running_prev_hash = prior_row_hash[0] if prior_row_hash is not None else _GENESIS_HASH
             for insert_index, event in enumerate(events):
                 effective_seq = event.seq if event.seq > 0 else next_seq + insert_index
+                payload_canonical = canonical_json(event.payload)
+                event_prev_hash = hashlib.sha256(
+                    (running_prev_hash + payload_canonical).encode("utf-8")
+                ).hexdigest()
                 self._conn.execute(
                     "INSERT INTO events (seq, event_id, internal_session_id, agent_id, "
                     " parent_event_id, host_entry_id, host_parent_entry_id, segment_id, "
                     " event_type, timestamp, surface_visibility, ignorable, payload_json, "
-                    " artifact_sha256, source_event_ids) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " artifact_sha256, source_event_ids, prev_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         effective_seq,
                         event.event_id,
@@ -529,12 +542,14 @@ class LedgerStore:
                         event.timestamp,
                         event.surface_visibility.value,
                         1 if event.ignorable else 0,
-                        canonical_json(event.payload),
+                        payload_canonical,
                         event.artifact_sha256,
                         canonical_json(event.source_event_ids),
+                        event_prev_hash,
                     ),
                 )
                 seqs.append(effective_seq)
+                running_prev_hash = event_prev_hash
             for event in events:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO events_fts (event_id, event_type, payload_text) "
@@ -594,7 +609,31 @@ class LedgerStore:
         self._conn.commit()
         self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
 
+    def _verify_object_digests(self) -> tuple[bool, list[str]]:
+        """Full digest re-verification of every object_refs row (session-
+        scoped; used by replay(), not by integrity()/checkpoint_ledger's hot
+        path — see integrity()'s docstring)."""
+        bad: list[str] = []
+        for obj in self._conn.execute("SELECT sha256, size FROM object_refs").fetchall():
+            try:
+                path = _contained(self._dir, f"{_OBJECT_DIR}/{obj['sha256']}")
+                data = path.read_bytes()
+                if hashlib.sha256(data).hexdigest() != obj["sha256"]:
+                    bad.append(obj["sha256"][:12])
+            except OSError:
+                bad.append(obj["sha256"][:12])
+        return (not bad, bad)
+
     def integrity(self) -> dict[str, Any]:
+        """Seq contiguity, orphan parents, schema version, and an
+        incremental hash-chain check (plan T6.3): verification resumes from
+        ``ledger_meta['last_verified_seq']`` (default 0) rather than
+        re-hashing every event on every call. Object payloads are NOT
+        re-hashed here — ``read_object()`` digest-verifies on every read,
+        and ``replay()`` separately full-verifies every object_refs row
+        before returning a projection; re-hashing all objects on every
+        integrity()/checkpoint_ledger() call was the eager cost this
+        rewrite removes."""
         assert self._conn is not None
         row = self._conn.execute(
             "SELECT COALESCE(MAX(seq), 0) AS mx, COALESCE(MIN(seq), 0) AS mn, COUNT(*) AS n "
@@ -606,30 +645,54 @@ class LedgerStore:
             "SELECT COUNT(*) FROM events e WHERE e.parent_event_id IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM events p WHERE p.event_id = e.parent_event_id)"
         ).fetchone()[0]
-        digest_ok = True
-        bad: list[str] = []
-        for obj in self._conn.execute("SELECT sha256, size FROM object_refs").fetchall():
-            try:
-                path = _contained(self._dir, f"{_OBJECT_DIR}/{obj['sha256']}")
-                data = path.read_bytes()
-                if hashlib.sha256(data).hexdigest() != obj["sha256"]:
-                    bad.append(obj["sha256"][:12])
-            except OSError:
-                bad.append(obj["sha256"][:12])
-        if bad:
-            digest_ok = False
         version = int(
             self._conn.execute(
                 "SELECT value FROM ledger_meta WHERE key = 'schema_version'"
             ).fetchone()[0]
         )
+
+        last_verified_row = self._conn.execute(
+            "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
+        ).fetchone()
+        last_verified_seq = int(last_verified_row[0]) if last_verified_row is not None else 0
+        seed_row = self._conn.execute(
+            "SELECT prev_hash FROM events WHERE seq = ?", (last_verified_seq,)
+        ).fetchone()
+        running_prev_hash = seed_row[0] if seed_row is not None else _GENESIS_HASH
+
+        hash_chain_ok = True
+        hash_chain_break_seq: int | None = None
+        verified_through = last_verified_seq
+        for erow in self._conn.execute(
+            "SELECT seq, payload_json, prev_hash FROM events WHERE seq > ? ORDER BY seq ASC",
+            (last_verified_seq,),
+        ):
+            expected = hashlib.sha256(
+                (running_prev_hash + erow["payload_json"]).encode("utf-8")
+            ).hexdigest()
+            if expected != erow["prev_hash"]:
+                hash_chain_ok = False
+                hash_chain_break_seq = int(erow["seq"])
+                break
+            running_prev_hash = erow["prev_hash"]
+            verified_through = int(erow["seq"])
+
+        if hash_chain_ok:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO ledger_meta (key, value) VALUES ('last_verified_seq', ?)",
+                (str(verified_through),),
+            )
+            self._conn.commit()
+
         return {
             "seq_contiguous": contiguous,
             "orphan_parents": int(orphans),
-            "object_digests_ok": digest_ok,
-            "object_bad": bad,
+            "objects_verified_on_read_only": True,
             "schema_version": version,
             "event_count": n,
+            "hash_chain_ok": hash_chain_ok,
+            "hash_chain_verified_through_seq": verified_through,
+            "hash_chain_break_seq": hash_chain_break_seq,
         }
 
     # -- segments ---------------------------------------------------------------
@@ -856,9 +919,10 @@ class LedgerStore:
             raise BrainError("replay rejected: seq not contiguous")
         if integrity["orphan_parents"]:
             raise BrainError("replay rejected: orphan parent_event_id")
-        if not integrity["object_digests_ok"]:
+        digests_ok, bad_objects = self._verify_object_digests()
+        if not digests_ok:
             raise BrainError(
-                f"replay rejected: object digest failures {integrity['object_bad']}"
+                f"replay rejected: object digest failures {bad_objects}"
             )
         chain = _lineage_chain(self._conn, lineage)
         rows = self._conn.execute(
@@ -1310,7 +1374,7 @@ def checkpoint_ledger(store: LedgerStore) -> dict[str, Any]:
         ok = bool(
             integrity["seq_contiguous"]
             and integrity["orphan_parents"] == 0
-            and integrity["object_digests_ok"]
+            and integrity["hash_chain_ok"]
         )
         return {"ok": ok, "durability": "flushed", "integrity": integrity}
     except Exception as exc:  # fail open to a failure flag, never raise
@@ -1600,6 +1664,7 @@ class SessionLifecycle:
             forbidden_roots=(self._home,),
             expected_name=self._internal,
         )
+        artifacts.remove_refs_by_owner_suffix(self._home, f":{self._internal}")
         shutil.rmtree(target)
 
         receipt_id = f"purge-{_now()}"

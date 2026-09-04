@@ -126,6 +126,22 @@ class TestVMemStorageAndResidency:
         assert fetched.summary == "Use FTS5 index for faster retrieval"
         assert fetched.content_sha256 == obj.content_sha256
 
+    def test_store_object_registers_artifact_ref(self, brain_home):
+        from second_brain import ledger as ledger_mod
+
+        store = VMemStore(brain_home, "sess-vmem-artifact-ref")
+        obj = store.store_object(
+            kind=SessionObjectKind.GENERIC, title="ref check", content="registered content"
+        )
+        internal_id = ledger_mod.internal_session_id("sess-vmem-artifact-ref")
+        conn = db.connect(db_path(brain_home), readonly=True)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM artifact_refs WHERE sha = ? AND owner = ?",
+            (obj.content_sha256, f"vmem:{internal_id}"),
+        ).fetchone()
+        conn.close()
+        assert row[0] == 1
+
     def test_pinned_object_priority(self, brain_home):
         store = VMemStore(brain_home, "sess-vmem-2")
         obj_pinned = store.store_object(
