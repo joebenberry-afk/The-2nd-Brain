@@ -1375,6 +1375,21 @@ def supersede(
     return new_version
 
 
+def revert_supersede(
+    home: Path | str,
+    memory_id: str,
+    *,
+    target_version: int | None = None,
+    session_id: str | None = None,
+) -> int:
+    """Revert a memory's active version to a prior version without deleting history."""
+    from . import reconsolidation
+
+    return reconsolidation.revert_supersede(
+        home, memory_id, target_version=target_version, session_id=session_id
+    )
+
+
 def history(home: Path, memory_id: str) -> list[dict]:
     """All versions (oldest first) with paths and change notes."""
     row = _row(home, memory_id)
