@@ -7,13 +7,12 @@ models. Global policy aggregates exclude models whose success rate is below a
 threshold — model-specific failures must not contaminate global policy.
 """
 
-from __future__ import annotations
-
+from collections.abc import Callable, Mapping
 import hashlib
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-
+from typing import Any
 from . import db
 from .errors import BrainError
 
@@ -277,4 +276,77 @@ def global_policy_stats(home: Path, skill_name: str, min_success_per_model: floa
         "excluded_model_count": len(excluded),
         "worst_model_success_rate": round(min(rates), 4) if rates else None,
         "global_scope_eligible": global_scope_eligible,
+    }
+
+
+def propose_transfer(
+    home: Path | str,
+    engram_id: str,
+    from_model: str,
+    to_model: str,
+    harness: str = "universal",
+) -> dict[str, Any]:
+    """Propose cross-model transfer of an engram. Stays candidate until verified."""
+    home_p = Path(home)
+    del home_p
+    transfer_id = "transfer-" + hashlib.sha256(
+        f"{engram_id}:{from_model}:{to_model}:{harness}".encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "transfer_id": transfer_id,
+        "engram_id": engram_id,
+        "from_model": from_model,
+        "to_model": to_model,
+        "harness": harness,
+        "status": "candidate",
+        "scope": "candidate",
+        "rollout_stage": "SHADOW",
+        "verified": False,
+    }
+
+
+def evaluate_teacher_student(
+    home: Path | str,
+    engram_id: str,
+    teacher_model: str,
+    student_model: str,
+    fixture: Mapping[str, Any],
+    *,
+    student_runner: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Evaluate teacher-to-student distillation requiring the same postconditions."""
+    home_p = Path(home)
+    del home_p
+    expected_postconditions = list(fixture.get("expected_postconditions") or [])
+
+    if student_runner is not None:
+        student_run = student_runner(fixture)
+    else:
+        student_run = dict(fixture.get("student_run") or {})
+
+    # Check if student satisfied 100% of the same postconditions as the teacher
+    satisfied = True
+    student_postconditions = list(student_run.get("passed_postconditions") or [])
+    for postcond in expected_postconditions:
+        if postcond not in student_postconditions:
+            satisfied = False
+            break
+
+    if student_run.get("acceptance_passed") is False:
+        satisfied = False
+
+    if satisfied:
+        status = "VERIFIED"
+        transfer_approved = True
+    else:
+        status = "HELD"
+        transfer_approved = False
+
+    return {
+        "engram_id": engram_id,
+        "teacher_model": teacher_model,
+        "student_model": student_model,
+        "status": status,
+        "transfer_approved": transfer_approved,
+        "same_acceptance": satisfied,
     }
