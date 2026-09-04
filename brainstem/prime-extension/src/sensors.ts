@@ -927,7 +927,7 @@ export interface LeanKernelRecord extends BaseRecord {
   /** inject = kernel patch produced; omit = no patch. */
   decision: "inject" | "omit";
   /** Enumerated: active | advisory | off | role | skill-missing. */
-  reason: "active" | "advisory" | "off" | "role" | "skill-missing";
+  reason: string;
   /** Agent role at decision time (driver-orchestration vocabulary). */
   role: string;
   /** Resolved skill lifecycle status (null when the file is missing). */
@@ -946,7 +946,7 @@ export function leanKernel(
   session: string,
   fields: {
     decision: "inject" | "omit";
-    reason: "active" | "advisory" | "off" | "role" | "skill-missing";
+    reason: string;
     role: string;
     skill_status: string | null;
     mode: string | null;

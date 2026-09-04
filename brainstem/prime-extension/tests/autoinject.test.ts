@@ -49,6 +49,8 @@ const ENV_KEYS = [
   "SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS",
   "SECOND_BRAIN_PROJECT",
   "SECOND_BRAIN_HOME",
+  "SECOND_BRAIN_PYTHON",
+  "SECOND_BRAIN_RUNTIME_ROOT",
 ] as const;
 const SAVED: Record<string, string | undefined> = {};
 
@@ -181,6 +183,15 @@ describe("runAutoInjectShadow (execFile mocked)", () => {
     const out = await runAutoInjectShadow(baseOpts());
     expect(out?.decision).toBe("INJECT");
     expect(out?.deliveryId).toBe("del-abc");
+  });
+  it("uses SECOND_BRAIN_PYTHON independently of state home", async () => {
+    process.env.SECOND_BRAIN_PYTHON = "R:/runtime/python.exe";
+    execFileMock.mockImplementation((python, _args, _opts, callback) => {
+      expect(python).toBe("R:/runtime/python.exe");
+      callback(null, OUT_JSON);
+    });
+
+    expect((await runAutoInjectShadow(baseOpts()))?.decision).toBe("INJECT");
   });
   it("resolves null on error/timeout", async () => {
     execFileMock.mockImplementation((_py, _args, _opts, cb) => cb(new Error("timeout")));
@@ -674,23 +685,38 @@ describe("emit stability (Phase C5)", () => {
     expect(hit.handler_returned_message).toBe(false);
   });
 
-  it("3 re-emits with varying trailing prompt metadata -> ONE spawn, identical message (Phase C8)", async () => {
+  it("different semantic task suffixes never share a cache entry", async () => {
     const { callObj, runner } = makeCall("advisory");
-    // > 128 chars so appended metadata lands AFTER the prompt-head guard window
     const base =
       "adaptive fan-out policy for the P1 orchestration design with recursion blocked and retained worker reuse across multiple independent workstreams";
-    const first = await realRunAdvisoryAutoInject({ ...callObj, task: base });
-    const second = await realRunAdvisoryAutoInject({
+    await realRunAdvisoryAutoInject({ ...callObj, task: base });
+    await realRunAdvisoryAutoInject({
       ...callObj,
       task: `${base} (attempt 2 - retry metadata)`,
     });
-    const third = await realRunAdvisoryAutoInject({
+    await realRunAdvisoryAutoInject({
       ...callObj,
       task: `${base} [extra metadata appended]`,
     });
-    expect(runner).toHaveBeenCalledTimes(1); // trailing metadata must NOT respawn
-    expect(second).toBe(first);
-    expect(third).toBe(first);
+    expect(runner).toHaveBeenCalledTimes(3);
+  });
+
+  it("same session and task in another project never reuses a packet", async () => {
+    const { callObj, runner } = makeCall("advisory");
+    await realRunAdvisoryAutoInject({ ...callObj, cwd: "C:\\repo-a" });
+    await realRunAdvisoryAutoInject({ ...callObj, cwd: "C:\\repo-b" });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("retrieval configuration change invalidates the cached packet", async () => {
+    const home = await mkdtemp(joinTmp(tmpdir(), "sb-ai-config-"));
+    mkdirSync(joinTmp(home, "config"), { recursive: true });
+    const { callObj, runner } = makeCall("advisory", { home });
+    writeFileSync(joinTmp(home, "config", "retrieval.toml"), "top_k = 2\n");
+    await realRunAdvisoryAutoInject(callObj);
+    writeFileSync(joinTmp(home, "config", "retrieval.toml"), "top_k = 3\n");
+    await realRunAdvisoryAutoInject(callObj);
+    expect(runner).toHaveBeenCalledTimes(2);
   });
 
   it("different prompt head within TTL -> replace entry + new spawn (Phase C8 guard)", async () => {

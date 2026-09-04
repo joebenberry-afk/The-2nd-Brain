@@ -1117,6 +1117,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     task: typeof event.prompt === "string" ? event.prompt : "",
     agentId: sensors.modelToString(context.model) ?? "prime",
     cwd: typeof context.cwd === "string" ? context.cwd : undefined,
+    projectId: resolveProject(),
     cfg: loadAutoInjectHostConfig(config.home),
     append: (record) => getStore(session)?.append(record),
   });
