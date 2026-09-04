@@ -11,11 +11,12 @@ from pathlib import Path
 
 from second_brain import semantic, working_set
 
-def _env():
+def _env(home: Path):
     env = dict(os.environ)
-    for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
-        env.pop(k, None)
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
     env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+    env["SECOND_BRAIN_HOME"] = str(home)
     return env
 
 def run_cli(
@@ -26,7 +27,7 @@ def run_cli(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],
         capture_output=True,
         text=True,
-        env=_env(),
+        env=_env(home),
         cwd=cwd or home,
         timeout=120,
         input=stdin,
@@ -1166,3 +1167,30 @@ def test_doctor_json_includes_environment_steward_check(tmp_path):
     check = next(item for item in payload["checks"] if item["name"] == "environment steward")
     assert check["status"] == "ok"
     assert "doctor-cli" in check["detail"]
+
+
+def test_project_resolve_reports_canonical_identity(tmp_path):
+    home = tmp_path / "brain"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert run_cli(home, "init").returncode == 0
+    attached = run_cli(
+        home,
+        "project",
+        "add",
+        str(repo),
+        "--id",
+        "canonical-project",
+        cwd=repo,
+    )
+    assert attached.returncode == 0, attached.stderr
+
+    resolved = run_cli(home, "project", "resolve", "--cwd", str(repo), cwd=repo)
+
+    assert resolved.returncode == 0, resolved.stderr
+    assert json.loads(resolved.stdout) == {
+        "confidence": "high",
+        "project_id": "canonical-project",
+        "repo_root": str(repo.resolve()),
+        "resolution": "manifest",
+    }

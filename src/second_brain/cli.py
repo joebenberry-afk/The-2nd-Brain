@@ -120,6 +120,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     prem.add_argument("key")
     prem.add_argument("--purge", action="store_true", help="also delete projects/<id>/")
+    presolve = ps.add_parser(
+        "resolve",
+        parents=[home_parent],
+        help="resolve canonical project identity for an adapter working directory",
+    )
+    presolve.add_argument("--cwd", default=None)
+    presolve.add_argument("--project", dest="project_id", default=None)
 
     b = sub.add_parser("backup", parents=[home_parent], help="create a Brain backup")
     b.add_argument("--note", default=None)
@@ -1618,6 +1625,12 @@ def cmd_project(args) -> int:
             print(f"Wrote manifest: {Path(args.repo) / '.brain' / 'project.toml'}")
         if changes.get("marker_added"):
             print(f"Added AGENTS.md marker: {Path(args.repo) / 'AGENTS.md'}")
+        return 0
+    if args.project_command == "resolve":
+        from . import autoinject
+
+        result = autoinject.resolve_project(home, args.cwd, args.project_id)
+        print(json.dumps(result, sort_keys=True))
         return 0
     if args.project_command == "list":
         projects = registry.list_projects(home, include_inactive=args.inactive)
