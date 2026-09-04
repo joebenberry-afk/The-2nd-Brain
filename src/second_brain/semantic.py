@@ -1655,10 +1655,21 @@ def _score_row(
         score *= _trust_score(row, w)
     if "scope" in score_terms:
         score *= _scope_match_score(row, project_id)
-    if "freshness" in score_terms:
-        score *= _freshness_score(row.get("updated_at"), w)
-    if "decision" in score_terms:
-        score *= _decision_value_score(row, w)
+    if "freshness" in score_terms or "decision" in score_terms:
+        p_need = row.get("_p_need")
+        if p_need is None and home is not None:
+            try:
+                from . import reconsolidation
+                b = reconsolidation.compute_base_level_activation(Path(home), row.get("memory_id", ""))
+                if b <= -10.0:
+                    p_need = 0.5
+                else:
+                    p_need = reconsolidation.compute_p_need(Path(home), row.get("memory_id", ""))
+            except Exception:
+                p_need = 0.5
+        if p_need is None:
+            p_need = 0.5
+        score *= (0.5 + float(p_need))
     if "negative" in score_terms:
         score *= _negative_transfer_score(row, w)
     if "token" in score_terms:

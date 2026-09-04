@@ -984,6 +984,58 @@ def prepare_injection(
         else cfg
     )
 
+    # Filter candidate items by need-cost ROI: skip if P_need * value < token_cost_ratio
+    row_by_id = {str(r.get("memory_id") or ""): r for r in role_rows}
+    retained_fresh: list[PacketItem] = []
+    for item in fresh:
+        row = row_by_id.get(item.memory_id, {})
+        p_need = row.get("_p_need")
+        if p_need is None and home is not None:
+            try:
+                from . import reconsolidation
+                b = reconsolidation.compute_base_level_activation(Path(home), item.memory_id)
+                if b <= -10.0:
+                    p_need = 0.5
+                else:
+                    p_need = reconsolidation.compute_p_need(Path(home), item.memory_id)
+            except Exception:
+                p_need = 0.5
+        if p_need is None:
+            p_need = 0.5
+        p_need = float(p_need)
+
+        try:
+            w = semantic._DEFAULT_RETRIEVAL_CONFIG.weights
+            trust = semantic._trust_score(row, w) if row else 1.0
+        except Exception:
+            trust = 1.0
+
+        if row.get("_bm25_normalized") is not None:
+            relevance = float(row["_bm25_normalized"])
+        elif row.get("_score") is not None:
+            relevance = float(row["_score"])
+        elif row.get("_bm25") is not None:
+            relevance = float(row["_bm25"])
+        else:
+            relevance = 1.0
+
+        value = float(trust) * float(relevance)
+        item_text = _render_packet_text([item], intent.project_id, lane=intent.lane)
+        item_tokens = token_estimate(item_text, home=home)
+        target_tokens = max(1, active_budget.target_tokens)
+        token_cost_ratio = item_tokens / target_tokens
+
+        if p_need * value < token_cost_ratio:
+            continue
+        retained_fresh.append(item)
+
+    fresh = retained_fresh
+    if not fresh:
+        return decision(
+            NoInjectionReason.CONTEXT_PRESSURE,
+            candidate_ids=candidate_ids,
+            selected_ids=[],
+        )
     fit = _fit_budget(fresh, intent.project_id, active_budget, home=home, lane=intent.lane)
     if fit is None:
         return decision(
