@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -361,6 +361,26 @@ describe("factory wiring (src/index.ts)", () => {
   it("subscribes exactly the 14 lifecycle events (11 + P3-B economics)", () => {
     const handlers = loadFactory();
     expect([...handlers.keys()].sort()).toEqual(EVENTS.map(([name]) => name).sort());
+  });
+
+  it("frozen-per-lifecycle: writes one runtime-ready status file at factory startup, never per session", () => {
+    loadFactory();
+    const statusPath = join(tmp, "state", "extension-runtime-ready.json");
+    const status = JSON.parse(readFileSync(statusPath, "utf8")) as {
+      home: string;
+      runtime_python: string;
+      identity_hash: string;
+    };
+    expect(status.home).toBe(tmp);
+    expect(status.identity_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    // A later env change never silently retargets a running instance:
+    // only a fresh factory load (/reload) re-resolves and rewrites the
+    // frozen identity file.
+    process.env.SECOND_BRAIN_PYTHON = "R:/other/python.exe";
+    loadFactory();
+    const reloaded = JSON.parse(readFileSync(statusPath, "utf8")) as { runtime_python: string };
+    expect(reloaded.runtime_python).toBe("R:/other/python.exe");
   });
 
   it("every handler returns undefined (void) and still writes one record each", async () => {

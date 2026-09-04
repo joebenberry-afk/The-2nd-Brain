@@ -42,7 +42,7 @@ import type {
 } from "../types/prime";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
@@ -468,6 +468,38 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
     return anonSessionIdValue;
   };
+
+  // Frozen-per-extension-lifecycle runtime identity (plan §10): resolved
+  // exactly once from the SAME config object every handler already shares,
+  // and recorded to a dedicated status file (never the per-session
+  // telemetry stream, which many wiring tests fixed-count-assert) so an
+  // operator can always prove which Brain home/runtime this running
+  // instance is frozen to. A later env change never silently retargets a
+  // running instance; only /reload or restart re-runs loadConfig() and
+  // rewrites this file. Best-effort: a write failure never disables the
+  // extension (fail-open, same policy as telemetry persistence).
+  try {
+    const identityHash = createHash("sha256")
+      .update(JSON.stringify({ home: config.home, runtimePython: config.runtimePython }))
+      .digest("hex");
+    const stateDir = join(config.home ?? "", "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, "extension-runtime-ready.json"),
+      JSON.stringify(
+        {
+          resolved_at: new Date().toISOString(),
+          home: config.home,
+          runtime_python: config.runtimePython,
+          identity_hash: identityHash,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch {
+    // status file is advisory only; never block extension startup
+  }
 
   let store: TelemetryStore | null = null;
   const getStore = (session: string): TelemetryStore | null => {

@@ -48,18 +48,30 @@ export interface ObservabilityConfig {
   enabled: boolean;
   home: string | null;
   telemetryDir: string | null;
+  /** Python runtime resolved ONCE at factory startup (frozen-per-lifecycle
+   * model, plan §10): explicit SECOND_BRAIN_PYTHON env, else the compat
+   * fallback under home. A later env change never silently retargets a
+   * running extension instance -- only /reload or restart picks it up. */
+  runtimePython: string | null;
 }
 
 /** Load the effective configuration. */
 export function loadConfig(): ObservabilityConfig {
   if (observabilityDisabledByEnv()) {
-    return { enabled: false, home: null, telemetryDir: null };
+    return { enabled: false, home: null, telemetryDir: null, runtimePython: null };
   }
   const home = resolveBrainHome();
   if (!home) {
-    return { enabled: false, home: null, telemetryDir: null };
+    return { enabled: false, home: null, telemetryDir: null, runtimePython: null };
   }
-  return { enabled: true, home, telemetryDir: join(home, "telemetry", "agent-performance") };
+  const runtimePython =
+    process.env.SECOND_BRAIN_PYTHON ?? join(home, ".venv", "Scripts", "python.exe");
+  return {
+    enabled: true,
+    home,
+    telemetryDir: join(home, "telemetry", "agent-performance"),
+    runtimePython,
+  };
 }
 
 // ---------------------------------------------------------------------------
