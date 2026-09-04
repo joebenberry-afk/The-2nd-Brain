@@ -22,6 +22,7 @@ from typing import cast
 from . import (
     __version__,
     artifacts,
+    capabilities,
     capsule_runtime,
     cerebellum,
     contracts,
@@ -1488,6 +1489,18 @@ def _parser() -> argparse.ArgumentParser:
     ts_comp.add_argument("schema_file", help="path to JSON tool schema")
     ts_comp.add_argument("--json", action="store_true", help="output JSON")
 
+    v2 = sub.add_parser("v2", parents=[home_parent], help="v2 corrected-plan surfaces")
+    v2s = v2.add_subparsers(dest="v2_command", required=True)
+    v2_harness = v2s.add_parser("harness", parents=[home_parent], help="harness adapter profiles")
+    v2_harness_sub = v2_harness.add_subparsers(dest="v2_harness_command", required=True)
+    v2_cap = v2_harness_sub.add_parser(
+        "capabilities",
+        parents=[home_parent],
+        help="show a harness's capability profile and tier (T4.3)",
+    )
+    v2_cap.add_argument("harness_id")
+    v2_cap.add_argument("--json", action="store_true", help="output JSON")
+
     return p
 
 
@@ -1698,6 +1711,33 @@ def cmd_risk(args) -> int:
         approval_line = "REQUIRED" if payload["approval_required"] else "not required"
         print("  human approval: " + approval_line)
     return 0
+
+
+def cmd_v2(args) -> int:
+    if args.v2_command == "harness" and args.v2_harness_command == "capabilities":
+        home = _home(args)
+        harness_id = args.harness_id
+        tier = capabilities.harness_tier(home, harness_id)
+        payload = {
+            "harness_id": harness_id,
+            "tier": tier,
+            "tier_behavior": capabilities.TIER_BEHAVIOR[tier],
+            "capabilities": capabilities.list_capabilities(home, harness_id),
+        }
+        if args.json:
+            print(contracts.canonical_json(payload))
+        else:
+            print(f"{harness_id}: {tier} -- {payload['tier_behavior']}")
+            for name in sorted(payload["capabilities"]):
+                row = payload["capabilities"][name]
+                supported = row["supported"]
+                state = "unknown" if supported is None else ("yes" if supported else "no")
+                print(
+                    f"  {name:20s} supported={state:7s} version={row['version']}"
+                    f" observed_at={row['observed_at']}"
+                )
+        return 0
+    return 2
 
 
 def cmd_radar(args) -> int:
@@ -5742,6 +5782,7 @@ def main(argv: list[str] | None = None) -> int:
         "processes": cmd_processes,
         "radar": cmd_radar,
         "risk": cmd_risk,
+        "v2": cmd_v2,
         "verify": cmd_verify,
         "artifact": cmd_artifact,
         "simplification": cmd_simplification,
