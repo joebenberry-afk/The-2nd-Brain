@@ -33,9 +33,11 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +49,7 @@ from . import (
     freshness,
     governor,
     hybrid_retrieval,
+    model_routing,
     reconsolidation,
     registry,
     semantic,
@@ -258,6 +261,75 @@ def _record_budget_soft(home: Path, intent: RetrievalIntent, used: int, cap: int
         )
     except Exception:
         logger.debug("budget SOFT decision record failed", exc_info=True)
+
+_ROLLOUT_STAGE_RANKS: dict[str, int] = {
+    "OFF": 0,
+    "SHADOW": 1,
+    "ADVISORY": 2,
+    "CANARY": 3,
+    "ACTIVE": 4,
+}
+
+
+def _retrieval_holdout_stage(home: Path | str) -> str:
+    """Read rollout stage for retrieval_holdout.
+
+    Checks SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE env var first,
+    then config/v2.toml [rollout] retrieval_holdout, defaulting to 'SHADOW'.
+    """
+    env_stage = os.environ.get("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE")
+    if env_stage and env_stage in decisions._ROLLOUT_STAGES:
+        return env_stage
+    stage = "SHADOW"
+    try:
+        v2_path = Path(home) / "config" / "v2.toml"
+        if v2_path.is_file():
+            v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
+            candidate = (v2_raw.get("rollout") or {}).get("retrieval_holdout", "SHADOW")
+            if candidate in decisions._ROLLOUT_STAGES:
+                stage = candidate
+    except Exception:
+        pass
+    return stage
+
+
+def _retrieval_holdout_epsilon(home: Path | str) -> float:
+    """Read holdout epsilon rate.
+
+    Checks SECOND_BRAIN_HOLDOUT_EPSILON env var, then config/v2.toml or config/retrieval.toml
+    [retrieval_holdout] epsilon, defaulting to 0.1.
+    """
+    env_eps = os.environ.get("SECOND_BRAIN_HOLDOUT_EPSILON")
+    if env_eps is not None:
+        try:
+            val = float(env_eps)
+            if 0.0 <= val <= 1.0:
+                return val
+        except (ValueError, TypeError):
+            pass
+    try:
+        v2_path = Path(home) / "config" / "v2.toml"
+        if v2_path.is_file():
+            v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
+            candidate = (v2_raw.get("retrieval_holdout") or {}).get("epsilon")
+            if candidate is not None:
+                val = float(candidate)
+                if 0.0 <= val <= 1.0:
+                    return val
+    except Exception:
+        pass
+    try:
+        retrieval_path = Path(home) / "config" / "retrieval.toml"
+        if retrieval_path.is_file():
+            ret_raw = tomllib.loads(retrieval_path.read_text(encoding="utf-8"))
+            candidate = (ret_raw.get("retrieval_holdout") or {}).get("epsilon")
+            if candidate is not None:
+                val = float(candidate)
+                if 0.0 <= val <= 1.0:
+                    return val
+    except Exception:
+        pass
+    return 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +623,7 @@ def _build_items(
                 supersedes=supersedes,
                 freshness=str(row.get("_freshness_state") or freshness.UNKNOWN),
                 contradicts=contradictions,
+                authority=str(row.get("authority_ceiling") or "advisory"),
             )
         )
     return items
@@ -698,6 +771,7 @@ def _ids_only(items: list[PacketItem]) -> list[PacketItem]:
             supersedes=i.supersedes,
             freshness=i.freshness,
             contradicts=i.contradicts,
+            authority=i.authority,
         )
         for i in items
     ]
@@ -758,6 +832,8 @@ def prepare_injection(
     *,
     config: AutoInjectConfig | None = None,
     retrieval_text: str | None = None,
+    seed: Any = None,
+    random_fn: Callable[[], float] | None = None,
 ) -> BrainInjectionDecision:
     """Decision pipeline. NEVER raises: every failure degrades to
     NO_INJECTION(BRAIN_UNAVAILABLE) (§6.8). No model-visible mutation."""
@@ -1045,6 +1121,96 @@ def prepare_injection(
         )
     selected, ids_only = fit
     del ids_only  # shadow phase: caller sees the same canonical shape either way
+
+    # T5.2: Retrieval injection holdout
+    stage = _retrieval_holdout_stage(home)
+    stage_rank = _ROLLOUT_STAGE_RANKS.get(stage, 0)
+    is_stage_eligible = stage_rank >= _ROLLOUT_STAGE_RANKS["CANARY"]
+
+    t_class = model_routing.classify_task(
+        intent.task_text or "", risk_class=getattr(intent, "risk_class", None)
+    )
+    t_class_val = t_class.value if isinstance(t_class, model_routing.TaskClass) else str(t_class)
+    is_class_eligible = (
+        t_class_val in {"trivial", "navigation", "implementation"}
+        and getattr(intent, "risk_class", None) not in ("HIGH", "CRITICAL")
+    )
+
+    is_authority_eligible = intent.lane != "policy" and all(
+        (getattr(item, "authority", "advisory") == "advisory")
+        and (row_by_id.get(item.memory_id, {}).get("authority_ceiling") in ("advisory", None, ""))
+        for item in selected
+    )
+
+    if is_stage_eligible and is_class_eligible and is_authority_eligible and selected:
+        epsilon = _retrieval_holdout_epsilon(home)
+        if random_fn is not None:
+            rand_val = random_fn()
+            holdout_triggered = (
+                (rand_val < epsilon) if isinstance(rand_val, (int, float)) else bool(rand_val)
+            )
+        elif seed is not None:
+            holdout_triggered = random.Random(seed).random() < epsilon
+        else:
+            holdout_triggered = random.random() < epsilon
+
+        if holdout_triggered:
+            withheld = selected[0]
+            delivered = selected[1:]
+            withheld_id = withheld.memory_id
+            delivered_ids = [i.memory_id for i in delivered]
+
+            try:
+                decisions.record(
+                    home,
+                    kind="retrieval",
+                    session_id=intent.session_id,
+                    task_id=None,
+                    chosen=delivered_ids,
+                    alternatives=[withheld_id],
+                    propensity=epsilon,
+                    randomized=True,
+                    policy_version="v5.2",
+                    stage=stage,
+                    inputs={
+                        "task_sha256": _task_sha256(intent.task_text),
+                        "withheld_id": withheld_id,
+                        "task_class": t_class_val,
+                    },
+                )
+            except Exception:
+                logger.debug("retrieval holdout decision record failed", exc_info=True)
+
+            if not delivered:
+                return decision(
+                    NoInjectionReason.HOLDOUT,
+                    candidate_ids=candidate_ids,
+                    selected_ids=[],
+                )
+
+            selected = delivered
+        else:
+            try:
+                decisions.record(
+                    home,
+                    kind="retrieval",
+                    session_id=intent.session_id,
+                    task_id=None,
+                    chosen=[i.memory_id for i in selected],
+                    alternatives=[],
+                    propensity=1.0 - epsilon,
+                    randomized=True,
+                    policy_version="v5.2",
+                    stage=stage,
+                    inputs={
+                        "task_sha256": _task_sha256(intent.task_text),
+                        "withheld_id": None,
+                        "task_class": t_class_val,
+                    },
+                )
+            except Exception:
+                logger.debug("retrieval delivery decision record failed", exc_info=True)
+
     text = _render_packet_text(selected, intent.project_id, lane=intent.lane)
     packet_id = _packet_id(selected)
     _cache_packet(packet_id, text, selected)
@@ -1257,6 +1423,8 @@ class BrainLifecycle:
         is_delta: bool = False,
         context: dict[str, Any] | None = None,
         lane: str = "semantic",
+        seed: Any = None,
+        random_fn: Callable[[], float] | None = None,
     ) -> BrainInjectionDecision:
         """Decision + ledger/telemetry record. Never raises.
 
@@ -1281,7 +1449,12 @@ class BrainLifecycle:
             cwd=cwd,
             lane=lane,
         )
-        decision = prepare_injection(self._home, intent)
+        decision = prepare_injection(
+            self._home,
+            intent,
+            seed=seed,
+            random_fn=random_fn,
+        )
         self._last_delivery_ids = []
         if decision.decision is InjectionDecision.INJECT:
             packet_text = render_packet(decision)
@@ -1353,8 +1526,12 @@ class BrainLifecycle:
         tool_call_args: object = None,
         final_message: object = None,
         session_id: str | None = None,
+        acceptance_passed: bool | None = None,
+        tokens_total: int | None = None,
     ) -> None:
-        feedback_session = session_id or self._feedback_session_id
+        feedback_session = session_id or self._feedback_session_id or (
+            self._session.host_session_id if self._session is not None else None
+        )
         if feedback_session:
             try:
                 delivered = _delivered_memory_ids(self._home, feedback_session)
@@ -1367,6 +1544,73 @@ class BrainLifecycle:
                 )
             except Exception:
                 logger.debug("activation feedback lookup failed", exc_info=True)
+
+            # T5.2: Record outcomes for pending retrieval decisions
+            try:
+                dbfile = db.db_path(Path(self._home))
+                if dbfile.is_file():
+                    conn = db.connect(dbfile)
+                    try:
+                        rows = conn.execute(
+                            "SELECT decision_id FROM decisions WHERE session_id = ? AND kind = 'retrieval' AND outcome_json IS NULL",
+                            (feedback_session,),
+                        ).fetchall()
+                        decision_ids = [str(r[0]) for r in rows if r and r[0]]
+                    finally:
+                        conn.close()
+
+                    if decision_ids:
+                        actual_tokens = tokens_total
+                        if actual_tokens is None:
+                            try:
+                                actual_tokens = governor._session_total_tokens(
+                                    Path(self._home), feedback_session
+                                )
+                            except Exception:
+                                actual_tokens = 0
+                            if not actual_tokens:
+                                direct_path = (
+                                    Path(self._home)
+                                    / "telemetry"
+                                    / "agent-performance"
+                                    / f"{feedback_session}.jsonl"
+                                )
+                                if direct_path.is_file():
+                                    try:
+                                        tok = governor.parse_telemetry_session(direct_path)
+                                        actual_tokens = tok.total_tokens or 0
+                                    except Exception:
+                                        actual_tokens = 0
+                                    if not actual_tokens:
+                                        try:
+                                            tot = 0
+                                            with open(direct_path, encoding="utf-8") as tf:
+                                                for tline in tf:
+                                                    if not tline.strip():
+                                                        continue
+                                                    rec = json.loads(tline)
+                                                    if "total_tokens" in rec and isinstance(rec["total_tokens"], int):
+                                                        tot += rec["total_tokens"]
+                                                    elif "input_tokens" in rec or "output_tokens" in rec:
+                                                        tot += int(rec.get("input_tokens") or 0) + int(rec.get("output_tokens") or 0)
+                                            if tot > 0:
+                                                actual_tokens = tot
+                                        except Exception:
+                                            pass
+                        reward = 1.0 if acceptance_passed else 0.0
+                        outcome = {
+                            "acceptance_passed": bool(acceptance_passed),
+                            "tokens_total": int(actual_tokens or 0),
+                        }
+                        for dec_id in decision_ids:
+                            try:
+                                decisions.record_outcome(self._home, dec_id, outcome, reward)
+                            except Exception:
+                                logger.debug(
+                                    "Failed to record outcome for decision %s", dec_id, exc_info=True
+                                )
+            except Exception:
+                logger.debug("retrieval decision finalization failed", exc_info=True)
         if self._session is not None:
             _append_telemetry(
                 self._home,

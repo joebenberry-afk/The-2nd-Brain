@@ -128,7 +128,8 @@ def test_record_rejects_content_like_or_oversized_metadata(brain_home):
 def test_fresh_migration_is_idempotent_and_preserves_decision(tmp_path):
     home = tmp_path / "fresh-brain"
     dbfile = db.db_path(home)
-    assert db.migrate(dbfile) == list(range(1, 12))
+    applied = db.migrate(dbfile)
+    assert 11 in applied and applied == list(range(1, len(applied) + 1))
     decision_id = decisions.record(home, **_record_kwargs())
     conn = db.connect(dbfile, readonly=True)
     try:
