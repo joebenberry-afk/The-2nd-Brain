@@ -186,7 +186,7 @@ export function mirrorEventSync(options: MirrorOptions): MirrorResult {
  * {ok:false, error} on any spawn failure. NEVER throws, NEVER blocks.
  */
 export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) {
     return { ok: true }; // no runtime installed -> silent no-op
   }
@@ -350,7 +350,7 @@ export function runLedgerCheckpoint(options: {
   python?: string;
   timeoutMs?: number;
 }): Promise<LedgerCheckpointResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) {
     return Promise.resolve({ ok: false, error: "no brain venv (checkpoint unavailable)" });
   }
@@ -402,7 +402,7 @@ export function runLedgerSegmentRollover(options: {
   timeoutMs?: number;
   onError?: (error: string) => void;
 }): void {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) return;
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;

@@ -47,7 +47,7 @@ export interface ActiveStateOptions {
 }
 
 function pythonExe(home: string, python?: string): string {
-  return python ?? join(home, ".venv", "Scripts", "python.exe");
+  return python ?? process.env.SECOND_BRAIN_PYTHON ?? join(home, ".venv", "Scripts", "python.exe");
 }
 
 function runEnv(home: string): Record<string, string | undefined> {

@@ -68,7 +68,7 @@ function parseResult(stdout: string, sessionId: string): P4PulseResult {
  * bridge produces.
  */
 export function runP4PulseSync(options: P4PulseOptions): P4PulseResult {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
   const args = [
     "-m", "second_brain", "p4", "pulse",
@@ -108,7 +108,7 @@ export function runP4PulseSync(options: P4PulseOptions): P4PulseResult {
  * contract as `runP4PulseSync`.
  */
 export function runP4Pulse(options: P4PulseOptions): Promise<P4PulseResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   if (!existsSync(python)) return Promise.resolve({ ok: true, sessionId: options.hostSessionId });
   const args = [
     "-m", "second_brain", "p4", "pulse",

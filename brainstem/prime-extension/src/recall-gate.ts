@@ -221,7 +221,7 @@ export interface RunRecallOptions {
  * timeout, parse garbage) resolves to [] — fail silent, no injection.
  */
 export function runBrainRecall(options: RunRecallOptions): Promise<unknown[]> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...(options.env ?? process.env) };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;

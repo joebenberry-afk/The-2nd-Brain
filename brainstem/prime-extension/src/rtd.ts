@@ -477,7 +477,7 @@ export function cliArtifactPreserver(opts: {
   python?: string;
   timeoutMs?: number;
 }): RtdPreserver {
-  const python = opts.python ?? join(opts.home, ".venv", "Scripts", "python.exe");
+  const python = opts.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(opts.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;

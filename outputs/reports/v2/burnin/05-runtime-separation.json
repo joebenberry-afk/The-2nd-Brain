@@ -1,0 +1,15 @@
+{
+  "repair": "separate Brain state home from Python runtime",
+  "status": "PASS_WITH_BASELINE_GATE_DEBT",
+  "precedence": [
+    "explicit adapter option",
+    "SECOND_BRAIN_PYTHON",
+    "<SECOND_BRAIN_HOME>/.venv/Scripts/python.exe compatibility fallback"
+  ],
+  "surfaces": ["Prime bridges", "Claude Code hook", "Antigravity hook", "Codex hook"],
+  "focused_test": "npx vitest run tests/autoinject.test.ts -t runAutoInjectShadow|emit stability",
+  "focused_result": "18 passed",
+  "task_lint": "PASS",
+  "full_typecheck": "BLOCKED by pre-existing lean telemetry reason type mismatch at src/index.ts:1465",
+  "rollback": "Unset SECOND_BRAIN_PYTHON to use the compatibility fallback, or revert the runtime separation commit."
+}

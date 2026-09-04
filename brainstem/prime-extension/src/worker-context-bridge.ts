@@ -144,7 +144,7 @@ export function renderOmpWorkerContext(handoff: OmpWorkerContextHandoff): string
 }
 
 export function runOmpWorkerContext(options: OmpWorkerContextOptions): Promise<OmpWorkerContextResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;
