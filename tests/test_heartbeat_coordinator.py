@@ -45,7 +45,31 @@ def test_off_does_not_probe_or_mutate(brain_home: Path, tmp_path: Path):
         "healthy": True, "db_ok": True, "cache_pruned_count": 0,
         "git_dirty": False, "issue_codes": [], "latency_ms": 0,
         "model_tokens_used": 0, "maintenance_mutated": False,
+        "artifacts_gc_count": 0,
     }
+
+
+def test_active_runs_artifact_gc(brain_home: Path, tmp_path: Path):
+    from second_brain import artifacts
+
+    info = artifacts.store_text(brain_home, "old orphan content", "generic")
+    sha = info["hash"]
+    meta_path = brain_home / "state" / "artifacts" / "meta" / f"{sha}.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    aged = datetime.now(UTC) - timedelta(days=31)
+    meta["created_at"] = aged.isoformat()
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    _config(
+        brain_home,
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
+        "min_interval_seconds = 0\n",
+    )
+    result = HeartbeatCoordinator(brain_home).run_if_due(
+        "session_shutdown", "s1", tmp_path, force=True
+    )
+    assert result["artifacts_gc_count"] == 1
+    assert not (brain_home / "state" / "artifacts" / "blobs" / f"{sha}.bin").exists()
 
 
 def test_shadow_counts_without_deleting_expired_cache(brain_home: Path):

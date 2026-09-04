@@ -14,7 +14,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from . import db
+from . import artifacts, db
 from .action_cache import ActionCacheStore
 from .paths import db_path
 
@@ -94,6 +94,7 @@ class HeartbeatStatus:
     timestamp: str = ""
     model_tokens_used: int = 0
     maintenance_mutated: bool = False
+    artifacts_gc_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -105,6 +106,7 @@ class HeartbeatStatus:
             "timestamp": self.timestamp,
             "model_tokens_used": 0,
             "maintenance_mutated": self.maintenance_mutated,
+            "artifacts_gc_count": self.artifacts_gc_count,
         }
 
 
@@ -140,6 +142,7 @@ class LocalHeartbeatEngine:
         issues: list[str] = []
         db_ok = True
         cache_count = 0
+        gc_count = 0
         git_dirty = False
         main_db = db_path(self.home)
         if not main_db.exists():
@@ -176,6 +179,11 @@ class LocalHeartbeatEngine:
                         cache.close()
                     except Exception:
                         issues.append("cache_prune")
+            try:
+                gc_result = artifacts.gc(self.home, min_age_days=30)
+                gc_count = int(gc_result.get("deleted_count", 0))
+            except Exception:
+                issues.append("artifacts_gc_probe")
 
         check_repo = Path(repo_dir) if repo_dir is not None else self.home
         try:
@@ -204,6 +212,7 @@ class LocalHeartbeatEngine:
             timestamp=timestamp,
             model_tokens_used=0,
             maintenance_mutated=mode == "active",
+            artifacts_gc_count=gc_count,
         )
 
 
@@ -228,6 +237,7 @@ class HeartbeatCoordinator:
             "latency_ms": 0,
             "model_tokens_used": 0,
             "maintenance_mutated": False,
+            "artifacts_gc_count": 0,
         }
 
     def _record_failure(self, mode: str, event: str, code: str, *, due: bool) -> dict[str, Any]:
@@ -331,6 +341,7 @@ class HeartbeatCoordinator:
             "latency_ms": int((perf_counter() - started) * 1000),
             "model_tokens_used": 0,
             "maintenance_mutated": status.maintenance_mutated,
+            "artifacts_gc_count": status.artifacts_gc_count,
         }
         if config.warning:
             result["configuration_warning"] = config.warning

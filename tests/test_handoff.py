@@ -73,6 +73,24 @@ class TestLosslessness:
         assert recovered["objective"] == source_capsule["objective"]
         assert recovered["next_action"] == source_capsule["next_action"]
 
+    def test_create_handoff_envelope_registers_artifact_ref(self, brain_home):
+        from second_brain import db, ledger as ledger_mod
+        from second_brain.paths import db_path
+
+        session_id = _seed_capsule(brain_home, "sess-p317-artifact-ref")
+        envelope, _artifact = create_handoff_envelope(
+            brain_home, session_id, source_harness="omp", target_harness="hermes"
+        )
+        payload_hash = envelope.payload_sha256
+        internal_id = ledger_mod.internal_session_id(session_id)
+        conn = db.connect(db_path(brain_home), readonly=True)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM artifact_refs WHERE sha = ? AND owner = ?",
+            (payload_hash, f"handoff:{internal_id}"),
+        ).fetchone()
+        conn.close()
+        assert row[0] == 1
+
     def test_canonical_structural_hash_equals_raw_artifact_byte_hash(self, brain_home):
         """Two independent proofs converge: the artifact store's byte hash
         (generic to any bytes) and the structural hash recomputed from the

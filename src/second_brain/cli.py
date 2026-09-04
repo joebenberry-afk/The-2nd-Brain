@@ -1660,6 +1660,7 @@ def cmd_artifact(args) -> int:
             info = artifacts.store_bytes(
                 home, data, args.kind, tool=args.tool, session=args.session
             )
+        artifacts.add_ref(home, info["hash"], owner="cli-manual")
         print(info["handle"])
         if not args.no_distill:
             print("Distilled:")
@@ -3844,6 +3845,7 @@ def cmd_heartbeat(args) -> int:
                 "issue_codes": result["issue_codes"],
                 "latency_ms": result["latency_ms"],
                 "model_tokens_used": result["model_tokens_used"],
+                "artifacts_gc_count": result["artifacts_gc_count"],
             },
         )
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))

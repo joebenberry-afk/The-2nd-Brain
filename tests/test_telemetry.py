@@ -199,6 +199,7 @@ def test_current_omp_v3_records_validate(brain_home):
                 "issue_codes": [],
                 "latency_ms": 0,
                 "model_tokens_used": 0,
+                "artifacts_gc_count": 0,
             },
         ],
     )

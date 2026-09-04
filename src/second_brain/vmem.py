@@ -346,6 +346,7 @@ class VMemStore:
                 session=self.session_id,
             )
             content_sha = stored_artifact["hash"]
+            artifacts.add_ref(self.home, content_sha, owner=f"vmem:{self.internal_id}")
         obj_id = f"obj-{content_sha[:12]}"
         now = _now()
         tokens = _estimate_tokens(content, self.home)

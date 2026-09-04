@@ -21,7 +21,9 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from . import db
 from .errors import BrainError
 
 HANDLE_TEMPLATE = "[brain-artifact:sha256:{hash}]"
@@ -345,3 +347,122 @@ def list_artifacts(home: Path) -> list[dict]:
     artifacts = [_load_meta(path) for path in sorted(meta_dir.glob("*.json"))]
     artifacts.sort(key=lambda meta: (meta["created_at"], meta["hash"]), reverse=True)
     return artifacts
+
+
+# ---------------------------------------------------------------------------
+# Refcount + GC (plan T6.3): artifact_refs lives in the main brain.sqlite
+# (db.db_path), NOT the per-session ledger.sqlite. Every store call site
+# registers a ref under an owner string; gc() reaps unreferenced blobs older
+# than min_age_days.
+# ---------------------------------------------------------------------------
+
+
+def _refs_conn(home: Path | str):
+    home_path = Path(home)
+    dbfile = db.db_path(home_path)
+    if db.pending_migrations(dbfile):
+        db.migrate(dbfile)
+    return db.connect(dbfile)
+
+
+def add_ref(home: Path | str, sha: str, owner: str) -> None:
+    """Register that ``owner`` references artifact ``sha``. Idempotent:
+    registering the same (sha, owner) pair twice is a no-op."""
+    conn = _refs_conn(home)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO artifact_refs (sha, owner, created_at) VALUES (?, ?, ?)",
+            (sha, owner, _utcnow()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_ref(home: Path | str, sha: str, owner: str) -> None:
+    """Remove a single (sha, owner) reference. Idempotent: removing a
+    non-existent ref is a no-op."""
+    conn = _refs_conn(home)
+    try:
+        conn.execute("DELETE FROM artifact_refs WHERE sha = ? AND owner = ?", (sha, owner))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_refs_by_owner_suffix(home: Path | str, suffix: str) -> int:
+    """Remove every ref whose owner string ends with ``suffix``. Returns the
+    row count deleted. Session purge primitive: session-scoped owners follow
+    the ``f"{subsystem}:{internal_session_id}"`` convention, so
+    ``remove_refs_by_owner_suffix(home, f":{internal_session_id}")`` finds
+    every ref belonging to that session regardless of which subsystem
+    registered it."""
+    conn = _refs_conn(home)
+    try:
+        cur = conn.execute(
+            "DELETE FROM artifact_refs WHERE owner LIKE ?", (f"%{suffix}",)
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def gc(home: Path | str, min_age_days: int = 30) -> dict[str, Any]:
+    """Delete blobs with zero refs older than ``min_age_days``.
+
+    A blob is eligible only when BOTH hold: (a) its own meta ``created_at``
+    age exceeds ``min_age_days`` (blob age, not ref-row age — a fresh
+    unreferenced blob may still be mid-registration by its owner and must
+    never be raced), and (b) ``artifact_refs`` has zero rows for its sha. A
+    referenced blob is never deleted regardless of age. Never raises on a
+    single entry's OS/parse error mid-sweep; that entry is skipped and noted
+    in the returned ``errors`` list."""
+    home_path = Path(home)
+    blob_dir, meta_dir = _dirs(home_path)
+    conn = _refs_conn(home_path)
+    now = datetime.now(UTC)
+    deleted_shas: list[str] = []
+    kept_referenced_count = 0
+    kept_too_recent_count = 0
+    errors: list[str] = []
+    try:
+        for meta_path in sorted(meta_dir.glob("*.json")):
+            sha = meta_path.stem
+            try:
+                meta = _load_meta(meta_path)
+            except BrainError as exc:
+                errors.append(f"{sha}: unreadable meta ({exc})")
+                continue
+            try:
+                created_at = datetime.fromisoformat(meta["created_at"])
+            except ValueError as exc:
+                errors.append(f"{sha}: bad created_at ({exc})")
+                continue
+            age_days = (now - created_at).total_seconds() / 86400.0
+            if age_days < min_age_days:
+                kept_too_recent_count += 1
+                continue
+            ref_count = conn.execute(
+                "SELECT COUNT(*) FROM artifact_refs WHERE sha = ?", (sha,)
+            ).fetchone()[0]
+            if ref_count > 0:
+                kept_referenced_count += 1
+                continue
+            try:
+                (blob_dir / f"{sha}.bin").unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                deleted_shas.append(sha)
+            except OSError as exc:
+                errors.append(f"{sha}: delete failed ({exc})")
+    finally:
+        conn.close()
+    result: dict[str, Any] = {
+        "deleted_count": len(deleted_shas),
+        "deleted_shas": deleted_shas,
+        "kept_referenced_count": kept_referenced_count,
+        "kept_too_recent_count": kept_too_recent_count,
+    }
+    if errors:
+        result["errors"] = errors
+    return result

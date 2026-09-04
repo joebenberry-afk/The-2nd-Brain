@@ -91,7 +91,7 @@ def test_ledger_store_check_version_mismatch(tmp_path: Path) -> None:
 
     # Mutate to version 2
     conn = sqlite3.connect(dbfile)
-    conn.execute("UPDATE ledger_meta SET value = '2' WHERE key = 'schema_version'")
+    conn.execute("UPDATE ledger_meta SET value = '99' WHERE key = 'schema_version'")
     conn.commit()
     conn.close()
 

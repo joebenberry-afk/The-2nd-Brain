@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -178,6 +179,76 @@ def test_store_validates_params(brain_home):
         artifacts.store_text(brain_home, "x", "generic", session=3)  # type: ignore[arg-type]
     with pytest.raises(BrainError, match="text"):
         artifacts.store_text(brain_home, 42, "generic")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Refcount + GC (T6.3)
+# ---------------------------------------------------------------------------
+
+
+def _age_meta(brain_home, sha, days):
+    meta_path = brain_home / "state" / "artifacts" / "meta" / f"{sha}.json"
+    meta = _read_json(meta_path)
+    aged = datetime.now(UTC) - timedelta(days=days)
+    meta["created_at"] = aged.isoformat()
+    meta_path.write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def test_add_ref_remove_ref_idempotent(brain_home):
+    info = artifacts.store_text(brain_home, "ref target", "generic")
+    sha = info["hash"]
+    artifacts.add_ref(brain_home, sha, owner="test:owner")
+    artifacts.add_ref(brain_home, sha, owner="test:owner")  # idempotent: no error, no dup
+    artifacts.remove_ref(brain_home, sha, owner="test:owner")
+    artifacts.remove_ref(brain_home, sha, owner="test:owner")  # idempotent: no error
+
+
+def test_remove_refs_by_owner_suffix(brain_home):
+    info = artifacts.store_text(brain_home, "session artifact", "generic")
+    sha = info["hash"]
+    artifacts.add_ref(brain_home, sha, owner="vmem:abc123")
+    artifacts.add_ref(brain_home, sha, owner="rtd:abc123")
+    artifacts.add_ref(brain_home, sha, owner="handoff:other456")
+    removed = artifacts.remove_refs_by_owner_suffix(brain_home, ":abc123")
+    assert removed == 2
+    # the unrelated owner survives -> gc() (after aging) still keeps the blob
+    _age_meta(brain_home, sha, 31)
+    result = artifacts.gc(brain_home, min_age_days=30)
+    assert sha not in result["deleted_shas"]
+
+
+def test_gc_keeps_referenced_blobs(brain_home):
+    blob_dir = brain_home / "state" / "artifacts" / "blobs"
+    meta_dir = brain_home / "state" / "artifacts" / "meta"
+
+    referenced = artifacts.store_text(brain_home, "referenced content", "generic")
+    ref_sha = referenced["hash"]
+    artifacts.add_ref(brain_home, ref_sha, owner="test:keeper")
+    _age_meta(brain_home, ref_sha, 31)
+
+    fresh_unreferenced = artifacts.store_text(brain_home, "fresh unreferenced content", "generic")
+    fresh_sha = fresh_unreferenced["hash"]
+    # left un-aged (created just now): the min_age_days floor must protect it
+
+    result = artifacts.gc(brain_home, min_age_days=30)
+    assert ref_sha not in result["deleted_shas"]
+    assert fresh_sha not in result["deleted_shas"]
+    assert (blob_dir / f"{ref_sha}.bin").is_file()
+    assert (meta_dir / f"{ref_sha}.json").is_file()
+    assert (blob_dir / f"{fresh_sha}.bin").is_file()
+    assert (meta_dir / f"{fresh_sha}.json").is_file()
+
+    # drop the ref: now old + unreferenced -> eligible for collection
+    artifacts.remove_ref(brain_home, ref_sha, owner="test:keeper")
+    result2 = artifacts.gc(brain_home, min_age_days=30)
+    assert ref_sha in result2["deleted_shas"]
+    assert result2["deleted_count"] == 1
+    assert not (blob_dir / f"{ref_sha}.bin").exists()
+    assert not (meta_dir / f"{ref_sha}.json").exists()
+    # the still-fresh unreferenced blob remains protected by the age floor
+    assert (blob_dir / f"{fresh_sha}.bin").is_file()
 
 
 # ---------------------------------------------------------------------------
