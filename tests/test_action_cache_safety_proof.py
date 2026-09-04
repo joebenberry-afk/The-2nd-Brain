@@ -19,6 +19,7 @@ from second_brain.action_cache import (
     ActionCacheStore,
     ActionProof,
     ActionType,
+    DependencyClass,
     hash_file_content,
 )
 
@@ -32,7 +33,10 @@ class TestActionCacheAdversarialSafetyProof:
         target.write_text("def add(a, b): return a + b", encoding="utf-8")
         h0 = hash_file_content(target)
 
-        proof = ActionProof(input_hashes={str(target): h0})
+        proof = ActionProof(
+            input_hashes={str(target): h0},
+            dependency_class=DependencyClass.FILE_SET,
+        )
         entry = store.store_action(
             action_type=ActionType.PURE_VERIFICATION,
             target=str(target),
@@ -58,7 +62,10 @@ class TestActionCacheAdversarialSafetyProof:
 
         os.environ["ACTION_CACHE_TEST_ENV"] = "production"
         try:
-            proof = ActionProof(env_fingerprint={"ACTION_CACHE_TEST_ENV": "production"})
+            proof = ActionProof(
+                env_fingerprint={"ACTION_CACHE_TEST_ENV": "production"},
+                dependency_class=DependencyClass.ENV,
+            )
             entry = store.store_action(
                 action_type=ActionType.PURE_VERIFICATION,
                 target=str(target),
@@ -83,7 +90,10 @@ class TestActionCacheAdversarialSafetyProof:
         target.write_text("ttl", encoding="utf-8")
 
         past_time = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
-        proof = ActionProof(expires_at=past_time)
+        proof = ActionProof(
+            expires_at=past_time,
+            dependency_class=DependencyClass.TIME,
+        )
         entry = store.store_action(
             action_type=ActionType.PURE_VERIFICATION,
             target=str(target),
@@ -101,7 +111,12 @@ class TestActionCacheAdversarialSafetyProof:
         target.write_text("git code", encoding="utf-8")
 
         # Set fake git tree hash that does not match current workspace tree
-        proof = ActionProof(git_tree_hash="0000000000000000000000000000000000000000")
+        proof = ActionProof(
+            dependency_class=DependencyClass.WORKTREE,
+            worktree_root=str(tmp_path),
+            worktree_scope=".",
+            worktree_fingerprint="0" * 64,
+        )
         entry = store.store_action(
             action_type=ActionType.PURE_VERIFICATION,
             target=str(target),
@@ -120,7 +135,10 @@ class TestActionCacheAdversarialSafetyProof:
         target.write_text("main", encoding="utf-8")
         unrelated.write_text("unrelated v1", encoding="utf-8")
 
-        proof = ActionProof(input_hashes={str(target): hash_file_content(target)})
+        proof = ActionProof(
+            input_hashes={str(target): hash_file_content(target)},
+            dependency_class=DependencyClass.FILE_SET,
+        )
         entry = store.store_action(
             action_type=ActionType.FILE_READ,
             target=str(target),
@@ -146,6 +164,7 @@ class TestActionCacheAdversarialSafetyProof:
 
         proof = ActionProof(
             input_hashes={str(target): hash_file_content(target)},
+            dependency_class=DependencyClass.FILE_SET,
             verification_predicate="always_valid_definitely_not_fake",
         )
         entry = store.store_action(
@@ -168,6 +187,7 @@ class TestActionCacheAdversarialSafetyProof:
 
         proof = ActionProof(
             input_hashes={str(target): hash_file_content(target)},
+            dependency_class=DependencyClass.FILE_SET,
             verification_predicate="reject_always",
         )
         entry = store.store_action(
@@ -191,6 +211,7 @@ class TestActionCacheAdversarialSafetyProof:
 
         proof = ActionProof(
             input_hashes={str(target): hash_file_content(target)},
+            dependency_class=DependencyClass.FILE_SET,
             verification_predicate="input_hashes_match",
         )
         entry = store.store_action(

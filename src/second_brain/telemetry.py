@@ -45,6 +45,7 @@ KNOWN_KINDS = {
     "vmem_compact_prep", "vmem_fault_in", "vmem_hot_context", "writeback_candidate",
     "heartbeat_pulse", "bottleneck_fingerprint", "optimization_proposal",
     "optimization_evaluation", "optimization_activation", "optimization_rollback",
+    "cache_store_skipped_inputs_changed",
 }
 KIND_SCHEMA_VERSION = {
     kind: 3
@@ -554,6 +555,9 @@ _APPEND_FIELDS = {
     "bottleneck_fingerprint": {
         "fingerprint_id", "category", "scope_id", "occurrence_count",
         "impact_score", "evidence_count", "evidence_hash",
+    },
+    "cache_store_skipped_inputs_changed": {
+        "action_type", "dependency_class",
     },
 }
 for _handoff_kind in (

@@ -1309,9 +1309,9 @@ def _parser() -> argparse.ArgumentParser:
         "search",
         parents=[home_parent],
         help="deterministic code search over git-tracked files, cached and "
-        "gated by git tree hash (Phase R5: narrowest Brain-owned execution-"
-        "bypass layer — Prime's tool_call hook cannot itself skip execution, "
-        "see outputs/reports/rc4/05-action-cache-live.md)",
+        "gated by a scoped dirty-worktree fingerprint (Phase R5: narrowest "
+        "Brain-owned execution-bypass layer — Prime's tool_call hook cannot "
+        "itself skip execution)",
     )
     ac_search.add_argument("pattern", help="regular expression to search for")
     ac_search.add_argument(
@@ -4348,6 +4348,14 @@ def cmd_action_cache(args) -> int:
             print(f"  Entries: {stats['total_entries']}")
             print(f"  Hits: {stats['total_hits']}")
             print(f"  Tokens Saved Estimate: {stats['tokens_saved_estimate']}")
+            print("  Economics by dependency class:")
+            for dependency_class, economics_row in stats[
+                "economics_by_dependency_class"
+            ].items():
+                print(
+                    f"    {dependency_class}: {economics_row['lookups']} lookups, "
+                    f"{economics_row['hits']} hits, {economics_row['status']}"
+                )
         return 0
 
     if args.action_cache_command == "get":
@@ -4443,30 +4451,44 @@ def _code_search_git_tracked(target_dir: Path, pattern: str, max_matches: int) -
 
 
 def _action_cache_search(home: Path, args) -> int:
-    """
-    Narrowest Brain-owned execution-bypass layer (Phase R5): Prime's
-    tool_call hook cannot supply a result and skip execution
-    (ToolCallEventResult has no content field — confirmed in
-    outputs/reports/rc4/02-prime-live-callgraph.md), so this cache
-    integration lives BELOW Prime, as a Brain-owned CLI action a caller
-    invokes instead of running the search directly.
-
-    T6.2: this NEVER caches. `git_tree_hash_for` only gates on the
-    COMMITTED tree (`git rev-parse HEAD^{tree}`), so an uncommitted
-    (staged/unstaged/untracked) edit to a searched file was invisible to
-    invalidation and a stale cached result could be served as a "hit"
-    even though on-disk content changed. Always compute fresh instead —
-    the real worktree-fingerprint-gated cache is deferred to T6.5
-    (DependencyClass-based dirty-worktree fingerprinting).
-    """
+    """Search through a safe scoped WORKTREE proof, or compute directly."""
     import json
     import time
 
-    target_dir = Path(args.path) if args.path else home
-    started = time.perf_counter()
-    content = _code_search_git_tracked(target_dir, args.pattern, args.max_matches)
-    latency_ms = (time.perf_counter() - started) * 1000
-    was_hit = False
+    from . import action_cache
+
+    target_dir = (Path(args.path) if args.path else home).resolve()
+    snapshot = action_cache.worktree_fingerprint_for(target_dir)
+    compute = lambda: _code_search_git_tracked(
+        target_dir,
+        args.pattern,
+        args.max_matches,
+    )
+    if snapshot is None:
+        started = time.perf_counter()
+        content = compute()
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        was_hit = False
+    else:
+        proof = action_cache.ActionProof(
+            dependency_class=action_cache.DependencyClass.WORKTREE,
+            worktree_root=snapshot.repository_root,
+            worktree_scope=snapshot.scope,
+            worktree_fingerprint=snapshot.fingerprint,
+            verification_predicate="git_tree_unchanged",
+        )
+        store = action_cache.ActionCacheStore(home)
+        content, was_hit, latency_ms = store.get_or_execute(
+            action_cache.ActionType.CODE_SEARCH,
+            target=str(target_dir),
+            params={
+                "pattern": args.pattern,
+                "max_matches": args.max_matches,
+            },
+            proof=proof,
+            compute_fn=compute,
+            output_summary=f"code search {args.pattern!r} under {target_dir}",
+        )
     if args.json:
         print(
             json.dumps(

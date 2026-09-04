@@ -643,14 +643,8 @@ def _git_repo_with_commit(repo: Path, filename: str, content: str) -> None:
     _git(repo, "commit", "-q", "-m", "init")
 
 
-def test_action_cache_search_never_caches_and_reflects_uncommitted_edits(tmp_path):
-    """T6.2: the prior `git rev-parse HEAD^{tree}`-only cache gate only saw
-    the COMMITTED tree, so an uncommitted (staged/unstaged/untracked) edit
-    to a searched file was invisible to invalidation and a stale cached
-    result could be served as a "hit" even though on-disk content changed.
-    `action-cache search` must never cache at all: every call recomputes,
-    `hit` is always False, and an uncommitted edit is reflected immediately
-    on the very next call (no commit required)."""
+def test_action_cache_search_uses_dirty_worktree_proof(tmp_path):
+    """Stable worktrees hit; uncommitted tracked edits change the cache key."""
     home = tmp_path / "brain"
     assert run_cli(home, "init").returncode == 0
     repo = tmp_path / "repo"
@@ -662,21 +656,25 @@ def test_action_cache_search_never_caches_and_reflects_uncommitted_edits(tmp_pat
     assert out1["hit"] is False
     assert "hello.py" in out1["content"]
 
-    # Second call with no change at all: still never a cache hit.
     r2 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
     out2 = json.loads(r2.stdout)
-    assert out2["hit"] is False
+    assert out2["hit"] is True
     assert out2["content"] == out1["content"]
 
-    # Uncommitted edit (no `git commit`) — the old tree-hash-only gate would
-    # never see this and could serve a stale hit. It must be visible now,
-    # on the very next call, with no commit involved.
     (repo / "hello.py").write_text("def bonjour():\n    return 'world2'\n", encoding="utf-8")
 
-    r3 = run_cli(home, "action-cache", "search", "bonjour", "--path", str(repo), "--json")
+    r3 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
     out3 = json.loads(r3.stdout)
     assert out3["hit"] is False
-    assert "bonjour" in out3["content"]
+    assert out3["content"] == "0 matches for 'hello'"
+
+    r4 = run_cli(home, "action-cache", "search", "bonjour", "--path", str(repo), "--json")
+    out4 = json.loads(r4.stdout)
+    assert out4["hit"] is False
+    assert "bonjour" in out4["content"]
+
+    r5 = run_cli(home, "action-cache", "search", "bonjour", "--path", str(repo), "--json")
+    assert json.loads(r5.stdout)["hit"] is True
 
 
 def test_action_cache_search_non_git_dir_never_caches(tmp_path):
