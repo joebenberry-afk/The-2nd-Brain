@@ -219,6 +219,7 @@ def set_outcome(
         raise BrainError(f"Could not set decision outcome: {exc}") from exc
     finally:
         conn.close()
+record_outcome = set_outcome
 
 
 def randomize(

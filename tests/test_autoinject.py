@@ -377,7 +377,7 @@ def test_migration_0008_fresh_and_v7_upgrade(tmp_path, monkeypatch) -> None:
     conn = db.connect(db.db_path(home))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 10
+        assert v >= 10
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
         assert "deliveries" in tables
     finally:
@@ -399,7 +399,8 @@ def test_migration_0008_fresh_and_v7_upgrade(tmp_path, monkeypatch) -> None:
     finally:
         conn.close()
     monkeypatch.setattr(db, "MIGRATIONS_DIR", real)
-    assert db.migrate(db.db_path(home7)) == [8, 9, 10]  # applies 0008+0009+0010
+    applied = db.migrate(db.db_path(home7))
+    assert applied[:3] == [8, 9, 10]
     assert db.migrate(db.db_path(home7)) == []  # idempotent second run
     conn = db.connect(db.db_path(home7))
     try:

@@ -62,6 +62,7 @@ class NoInjectionReason(StrEnum):
     CLEAN_ROOM_REQUEST = "CLEAN_ROOM_REQUEST"
     BRAIN_UNAVAILABLE = "BRAIN_UNAVAILABLE"
     BUDGET_SOFT = "BUDGET_SOFT"
+    HOLDOUT = "HOLDOUT"
 
 class MemoryItemStatus(StrEnum):
     CURRENT = "current"
@@ -909,6 +910,7 @@ class PacketItem:
     supersedes: tuple[str, int] | None = None
     freshness: str = "UNKNOWN"
     contradicts: tuple[str, ...] = ()
+    authority: str = "advisory"
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PacketItem:
@@ -930,6 +932,7 @@ class PacketItem:
             supersedes=supersedes,
             freshness=str(data.get("freshness") or "UNKNOWN"),
             contradicts=tuple(str(item) for item in contradictions),
+            authority=str(data.get("authority") or "advisory"),
         )
 
 
