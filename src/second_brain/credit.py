@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import db, plasticity, router, telemetry
+from . import contracts, db, decisions, plasticity, router, telemetry
 from .errors import BrainError
 
 CREDIT_LEVELS: tuple[str, ...] = plasticity.CREDIT_LEVELS
@@ -612,4 +612,355 @@ def arm_from_telemetry(
         "wall_time_ms": wall_time_ms,
         "verification": verification,
         "regressions": regressions,
+    }
+
+
+def record_intervention(
+    home: Path | str,
+    intervention_type: str,
+    target_ref: str,
+    expected_outcome: Mapping[str, Any],
+    baseline_ref: str,
+    *,
+    decision_ref: str | None = None,
+    policy_version: str = "v7.5",
+    session_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Record an adaptive intervention with prior measurable expected outcome.
+
+    Rule: Every adaptive intervention records an expected measurable outcome
+    before execution. Free-form expectation or missing expectation is rejected.
+    """
+    home_p = Path(home)
+    if db.pending_migrations(db.db_path(home_p)):
+        db.migrate(db.db_path(home_p))
+
+    if not isinstance(expected_outcome, Mapping) or not expected_outcome:
+        raise BrainError("Intervention requires non-empty prior measurable expected_outcome mapping")
+
+    has_measurable = any(
+        k in expected_outcome
+        for k in (
+            "metric",
+            "expected_delta",
+            "direction",
+            "expected_pass",
+            "expected_value",
+            "delta",
+        )
+    )
+    if not has_measurable:
+        raise BrainError("Intervention requires prior measurable expected_outcome")
+
+    now = datetime.now(UTC).isoformat()
+    expected_dict = dict(expected_outcome)
+    intervention_dict = {
+        "intervention_type": str(intervention_type),
+        "target_ref": str(target_ref),
+        "baseline_ref": str(baseline_ref),
+    }
+
+    identity_str = f"{intervention_type}:{target_ref}:{baseline_ref}:{contracts.canonical_json(expected_dict)}"
+    intervention_id = (
+        "intv-"
+        + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
+    )
+    provenance_hash = hashlib.sha256(
+        contracts.canonical_json(
+            {"intervention": intervention_dict, "expected": expected_dict}
+        ).encode("utf-8")
+    ).hexdigest()
+
+    conn = db.connect(db.db_path(home_p))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """INSERT OR REPLACE INTO v2_interventions(
+                intervention_id, intervention_type, target_ref, expected_json,
+                baseline_ref, decision_ref, status, policy_version, provenance_hash,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)""",
+            (
+                intervention_id,
+                intervention_type,
+                target_ref,
+                contracts.canonical_json(expected_dict),
+                baseline_ref,
+                decision_ref,
+                policy_version,
+                provenance_hash,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not record intervention: {exc}") from exc
+    finally:
+        conn.close()
+
+    dec_ref = decisions.record(
+        home_p,
+        kind="learning",
+        session_id=session_id or f"sess-{intervention_id}",
+        task_id=task_id or f"task-{intervention_id}",
+        chosen={
+            "action": "record_intervention",
+            "intervention_id": intervention_id,
+            "status": "PENDING",
+        },
+        alternatives=[{"action": "no_intervention"}],
+        propensity=1.0,
+        randomized=False,
+        policy_version=policy_version,
+        stage="SHADOW",
+        inputs={
+            "target_ref": target_ref,
+            "expected": expected_dict,
+            "baseline_ref": baseline_ref,
+        },
+    )
+
+    return {
+        "intervention_id": intervention_id,
+        "intervention_type": intervention_type,
+        "target_ref": target_ref,
+        "expected_outcome": expected_dict,
+        "baseline_ref": baseline_ref,
+        "decision_ref": dec_ref,
+        "status": "PENDING",
+        "provenance_hash": provenance_hash,
+        "created_at": now,
+    }
+
+
+def record_observation(
+    home: Path | str,
+    intervention_id: str,
+    observed_data: Mapping[str, Any],
+    evidence_ref: str,
+    evidence_type: str,
+    *,
+    evaluator_ref: str = "evaluator-system",
+    evidence_strength: float = 1.0,
+    session_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Record an observation from telemetry/test evidence, compute prediction error & credit."""
+    home_p = Path(home)
+    if db.pending_migrations(db.db_path(home_p)):
+        db.migrate(db.db_path(home_p))
+
+    allowed_evidence_types = {
+        "telemetry",
+        "test_runner",
+        "acceptance_check",
+        "benchmark",
+    }
+    clean_ev_type = str(evidence_type).strip().lower()
+    if (
+        clean_ev_type not in allowed_evidence_types
+        or "self_report" in clean_ev_type
+        or "model_assertion" in clean_ev_type
+    ):
+        raise BrainError(
+            "Model self-report is not an observation; requires telemetry or test evidence"
+        )
+
+    if not isinstance(observed_data, Mapping) or not observed_data:
+        raise BrainError("observed_data must be a non-empty mapping")
+
+    conn = db.connect(db.db_path(home_p))
+    try:
+        row = conn.execute(
+            "SELECT * FROM v2_interventions WHERE intervention_id = ?",
+            (intervention_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise BrainError(f"Unknown intervention {intervention_id!r}")
+
+    expected_raw = row["expected_json"]
+    if not expected_raw or expected_raw == "{}":
+        raise BrainError("Cannot compute prediction error without prior expectation")
+
+    expected_dict = json.loads(expected_raw)
+    observed_dict = dict(observed_data)
+
+    metric_name = expected_dict.get("metric", "delta")
+    exp_val = expected_dict.get(
+        "expected_delta",
+        expected_dict.get(
+            "expected_value", expected_dict.get("expected_pass")
+        ),
+    )
+    obs_val = observed_dict.get(
+        metric_name,
+        observed_dict.get(
+            "delta",
+            observed_dict.get("actual_delta", observed_dict.get("pass")),
+        ),
+    )
+
+    if isinstance(exp_val, (int, float)) and isinstance(obs_val, (int, float)):
+        pred_error = float(obs_val) - float(exp_val)
+        rel_diff = abs(pred_error) / max(1.0, abs(float(exp_val)))
+        surprise_score = min(1.0, round(rel_diff, 4))
+    elif isinstance(exp_val, bool) and isinstance(obs_val, bool):
+        pred_error = 0.0 if exp_val == obs_val else 1.0
+        surprise_score = 0.0 if exp_val == obs_val else 1.0
+    else:
+        pred_error = 0.0
+        surprise_score = 0.5
+
+    prediction_error_dict = {
+        "metric": metric_name,
+        "expected": exp_val,
+        "observed": obs_val,
+        "error": pred_error,
+    }
+
+    design = observed_dict.get("design", "paired")
+    effect = observed_dict.get(
+        "effect",
+        observed_dict.get(
+            "r_bar",
+            -pred_error if "token" in metric_name else obs_val,
+        ),
+    )
+    verdict_str = observed_dict.get(
+        "verdict",
+        "POSITIVE" if effect and float(effect) > 0 else "INSUFFICIENT",
+    )
+
+    credit_evidence = {
+        "design": design,
+        "verdict": verdict_str,
+        "effect": effect,
+        "interaction_significant": observed_dict.get(
+            "interaction_significant", False
+        ),
+    }
+    derived_credit = classify_credit(credit_evidence)
+
+    target_ref = row["target_ref"]
+    if derived_credit == CreditClass.UNRELATED_NEGATIVE or (
+        isinstance(effect, (int, float)) and effect < 0
+    ):
+        candidate_action = {
+            "action": "demote_candidate",
+            "target_ref": target_ref,
+            "rollout_stage": "SHADOW",
+            "reason": "negative_causal_effect",
+            "effect_size": effect,
+        }
+    elif (
+        derived_credit in (CreditClass.DIRECT, CreditClass.CONTRIBUTORY)
+        and surprise_score >= 0.2
+    ):
+        candidate_action = {
+            "action": "propose_candidate_update",
+            "target_ref": target_ref,
+            "rollout_stage": "SHADOW",
+            "reason": "positive_causal_effect",
+            "effect_size": effect,
+        }
+    else:
+        candidate_action = {
+            "action": "hold_candidate",
+            "target_ref": target_ref,
+            "rollout_stage": "SHADOW",
+            "reason": "unverified_or_immaterial_surprise",
+            "effect_size": effect,
+        }
+
+    now = datetime.now(UTC).isoformat()
+    obs_id = (
+        "obs-"
+        + hashlib.sha256(
+            f"{intervention_id}:{evidence_ref}:{now}".encode("utf-8")
+        ).hexdigest()[:24]
+    )
+    prov_hash = hashlib.sha256(
+        contracts.canonical_json(
+            {"obs": observed_dict, "pred_err": prediction_error_dict}
+        ).encode("utf-8")
+    ).hexdigest()
+
+    conn = db.connect(db.db_path(home_p))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """INSERT INTO v2_observations(
+                observation_id, intervention_id, observed_json, prediction_error_json,
+                surprise_score, evidence_strength, credit_class, evaluator_ref,
+                evidence_type, candidate_action_json, provenance_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                obs_id,
+                intervention_id,
+                contracts.canonical_json(observed_dict),
+                contracts.canonical_json(prediction_error_dict),
+                float(surprise_score),
+                float(evidence_strength),
+                str(derived_credit),
+                evaluator_ref,
+                clean_ev_type,
+                contracts.canonical_json(candidate_action),
+                prov_hash,
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE v2_interventions SET status = 'OBSERVED', updated_at = ? WHERE intervention_id = ?",
+            (now, intervention_id),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not record observation: {exc}") from exc
+    finally:
+        conn.close()
+
+    decisions.record(
+        home_p,
+        kind="learning",
+        session_id=session_id or f"sess-{obs_id}",
+        task_id=task_id or f"task-{obs_id}",
+        chosen={
+            "observation_id": obs_id,
+            "intervention_id": intervention_id,
+            "credit_class": str(derived_credit),
+            "candidate_action": candidate_action["action"],
+            "rollout_stage": "SHADOW",
+        },
+        alternatives=[],
+        propensity=1.0,
+        randomized=False,
+        policy_version="v7.5",
+        stage="SHADOW",
+        inputs={
+            "intervention_id": intervention_id,
+            "surprise_score": surprise_score,
+            "prediction_error": prediction_error_dict,
+            "credit_class": str(derived_credit),
+        },
+    )
+
+    return {
+        "observation_id": obs_id,
+        "intervention_id": intervention_id,
+        "observed_data": observed_dict,
+        "prediction_error": prediction_error_dict,
+        "surprise_score": surprise_score,
+        "credit_class": str(derived_credit),
+        "candidate_action": candidate_action,
+        "evidence_type": clean_ev_type,
+        "evaluator_ref": evaluator_ref,
+        "provenance_hash": prov_hash,
+        "created_at": now,
     }
