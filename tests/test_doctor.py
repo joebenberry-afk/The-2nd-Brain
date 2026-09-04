@@ -60,6 +60,23 @@ def test_doctor_warns_on_python_env_pollution(brain_home, monkeypatch):
     assert not result.failed
 
 
+def test_doctor_fails_when_explicit_and_environment_homes_differ(brain_home, monkeypatch):
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(brain_home.parent / "other-brain"))
+
+    result = doctor.run_doctor(brain_home)
+
+    assert _statuses(result)["identity coherence"] == "fail"
+
+
+def test_doctor_fails_when_runtime_root_disagrees(brain_home, monkeypatch):
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(brain_home))
+    monkeypatch.setenv("SECOND_BRAIN_RUNTIME_ROOT", str(brain_home / "other-runtime"))
+
+    result = doctor.run_doctor(brain_home)
+
+    assert _statuses(result)["identity coherence"] == "fail"
+
+
 def test_format_result(brain_home):
     text = doctor.format_result(doctor.run_doctor(brain_home))
     assert "PASS" in text
