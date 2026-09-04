@@ -1194,3 +1194,31 @@ def test_project_resolve_reports_canonical_identity(tmp_path):
         "repo_root": str(repo.resolve()),
         "resolution": "manifest",
     }
+
+
+def test_project_resolve_finds_manifest_from_nested_directory(tmp_path):
+    home = tmp_path / "brain"
+    repo = tmp_path / "repo"
+    nested = repo / "src" / "deep" / "nested"
+    nested.mkdir(parents=True)
+    assert run_cli(home, "init").returncode == 0
+    attached = run_cli(
+        home,
+        "project",
+        "add",
+        str(repo),
+        "--id",
+        "canonical-project",
+        cwd=repo,
+    )
+    assert attached.returncode == 0, attached.stderr
+
+    resolved = run_cli(home, "project", "resolve", "--cwd", str(nested), cwd=nested)
+
+    assert resolved.returncode == 0, resolved.stderr
+    assert json.loads(resolved.stdout) == {
+        "confidence": "high",
+        "project_id": "canonical-project",
+        "repo_root": str(repo.resolve()),
+        "resolution": "manifest",
+    }

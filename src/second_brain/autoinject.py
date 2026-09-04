@@ -339,6 +339,28 @@ def _retrieval_holdout_epsilon(home: Path | str) -> float:
 # validity dimensions the plan requires and never re-scores.
 # ---------------------------------------------------------------------------
 
+_MANIFEST_WALK_MAX_LEVELS = 64
+
+
+def _detect_explicit_id_upward(cwd_path: Path) -> tuple[str, Path] | None:
+    """Find `.brain/project.toml` starting at `cwd_path` and walking upward
+    to the filesystem root, the same discovery semantics `git` itself uses
+    for `.git`. A manifest declared at the repository root must resolve the
+    same canonical project id for every nested working directory inside
+    that repository, not only an exact manifest-directory match. Returns
+    (project_id, manifest_root) so callers can report the REAL project
+    root instead of the caller's raw cwd."""
+    current = cwd_path
+    for _ in range(_MANIFEST_WALK_MAX_LEVELS):
+        manifest_id = registry.detect_explicit_id(str(current))
+        if manifest_id:
+            return manifest_id, current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+    return None
+
 
 def resolve_project(
     home: Path | str, cwd: str | None = None, explicit: str | None = None
@@ -356,17 +378,17 @@ def resolve_project(
     cwd_path = Path(cwd).resolve() if cwd and str(cwd).strip() else None
     if cwd_path is not None:
         try:
-            manifest_id = registry.detect_explicit_id(str(cwd_path))
-            if manifest_id:
+            found = _detect_explicit_id_upward(cwd_path)
+            if found is not None:
+                manifest_id, manifest_root = found
                 return {
                     "project_id": manifest_id,
                     "resolution": "manifest",
-                    "repo_root": str(cwd_path),
+                    "repo_root": str(manifest_root),
                     "confidence": "high",
                 }
         except Exception:
             pass
-
         try:
             matches = []
             for project in registry.list_projects(home_path):
