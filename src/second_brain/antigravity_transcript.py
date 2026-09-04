@@ -243,3 +243,58 @@ def extract_usage_tail(
                 result[field] = usage[field]
         results.append(result)
     return results
+
+
+def extract_tool_call_args(transcript_path: object) -> list[object]:
+    """Extract bounded tool-call argument fields without persisting content.
+
+    Shared by the Antigravity and Claude Code hook adapters, both of which
+    read the same JSONL transcript-tail shape.
+    """
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return []
+    try:
+        path = Path(transcript_path)
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 128 * 1024))
+            raw = fh.read(128 * 1024)
+        if size > 128 * 1024:
+            raw = raw[raw.find(b"\n") + 1 :]
+        lines = raw.decode("utf-8", errors="replace").splitlines()[-200:]
+    except (OSError, ValueError):
+        return []
+    args: list[object] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, dict):
+            kind = str(node.get("type") or "").lower()
+            if kind in {"tool", "tool_call", "tool_use"}:
+                for key in ("args", "arguments", "input"):
+                    if key in node:
+                        args.append(node[key])
+                        break
+            for key in ("tool_calls", "toolCalls", "toolCall"):
+                calls = node.get(key)
+                if isinstance(calls, dict):
+                    calls = [calls]
+                if isinstance(calls, list):
+                    for call in calls:
+                        if isinstance(call, dict):
+                            for arg_key in ("args", "arguments", "input"):
+                                if arg_key in call:
+                                    args.append(call[arg_key])
+                                    break
+            for child in node.values():
+                collect(child)
+        elif isinstance(node, list):
+            for child in node:
+                collect(child)
+
+    for line in lines:
+        try:
+            collect(json.loads(line))
+        except (TypeError, ValueError):
+            continue
+    return args

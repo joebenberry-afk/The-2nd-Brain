@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from second_brain import semantic
+from second_brain import registry, semantic
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -134,3 +134,52 @@ def test_wrong_project_stdin_no_injection(tmp_path) -> None:
     out = json.loads(r.stdout)
     assert out["decision"] == "NO_INJECTION"
     assert out["reason"] in ("WRONG_PROJECT", "NO_RELEVANT_MEMORY")
+
+
+def test_codex_project_from_cwd_ladder(tmp_path) -> None:
+    """No explicit `project` field: codex-shadow must resolve project_id via
+    `autoinject._resolve_project_id`'s cwd ladder (registry repo_path match),
+    not silently fall through to "default" for harnesses that only ever send
+    `cwd`. An explicit `project` field still wins over the ladder (rung 1)."""
+    home = tmp_path / "brain"
+    _init_and_seed(home)
+    cwd_dir = tmp_path / "workdir"
+    cwd_dir.mkdir()
+    registry.add_project(home, cwd_dir, project_id="proj-a")
+
+    # No `project` field at all -> must resolve "proj-a" via the cwd ladder,
+    # not fall through to "default" (where the seeded memory is invisible).
+    payload = json.dumps(
+        {
+            "session_id": "codex-cwd-ladder-1",
+            "task": "migration ordering",
+            "agent_id": "a1",
+            "branch": "main",
+            "role": "worker",
+            "source": "UserPromptSubmit",
+            "cwd": str(cwd_dir),
+        }
+    )
+    r = _run_cli(home, "autoinject", "codex-shadow", stdin=payload)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["decision"] == "INJECT"
+
+    # An explicit `project` field still wins over the cwd ladder.
+    payload2 = json.dumps(
+        {
+            "session_id": "codex-cwd-ladder-2",
+            "project": "proj-zzz",
+            "task": "migration ordering",
+            "agent_id": "a1",
+            "branch": "main",
+            "role": "worker",
+            "source": "UserPromptSubmit",
+            "cwd": str(cwd_dir),
+        }
+    )
+    r2 = _run_cli(home, "autoinject", "codex-shadow", stdin=payload2)
+    assert r2.returncode == 0, r2.stderr
+    out2 = json.loads(r2.stdout)
+    assert out2["decision"] == "NO_INJECTION"
+    assert out2["reason"] in ("WRONG_PROJECT", "NO_RELEVANT_MEMORY")

@@ -737,6 +737,21 @@ def render_packet(decision: BrainInjectionDecision) -> str | None:
     return cached[0] if cached is not None else None
 
 
+def shadow_output(
+    decision: BrainInjectionDecision, packet: str | None, delivery_id: str | None
+) -> dict:
+    """Deterministic one-object JSON shape shared by shadow + codex-shadow."""
+    return {
+        "decision": decision.decision.value,
+        "reason": decision.reason.value if decision.reason is not None else None,
+        "packet": packet,
+        "packet_tokens": decision.packet_token_size,
+        "candidate_ids": decision.candidate_ids,
+        "selected_ids": decision.selected_ids,
+        "delivery_id": delivery_id,
+    }
+
+
 def prepare_injection(
     home: Path | str,
     intent: RetrievalIntent,
