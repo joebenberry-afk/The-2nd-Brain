@@ -1,0 +1,9 @@
+branch: brain/v2-omp-qualification
+sha: 0129e235421160b51791459b0fd339c1368ff6fa
+remote_repair_sha: 0129e235421160b51791459b0fd339c1368ff6fa
+worktree_status:
+?? outputs/reports/v2/omp-burnin/
+tags:
+second-brain-p3-proven
+second-brain-p3-proven-remediated
+v1.0.0

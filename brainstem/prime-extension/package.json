@@ -1,8 +1,8 @@
 {
   "name": "second-brain-observability",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Measurement-only Prime Agent extension for The Second Brain OS Phase 2 observability. Observes lifecycle events and appends JSONL telemetry; never mutates agent behavior.",
+  "description": "Second Brain harness integration extension with OMP-first lifecycle, retrieval, routing, worker-context, visibility, and telemetry support.",
   "license": "UNLICENSED",
   "scripts": {
     "lint": "eslint .",
