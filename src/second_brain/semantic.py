@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import json
 import math
 import os
 import re
@@ -25,13 +26,14 @@ import sqlite3
 import subprocess
 import tempfile
 import tomllib
+from enum import StrEnum
 from dataclasses import dataclass
 from dataclasses import field as _field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import db
-from .contracts import estimate_tokens
+from . import db, decisions
+from .contracts import canonical_json, estimate_tokens
 from .errors import BrainError
 
 _LOG = logging.getLogger("second_brain.semantic")
@@ -52,6 +54,43 @@ ORIGIN_CLASSES: tuple[str, ...] = (
 AUTHORITY_CEILINGS: tuple[str, ...] = ("advisory", "project_rule", "policy")
 _AUTHORITY_RANK = {"advisory": 0, "project_rule": 1, "policy": 2}
 _PROJECT_RULE_ORIGINS = frozenset({"USER_AUTHORED", "LOCAL_REPO", "TRUSTED_TEST"})
+
+
+class CandidateTrigger(StrEnum):
+    """Evidence-only reasons that can open the earned-memory gate."""
+
+    CORRECTION = "CORRECTION"
+    REGRESSION = "REGRESSION"
+    REPETITION = "REPETITION"
+    SUBTLETY = "SUBTLETY"
+    SEVERITY = "SEVERITY"
+    INDEPENDENT_EVIDENCE = "INDEPENDENT_EVIDENCE"
+    CROSS_SESSION_REUSE = "CROSS_SESSION_REUSE"
+
+
+CANDIDATE_TRIGGERS: tuple[str, ...] = tuple(item.value for item in CandidateTrigger)
+_CORRECTION_EVENTS = frozenset(
+    {
+        "result_correction_requested",
+        "result_corrected",
+        "hermes_worker_result_correction_requested",
+        "hermes_worker_result_corrected",
+    }
+)
+_FAILURE_EVENTS = frozenset(
+    {"task_failed", "worker_failed", "test_observed", "model_invocation_failed"}
+)
+_SHA_FIELDS = (
+    "record_hash",
+    "evidence_hash",
+    "correction_sha256",
+    "original_result_sha256",
+    "result_sha256",
+    "artifact_sha256",
+)
+_CANDIDATE_EVENT_LIMIT = 16
+_CANDIDATE_REF_LIMIT = 256
+_EARNED_MEMORY_POLICY_VERSION = "earned-memory-v1"
 
 # Rank for upgrade/downgrade decisions; HISTORICAL/REJECTED sit below everything.
 _GRADE_RANK = {
@@ -306,6 +345,328 @@ def _validate_origin(origin_class: str, origin_root_sha: str | None) -> tuple[st
         origin_root_sha = origin_root_sha.lower()
     ceiling = "project_rule" if origin_class in _PROJECT_RULE_ORIGINS else "advisory"
     return origin_class, origin_root_sha, ceiling
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def _event_view(raw: object) -> tuple[str, dict, str, str] | None:
+    """Normalize one ledger event or hash-bound telemetry record."""
+    if isinstance(raw, dict):
+        outer = raw
+        nested = raw.get("payload")
+        payload = dict(nested) if isinstance(nested, dict) else dict(raw)
+    else:
+        outer = {
+            "event_id": getattr(raw, "event_id", None),
+            "event_type": getattr(raw, "event_type", None),
+            "internal_session_id": getattr(raw, "internal_session_id", None),
+            "artifact_sha256": getattr(raw, "artifact_sha256", None),
+        }
+        nested = getattr(raw, "payload", None)
+        if not isinstance(nested, dict):
+            return None
+        payload = dict(nested)
+
+    raw_kind = outer.get("event_type") or outer.get("kind")
+    kind = str(getattr(raw_kind, "value", raw_kind) or "").strip().lower()
+    if not kind:
+        return None
+    event_id = outer.get("event_id")
+    telemetry_ref = outer.get("telemetry_ref")
+    if isinstance(event_id, str) and event_id.strip():
+        ref = event_id.strip()
+    elif (
+        isinstance(telemetry_ref, str)
+        and 0 < len(telemetry_ref.strip()) <= _CANDIDATE_REF_LIMIT
+        and _is_sha256(outer.get("record_hash"))
+    ):
+        unhashed = {
+            key: value
+            for key, value in outer.items()
+            if key not in {"telemetry_ref", "record_hash"}
+        }
+        expected = hashlib.sha256(canonical_json(unhashed).encode("utf-8")).hexdigest()
+        if expected != str(outer["record_hash"]).lower():
+            return None
+        ref = telemetry_ref.strip()
+    else:
+        return None
+    if len(ref) > _CANDIDATE_REF_LIMIT:
+        raise BrainError(f"source event ref exceeds {_CANDIDATE_REF_LIMIT} characters")
+
+    for key in ("artifact_sha256", "record_hash"):
+        if key in outer and key not in payload:
+            payload[key] = outer[key]
+    session = str(
+        outer.get("internal_session_id")
+        or outer.get("session")
+        or outer.get("brain_session_id")
+        or outer.get("hermes_session_id")
+        or ""
+    ).strip()
+    return kind, payload, ref, session
+
+
+def _bound_evidence(payload: dict) -> bool:
+    return any(_is_sha256(payload.get(field)) for field in _SHA_FIELDS)
+
+
+def _signal_key(payload: dict) -> str:
+    for field in (
+        "signal_key",
+        "fingerprint_id",
+        "task_id",
+        "test_id",
+        "failure_code",
+        "original_result_sha256",
+    ):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return f"{field}:{value.strip()}"
+    return ""
+
+
+def _extract_candidate_evidence(events: list[object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not isinstance(events, list):
+        raise BrainError("events must be a list of ledger or telemetry records")
+    if len(events) > _CANDIDATE_EVENT_LIMIT:
+        raise BrainError(f"events must contain at most {_CANDIDATE_EVENT_LIMIT} records")
+
+    views = [view for raw in events if (view := _event_view(raw)) is not None]
+    refs_by_trigger: dict[str, set[str]] = {}
+
+    def add(trigger: CandidateTrigger, *refs: str) -> None:
+        refs_by_trigger.setdefault(trigger.value, set()).update(refs)
+
+    repeated_failures: dict[str, list[tuple[str, str]]] = {}
+    cross_session: dict[str, list[tuple[str, str]]] = {}
+    for kind, payload, ref, session in views:
+        bound = _bound_evidence(payload)
+        verified = payload.get("verified") is True or payload.get("approved") is True or bound
+        signal = _signal_key(payload)
+
+        if kind in _CORRECTION_EVENTS and bound:
+            add(CandidateTrigger.CORRECTION, ref)
+            attempt = payload.get("correction_attempt")
+            if isinstance(attempt, int) and not isinstance(attempt, bool) and attempt >= 2:
+                add(CandidateTrigger.REPETITION, ref)
+        if (
+            payload.get("regression_verified") is True
+            or (
+                payload.get("regression") is True
+                and payload.get("verified") is True
+            )
+            or (
+                str(payload.get("failure_code") or "").upper() == "REGRESSION"
+                and payload.get("verified") is True
+            )
+        ):
+            add(CandidateTrigger.REGRESSION, ref)
+        if payload.get("subtle") is True and verified:
+            add(CandidateTrigger.SUBTLETY, ref)
+
+        severity = str(payload.get("severity") or "").upper()
+        impact = payload.get("impact_score")
+        severe_impact = (
+            isinstance(impact, (int, float))
+            and not isinstance(impact, bool)
+            and math.isfinite(float(impact))
+            and float(impact) >= 8.0
+            and bound
+        )
+        if (severity in {"HIGH", "CRITICAL"} and verified) or severe_impact:
+            add(CandidateTrigger.SEVERITY, ref)
+
+        verdict = str(payload.get("verdict") or payload.get("result") or "").upper()
+        if kind == "independent_verification" and verdict == "PASS" and verified:
+            add(CandidateTrigger.INDEPENDENT_EVIDENCE, ref)
+
+        occurrence = payload.get("occurrence_count")
+        if (
+            isinstance(occurrence, int)
+            and not isinstance(occurrence, bool)
+            and occurrence >= 2
+            and bound
+        ):
+            add(CandidateTrigger.REPETITION, ref)
+        if kind in _FAILURE_EVENTS and payload.get("verified") is True and signal:
+            repeated_failures.setdefault(signal, []).append((ref, session))
+        if signal and session and verified:
+            cross_session.setdefault(signal, []).append((ref, session))
+
+    for observations in repeated_failures.values():
+        unique_refs = sorted({ref for ref, _session in observations})
+        if len(unique_refs) >= 2:
+            add(CandidateTrigger.REPETITION, *unique_refs)
+    for observations in cross_session.values():
+        if len({session for _ref, session in observations}) >= 2:
+            add(
+                CandidateTrigger.CROSS_SESSION_REUSE,
+                *(ref for ref, _session in observations),
+            )
+
+    triggers = tuple(sorted(refs_by_trigger))
+    refs = tuple(
+        sorted(
+            {
+                ref
+                for trigger_refs in refs_by_trigger.values()
+                for ref in trigger_refs
+            }
+        )
+    )
+    return triggers, refs
+
+
+def extract_candidate_triggers(events: list[object]) -> tuple[str, ...]:
+    """Return normalized evidence triggers; model confidence is never a signal."""
+    return _extract_candidate_evidence(events)[0]
+
+
+def _candidate_row(home: Path | str, candidate_id: str) -> dict | None:
+    conn = db.connect(_dbfile(Path(home)), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT * FROM v2_candidates WHERE candidate_id = ?", (candidate_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    result = dict(row)
+    result["triggers"] = json.loads(result["trigger_set_json"])
+    result["source_event_refs"] = json.loads(result["source_event_refs_json"])
+    return result
+
+
+def evaluate_candidate(
+    home: Path | str,
+    title: str,
+    body: str,
+    *,
+    events: list[object],
+    session_id: str,
+    task_id: str | None = None,
+    scope: str = "project",
+    project_id: str | None = None,
+    origin_class: str = "MODEL_INFERENCE",
+    origin_root_sha: str | None = None,
+) -> dict | None:
+    """Apply the earned-memory gate and persist only a SHADOW candidate.
+
+    The API deliberately exposes no confidence, authority, status, or rollout
+    parameters. Those values are derived from the immutable T1.7 origin ceiling.
+    """
+    _validate_new(title, body, scope, "INFERRED")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise BrainError("session_id must be a non-empty string")
+    origin_class, origin_root_sha, authority_ceiling = _validate_origin(
+        origin_class, origin_root_sha
+    )
+    triggers, source_refs = _extract_candidate_evidence(events)
+    identity = {
+        "title": " ".join(title.strip().casefold().split()),
+        "body_sha256": hashlib.sha256(body.strip().encode("utf-8")).hexdigest(),
+        "scope": scope,
+        "project_id": project_id,
+    }
+    candidate_id = "candidate-" + hashlib.sha256(
+        canonical_json(identity).encode("utf-8")
+    ).hexdigest()[:24]
+    inputs = {
+        "candidate_id": candidate_id,
+        "trigger_set": list(triggers),
+        "source_event_refs": list(source_refs),
+        "origin_class": origin_class,
+        "authority_ceiling": authority_ceiling,
+    }
+    outcome = "candidate_shadowed" if triggers else "no_candidate"
+    decision_ref = decisions.record(
+        home,
+        kind="admission",
+        session_id=session_id.strip(),
+        task_id=task_id,
+        chosen={"outcome": outcome, "candidate_id": candidate_id if triggers else None},
+        alternatives=[{"outcome": "no_candidate"}, {"outcome": "candidate_shadowed"}],
+        propensity=1.0,
+        randomized=False,
+        policy_version=_EARNED_MEMORY_POLICY_VERSION,
+        stage="SHADOW",
+        inputs=inputs,
+    )
+    if not triggers:
+        return None
+
+    confidence = "medium" if origin_class in _PROJECT_RULE_ORIGINS else "low"
+    _ensure_migrated(Path(home))
+    now = _utcnow()
+    conn = db.connect(_dbfile(Path(home)))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT trigger_set_json, source_event_refs_json FROM v2_candidates "
+            "WHERE candidate_id = ?",
+            (candidate_id,),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO v2_candidates(
+                    candidate_id, title, body, scope, project_id, lifecycle_state,
+                    trigger_set_json, source_event_refs_json, origin_class,
+                    origin_root_sha, authority_ceiling, confidence, rollout_stage,
+                    decision_ref, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, ?, 'SHADOW', ?, ?, ?)""",
+                (
+                    candidate_id,
+                    title.strip(),
+                    body.strip(),
+                    scope,
+                    project_id,
+                    canonical_json(list(triggers)),
+                    canonical_json(list(source_refs)),
+                    origin_class,
+                    origin_root_sha,
+                    authority_ceiling,
+                    confidence,
+                    decision_ref,
+                    now,
+                    now,
+                ),
+            )
+        else:
+            merged_triggers = sorted(
+                set(json.loads(existing["trigger_set_json"])) | set(triggers)
+            )
+            merged_refs = sorted(
+                set(json.loads(existing["source_event_refs_json"])) | set(source_refs)
+            )
+            if len(merged_refs) > 64:
+                raise BrainError("candidate source event refs exceed 64-record bound")
+            if (
+                canonical_json(merged_triggers) != existing["trigger_set_json"]
+                or canonical_json(merged_refs) != existing["source_event_refs_json"]
+            ):
+                conn.execute(
+                    "UPDATE v2_candidates SET trigger_set_json = ?, "
+                    "source_event_refs_json = ?, decision_ref = ?, updated_at = ? "
+                    "WHERE candidate_id = ?",
+                    (
+                        canonical_json(merged_triggers),
+                        canonical_json(merged_refs),
+                        decision_ref,
+                        now,
+                        candidate_id,
+                    ),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return _candidate_row(home, candidate_id)
 
 
 def corroboration_count(rows: object) -> int:
