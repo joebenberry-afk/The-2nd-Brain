@@ -1,0 +1,195 @@
+{
+  "experiment": "T7.4 Brainstem Attention & Intervention Coordinator Replay",
+  "hypothesis": "Deterministic Brainstem rules match expert manual decisions across routine, pressure, high-risk, exploration, and cold-start sessions. Replay is 100% deterministic from structured inputs and hard safety/budget constraints cannot be bypassed.",
+  "metrics": {
+    "total_scenarios_replayed": 6,
+    "concordance_matches": 6,
+    "concordance_rate": 1.0,
+    "replay_determinism_rate": 1.0,
+    "safety_bypass_refusal_rate": 1.0,
+    "decisions_recorded_count": 7
+  },
+  "adversarial_override_proof": {
+    "requested_budget": 99999,
+    "actual_budget": 2500,
+    "budget_hard_cap_enforced": true,
+    "requested_verify_level": "none",
+    "actual_verify_level": "full",
+    "verify_floor_enforced": true,
+    "requested_route_floor": "cheap",
+    "actual_route_floor": "T2",
+    "route_floor_enforced": true,
+    "reason_codes": [
+      "TASK_REQUIRES_RETRIEVAL",
+      "HIGH_RISK_ELEVATION",
+      "OVERRIDE_BUDGET_CAPPED_AT_HARD_LIMIT:2500",
+      "OVERRIDE_VERIFY_FLOOR_REJECTED",
+      "OVERRIDE_ROUTE_FLOOR_REJECTED"
+    ]
+  },
+  "scenarios": [
+    {
+      "scenario_id": "scen-01-routine-pilot",
+      "description": "Routine implementation task from RC4 Prime pilot",
+      "decision": {
+        "retrieve": true,
+        "inject_budget": 2100,
+        "route_floor": "T0",
+        "evict": false,
+        "verify_level": "targeted",
+        "scout_allowed": false,
+        "reason_codes": [
+          "TASK_REQUIRES_RETRIEVAL",
+          "STANDARD_DISPATCH"
+        ],
+        "decision_ref": "07404aad2caea2d46927f4ba",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": true,
+        "evict": false,
+        "route_floor": "T0",
+        "verify_level": "targeted",
+        "scout_allowed": false
+      },
+      "concordance": true,
+      "replay_identical": true
+    },
+    {
+      "scenario_id": "scen-02-context-pressure",
+      "description": "Compacted session under extreme context pressure (>80% limit)",
+      "decision": {
+        "retrieve": true,
+        "inject_budget": 1500,
+        "route_floor": "T0",
+        "evict": true,
+        "verify_level": "targeted",
+        "scout_allowed": false,
+        "reason_codes": [
+          "CONTEXT_PRESSURE_HIGH",
+          "TASK_REQUIRES_RETRIEVAL",
+          "STANDARD_DISPATCH"
+        ],
+        "decision_ref": "25e5b96994f6573a83885bec",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": true,
+        "evict": true,
+        "route_floor": "T0",
+        "verify_level": "targeted",
+        "scout_allowed": false
+      },
+      "concordance": true,
+      "replay_identical": true
+    },
+    {
+      "scenario_id": "scen-03-high-risk-security",
+      "description": "High risk authentication and security refactor",
+      "decision": {
+        "retrieve": true,
+        "inject_budget": 2000,
+        "route_floor": "T2",
+        "evict": false,
+        "verify_level": "full",
+        "scout_allowed": true,
+        "reason_codes": [
+          "TASK_REQUIRES_RETRIEVAL",
+          "HIGH_RISK_ELEVATION"
+        ],
+        "decision_ref": "02ebd02a1d6dc3772985b4b0",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": true,
+        "evict": false,
+        "route_floor": "T2",
+        "verify_level": "full",
+        "scout_allowed": true
+      },
+      "concordance": true,
+      "replay_identical": true
+    },
+    {
+      "scenario_id": "scen-04-trivial-turn",
+      "description": "Trivial acknowledgment / status turn",
+      "decision": {
+        "retrieve": false,
+        "inject_budget": 2000,
+        "route_floor": "T0",
+        "evict": false,
+        "verify_level": "targeted",
+        "scout_allowed": false,
+        "reason_codes": [
+          "TRIVIAL_TASK_SKIP_RETRIEVAL",
+          "STANDARD_DISPATCH"
+        ],
+        "decision_ref": "d5093f58af10041fb4d5608e",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": false,
+        "evict": false,
+        "route_floor": "T0",
+        "verify_level": "targeted",
+        "scout_allowed": false
+      },
+      "concordance": true,
+      "replay_identical": true
+    },
+    {
+      "scenario_id": "scen-05-exploratory-scout",
+      "description": "Broad codebase exploration task",
+      "decision": {
+        "retrieve": true,
+        "inject_budget": 2000,
+        "route_floor": "T1",
+        "evict": false,
+        "verify_level": "targeted",
+        "scout_allowed": true,
+        "reason_codes": [
+          "TASK_REQUIRES_RETRIEVAL",
+          "EXPLORATION_SCOUT_ALLOWED"
+        ],
+        "decision_ref": "0047a15e1cd658b0185720bc",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": true,
+        "evict": false,
+        "route_floor": "T1",
+        "verify_level": "targeted",
+        "scout_allowed": true
+      },
+      "concordance": true,
+      "replay_identical": true
+    },
+    {
+      "scenario_id": "scen-06-all-missing-conservative",
+      "description": "Cold start with completely missing / null telemetry signals",
+      "decision": {
+        "retrieve": false,
+        "inject_budget": 500,
+        "route_floor": "T0",
+        "evict": false,
+        "verify_level": "targeted",
+        "scout_allowed": false,
+        "reason_codes": [
+          "CONSERVATIVE_DEFAULTS_APPLIED"
+        ],
+        "decision_ref": "d76275575300c4aa9284a733",
+        "rollout_stage": "SHADOW"
+      },
+      "expected": {
+        "retrieve": false,
+        "evict": false,
+        "route_floor": "T0",
+        "verify_level": "targeted",
+        "scout_allowed": false
+      },
+      "concordance": true,
+      "replay_identical": true
+    }
+  ],
+  "conclusion": "PASS: Replayed 6 sessions with 6/6 (100.0%) concordance. Replay determinism is 100%. Hard budget cap ($2500 tokens) and verification floor (full) refused adversarial override bypass in SHADOW mode."
+}
