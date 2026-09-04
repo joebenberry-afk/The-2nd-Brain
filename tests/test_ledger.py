@@ -56,7 +56,7 @@ def _ev(
 
 @pytest.fixture
 def store(tmp_path):
-    s = ledger_mod.LedgerStore(tmp_path, HOST).open(create=True)
+    s = ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True)
     yield s
     s.close()
 
@@ -77,7 +77,7 @@ def _seed(store, n: int = 4, prefix: str = "e") -> list[BrainLifecycleEvent]:
 
 
 def test_init_manifest_and_header(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         internal = ledger_mod.internal_session_id(HOST)
         assert s.session_path.name == internal
         assert s.dbfile.is_file()
@@ -91,7 +91,7 @@ def test_init_manifest_and_header(tmp_path) -> None:
 
 
 def test_internal_id_is_hash_not_raw(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True):
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True):
         pass
     raw_path = tmp_path / "state" / "sessions" / HOST
     assert not raw_path.exists()  # never the raw host id as a path
@@ -186,7 +186,7 @@ def test_like_fallback_when_fts_unavailable(store, monkeypatch) -> None:
 
 
 def test_schema_versioning(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True):
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True):
         pass
     internal = ledger_mod.internal_session_id(HOST)
     dbfile = tmp_path / "state" / "sessions" / internal / "ledger.sqlite"
@@ -205,7 +205,7 @@ def test_schema_versioning(tmp_path) -> None:
 
 
 def test_replay_projection_and_compare(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 3)
         proj = s.replay(["e-1", "e-2", "e-3"])
         assert [e.event_id for e in proj.events] == ["e-1", "e-2", "e-3"]
@@ -216,7 +216,7 @@ def test_replay_projection_and_compare(tmp_path) -> None:
 
 
 def test_replay_rejects_seq_gap(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 3)
         conn = sqlite3.connect(s.dbfile)
         conn.execute("DELETE FROM events WHERE seq = 2")
@@ -227,7 +227,7 @@ def test_replay_rejects_seq_gap(tmp_path) -> None:
 
 
 def test_replay_rejects_orphan_parent(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 2)
         conn = sqlite3.connect(s.dbfile)
         conn.execute("UPDATE events SET parent_event_id = 'ghost' WHERE seq = 2")
@@ -238,14 +238,14 @@ def test_replay_rejects_orphan_parent(tmp_path) -> None:
 
 
 def test_replay_rejects_broken_lineage_pointer(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 3)
         with pytest.raises(BrainError, match="lineage event missing"):
             s.replay(["e-1", "ghost"])
 
 
 def test_replay_detects_payload_tamper_via_compare(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 3)
         captured = s.replay(["e-1", "e-2", "e-3"])
         conn = sqlite3.connect(s.dbfile)
@@ -262,7 +262,7 @@ def test_replay_detects_payload_tamper_via_compare(tmp_path) -> None:
 
 
 def test_replay_rejects_missing_object(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 1)
         digest = s.add_object(b"payload bytes")
         (s.session_path / "objects" / digest).unlink()
@@ -687,7 +687,7 @@ def test_segment_lifecycle(store) -> None:
 
 
 def test_checkpoint_ok_and_failure_flag(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 3)
         result = ledger_mod.checkpoint_ledger(s)
         assert result["ok"] is True
@@ -834,7 +834,7 @@ def test_status_transitions(store) -> None:
 
 
 def test_recover_report_flags(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         s.append_events(
             [
                 _ev(1, "comp-1", LifecycleEventType.COMPACTION_STARTED, payload={}),
@@ -864,7 +864,7 @@ def test_recover_report_flags(tmp_path) -> None:
 
 
 def test_purge_refuses_active_and_pinned(tmp_path, monkeypatch) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _create(s)
         _seed(s, 1)
     life = ledger_mod.SessionLifecycle(tmp_path, HOST)
@@ -893,7 +893,7 @@ def test_purge_refuses_active_and_pinned(tmp_path, monkeypatch) -> None:
 
 
 def test_purge_flow_with_extraction_and_receipt(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _create(s, project="proj-a")
         s.append_events(
             [
@@ -945,7 +945,7 @@ def test_purge_safety_traversal_and_identity(tmp_path, monkeypatch) -> None:
         assert d.name == internal
         assert str(d).startswith(str((tmp_path / "state" / "sessions").resolve()))
     # manifest identity mismatch refuses purge
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True):
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True):
         pass
     internal = ledger_mod.internal_session_id(HOST)
     manifest_path = tmp_path / "state" / "sessions" / internal / "manifest.json"
@@ -973,7 +973,7 @@ def test_purge_safety_traversal_and_identity(tmp_path, monkeypatch) -> None:
 
 def test_select_oldest_inactive_unpinned(tmp_path) -> None:
     for _i, host in enumerate(("host-a", "host-b", "host-c")):
-        with ledger_mod.LedgerStore(tmp_path, host).open(create=True) as s:
+        with ledger_mod.LedgerStore(tmp_path, host, host="test").open(create=True) as s:
             _create(s, host)
     ledger_mod.SessionLifecycle(tmp_path, "host-a").mark_status("inactive_grace")
     ledger_mod.SessionLifecycle(tmp_path, "host-c").mark_status("inactive_grace")
@@ -991,7 +991,7 @@ def test_select_oldest_inactive_unpinned(tmp_path) -> None:
 
 def test_append_auto_assigns_seq_zero(tmp_path) -> None:
     """T-G6-F1: events with seq<=0 auto-assign contiguous seqs."""
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         _seed(s, 1)
         seqs = s.append_events(
             [
@@ -1005,7 +1005,7 @@ def test_append_auto_assigns_seq_zero(tmp_path) -> None:
 
 def test_rehydrate_decision_id_match(tmp_path) -> None:
     """T-G6-F2: --decision matches event_id OR payload decision_id."""
-    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
         s.append_events(
             [
                 _ev(
@@ -1032,3 +1032,143 @@ def test_rehydrate_decision_id_match(tmp_path) -> None:
     assert [p["event_id"] for p in by_substring["evidence_packets"]] == ["d-1", "d-2"]
     led = ledger_mod.LedgerStore(tmp_path, HOST)
     led.close()
+
+
+# ---------------------------------------------------------------------------
+# T4.2: one unified session-id scheme, host-required ledger initialization
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_store_requires_explicit_host_on_first_init(tmp_path) -> None:
+    """A brand-new ledger directory with no explicit host and no prior
+    manifest must raise deterministically -- never silently write
+    host='prime' (T4.2)."""
+    with pytest.raises(BrainError, match="requires an explicit host"):
+        ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(create=True)
+    session_dir = tmp_path / "state" / "sessions" / ledger_mod.internal_session_id(
+        "never-initialized-session"
+    )
+    assert not (session_dir / "manifest.json").exists()
+
+    # An explicit host succeeds and the manifest records it (never 'prime').
+    with ledger_mod.LedgerStore(
+        tmp_path, "never-initialized-session", host="hermes"
+    ).open(create=True) as s:
+        assert s.header()["schema_version"] == "1"
+    manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["host"] == "hermes"
+
+    # Re-opening the now-initialized ledger without a host preserves the
+    # already-recorded host instead of raising (re-open/append is unaffected).
+    with ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(
+        create=True
+    ) as s:
+        assert s.header()["schema_version"] == "1"
+    manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["host"] == "hermes"
+
+
+def test_single_session_id_scheme(brain_home, monkeypatch) -> None:
+    """Every cli.py host adapter hook/CLI site builds internal_session_id via
+    ledger.internal_session_id(host_session_id) -- the single unified,
+    full-sha256-hex scheme (T4.2). No adapter constructs the deleted
+    'is-' + sha256(...)[:12] identity."""
+    import io
+    import sys
+    from types import SimpleNamespace
+
+    from second_brain import cli, contracts
+
+    captured: list[contracts.BrainSessionIdentity] = []
+    real_cls = contracts.BrainSessionIdentity
+
+    def _spy(*args, **kwargs):
+        identity = real_cls(*args, **kwargs)
+        captured.append(identity)
+        return identity
+
+    monkeypatch.setattr(contracts, "BrainSessionIdentity", _spy)
+
+    # 1) codex-hooks: Stop/SessionEnd finalization branch (no task text).
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"source": "Stop", "session_id": "codex-stop-sess"})),
+    )
+    cli._cmd_codex_shadow(brain_home)
+
+    # 2) codex-hooks: main prepare_injection branch.
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps(
+                {
+                    "session_id": "codex-main-sess",
+                    "project": "proj",
+                    "task": "do the thing",
+                    "agent_id": "a1",
+                    "branch": "main",
+                    "role": "worker",
+                }
+            )
+        ),
+    )
+    cli._cmd_codex_shadow(brain_home)
+
+    # 3) antigravity hook.
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"conversationId": "agy-sess"}))
+    )
+    cli._cmd_antigravity_hook(brain_home)
+
+    # 4) claude-code hook.
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            json.dumps({"session_id": "claude-sess", "hook_event_name": "SessionStart"})
+        ),
+    )
+    cli._cmd_claude_code_hook(brain_home)
+
+    # 5) brainctl writeback.
+    writeback_args = SimpleNamespace(
+        home=brain_home,
+        session_id="brainctl-sess",
+        project_id="proj",
+        title="observed pattern",
+        observation="the tool always retries twice",
+        guidance="",
+        evidence="[]",
+    )
+    cli._cmd_writeback(brain_home, writeback_args)
+
+    # 6) prime-cli shadow.
+    shadow_args = SimpleNamespace(
+        home=brain_home,
+        autoinject_command="shadow",
+        task="do it",
+        project_id="proj",
+        cwd=None,
+        session_id="prime-sess",
+        agent_id="a1",
+        branch="main",
+        role_profile="orchestrator",
+        json=False,
+    )
+    cli.cmd_autoinject(shadow_args)
+
+    assert {identity.host for identity in captured} == {
+        "codex-hooks",
+        "antigravity",
+        "claude-code",
+        "brainctl",
+        "prime-cli",
+    }
+    assert len(captured) == 6  # 2 codex-hooks sites + 4 single-site adapters
+    for identity in captured:
+        expected = ledger_mod.internal_session_id(identity.host_session_id)
+        assert identity.internal_session_id == expected
+        assert not identity.internal_session_id.startswith("is-")
+        assert len(identity.internal_session_id) == 64  # full sha256 hex digest

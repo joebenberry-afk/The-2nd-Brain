@@ -35,6 +35,13 @@ from .contracts import (
 from .errors import BrainError
 DEFAULT_LEASE_SECONDS = 300
 MAX_DISPATCH_PAYLOAD_BYTES = 16 * 1024
+# Ledger session identity requires an explicit host adapter name (ledger.py
+# no longer invents one). This module is genuinely harness-neutral (see the
+# module docstring): most callers thread their real host through, but a few
+# call sites (the lease reaper, direct protocol-level tests) never learn a
+# host. Falling back to this bounded literal keeps that legitimate
+# host-agnostic usage working without resurrecting a silent 'prime' guess.
+_DEFAULT_HOST = "worker-protocol"
 
 _WORKER_EVENT_STATES = {
     "accepted": WorkerLifecycle.WORKING,
@@ -201,11 +208,13 @@ def _latest_context_snapshot(
 
 
 def _store_context_snapshot(
-    home: Path, parent_session_id: str, snapshot: dict[str, Any]
+    home: Path, parent_session_id: str, snapshot: dict[str, Any], *, host: str | None = None
 ) -> str:
     """Store a context snapshot in the existing per-session object store."""
     data = canonical_json(snapshot).encode("utf-8")
-    with ledger.LedgerStore(home, parent_session_id).open(create=True) as store:
+    with ledger.LedgerStore(
+        home, parent_session_id, host=host or _DEFAULT_HOST
+    ).open(create=True) as store:
         return store.add_object(data, mime="application/json", role="worker_context_snapshot")
 
 
@@ -277,7 +286,7 @@ def _handoff_delta(
 
 
 def prepare_context_handoff(
-    home: Path | str, packet: WorkerTaskPacket
+    home: Path | str, packet: WorkerTaskPacket, *, host: str | None = None
 ) -> dict[str, Any]:
     """Prepare a stable full/reuse/delta worker context handoff.
 
@@ -328,7 +337,9 @@ def prepare_context_handoff(
             resolved, metadata, previous, jit_info
         )
     snapshot = {**snapshot_core, "context_fingerprint": fingerprint}
-    snapshot_hash = _store_context_snapshot(home_path, packet.parent_session_id, snapshot)
+    snapshot_hash = _store_context_snapshot(
+        home_path, packet.parent_session_id, snapshot, host=host
+    )
     full_payload = prompt_context(resolved) if mode == "full" else []
     delta_payload = {
         "changed_refs": prompt_context(changed) if mode == "delta" else [],
@@ -703,12 +714,36 @@ def register_task(
         conn.close()
 
 
+def dispatch_snapshot(home: Path | str, task_id: str) -> dict[str, Any] | None:
+    """Read-only recovery of a task's originally registered dispatch payload.
+
+    Lets a later result-validation path recover the requested worker role for
+    cross-role correlation without threading extra state through the caller.
+    """
+    conn = db.connect(_worker_db(home))
+    try:
+        row = conn.execute(
+            "SELECT dispatch_payload FROM worker_task_meta WHERE task_id = ?", (task_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None or not row["dispatch_payload"]:
+        return None
+    try:
+        parsed = json.loads(row["dispatch_payload"])
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _emit_worker_event(
     home: Path | str,
     session_id: str | None,
     task_id: str,
     state: str,
     payload: dict[str, Any],
+    *,
+    host: str | None = None,
 ) -> None:
     if not session_id:
         return
@@ -738,7 +773,9 @@ def _emit_worker_event(
         for kind in event_types
     ]
     try:
-        with ledger.LedgerStore(home, session_id).open(create=True) as store:
+        with ledger.LedgerStore(
+            home, session_id, host=host or _DEFAULT_HOST
+        ).open(create=True) as store:
             store.append_events(events)
     except Exception:
         # State persistence remains authoritative; a missing host ledger must
@@ -756,6 +793,7 @@ def record_worker_event(
     session_id: str | None = None,
     now: datetime | str | None = None,
     lease_seconds: int | float | None = None,
+    host: str | None = None,
 ) -> dict[str, Any]:
     """Apply one worker event with packet identity and lease renewal guards."""
     digest = _packet_hash(packet_sha256)
@@ -878,7 +916,7 @@ def record_worker_event(
     finally:
         conn.close()
     if emit:
-        _emit_worker_event(home, emit[0], task_id, emit[1], emit[2])
+        _emit_worker_event(home, emit[0], task_id, emit[1], emit[2], host=host)
     return out
 
 

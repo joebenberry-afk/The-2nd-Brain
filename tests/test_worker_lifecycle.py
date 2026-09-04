@@ -385,7 +385,7 @@ def test_settlement_rejects_unrelated_reviewed_diff(brain_home) -> None:
             "evidence": {"diff_sha256": HASH},
         },
     )
-    with ledger.LedgerStore(brain_home, session_id).open(create=True) as store:
+    with ledger.LedgerStore(brain_home, session_id, host="test").open(create=True) as store:
         store.append_events([reviewed])
     with pytest.raises(contracts.WorkerPacketError, match="SETTLEMENT_REJECTED"):
         worker_protocol.settle_task(

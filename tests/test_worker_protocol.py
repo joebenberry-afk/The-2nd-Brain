@@ -110,7 +110,7 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
         summary="initial",
     ).validate()
 
-    first = worker_protocol.prepare_context_handoff(brain_home, packet)
+    first = worker_protocol.prepare_context_handoff(brain_home, packet, host="test")
     assert first["mode"] == "full"
     assert first["reused"] is False
     assert len(first["resolved_context"]) == 1
@@ -139,7 +139,7 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
     with pytest.raises(contracts.WorkerPacketError, match="CONTEXT_HANDOFF_MISMATCH"):
         worker_protocol.validate_context_handoff(brain_home, packet, forged)
 
-    unchanged = worker_protocol.prepare_context_handoff(brain_home, packet)
+    unchanged = worker_protocol.prepare_context_handoff(brain_home, packet, host="test")
     assert unchanged["mode"] == "unchanged"
     assert unchanged["reused"] is True
     assert unchanged["cache_hit"] is True
@@ -164,7 +164,7 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
         new_body="Changed worker context with one bounded delta.",
         change_note="P13 delta fixture",
     )
-    changed = worker_protocol.prepare_context_handoff(brain_home, packet)
+    changed = worker_protocol.prepare_context_handoff(brain_home, packet, host="test")
     assert changed["mode"] == "delta"
     assert changed["reused"] is False
     assert changed["cache_hit"] is False

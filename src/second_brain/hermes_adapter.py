@@ -645,7 +645,9 @@ def prepare_worker_task(
                 "packet_sha256": packet.canonical_hash(),
             }
         _register_binding(home_path, binding)
-        handoff = worker_protocol.prepare_context_handoff(home_path, packet)
+        handoff = worker_protocol.prepare_context_handoff(
+            home_path, packet, host=binding.session.host
+        )
     except contracts.WorkerPacketError as exc:
         return {
             **_response_base(binding, "worker_task_prepare"),
@@ -677,6 +679,7 @@ def prepare_worker_task(
             packet.canonical_hash(),
             "delivered",
             session_id=binding.host_session_id,
+            host=binding.session.host,
         )
     except contracts.WorkerPacketError as exc:
         return {
@@ -750,7 +753,9 @@ def request_worker_task(
     _register_binding(home_path, binding)
     try:
         if context_handoff_data is None:
-            context_handoff = worker_protocol.prepare_context_handoff(home_path, packet)
+            context_handoff = worker_protocol.prepare_context_handoff(
+                home_path, packet, host=binding.session.host
+            )
         else:
             context_handoff = worker_protocol.validate_context_handoff(
                 home_path, packet, context_handoff_data
@@ -818,6 +823,7 @@ def request_worker_task(
                 packet.canonical_hash(),
                 "worker_started",
                 session_id=binding.host_session_id,
+                host=binding.session.host,
             )
     except contracts.WorkerPacketError as exc:
         return {
@@ -908,6 +914,7 @@ def request_worker_task(
             result.status,
             payload=event_payload,
             session_id=binding.host_session_id,
+            host=binding.session.host,
         )
     except contracts.WorkerPacketError as exc:
         return {
@@ -1415,7 +1422,9 @@ def return_corrected_worker_result(
         if binding_error is not None:
             raise contracts.WorkerPacketError(binding_error, "original result is not durable")
         if context_handoff_data is None:
-            context_handoff = worker_protocol.prepare_context_handoff(Path(home), packet)
+            context_handoff = worker_protocol.prepare_context_handoff(
+                Path(home), packet, host=binding.session.host
+            )
         else:
             context_handoff = worker_protocol.validate_context_handoff(
                 Path(home), packet, context_handoff_data
@@ -1522,7 +1531,9 @@ def _append_event(
         payload=payload,
     )
     try:
-        with ledger.LedgerStore(home, binding.host_session_id).open(create=True) as store:
+        with ledger.LedgerStore(
+            home, binding.host_session_id, host=binding.session.host
+        ).open(create=True) as store:
             store.append_events([event])
         return True
     except Exception:
@@ -1536,7 +1547,9 @@ def _register_binding(home: Path, binding: HermesBinding) -> None:
     lifecycle = autoinject.BrainLifecycle(home, binding.session)
     lifecycle.start_session(binding.session)
 
-    with ledger.LedgerStore(home, binding.host_session_id).open(create=True) as store:
+    with ledger.LedgerStore(
+        home, binding.host_session_id, host=binding.session.host
+    ).open(create=True) as store:
         store.create_session(binding.session)
         store.register_agent(
             {
