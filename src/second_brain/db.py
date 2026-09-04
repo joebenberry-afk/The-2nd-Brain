@@ -130,10 +130,12 @@ def _execute_migration_statement(
     0012 restartable if a manually-created database already has some columns.
     """
     del version  # reserved for future migration-specific guards
+    clean_stmt = re.sub(r"--[^\n]*\n?", "", stmt).strip()
+    clean_stmt = re.sub(r"/\*.*?\*/", "", clean_stmt, flags=re.DOTALL).strip()
     match = re.match(
-        r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
+        r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+(?:COLUMN\s+)?"
         r"([A-Za-z_][A-Za-z0-9_]*)\b",
-        stmt,
+        clean_stmt,
         re.IGNORECASE,
     )
     if match:
