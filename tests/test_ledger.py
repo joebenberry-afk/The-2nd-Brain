@@ -194,13 +194,13 @@ def test_schema_versioning(tmp_path) -> None:
     conn.execute("UPDATE ledger_meta SET value = '2' WHERE key = 'schema_version'")
     conn.commit()
     conn.close()
-    with pytest.raises(BrainError, match="newer runtime"):
+    with pytest.raises(BrainError, match="unsupported"):
         ledger_mod.LedgerStore(tmp_path, HOST).open()
     conn = sqlite3.connect(dbfile)
     conn.execute("UPDATE ledger_meta SET value = '0' WHERE key = 'schema_version'")
     conn.commit()
     conn.close()
-    with pytest.raises(BrainError, match="no in-memory upgrader"):
+    with pytest.raises(BrainError, match="unsupported"):
         ledger_mod.LedgerStore(tmp_path, HOST).open()
 
 

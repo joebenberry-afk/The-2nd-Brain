@@ -6,12 +6,9 @@ Upgrades session memory into a paged virtual context with explicit residency sta
 hot working set admission/eviction, deterministic compaction recovery, and JIT fault-in.
 
 Residency States (§6.3):
-- STORED: Preserved in session storage
 - RESIDENT: Active in model-visible context
 - EVICTED: Removed from active context to preserve budget (recoverable by ref)
 - FAULTED_IN: Paged back into active context upon demand
-- SUPERSEDED: Replaced by a newer version
-- PURGED: Cleaned up upon retention expiration
 """
 
 from __future__ import annotations
@@ -44,12 +41,9 @@ DURABILITY_CLEAN = "CLEAN"
 
 
 class ResidencyState(StrEnum):
-    STORED = "STORED"
     RESIDENT = "RESIDENT"
     EVICTED = "EVICTED"
     FAULTED_IN = "FAULTED_IN"
-    SUPERSEDED = "SUPERSEDED"
-    PURGED = "PURGED"
 
 
 class SessionObjectKind(StrEnum):

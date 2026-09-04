@@ -308,28 +308,6 @@ class TestVMemClaimPages:
         assert refetched is not None
         assert refetched.residency_state == ResidencyState.RESIDENT  # unchanged
 
-    @pytest.mark.parametrize("state", ["STORED", "SUPERSEDED", "PURGED"])
-    def test_claim_pages_non_pre_page_states_never_claimed(self, brain_home, state):
-        store = VMemStore(brain_home, "sess-claim-5")
-        obj = store.store_object(
-            kind=SessionObjectKind.RESEARCH_RESULT,
-            title="Not pre-page",
-            content="content",
-            pinned=False,
-        )
-        with sqlite3.connect(store._dbfile) as conn:
-            conn.execute(
-                "UPDATE session_vmem SET residency_state = ? WHERE obj_id = ?", (state, obj.obj_id)
-            )
-            conn.commit()
-
-        claimed = store.claim_pages([{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}])
-
-        assert claimed == []
-        refetched = store.get_object(obj.obj_id)
-        assert refetched is not None
-        assert refetched.residency_state.value == state  # unchanged
-
     def test_claim_pages_already_evicted_is_idempotent_no_error(self, brain_home):
         store = VMemStore(brain_home, "sess-claim-6")
         obj = store.store_object(

@@ -1458,39 +1458,6 @@ def _parser() -> argparse.ArgumentParser:
 
     cass.add_parser("clear-cache", parents=[home_parent], help="clear negative result cache")
 
-    ts = sub.add_parser(
-        "tool-set",
-        parents=[home_parent],
-        help="Dynamic Tool Working Set: Tier A core & lazy activation (Phase 7)",
-    )
-    tss = ts.add_subparsers(dest="tool_set_command", required=True)
-
-    ts_list = tss.add_parser("list", parents=[home_parent], help="list all registered tools")
-    ts_list.add_argument("--active", action="store_true", help="show only active resident tools")
-    ts_list.add_argument("--json", action="store_true", help="output JSON")
-
-    ts_act = tss.add_parser("activate", parents=[home_parent], help="activate a domain tool")
-    ts_act.add_argument("tool_name", help="tool name to activate")
-    ts_act.add_argument("--turn", type=int, default=0, help="current session turn")
-    ts_act.add_argument("--json", action="store_true", help="output JSON")
-
-    ts_det = tss.add_parser(
-        "detect",
-        parents=[home_parent],
-        help="detect and activate tools from task text",
-    )
-    ts_det.add_argument("task_text", help="task description text")
-    ts_det.add_argument("--turn", type=int, default=0, help="current session turn")
-    ts_det.add_argument("--json", action="store_true", help="output JSON")
-
-    ts_prune = tss.add_parser("prune", parents=[home_parent], help="prune idle domain tools")
-    ts_prune.add_argument("--turn", type=int, default=3, help="current session turn")
-    ts_prune.add_argument("--max-idle", type=int, default=3, help="max idle turns allowed")
-    ts_prune.add_argument("--json", action="store_true", help="output JSON")
-
-    ts_comp = tss.add_parser("compress", parents=[home_parent], help="compress a tool JSON schema")
-    ts_comp.add_argument("schema_file", help="path to JSON tool schema")
-    ts_comp.add_argument("--json", action="store_true", help="output JSON")
 
     v2 = sub.add_parser("v2", parents=[home_parent], help="v2 corrected-plan surfaces")
     v2s = v2.add_subparsers(dest="v2_command", required=True)
@@ -4788,73 +4755,6 @@ def cmd_cascade(args) -> int:
     return 2
 
 
-def cmd_tool_set(args) -> int:
-    import json
-
-    from . import tool_working_set
-
-    mgr = tool_working_set.ToolWorkingSetManager(home=_home(args))
-
-    if args.tool_set_command == "list":
-        if args.active:
-            tools = mgr.get_active_tools(compress=True)
-            tokens = mgr.estimate_active_tokens()
-            if args.json:
-                print(json.dumps({"active_tools": tools, "token_estimate": tokens}, indent=2))
-            else:
-                print(f"Active Tools ({len(tools)} tools, ~{tokens} tokens):")
-                for t in tools:
-                    print(f"  - {t['name']}: {t['description']}")
-        else:
-            all_tools = mgr.list_all()
-            if args.json:
-                print(json.dumps(all_tools, indent=2))
-            else:
-                print(f"Registered Tools ({len(all_tools)} total):")
-                for t in all_tools:
-                    state = "[ACTIVE]" if t["active"] else "[INACTIVE]"
-                    print(f"  {state:10} {t['tier']:15} {t['name']}")
-        return 0
-
-    if args.tool_set_command == "activate":
-        try:
-            mgr.activate_tool(args.tool_name, turn=args.turn)
-            print(f"Activated tool {args.tool_name} (turn {args.turn}).")
-            return 0
-        except BrainError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 2
-
-    if args.tool_set_command == "detect":
-        activated = mgr.detect_and_activate(args.task_text, turn=args.turn)
-        if args.json:
-            print(json.dumps({"activated": activated}, indent=2))
-        else:
-            if activated:
-                print(f"Detected and activated: {', '.join(activated)}")
-            else:
-                print("No additional domain tools needed for this task.")
-        return 0
-
-    if args.tool_set_command == "prune":
-        pruned = mgr.prune_idle_tools(current_turn=args.turn, max_idle_turns=args.max_idle)
-        if args.json:
-            print(json.dumps({"pruned": pruned}, indent=2))
-        else:
-            if pruned:
-                print(f"Pruned idle tools: {', '.join(pruned)}")
-            else:
-                print("No idle tools to prune.")
-        return 0
-
-    if args.tool_set_command == "compress":
-        raw_schema = json.loads(Path(args.schema_file).read_text(encoding="utf-8"))
-        compressed = tool_working_set.compress_tool_schema(raw_schema)
-        print(json.dumps(compressed, indent=2))
-        return 0
-
-    return 2
-
 
 def cmd_backup(args) -> int:
     home = _home(args)
@@ -4891,7 +4791,6 @@ def main(argv: list[str] | None = None) -> int:
         "fresh-verifier": cmd_fresh_verifier,
         "delta-sync": cmd_delta_sync,
         "cascade": cmd_cascade,
-        "tool-set": cmd_tool_set,
         "capsule": cmd_capsule,
         "scout": cmd_scout,
         "engrams": cmd_engrams,

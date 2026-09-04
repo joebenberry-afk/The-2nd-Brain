@@ -25,7 +25,6 @@ structural_retrieval = true        # Symbol/code structure lookup
 semantic_vectors = true            # Semantic search fallback
 
 # User experience optimizations
-tool_working_set = true            # Task-relevant tool activation
 skill_lazy_loading = true          # JIT skill instruction loading
 prompt_compression = true          # Prompt compression (if available)
 

@@ -2,7 +2,7 @@
 Live integration tests for Context Virtual Memory (Plan §4 R3).
 
 Proves:
-1. Object residency lifecycle: STORED -> RESIDENT -> EVICTED -> FAULTED_IN.
+1. Object residency lifecycle: RESIDENT -> EVICTED -> FAULTED_IN.
 2. Token budget enforcement with prioritized eviction.
 3. Compaction barrier: snapshotting, eviction of unpinned items, and post-compaction resume.
 4. JIT paging / fault-in of cold objects by compact ref.

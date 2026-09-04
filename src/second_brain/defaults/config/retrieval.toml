@@ -1,9 +1,8 @@
 # retrieval.toml — memory retrieval scoring defaults
 # Status: ENFORCED for [scoring].max_results and [scoring.weights] (read by
 # semantic.load_retrieval_config on every search; absent/invalid keys fall
-# back to the hardcoded defaults). components/log_all_components,
-# lateral_inhibition.* and decay.* remain documented-only (NOT WIRED) until a
-# later phase reads them.
+# back to the hardcoded defaults). components/log_all_components remains
+# documented-only (NOT WIRED) until a later phase reads it.
 schema_version = 1
 
 [scoring]
@@ -54,16 +53,3 @@ labile = 0.95
 candidate = 0.9
 archived = 0.8
 superseded = 0.8
-
-[lateral_inhibition]
-# NOT WIRED — dedupe is always on (semantic._dedupe_rows); these keys are
-# documented plan defaults only.
-deduplicate = true
-surface_contradictions = true
-
-[decay]
-# NOT WIRED — reconsolidation/sleep constants; documented plan defaults.
-states = ["HOT", "WARM", "COLD", "ARCHIVED"]
-protected = ["constitution", "security", "accepted_decisions",
-             "critical_failure_immunizations", "user_preferences",
-             "current_invariants"]
