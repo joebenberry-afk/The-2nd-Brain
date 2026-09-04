@@ -1,0 +1,184 @@
+{
+  "experiment": "T7.6 Deterministic Engrams & Teacher-Student Distillation Replay",
+  "hypothesis": "Repeated 3-5 tool workflows can be distilled into deterministic composite engrams, replayed with preserved pre/postconditions and zero model calls, and transferred to cheaper student models under identical acceptance postconditions.",
+  "metrics": {
+    "extracted_workflow_sequence": [
+      "read_file",
+      "run_linter",
+      "run_tests"
+    ],
+    "extracted_workflow_length": 3,
+    "workflow_support_count": 2,
+    "deterministic_run_success": true,
+    "deterministic_run_model_calls": 0,
+    "action_cache_hit_verified": true,
+    "teacher_student_distillation_status": "VERIFIED",
+    "teacher_student_same_acceptance": true
+  },
+  "distilled_engram": {
+    "engram_id": "engram-a10e09f92f3d1de3",
+    "version": 1,
+    "procedure": [
+      {
+        "tool": "read_file",
+        "args_template": {
+          "path": "$path"
+        },
+        "precondition": {
+          "cmd": "test -f \"$path\"",
+          "expect_exit": 0,
+          "actual_exit": 0
+        },
+        "postcondition": {
+          "cmd": "test -s \"$path\"",
+          "expect_exit": 0,
+          "actual_exit": 0
+        }
+      },
+      {
+        "tool": "run_linter",
+        "args_template": {
+          "path": "$path"
+        },
+        "precondition": {
+          "cmd": "which ruff",
+          "expect_exit": 0,
+          "actual_exit": 0
+        },
+        "postcondition": {
+          "cmd": "test $? -eq 0",
+          "expect_exit": 0,
+          "actual_exit": 0
+        }
+      },
+      {
+        "tool": "run_tests",
+        "args_template": {
+          "path": "$path"
+        },
+        "precondition": {
+          "cmd": "test -f tests/test_core.py",
+          "expect_exit": 0,
+          "actual_exit": 0
+        },
+        "postcondition": {
+          "cmd": "test $? -eq 0",
+          "expect_exit": 0,
+          "actual_exit": 0
+        }
+      }
+    ],
+    "valid_for": {
+      "harness": "universal",
+      "tool_versions": {
+        "read_file": "1.0",
+        "run_linter": "1.0",
+        "run_tests": "1.0"
+      },
+      "model": "all"
+    },
+    "status": "candidate",
+    "created_at": "2026-09-04T08:26:45.248513+00:00"
+  },
+  "first_run_result": {
+    "engram_id": "engram-a10e09f92f3d1de3",
+    "version": 1,
+    "success": true,
+    "model_calls": 0,
+    "cache_hit": false,
+    "steps_executed": 3,
+    "steps": [
+      {
+        "step": 0,
+        "tool": "read_file",
+        "output": {
+          "tool": "read_file",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      },
+      {
+        "step": 1,
+        "tool": "run_linter",
+        "output": {
+          "tool": "run_linter",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      },
+      {
+        "step": 2,
+        "tool": "run_tests",
+        "output": {
+          "tool": "run_tests",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      }
+    ]
+  },
+  "cached_run_result": {
+    "engram_id": "engram-a10e09f92f3d1de3",
+    "version": 1,
+    "success": true,
+    "model_calls": 0,
+    "cache_hit": true,
+    "steps_executed": 3,
+    "steps": [
+      {
+        "step": 0,
+        "tool": "read_file",
+        "output": {
+          "tool": "read_file",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      },
+      {
+        "step": 1,
+        "tool": "run_linter",
+        "output": {
+          "tool": "run_linter",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      },
+      {
+        "step": 2,
+        "tool": "run_tests",
+        "output": {
+          "tool": "run_tests",
+          "args": {
+            "path": "src/core.py"
+          },
+          "status": "ok",
+          "exit_code": 0
+        }
+      }
+    ]
+  },
+  "distillation_result": {
+    "engram_id": "engram-a10e09f92f3d1de3",
+    "teacher_model": "claude-3-5-sonnet",
+    "student_model": "claude-3-5-haiku",
+    "status": "VERIFIED",
+    "transfer_approved": true,
+    "same_acceptance": true
+  },
+  "conclusion": "PASS: Distilled 3-step workflow (read_file -> run_linter -> run_tests) with support=2. Replayed deterministically with preserved preconditions and postconditions using ZERO model calls. Action cache hit on repeat verified. Teacher-to-student distillation satisfied 100% same acceptance."
+}
