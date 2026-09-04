@@ -1,3 +1,17 @@
+> **HISTORICAL / SUPERSEDED — DO NOT USE AS THE CURRENT RELEASE GATE**
+>
+> This report records the earlier Prime-centric repair campaign. It is retained
+> as historical evidence, but its Prime Agent 0.9.1 and Claude Code burn-in
+> blockers are no longer the v2 release model. The authoritative current
+> decision is `outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/RELEASE_DECISION.md`.
+>
+> Current authoritative blocker: **HOLD — Native OMP Phase 22 production
+> qualification coverage is incomplete** (`19/20` worker launches, `7/20`
+> worker results, `8/10` compactions, `11/20` project switches). Additional
+> real runs stopped at the external provider boundary: HTTP `429
+> rate_limit_error`, `retry-after-ms: 9017000`. Prime binary required for OMP
+> v2 release: **NO**.
+
 # Second Brain v2 Burn-In Repair — Final Release Gate
 
 Repair branch: `brain/v2-burnin-repair` (pushed to `origin/brain/v2-burnin-repair`)
