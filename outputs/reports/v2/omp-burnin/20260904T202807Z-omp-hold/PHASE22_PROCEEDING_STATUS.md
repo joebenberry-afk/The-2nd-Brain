@@ -9,10 +9,10 @@
 
 ## Existing worker recovery check
 
-The canonical worker-result interpretation is recorded in
-`PHASE22_RESULT_SEMANTICS.md`: only legitimate terminal
-`omp_worker_child_result` events count, with real `completed` and `failed`
-statuses both eligible. Running jobs do not count.
+The corrected `PHASE22_RESULT_SEMANTICS.md` defines two independent worker
+gates: Gate A counts legitimate terminal result events; Gate B counts only
+successful workers with terminal status `completed`. A failed result can satisfy
+Gate A but never Gate B.
 
 The current worker task database contains:
 
@@ -43,7 +43,8 @@ at approximately `2026-09-04T19:49Z`. No new provider-backed OMP session was
 started. Phase 22 therefore remains unchanged at:
 
 - worker launches: `19/20`
-- worker result events: `7/20` (`4 completed`, `3 failed`)
+- terminal worker-result events: `7/20` (`4 completed`, `3 failed`)
+- successful worker completions: `4/20`
 - compactions: `8/10`
 - project switches: `11/20`
 
@@ -51,20 +52,20 @@ Release decision remains **HOLD**. No counters were synthesized, and no
 historical burn-in report was rewritten.
 ## Local regression boundary
 
-The candidate-source `second_brain doctor` check at this proceeding boundary
+The candidate-source `second_brain doctor` check after release-hygiene cleanup
 returned 19 checks, 0 failures, and 0 warnings. It passed version, state/runtime
-identity, schema, and build-identity checks. The package-lock root remains
-`0.1.0` while `package.json` is `0.2.0`; that release-hygiene mismatch is
-intentionally deferred and is not being silently treated as fixed.
+identity, schema, and build-identity checks. `package.json` and both
+`package-lock.json` root version fields are aligned at `0.2.0`; packaging checks
+also passed. This semantics correction changes documentation only.
 
 ## Build and schema identity
 
-The current worktree reports version `2.0.0-rc.1`, database schema `21`, and
+The runtime candidate reports version `2.0.0-rc.1`, database schema `21`, and
 adapter build fingerprint
 `56b61076903f681215426ae38d6ff47225739283bff731d85db1c71e25d81f68`.
-The observed Git SHA is the authorized starting SHA; `dirty=true` is expected
-because this proceeding report set is not yet committed. No runtime or
-extension source changed.
+The runtime and extension source remain unchanged from the authorized
+qualification ancestor. Subsequent branch movement is documentation-only; no
+runtime or extension source changed.
 
 ## Lifecycle recheck
 
