@@ -3795,7 +3795,8 @@ def cmd_autoinject(args) -> int:
         return _cmd_writeback(home, args)
     if args.autoinject_command != "shadow":
         return 2
-    resolved_project = autoinject._resolve_project_id(home, args.cwd, args.project_id)
+    resolved = autoinject.resolve_project(home, args.cwd, args.project_id)
+    resolved_project = resolved["project_id"]
     session = contracts.BrainSessionIdentity(
         internal_session_id=ledger.internal_session_id(args.session_id),
         host="prime-cli",
@@ -3819,7 +3820,11 @@ def cmd_autoinject(args) -> int:
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
     if args.json:
-        print(contracts.canonical_json(autoinject.shadow_output(decision, packet, delivery_id)))
+        print(
+            contracts.canonical_json(
+                autoinject.shadow_output(decision, packet, delivery_id, resolved)
+            )
+        )
     else:
         print(f"decision: {decision.decision.value}")
         print(f"reason: {decision.reason.value if decision.reason is not None else 'n/a'}")

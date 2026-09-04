@@ -334,6 +334,26 @@ export interface AutoInjectShadowOutcome {
   cliPacketChars: number | null;
   /** Length of the raw CLI stdout that was parsed. */
   cliStdoutChars: number;
+  /** Canonical project id resolved by Python (autoinject.resolve_project). */
+  projectId: string | null;
+  /** Resolution rung: explicit | manifest | registry_path | git_remote | env | default. */
+  projectResolution: string | null;
+}
+
+/**
+ * Last project id Python resolved for each session (Phase 11 repair): the
+ * host-visible prefix/other bridges must reuse the SAME canonical
+ * resolution AutoInject already computed instead of an independent
+ * env-only guess. Read via `resolvedProjectIdForSession`.
+ */
+const sessionProjectIds: Record<string, string> = {};
+
+export function resolvedProjectIdForSession(session: string): string | undefined {
+  return sessionProjectIds[session];
+}
+
+function rememberResolvedProject(session: string, outcome: AutoInjectShadowOutcome | null): void {
+  if (outcome?.projectId) sessionProjectIds[session] = outcome.projectId;
 }
 
 export interface AutoInjectRunOptions {
@@ -372,6 +392,8 @@ export function parseShadowOutput(stdout: string): AutoInjectShadowOutcome | nul
       packet !== null ? createHash("sha256").update(packet, "utf8").digest("hex") : null,
     cliPacketChars: packet !== null ? packet.length : null,
     cliStdoutChars: stdout.length,
+    projectId: typeof obj.project_id === "string" ? obj.project_id : null,
+    projectResolution: typeof obj.project_resolution === "string" ? obj.project_resolution : null,
   };
 }
 
@@ -515,6 +537,7 @@ export async function runAdvisoryAutoInject(
       persistEmitCache(call.home);
       return undefined;
     }
+    rememberResolvedProject(call.session, outcome);
     const message = messageFromOutcome(outcome, call.customType ?? AUTOINJECT_CUSTOM_TYPE);
     appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, message !== undefined, 1, false);
     autoInjectEmitCache.set(key, {
@@ -595,6 +618,7 @@ function serveEmitCacheHit(
   entry: AutoInjectEmitEntry,
   mode: "off" | "shadow" | "advisory" | "active",
 ): AutoInjectEmitEntry["message"] {
+  rememberResolvedProject(call.session, entry.outcome);
   entry.emits += 1;
   const message =
     entry.message ?? messageFromOutcome(entry.outcome, AUTOINJECT_CUSTOM_TYPE);
@@ -665,6 +689,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
       persistEmitCache(call.home);
       return;
     }
+    rememberResolvedProject(call.session, outcome);
     appendDecisionRecord(call, outcome, latencyMs, call.cfg.mode, false, 1, false);
     autoInjectEmitCache.set(key, {
       message: messageFromOutcome(outcome, AUTOINJECT_CUSTOM_TYPE),

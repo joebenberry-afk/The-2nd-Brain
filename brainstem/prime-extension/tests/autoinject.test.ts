@@ -229,6 +229,8 @@ describe("runShadowAutoInject orchestration (real implementation)", () => {
       packetSha256: "ab",
       cliPacketChars: null,
       cliStdoutChars: 0,
+      projectId: null,
+      projectResolution: null,
     });
     const callObj: Parameters<typeof runShadowAutoInject>[0] = {
       home: "H:/brain",
@@ -347,6 +349,8 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
       packetSha256: "ab",
       cliPacketChars: null,
       cliStdoutChars: 0,
+      projectId: null,
+      projectResolution: null,
     });
     const callObj: Parameters<typeof runAdvisoryAutoInject>[0] = {
       home: "H:/brain",
@@ -392,6 +396,8 @@ describe("runAdvisoryAutoInject (real implementation)", () => {
           packetSha256: null,
           cliPacketChars: null,
           cliStdoutChars: 0,
+          projectId: null,
+          projectResolution: null,
         }),
     });
     expect(await realRunAdvisoryAutoInject(callObj)).toBeUndefined();
@@ -604,6 +610,8 @@ describe("emit stability (Phase C5)", () => {
       packetSha256: "ab",
       cliPacketChars: null,
       cliStdoutChars: 0,
+      projectId: null,
+      projectResolution: null,
     });
     const callObj: Parameters<typeof runAdvisoryAutoInject>[0] = {
       home: "H:/brain",
@@ -752,6 +760,8 @@ describe("emit stability (Phase C5)", () => {
       packetSha256: null,
       cliPacketChars: null,
       cliStdoutChars: 489,
+      projectId: null,
+      projectResolution: null,
     });
     resetAutoInjectEmitCache();
     const call2 = { ...callObj, session: "s-inv2" };

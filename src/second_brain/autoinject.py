@@ -841,7 +841,10 @@ def render_packet(decision: BrainInjectionDecision) -> str | None:
 
 
 def shadow_output(
-    decision: BrainInjectionDecision, packet: str | None, delivery_id: str | None
+    decision: BrainInjectionDecision,
+    packet: str | None,
+    delivery_id: str | None,
+    project: dict[str, str] | None = None,
 ) -> dict:
     """Deterministic one-object JSON shape shared by shadow + codex-shadow."""
     return {
@@ -852,6 +855,8 @@ def shadow_output(
         "candidate_ids": decision.candidate_ids,
         "selected_ids": decision.selected_ids,
         "delivery_id": delivery_id,
+        "project_id": (project or {}).get("project_id"),
+        "project_resolution": (project or {}).get("resolution"),
     }
 
 

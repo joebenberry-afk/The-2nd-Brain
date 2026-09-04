@@ -70,6 +70,9 @@ def _run_cli(home: Path, *args: str) -> subprocess.CompletedProcess:
     env = dict(__import__("os").environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
+    # Runtime identity: exercise THIS worktree's source, never whatever
+    # second_brain happens to be installed editable in the shared venv.
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     return subprocess.run(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],
         capture_output=True,
@@ -460,6 +463,8 @@ def test_cli_shadow_json_deterministic_and_dedupe(tmp_path) -> None:
     assert out1["packet"].startswith("[BRAIN_CONTEXT_DELTA v1]")
     assert out1["delivery_id"]
     assert out1["candidate_ids"] == out1["selected_ids"]
+    assert out1["project_id"] == "proj-a"
+    assert out1["project_resolution"] == "explicit"
 
     # Same lineage: second call dedupes -> NO_INJECTION, still exit 0.
     r2 = _run_cli(home, *args)
