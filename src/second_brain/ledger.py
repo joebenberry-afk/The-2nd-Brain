@@ -80,10 +80,6 @@ _MANIFEST = "manifest.json"
 _OBJECT_DIR = "objects"
 _FTS_KEYS = ("title", "summary", "file", "symbol", "task", "task_sha256", "decision", "tool")
 
-# Ordered in-memory upgraders for OLD versions, keyed by the version they
-# upgrade FROM. Empty stub today: any unknown old version is a deterministic
-# error instead of a silent guess (§14). Reading never rewrites.
-UPGRADERS: dict[int, Any] = {}
 
 _FTS_DDL = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5("
@@ -378,20 +374,10 @@ class LedgerStore:
         if row is None:
             raise BrainError("ledger missing schema_version header")
         version = int(row["value"])
-        if version > LEDGER_SCHEMA_VERSION:
+        if version != LEDGER_SCHEMA_VERSION:
             raise BrainError(
-                f"ledger schema version {version} requires a newer runtime "
-                f"(this runtime supports up to {LEDGER_SCHEMA_VERSION})"
+                f"ledger schema version {version} unsupported (this runtime requires {LEDGER_SCHEMA_VERSION})"
             )
-        if version < LEDGER_SCHEMA_VERSION:
-            current = dict()
-            for v in range(version, LEDGER_SCHEMA_VERSION):
-                upgrader = UPGRADERS.get(v)
-                if upgrader is None:
-                    raise BrainError(
-                        f"no in-memory upgrader for ledger schema version {v}"
-                    )
-                current = upgrader(current)
         # reading never rewrites: no DDL/DML executed on the open path
 
     # -- session/agent registration -----------------------------------------

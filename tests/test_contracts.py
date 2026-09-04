@@ -29,7 +29,6 @@ from second_brain.contracts import (
     SimplificationReviewOutcome,
     SurfaceVisibility,
     ToolOutcome,
-    ToolOutcomeState,
     ToolSignal,
     canonical_json,
     is_already_delivered,
@@ -586,21 +585,6 @@ def test_fingerprint_divergence_roundtrip_and_null_cache_fields() -> None:
     assert rt.cache_miss_tokens is None
 
 
-def test_tool_outcome_transitions() -> None:
-    assert ToolOutcomeState().apply(ToolSignal.NOT_STARTED).state is ToolOutcome.TOOL_NOT_STARTED
-    started = ToolOutcomeState().apply(ToolSignal.STARTED)
-    assert started.apply(ToolSignal.OUTCOME_UNKNOWN).state is ToolOutcome.TOOL_OUTCOME_UNKNOWN
-    assert started.apply(ToolSignal.RESULT).state is ToolOutcome.COMPLETE
-
-
-def test_tool_outcome_invalid_transitions() -> None:
-    with pytest.raises(BrainError):
-        ToolOutcomeState().apply(ToolSignal.RESULT)  # result before any start
-    with pytest.raises(BrainError):
-        ToolOutcomeState().apply(ToolSignal.STARTED).apply(ToolSignal.STARTED)  # double start
-    with pytest.raises(BrainError):
-        ToolOutcomeState().apply(ToolSignal.OUTCOME_UNKNOWN)  # unknown before any start
-
 
 def test_unknown_required_event_rejected_unknown_ignorable_skipped() -> None:
     base = {
@@ -688,9 +672,9 @@ def test_ledger_schema_versioning() -> None:
     header = read_ledger_header(h)
     assert isinstance(header, LedgerHeader)
     assert header.schema_version == contracts.LEDGER_SCHEMA_VERSION
-    with pytest.raises(BrainError, match="newer runtime"):
+    with pytest.raises(BrainError, match="unsupported ledger schema version"):
         read_ledger_header({**h, "schema_version": 2})
-    with pytest.raises(BrainError, match="no in-memory upgrader"):
+    with pytest.raises(BrainError, match="unsupported ledger schema version"):
         read_ledger_header({**h, "schema_version": 0})
 
 

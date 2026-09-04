@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS action_cache (
 CREATE INDEX IF NOT EXISTS idx_action_type ON action_cache (action_type);
 CREATE INDEX IF NOT EXISTS idx_action_target ON action_cache (target);
 CREATE INDEX IF NOT EXISTS idx_action_expires ON action_cache (expires_at);
+CREATE INDEX IF NOT EXISTS idx_action_last_accessed ON action_cache (last_accessed_at);
 """
 
 
@@ -215,14 +216,16 @@ class CacheHitResult:
 class ActionCacheStore:
     """Proof-Carrying Action Cache database and execution engine."""
 
-    def __init__(self, home: Path | str) -> None:
+    def __init__(self, home: Path | str, max_entries: int | None = None) -> None:
         self.home = Path(home)
+        self.max_entries = (
+            max_entries if max_entries is not None else DEFAULT_CACHE_MAX_ENTRIES
+        )
         self._db_dir = self.home / "state" / "cache"
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._dbfile = self._db_dir / "action_cache.sqlite"
         self._conn: sqlite3.Connection | None = None
         self._init_db()
-
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             conn = sqlite3.connect(self._dbfile, timeout=5.0)
@@ -259,6 +262,7 @@ class ActionCacheStore:
         params: dict[str, Any] | None = None,
         tokens_saved_estimate: int | None = None,
         ttl_seconds: int | None = None,
+        max_entries: int | None = None,
     ) -> ActionCacheEntry:
         """
         Store a deterministic action output and its safety proof.
@@ -338,6 +342,17 @@ class ActionCacheStore:
                 entry.proof.expires_at,
             ),
         )
+        effective_max = max_entries if max_entries is not None else self.max_entries
+        if effective_max is not None and effective_max > 0:
+            count_row = conn.execute("SELECT COUNT(*) as c FROM action_cache").fetchone()
+            count = count_row["c"] if count_row else 0
+            if count > effective_max:
+                excess = count - effective_max
+                conn.execute(
+                    "DELETE FROM action_cache WHERE action_key IN "
+                    "(SELECT action_key FROM action_cache ORDER BY last_accessed_at ASC LIMIT ?)",
+                    (excess,),
+                )
         conn.commit()
 
         return entry
@@ -596,3 +611,8 @@ class ActionCacheStore:
         conn = self._get_conn()
         conn.execute("DELETE FROM action_cache")
         conn.commit()
+
+    put = store_action
+
+
+ActionCache = ActionCacheStore

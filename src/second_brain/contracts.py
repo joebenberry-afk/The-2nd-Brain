@@ -14,8 +14,8 @@ Module map:
 - §6.7  : BrainLifecycleEvent (+ SurfaceVisibility, unknown-event policy).
 - §8.2  : RequestEpoch / RequestFingerprint (+ DivergenceCategory).
 - §9.4  : SessionSegment (minimal schema mirror).
-- §11.2 : ToolOutcomeState / ToolSignal / ToolOutcome crash state machine.
-- §14   : LedgerHeader, LEDGER_SCHEMA_VERSION, UPGRADERS, read_ledger_header.
+- §11.2 : ToolSignal / ToolOutcome crash states.
+- §14   : LedgerHeader, LEDGER_SCHEMA_VERSION, read_ledger_header.
 
 Also: BrainSessionIdentity, AgentIdentity, TaskIdentity, canonical_json,
 stable_content_hash.
@@ -29,7 +29,7 @@ import json
 import math
 import os
 import typing
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
@@ -1235,41 +1235,6 @@ class SessionSegment:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ToolOutcomeState:
-    """Per-tool recovery state: REQUESTED -> NOT_STARTED | OUTCOME_UNKNOWN | COMPLETE.
-
-    Transitions are explicit (plan §11.2):
-
-    - REQUESTED + ``NOT_STARTED``          -> TOOL_NOT_STARTED
-    - REQUESTED + ``STARTED``              -> REQUESTED (started)
-    - started + ``RESULT``                 -> COMPLETE
-    - started + ``OUTCOME_UNKNOWN``        -> TOOL_OUTCOME_UNKNOWN
-    """
-
-    state: ToolOutcome = ToolOutcome.REQUESTED
-    started: bool = False
-    has_result: bool = False
-
-    def apply(self, signal: ToolSignal) -> ToolOutcomeState:
-        if signal is ToolSignal.NOT_STARTED:
-            if self.started or self.state is not ToolOutcome.REQUESTED:
-                raise BrainError("TOOL_NOT_STARTED only valid from fresh REQUESTED")
-            return ToolOutcomeState(ToolOutcome.TOOL_NOT_STARTED)
-        if signal is ToolSignal.STARTED:
-            if self.started or self.state is not ToolOutcome.REQUESTED:
-                raise BrainError("duplicate TOOL_STARTED")
-            return ToolOutcomeState(ToolOutcome.REQUESTED, started=True)
-        if signal is ToolSignal.RESULT:
-            if not self.started:
-                raise BrainError("TOOL_RESULT before TOOL_STARTED")
-            return ToolOutcomeState(ToolOutcome.COMPLETE, started=True, has_result=True)
-        if signal is ToolSignal.OUTCOME_UNKNOWN:
-            if not self.started:
-                raise BrainError("TOOL_OUTCOME_UNKNOWN before TOOL_STARTED")
-            return ToolOutcomeState(ToolOutcome.TOOL_OUTCOME_UNKNOWN, started=True)
-        raise BrainError(f"unknown tool signal: {signal!r}")
-
 
 # ---------------------------------------------------------------------------
 # Ledger schema versioning (§14).
@@ -1289,43 +1254,26 @@ class LedgerHeader:
     created_at: str
 
 
-# Ordered in-memory upgraders for OLD versions, keyed by the version they
-# upgrade FROM. Empty stub today: any unknown old version is a deterministic
-# error instead of a silent guess. Reading never rewrites the source data.
-UPGRADERS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
-
-
 def read_ledger_header(data: Mapping[str, Any]) -> LedgerHeader:
     """Load a ledger header with §14 version rules.
 
     - version == current: load.
-    - version < current: run ordered in-memory upgraders (deterministic error
-      when no upgrader exists for an unknown old version).
-    - version > current: refuse with a clear 'newer runtime required' error.
+    - version != current: refuse with unsupported version error.
     """
     version = data.get("schema_version")
     if not isinstance(version, int):
         raise BrainError("ledger header missing integer schema_version")
-    if version > LEDGER_SCHEMA_VERSION:
+    if version != LEDGER_SCHEMA_VERSION:
         raise BrainError(
-            f"ledger schema version {version} requires a newer runtime "
-            f"(this runtime supports up to {LEDGER_SCHEMA_VERSION})"
+            f"unsupported ledger schema version {version} (expected {LEDGER_SCHEMA_VERSION})"
         )
-    header: dict[str, Any] = dict(data)
-    while version < LEDGER_SCHEMA_VERSION:
-        upgrader = UPGRADERS.get(version)
-        if upgrader is None:
-            raise BrainError(f"no in-memory upgrader for ledger schema version {version}")
-        header = upgrader(header)
-        version = int(header["schema_version"])
     return LedgerHeader(
-        schema_version=int(header["schema_version"]),
-        brain_version=str(header["brain_version"]),
-        adapter_name=str(header["adapter_name"]),
-        adapter_version=str(header["adapter_version"]),
-        created_at=str(header["created_at"]),
+        schema_version=int(data["schema_version"]),
+        brain_version=str(data["brain_version"]),
+        adapter_name=str(data["adapter_name"]),
+        adapter_version=str(data["adapter_version"]),
+        created_at=str(data["created_at"]),
     )
-
 
 # ---------------------------------------------------------------------------
 # Brain Handoff Envelope (plan §3 P3.17): bounded, harness-neutral transport.

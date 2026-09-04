@@ -5,18 +5,6 @@
 # proof/reports/config-consumption.md).
 schema_version = 1
 
-[governor]
-# PLANNED — no runtime module reads these bands yet: the existing context
-# pressure monitor (src/second_brain/monitor.py) uses hardcoded 50/80
-# boundaries; wiring governor bands is out of scope for this pass
-# (see proof/reports/config-consumption.md).
-green_until_pct = 60
-yellow_until_pct = 75
-orange_until_pct = 85
-# above orange_until_pct => RED
-actions = ["normal", "restrict_broad_reads", "distill_offload", "checkpoint",
-           "compact_handoff"]
-
 [read_ledger]
 # repeated reads are allowed when needed; ledger enables prior compact reference
 track = ["path", "hash", "range", "purpose", "turn", "artifact"]

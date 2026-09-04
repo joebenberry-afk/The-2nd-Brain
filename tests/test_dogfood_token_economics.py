@@ -19,7 +19,6 @@ from second_brain.firewall import reduce_observation
 from second_brain.governor import SessionTokens, classify_roi
 from second_brain.hybrid_retrieval import HybridCascadeRetriever
 from second_brain.semantic import add_memory, curate
-from second_brain.tool_working_set import ToolWorkingSetManager
 from second_brain.vmem import SessionObjectKind, VMemStore
 
 
@@ -28,17 +27,12 @@ class TestEndToEndDogfoodPipeline:
 
     def test_multi_turn_dogfood_session(self, brain_home, tmp_path):
         session_id = "dogfood-session-001"
-        tool_mgr = ToolWorkingSetManager()
         cache_store = ActionCacheStore(brain_home)
         vmem_store = VMemStore(brain_home, session_id)
         retriever = HybridCascadeRetriever()
         sync_engine = DeltaSyncEngine()
 
         # Turn 1: Inspection & File Reads
-        # Verify tool working set starts lean (<=500 tokens)
-        active_tools = tool_mgr.get_active_tools(compress=True)
-        assert len(active_tools) == 4
-        assert tool_mgr.estimate_active_tokens() <= 500
 
         # Action Cache store & replay for file read
         src_file = tmp_path / "app.py"
