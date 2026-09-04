@@ -42,6 +42,7 @@ def test_record_and_outcome_roundtrip(brain_home):
     assert row["chosen_json"] == contracts.canonical_json(values["chosen"])
     assert row["alternatives_json"] == contracts.canonical_json(values["alternatives"])
     assert row["inputs_hash"] == contracts.stable_content_hash(values["inputs"])
+    assert row["inputs_json"] == contracts.canonical_json(values["inputs"])
     assert row["outcome_json"] is None
     assert row["reward"] is None
 
@@ -54,6 +55,17 @@ def test_record_and_outcome_roundtrip(brain_home):
     assert row["outcome_json"] == contracts.canonical_json({"success": True, "latency_ms": 12})
     assert row["reward"] == pytest.approx(-0.5)
 
+
+    # Verify list_decisions
+    listed = decisions.list_decisions(brain_home, kind="retrieval")
+    assert len(listed) == 1
+    assert listed[0]["decision_id"] == decision_id
+    assert listed[0]["chosen"] == values["chosen"]
+    assert listed[0]["alternatives"] == values["alternatives"]
+    assert listed[0]["inputs"] == values["inputs"]
+    assert listed[0]["outcome"] == {"success": True, "latency_ms": 12}
+    assert listed[0]["reward"] == pytest.approx(-0.5)
+    assert decisions.list_decisions(brain_home, kind="routing") == []
 
 def test_randomize_propensities_sum_to_one_and_matches_observations():
     epsilon = 0.2

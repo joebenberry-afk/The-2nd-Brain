@@ -6,6 +6,7 @@ unknown rather than being converted to zero or an invented dollar amount.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import tomllib
@@ -258,3 +259,149 @@ def validate_fixture(data: Mapping[str, Any]) -> None:
         ):
             raise ValueError("task acceptance requires non-empty command and integer expect_exit=0")
         ids.add(task_id)
+
+
+def _actions_equal(left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    if left is None or right is None:
+        return False
+    if isinstance(left, str) and not isinstance(right, str):
+        try:
+            return json.loads(left) == right
+        except Exception:
+            pass
+    elif isinstance(right, str) and not isinstance(left, str):
+        try:
+            return json.loads(right) == left
+        except Exception:
+            pass
+    try:
+        from . import contracts
+        return contracts.canonical_json(left) == contracts.canonical_json(right)
+    except Exception:
+        return False
+
+
+def ope_ips(
+    decisions: Sequence[Mapping[str, Any]],
+    target_policy: Any,
+) -> dict[str, Any]:
+    """Off-policy evaluation via Inverse Propensity Scoring (IPS) and SNIPS.
+
+    Evaluates target_policy over logged replayable decision records (x_i, a_i, p_i, r_i).
+    Weights are clipped at minimum propensity 0.05 to prevent infinite variance:
+        w_i = I[target_policy(x_i) == a_i] / max(p_i, 0.05)
+    Estimators:
+        V = (1/n) * sum(w_i * r_i)
+        V_snips = sum(w_i * r_i) / sum(w_i) if sum(w_i) > 0 else 0.0
+        ESS = (sum(w_i))^2 / sum(w_i^2) if sum(w_i^2) > 0 else 0.0
+    """
+    n = len(decisions)
+    if n == 0:
+        return {
+            "value": 0.0,
+            "value_snips": 0.0,
+            "n": 0,
+            "ess": 0.0,
+            "weights_sum": 0.0,
+        }
+
+    is_callable = callable(target_policy)
+    policy_str: str | None = None
+    if isinstance(target_policy, str):
+        policy_str = target_policy.strip().lower()
+        if policy_str not in ("logging", "current", "always_inject", "inject", "holdout"):
+            raise ValueError(f"Unknown target policy: {target_policy!r}")
+    elif not is_callable:
+        raise ValueError(
+            f"target_policy must be callable or string, got {type(target_policy).__name__}"
+        )
+
+    weights: list[float] = []
+    rewards: list[float] = []
+
+    for d in decisions:
+        x_i = d.get("inputs")
+        if x_i is None and "inputs_json" in d:
+            raw_inputs = d.get("inputs_json")
+            if isinstance(raw_inputs, str) and raw_inputs:
+                try:
+                    x_i = json.loads(raw_inputs)
+                except Exception:
+                    x_i = raw_inputs
+            else:
+                x_i = raw_inputs
+        if x_i is None:
+            x_i = {}
+
+        a_i = d.get("chosen")
+        if a_i is None and "chosen_json" in d:
+            a_i = d.get("chosen_json")
+
+        raw_p = d.get("propensity")
+        try:
+            p_i = float(raw_p) if raw_p is not None else 1.0
+        except (ValueError, TypeError):
+            p_i = 1.0
+        if not math.isfinite(p_i) or p_i <= 0.0:
+            p_i = 1.0
+
+        raw_r = d.get("reward")
+        try:
+            r_i = float(raw_r) if raw_r is not None else 0.0
+        except (ValueError, TypeError):
+            r_i = 0.0
+        if not math.isfinite(r_i):
+            r_i = 0.0
+
+        if is_callable:
+            pred_a = target_policy(x_i)
+            match = 1.0 if _actions_equal(pred_a, a_i) else 0.0
+        elif policy_str in ("logging", "current"):
+            match = 1.0
+        elif policy_str in ("always_inject", "inject"):
+            alts = d.get("alternatives")
+            if alts is None and d.get("alternatives_json"):
+                try:
+                    alts = json.loads(d["alternatives_json"])
+                except Exception:
+                    alts = d["alternatives_json"]
+            if isinstance(x_i, dict) and "withheld_id" in x_i:
+                match = 1.0 if x_i["withheld_id"] is None else 0.0
+            else:
+                match = 1.0 if not alts else 0.0
+        elif policy_str == "holdout":
+            alts = d.get("alternatives")
+            if alts is None and d.get("alternatives_json"):
+                try:
+                    alts = json.loads(d["alternatives_json"])
+                except Exception:
+                    alts = d["alternatives_json"]
+            if isinstance(x_i, dict) and "withheld_id" in x_i:
+                match = 1.0 if x_i["withheld_id"] is not None else 0.0
+            else:
+                match = 1.0 if bool(alts) else 0.0
+        else:
+            match = 0.0
+
+        clipped_p = max(p_i, 0.05)
+        w_i = (match / clipped_p) if match > 0 else 0.0
+        weights.append(w_i)
+        rewards.append(r_i)
+
+    sum_w = sum(weights)
+    sum_w2 = sum(w * w for w in weights)
+    sum_wr = sum(w * r for w, r in zip(weights, rewards))
+
+    val = sum_wr / n
+    val_snips = (sum_wr / sum_w) if sum_w > 0 else 0.0
+    ess = (sum_w * sum_w / sum_w2) if sum_w2 > 0 else 0.0
+
+    return {
+        "value": val,
+        "value_snips": val_snips,
+        "n": n,
+        "ess": ess,
+        "weights_sum": sum_w,
+    }
