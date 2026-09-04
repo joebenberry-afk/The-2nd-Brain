@@ -1,62 +1,91 @@
-# The Second Brain — install the Prime Agent measurement extension (Phase 2).
-# Copies brainstem/prime-extension/src -> ~/.prime/agent/extensions/second-brain/
-# with a pre-install backup (plan §126). Never edits settings.json.
-#
-# Usage: powershell -ExecutionPolicy Bypass -File scripts\install-prime-extension.ps1
-# Testable override params: -ExtensionsDir <dir> -SettingsFile <file>
+# Install the Prime Agent extension from this repository, never from Brain state.
 
 [CmdletBinding()]
 param(
-    [string]$ExtensionsDir,   # defaults to ~/.prime/agent/extensions
-    [string]$SettingsFile     # defaults to ~/.prime/agent/settings.json (backup only)
+    [string]$ExtensionsDir,
+    [string]$SettingsFile,
+    [string]$SourceRoot
 )
 
 $ErrorActionPreference = "Stop"
 
-if ($env:SECOND_BRAIN_HOME) { $Brain = $env:SECOND_BRAIN_HOME }
-else { $Brain = Join-Path $env:USERPROFILE "Documents\The-Second-Brain" }
-$Brain = [System.IO.Path]::GetFullPath($Brain)
-
+if (-not $SourceRoot) { $SourceRoot = Split-Path $PSScriptRoot -Parent }
+$SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
 if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".prime\agent\extensions" }
 if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".prime\agent\settings.json" }
 
-$Src = Join-Path $Brain "brainstem\prime-extension\src"
-$TypesSrc = Join-Path $Brain "brainstem\prime-extension\types"
+$Src = Join-Path $SourceRoot "brainstem\prime-extension\src"
+$TypesSrc = Join-Path $SourceRoot "brainstem\prime-extension\types"
 $Target = Join-Path $ExtensionsDir "second-brain"
 
-# 1. Source must exist (don't install an empty extension).
-if (-not (Test-Path (Join-Path $Src "index.ts"))) {
-    Write-Warning "Extension source not found at $Src (missing index.ts). Build Phase 2 first."
-    exit 2
+function Get-ExtensionManifest([string]$Root) {
+    if (-not (Test-Path $Root -PathType Container)) { return @() }
+    return @(Get-ChildItem -Path $Root -File -Recurse |
+        Sort-Object FullName |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($Root.Length).TrimStart("\", "/").Replace("\", "/")
+            "$relative`t$((Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant())"
+        })
 }
 
-# 2. Pre-install backup (plan §126: backup before adapter/global-config change).
+function Get-ManifestHash([string[]]$Manifest) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($Manifest -join "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+if (-not (Test-Path (Join-Path $Src "index.ts") -PathType Leaf)) {
+    throw "Extension source missing index.ts: $Src"
+}
+
+$SourceManifest = Get-ExtensionManifest (Join-Path $SourceRoot "brainstem\prime-extension")
+if ($SourceManifest.Count -eq 0) { throw "Extension source manifest is empty: $SourceRoot" }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
-$BackupDir = Join-Path $Brain "backups\$stamp-prime-extension-pre-install"
+$BackupDir = Join-Path $SourceRoot "backups\$stamp-prime-extension-pre-install"
+$Stage = Join-Path $ExtensionsDir ".second-brain-install-$stamp"
+
+New-Item -ItemType Directory -Force -Path $ExtensionsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 if (Test-Path $Target) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $BackupDir "extensions") | Out-Null
     Copy-Item -Recurse -Force $Target (Join-Path $BackupDir "extensions\second-brain")
 }
-if (Test-Path $SettingsFile) {
+if (Test-Path $SettingsFile -PathType Leaf) {
     New-Item -ItemType Directory -Force -Path (Join-Path $BackupDir "settings") | Out-Null
     Copy-Item -Force $SettingsFile (Join-Path $BackupDir "settings\settings.json")
 }
-Write-Host "Pre-install backup: $BackupDir"
 
-# 3. Install (replace target with an exact mirror of the source tree; the
-#    previous state lives in the pre-install backup; never edit settings.json).
-if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
-New-Item -ItemType Directory -Force -Path $Target | Out-Null
-Copy-Item -Force (Join-Path $Src "*.ts") $Target
-if (Test-Path $TypesSrc) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $Target "types") | Out-Null
-    Copy-Item -Force (Join-Path $TypesSrc "*.d.ts") (Join-Path $Target "types")
+try {
+    New-Item -ItemType Directory -Force -Path $Stage | Out-Null
+    Copy-Item -Force (Join-Path $Src "*.ts") $Stage
+    if (Test-Path $TypesSrc -PathType Container) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $Stage "types") | Out-Null
+        Copy-Item -Force (Join-Path $TypesSrc "*.d.ts") (Join-Path $Stage "types")
+    }
+    $InstalledManifest = Get-ExtensionManifest $Stage
+    $ExpectedManifest = @($SourceManifest | Where-Object { $_ -match "^(src/.*\.ts|types/.*\.d\.ts)`t" } |
+        ForEach-Object { $_ -replace "^src/", "" })
+    if ((Compare-Object $ExpectedManifest $InstalledManifest).Count -ne 0) {
+        throw "Installed extension manifest does not match source"
+    }
+    if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
+    Move-Item $Stage $Target
+} catch {
+    if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
+    throw
 }
-Write-Host "Installed extension to $Target"
 
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  - restart Prime Agent (or /reload) to load the extension"
-Write-Host "  - disable measurement: set SECOND_BRAIN_OBSERVABILITY=off"
-Write-Host "  - uninstall: powershell -ExecutionPolicy Bypass -File scripts\uninstall-prime-extension.ps1"
+$SourceCommit = "unknown"
+if (Test-Path (Join-Path $SourceRoot ".git")) {
+    $SourceCommit = (& git -C $SourceRoot rev-parse HEAD 2>$null)
+}
+$ManifestHash = Get-ManifestHash $InstalledManifest
+Write-Host "Source repository: $SourceRoot"
+Write-Host "Source commit: $SourceCommit"
+Write-Host "Target: $Target"
+Write-Host "File count: $($InstalledManifest.Count)"
+Write-Host "Manifest SHA-256: $ManifestHash"
+Write-Host "Pre-install backup: $BackupDir"
+Write-Host "Restart Prime Agent or run /reload to load the extension."
 exit 0
