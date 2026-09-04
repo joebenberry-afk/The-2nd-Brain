@@ -1,0 +1,22 @@
+{
+  "repair": "retrieval live-path project attribution and diagnostics",
+  "status": "PASS",
+  "defect": "Prime built the model-visible prefix and other bridges from resolveProject() (env/default only), diverging from the canonical AutoInject resolution Python already computed for retrieval scoping.",
+  "fix": [
+    "autoinject.shadow_output now returns project_id and project_resolution alongside decision/packet fields.",
+    "brainctl project resolve --cwd <path> exposes the canonical ladder result for any adapter.",
+    "cmd_autoinject shadow and the codex adapter pass the resolved project through to shadow_output.",
+    "Prime autoinject.ts parses project_id/project_resolution from CLI stdout onto AutoInjectShadowOutcome.",
+    "Prime tracks the last resolved project per session (resolvedProjectIdForSession) from fresh and cache-hit outcomes.",
+    "index.ts prefix assembly and prefix-extras now prefer resolvedProjectIdForSession(session) over the env-only resolveProject() fallback."
+  ],
+  "unrelated_defect_found_and_fixed": "tests/test_autoinject.py::_run_cli popped PYTHONPATH without restoring the worktree src path, so every CLI-invoking test in that file exercised whatever second_brain happened to be pip-installed editable in the shared venv (the parent checkout) instead of this worktree's repaired code -- the exact runtime/state identity defect this campaign targets. Fixed to match tests/test_cli.py's existing pattern.",
+  "prime_baseline_confirmation": "tests/wiring.test.ts (6) and tests/autoinject.test.ts (8) real-factory timeouts are reproduced identically on unmodified baseline commit 4af64af in a scratch worktree; pre-existing and out of this repair's scope.",
+  "test_commands": [
+    ".venv/Scripts/python.exe -m pytest -q tests/test_autoinject.py",
+    "npx vitest run tests/autoinject.test.ts",
+    "npm run typecheck"
+  ],
+  "test_results": ["41 passed", "39 passed, 8 pre-existing baseline failures", "PASS"],
+  "rollback": "Revert this commit; shadow_output's new fields are additive and ignored by older consumers."
+}

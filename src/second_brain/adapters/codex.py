@@ -73,9 +73,10 @@ def run(home: Path) -> int:
         return 0
     payload_dict = payload if isinstance(payload, dict) else {}
     session_id = str(payload_dict.get("session_id") or "codex-anon")
-    project_id = autoinject._resolve_project_id(
+    resolved = autoinject.resolve_project(
         home, payload_dict.get("cwd"), payload_dict.get("project")
     )
+    project_id = resolved["project_id"]
     agent_id = str(payload_dict.get("agent_id") or payload_dict.get("model") or "codex")
     branch = str(payload_dict.get("branch") or "main")
     role = str(payload_dict.get("role") or "worker")
@@ -133,5 +134,9 @@ def run(home: Path) -> int:
         # drift telemetry is recorded every turn), but the JSON shape stays
         # exactly the pre-T2.4 {decision, reason, packet, packet_tokens,
         # candidate_ids, selected_ids, delivery_id} contract.
-        print(contracts.canonical_json(autoinject.shadow_output(decision, packet, delivery_id)))
+        print(
+            contracts.canonical_json(
+                autoinject.shadow_output(decision, packet, delivery_id, resolved)
+            )
+        )
     return 0

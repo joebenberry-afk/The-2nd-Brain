@@ -84,6 +84,7 @@ import {
 import {
   loadAutoInjectHostConfig,
   resolveProject,
+  resolvedProjectIdForSession,
   runAdvisoryAutoInject,
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
@@ -1117,7 +1118,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     task: typeof event.prompt === "string" ? event.prompt : "",
     agentId: sensors.modelToString(context.model) ?? "prime",
     cwd: typeof context.cwd === "string" ? context.cwd : undefined,
-    projectId: resolveProject(),
+    projectId: resolvedProjectIdForSession(session) ?? resolveProject(),
     cfg: loadAutoInjectHostConfig(config.home),
     append: (record) => getStore(session)?.append(record),
   });
@@ -1487,7 +1488,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // telemetry store, so existing fixed-record-count assertions are
       // untouched) only when drift actually occurs.
       const prefix = assemblePrefix({
-        projectId: resolveProject(),
+        projectId: resolvedProjectIdForSession(session) ?? resolveProject(),
         leanKernel: lean.decision === "inject" && lean.placement !== "tail" ? lean.kernel : undefined,
       });
       const prefixDrift = checkPrefixDrift(session, prefix);
@@ -1540,7 +1541,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // its own stable marker, so this is only ever delivered once per
       // accumulated base, exactly like the lean kernel and driver
       // contract above it.
-      const withExtras = appendPrefixExtras(patched, resolveProject());
+      const withExtras = appendPrefixExtras(
+        patched,
+        resolvedProjectIdForSession(session) ?? resolveProject(),
+      );
       if (withExtras !== undefined) {
         patched = withExtras;
       }
