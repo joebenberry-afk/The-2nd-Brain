@@ -226,21 +226,27 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
     input?: string,
   ): Promise<{ error?: string; stdout?: string }> =>
     new Promise((resolve) => {
-      const child = execFile(
-        python,
-        args,
-        {
-          cwd: options.home,
-          env,
-          timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
-          windowsHide: true,
-          maxBuffer: 1024 * 1024,
-        },
-        (error, stdout) => resolve({ error: error?.message, stdout }),
-      );
-      if (input !== undefined) {
-        child.stdin?.write(input);
-        child.stdin?.end();
+      try {
+        const child = execFile(
+          python,
+          args,
+          {
+            cwd: options.home,
+            env,
+            timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+          },
+          (error, stdout) => resolve({ error: error?.message, stdout }),
+        );
+        if (input !== undefined) {
+          child.stdin?.write(input);
+          child.stdin?.end();
+        }
+      } catch (err) {
+        // A synchronous spawn failure (e.g. an unspawnable interpreter path)
+        // must resolve fail-open, never reject this fire-and-forget chain.
+        resolve({ error: err instanceof Error ? err.message : String(err) });
       }
     });
   // One full init->append chain. P3-E fix: on ANY transient failure (init
@@ -263,43 +269,48 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
         return { ok: false, error: `ledger init: ${initResult.error}` };
       }
       return new Promise((resolve) => {
-        const child = execFile(
-          python,
-          appendArgs,
-          {
-            cwd: options.home,
-            env,
-            timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
-            windowsHide: true,
-            maxBuffer: 1024 * 1024,
-          },
-          (error, stdout) => {
-            if (error) {
-              resolve({ ok: false, error: error.message });
-              return;
-            }
-            try {
-              const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
-              if (parsed && parsed.error) {
-                // P3-E final fix: the retry re-sends the SAME payload; if the
-                // ledger already holds THIS event (first attempt persisted but
-                // reported failure), delivery succeeded — resolve ok, do not
-                // pollute telemetry with an error record.
-                if (isDuplicateOfThisEvent(String(parsed.error), json)) {
-                  resolve({ ok: true });
-                  return;
-                }
-                resolve({ ok: false, error: String(parsed.error) });
+        try {
+          const child = execFile(
+            python,
+            appendArgs,
+            {
+              cwd: options.home,
+              env,
+              timeout: options.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
+              windowsHide: true,
+              maxBuffer: 1024 * 1024,
+            },
+            (error, stdout) => {
+              if (error) {
+                resolve({ ok: false, error: error.message });
                 return;
               }
-              resolve({ ok: true });
-            } catch {
-              resolve({ ok: false, error: "ledger append returned unparsable output" });
-            }
-          },
-        );
-        child.stdin?.write(json);
-        child.stdin?.end();
+              try {
+                const parsed = JSON.parse(stdout) as { appended?: unknown; error?: string };
+                if (parsed && parsed.error) {
+                  // P3-E final fix: the retry re-sends the SAME payload; if the
+                  // ledger already holds THIS event (first attempt persisted but
+                  // reported failure), delivery succeeded — resolve ok, do not
+                  // pollute telemetry with an error record.
+                  if (isDuplicateOfThisEvent(String(parsed.error), json)) {
+                    resolve({ ok: true });
+                    return;
+                  }
+                  resolve({ ok: false, error: String(parsed.error) });
+                  return;
+                }
+                resolve({ ok: true });
+              } catch {
+                resolve({ ok: false, error: "ledger append returned unparsable output" });
+              }
+            },
+          );
+          child.stdin?.write(json);
+          child.stdin?.end();
+        } catch (err) {
+          // Same synchronous-spawn-failure guard as the init `run()` helper.
+          resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
       });
     });
   };
@@ -317,15 +328,29 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
 export function mirrorFireAndForget(
   options: MirrorOptions & { onError?: (error: string) => void },
 ): void {
-  void mirrorEvent(options).then((result) => {
-    if (!result.ok && options.onError) {
-      try {
-        options.onError(result.error ?? "ledger mirror failed");
-      } catch {
-        // storage failed too — stay silent
+  void mirrorEvent(options)
+    .then((result) => {
+      if (!result.ok && options.onError) {
+        try {
+          options.onError(result.error ?? "ledger mirror failed");
+        } catch {
+          // storage failed too — stay silent
+        }
       }
-    }
-  });
+    })
+    .catch((error) => {
+      // Defense in depth: mirrorEvent's own internals already resolve
+      // fail-open on every known failure path, but this wrapper's whole
+      // contract is "never blocks" — a rejection must never escape here
+      // regardless of its source.
+      if (options.onError) {
+        try {
+          options.onError(error instanceof Error ? error.message : String(error));
+        } catch {
+          // storage failed too — stay silent
+        }
+      }
+    });
 }
 
 /** Convenience: build an extension_error record for a mirror failure. */

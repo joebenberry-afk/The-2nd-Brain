@@ -188,6 +188,21 @@ describe("mirrorEvent spawn contract", () => {
     expect(result.ok).toBe(true);
     expect(execFileMock).not.toHaveBeenCalled();
   });
+
+  it("resolves fail-open (never rejects) when execFile throws synchronously (P19: unspawnable interpreter, e.g. a .cmd path on Windows without shell:true)", async () => {
+    const { home, python } = await fakeHome();
+    execFileMock.mockImplementation(() => {
+      throw new Error("spawn C:\\fake\\python.cmd EINVAL");
+    });
+    const result = await mirrorEvent({
+      home,
+      hostSessionId: "s-sync-throw",
+      record: { kind: "user_task", fields: {} },
+      python,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("EINVAL");
+  });
 });
 
 
