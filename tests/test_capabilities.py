@@ -1,11 +1,18 @@
-"""T2.6 provider capability table tests.
+"""T2.6 provider capability table tests, plus T4.3 harness capability
+profile/tier tests.
 
 Covers `second_brain.capabilities.get_provider_capabilities` (the narrow,
 config-driven, seven-field nullable schema) and its single narrow
-integration point in `vmem._load_economics_parameters` (T2.1).
+integration point in `vmem._load_economics_parameters` (T2.1); and the
+T4.3 DB-backed `observe`/`declare`/`harness_tier`/`list_capabilities`/
+`tier_behavior` harness capability surface + its CLI command.
 """
 
 from __future__ import annotations
+
+import json
+
+import pytest
 
 from second_brain import capabilities, vmem
 
@@ -228,3 +235,167 @@ cache_support = "none"
         econ = vmem._load_economics_parameters(brain_home, provider_id="no-cache-provider")
         assert econ["cache_read"] == 0.20
         assert econ["cache_write"] == 0.20
+
+
+# ---------------------------------------------------------------------------
+# T4.3: harness capability profiles and tiers.
+# ---------------------------------------------------------------------------
+
+
+def test_migration_0015_fresh_create_and_idempotent(brain_home):
+    """`brain_home` already ran `db.migrate` (0015 included); a second
+    `migrate` is a no-op and the table/index exist with the exact brief
+    schema."""
+    from second_brain import db
+
+    dbfile = db.db_path(brain_home)
+    assert db.migrate(dbfile) == []
+    conn = db.connect(dbfile)
+    try:
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(harness_capabilities)")}
+        assert cols == {
+            "harness_id",
+            "capability",
+            "supported",
+            "version",
+            "observed_at",
+            "evidence_json",
+        }
+        indexes = {row["name"] for row in conn.execute("PRAGMA index_list(harness_capabilities)")}
+        assert any("harness" in name for name in indexes)
+    finally:
+        conn.close()
+
+
+def test_tier_from_observed_events(brain_home):
+    """observe() with real known kinds walks T0 -> T1 -> T2 as more
+    capability-triggering kinds are observed."""
+    harness_id = "claude-code"
+    assert capabilities.harness_tier(brain_home, harness_id) == "T0"
+
+    marked = capabilities.observe(brain_home, harness_id, "session_start")
+    assert marked == ("session_events",)
+    assert capabilities.harness_tier(brain_home, harness_id) == "T0"  # still floor
+
+    marked = capabilities.observe(brain_home, harness_id, "tool_call")
+    assert marked == ("tool_events",)
+    assert capabilities.harness_tier(brain_home, harness_id) == "T1"
+
+    marked = capabilities.observe(brain_home, harness_id, "omp_worker_context_handoff")
+    assert marked == ("subagents",)
+    assert capabilities.harness_tier(brain_home, harness_id) == "T2"
+
+
+def test_observe_session_compact_maps_to_two_capabilities(brain_home):
+    """`session_compact` is real evidence for BOTH session_events and
+    compaction_events -- one kind may evidence more than one capability
+    when genuinely supported."""
+    harness_id = "codex"
+    marked = capabilities.observe(brain_home, harness_id, "session_compact")
+    assert set(marked) == {"session_events", "compaction_events"}
+    state = capabilities.list_capabilities(brain_home, harness_id)
+    assert state["session_events"]["supported"] is True
+    assert state["compaction_events"]["supported"] is True
+
+
+def test_observe_is_idempotent_upsert(brain_home):
+    """Re-observing the same evidence never errors; it refreshes
+    observed_at/evidence_json and keeps supported=true."""
+    harness_id = "hermes"
+    capabilities.observe(brain_home, harness_id, "assistant_usage")
+    first = capabilities.list_capabilities(brain_home, harness_id)["usage_telemetry"]
+    capabilities.observe(brain_home, harness_id, "assistant_usage")
+    second = capabilities.list_capabilities(brain_home, harness_id)["usage_telemetry"]
+    assert first["supported"] is True
+    assert second["supported"] is True
+    assert second["evidence"]["event_kind"] == "assistant_usage"
+
+
+def test_feature_degrades_to_lower_tier_behavior(brain_home):
+    """`tier_behavior()` is real caller-visible behavior that branches on
+    `harness_tier` -- proven here as capabilities are explicitly removed
+    (declare(..., False)), not just that the tier string itself computes
+    correctly (that is `test_tier_from_observed_events` above)."""
+    harness_id = "antigravity"
+    assert capabilities.tier_behavior(brain_home, harness_id) == capabilities.TIER_BEHAVIOR["T0"]
+
+    capabilities.declare(brain_home, harness_id, "tool_events", True)
+    capabilities.declare(brain_home, harness_id, "subagents", True)
+    assert capabilities.tier_behavior(brain_home, harness_id) == capabilities.TIER_BEHAVIOR["T2"]
+
+    # Explicit false on the T2-trigger capability degrades caller-visible
+    # behavior to T1 (tool_events is still supported=true).
+    capabilities.declare(brain_home, harness_id, "subagents", False)
+    assert capabilities.tier_behavior(brain_home, harness_id) == capabilities.TIER_BEHAVIOR["T1"]
+    assert capabilities.list_capabilities(brain_home, harness_id)["subagents"]["supported"] is False
+
+    # Removing the remaining T1-trigger capability degrades to the T0 floor.
+    capabilities.declare(brain_home, harness_id, "tool_events", False)
+    assert capabilities.tier_behavior(brain_home, harness_id) == capabilities.TIER_BEHAVIOR["T0"]
+
+
+def test_unknown_capability_never_assumed(brain_home):
+    """An unmapped event_kind is a deterministic no-op; declare() rejects
+    an invalid capability name deterministically; a never-recorded
+    capability reads back unsupported/unknown, never silently true."""
+    harness_id = "no-evidence-harness"
+
+    marked = capabilities.observe(brain_home, harness_id, "context_paging")
+    assert marked == ()
+    state = capabilities.list_capabilities(brain_home, harness_id)
+    assert all(row["supported"] is None for row in state.values())
+
+    with pytest.raises(capabilities.UnknownCapabilityError):
+        capabilities.declare(brain_home, harness_id, "not_a_real_capability", True)
+
+    # Table is still empty for this harness after the rejected declare().
+    state_after = capabilities.list_capabilities(brain_home, harness_id)
+    assert all(row["supported"] is None for row in state_after.values())
+
+    # A never-recorded capability on a DIFFERENT, otherwise-populated
+    # harness also reads back unsupported/unknown, never true.
+    capabilities.declare(brain_home, "populated-harness", "session_events", True)
+    other_state = capabilities.list_capabilities(brain_home, "populated-harness")
+    assert other_state["budget_enforcement"]["supported"] is None
+
+
+def test_declare_rejects_non_bool_supported(brain_home):
+    """No truthy-string coercion -- `supported` must be an actual bool."""
+    with pytest.raises(TypeError):
+        capabilities.declare(brain_home, "h", "session_events", "true")
+
+
+def test_declare_persists_explicit_false_distinct_from_never_recorded(brain_home):
+    capabilities.declare(brain_home, "h", "budget_enforcement", False, version="1.0")
+    row = capabilities.list_capabilities(brain_home, "h")["budget_enforcement"]
+    assert row["supported"] is False
+    assert row["version"] == "1.0"
+    # Distinct from a capability never declared/observed at all:
+    assert capabilities.list_capabilities(brain_home, "h")["model_rewrite"]["supported"] is None
+
+
+def test_cli_v2_harness_capabilities_json_output_shape(brain_home, capsys):
+    from second_brain import cli
+
+    capabilities.declare(brain_home, "cli-harness", "subagents", True, version="2.0")
+    capabilities.observe(brain_home, "cli-harness", "tool_call")
+
+    assert (
+        cli.main(
+            ["--home", str(brain_home), "v2", "harness", "capabilities", "cli-harness", "--json"]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["harness_id"] == "cli-harness"
+    assert payload["tier"] == "T2"
+    assert payload["tier_behavior"] == capabilities.TIER_BEHAVIOR["T2"]
+    assert set(payload["capabilities"]) == capabilities.KNOWN_CAPABILITIES
+    assert payload["capabilities"]["subagents"]["supported"] is True
+    assert payload["capabilities"]["subagents"]["version"] == "2.0"
+
+    # Read-only: no DB mutation beyond the earlier declare/observe calls.
+    before = capabilities.list_capabilities(brain_home, "cli-harness")
+    cli.main(["--home", str(brain_home), "v2", "harness", "capabilities", "cli-harness"])
+    after = capabilities.list_capabilities(brain_home, "cli-harness")
+    assert before == after
