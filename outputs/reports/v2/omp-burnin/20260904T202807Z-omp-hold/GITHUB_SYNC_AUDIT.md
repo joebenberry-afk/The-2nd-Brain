@@ -60,7 +60,7 @@ provider-backed runs are temporarily unavailable due to rate limiting.
 
 Prime binary required for OMP v2 release: **NO**
 
-## Outstanding Repository Hygiene
+## Outstanding Repository Hygiene (at the b7d893b audit checkpoint)
 
 - stale package metadata: `brainstem/prime-extension/package.json` is already
   OMP-first (`version` `0.2.0` and the OMP-first description). Its lockfile
@@ -87,3 +87,12 @@ Prime binary required for OMP v2 release: **NO**
   `outputs/reports/v2/final/release-report.md`
 - Both historical reports now carry an explicit supersession banner. Their
   earlier Prime/Claude Code blocker is not the current OMP release gate.
+
+## Proceeding Addendum
+
+After the b7d893b checkpoint, the planned package cleanup was applied without
+dependency regeneration: both `package.json` and the `package-lock.json` root
+metadata now report version `0.2.0`. `npm run typecheck` and
+`npm ci --dry-run --ignore-scripts` both passed. The three new proceeding
+reports in this directory record the unchanged Phase 22 hold and the
+non-recoverable stale worker rows; no release tag was created.
