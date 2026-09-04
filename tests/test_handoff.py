@@ -15,7 +15,7 @@ import pytest
 
 from second_brain import contracts, hermes_adapter, omp_adapter, working_set
 from second_brain.contracts import HandoffError
-from second_brain.handoff import create_handoff_envelope, read_handoff_envelope
+from second_brain.handoff import create_handoff, create_handoff_envelope, read_handoff_envelope
 
 
 def _seed_capsule(home, session_id="sess-p317-01"):
@@ -267,3 +267,18 @@ class TestCrossHarnessAdapters:
         })
         assert omp_bad["failure_code"] == "HANDOFF_PROJECT_MISMATCH"
         assert hermes_bad["failure_code"] == "HANDOFF_PROJECT_MISMATCH"
+
+
+class TestLegacyHandoffObjective:
+    """T6.2: `create_handoff` must read the capsule's real `objective` field,
+    not a nonexistent `current_objective` key (which always fell through to
+    the "Continue session task" default, silently discarding the capsule's
+    actual objective on every handoff)."""
+
+    def test_handoff_uses_capsule_objective(self, brain_home):
+        session_id = _seed_capsule(brain_home, "sess-p317-objective")
+
+        artifact = create_handoff(brain_home, session_id)
+
+        assert artifact.objective == "Close the P3.17 handoff seam"
+        assert artifact.objective != "Continue session task"

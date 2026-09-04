@@ -643,11 +643,14 @@ def _git_repo_with_commit(repo: Path, filename: str, content: str) -> None:
     _git(repo, "commit", "-q", "-m", "init")
 
 
-def test_action_cache_search_hits_on_second_call_and_misses_after_a_commit(tmp_path):
-    """Phase R5: narrowest Brain-owned execution-bypass layer (Prime's
-    tool_call hook cannot itself skip execution — see
-    outputs/reports/rc4/02-prime-live-callgraph.md and
-    outputs/reports/rc4/05-action-cache-live.md)."""
+def test_action_cache_search_never_caches_and_reflects_uncommitted_edits(tmp_path):
+    """T6.2: the prior `git rev-parse HEAD^{tree}`-only cache gate only saw
+    the COMMITTED tree, so an uncommitted (staged/unstaged/untracked) edit
+    to a searched file was invisible to invalidation and a stale cached
+    result could be served as a "hit" even though on-disk content changed.
+    `action-cache search` must never cache at all: every call recomputes,
+    `hit` is always False, and an uncommitted edit is reflected immediately
+    on the very next call (no commit required)."""
     home = tmp_path / "brain"
     assert run_cli(home, "init").returncode == 0
     repo = tmp_path / "repo"
@@ -659,19 +662,21 @@ def test_action_cache_search_hits_on_second_call_and_misses_after_a_commit(tmp_p
     assert out1["hit"] is False
     assert "hello.py" in out1["content"]
 
+    # Second call with no change at all: still never a cache hit.
     r2 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
     out2 = json.loads(r2.stdout)
-    assert out2["hit"] is True
+    assert out2["hit"] is False
     assert out2["content"] == out1["content"]
 
-    # A new commit changes the git tree hash -> the proof no longer matches -> miss.
-    (repo / "hello.py").write_text("def hello():\n    return 'world2'\n", encoding="utf-8")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "change")
+    # Uncommitted edit (no `git commit`) — the old tree-hash-only gate would
+    # never see this and could serve a stale hit. It must be visible now,
+    # on the very next call, with no commit involved.
+    (repo / "hello.py").write_text("def bonjour():\n    return 'world2'\n", encoding="utf-8")
 
-    r3 = run_cli(home, "action-cache", "search", "hello", "--path", str(repo), "--json")
+    r3 = run_cli(home, "action-cache", "search", "bonjour", "--path", str(repo), "--json")
     out3 = json.loads(r3.stdout)
     assert out3["hit"] is False
+    assert "bonjour" in out3["content"]
 
 
 def test_action_cache_search_non_git_dir_never_caches(tmp_path):

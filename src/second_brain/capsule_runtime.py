@@ -7,6 +7,8 @@ This module owns no new state. It only binds lifecycle inputs to the canonical
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +26,37 @@ def _bounded_text(value: str, *, field: str) -> str:
     return value.strip()[:MAX_TEXT_CHARS]
 
 
-def _bounded_items(values: list[str], existing: list[str] | None = None) -> list[str]:
+def _record_dropped_items(
+    home: Path, session_id: str, field: str, dropped: list[str]
+) -> None:
+    """Best-effort append of capsule items bumped out of the bounded
+    last-``MAX_ITEMS`` window to ``capsule-history.jsonl`` (observability
+    only; a write failure never blocks the capsule update it accompanies)."""
+    try:
+        session_path = working_set.session_dir(home, session_id)
+        session_path.mkdir(parents=True, exist_ok=True)
+        history_path = session_path / "capsule-history.jsonl"
+        with history_path.open("a", encoding="utf-8") as f:
+            for item in dropped:
+                record = {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "session_id": session_id,
+                    "field": field,
+                    "dropped_item": item,
+                }
+                f.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _bounded_items(
+    values: list[str],
+    existing: list[str] | None = None,
+    *,
+    home: Path | None = None,
+    session_id: str | None = None,
+    field: str | None = None,
+) -> list[str]:
     if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
         raise BrainError("capsule list fields must be lists of strings")
     merged = list(existing or [])
@@ -33,6 +65,10 @@ def _bounded_items(values: list[str], existing: list[str] | None = None) -> list
     for item in merged:
         if item and item not in deduped:
             deduped.append(item)
+    if len(deduped) > MAX_ITEMS:
+        dropped = deduped[:-MAX_ITEMS]
+        if home is not None and session_id is not None:
+            _record_dropped_items(home, session_id, field or "", dropped)
     return deduped[-MAX_ITEMS:]
 
 
@@ -156,7 +192,7 @@ def update_capsule(
     for name, incoming in list_fields:
         if incoming is None:
             continue
-        merged = _bounded_items(incoming, capsule[name])
+        merged = _bounded_items(incoming, capsule[name], home=home, session_id=session_id, field=name)
         if merged != capsule[name]:
             fields[name] = merged
     if verification is not None:

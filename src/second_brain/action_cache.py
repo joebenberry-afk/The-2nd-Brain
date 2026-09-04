@@ -552,22 +552,35 @@ class ActionCacheStore:
     def invalidate_by_path(self, path: Path | str) -> int:
         """
         Invalidate all cache entries whose proof depends on `path` (§7.5).
+
+        The `target`-match branch uses the existing `idx_action_target`
+        index directly (an indexed `IN` lookup on both the literal string a
+        caller passed to `store_action`/`get_or_execute` and its resolved
+        form) instead of a full-table scan + per-row `Path.resolve()`.
+        Every real `target` in this codebase (FILE_READ/DIR_SCAN/
+        GENERIC_PURE) is a bare path string, never a composite key, so this
+        covers the real matching cases without fabricating an index lookup
+        that never fires. The `input_hashes` fallback stays a linear scan
+        (narrower "index on target" scope; not tightened here).
         """
-        target_path_str = str(Path(path).resolve())
+        resolved_str = str(Path(path).resolve())
+        candidates = {str(path), resolved_str}
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT action_key, proof_json, target FROM action_cache"
-        ).fetchall()
-        to_delete = []
-        for r in rows:
-            if str(Path(r["target"]).resolve()) == target_path_str:
-                to_delete.append(r["action_key"])
-                continue
+        placeholders = ",".join("?" for _ in candidates)
+        to_delete: set[str] = {
+            r["action_key"]
+            for r in conn.execute(
+                f"SELECT action_key FROM action_cache WHERE target IN ({placeholders})",
+                tuple(candidates),
+            ).fetchall()
+        }
+
+        for r in conn.execute("SELECT action_key, proof_json FROM action_cache").fetchall():
             proof_dict = json.loads(r["proof_json"])
             input_hashes = proof_dict.get("input_hashes", {})
             for p in input_hashes:
-                if str(Path(p).resolve()) == target_path_str:
-                    to_delete.append(r["action_key"])
+                if str(Path(p).resolve()) == resolved_str:
+                    to_delete.add(r["action_key"])
                     break
 
         for key in to_delete:
