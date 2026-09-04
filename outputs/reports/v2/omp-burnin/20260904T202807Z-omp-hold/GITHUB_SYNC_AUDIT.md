@@ -35,11 +35,21 @@ later documentation-only synchronization commits.
   pre-change snapshot; SQLite integrity check returned `ok`
 - Focused regressions: **5 passed** on the repaired live paths
 - Worker launches: **19/20**
-- Worker results: **7/20** — 4 completed and 3 failed; failed results remain
-  explicitly failed and are not counted as fabricated completions
+- Gate A — terminal worker-result lifecycle: **7/20** — 4 completed and 3
+  failed; failed results remain legitimate terminal failure-path evidence
+- Gate B — successful worker completions: **4/20** — only workers with
+  terminal status `completed` count toward this gate
 - Compactions: **8/10**
 - Project switches: **11/20**
 
+## Gate clarification
+
+The earlier `worker results` count is retained as Gate A: legitimate terminal
+events emitted by the real OMP lifecycle. Gate B is separate and requires
+`20+` real workers with status `completed`; the three failed events do not
+count toward it. Running, stale, duplicate, fabricated, and backfilled
+records are excluded. This clarification was recorded before qualification
+resumes.
 ## External Boundary
 
 - Provider error: HTTP `429`, error type `rate_limit_error`
@@ -93,7 +103,7 @@ Prime binary required for OMP v2 release: **NO**
 After the b7d893b checkpoint, the planned package cleanup was applied without
 dependency regeneration: both `package.json` and the `package-lock.json` root
 metadata now report version `0.2.0`. `npm run typecheck` and
-`npm ci --dry-run --ignore-scripts` both passed. The four new proceeding
-reports in this directory record the unchanged Phase 22 hold, the
-non-recoverable stale worker rows, and the final release decision; no release
-tag was created.
+`npm ci --dry-run --ignore-scripts` both passed. The current proceeding reports
+record Gate A at `7/20` terminal events and Gate B at `4/20` successful
+completions, alongside the unchanged launch, compaction, and project-switch
+holds. No release tag was created.

@@ -1,7 +1,9 @@
 # Final OMP Qualification Evidence
 
 Generated at `2026-09-04T21:43:41Z` after the proceeding checkpoint and
-release-hygiene cleanup.
+release-hygiene cleanup. A subsequent documentation-only correction clarifies
+the separate terminal-result and successful-completion gates before
+qualification resumes.
 
 ## Candidate identity
 
@@ -16,8 +18,9 @@ release-hygiene cleanup.
 - Candidate worktree at this SHA: clean
 
 The runtime/extension source is unchanged from the authorized qualification
-ancestor. The candidate SHA contains only proceeding evidence and the planned
-package-lock root metadata cleanup.
+ancestor. The candidate snapshot SHA contains only proceeding evidence and the
+package-lock root metadata cleanup. The subsequent gate-semantics correction
+changes documentation only.
 
 ## Phase 22 counts
 
@@ -27,17 +30,21 @@ package-lock root metadata cleanup.
 | Normal turns | 190 `turn_start` records | PASS |
 | Tool calls | 152 | PASS |
 | Worker launches | 19/20 | HOLD — 1 short |
-| Terminal worker results | 7/20: 4 `completed`, 3 `failed` | HOLD — 13 short |
+| Gate A — terminal worker results | 7/20: 4 `completed`, 3 `failed` | HOLD — 13 short |
+| Gate B — successful worker completions | 4/20 real workers with status `completed` | HOLD — 16 short |
 | Session compactions | 8/10 matched pairs | HOLD — 2 short |
 | Clean restarts | 85 shutdown records across 76 sessions | PASS |
 | Interrupted/recovery cases | 3 | PASS |
 | Project switches | 11/20 | HOLD — 9 short |
 | Conflicting controlled projects | 2 alternating alpha/bravo projects | PASS |
 
-The result count uses the recorded terminal-event semantics: legitimate
-`completed` and `failed` events count; running, stale, duplicate, or fabricated
-results do not. Four database rows remain stale `WORKING` rows with expired
-leases and no matching terminal event; they are excluded.
+Gate A counts legitimate terminal lifecycle events: legitimate `completed`,
+`failed`, and other real eligible terminal statuses. Gate B counts only real
+workers with terminal status `completed`; the three failed events remain
+failure-path evidence and do not count toward Gate B. Running, stale,
+duplicate, fabricated, and backfilled results are excluded. Four database rows
+remain stale `WORKING` rows with expired leases and no matching terminal event.
+They are excluded from both gates.
 
 ## Final checks
 
@@ -58,14 +65,13 @@ leases and no matching terminal event; they are excluded.
 - Candidate-source telemetry validator reports 301 historical heartbeat records
   missing `artifacts_gc_count`; no historical telemetry was rewritten.
 
-## External blocker and decision
-
 The last authoritative provider response was HTTP `429 rate_limit_error` with
 `retry-after-ms: 9017000`, observed around `2026-09-04T19:49Z`. The cooldown had
 not elapsed at the proceeding checks, so no fresh OMP provider-backed activity
-was started. The remaining real-activity deficits are therefore unchanged:
-13 worker results, 1 worker launch, 2 compactions, and 9 project switches.
-
+was started. The two-gate semantics correction was recorded before
+qualification resumes. The remaining real-activity deficits are:
+13 terminal-result events, 16 successful completions, 1 worker launch,
+2 compactions, and 9 project switches.
 **RELEASE DECISION: HOLD**
 
 No `v2.0.0` tag is created. Qualified release SHA: **NONE**. Resume only with
