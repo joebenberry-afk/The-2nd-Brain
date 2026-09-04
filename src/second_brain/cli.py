@@ -35,6 +35,7 @@ from . import (
     governor,
     handoff,
     immune,
+    ledger,
     monitor,
     optimization,
     paths,
@@ -1805,7 +1806,9 @@ def cmd_verify(args) -> int:
             ignorable=False,
             payload=result,
         )
-        with ledger.LedgerStore(home, args.verifier_session_id).open(create=True) as store:
+        with ledger.LedgerStore(home, args.verifier_session_id, host="prime").open(
+            create=True
+        ) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(args.verifier_session_id),
@@ -1897,7 +1900,7 @@ def cmd_verify(args) -> int:
             ignorable=False,
             payload=result,
         )
-        with ledger.LedgerStore(home, args.session_id).open(create=True) as store:
+        with ledger.LedgerStore(home, args.session_id, host="prime").open(create=True) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(args.session_id),
@@ -1960,7 +1963,7 @@ def cmd_env(args) -> int:
             ignorable=False,
             payload=result,
         )
-        with ledger.LedgerStore(home, args.session_id).open(create=True) as store:
+        with ledger.LedgerStore(home, args.session_id, host="prime").open(create=True) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(args.session_id),
@@ -3205,10 +3208,9 @@ def _cmd_codex_shadow(home: Path) -> int:
         if str(payload_dict.get("source") or "") in ("Stop", "SessionEnd"):
             try:
                 session = contracts.BrainSessionIdentity(
-                    internal_session_id="is-"
-                    + hashlib.sha256(
-                        str(payload_dict.get("session_id") or "codex-anon").encode()
-                    ).hexdigest()[:12],
+                    internal_session_id=ledger.internal_session_id(
+                        str(payload_dict.get("session_id") or "codex-anon")
+                    ),
                     host="codex-hooks",
                     host_session_id=str(payload_dict.get("session_id") or "codex-anon"),
                     project_id=str(
@@ -3248,7 +3250,7 @@ def _cmd_codex_shadow(home: Path) -> int:
     branch = str(payload_dict.get("branch") or "main")
     role = str(payload_dict.get("role") or "worker")
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12],
+        internal_session_id=ledger.internal_session_id(session_id),
         host="codex-hooks",
         host_session_id=session_id,
         project_id=project_id,
@@ -3427,8 +3429,7 @@ def _cmd_antigravity_hook(home: Path) -> int:
     role = "worker" if is_subagent else "driver"
 
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-"
-        + hashlib.sha256(conversation_id.encode("utf-8")).hexdigest()[:12],
+        internal_session_id=ledger.internal_session_id(conversation_id),
         host="antigravity",
         host_session_id=conversation_id,
         project_id=resolved_project,
@@ -3867,7 +3868,6 @@ def _cmd_claude_code_hook(home: Path) -> int:
     must never fail to start, compact, or finish a turn because the Brain
     is unavailable.
     """
-    import dataclasses
     import json
 
     from . import autoinject, contracts
@@ -3882,7 +3882,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
     try:
         event = str(payload_dict.get("hook_event_name") or "SessionStart")
         session_id = str(payload_dict.get("session_id") or "claude-anon")
-        session_hash = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+        session_internal_id = ledger.internal_session_id(session_id)
     except Exception:
         print("{}")
         return 0
@@ -3896,7 +3896,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
         resolved_project = "default"
 
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-" + session_hash[:12],
+        internal_session_id=session_internal_id,
         host="claude-code",
         host_session_id=session_id,
         project_id=resolved_project,
@@ -3914,7 +3914,7 @@ def _cmd_claude_code_hook(home: Path) -> int:
         return 0
 
     if event == "PreCompact":
-        from . import antigravity_transcript, ledger
+        from . import antigravity_transcript
 
         with contextlib.suppress(Exception):
             autoinject.BrainLifecycle(home, session).start_session(session)
@@ -3963,18 +3963,16 @@ def _cmd_claude_code_hook(home: Path) -> int:
         content_hash = contracts.stable_content_hash(resume_packet)
 
         try:
-            store = ledger.LedgerStore(home, session_id)
-            # Ledger primary keys are always ledger.internal_session_id() (full
-            # sha256 hex) - the "is-"+sha256[:12] scheme on `session` is the
-            # AutoInject/telemetry identity and is a different key. Reusing
-            # `session` here would create a second, mislabeled sessions row
-            # (see _ensure_session_row's host="prime" fallback) instead of the
-            # row appended events already FK-reference.
-            internal = ledger.internal_session_id(session_id)
+            store = ledger.LedgerStore(home, session_id, host="claude-code")
+            # Ledger primary keys are ledger.internal_session_id() (full sha256
+            # hex), which is now the SAME scheme as `session.internal_session_id`
+            # (unified across every host adapter) - no separate reconciliation
+            # needed before calling create_session with `session` directly.
+            internal = session.internal_session_id
             with store.open(create=True):
                 # INSERT OR REPLACE is idempotent; ignore best-effort
                 with contextlib.suppress(Exception):
-                    store.create_session(dataclasses.replace(session, internal_session_id=internal))
+                    store.create_session(session)
                 existing = store.search(
                     content_hash[:16], event_type="compaction_started", limit=1
                 )
@@ -4171,8 +4169,7 @@ def _cmd_writeback(home: Path, args) -> int:
         if not isinstance(evidence, list):
             raise ValueError("--evidence must be a JSON list of {ref, kind} dicts or a dict")
         session = contracts.BrainSessionIdentity(
-            internal_session_id="is-"
-            + hashlib.sha256(args.session_id.encode("utf-8")).hexdigest()[:12],
+            internal_session_id=ledger.internal_session_id(args.session_id),
             host="brainctl",
             host_session_id=args.session_id,
             project_id=args.project_id,
@@ -4325,7 +4322,7 @@ def cmd_ledger(args) -> int:
             if args.cwd
             else (args.project_id or "")
         )
-        store = ledger.LedgerStore(home, args.host_session_id)
+        store = ledger.LedgerStore(home, args.host_session_id, host=args.host)
         store._init_host_artifacts = artifacts  # carried into the manifest at open
         with store.open(create=True):
             internal = ledger.internal_session_id(args.host_session_id)
@@ -4545,7 +4542,7 @@ def cmd_stop(args) -> int:
         ignorable=False,
         payload=payload,
     )
-    with ledger.LedgerStore(home, args.host_session_id).open(create=True) as store:
+    with ledger.LedgerStore(home, args.host_session_id, host="prime").open(create=True) as store:
         store.create_session(
             contracts.BrainSessionIdentity(
                 internal_session_id=ledger.internal_session_id(args.host_session_id),
@@ -4642,8 +4639,7 @@ def cmd_autoinject(args) -> int:
         return 2
     resolved_project = autoinject._resolve_project_id(home, args.cwd, args.project_id)
     session = contracts.BrainSessionIdentity(
-        internal_session_id="is-"
-        + hashlib.sha256(args.session_id.encode("utf-8")).hexdigest()[:12],
+        internal_session_id=ledger.internal_session_id(args.session_id),
         host="prime-cli",
         host_session_id=args.session_id,
         project_id=resolved_project,

@@ -934,7 +934,7 @@ class TestCheckBudget:
             [_rec("assistant_usage", total_tokens=2500, session="child")],
         )
 
-        with ledger.LedgerStore(brain_home, child_host_id).open(create=True) as store:
+        with ledger.LedgerStore(brain_home, child_host_id, host="hermes").open(create=True) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(child_host_id),
@@ -968,7 +968,7 @@ class TestCheckBudget:
             brain_home, stray_host_id, [_rec("assistant_usage", total_tokens=99999)]
         )
 
-        with ledger.LedgerStore(brain_home, stray_host_id).open(create=True) as store:
+        with ledger.LedgerStore(brain_home, stray_host_id, host="hermes").open(create=True) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(stray_host_id),

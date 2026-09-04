@@ -7,7 +7,10 @@ calls the existing Brain primitives.
 
 from __future__ import annotations
 
+import contextlib
+import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -90,15 +93,41 @@ def _prepare_worker_context(home: Path, payload: Mapping[str, Any]) -> dict[str,
         project_id=_text(payload.get("project_id")) or "default",
         repo_root=_text(payload.get("cwd")) or str(home),
     ).validate()
-    handoff = worker_protocol.prepare_context_handoff(home, packet)
+    context_handoff = worker_protocol.prepare_context_handoff(home, packet, host="omp")
+    registration = worker_protocol.register_task(
+        home,
+        packet.task_id,
+        packet.canonical_hash(),
+        session_id=host_session_id,
+        dispatch_payload=json.loads(packet.canonical_json()),
+    )
+    duplicate_terminal = bool(
+        registration.get("duplicate")
+        and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
+    )
+    if duplicate_terminal:
+        return {
+            "status": str(registration["state"]).lower(),
+            "duplicate": True,
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+        }
+    worker_protocol.record_worker_event(
+        home,
+        packet.task_id,
+        packet.canonical_hash(),
+        "worker_started",
+        session_id=host_session_id,
+        host="omp",
+    )
     return {
         "status": "prepared",
         "task_id": packet.task_id,
         "packet_sha256": packet.canonical_hash(),
         "worker_role": packet.requested_role,
         "worker_model": model,
-        "context_metadata": worker_protocol.handoff_metadata(handoff),
-        "context_handoff": handoff,
+        "context_metadata": worker_protocol.handoff_metadata(context_handoff),
+        "context_handoff": context_handoff,
     }
 
 
@@ -185,6 +214,137 @@ def _prepare_handoff_read(home: Path, payload: Mapping[str, Any]) -> dict[str, A
         allow_stale=bool(payload.get("allow_stale", False)),
     )
 
+
+def to_result_packet(payload: Mapping[str, Any]) -> contracts.WorkerResultPacket:
+    """Validate a wire dict into a WorkerResultPacket (thin, directly testable seam)."""
+    return contracts.WorkerResultPacket.from_dict(dict(payload))
+
+
+def _worker_result_identity(
+    home: Path, task_id: str, session_id: str | None, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Assemble a worker AgentIdentity dict from the bridge's flat wire fields.
+
+    `worker-result-bridge.ts` sends flat `worker_agent`/`worker_model`/`worker_role`
+    fields (mirroring `worker-context-bridge.ts`'s flat `role`/`provider`/`model`),
+    never a pre-built nested `worker_identity`. This mirrors how
+    `_prepare_worker_context` assembles `driver_identity` from its own flat fields.
+    The real bridge never populates `worker_role`, so an invalid/missing role
+    falls back to the role recorded at task-dispatch time.
+    """
+    role = _text(payload.get("worker_role"))
+    if role not in contracts.WORKER_ROLES:
+        dispatch = worker_protocol.dispatch_snapshot(home, task_id)
+        requested_role = dispatch.get("requested_role") if isinstance(dispatch, dict) else None
+        role = requested_role if requested_role in contracts.WORKER_ROLES else "worker"
+    return {
+        "agent_id": _text(payload.get("worker_agent")) or f"omp-worker:{task_id}",
+        "internal_session_id": (
+            ledger.internal_session_id(session_id) if session_id else "unavailable"
+        ),
+        "host_agent_id": "omp",
+        "parent_agent_id": None,
+        "role_profile": role,
+        "model": _text(payload.get("worker_model")) or "unknown",
+        "provider": "omp",
+        "created_at": _text(payload.get("created_at")) or datetime.now(UTC).isoformat(),
+    }
+
+
+def _synthesize_failed_result(
+    home: Path, task_id: str, failure_code: str
+) -> contracts.WorkerResultPacket:
+    dispatch = worker_protocol.dispatch_snapshot(home, task_id)
+    requested_role = dispatch.get("requested_role") if isinstance(dispatch, dict) else None
+    role = requested_role if requested_role in contracts.WORKER_ROLES else "worker"
+    return contracts.WorkerResultPacket(
+        task_id=task_id,
+        worker_identity=contracts.AgentIdentity(
+            agent_id=f"omp-unavailable:{task_id}",
+            internal_session_id="unavailable",
+            host_agent_id="omp",
+            parent_agent_id=None,
+            role_profile=role,
+            model="unknown",
+            provider="omp",
+            created_at=datetime.now(UTC).isoformat(),
+        ),
+        status="failed",
+        failure_code=failure_code,
+        retryable=True,
+    ).validate()
+
+
+def _fail_worker_result(
+    home: Path,
+    task_id: str,
+    packet_sha256: str,
+    failure_code: str,
+    session_id: str | None,
+) -> dict[str, Any]:
+    with contextlib.suppress(Exception):
+        _synthesize_failed_result(home, task_id, failure_code)
+    with contextlib.suppress(Exception):
+        worker_protocol.record_worker_event(
+            home,
+            task_id,
+            packet_sha256,
+            "failed",
+            payload={"failure_code": failure_code, "task_id": task_id},
+            session_id=session_id,
+            host="omp",
+        )
+    return {"status": "failed", "failure_code": failure_code, "task_id": task_id}
+
+
+def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    task_id = _text(payload.get("task_id"))
+    packet_sha256 = _text(payload.get("packet_sha256"))
+    if not task_id or not packet_sha256:
+        return {"status": "failed", "failure_code": "MALFORMED_RESULT"}
+    session_id = _text(payload.get("host_session_id") or payload.get("session_id")) or None
+    try:
+        result = to_result_packet(
+            {
+                **payload,
+                "worker_identity": _worker_result_identity(home, task_id, session_id, payload),
+            }
+        )
+    except contracts.WorkerPacketError as exc:
+        return _fail_worker_result(home, task_id, packet_sha256, exc.code, session_id)
+    dispatch = worker_protocol.dispatch_snapshot(home, result.task_id)
+    if isinstance(dispatch, dict):
+        requested_role = dispatch.get("requested_role")
+        if (
+            isinstance(requested_role, str)
+            and result.worker_identity.role_profile != requested_role
+        ):
+            return _fail_worker_result(
+                home, task_id, packet_sha256, "UNAUTHORIZED_WORKER", session_id
+            )
+    try:
+        worker_protocol.record_worker_event(
+            home,
+            result.task_id,
+            packet_sha256,
+            result.status,
+            payload={
+                **json.loads(result.canonical_json()),
+                "result_sha256": result.canonical_hash(),
+            },
+            session_id=session_id,
+            host="omp",
+        )
+    except contracts.WorkerPacketError as exc:
+        return {"status": "failed", "failure_code": exc.code, "task_id": result.task_id}
+    return {
+        "status": result.status,
+        "failure_code": result.failure_code,
+        "task_id": result.task_id,
+        "packet_sha256": packet_sha256,
+        "result_sha256": result.canonical_hash(),
+    }
+
 def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return one bounded OMP routing or worker-context response."""
     if not isinstance(payload, Mapping):
@@ -196,6 +356,21 @@ def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[
             return {"status": "failed", "failure_code": exc.code}
         except Exception:
             return {"status": "failed", "failure_code": "CONTEXT_UNAVAILABLE"}
+    if payload.get("operation") == "worker_result":
+        try:
+            return _prepare_worker_result(Path(home), payload)
+        except contracts.WorkerPacketError as exc:
+            return {
+                "status": "failed",
+                "failure_code": exc.code,
+                "task_id": _text(payload.get("task_id")),
+            }
+        except Exception:
+            return {
+                "status": "failed",
+                "failure_code": "RESULT_UNAVAILABLE",
+                "task_id": _text(payload.get("task_id")),
+            }
     if payload.get("operation") == "skill_visibility":
         try:
             return _prepare_skill_visibility(Path(home), payload)

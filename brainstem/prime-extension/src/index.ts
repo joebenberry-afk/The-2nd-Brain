@@ -158,6 +158,11 @@ import {
   type OmpWorkerContextResult,
 } from "./worker-context-bridge";
 import {
+  runOmpWorkerResult,
+  type OmpWorkerResultOptions,
+  type OmpWorkerResultOutcome,
+} from "./worker-result-bridge";
+import {
   STOP_CONTROL_COMMAND,
   StopBoundaryState,
   extractTextContent,
@@ -420,6 +425,8 @@ export interface ExtensionOptions {
   autoinjectPacketPreserver?: RtdPreserver;
   /** OMP worker Context Capsule seam; production uses the bounded Brain CLI bridge. */
   ompWorkerContextRunner?: (options: OmpWorkerContextOptions) => Promise<OmpWorkerContextResult>;
+  /** OMP worker-result -> T4.1 lifecycle seam; production uses the bounded Brain CLI bridge. */
+  ompWorkerResultRunner?: (options: OmpWorkerResultOptions) => Promise<OmpWorkerResultOutcome>;
   ompRoutingRunner?: (options: OmpRoutingOptions) => Promise<OmpRoutingResult>;
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
@@ -536,6 +543,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
+  const workerResultRunner = options.ompWorkerResultRunner ?? runOmpWorkerResult;
   const sessionBudgetStates = options.sessionBudgetStates ?? new Map<string, BudgetState>();
   const budgetRunner = options.budgetRunner ?? runBudgetCheck;
   const safeWorkerContextRunner = async (
@@ -656,7 +664,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (batch) return { input: { ...input, tasks: augmented } };
     return { input: { ...input, task: String(augmented[0].task ?? "") } };
   };
-  const recordWorkerChildResults = (event: ToolResultEvent, ctx: ExtensionContext, session: string): void => {
+  const recordWorkerChildResults = async (
+    event: ToolResultEvent,
+    ctx: ExtensionContext,
+    session: string,
+  ): Promise<void> => {
     if (event.toolName !== "task" || event.details == null || typeof event.details !== "object") return;
     const rawResults = (event.details as Record<string, unknown>).results;
     if (!Array.isArray(rawResults)) return;
@@ -685,6 +697,27 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       };
       getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
       mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+      const firstBlock = Array.isArray(event.content) ? event.content[0] : undefined;
+      const summaryText =
+        firstBlock != null && typeof firstBlock === "object" && "text" in firstBlock && typeof firstBlock.text === "string"
+          ? firstBlock.text
+          : "";
+      try {
+        await workerResultRunner({
+          home: config.home ?? "",
+          sessionId: session,
+          taskId: marker[1],
+          packetSha256: marker[2],
+          status: status as "completed" | "failed" | "cancelled",
+          workerAgent: fields.worker_agent,
+          workerModel: fields.worker_model ?? "",
+          summary: summaryText.slice(0, 2048),
+          childOmpAgentId: fields.child_omp_agent_id ?? "",
+        });
+      } catch {
+        // Brain-side lifecycle recording is best-effort; local telemetry above
+        // already captured this result and must never be blocked by it.
+      }
     }
   };
   const mirrorWorkerContextReceipt = (
@@ -2287,7 +2320,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           }
         }
       }
-      recordWorkerChildResults(event, ctx, session);
+      await recordWorkerChildResults(event, ctx, session);
       const rtdCfg = loadRtdConfig(config.home);
       const eligibility = rtdEligibility(event.toolName, event.input, rtdCfg);
       // ONE shared measurement (Phase 3 correction); mirror reuses output_bytes.

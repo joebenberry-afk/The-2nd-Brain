@@ -188,7 +188,7 @@ def _record_ledger_event(
         payload=payload,
     )
     try:
-        with ledger.LedgerStore(home, review.session_id).open(create=True) as store:
+        with ledger.LedgerStore(home, review.session_id, host="prime").open(create=True) as store:
             store.append_events([event])
         return event_id
     except BrainError:

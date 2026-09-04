@@ -178,7 +178,7 @@ def test_extract_durable_binds_tool_observation(tmp_path: Path) -> None:
         pinned=False,
         schema_version=1,
     )
-    with ledger_mod.LedgerStore(tmp_path, host).open(create=True) as store:
+    with ledger_mod.LedgerStore(tmp_path, host, host="prime").open(create=True) as store:
         store.create_session(identity)
         store.append_events(
             [

@@ -256,12 +256,15 @@ class ProjectedContext:
 class LedgerStore:
     """Append-only ledger for one session (stdlib sqlite3; db.py pragmas)."""
 
-    def __init__(self, home: Path | str, host_session_id: str) -> None:
+    def __init__(
+        self, home: Path | str, host_session_id: str, *, host: str | None = None
+    ) -> None:
         self._home = Path(home)
         self._host_session_id = host_session_id
         self._internal = internal_session_id(host_session_id)
         self._dir = session_dir(home, host_session_id)
         self._conn: sqlite3.Connection | None = None
+        self._host = host
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -441,19 +444,31 @@ class LedgerStore:
 
     def _ensure_session_row(self) -> None:
         assert self._conn is not None
-        self._conn.execute(
-            "INSERT OR IGNORE INTO sessions (internal_session_id, host, host_session_id, "
-            " project_id, created_at, last_active_at, status, pinned, schema_version, "
-            " current_segment_id, root_parent_session_id) "
-            "VALUES (?, 'prime', ?, '', ?, ?, 'active', 0, ?, NULL, NULL)",
-            (
-                self._internal,
-                self._host_session_id,
-                _now(),
-                _now(),
-                LEDGER_SCHEMA_VERSION,
-            ),
-        )
+        if self._host is not None:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sessions (internal_session_id, host, host_session_id, "
+                " project_id, created_at, last_active_at, status, pinned, schema_version, "
+                " current_segment_id, root_parent_session_id) "
+                "VALUES (?, ?, ?, '', ?, ?, 'active', 0, ?, NULL, NULL)",
+                (
+                    self._internal,
+                    self._host,
+                    self._host_session_id,
+                    _now(),
+                    _now(),
+                    LEDGER_SCHEMA_VERSION,
+                ),
+            )
+            return
+        existing = self._conn.execute(
+            "SELECT 1 FROM sessions WHERE internal_session_id = ?",
+            (self._internal,),
+        ).fetchone()
+        if existing is None:
+            raise BrainError(
+                f"ledger session {self._host_session_id!r} requires an explicit "
+                "host for first-time initialization"
+            )
 
     def _ensure_agent_row(self, agent_id: str | None) -> None:
         if not agent_id:
@@ -906,16 +921,30 @@ class LedgerStore:
         return {r["key"]: r["value"] for r in rows}
 
     def _write_manifest(self, host_artifacts: list[dict[str, str]] | None = None) -> None:
+        host = self._host
+        target = _contained(self._dir, _MANIFEST)
+        if host is None and target.exists():
+            try:
+                existing_manifest = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                existing_manifest = {}
+            existing_host = existing_manifest.get("host")
+            if isinstance(existing_host, str) and existing_host:
+                host = existing_host
+        if host is None:
+            raise BrainError(
+                f"ledger session {self._host_session_id!r} requires an explicit "
+                "host for first-time initialization"
+            )
         manifest = {
             "internal_id": self._internal,
-            "host": "prime",
+            "host": host,
             "host_session_id": self._host_session_id,
             "created_at": _now(),
             "schema_version": LEDGER_SCHEMA_VERSION,
             "db": "ledger.sqlite",
             "host_artifacts": host_artifacts or [],
         }
-        target = _contained(self._dir, _MANIFEST)
         # P3-E fix: a FIXED tmp name collided under concurrent init of the
         # same fresh session (Windows sharing violation on write). Use a
         # unique temp name per process, then one atomic os.replace.
