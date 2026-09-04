@@ -132,6 +132,49 @@ def check_python(checks: list[Check]) -> None:
     checks.append(Check("sqlite3", STATUS_OK, f"SQLite {sqlite3.sqlite_version}"))
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(str(left.resolve())) == os.path.normcase(str(right.resolve()))
+
+
+def check_identity(home: Path, checks: list[Check]) -> None:
+    env_home = os.environ.get("SECOND_BRAIN_HOME")
+    if env_home and not _same_path(home, Path(env_home)):
+        checks.append(
+            Check(
+                "identity coherence",
+                STATUS_FAIL,
+                f"requested home={home.resolve()}, environment home={Path(env_home).resolve()}",
+            )
+        )
+        return
+
+    package_root = Path(__file__).resolve().parents[2]
+    configured_runtime = os.environ.get("SECOND_BRAIN_RUNTIME_ROOT")
+    if configured_runtime and not _same_path(package_root, Path(configured_runtime)):
+        checks.append(
+            Check(
+                "identity coherence",
+                STATUS_FAIL,
+                (
+                    f"runtime package={package_root}, "
+                    f"configured runtime root={Path(configured_runtime).resolve()}"
+                ),
+            )
+        )
+        return
+
+    checks.append(
+        Check(
+            "identity coherence",
+            STATUS_OK,
+            (
+                f"state={home.resolve()}, runtime={package_root}, "
+                f"python={Path(sys.executable).resolve()}"
+            ),
+        )
+    )
+
+
 def check_git(home: Path, checks: list[Check]) -> None:
     ok, out = _run(["git", "--version"])
     if not ok:
@@ -250,6 +293,7 @@ def run_doctor(
         check_version_file(home, checks)
         check_env(checks)
         check_python(checks)
+        check_identity(home, checks)
         check_git(home, checks)
         check_db(home, checks)
         check_tools(checks)

@@ -1,0 +1,15 @@
+{
+  "repair": "doctor runtime and state identity coherence",
+  "status": "PASS",
+  "tests": {
+    "command": ".venv/Scripts/python.exe -m pytest -q tests/test_doctor.py",
+    "result": "11 passed"
+  },
+  "mismatch_smoke": {
+    "requested_home": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot",
+    "environment_home": "C:\\Users\\assas\\Documents\\The-Second-Brain",
+    "doctor_exit_code": 1,
+    "identity_coherence": "FAIL"
+  },
+  "rollback": "Revert the doctor repair commit; no state migration or persistent mutation is involved."
+}
