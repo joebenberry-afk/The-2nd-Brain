@@ -30,6 +30,8 @@ from . import (
     credit,
     crossmodel,
     db,
+    decisions,
+    economics,
     engram,
     envsteward,
     episodes,
@@ -1502,6 +1504,26 @@ def _parser() -> argparse.ArgumentParser:
     v2_cap.add_argument("harness_id")
     v2_cap.add_argument("--json", action="store_true", help="output JSON")
 
+
+    v2_learn = v2s.add_parser("learn", parents=[home_parent], help="policy learning and evaluation")
+    v2_learn_sub = v2_learn.add_subparsers(dest="v2_learn_command", required=True)
+    v2_ope = v2_learn_sub.add_parser(
+        "ope",
+        parents=[home_parent],
+        help="off-policy evaluation via IPS/SNIPS (T5.3)",
+    )
+    v2_ope.add_argument(
+        "--kind",
+        default="retrieval",
+        choices=sorted(decisions._DECISION_KINDS),
+        help="decision kind (default: retrieval)",
+    )
+    v2_ope.add_argument(
+        "--policy",
+        required=True,
+        help="target policy name (e.g. logging, current, always_inject, inject, holdout)",
+    )
+    v2_ope.add_argument("--json", action="store_true", help="output JSON")
     return p
 
 
@@ -1737,6 +1759,48 @@ def cmd_v2(args) -> int:
                     f"  {name:20s} supported={state:7s} version={row['version']}"
                     f" observed_at={row['observed_at']}"
                 )
+        return 0
+    if args.v2_command == "learn" and args.v2_learn_command == "ope":
+        home = _home(args)
+        if args.kind not in decisions._DECISION_KINDS:
+            raise BrainError(f"kind must be one of {sorted(decisions._DECISION_KINDS)}")
+        records = decisions.list_decisions(home, kind=args.kind)
+        try:
+            result = economics.ope_ips(records, args.policy)
+        except ValueError as exc:
+            raise BrainError(str(exc)) from exc
+        ess = result["ess"]
+        n = result["n"]
+        val = result["value"]
+        val_snips = result["value_snips"]
+        if ess < 30.0:
+            payload = {
+                "status": "INSUFFICIENT_LOGGED_DATA",
+                "n": n,
+                "ess": ess,
+                "value": val,
+                "value_snips": val_snips,
+            }
+            if args.json:
+                print(contracts.canonical_json(payload))
+            else:
+                print(f"INSUFFICIENT_LOGGED_DATA (ess={ess:.1f} < 30, n={n})")
+            return 1
+
+        payload = {
+            "status": "OK",
+            "n": n,
+            "ess": ess,
+            "value": val,
+            "value_snips": val_snips,
+        }
+        if args.json:
+            print(contracts.canonical_json(payload))
+        else:
+            print(
+                f"OPE IPS: value={val:.4f} value_snips={val_snips:.4f} "
+                f"ess={ess:.1f} n={n} policy={args.policy} kind={args.kind}"
+            )
         return 0
     return 2
 

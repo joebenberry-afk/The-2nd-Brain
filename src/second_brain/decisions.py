@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
-import random
 import os
+import random
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -146,6 +147,8 @@ def record(
     chosen_json = _metadata_json(chosen, "chosen")
     alternatives_json = _metadata_json(alternatives, "alternatives")
     inputs_json = _canonical(inputs, "inputs")
+    if len(inputs_json.encode("utf-8")) > _MAX_METADATA_BYTES:
+        raise BrainError("inputs exceeds metadata byte bound")
     inputs_hash = contracts.stable_content_hash(inputs)
     decision_id = hashlib.sha256(
         (inputs_json + session_id + kind).encode("utf-8")
@@ -158,8 +161,8 @@ def record(
             """INSERT OR IGNORE INTO decisions(
                 decision_id, session_id, task_id, kind, chosen_json,
                 alternatives_json, propensity, randomized, policy_version,
-                rollout_stage, inputs_hash, outcome_json, reward, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
+                rollout_stage, inputs_hash, inputs_json, outcome_json, reward, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)""",
             (
                 decision_id,
                 session_id,
@@ -172,6 +175,7 @@ def record(
                 policy_version,
                 stage,
                 inputs_hash,
+                inputs_json,
                 datetime.now(UTC).isoformat(),
             ),
         )
@@ -261,3 +265,65 @@ def randomize(
         else 1.0 - epsilon
     )
     return choice, propensity, randomized
+
+
+def list_decisions(
+    home: Path | str,
+    *,
+    kind: str | None = None,
+    session_id: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Query decisions table, parsing JSON fields into Python objects."""
+    _ensure_migrated(home)
+    conn = db.connect(_dbfile(home), readonly=True)
+    try:
+        sql = "SELECT * FROM decisions WHERE 1=1"
+        params: list[Any] = []
+        if kind is not None:
+            kind_str = _text(kind, "kind") or ""
+            if kind_str not in _DECISION_KINDS:
+                raise BrainError(f"kind must be one of {sorted(_DECISION_KINDS)}")
+            sql += " AND kind = ?"
+            params.append(kind_str)
+        if session_id is not None:
+            sess_str = _text(session_id, "session_id")
+            sql += " AND session_id = ?"
+            params.append(sess_str)
+        sql += " ORDER BY created_at ASC, rowid ASC"
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+                raise BrainError("limit must be a positive integer")
+            sql += " LIMIT ?"
+            params.append(limit)
+
+        rows = conn.execute(sql, params).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            row_dict = dict(row)
+            for key, json_key in (
+                ("chosen", "chosen_json"),
+                ("alternatives", "alternatives_json"),
+                ("inputs", "inputs_json"),
+                ("outcome", "outcome_json"),
+            ):
+                raw = row_dict.get(json_key)
+                if raw is not None:
+                    try:
+                        row_dict[key] = json.loads(raw)
+                    except Exception:
+                        row_dict[key] = raw
+                else:
+                    row_dict[key] = [] if key == "alternatives" else None
+
+            if "randomized" in row_dict:
+                row_dict["randomized"] = bool(row_dict["randomized"])
+            if "propensity" in row_dict and row_dict["propensity"] is not None:
+                row_dict["propensity"] = float(row_dict["propensity"])
+            if "reward" in row_dict and row_dict["reward"] is not None:
+                row_dict["reward"] = float(row_dict["reward"])
+
+            results.append(row_dict)
+        return results
+    finally:
+        conn.close()
