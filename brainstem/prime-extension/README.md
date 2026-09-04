@@ -1,22 +1,54 @@
 # Second Brain Observability — Prime Agent Extension
 
-[Prime Agent](https://prime.cursor.sh) extension for The Second Brain OS
-**Phase 2 (Observability) + Phase 1 (Sol minimal-orchestrator guard)**. It
-observes the Prime agent lifecycle, appends JSONL telemetry, and — for
-orchestrator-model sessions only (default model substring `gpt-5.6-sol`) —
-blocks direct execution tools and injects the Sol contract. Everything else is
-measurement-only:
+[Prime Agent](https://prime.cursor.sh) extension for The Second Brain OS. It
+observes the Prime agent lifecycle, appends JSONL telemetry, drives the v2
+AutoInject retrieval path, and — for orchestrator-model sessions only
+(default model substring `gpt-5.6-sol`) — blocks direct execution tools and
+injects the Sol contract. Everything else is measurement or advisory-only:
 
 - `tool_call` handlers only read `event.input` — they never modify it.
 - The ONLY patches returned are: `{ block: true, reason }` from `tool_call`
   when an orchestrator model calls a blocked tool (`bash`/`edit`/`websearch`;
   `ipython` is NOT blocked — RLM delegation runs through the IPython kernel),
-  and `{ systemPrompt }` from `before_agent_start` for orchestrator-model
-  sessions (the condensed Sol contract). Every other session/event returns
-  undefined.
-- Every handler is wrapped in try/catch; storage writes are fire-and-forget and
-  never throw into the session. Guard failures fail open (`extension_error`
-  record, no block).
+  `{ systemPrompt }` from `before_agent_start` for orchestrator-model
+  sessions (the condensed Sol contract), and a low-authority `message`
+  (`customType: "brain.autoinject.packet"`, `authority: advisory` inside the
+  packet text) from `before_agent_start` when v2 AutoInject is in
+  `advisory`/`active` mode. Every other session/event returns undefined.
+- Every handler is wrapped in try/catch; storage writes are fire-and-forget
+  and never throw into the session. Guard and retrieval failures fail open
+  (`extension_error` record, no block, no packet).
+
+## Current deployment status
+
+This section describes the FACTS an operator can verify right now, not a
+point-in-time claim that goes stale. Never trust a hardcoded date in this
+file over live evidence:
+
+- `brainctl doctor --home <brain-home>` — `identity coherence` and
+  `build identity` checks report the exact runtime/state pairing and the
+  exact commit/schema/adapter-fingerprint currently in effect.
+- `<brain-home>/state/extension-runtime-ready.json` — written once per Prime
+  extension lifecycle (see "Runtime and state separation" below); the
+  authoritative record of which home/runtime/Brain-version THIS running
+  extension instance is frozen to.
+- `outputs/reports/v2/burnin/` in this repository — the evidence trail for
+  every repair applied since the qualified baseline commit
+  `4af64affdf4f1ec07b9483b67f440394d2853b32` (branch `brain/v2-one-shot`).
+  `v2.0.0` is not tagged until production burn-in on Prime 0.9.1 and Claude
+  Code both pass; see
+  `The_Second_Brain_v2_Burnin_Repair_and_Release_Plan.md` for the gate list.
+
+## Legacy recall vs v2 AutoInject vs Retrieval Intelligence 2.0
+
+Three retrieval mechanisms exist in this codebase; only one is the active
+production path:
+
+| Mechanism | Status | Trigger | Notes |
+|---|---|---|---|
+| **Phase 14 recall hook** (`SECOND_BRAIN_RECALL`) | Legacy, default OFF | Env var only | Predates AutoInject; a single `brain memory search` text-format spawn appending a compact Brief. Kept for backward compatibility; NOT the v2 retrieval architecture. Do not confuse "recall default off" with v2 AutoInject being inactive — they are independent switches. |
+| **v2 AutoInject** | Active production path | `config/autoinject.toml` `[autoinject] mode` (or `SECOND_BRAIN_AUTOINJECT_MODE` env override); default `shadow` | This extension's `before_agent_start`/`session_start` handlers spawn `second_brain autoinject shadow` (or advisory/active). `shadow` decides and records but never injects; `advisory`/`active` may return the low-authority packet message. See `src/autoinject.ts`. |
+| **Retrieval Intelligence 2.0** | Active, invoked BY AutoInject | N/A (Python-internal) | The scoring/ranking engine (`hybrid_retrieval.py`, `semantic.py`) that v2 AutoInject calls on the Python side for every non-shadow-skip decision: relevance, authority, scope, freshness, contradiction, activation need, diversity, MMR selection. Never invoked directly by this extension. |
 
 ## What it records
 
@@ -35,6 +67,56 @@ Each record carries `v: 2`, `ts` (ISO-8601 UTC, ms), `kind`, and `session`.
 Kinds are stored in
 `<brain-home>/telemetry/agent-performance/<session-stem>.jsonl` (one JSON object
 per line).
+
+## Environment variables: persistent vs process-local
+
+**Persistent** — set BEFORE starting `prime-agent`; the daemon inherits its
+startup environment and passes it to every worker session for the life of
+that daemon process. Changing these mid-session never retargets a running
+extension instance (see "Runtime and state separation"); only a daemon
+restart or `/reload` re-reads them:
+
+- `SECOND_BRAIN_HOME` — Brain state root.
+- `SECOND_BRAIN_PYTHON` — explicit Python runtime executable (overrides the
+  `<home>/.venv/Scripts/python.exe` compatibility fallback).
+- `SECOND_BRAIN_OBSERVABILITY` — kill switch.
+- `ORCHESTRATOR_MODELS`, `ORCHESTRATOR_BLOCKED_TOOLS`, `DRIVER_MODELS`,
+  `WORKER_MODELS` — role classification tables.
+
+**Process-local / per-invocation** — read live at call time by the specific
+bridge that consumes them; safe to vary between sessions without a restart
+because nothing caches them at factory startup:
+
+- `SECOND_BRAIN_AUTOINJECT_MODE`, `SECOND_BRAIN_AUTOINJECT_TIMEOUT_MS` — also
+  overridable per-Brain via `config/autoinject.toml` (the live flip switch;
+  takes effect on the NEXT event, no redeploy).
+- `SECOND_BRAIN_PROJECT` — lowest-precedence rung of the canonical project
+  resolution ladder (`brainctl project resolve`); explicit/manifest/registry
+  rungs win when present.
+- `SECOND_BRAIN_RECALL*` — legacy Phase 14 recall gate tuning.
+- `SECOND_BRAIN_RTD`, `SECOND_BRAIN_RTD_THRESHOLD` — RTD shadow tuning.
+- `SECOND_BRAIN_REREAD_AVOIDANCE` — reread-hint mode.
+
+## Runtime and state separation
+
+`SECOND_BRAIN_HOME` (state) and `SECOND_BRAIN_PYTHON` (runtime) are
+independently configurable so changing one can never silently change the
+other. Every bridge in this extension resolves the Python executable with
+the same precedence: explicit call-site option > `SECOND_BRAIN_PYTHON` >
+`<home>/.venv/Scripts/python.exe` compatibility fallback. `brainctl doctor`
+fails when an explicit `--home` disagrees with `SECOND_BRAIN_HOME`, or when
+the importing Python runtime's package source disagrees with the requested
+`SECOND_BRAIN_RUNTIME_ROOT`.
+
+## /reload and frozen-per-lifecycle semantics
+
+Brain home, runtime python, and their identity hash are resolved ONCE when
+Prime loads this extension (`loadConfig()` inside the factory closure) and
+written to `<home>/state/extension-runtime-ready.json`. An environment
+change after that point never silently retargets the running instance —
+only `/reload` (or a full Prime restart), which re-runs the factory and
+rewrites the status file, picks up a new value. This is deliberate: a
+mid-session home swap must never happen invisibly.
 
 ## Privacy
 
@@ -113,20 +195,17 @@ workers must never orchestrate (anti-recursion). Each `before_agent_start`
 telemetry record carries the resolved `role`; driver sessions also carry
 `driver_contract_injected` (see `brainstem/telemetry/SCHEMA.md`).
 
-**Deployment status (2026-08-15):** the committed source includes the Sol
-guard, the Phase 14 recall hook, and the driver-orchestration contract, but
-the installed copy at
-`~/.prime/agent/extensions/second-brain/` predates them. Deployment is a
-separate step pending campaign end; until then the live runtime remains
-measurement-only (advisory policy only).
+See "Current deployment status" above for how to verify what is actually
+installed and running right now instead of trusting a date in this file.
 
-## Phase 14 — controlled recall hook (default OFF)
+## Legacy: Phase 14 recall hook (default OFF, superseded by v2 AutoInject)
 
 `SECOND_BRAIN_RECALL` in {1,true,yes} enables one bounded Brain recall per
 `before_agent_start` for substantial, non-trivial prompts (default OFF =
 zero behavior change, zero spawns). The handler runs
 `<brain-home>/.venv/Scripts/python.exe -m second_brain memory search "<prompt>"`
-(cwd = brain home, `SECOND_BRAIN_HOME` set, `PYTHONHOME`/`PYTHONPATH`
+(runtime resolved via the SAME `SECOND_BRAIN_PYTHON` precedence documented
+above; cwd = brain home, `SECOND_BRAIN_HOME` set, `PYTHONHOME`/`PYTHONPATH`
 removed, hard timeout) and appends a compact **Brain Brief** (<= 3 rows,
 <= 1000 words, current/superseded/uncertain labels) to the FULL current
 system prompt (`ctx.getSystemPrompt()` — never replaces the base prompt).
@@ -182,10 +261,4 @@ Layout:
   startup env.
 
 
-## Production deployment note
 
-Prime Agent runs sessions inside a daemon that inherits the environment it was
-started with. Set `SECOND_BRAIN_HOME` (and optionally
-`SECOND_BRAIN_OBSERVABILITY`) **before** starting `prime-agent` so the daemon
-passes them to worker sessions. If the home directory does not exist or the
-gate var disables observability, the extension silently writes nothing.
