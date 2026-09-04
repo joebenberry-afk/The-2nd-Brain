@@ -149,7 +149,7 @@ export function parseOmpRoutingOutput(stdout: string): OmpRoutingResult {
 
 /** Run one bounded Brain-owned model decision; every failure fails open. */
 export function runOmpRouting(options: OmpRoutingOptions): Promise<OmpRoutingResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;

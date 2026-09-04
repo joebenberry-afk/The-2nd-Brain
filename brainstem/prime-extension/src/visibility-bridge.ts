@@ -174,7 +174,7 @@ export function ompVisibilityRecord(
 
 /** Run one bounded Brain-owned skill-visibility plan; every failure fails open. */
 export function runOmpVisibility(options: OmpVisibilityOptions): Promise<OmpVisibilityResult> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...process.env };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;

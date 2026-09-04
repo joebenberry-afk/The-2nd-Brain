@@ -16,7 +16,8 @@ $ErrorActionPreference = "Stop"
 
 $repoHome = $env:SECOND_BRAIN_HOME
 if (-not $repoHome) { $repoHome = Join-Path $env:USERPROFILE "Documents\The-Second-Brain" }
-$python = Join-Path $repoHome ".venv\Scripts\python.exe"
+$python = $env:SECOND_BRAIN_PYTHON
+if (-not $python) { $python = Join-Path $repoHome ".venv\Scripts\python.exe" }
 if (-not (Test-Path $python)) { Write-Output "{}"; exit 0 }
 
 $payload = [Console]::In.ReadToEnd()
