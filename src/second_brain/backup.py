@@ -238,11 +238,13 @@ def _verify_memory_references(home: Path) -> None:
     finally:
         conn.close()
     for row in rows:
-        rel = row["body_path"]
+        rel = str(row["body_path"]).replace("\\", "/")
         try:
             target = resolve_under(home, rel, allow_missing=False)
         except (ValueError, FileNotFoundError) as exc:
-            raise BackupError(f"Restored DB references missing canonical memory {rel!r}") from exc
+            raise BackupError(
+                f"Restored DB references missing canonical memory {rel!r}"
+            ) from exc
         if not target.is_file():
             raise BackupError(f"Restored DB references missing canonical memory {rel!r}")
 
