@@ -10,12 +10,17 @@ high-risk change without approval can never be activated (gate_check).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import hashlib
 import json
 import os
 import re
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from . import contracts, db, decisions
 from .errors import BrainError
 from .security.identifiers import validate_frontier_id
 
@@ -325,3 +330,243 @@ def list_pending(home: Path) -> list[str]:
         if _latest_verdict(home, cid) is None:
             held.append(cid)
     return sorted(held)
+
+
+def _dbfile(home: Path) -> Path:
+    return db.db_path(home)
+
+
+def _ensure_migrated(home: Path) -> None:
+    if db.pending_migrations(_dbfile(home)):
+        db.migrate(_dbfile(home))
+
+
+def create_frontier_item(
+    home: Path | str,
+    unknown: str,
+    decision_ref: str,
+    *,
+    stake_tokens: float | None = None,
+    p_flip: float | None = None,
+    expected_cost: float | None = None,
+    experiments: list[dict[str, Any]] | None = None,
+    scope: str = "project",
+    why_matters: str = "",
+    evidence_refs: list[str] | None = None,
+    status: str = "OPEN",
+    confidence: float | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a decision-linked operational knowledge frontier item.
+
+    Rule 1: Frontier items must represent uncertainty that could change an actual Brain decision.
+    Rule 2: Items without decision_ref are strictly rejected.
+    Rule 3: priority = stake_tokens * p_flip / expected_cost.
+    Unknown numeric inputs stay null and cannot outrank measured items.
+    """
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+
+    if not decision_ref or not str(decision_ref).strip():
+        raise BrainError(
+            "Frontier item requires a valid non-empty decision_ref linking to an operational decision"
+        )
+
+    if not unknown or not str(unknown).strip():
+        raise BrainError("Frontier item requires a non-empty unknown description")
+
+    status_upper = str(status).strip().upper()
+    if status_upper not in ("OPEN", "INVESTIGATING", "CLOSED", "EXPIRED"):
+        raise BrainError(f"Invalid frontier item status {status!r}")
+
+    # Validate numeric parameters
+    stake_val = float(stake_tokens) if stake_tokens is not None else None
+    p_flip_val = float(p_flip) if p_flip is not None else None
+    cost_val = float(expected_cost) if expected_cost is not None else None
+
+    if p_flip_val is not None and not (0.0 <= p_flip_val <= 1.0):
+        raise BrainError("p_flip must be between 0.0 and 1.0")
+
+    if (
+        stake_val is not None
+        and p_flip_val is not None
+        and cost_val is not None
+        and cost_val > 0
+    ):
+        priority: float | None = round((stake_val * p_flip_val) / cost_val, 4)
+    else:
+        priority = None
+
+    now = _utcnow()
+    identity_str = f"{decision_ref}:{unknown}:{scope}"
+    frontier_id = "front-" + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
+
+    experiments_list = list(experiments or [])
+    evidence_list = list(evidence_refs or [])
+
+    prov_hash = hashlib.sha256(
+        contracts.canonical_json({
+            "decision_ref": decision_ref,
+            "unknown": unknown,
+            "priority": priority,
+        }).encode("utf-8")
+    ).hexdigest()
+
+    conn = db.connect(_dbfile(home_p))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """INSERT OR REPLACE INTO v2_frontier_items(
+                frontier_id, decision_ref, unknown, why_matters, scope,
+                stake_tokens, p_flip, expected_cost, priority,
+                experiments_json, evidence_refs_json, status, confidence,
+                provenance_hash, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                frontier_id,
+                decision_ref,
+                unknown.strip(),
+                why_matters.strip(),
+                scope.strip(),
+                stake_val,
+                p_flip_val,
+                cost_val,
+                priority,
+                contracts.canonical_json(experiments_list),
+                contracts.canonical_json(evidence_list),
+                status_upper,
+                confidence,
+                prov_hash,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not persist frontier item: {exc}") from exc
+    finally:
+        conn.close()
+
+    dec_ref = decisions.record(
+        home_p,
+        kind="frontier",
+        session_id=session_id or f"sess-{frontier_id}",
+        task_id=task_id or f"task-{frontier_id}",
+        chosen={
+            "action": "create_frontier_item",
+            "frontier_id": frontier_id,
+            "priority": priority,
+            "status": status_upper,
+        },
+        alternatives=[{"action": "no_frontier_item"}],
+        propensity=1.0,
+        randomized=False,
+        policy_version="v7.8",
+        stage="SHADOW",
+        inputs={
+            "decision_ref": decision_ref,
+            "stake_tokens": stake_val,
+            "p_flip": p_flip_val,
+            "expected_cost": cost_val,
+            "priority": priority,
+        },
+    )
+
+    return {
+        "frontier_id": frontier_id,
+        "decision_ref": decision_ref,
+        "unknown": unknown.strip(),
+        "why_matters": why_matters.strip(),
+        "scope": scope.strip(),
+        "stake_tokens": stake_val,
+        "p_flip": p_flip_val,
+        "expected_cost": cost_val,
+        "priority": priority,
+        "experiments": experiments_list,
+        "evidence_refs": evidence_list,
+        "status": status_upper,
+        "confidence": confidence,
+        "decision_logged_ref": dec_ref,
+        "provenance_hash": prov_hash,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def get_frontier_item(home: Path | str, frontier_id: str) -> dict[str, Any] | None:
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+    conn = db.connect(_dbfile(home_p), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT * FROM v2_frontier_items WHERE frontier_id = ?", (frontier_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    res = dict(row)
+    res["experiments"] = json.loads(res["experiments_json"])
+    res["evidence_refs"] = json.loads(res["evidence_refs_json"])
+    return res
+
+
+def list_frontier_items(
+    home: Path | str, *, status: str | None = None
+) -> list[dict[str, Any]]:
+    """List operational frontier items.
+
+    Measured items with calculated priority always sort first in descending order.
+    Items with unknown cost (null priority) sort last.
+    """
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+    conn = db.connect(_dbfile(home_p), readonly=True)
+    try:
+        sql = "SELECT * FROM v2_frontier_items WHERE 1=1"
+        params: list[Any] = []
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(str(status).strip().upper())
+        sql += " ORDER BY (priority IS NOT NULL) DESC, priority DESC, created_at DESC"
+        rows = conn.execute(sql, params).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["experiments"] = json.loads(d["experiments_json"])
+            d["evidence_refs"] = json.loads(d["evidence_refs_json"])
+            items.append(d)
+        return items
+    finally:
+        conn.close()
+
+
+def choose_cheapest_experiment(home: Path | str, frontier_id: str) -> dict[str, Any]:
+    """Select the cheapest discriminating experiment for a frontier item."""
+    item = get_frontier_item(home, frontier_id)
+    if item is None:
+        raise BrainError(f"Unknown frontier item {frontier_id!r}")
+
+    experiments = item.get("experiments", [])
+    if not experiments:
+        return {
+            "experiment_id": f"exp-default-{frontier_id[:8]}",
+            "type": "local_inspection",
+            "cost": 0.0,
+            "discriminator": "deterministic_check",
+        }
+
+    # Prefer cheap/local experiments
+    def _cost_key(exp: dict[str, Any]) -> float:
+        cost = exp.get("cost") or exp.get("expected_cost")
+        if cost == "local" or cost == 0:
+            return 0.0
+        try:
+            return float(cost)
+        except (ValueError, TypeError):
+            return 1000.0
+
+    cheapest = min(experiments, key=_cost_key)
+    return cheapest
