@@ -562,6 +562,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const stopStates = new Map<string, StopBoundaryState>();
   const stopControlCalls = new Set<string>();
   const workerParentSessions = new Map<string, string>();
+  // Correlates an OMP async job/agent id (e.g. "ConsistentTarantula") back to
+  // the Second Brain worker packet identity, captured from the SPAWNING
+  // `tool_result`'s `details.progress[]` (which always carries the marker-
+  // embedded task text, even when `details.results` is empty for a
+  // background spawn — the default execution mode observed live in this
+  // qualification campaign). Without this, worker completion telemetry and
+  // durable lifecycle recording never fire, because the actual completion
+  // for a background spawn is delivered through a LATER `hub` tool_result
+  // (`op:"wait"`/`"jobs"`), never a second `tool_result` for `toolName ===
+  // "task"`.
+  const pendingWorkerJobs = new Map<
+    string,
+    { taskId: string; packetSha256: string; parentSessionId: string; agent: string }
+  >();
+  // A settled hub job can be re-observed by repeated `hub jobs`/`wait` polls;
+  // report each worker's completion exactly once.
+  const reportedWorkerTaskIds = new Set<string>();
   const environmentTaskHashes = new Map<string, string>();
   const stopStateFor = (session: string): StopBoundaryState => {
     const existing = stopStates.get(session);
@@ -705,21 +722,78 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (batch) return { input: { ...input, tasks: augmented } };
     return { input: { ...input, task: String(augmented[0].task ?? "") } };
   };
+  const emitWorkerCompletion = async (
+    session: string,
+    ctx: ExtensionContext,
+    fields: {
+      task_id: string;
+      packet_sha256: string;
+      child_omp_agent_id: string | null;
+      child_omp_session_file: string | null;
+      worker_agent: string;
+      worker_model: string | null;
+      status: "completed" | "failed" | "cancelled";
+    },
+    summaryText: string,
+  ): Promise<void> => {
+    if (reportedWorkerTaskIds.has(fields.task_id)) return;
+    reportedWorkerTaskIds.add(fields.task_id);
+    getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
+    mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+    try {
+      await workerResultRunner({
+        home: config.home ?? "",
+        sessionId: session,
+        taskId: fields.task_id,
+        packetSha256: fields.packet_sha256,
+        status: fields.status,
+        workerAgent: fields.worker_agent,
+        workerModel: fields.worker_model ?? "",
+        summary: summaryText.slice(0, 2048),
+        childOmpAgentId: fields.child_omp_agent_id ?? "",
+      });
+    } catch {
+      // Brain-side lifecycle recording is best-effort; local telemetry above
+      // already captured this result and must never be blocked by it.
+    }
+  };
+  const WORKER_TASK_MARKER_RE = /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/;
   const recordWorkerChildResults = async (
     event: ToolResultEvent,
     ctx: ExtensionContext,
     session: string,
   ): Promise<void> => {
     if (event.toolName !== "task" || event.details == null || typeof event.details !== "object") return;
-    const rawResults = (event.details as Record<string, unknown>).results;
+    const details = event.details as Record<string, unknown>;
+    // Background spawns (this OMP version's default for the generic `task`
+    // agent, confirmed live) return `results: []` on the spawning tool_result
+    // and instead expose the marker-embedded task text via `progress[]`.
+    // Remember agent-id -> packet identity now so a LATER settled `hub` job
+    // report (see recordAsyncWorkerCompletions) can still be attributed.
+    const rawProgress = details.progress;
+    if (Array.isArray(rawProgress)) {
+      for (const rawEntry of rawProgress) {
+        if (rawEntry == null || typeof rawEntry !== "object") continue;
+        const entry = rawEntry as Record<string, unknown>;
+        const agentId = typeof entry.id === "string" ? entry.id : undefined;
+        const entryTask = typeof entry.task === "string" ? entry.task : "";
+        const marker = entryTask.match(WORKER_TASK_MARKER_RE);
+        if (agentId === undefined || marker === null || pendingWorkerJobs.has(agentId)) continue;
+        pendingWorkerJobs.set(agentId, {
+          taskId: marker[1],
+          packetSha256: marker[2],
+          parentSessionId: marker[3] ?? session,
+          agent: typeof entry.agent === "string" ? entry.agent : "unknown",
+        });
+      }
+    }
+    const rawResults = details.results;
     if (!Array.isArray(rawResults)) return;
     for (const rawResult of rawResults) {
       if (rawResult == null || typeof rawResult !== "object") continue;
       const result = rawResult as Record<string, unknown>;
       const taskText = typeof result.task === "string" ? result.task : "";
-      const marker = taskText.match(
-        /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})\]/,
-      );
+      const marker = taskText.match(WORKER_TASK_MARKER_RE);
       if (marker === null) continue;
       const status =
         result.aborted === true || typeof result.abortReason === "string"
@@ -727,38 +801,76 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           : event.isError === true || (typeof result.exitCode === "number" && result.exitCode !== 0)
             ? "failed"
             : "completed";
-      const fields = {
-        task_id: marker[1],
-        packet_sha256: marker[2],
-        child_omp_agent_id: typeof result.id === "string" ? result.id : null,
-        child_omp_session_file: typeof result.sessionFile === "string" ? result.sessionFile : null,
-        worker_agent: typeof result.agent === "string" ? result.agent : "unknown",
-        worker_model: typeof result.resolvedModel === "string" ? result.resolvedModel : null,
-        status,
-      };
-      getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
-      mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+      const agentId = typeof result.id === "string" ? result.id : null;
+      if (agentId !== null) pendingWorkerJobs.delete(agentId);
       const firstBlock = Array.isArray(event.content) ? event.content[0] : undefined;
       const summaryText =
         firstBlock != null && typeof firstBlock === "object" && "text" in firstBlock && typeof firstBlock.text === "string"
           ? firstBlock.text
           : "";
-      try {
-        await workerResultRunner({
-          home: config.home ?? "",
-          sessionId: session,
-          taskId: marker[1],
-          packetSha256: marker[2],
-          status: status as "completed" | "failed" | "cancelled",
-          workerAgent: fields.worker_agent,
-          workerModel: fields.worker_model ?? "",
-          summary: summaryText.slice(0, 2048),
-          childOmpAgentId: fields.child_omp_agent_id ?? "",
-        });
-      } catch {
-        // Brain-side lifecycle recording is best-effort; local telemetry above
-        // already captured this result and must never be blocked by it.
-      }
+      await emitWorkerCompletion(
+        session,
+        ctx,
+        {
+          task_id: marker[1],
+          packet_sha256: marker[2],
+          child_omp_agent_id: agentId,
+          child_omp_session_file: typeof result.sessionFile === "string" ? result.sessionFile : null,
+          worker_agent: typeof result.agent === "string" ? result.agent : "unknown",
+          worker_model: typeof result.resolvedModel === "string" ? result.resolvedModel : null,
+          status,
+        },
+        summaryText,
+      );
+    }
+  };
+  /**
+   * Background task completions never produce a second `tool_result` for
+   * `toolName === "task"`; the caller instead learns about them by polling
+   * `hub` (`op:"jobs"`/`"wait"`), whose settled `details.jobs[]` entries
+   * (`{ id, type, status: "running"|"completed"|"failed" }`, live-confirmed
+   * shape) carry only the OMP-assigned agent id, not the Second Brain packet
+   * identity. Correlate via the `pendingWorkerJobs` map populated by
+   * `recordWorkerChildResults` at spawn time.
+   */
+  const recordAsyncWorkerCompletions = async (
+    event: ToolResultEvent,
+    ctx: ExtensionContext,
+    _session: string,
+  ): Promise<void> => {
+    if (event.toolName !== "hub" || event.details == null || typeof event.details !== "object") return;
+    const rawJobs = (event.details as Record<string, unknown>).jobs;
+    if (!Array.isArray(rawJobs)) return;
+    for (const rawJob of rawJobs) {
+      if (rawJob == null || typeof rawJob !== "object") continue;
+      const job = rawJob as Record<string, unknown>;
+      if (job.type !== "task" || job.status === "running") continue;
+      const agentId = typeof job.id === "string" ? job.id : undefined;
+      if (agentId === undefined) continue;
+      const pending = pendingWorkerJobs.get(agentId);
+      if (pending === undefined) continue;
+      pendingWorkerJobs.delete(agentId);
+      const status = job.status === "completed" ? "completed" : "failed";
+      const summaryText =
+        typeof job.resultText === "string"
+          ? job.resultText
+          : typeof job.errorText === "string"
+            ? job.errorText
+            : "";
+      await emitWorkerCompletion(
+        pending.parentSessionId,
+        ctx,
+        {
+          task_id: pending.taskId,
+          packet_sha256: pending.packetSha256,
+          child_omp_agent_id: agentId,
+          child_omp_session_file: null,
+          worker_agent: pending.agent,
+          worker_model: typeof job.resolvedModel === "string" ? job.resolvedModel : null,
+          status,
+        },
+        summaryText,
+      );
     }
   };
   const mirrorWorkerContextReceipt = (
@@ -766,9 +878,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session: string,
     ctx: ExtensionContext,
   ): void => {
-    const marker = prompt.match(
-      /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/,
-    );
+    const marker = prompt.match(WORKER_TASK_MARKER_RE);
     if (marker === null) return;
     const parentSession = marker[3] ?? null;
     if (parentSession !== null) workerParentSessions.set(session, parentSession);
@@ -2366,6 +2476,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         }
       }
       await recordWorkerChildResults(event, ctx, session);
+      await recordAsyncWorkerCompletions(event, ctx, session);
       const rtdCfg = loadRtdConfig(config.home);
       const eligibility = rtdEligibility(event.toolName, event.input, rtdCfg);
       // ONE shared measurement (Phase 3 correction); mirror reuses output_bytes.

@@ -2592,3 +2592,202 @@ describe("P3.16 skill-visibility wiring (real factory, ompVisibilityRunner seam)
     expect(visibilityRecords).toHaveLength(1);
   });
 });
+
+describe("OMP async worker result correlation (real factory, [worker_result_lifecycle])", () => {
+  // Regression for the live-found defect (2026-09-04 OMP-first qualification
+  // campaign): this OMP version's default `task` execution mode is
+  // background/async -- the SPAWNING `tool_result` for `toolName==="task"`
+  // always carries `details.results: []`, so the pre-fix `recordWorkerChildResults`
+  // (which only ever read `details.results`) never fired ANY worker
+  // completion telemetry. The actual settlement instead arrives later via a
+  // `tool_result` for `toolName==="hub"` (`op:"wait"`/`"jobs"`) whose
+  // `details.jobs[]` entries carry only the OMP-assigned agent id, live-shape
+  // confirmed: `{ id, type: "task", status: "running"|"completed"|"failed" }`.
+  const workerContextResult = {
+    ok: true,
+    taskId: "omp-task-async-1",
+    packetSha256: "d".repeat(64),
+    contextHandoff: {
+      mode: "full" as const,
+      resolved_context: [],
+      context_delta: { changed_refs: [], removed_ref_hashes: [], jit_delta: "" },
+      context_fingerprint: "e".repeat(64),
+      jit_context: "",
+    },
+    contextMetadata: {
+      mode: "full" as const,
+      reused: false,
+      cache_hit: false,
+      resolved_count: 0,
+      context_fingerprint: "e".repeat(64),
+      context_handoff_bytes: 10,
+      context_handoff_tokens_estimate: 3,
+      context_delta_bytes: 0,
+      context_delta_tokens_estimate: 0,
+    },
+  };
+
+  async function spawnAndAugment(
+    handlers: Map<string, Handler>,
+    ctx: ExtensionContext,
+    toolCallId: string,
+  ): Promise<{ agentId: string; augmentedTask: string; taskId: string }> {
+    const spawnResult = (await handlers.get("tool_call")!(
+      { toolName: "task", toolCallId, input: { agent: "task", task: "Reply with exactly: OK" } },
+      ctx,
+    )) as { input: { task: string } };
+    const augmentedTask = spawnResult.input.task;
+    const taskIdMatch = augmentedTask.match(/\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+)/);
+    if (taskIdMatch === null) throw new Error("augmented task missing SECOND_BRAIN_WORKER_TASK marker");
+    const taskId = taskIdMatch[1];
+    const agentId = "AsyncWorkerOne";
+    // The spawning tool_result: background mode, `results` empty, only
+    // `progress[]` carries the marker-embedded task text + OMP agent id.
+    await handlers.get("tool_result")!(
+      {
+        toolName: "task",
+        toolCallId,
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "Spawned agent" }],
+        details: {
+          results: [],
+          progress: [{ id: agentId, agent: "task", task: augmentedTask, status: "pending" }],
+        },
+      },
+      ctx,
+    );
+    return { agentId, augmentedTask, taskId };
+  }
+
+  it("correlates a completed async job (delivered via hub, not a second task tool_result)", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "async-call-1");
+
+    await handlers.get("tool_result")!(
+      {
+        toolName: "hub",
+        toolCallId: "hub-wait-1",
+        input: { op: "wait" },
+        isError: false,
+        content: [{ type: "text", text: "settled" }],
+        details: {
+          op: "wait",
+          jobs: [{ id: agentId, type: "task", status: "completed", resolvedModel: "anthropic/claude-sonnet-5", resultText: "OK" }],
+        },
+      },
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completion = records.find((r) => r.kind === "omp_worker_child_result");
+    expect(completion).toMatchObject({
+      task_id: taskId,
+      packet_sha256: "d".repeat(64),
+      child_omp_agent_id: agentId,
+      status: "completed",
+    });
+    expect(resultRunner).toHaveBeenCalledTimes(1);
+    expect(resultRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, status: "completed", childOmpAgentId: agentId }),
+    );
+  });
+
+  it("correlates a failed async job with status: failed, not completed", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "async-call-2");
+
+    await handlers.get("tool_result")!(
+      {
+        toolName: "hub",
+        toolCallId: "hub-wait-2",
+        input: { op: "wait" },
+        isError: false,
+        content: [{ type: "text", text: "settled" }],
+        details: {
+          op: "wait",
+          jobs: [{ id: agentId, type: "task", status: "failed", errorText: "intentional failure probe" }],
+        },
+      },
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completion = records.find((r) => r.kind === "omp_worker_child_result");
+    expect(completion).toMatchObject({ task_id: taskId, status: "failed" });
+  });
+
+  it("never double-reports a settled job observed by repeated hub polls", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId } = await spawnAndAugment(handlers, ctx, "async-call-3");
+    const settledJobResult = {
+      toolName: "hub",
+      toolCallId: "hub-wait-3",
+      input: { op: "wait" },
+      isError: false,
+      content: [{ type: "text", text: "settled" }],
+      details: {
+        op: "wait",
+        jobs: [{ id: agentId, type: "task", status: "completed", resultText: "OK" }],
+      },
+    };
+
+    await handlers.get("tool_result")!(settledJobResult, ctx);
+    await handlers.get("tool_result")!({ ...settledJobResult, toolCallId: "hub-jobs-4" }, ctx);
+    await handlers.get("tool_result")!({ ...settledJobResult, toolCallId: "hub-jobs-5" }, ctx);
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completions = records.filter((r) => r.kind === "omp_worker_child_result");
+    expect(completions).toHaveLength(1);
+    expect(resultRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("a still-running job produces no completion telemetry", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId } = await spawnAndAugment(handlers, ctx, "async-call-6");
+
+    await handlers.get("tool_result")!(
+      {
+        toolName: "hub",
+        toolCallId: "hub-wait-6",
+        input: { op: "wait" },
+        isError: false,
+        content: [{ type: "text", text: "still running" }],
+        details: { op: "wait", jobs: [{ id: agentId, type: "task", status: "running" }] },
+      },
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.some((r) => r.kind === "omp_worker_child_result")).toBe(false);
+    expect(resultRunner).not.toHaveBeenCalled();
+  });
+});
