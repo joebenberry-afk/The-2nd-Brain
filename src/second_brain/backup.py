@@ -25,12 +25,22 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import db, paths
+from . import __version__, db, paths
 from .errors import BackupError
 from .security.paths import resolve_under
 
-MANIFEST_FORMAT = 1
-SNAPSHOT_DIRS = ("config", "constitution", "projects")
+MANIFEST_FORMAT = 2
+SUPPORTED_MANIFEST_FORMATS = (1, 2)
+SNAPSHOT_DIRS = (
+    "memory",
+    "experiences",
+    "decisions",
+    "projects",
+    "skills",
+    "engrams",
+    "constitution",
+    "config",
+)
 SNAPSHOT_FILES = ("VERSION",)
 # The full SQLite file set: restoring must never leave a stale -wal/-shm next
 # to the restored DB (SQLite would replay frames whose salts match).
@@ -47,6 +57,32 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _file_manifest(root: Path, copied: list[str]) -> dict[str, str]:
+    files: dict[str, str] = {}
+    for rel in copied:
+        source = root / rel
+        if source.is_file():
+            files[rel.replace("\\", "/")] = sha256_file(source)
+            continue
+        for item in sorted(path for path in source.rglob("*") if path.is_file()):
+            item_rel = str(item.relative_to(root)).replace("\\", "/")
+            files[item_rel] = sha256_file(item)
+    return files
+
+
+def _git_sha(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
 def _snapshot_db(src: Path, dst: Path) -> None:
@@ -86,12 +122,29 @@ def create_backup(home: Path, *, note: str | None = None) -> Path:
             shutil.copy2(src, bdir / rel)
             copied.append(rel)
 
+    conn = db.connect(src_db, readonly=True)
+    try:
+        schema_version = db.current_version(conn)
+    finally:
+        conn.close()
     manifest = {
         "format": MANIFEST_FORMAT,
         "created_at": utcnow(),
         "note": note,
-        "db": {"file": "brain.sqlite", "sha256": sha256_file(bdir / "brain.sqlite")},
+        "runtime": {"version": __version__, "git_sha": _git_sha(home)},
+        "db": {
+            "file": "brain.sqlite",
+            "sha256": sha256_file(bdir / "brain.sqlite"),
+            "schema_version": schema_version,
+        },
+        "canonical_paths": list(SNAPSHOT_DIRS),
+        "excluded": {
+            "derived": ["db", "state", "telemetry", "plasticity", "sleep"],
+            "runtime": ["backups", "logs", "outputs"],
+            "external_reference": ["brainstem", "src", "scripts", "tests", "templates"],
+        },
         "copied": copied,
+        "files": _file_manifest(bdir, copied),
     }
     (bdir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return bdir
@@ -115,10 +168,10 @@ def load_manifest(backup_dir: Path) -> dict:
         manifest = json.loads(mf.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise BackupError(f"Corrupt backup manifest {mf}: {exc}") from exc
-    if manifest.get("format") != MANIFEST_FORMAT:
+    if manifest.get("format") not in SUPPORTED_MANIFEST_FORMATS:
         raise BackupError(
             f"Unsupported backup manifest format {manifest.get('format')!r} "
-            f"(expected {MANIFEST_FORMAT})"
+            f"(supported {SUPPORTED_MANIFEST_FORMATS})"
         )
     return manifest
 
@@ -152,7 +205,49 @@ def _verify_db_hash(backup_dir: Path, manifest: dict) -> None:
         raise BackupError(f"Backup DB hash mismatch: manifest {expected}, actual {actual}")
 
 
-def _targets_exist(home: Path) -> list[str]:
+def _verify_file_hashes(backup_dir: Path, manifest: dict) -> None:
+    if manifest.get("format") == 1:
+        return
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise BackupError("Backup manifest files must be an object")
+    for rel, expected in files.items():
+        if not isinstance(rel, str) or not isinstance(expected, str):
+            raise BackupError("Backup manifest file hashes must be string pairs")
+        try:
+            source = resolve_under(backup_dir, rel, allow_missing=False)
+        except ValueError as exc:
+            raise BackupError(f"Backup file hash entry {rel!r} is unsafe ({exc})") from exc
+        if not source.is_file():
+            raise BackupError(f"Backup canonical file missing: {rel}")
+        actual = sha256_file(source)
+        if actual != expected:
+            raise BackupError(
+                f"Backup canonical file hash mismatch for {rel}: "
+                f"manifest {expected}, actual {actual}"
+            )
+
+
+def _verify_memory_references(home: Path) -> None:
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        rows = conn.execute(
+            "SELECT body_path FROM memories WHERE body_path IS NOT NULL "
+            "UNION SELECT body_path FROM memory_versions WHERE body_path IS NOT NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+    for row in rows:
+        rel = row["body_path"]
+        try:
+            target = resolve_under(home, rel, allow_missing=False)
+        except (ValueError, FileNotFoundError) as exc:
+            raise BackupError(f"Restored DB references missing canonical memory {rel!r}") from exc
+        if not target.is_file():
+            raise BackupError(f"Restored DB references missing canonical memory {rel!r}")
+
+
+def _targets_exist(home: Path, copied: list[str] | None = None) -> list[str]:
     """Targets that contain real data (would actually be overwritten).
 
     Empty skeleton directories (e.g. a fresh layout with empty config/) are
@@ -163,11 +258,13 @@ def _targets_exist(home: Path) -> list[str]:
         f = db.db_path(home).parent / name
         if f.exists() and f.stat().st_size > 0:
             present.append(f"db/{name}")
-    for rel in (*SNAPSHOT_DIRS, *SNAPSHOT_FILES):
+    for rel in copied if copied is not None else (*SNAPSHOT_DIRS, *SNAPSHOT_FILES):
         target = home / rel
         if not target.exists():
             continue
-        if target.is_dir() and not any(target.iterdir()):
+        if target.is_dir() and not any(
+            item.is_file() and item.name != ".gitkeep" for item in target.rglob("*")
+        ):
             continue
         present.append(rel)
     return present
@@ -275,12 +372,13 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         raise BackupError(f"Backup directory not found: {backup_dir}")
     manifest = load_manifest(backup_dir)
     _verify_db_hash(backup_dir, manifest)
+    _verify_file_hashes(backup_dir, manifest)
 
     home.mkdir(parents=True, exist_ok=True)
     # Preflight the complete restore plan before mutating anything.
     plan = _restore_plan(home, backup_dir, manifest)
 
-    existing = _targets_exist(home)
+    existing = _targets_exist(home, [rel for rel, _, _ in plan])
     if existing and not force:
         raise BackupError(
             "Target Brain already has data that restore would overwrite: "
@@ -312,6 +410,8 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
             raise BackupError("Restored database failed byte-identity verification")
         # Bring restored DB to the current schema (upgrade path is idempotent).
         db.migrate(dst_db)
+        _verify_memory_references(home)
+        _drop_stale_db_sidecars(home)
         # The Brain root must be a Git repository (doctor requires it).
         if not (home / ".git").exists():
             subprocess.run(["git", "init", "-q"], cwd=home, check=False)
