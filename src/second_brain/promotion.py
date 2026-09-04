@@ -1,7 +1,7 @@
 """Policy promotion — shadow -> candidate -> active with ALL guards (plan §119, Phase 23).
 
-Upward adjacent promotion requires: G1 evidence (>= 1 credit_event for the
-skill OR >= 1 model_skill_outcome), G2 a frontier approve review for
+Upward adjacent promotion requires: G1 evidence (>= 1 DIRECT or CONTRIBUTORY
+credit_event for the skill), G2 a frontier approve review for
 ``skill-<name>-promotion``, and G3 no immune rollback record for
 ``skill-<name>``. Skip-level moves, same-level no-ops, level mismatches, and
 destination conflicts are refused. Demotion (active -> anything, or via
@@ -17,7 +17,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import frontier, immune, paths, skillforge
+from . import db, frontier, immune, paths, skillforge
 from .errors import BrainError
 from .security.identifiers import validate_skill_name
 
@@ -67,10 +67,26 @@ def _count(home: Path, table: str, column: str, value: str) -> int:
     finally:
         conn.close()
 
+def _causal_credit_count(home: Path, skill_name: str) -> int:
+    conn = db.connect(db.db_path(home))
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM credit_events "
+            "WHERE subject_id = ? AND LOWER(credit_level) IN ('direct', 'contributory')",
+            (skill_name,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
 
 def _evidence_counts(home: Path, skill_name: str) -> dict:
     return {
         "credit_events": _count(home, "credit_events", "subject_id", skill_name),
+        "causal_credit_events": _causal_credit_count(home, skill_name),
         "model_skill_outcomes": _count(home, "model_skill_outcomes", "skill_name", skill_name),
     }
 
@@ -125,7 +141,7 @@ def _version_check(home: Path, skill_name: str) -> tuple[bool, str | None, int |
 
 def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
     evidence = _evidence_counts(home, skill_name)
-    has_evidence = evidence["credit_events"] >= 1 or evidence["model_skill_outcomes"] >= 1
+    has_evidence = _causal_credit_count(home, skill_name) >= 1
     verdict = _frontier_verdict(home, skill_name)
     rolled_back = any(
         record.get("policy_id") == f"skill-{skill_name}" for record in immune.rollback_log(home)
@@ -254,7 +270,7 @@ def promote(
     demotion = LEVEL_RANK[to_level] < LEVEL_RANK[from_level]
     guards = None
     details = {
-        "evidence_counts": {"credit_events": 0, "model_skill_outcomes": 0},
+        "evidence_counts": {"credit_events": 0, "causal_credit_events": 0, "model_skill_outcomes": 0},
         "frontier_verdict": None,
         "rolled_back": False,
     }
@@ -361,7 +377,7 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         "session_id": "",
         "guards": None,
         "frontier_verdict": None,
-        "evidence_counts": {"credit_events": 0, "model_skill_outcomes": 0},
+        "evidence_counts": {"credit_events": 0, "causal_credit_events": 0, "model_skill_outcomes": 0},
         "reason": reason,
     }
     record_path = _write_record(home, record)

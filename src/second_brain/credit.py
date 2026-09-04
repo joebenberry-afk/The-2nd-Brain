@@ -8,7 +8,7 @@ explicitly (plan §43: task success must never reward every active skill).
 Counterfactual evaluation (plan §44) has two layers, kept structurally
 distinct (predicted effect vs. observed effect):
 
-- :func:`counterfactual_eval` / :func:`eval_skill_credit` — the PREDICTED
+- :func:`routing_counterfactual` / :func:`eval_skill_credit` — the PREDICTED
   effect: routes each task WITH and WITHOUT one shadow skill via the
   router's ``skills`` override (no filesystem mutation) and reports routing
   deltas; INERT recommendations only, nothing is written.
@@ -17,7 +17,7 @@ distinct (predicted effect vs. observed effect):
   dimensions (success, tokens, tools, time, verification, regressions),
   built from real evidence the caller already collected (telemetry usage,
   P3.7/P3.8 verification outcomes, regression test evidence) — never
-  self-reported or fabricated. A :func:`counterfactual_eval` result may be
+  self-reported or fabricated. A :func:`routing_counterfactual` result may be
   embedded as ``predicted_effect`` alongside it; the two are never
   conflated. Harness-neutral: applies identically to skills, memories,
   routing policies, Scout, and verification policy via one
@@ -27,19 +27,89 @@ distinct (predicted effect vs. observed effect):
 from __future__ import annotations
 
 import contextlib
+import enum
 import hashlib
 import json
 import os
 import sqlite3
 import tempfile
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from . import db, plasticity, router, telemetry
 from .errors import BrainError
 
 CREDIT_LEVELS: tuple[str, ...] = plasticity.CREDIT_LEVELS
+
+class CreditClass(enum.StrEnum):
+    DIRECT = "DIRECT"
+    CONTRIBUTORY = "CONTRIBUTORY"
+    CORRELATED = "CORRELATED"
+    UNRELATED_NEGATIVE = "UNRELATED_NEGATIVE"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (str, enum.Enum)):
+            val = other.value if isinstance(other, enum.Enum) else other
+            return self.value.upper() == str(val).upper()
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(self.value.upper())
+
+
+def classify_credit(evidence: Mapping[str, Any] | Any) -> str:
+    """Classify credit evidence into design-derived causal classes.
+
+    Rules:
+    - If evidence is not a mapping: CORRELATED
+    - Paired design with negative effect: UNRELATED_NEGATIVE
+    - Paired design with significant interaction:
+        CONTRIBUTORY if verdict != INSUFFICIENT else CORRELATED
+    - Holdout or paired design with verdict != INSUFFICIENT: DIRECT
+    - Otherwise: CORRELATED
+    """
+    if not isinstance(evidence, Mapping):
+        return CreditClass.CORRELATED
+
+    design = str(evidence.get("design") or "").lower()
+
+    econ = evidence.get("economics")
+    econ_verdict = econ.get("verdict") if isinstance(econ, Mapping) else None
+    verdict = str(evidence.get("verdict") or econ_verdict or "").upper()
+
+    effect = (
+        evidence.get("effect")
+        if evidence.get("effect") is not None
+        else evidence.get("r_bar")
+        if evidence.get("r_bar") is not None
+        else evidence.get("effect_size")
+    )
+    effect_num: float | None = None
+    if effect is not None:
+        try:
+            effect_num = float(effect)
+        except (ValueError, TypeError):
+            effect_num = None
+
+    if design == "paired" and effect_num is not None and effect_num < 0:
+        return CreditClass.UNRELATED_NEGATIVE
+
+    has_interaction = bool(
+        evidence.get("interaction_significant")
+        or evidence.get("interaction_term")
+        or evidence.get("has_interaction")
+        or evidence.get("significant_interaction")
+    )
+    if design == "paired" and has_interaction:
+        return CreditClass.CONTRIBUTORY if verdict != "INSUFFICIENT" else CreditClass.CORRELATED
+
+    if design in ("holdout", "paired") and verdict != "INSUFFICIENT":
+        return CreditClass.DIRECT
+
+    return CreditClass.CORRELATED
 
 # Deterministic subject-kind inference contract (assign_credit).
 _SKILL_DIRS = ("skills/shadow", "skills/candidates")
@@ -146,7 +216,7 @@ def _shadow_names(home: Path) -> list[str]:
     return sorted(p.name for p in directory.iterdir() if p.is_dir()) if directory.is_dir() else []
 
 
-def counterfactual_eval(home: Path, skill_name: str, tasks: list[dict]) -> dict:
+def routing_counterfactual(home: Path, skill_name: str, tasks: list[dict]) -> dict:
     """Local counterfactual (plan §44): route each task with and without one
     shadow skill (router `skills` override — no filesystem mutation).
     delta_tools is unobservable here and reported honestly as 0."""
@@ -219,7 +289,7 @@ def _write_report(home: Path, skill_name: str, report: dict) -> Path:
 def eval_skill_credit(home: Path, skill_name: str, tasks: list[dict]) -> dict:
     """Counterfactual + INERT credit recommendations (direct/contributory/
     correlated). Nothing is written — recommendations are text only."""
-    eval_result = counterfactual_eval(home, skill_name, tasks)
+    eval_result = routing_counterfactual(home, skill_name, tasks)
     expect_by_text = {str(task.get("text", "")): set(task.get("expect") or []) for task in tasks}
     recommendations: dict[str, int] = {"direct": 0, "contributory": 0, "correlated": 0}
     per_task: list[dict] = []
@@ -410,7 +480,7 @@ def counterfactual_result(
     ``verification`` from existing P3.7/P3.8 gate evidence (never
     self-reported), ``regressions`` from existing test evidence. Zero is a
     valid, measured value everywhere; nothing here is hardcoded or invented.
-    Optionally embeds a :func:`counterfactual_eval` result as
+    Optionally embeds a :func:`routing_counterfactual` result as
     ``predicted_effect`` — the routing-selection PREDICTION, kept structurally
     distinct from this function's OBSERVED execution effect.
     """
