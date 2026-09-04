@@ -21,6 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import {
   closeSync,
   existsSync,
@@ -28,7 +29,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -249,10 +249,27 @@ function fileFingerprint(path: string): string {
 }
 
 function corpusGeneration(home: string): string {
+  // The whole brain.sqlite file's mtime changes on every ledger/telemetry/
+  // heartbeat write, which happens on nearly every OMP turn -- using it here
+  // would invalidate the cross-process cache almost every call, defeating
+  // the cache entirely (confirmed live: cache_hit stayed false across a
+  // resumed OMP session with an identical repeated task). `brain_meta`'s
+  // `memory_epoch` row is bumped ONLY when canonical memory content itself
+  // changes (second_brain.db.bump_memory_epoch), so it is the correct,
+  // narrow invalidation signal. Read it directly via Node's built-in
+  // `node:sqlite` (supported natively by both Bun and Node, no new
+  // dependency) so a cache-hit check never pays a Python spawn to avoid one.
+  let db: DatabaseSync | undefined;
   try {
-    return String(statSync(join(home, "db", "brain.sqlite")).mtimeMs);
+    db = new DatabaseSync(join(home, "db", "brain.sqlite"), { readOnly: true });
+    const row = db
+      .prepare("SELECT value FROM brain_meta WHERE key = 'memory_epoch'")
+      .get() as { value?: string } | undefined;
+    return row?.value ?? "0";
   } catch {
-    return "missing";
+    return "unknown";
+  } finally {
+    db?.close();
   }
 }
 
