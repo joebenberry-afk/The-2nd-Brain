@@ -340,82 +340,110 @@ def _retrieval_holdout_epsilon(home: Path | str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_project_id(
-    home: Path | str, cwd: str | None, explicit: str | None
-) -> str:
-    """Project resolution ladder:
-
-    1. explicit `--project` argument;
-    2. cwd-based detection if cwd is provided:
-       a. explicit `.brain/project.toml` manifest (registry.detect_explicit_id);
-       b. registered project whose repo_path contains cwd (registry.list_projects);
-       c. git remote match against registered projects (registry.detect_git_remote);
-    3. if cwd is absent/empty: check if brain home path is a registered project;
-    4. `SECOND_BRAIN_PROJECT` environment variable;
-    5. "default" (unresolved safe fallback).
-
-    Registry lookup is best-effort (fail open to next rung).
-    When cwd is explicitly provided, never silently falls back to brain home path.
-    """
+def resolve_project(
+    home: Path | str, cwd: str | None = None, explicit: str | None = None
+) -> dict[str, str]:
+    """Resolve one canonical project identity for every adapter surface."""
     if explicit is not None and str(explicit).strip():
-        return str(explicit).strip()
+        return {
+            "project_id": str(explicit).strip(),
+            "resolution": "explicit",
+            "repo_root": str(Path(cwd).resolve()) if cwd else "",
+            "confidence": "high",
+        }
+
     home_path = Path(home)
-    if cwd and str(cwd).strip():
-        cwd_str = str(cwd).strip()
-        # 2a. Manifest detection
+    cwd_path = Path(cwd).resolve() if cwd and str(cwd).strip() else None
+    if cwd_path is not None:
         try:
-            manifest_id = registry.detect_explicit_id(cwd_str)
+            manifest_id = registry.detect_explicit_id(str(cwd_path))
             if manifest_id:
-                return manifest_id
+                return {
+                    "project_id": manifest_id,
+                    "resolution": "manifest",
+                    "repo_root": str(cwd_path),
+                    "confidence": "high",
+                }
         except Exception:
             pass
-        # 2b. Repo path match
+
         try:
-            cwd_abs = os.path.abspath(cwd_str)
-            for proj in registry.list_projects(home_path):
-                root = proj.repo_path
-                if root:
-                    root_abs = os.path.abspath(root)
-                    try:
-                        if os.path.commonpath([cwd_abs, root_abs]) == root_abs:
-                            return proj.id
-                    except ValueError:
-                        continue  # different drive
+            matches = []
+            for project in registry.list_projects(home_path):
+                if not project.repo_path:
+                    continue
+                root = Path(project.repo_path).resolve()
+                try:
+                    cwd_path.relative_to(root)
+                except ValueError:
+                    continue
+                matches.append((len(root.parts), project, root))
+            if matches:
+                _, project, root = max(matches, key=lambda item: item[0])
+                return {
+                    "project_id": project.id,
+                    "resolution": "registry_path",
+                    "repo_root": str(root),
+                    "confidence": "high",
+                }
         except Exception:
             pass
-        # 2c. Git remote match
+
         try:
-            remote = registry.detect_git_remote(cwd_str)
+            remote = registry.detect_git_remote(str(cwd_path))
             if remote:
-                norm_rem = registry.remote_identity(remote)
-                for proj in registry.list_projects(home_path):
-                    if proj.git_remote and (
-                        proj.git_remote.strip().lower() == remote.strip().lower()
-                        or registry.remote_identity(proj.git_remote) == norm_rem
+                identity = registry.remote_identity(remote)
+                for project in registry.list_projects(home_path):
+                    if (
+                        project.git_remote
+                        and registry.remote_identity(project.git_remote) == identity
                     ):
-                        return proj.id
+                        return {
+                            "project_id": project.id,
+                            "resolution": "git_remote",
+                            "repo_root": str(cwd_path),
+                            "confidence": "medium",
+                        }
         except Exception:
             pass
     else:
-        # 3. If cwd is absent/empty: check if brain home path itself is registered
         try:
-            home_abs = os.path.abspath(str(home_path))
-            for proj in registry.list_projects(home_path):
-                root = proj.repo_path
-                if root:
-                    root_abs = os.path.abspath(root)
-                    try:
-                        if os.path.commonpath([home_abs, root_abs]) == root_abs:
-                            return proj.id
-                    except ValueError:
-                        continue
+            home_root = home_path.resolve()
+            for project in registry.list_projects(home_path):
+                if not project.repo_path:
+                    continue
+                root = Path(project.repo_path).resolve()
+                try:
+                    home_root.relative_to(root)
+                except ValueError:
+                    continue
+                return {
+                    "project_id": project.id,
+                    "resolution": "registry_path",
+                    "repo_root": str(root),
+                    "confidence": "high",
+                }
         except Exception:
             pass
 
-    env_p = os.environ.get("SECOND_BRAIN_PROJECT")
-    if env_p and env_p.strip():
-        return env_p.strip()
-    return "default"
+    env_project = os.environ.get("SECOND_BRAIN_PROJECT")
+    if env_project and env_project.strip():
+        return {
+            "project_id": env_project.strip(),
+            "resolution": "env",
+            "repo_root": str(cwd_path) if cwd_path else "",
+            "confidence": "medium",
+        }
+    return {
+        "project_id": "default",
+        "resolution": "default",
+        "repo_root": str(cwd_path) if cwd_path else "",
+        "confidence": "low",
+    }
+
+
+def _resolve_project_id(home: Path | str, cwd: str | None, explicit: str | None) -> str:
+    return resolve_project(home, cwd, explicit)["project_id"]
 
 
 

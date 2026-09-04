@@ -1,0 +1,11 @@
+{
+  "repair": "unify canonical project resolution",
+  "status": "PASS",
+  "authority": "second_brain.autoinject.resolve_project",
+  "ladder": ["explicit", "manifest", "registry_path", "git_remote", "env", "default"],
+  "result_fields": ["project_id", "resolution", "repo_root", "confidence"],
+  "cli": "brainctl project resolve --cwd <path>",
+  "test_command": ".venv/Scripts/python.exe -m pytest -q tests/test_autoinject.py tests/test_cli.py tests/test_doctor.py",
+  "test_result": "90 passed",
+  "rollback": "Revert the project resolver commit; registry data and project manifests are unchanged."
+}
