@@ -1,3 +1,15 @@
+> **HISTORICAL / SUPERSEDED — DO NOT USE AS THE CURRENT RELEASE DECISION**
+>
+> This report describes the earlier Prime/Claude Code release model and is
+> retained for historical qualification context only. The authoritative
+> current OMP-first decision is
+> `outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/RELEASE_DECISION.md`.
+> Current decision: **HOLD** because native OMP Phase 22 coverage remains
+> incomplete (`19/20` worker launches, `7/20` worker results, `8/10`
+> compactions, `11/20` project switches) after the provider returned HTTP `429
+> rate_limit_error` with `retry-after-ms: 9017000`. Prime binary required for
+> OMP v2 release: **NO**.
+
 # Second Brain v2 Release Qualification Report (P8)
 
 Generated at: 2026-09-04T08:54:34.725312+00:00
