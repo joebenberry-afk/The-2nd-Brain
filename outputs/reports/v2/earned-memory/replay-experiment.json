@@ -1,0 +1,80 @@
+{
+  "experiment": "T7.1 Earned Memory / Friction Gate Replay",
+  "hypothesis": "Friction gate eliminates false-positive memory candidate creation from routine/unverified sessions while capturing all verified friction events with strict evidence provenance.",
+  "metrics": {
+    "total_sessions_replayed": 8,
+    "sessions_with_real_friction": 4,
+    "sessions_routine_or_unverified": 4,
+    "gate_off_total_candidates": 8,
+    "gate_off_false_positives": 4,
+    "gate_off_false_positive_rate": 0.5,
+    "gate_on_total_candidates": 4,
+    "gate_on_false_positives": 0,
+    "gate_on_false_positive_rate": 0.0,
+    "false_positive_reduction_percent": 100.0,
+    "provenance_compliance_rate": 1.0,
+    "active_memory_leakage_count": 0,
+    "admission_decisions_recorded": 8
+  },
+  "gate_on_candidates": [
+    {
+      "candidate_id": "candidate-0ba8d9958193787477aac4aa",
+      "session_id": "session-regression-01",
+      "title": "Regression Guard for Test Runner",
+      "triggers": [
+        "REGRESSION"
+      ],
+      "source_event_refs": [
+        "evt-reg-01"
+      ],
+      "authority_ceiling": "advisory",
+      "rollout_stage": "SHADOW",
+      "decision_ref": "57d6d3cfe01242496f2ad833"
+    },
+    {
+      "candidate_id": "candidate-d7eb5a541001cc4d53605227",
+      "session_id": "session-correction-01",
+      "title": "Correction Rule for Output Format",
+      "triggers": [
+        "CORRECTION"
+      ],
+      "source_event_refs": [
+        "evt-corr-01"
+      ],
+      "authority_ceiling": "advisory",
+      "rollout_stage": "SHADOW",
+      "decision_ref": "2266c7e86b5813d9b0d5dacc"
+    },
+    {
+      "candidate_id": "candidate-f72c83ebe602aed75ced020c",
+      "session_id": "session-repeat-01",
+      "title": "Timeout Connection Retry Rule",
+      "triggers": [
+        "CROSS_SESSION_REUSE",
+        "REPETITION"
+      ],
+      "source_event_refs": [
+        "evt-rep-01",
+        "evt-rep-02"
+      ],
+      "authority_ceiling": "advisory",
+      "rollout_stage": "SHADOW",
+      "decision_ref": "5698f3abfe15bb8ed943bce9"
+    },
+    {
+      "candidate_id": "candidate-b16e4e034aa9ca0edc987f38",
+      "session_id": "session-subtle-01",
+      "title": "Subtle Race Condition Guard",
+      "triggers": [
+        "SUBTLETY"
+      ],
+      "source_event_refs": [
+        "evt-sub-01"
+      ],
+      "authority_ceiling": "advisory",
+      "rollout_stage": "SHADOW",
+      "decision_ref": "99a582b89cc6db62939ec11d"
+    }
+  ],
+  "conclusion": "PASS: Gate ON reduced false-positive candidate creation from 4/8 (50.0%) to 0/4 (0.0%). All 4 captured candidates possess complete evidence provenance, start in SHADOW, adhere to origin authority ceiling, and write zero entries to active semantic memory."
+}
