@@ -21,7 +21,17 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { autoinjectShadowDecision, extensionError } from "./sensors";
 
@@ -81,10 +91,12 @@ export interface AutoInjectEmitEntry {
   /** Number of emits served by this entry (1 = the spawning emit). */
   emits: number;
   expiresAt: number;
-  /** First 64 chars of the task that produced this entry (correctness guard:
-   * the key is session-only, so a genuinely different task within TTL must
-   * replace the entry instead of being served a stale message). */
-  promptHead: string;
+  createdAt: number;
+  taskSha256: string;
+  projectId: string;
+  retrievalConfigFingerprint: string;
+  corpusGeneration: string;
+  runtimeBuildIdentity: string;
 }
 
 /**
@@ -139,7 +151,12 @@ interface PersistedEmitEntry {
   outcome: AutoInjectShadowOutcome | null;
   emits: number;
   expiresAt: number;
-  promptHead: string;
+  createdAt: number;
+  taskSha256: string;
+  projectId: string;
+  retrievalConfigFingerprint: string;
+  corpusGeneration: string;
+  runtimeBuildIdentity: string;
 }
 
 function loadEmitCache(home: string): void {
@@ -160,7 +177,17 @@ function loadEmitCache(home: string): void {
           outcome: entry.outcome ?? null,
           emits: typeof entry.emits === "number" ? entry.emits : 1,
           expiresAt: entry.expiresAt,
-          promptHead: typeof entry.promptHead === "string" ? entry.promptHead : "",
+          createdAt: typeof entry.createdAt === "number" ? entry.createdAt : now,
+          taskSha256: typeof entry.taskSha256 === "string" ? entry.taskSha256 : "",
+          projectId: typeof entry.projectId === "string" ? entry.projectId : "",
+          retrievalConfigFingerprint:
+            typeof entry.retrievalConfigFingerprint === "string"
+              ? entry.retrievalConfigFingerprint
+              : "",
+          corpusGeneration:
+            typeof entry.corpusGeneration === "string" ? entry.corpusGeneration : "",
+          runtimeBuildIdentity:
+            typeof entry.runtimeBuildIdentity === "string" ? entry.runtimeBuildIdentity : "",
         });
       }
     }
@@ -170,9 +197,14 @@ function loadEmitCache(home: string): void {
 }
 
 function persistEmitCache(home: string): void {
+  const target = emitCacheFile(home);
+  const lockPath = `${target}.lock`;
+  let lock: number | undefined;
+  let tmp: string | undefined;
   try {
     const dir = join(emitCacheHome(home), "state");
     mkdirSync(dir, { recursive: true });
+    lock = openSync(lockPath, "wx");
     const now = Date.now();
     const data: Record<string, PersistedEmitEntry> = {};
     for (const [key, entry] of autoInjectEmitCache) {
@@ -182,16 +214,24 @@ function persistEmitCache(home: string): void {
           outcome: entry.outcome,
           emits: entry.emits,
           expiresAt: entry.expiresAt,
-          promptHead: entry.promptHead,
+          createdAt: entry.createdAt,
+          taskSha256: entry.taskSha256,
+          projectId: entry.projectId,
+          retrievalConfigFingerprint: entry.retrievalConfigFingerprint,
+          corpusGeneration: entry.corpusGeneration,
+          runtimeBuildIdentity: entry.runtimeBuildIdentity,
         };
       }
     }
-    const target = emitCacheFile(home);
-    const tmp = `${target}.tmp`;
+    tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(tmp, JSON.stringify(data));
     renameSync(tmp, target);
   } catch {
-    // persistence must never break injection (fail open)
+    // A competing writer or filesystem failure only disables persistence.
+  } finally {
+    if (lock !== undefined) closeSync(lock);
+    if (tmp && existsSync(tmp)) unlinkSync(tmp);
+    if (lock !== undefined && existsSync(lockPath)) unlinkSync(lockPath);
   }
 }
 
@@ -200,29 +240,58 @@ function emitTtlMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : AUTOINJECT_DEFAULT_EMIT_TTL_MS;
 }
 
-/**
- * Phase C8: the cache key is the SESSION only — the host re-emits the same
- * turn several times with identical prompt text (verified: 7/7
- * brain_retrieval_attempt rows carried the same task_sha256 in observer6),
- * and worker processes are long-lived + diverse, so per-task keys fragment
- * the cache. Correctness: the prompt-head guard (first 64 chars) in
- * lookupEmitEntry ensures a genuinely different task replaces the entry.
- */
-function emitKey(sessionId: string): string {
-  return `session:${sessionId}`;
+function fileFingerprint(path: string): string {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return "missing";
+  }
 }
 
-function promptHead(task: string): string {
-  // Phase C10 (verifier): 128-char guard window — long enough that trailing
-  // metadata (timestamps, retry markers) almost never lands inside it while
-  // still cheap to compare.
-  return task.slice(0, 128);
+function corpusGeneration(home: string): string {
+  try {
+    return String(statSync(join(home, "db", "brain.sqlite")).mtimeMs);
+  } catch {
+    return "missing";
+  }
 }
 
-function lookupEmitEntry(sessionId: string, task: string): AutoInjectEmitEntry | undefined {
-  const entry = autoInjectEmitCache.get(emitKey(sessionId));
+function emitKey(call: ShadowAutoInjectCall, task: string): string {
+  const identity = {
+    session: call.session,
+    taskSha256: createHash("sha256").update(task, "utf8").digest("hex"),
+    project: process.env.SECOND_BRAIN_PROJECT ?? "",
+    cwd: call.cwd ?? "",
+    mode: call.cfg.mode,
+    timeoutMs: call.cfg.timeoutMs,
+    autoinjectConfig: fileFingerprint(join(call.home, "config", "autoinject.toml")),
+    retrievalConfig: fileFingerprint(join(call.home, "config", "retrieval.toml")),
+    corpusGeneration: corpusGeneration(call.home),
+    runtime: process.env.SECOND_BRAIN_RUNTIME_ROOT ?? process.env.SECOND_BRAIN_PYTHON ?? "",
+  };
+  return createHash("sha256").update(JSON.stringify(identity), "utf8").digest("hex");
+}
+
+function entryProvenance(call: ShadowAutoInjectCall, task: string) {
+  return {
+    createdAt: Date.now(),
+    taskSha256: createHash("sha256").update(task, "utf8").digest("hex"),
+    projectId: call.projectId ?? process.env.SECOND_BRAIN_PROJECT ?? "default",
+    retrievalConfigFingerprint: fileFingerprint(
+      join(call.home, "config", "retrieval.toml"),
+    ),
+    corpusGeneration: corpusGeneration(call.home),
+    runtimeBuildIdentity:
+      process.env.SECOND_BRAIN_RUNTIME_ROOT ?? process.env.SECOND_BRAIN_PYTHON ?? "compat",
+  };
+}
+
+function lookupEmitEntry(call: ShadowAutoInjectCall, task: string): AutoInjectEmitEntry | undefined {
+  const entry = autoInjectEmitCache.get(emitKey(call, task));
   if (entry === undefined || entry.expiresAt <= Date.now()) return undefined;
-  if (entry.promptHead !== promptHead(task)) return undefined; // new task -> replace
+  if (entry.taskSha256 !== createHash("sha256").update(task, "utf8").digest("hex")) {
+    return undefined;
+  }
   return entry;
 }
 
@@ -311,7 +380,10 @@ export function parseShadowOutput(stdout: string): AutoInjectShadowOutcome | nul
  * timeout. Resolves null on ANY failure (fail-open); never rejects.
  */
 export function runAutoInjectShadow(options: AutoInjectRunOptions): Promise<AutoInjectShadowOutcome | null> {
-  const python = options.python ?? join(options.home, ".venv", "Scripts", "python.exe");
+  const python =
+    options.python ??
+    process.env.SECOND_BRAIN_PYTHON ??
+    join(options.home, ".venv", "Scripts", "python.exe");
   const env: Record<string, string | undefined> = { ...(options.env ?? process.env) };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;
@@ -368,6 +440,7 @@ export interface ShadowAutoInjectCall {
   task: string;
   agentId: string;
   cwd?: string;
+  projectId?: string;
   branchId?: string;
   roleProfile?: string;
   cfg: AutoInjectHostConfig;
@@ -405,13 +478,14 @@ export async function runAdvisoryAutoInject(
   // before_agent_start several times per turn; last result wins). The cache
   // is file-backed so a recovered session worker (new process) still serves
   // cache hits instead of re-spawning.
-  const key = emitKey(call.session);
+  const key = emitKey(call, task);
   loadEmitCache(call.home);
-  const hit = lookupEmitEntry(call.session, task);
+  const hit = lookupEmitEntry(call, task);
   if (hit !== undefined) {
     return serveEmitCacheHit(call, hit, call.cfg.mode);
   }
-  if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
+  const runtime = process.env.SECOND_BRAIN_PYTHON ?? join(call.home, ".venv", "Scripts", "python.exe");
+  if (call.runner === undefined && !existsSync(runtime)) {
     return undefined;
   }
   const started = Date.now();
@@ -436,7 +510,7 @@ export async function runAdvisoryAutoInject(
         outcome: null,
         emits: 1,
         expiresAt: Date.now() + emitTtlMs(),
-        promptHead: promptHead(task),
+        ...entryProvenance(call, task),
       });
       persistEmitCache(call.home);
       return undefined;
@@ -448,7 +522,7 @@ export async function runAdvisoryAutoInject(
       outcome,
       emits: 1,
       expiresAt: Date.now() + emitTtlMs(),
-      promptHead: promptHead(task),
+      ...entryProvenance(call, task),
     });
     persistEmitCache(call.home);
     return message;
@@ -551,16 +625,17 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
   if (task.length === 0) return;
   // Phase C5: cache also applies to shadow — re-emits of the same task skip
   // the spawn entirely (no duplicate ledger writes, no duplicate records).
-  const key = emitKey(call.session);
+  const key = emitKey(call, task);
   loadEmitCache(call.home);
-  const hit = lookupEmitEntry(call.session, task);
+  const hit = lookupEmitEntry(call, task);
   if (hit !== undefined) {
     serveEmitCacheHit(call, hit, call.cfg.mode);
     return;
   }
   // Fail-open: a Brain home without an installed venv is not a runtime;
   // skip silently (no spawn, no record) so host sessions are never touched.
-  if (call.runner === undefined && !existsSync(join(call.home, ".venv", "Scripts", "python.exe"))) {
+  const runtime = process.env.SECOND_BRAIN_PYTHON ?? join(call.home, ".venv", "Scripts", "python.exe");
+  if (call.runner === undefined && !existsSync(runtime)) {
     return;
   }
   const started = Date.now();
@@ -585,7 +660,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
         outcome: null,
         emits: 1,
         expiresAt: Date.now() + emitTtlMs(),
-        promptHead: promptHead(task),
+        ...entryProvenance(call, task),
       });
       persistEmitCache(call.home);
       return;
@@ -596,7 +671,7 @@ export async function runShadowAutoInject(call: ShadowAutoInjectCall): Promise<v
       outcome,
       emits: 1,
       expiresAt: Date.now() + emitTtlMs(),
-      promptHead: promptHead(task),
+      ...entryProvenance(call, task),
     });
     persistEmitCache(call.home);
   } catch (error) {
