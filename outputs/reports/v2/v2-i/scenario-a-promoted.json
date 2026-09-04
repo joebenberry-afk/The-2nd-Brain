@@ -1,0 +1,87 @@
+{
+  "scenario": "Scenario A \u2014 Successful Candidate Promotion",
+  "feature": "tool_working_set_reduction",
+  "proof_path": [
+    "observe",
+    "candidate",
+    "isolate",
+    "evaluate",
+    "independently_verify",
+    "canary",
+    "promote",
+    "monitor"
+  ],
+  "evidence": {
+    "source_evidence": "telemetry:rc4-dogfood-session-001",
+    "intervention_id": "intv-7558e57a2778789dfcb0db9d",
+    "observation_id": "obs-2aa526a21cda67c5f1ecb603",
+    "credit_class": "DIRECT",
+    "verifier_report": {
+      "verifier": "scripts/verify_qualification.py",
+      "status": "PASS",
+      "ok": true,
+      "gates_checked": [
+        "contract_roundtrip",
+        "economic_roi",
+        "integrity_clean"
+      ]
+    },
+    "final_stage": "ACTIVE"
+  },
+  "rollout_transitions": [
+    {
+      "event_id": "event-35ec25b8260e99822bc417ee",
+      "feature": "tool_working_set_reduction",
+      "from_stage": "OFF",
+      "to_stage": "SHADOW",
+      "reason": "Begin shadow evaluation",
+      "evidence_refs_json": "[\"telemetry:rc4-dogfood-session-001\"]",
+      "actor": "system",
+      "created_at": "2026-09-04T08:40:46.221571+00:00",
+      "evidence_refs": [
+        "telemetry:rc4-dogfood-session-001"
+      ]
+    },
+    {
+      "event_id": "event-07b627fc7d297d22a723278c",
+      "feature": "tool_working_set_reduction",
+      "from_stage": "SHADOW",
+      "to_stage": "ADVISORY",
+      "reason": "Advisory recommendation verified",
+      "evidence_refs_json": "[\"obs-2aa526a21cda67c5f1ecb603\"]",
+      "actor": "system",
+      "created_at": "2026-09-04T08:40:46.240497+00:00",
+      "evidence_refs": [
+        "obs-2aa526a21cda67c5f1ecb603"
+      ]
+    },
+    {
+      "event_id": "event-fc411154c9e8fb16c6b99ba9",
+      "feature": "tool_working_set_reduction",
+      "from_stage": "ADVISORY",
+      "to_stage": "CANARY",
+      "reason": "Begin canary monitoring deployment",
+      "evidence_refs_json": "[\"obs-2aa526a21cda67c5f1ecb603\"]",
+      "actor": "system",
+      "created_at": "2026-09-04T08:40:46.259461+00:00",
+      "evidence_refs": [
+        "obs-2aa526a21cda67c5f1ecb603"
+      ]
+    },
+    {
+      "event_id": "event-7bd839851c2b263d2f101a6d",
+      "feature": "tool_working_set_reduction",
+      "from_stage": "CANARY",
+      "to_stage": "ACTIVE",
+      "reason": "Promoted following canary burn-in and independent verifier pass",
+      "evidence_refs_json": "[\"obs-2aa526a21cda67c5f1ecb603\",\"verifier:qualification-pass\"]",
+      "actor": "system",
+      "created_at": "2026-09-04T08:40:46.276238+00:00",
+      "evidence_refs": [
+        "obs-2aa526a21cda67c5f1ecb603",
+        "verifier:qualification-pass"
+      ]
+    }
+  ],
+  "conclusion": "PASS: Feature successfully traversed full proof path to ACTIVE with verified credit and verifier pass."
+}

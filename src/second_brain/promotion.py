@@ -17,7 +17,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import db, frontier, immune, paths, skillforge
+from . import contracts, db, decisions, frontier, immune, paths, skillforge
 from .errors import BrainError
 from .security.identifiers import validate_skill_name
 
@@ -430,3 +430,248 @@ def promotion_status(home: Path, skill_name: str | None = None) -> dict:
 def is_active(home: Path, skill_name: str) -> bool:
     skill_name = validate_skill_name(skill_name)
     return (_skills_dir(home) / "active" / skill_name).is_dir()
+
+
+ROLLOUT_STAGES: tuple[str, ...] = ("OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE")
+STAGE_RANKS: dict[str, int] = {
+    "OFF": 0,
+    "SHADOW": 1,
+    "ADVISORY": 2,
+    "CANARY": 3,
+    "ACTIVE": 4,
+}
+
+
+def _ensure_v2_migrated(home: Path) -> None:
+    dbfile = db.db_path(home)
+    if db.pending_migrations(dbfile):
+        db.migrate(dbfile)
+
+
+def get_feature_stage(home: Path | str, feature: str) -> str:
+    home_p = Path(home)
+    _ensure_v2_migrated(home_p)
+    conn = db.connect(db.db_path(home_p), readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT to_stage FROM v2_rollout_events WHERE feature = ? "
+            "ORDER BY created_at DESC, event_id DESC LIMIT 1",
+            (feature,),
+        ).fetchone()
+        if row is not None:
+            return str(row["to_stage"])
+    finally:
+        conn.close()
+    return "OFF"
+
+
+def transition_rollout_stage(
+    home: Path | str,
+    feature: str,
+    to_stage: str,
+    *,
+    reason: str,
+    evidence_refs: list[str] | None = None,
+    actor: str = "system",
+    credit_class: str | None = None,
+    verifier_passed: bool | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Transition a feature's rollout stage with strict invariant enforcement.
+
+    Rule 1: Stages must progress adjacent: OFF -> SHADOW -> ADVISORY -> CANARY -> ACTIVE.
+            Skipping stages (e.g. SHADOW -> ACTIVE) is strictly forbidden.
+    Rule 2: Promotion to ACTIVE requires verified causal credit (DIRECT or CONTRIBUTORY)
+            AND an independent verifier pass.
+    Rule 3: Negative or regressed evidence refuses promotion and holds or demotes the candidate.
+    Rule 4: Demotion and rollback write full audit records and preserve all history.
+    """
+    home_p = Path(home)
+    _ensure_v2_migrated(home_p)
+
+    target_stage = str(to_stage).strip().upper()
+    if target_stage not in STAGE_RANKS:
+        raise BrainError(f"Invalid rollout stage {to_stage!r}")
+
+    current_stage = get_feature_stage(home_p, feature)
+    current_rank = STAGE_RANKS[current_stage]
+    target_rank = STAGE_RANKS[target_stage]
+
+    # Check for negative / unsafe evidence refusing promotion
+    if credit_class == "UNRELATED_NEGATIVE" and target_rank >= current_rank:
+        demote_target = "SHADOW" if current_stage in ("CANARY", "ADVISORY") else "OFF"
+        event_id = "event-" + hashlib.sha256(
+            f"{feature}:{current_stage}:{demote_target}:{_utcnow()}".encode("utf-8")
+        ).hexdigest()[:24]
+        evidence_list = list(evidence_refs or []) + ["credit:UNRELATED_NEGATIVE"]
+        now = _utcnow()
+
+        conn = db.connect(db.db_path(home_p))
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT INTO v2_rollout_events(
+                    event_id, feature, from_stage, to_stage, reason, evidence_refs_json, actor, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event_id,
+                    feature,
+                    current_stage,
+                    demote_target,
+                    f"PROMOTION_REFUSED_NEGATIVE_EFFECT: {reason}",
+                    contracts.canonical_json(evidence_list),
+                    actor,
+                    now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        decisions.record(
+            home_p,
+            kind="learning",
+            session_id=session_id or f"rollout-{event_id}",
+            task_id=task_id or f"task-{event_id}",
+            chosen={
+                "action": "demote_feature",
+                "feature": feature,
+                "from_stage": current_stage,
+                "to_stage": demote_target,
+            },
+            alternatives=[{"action": "promote"}],
+            propensity=1.0,
+            randomized=False,
+            policy_version="v7.9",
+            stage=demote_target,
+            inputs={
+                "feature": feature,
+                "credit_class": credit_class,
+                "reason": reason,
+            },
+        )
+
+        return {
+            "event_id": event_id,
+            "feature": feature,
+            "from_stage": current_stage,
+            "to_stage": demote_target,
+            "status": "HELD",
+            "promotion_refused": True,
+            "reason": f"Promotion refused due to negative effect; candidate demoted to {demote_target}",
+            "evidence_refs": evidence_list,
+            "created_at": now,
+        }
+
+    # Check for skip-stage attempts when advancing
+    if target_rank > current_rank:
+        if target_rank > current_rank + 1:
+            raise BrainError(
+                f"Cannot skip rollout stages: attempted {current_stage} -> {target_stage}. "
+                "Must advance sequentially (OFF -> SHADOW -> ADVISORY -> CANARY -> ACTIVE)."
+            )
+
+        # Rule 2: Promotion to ACTIVE requires credit and verifier pass
+        if target_stage == "ACTIVE":
+            if credit_class not in ("DIRECT", "CONTRIBUTORY"):
+                raise BrainError(
+                    f"Promotion to ACTIVE requires causal credit DIRECT or CONTRIBUTORY (got {credit_class!r})"
+                )
+            if verifier_passed is not True:
+                raise BrainError(
+                    "Promotion to ACTIVE requires an independent verifier pass (verifier_passed must be True)"
+                )
+
+    now = _utcnow()
+    event_id = "event-" + hashlib.sha256(
+        f"{feature}:{current_stage}:{target_stage}:{now}".encode("utf-8")
+    ).hexdigest()[:24]
+    evidence_list = list(evidence_refs or [])
+
+    conn = db.connect(db.db_path(home_p))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """INSERT INTO v2_rollout_events(
+                event_id, feature, from_stage, to_stage, reason, evidence_refs_json, actor, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                feature,
+                current_stage,
+                target_stage,
+                reason,
+                contracts.canonical_json(evidence_list),
+                actor,
+                now,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not record rollout event: {exc}") from exc
+    finally:
+        conn.close()
+
+    decisions.record(
+        home_p,
+        kind="learning",
+        session_id=session_id or f"rollout-{event_id}",
+        task_id=task_id or f"task-{event_id}",
+        chosen={
+            "action": "transition_stage",
+            "feature": feature,
+            "from_stage": current_stage,
+            "to_stage": target_stage,
+        },
+        alternatives=[],
+        propensity=1.0,
+        randomized=False,
+        policy_version="v7.9",
+        stage=target_stage,
+        inputs={
+            "feature": feature,
+            "credit_class": credit_class,
+            "verifier_passed": verifier_passed,
+            "reason": reason,
+        },
+    )
+
+    return {
+        "event_id": event_id,
+        "feature": feature,
+        "from_stage": current_stage,
+        "to_stage": target_stage,
+        "status": "PROMOTED"
+        if target_rank > current_rank
+        else ("DEMOTED" if target_rank < current_rank else "MAINTAINED"),
+        "promotion_refused": False,
+        "reason": reason,
+        "evidence_refs": evidence_list,
+        "created_at": now,
+    }
+
+
+def list_rollout_events(
+    home: Path | str, feature: str | None = None
+) -> list[dict[str, Any]]:
+    home_p = Path(home)
+    _ensure_v2_migrated(home_p)
+    conn = db.connect(db.db_path(home_p), readonly=True)
+    try:
+        sql = "SELECT * FROM v2_rollout_events WHERE 1=1"
+        params: list[Any] = []
+        if feature is not None:
+            sql += " AND feature = ?"
+            params.append(feature)
+        sql += " ORDER BY created_at ASC, event_id ASC"
+        rows = conn.execute(sql, params).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["evidence_refs"] = json.loads(d["evidence_refs_json"])
+            results.append(d)
+        return results
+    finally:
+        conn.close()

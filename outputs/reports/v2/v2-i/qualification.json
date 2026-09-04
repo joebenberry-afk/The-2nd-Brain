@@ -1,0 +1,11 @@
+{
+  "phase": "v2-i",
+  "requirement": "governed_self_improvement_proof",
+  "status": "PROVEN",
+  "scenarios": {
+    "scenario_a_promoted": true,
+    "scenario_b_rollback": true
+  },
+  "artifact_hash": "1efa2721cc3798b1b0851244ba4e4bb6f0525ced9076f12f00fbb98b4a3237e0",
+  "generated_at": "2026-09-04T08:40:46.426491+00:00"
+}
