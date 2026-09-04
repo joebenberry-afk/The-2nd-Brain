@@ -150,8 +150,8 @@ def test_counterfactual_deterministic_and_report(brain_home):
         {"text": "deploy the frontend build", "expect": []},
         {"text": "pending migrations are blocking the upgrade", "expect": [SKILL]},
     ]
-    first = credit.counterfactual_eval(brain_home, SKILL, tasks)
-    second = credit.counterfactual_eval(brain_home, SKILL, tasks)
+    first = credit.routing_counterfactual(brain_home, SKILL, tasks)
+    second = credit.routing_counterfactual(brain_home, SKILL, tasks)
     assert first == second
     assert first["tasks_affected"] == 2
     assert first["tasks_unaffected"] == 1
@@ -166,7 +166,7 @@ def test_counterfactual_deterministic_and_report(brain_home):
 
 def test_counterfactual_unknown_skill(brain_home):
     with pytest.raises(BrainError, match="No shadow skill"):
-        credit.counterfactual_eval(brain_home, "ghost-skill", [])
+        credit.routing_counterfactual(brain_home, "ghost-skill", [])
 
 
 def test_skills_override_router_equivalence(brain_home):
@@ -570,7 +570,7 @@ def test_counterfactual_result_harness_neutral_across_intervention_types(brain_h
 
 def test_counterfactual_result_predicted_vs_observed_distinct(brain_home):
     _forge_and_shadow(brain_home)
-    predicted = credit.counterfactual_eval(
+    predicted = credit.routing_counterfactual(
         brain_home,
         SKILL,
         [{"text": "sqlite migration failed with a schema version mismatch", "expect": [SKILL]}],

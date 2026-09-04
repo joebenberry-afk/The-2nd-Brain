@@ -2716,7 +2716,7 @@ def cmd_credit(args) -> int:
     if args.credit_command == "counterfactual":
         data = json.loads(Path(args.tasks_file).read_text(encoding="utf-8"))
         tasks = data["tasks"] if isinstance(data, dict) else data
-        result = credit.counterfactual_eval(home, args.skill_name, tasks)
+        result = credit.routing_counterfactual(home, args.skill_name, tasks)
         print(
             f"affected={result['tasks_affected']} "
             f"unaffected={result['tasks_unaffected']} total={len(result['tasks'])}"
