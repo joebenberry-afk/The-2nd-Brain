@@ -80,7 +80,7 @@ Prime binary required for OMP v2 release: **NO**
 ## Authority and Historical Reports
 
 - Current authoritative decision:
-  `outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/RELEASE_DECISION.md`
+  `outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/FINAL_RELEASE_EVIDENCE.md`
 - Superseded and retained as historical evidence:
   `outputs/reports/v2/burnin/14-final-release-gate.md`
 - Superseded and retained as historical evidence:
@@ -93,6 +93,7 @@ Prime binary required for OMP v2 release: **NO**
 After the b7d893b checkpoint, the planned package cleanup was applied without
 dependency regeneration: both `package.json` and the `package-lock.json` root
 metadata now report version `0.2.0`. `npm run typecheck` and
-`npm ci --dry-run --ignore-scripts` both passed. The three new proceeding
-reports in this directory record the unchanged Phase 22 hold and the
-non-recoverable stale worker rows; no release tag was created.
+`npm ci --dry-run --ignore-scripts` both passed. The four new proceeding
+reports in this directory record the unchanged Phase 22 hold, the
+non-recoverable stale worker rows, and the final release decision; no release
+tag was created.
