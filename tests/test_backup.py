@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from second_brain import backup as backup_mod
-from second_brain import db, paths
+from second_brain import db, paths, semantic
 from second_brain.errors import BackupError
 
 
@@ -26,7 +26,7 @@ def test_backup_roundtrip_into_empty_home(brain_home, tmp_path, monkeypatch):
     _seed(brain_home, "orig")
     bdir = backup_mod.create_backup(brain_home, note="roundtrip test")
     manifest = json.loads((bdir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["format"] == 1
+    assert manifest["format"] == 2
     assert manifest["db"]["file"] == "brain.sqlite"
 
     # restore into a fresh brain home
@@ -151,15 +151,15 @@ def test_restore_applies_pending_migrations(brain_home, tmp_path, monkeypatch):
 
     extra = tmp_path / "migs"
     extra.mkdir()
-    # 0011: the real migration set ends at 0010 (P4 operations); the custom
-    # migration must sort AFTER it to be "pending" on restore.
-    (extra / "0011_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
+    # A synthetic migration after the current v2 schema proves restore upgrades
+    # rather than merely copying the snapshot.
+    (extra / "0022_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
     monkeypatch.setattr(db, "MIGRATIONS_DIR", extra)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
         v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 11
+        assert v == 22
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "extra_table" in tables
     finally:
@@ -392,3 +392,58 @@ def test_restore_non_string_copied_entry_rejected(brain_home, tmp_path, monkeypa
     paths.ensure_layout(home2)
     with pytest.raises(BackupError, match="non-empty string"):
         backup_mod.restore_backup(home2, bdir)
+
+
+def test_format_two_preserves_all_canonical_roots(brain_home, tmp_path, monkeypatch):
+    canonical_files = {
+        "memory/semantic/manual.md": "memory",
+        "experiences/successes/result.md": "experience",
+        "decisions/global/decision.md": "decision",
+        "skills/principles/rule.md": "skill",
+        "engrams/active/procedure.md": "engram",
+    }
+    for rel, content in canonical_files.items():
+        path = brain_home / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    backup_dir = backup_mod.create_backup(brain_home)
+    manifest = backup_mod.load_manifest(backup_dir)
+    assert manifest["format"] == 2
+    assert set(backup_mod.SNAPSHOT_DIRS) == set(manifest["canonical_paths"])
+
+    restored = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(restored))
+    backup_mod.restore_backup(restored, backup_dir)
+    for rel, content in canonical_files.items():
+        assert (restored / rel).read_text(encoding="utf-8") == content
+
+
+def test_restore_rejects_modified_canonical_file(brain_home, tmp_path):
+    source = brain_home / "memory/semantic/manual.md"
+    source.write_text("trusted", encoding="utf-8")
+    backup_dir = backup_mod.create_backup(brain_home)
+    (backup_dir / "memory/semantic/manual.md").write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(BackupError, match="canonical file hash mismatch"):
+        backup_mod.restore_backup(tmp_path / "restored", backup_dir)
+
+
+def test_restore_rejects_missing_memory_body_reference(brain_home, tmp_path):
+    memory_id = semantic.add_memory(brain_home, "Durable rule", "body")
+    backup_dir = backup_mod.create_backup(brain_home)
+    manifest = backup_mod.load_manifest(backup_dir)
+    conn = db.connect(backup_dir / manifest["db"]["file"])
+    try:
+        conn.execute(
+            "UPDATE memories SET body_path = ? WHERE memory_id = ?",
+            ("memory/semantic/missing.md", memory_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    manifest["db"]["sha256"] = backup_mod.sha256_file(backup_dir / manifest["db"]["file"])
+    (backup_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupError, match="missing canonical memory"):
+        backup_mod.restore_backup(tmp_path / "restored", backup_dir)

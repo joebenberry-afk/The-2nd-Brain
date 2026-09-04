@@ -1,0 +1,16 @@
+format = 1
+
+canonical = [
+  "memory",
+  "experiences",
+  "decisions",
+  "projects",
+  "skills",
+  "engrams",
+  "constitution",
+  "config",
+]
+
+derived = ["db", "state", "telemetry", "plasticity", "sleep"]
+runtime = ["backups", "logs", "outputs"]
+external_reference = ["brainstem", "src", "scripts", "tests", "templates"]
