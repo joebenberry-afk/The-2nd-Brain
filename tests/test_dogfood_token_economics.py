@@ -12,6 +12,7 @@ from second_brain.action_cache import (
     ActionCacheStore,
     ActionProof,
     ActionType,
+    DependencyClass,
     hash_file_content,
 )
 from second_brain.delta_sync import DeltaSyncEngine
@@ -38,7 +39,10 @@ class TestEndToEndDogfoodPipeline:
         src_file = tmp_path / "app.py"
         src_file.write_text("import os\n\ndef run(): pass\n", encoding="utf-8")
         src_hash = hash_file_content(src_file)
-        proof = ActionProof(input_hashes={str(src_file): src_hash})
+        proof = ActionProof(
+            input_hashes={str(src_file): src_hash},
+            dependency_class=DependencyClass.FILE_SET,
+        )
 
         cached_entry = cache_store.store_action(
             action_type=ActionType.FILE_READ,

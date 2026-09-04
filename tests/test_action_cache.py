@@ -10,6 +10,7 @@ from second_brain.action_cache import (
     ActionCacheStore,
     ActionProof,
     ActionType,
+    DependencyClass,
     compute_action_key,
     hash_file_content,
 )
@@ -59,6 +60,7 @@ class TestActionCacheStoreAndReplay:
 
         proof = ActionProof(
             input_hashes={str(target_file): file_hash},
+            dependency_class=DependencyClass.FILE_SET,
         )
 
         entry = store.store_action(
@@ -86,7 +88,10 @@ class TestActionCacheStoreAndReplay:
         target_file.write_text("v1 content", encoding="utf-8")
         file_hash = hash_file_content(target_file)
 
-        proof = ActionProof(input_hashes={str(target_file): file_hash})
+        proof = ActionProof(
+            input_hashes={str(target_file): file_hash},
+            dependency_class=DependencyClass.FILE_SET,
+        )
         entry = store.store_action(
             action_type=ActionType.PURE_VERIFICATION,
             target=str(target_file),
@@ -112,10 +117,11 @@ class TestActionCacheStoreAndReplay:
     def test_ttl_expiration(self, brain_home):
         store = ActionCacheStore(brain_home)
         entry = store.store_action(
-            action_type=ActionType.DIR_SCAN,
+            action_type=ActionType.PURE_VERIFICATION,
             target="src/",
             content="file1.py\nfile2.py",
-            ttl_seconds=-1,  # Expired immediately
+            proof=ActionProof(dependency_class=DependencyClass.TIME),
+            ttl_seconds=-1,
         )
 
         res = store.query(entry.action_key)
@@ -127,7 +133,10 @@ class TestActionCacheStoreAndReplay:
         target = tmp_path / "lib.py"
         target.write_text("class Vault: pass", encoding="utf-8")
         file_hash = hash_file_content(target)
-        proof = ActionProof(input_hashes={str(target): file_hash})
+        proof = ActionProof(
+            input_hashes={str(target): file_hash},
+            dependency_class=DependencyClass.FILE_SET,
+        )
 
         call_count = 0
 
@@ -169,7 +178,10 @@ class TestActionCacheStoreAndReplay:
             action_type=ActionType.FILE_READ,
             target=str(f1),
             content="f1 content",
-            proof=ActionProof(input_hashes={str(f1): h1}),
+            proof=ActionProof(
+                input_hashes={str(f1): h1},
+                dependency_class=DependencyClass.FILE_SET,
+            ),
         )
 
         stats_before = store.get_stats()
@@ -202,16 +214,22 @@ class TestActionCacheStoreAndReplay:
         f2.write_text("f2", encoding="utf-8")
 
         store.store_action(
-            action_type=ActionType.FILE_READ,
+            action_type=ActionType.GENERIC_PURE,
             target=str(f1),
             content="f1 content",
-            proof=ActionProof(),
+            proof=ActionProof(
+                dependency_class=DependencyClass.PURE_CONSTANT,
+                constant_fingerprint={"value": "f1"},
+            ),
         )
         store.store_action(
-            action_type=ActionType.FILE_READ,
+            action_type=ActionType.GENERIC_PURE,
             target=str(f2),
             content="f2 content",
-            proof=ActionProof(),
+            proof=ActionProof(
+                dependency_class=DependencyClass.PURE_CONSTANT,
+                constant_fingerprint={"value": "f2"},
+            ),
         )
         assert store.get_stats()["total_entries"] == 2
 
@@ -249,7 +267,10 @@ class TestActionCacheGateBenchmark:
         f = tmp_path / "bench.py"
         f.write_text("benchmark content line\n" * 50, encoding="utf-8")
         h = hash_file_content(f)
-        proof = ActionProof(input_hashes={str(f): h})
+        proof = ActionProof(
+            input_hashes={str(f): h},
+            dependency_class=DependencyClass.FILE_SET,
+        )
 
         entry = store.store_action(
             action_type=ActionType.FILE_READ,
@@ -287,7 +308,10 @@ class TestActionCacheCLI:
             action_type=ActionType.FILE_READ,
             target=str(f),
             content="cli test content",
-            proof=ActionProof(input_hashes={str(f): hash_file_content(f)}),
+            proof=ActionProof(
+                input_hashes={str(f): hash_file_content(f)},
+                dependency_class=DependencyClass.FILE_SET,
+            ),
         )
 
         # 1. Stats
@@ -339,19 +363,22 @@ class TestActionCacheArtifactRefs:
         from second_brain import db as db_mod
 
         cache = ActionCacheStore(tmp_path, max_entries=2)
-        proof = ActionProof()
+        proof = ActionProof(
+            dependency_class=DependencyClass.PURE_CONSTANT,
+            constant_fingerprint={"test": "artifact-ref-lru"},
+        )
         e1 = cache.put(
-            action_type=ActionType.FILE_READ, target="f1.py", content="c1",
+            action_type=ActionType.GENERIC_PURE, target="f1.py", content="c1",
             proof=proof, params={"p": 1},
         )
         time.sleep(0.01)
         e2 = cache.put(
-            action_type=ActionType.FILE_READ, target="f2.py", content="c2",
+            action_type=ActionType.GENERIC_PURE, target="f2.py", content="c2",
             proof=proof, params={"p": 2},
         )
         time.sleep(0.01)
         e3 = cache.put(
-            action_type=ActionType.FILE_READ, target="f3.py", content="c3",
+            action_type=ActionType.GENERIC_PURE, target="f3.py", content="c3",
             proof=proof, params={"p": 3},
         )
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
@@ -366,8 +393,13 @@ class TestActionCacheArtifactRefs:
 
         cache = ActionCacheStore(tmp_path)
         entry = cache.put(
-            action_type=ActionType.FILE_READ, target="f1.py", content="c1",
-            proof=ActionProof(),
+            action_type=ActionType.GENERIC_PURE,
+            target="f1.py",
+            content="c1",
+            proof=ActionProof(
+                dependency_class=DependencyClass.PURE_CONSTANT,
+                constant_fingerprint={"test": "artifact-ref-key"},
+            ),
         )
         owner = f"action_cache:{entry.action_key}"
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
@@ -390,8 +422,22 @@ class TestActionCacheArtifactRefs:
         from second_brain import db as db_mod
 
         cache = ActionCacheStore(tmp_path)
-        cache.put(action_type=ActionType.FILE_READ, target="f1.py", content="c1", proof=ActionProof())
-        cache.put(action_type=ActionType.FILE_READ, target="f2.py", content="c2", proof=ActionProof())
+        proof = ActionProof(
+            dependency_class=DependencyClass.PURE_CONSTANT,
+            constant_fingerprint={"test": "artifact-ref-clear"},
+        )
+        cache.put(
+            action_type=ActionType.GENERIC_PURE,
+            target="f1.py",
+            content="c1",
+            proof=proof,
+        )
+        cache.put(
+            action_type=ActionType.GENERIC_PURE,
+            target="f2.py",
+            content="c2",
+            proof=proof,
+        )
         cache.clear()
 
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)

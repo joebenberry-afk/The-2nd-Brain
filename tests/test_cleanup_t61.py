@@ -20,7 +20,13 @@ import tomllib
 import pytest
 
 from second_brain import action_cache, contracts, ledger, telemetry, vmem
-from second_brain.action_cache import ActionCache, ActionCacheStore, ActionProof, ActionType
+from second_brain.action_cache import (
+    ActionCache,
+    ActionCacheStore,
+    ActionProof,
+    ActionType,
+    DependencyClass,
+)
 from second_brain.contracts import LEDGER_SCHEMA_VERSION, LedgerHeader, read_ledger_header
 from second_brain.errors import BrainError
 from second_brain.ledger import LedgerStore
@@ -154,11 +160,14 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
     assert cache.max_entries == 3
     assert ActionCache is ActionCacheStore
 
-    proof = ActionProof()
+    proof = ActionProof(
+        dependency_class=DependencyClass.PURE_CONSTANT,
+        constant_fingerprint={"test": "lru"},
+    )
 
     # Insert 3 entries
     e1 = cache.put(
-        action_type=ActionType.FILE_READ,
+        action_type=ActionType.GENERIC_PURE,
         target="file1.py",
         content="content 1",
         proof=proof,
@@ -167,7 +176,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
     # Ensure distinct last_accessed_at timestamps if sub-millisecond
     time.sleep(0.01)
     e2 = cache.put(
-        action_type=ActionType.FILE_READ,
+        action_type=ActionType.GENERIC_PURE,
         target="file2.py",
         content="content 2",
         proof=proof,
@@ -175,7 +184,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
     )
     time.sleep(0.01)
     e3 = cache.put(
-        action_type=ActionType.FILE_READ,
+        action_type=ActionType.GENERIC_PURE,
         target="file3.py",
         content="content 3",
         proof=proof,
@@ -193,7 +202,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
     # Insert 4th entry -> cache max is 3, so e2 should be evicted
     time.sleep(0.01)
     e4 = cache.put(
-        action_type=ActionType.FILE_READ,
+        action_type=ActionType.GENERIC_PURE,
         target="file4.py",
         content="content 4",
         proof=proof,
@@ -213,12 +222,15 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
 def test_action_cache_lru_method_override(tmp_path: Path) -> None:
     """ActionCacheStore.store_action must respect per-call max_entries override."""
     cache = ActionCache(tmp_path, max_entries=10)
-    proof = ActionProof()
+    proof = ActionProof(
+        dependency_class=DependencyClass.PURE_CONSTANT,
+        constant_fingerprint={"test": "method-override"},
+    )
 
     for i in range(5):
         time.sleep(0.005)
         cache.store_action(
-            action_type=ActionType.FILE_READ,
+            action_type=ActionType.GENERIC_PURE,
             target=f"file{i}.py",
             content=f"content {i}",
             proof=proof,
