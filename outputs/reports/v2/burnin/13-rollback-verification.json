@@ -1,0 +1,28 @@
+{
+  "verification": "complete rollback path",
+  "status": "PASS",
+  "layers": [
+    {
+      "layer": "qualified baseline commit",
+      "check": "git merge-base --is-ancestor 4af64affdf4f1ec07b9483b67f440394d2853b32 HEAD",
+      "result": "PASS -- 14 repair commits sit linearly on top of the untouched baseline; `git checkout 4af64af` or `git reset --hard 4af64af` returns exactly to the qualified state",
+      "remote": "origin/brain/v2-one-shot still resolves to 4af64affdf4f1ec07b9483b67f440394d2853b32 (never amended, never force-pushed)"
+    },
+    {
+      "layer": "repair branch",
+      "check": "git push -u origin brain/v2-burnin-repair",
+      "result": "PASS -- pushed; remote and local HEAD match, auditable independent of this worktree"
+    },
+    {
+      "layer": "Prime extension install/rollback",
+      "check": "tests/test_prime_installer.py::test_installer_uses_source_root_and_rollback_is_byte_exact",
+      "result": "PASS -- installer writes a pre-install backup; uninstall -BackupDir restores the previous extension byte-for-byte"
+    },
+    {
+      "layer": "Brain backup/restore",
+      "check": "tests/test_backup.py::test_restore_failure_rolls_back_aside, test_restore_applies_pending_migrations",
+      "result": "PASS -- a restore failure moves the current state aside and rolls it back in place; force-restore preserves the target if anything fails mid-way"
+    }
+  ],
+  "acceptance": "Every repair layer (source commits, deployed extension, Brain state) has a proven, tested rollback path back to the qualified 4af64af baseline."
+}
