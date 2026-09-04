@@ -245,7 +245,7 @@ def test_lazy_migration_0005(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [5, 6, 7, 8, 9, 10]
+    assert db.pending_migrations(dbfile) == [v for v in [int(p.name[:4]) for p in db.migration_files()] if v >= 5]
     mid = semantic.add_memory(brain_home, "new memory", "body")
     assert db.pending_migrations(dbfile) == []
     assert _row(brain_home, mid)["heat"] == "WARM"

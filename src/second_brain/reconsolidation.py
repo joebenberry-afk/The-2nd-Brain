@@ -12,10 +12,10 @@ are never touched, so history stays recoverable.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-
 from . import db, semantic
 from .errors import BrainError
 
@@ -29,6 +29,23 @@ PROTECTED_TITLE_WORDS = ("constitution", "security")
 def _utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
+
+def _parse_dt(val: datetime | str | None) -> datetime:
+    if val is None:
+        return datetime.now(UTC)
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            return val.replace(tzinfo=UTC)
+        return val
+    if isinstance(val, str):
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt
+        except ValueError:
+            return datetime.now(UTC)
+    return datetime.now(UTC)
 
 def _dbfile(home: Path) -> Path:
     return db.db_path(home)
@@ -107,21 +124,25 @@ def record_retrieval(
 
 
 def record_activation(
-    home: Path,
+    home: Path | str,
     memory_id: str,
     outcome: str,
     session_id: str | None = None,
     *,
     idempotent: bool = False,
+    kind: str | None = None,
 ) -> int:
     """Record an activation outcome; optionally deduplicate host-hook repeats."""
+    home_p = Path(home)
     if not isinstance(memory_id, str) or not memory_id.strip():
         raise BrainError("memory_id must be a non-empty string")
     if outcome not in ACTIVATION_OUTCOMES:
         raise BrainError(f"outcome must be one of {', '.join(ACTIVATION_OUTCOMES)}")
     _validate_session(session_id)
-    _memory_row(home, memory_id)  # existence check + lazy migration
-    conn = db.connect(_dbfile(home))
+    _memory_row(home_p, memory_id)  # existence check + lazy migration
+    if kind is None:
+        kind = "used" if outcome == "correct" else outcome
+    conn = db.connect(_dbfile(home_p))
     try:
         conn.execute("BEGIN IMMEDIATE")
         if idempotent and session_id is not None:
@@ -135,9 +156,9 @@ def record_activation(
                 conn.commit()
                 return int(existing["activation_id"])
         cursor = conn.execute(
-            "INSERT INTO memory_activations (memory_id, session_id, outcome, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (memory_id, session_id, outcome, _utcnow()),
+            "INSERT INTO memory_activations (memory_id, session_id, outcome, created_at, kind) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (memory_id, session_id, outcome, _utcnow(), kind),
         )
         if outcome == "correct":
             conn.execute(
@@ -151,6 +172,12 @@ def record_activation(
                 "heat = 'COLD', status = 'labile' WHERE memory_id = ?",
                 (memory_id,),
             )
+        if kind in ("used", "success", "verified"):
+            conn.execute(
+                "UPDATE memories SET storage_strength = storage_strength + 0.1 "
+                "WHERE memory_id = ?",
+                (memory_id,),
+            )
         conn.commit()
         return _insert_id(cursor)
     except sqlite3.Error as exc:
@@ -158,6 +185,69 @@ def record_activation(
         raise BrainError(f"Could not record activation: {exc}") from exc
     finally:
         conn.close()
+
+
+def compute_base_level_activation(
+    home: Path | str,
+    memory_id: str,
+    now: datetime | str | None = None,
+    d: float = 0.5,
+) -> float:
+    """Compute ACT-R base-level activation: B = ln(sum(t_j ** -d)).
+
+    Retrieval-only events never contribute. When no matching events exist or
+    sum <= 0, returns -10.0.
+    """
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+    now_dt = _parse_dt(now)
+    conn = db.connect(_dbfile(home_p))
+    try:
+        rows = conn.execute(
+            "SELECT created_at FROM memory_activations "
+            "WHERE memory_id = ? AND ("
+            "  kind IN ('used', 'success', 'verified') OR "
+            "  (kind IS NULL AND outcome = 'correct')"
+            ")",
+            (memory_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        return -10.0
+    finally:
+        conn.close()
+
+    if not rows:
+        return -10.0
+
+    total_sum = 0.0
+    for r in rows:
+        created_dt = _parse_dt(r["created_at"])
+        delta_sec = (now_dt - created_dt).total_seconds()
+        t_j = max(delta_sec / 3600.0, 0.001)
+        total_sum += t_j ** (-d)
+
+    if total_sum <= 0.0:
+        return -10.0
+    return math.log(total_sum)
+
+
+def compute_p_need(
+    home: Path | str,
+    memory_id: str,
+    now: datetime | str | None = None,
+    tau: float = 0.0,
+    s: float = 1.0,
+    d: float = 0.5,
+) -> float:
+    """Compute need probability P_need = sigmoid((B - tau) / s).
+
+    Bounds the sigmoid argument to [-40, 40] to prevent overflow.
+    """
+    b = compute_base_level_activation(home, memory_id, now=now, d=d)
+    s_val = float(s) if s and s > 0 else 1.0
+    z = (b - float(tau)) / s_val
+    z_clamped = max(-40.0, min(40.0, z))
+    return 1.0 / (1.0 + math.exp(-z_clamped))
 
 def apply_heat(home: Path, memory_id: str, heat: str) -> dict:
     """Set a memory's heat state with plan §52 guardrails:
@@ -205,35 +295,85 @@ def _reference_dt(row: dict) -> datetime | None:
 
 
 def decay_pass(
-    home: Path,
-    dry_run: bool = True,
-    now: str | None = None,
+    home: Path | str,
+    arg1: bool | datetime | str | None = None,
+    arg2: bool | datetime | str | None = None,
+    *,
+    dry_run: bool | None = None,
+    now: datetime | str | None = None,
     hot_ttl_days: int = HOT_TTL_DAYS,
     warm_ttl_days: int = WARM_TTL_DAYS,
 ) -> list[dict]:
-    """Advisory decay: HOT -> WARM when stale; WARM -> COLD when never
-    retrieved and old. Protected memories never decay; nothing is ever
-    auto-ARCHIVED and no evidence is destroyed. Deterministic for a fixed
-    `now`."""
-    now_iso = now or _utcnow()
-    now_dt = datetime.fromisoformat(now_iso)
+    """Advisory decay: updates heat based on ACT-R activation B (or legacy TTL
+    when no activation events exist). Protected memories never decay;
+    nothing is ever auto-ARCHIVED and no evidence is destroyed."""
+    if dry_run is None:
+        if isinstance(arg1, bool):
+            dry_run = arg1
+        elif isinstance(arg2, bool):
+            dry_run = arg2
+        else:
+            dry_run = False
+    if now is None:
+        if isinstance(arg1, (str, datetime)):
+            now = arg1
+        elif isinstance(arg2, (str, datetime)):
+            now = arg2
+
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+    now_dt = _parse_dt(now)
     changes: list[dict] = []
-    for row in semantic.list_memories(home):
+
+    conn = db.connect(_dbfile(home_p))
+    try:
+        act_rows = conn.execute(
+            "SELECT DISTINCT memory_id FROM memory_activations"
+        ).fetchall()
+        memories_with_activations = {str(r["memory_id"]) for r in act_rows}
+    except sqlite3.Error:
+        memories_with_activations = set()
+    finally:
+        conn.close()
+
+    for row in semantic.list_memories(home_p):
         if _protected(row):
             continue
         heat = row.get("heat") or "WARM"
-        reference = _reference_dt(row)
-        age_days = float("inf") if reference is None else (now_dt - reference).days
+        if heat == "ARCHIVED":
+            continue
+
+        mid = str(row["memory_id"])
         new_heat = heat
         reason = None
-        if heat == "HOT" and age_days > hot_ttl_days:
-            new_heat = "WARM"
-            reason = f"not retrieved in {age_days:.0f} day(s) (TTL {hot_ttl_days})"
-        elif heat == "WARM" and (row.get("retrieval_count") or 0) == 0 and age_days > warm_ttl_days:
-            new_heat = "COLD"
-            reason = f"never retrieved and older than {warm_ttl_days} day(s)"
+
+        if mid in memories_with_activations:
+            b = compute_base_level_activation(home_p, mid, now=now_dt)
+            if b > 0:
+                if row.get("status") == "current" and row.get("evidence_grade") in ("VERIFIED", "TESTED"):
+                    candidate_heat = "HOT"
+                else:
+                    candidate_heat = "WARM"
+            elif b > -3:
+                candidate_heat = "WARM"
+            else:
+                candidate_heat = "COLD"
+            if candidate_heat != heat:
+                new_heat = candidate_heat
+                reason = f"ACT-R base activation B={b:.2f}"
+        else:
+            reference = _reference_dt(row)
+            age_days = float("inf") if reference is None else (now_dt - reference).days
+            if heat == "HOT" and age_days > hot_ttl_days:
+                new_heat = "WARM"
+                reason = f"not retrieved in {age_days:.0f} day(s) (TTL {hot_ttl_days})"
+            elif heat == "WARM" and (row.get("retrieval_count") or 0) == 0 and age_days > warm_ttl_days:
+                new_heat = "COLD"
+                reason = f"never retrieved and older than {warm_ttl_days} day(s)"
+
         if new_heat == heat:
             continue
+
         changes.append(
             {
                 "memory_id": row["memory_id"],
@@ -245,10 +385,12 @@ def decay_pass(
         )
         if dry_run:
             continue
-        conn = db.connect(_dbfile(home))
+
+        conn = db.connect(_dbfile(home_p))
         try:
             conn.execute(
-                "UPDATE memories SET heat = ? WHERE memory_id = ?", (new_heat, row["memory_id"])
+                "UPDATE memories SET heat = ? WHERE memory_id = ?",
+                (new_heat, row["memory_id"]),
             )
             conn.commit()
         except sqlite3.Error as exc:
@@ -256,4 +398,5 @@ def decay_pass(
             raise BrainError(f"Could not decay memory {row['memory_id']}: {exc}") from exc
         finally:
             conn.close()
+
     return changes
