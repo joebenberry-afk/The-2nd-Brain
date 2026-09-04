@@ -1,0 +1,176 @@
+{
+  "experiment": "T7.3 Retrieval Intelligence 2.0 Paired Economics",
+  "hypothesis": "MMR diversity with lambda=0.7 eliminates near-duplicate memory injection, reducing token expenditure and context window bloat while preserving 100% acceptance.",
+  "verdict": {
+    "n": 8,
+    "r_bar": 0.0,
+    "lambda": 1.0,
+    "verdict": "INSUFFICIENT",
+    "success_delta": 0.0,
+    "turns_delta": 0.0,
+    "dollars_delta": 0.0
+  },
+  "summary": {
+    "pairs_evaluated": 8,
+    "token_savings_mean": 0.0,
+    "dollars_delta_mean": 0.0,
+    "turns_delta_mean": 0.0,
+    "success_delta_mean": 0.0,
+    "economics_verdict": "INSUFFICIENT"
+  },
+  "runs": [
+    {
+      "pair_id": "ret-pair-0",
+      "query": "PostgreSQL pooling connection",
+      "task_class": "database",
+      "off": {
+        "tokens": 718,
+        "dollars": 0.004554,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 718,
+        "dollars": 0.004554,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 28.248600021470338
+      }
+    },
+    {
+      "pair_id": "ret-pair-1",
+      "query": "Redis cache eviction",
+      "task_class": "caching",
+      "off": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 16.39539998723194
+      }
+    },
+    {
+      "pair_id": "ret-pair-2",
+      "query": "SQLite WAL concurrency",
+      "task_class": "storage",
+      "off": {
+        "tokens": 710,
+        "dollars": 0.00453,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 710,
+        "dollars": 0.00453,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 16.880600014701486
+      }
+    },
+    {
+      "pair_id": "ret-pair-3",
+      "query": "HTTP timeout backoff retry",
+      "task_class": "networking",
+      "off": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 16.59090002067387
+      }
+    },
+    {
+      "pair_id": "ret-pair-4",
+      "query": "PostgreSQL Redis cache pooling",
+      "task_class": "architecture",
+      "off": {
+        "tokens": 724,
+        "dollars": 0.004572,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 724,
+        "dollars": 0.004572,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 26.145000010728836
+      }
+    },
+    {
+      "pair_id": "ret-pair-5",
+      "query": "database connection and cache eviction",
+      "task_class": "data_layer",
+      "off": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 711,
+        "dollars": 0.004533000000000001,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 16.46790001541376
+      }
+    },
+    {
+      "pair_id": "ret-pair-6",
+      "query": "concurrency timeout and rate limit",
+      "task_class": "resilience",
+      "off": {
+        "tokens": 705,
+        "dollars": 0.004515,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 705,
+        "dollars": 0.004515,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 11.48099999409169
+      }
+    },
+    {
+      "pair_id": "ret-pair-7",
+      "query": "PostgreSQL pool connection limits",
+      "task_class": "database_limits",
+      "off": {
+        "tokens": 718,
+        "dollars": 0.004554,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 15.0
+      },
+      "on": {
+        "tokens": 718,
+        "dollars": 0.004554,
+        "turns": 1,
+        "pass": true,
+        "wall_ms": 20.441400003619492
+      }
+    }
+  ],
+  "conclusion": "PASS: Paired economics evaluated across 8 queries. Token delta: None tokens/query. No turn or economic regression detected. Economics verdict: INSUFFICIENT."
+}

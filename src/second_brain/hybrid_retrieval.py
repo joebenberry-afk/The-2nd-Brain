@@ -58,6 +58,9 @@ class RetrievalMatch:
     body: str = ""
     confidence: float | None = 1.0
     raw_row: dict[str, Any] = field(default_factory=dict)
+    score_components: dict[str, float] = field(default_factory=dict)
+    has_contradiction: bool = False
+    contradiction_details: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,8 +72,13 @@ class RetrievalMatch:
             "confidence": (
                 round(self.confidence, 4) if self.confidence is not None else None
             ),
+            "score_components": {
+                k: round(v, 4) if isinstance(v, (int, float)) else v
+                for k, v in self.score_components.items()
+            },
+            "has_contradiction": self.has_contradiction,
+            "contradiction_details": self.contradiction_details,
         }
-
 
 @dataclass
 class CascadeResult:
@@ -86,7 +94,8 @@ class CascadeResult:
     decision: str = "INJECT"  # "INJECT" or "NO_INJECTION"
     retrieval_error: bool = False
     reason: str = ""
-
+    contradictions: list[dict[str, Any]] = field(default_factory=list)
+    multiview_invoked: bool = False
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
@@ -100,8 +109,139 @@ class CascadeResult:
             "latency_ms": round(self.latency_ms, 3),
             "match_count": len(self.matches),
             "matches": [m.to_dict() for m in self.matches],
+            "contradictions": self.contradictions,
+            "multiview_invoked": self.multiview_invoked,
             "retrieval_error": self.retrieval_error,
         }
+
+
+def _token_set(text: str) -> set[str]:
+    return set(re.findall(r"\b\w+\b", text.lower()))
+
+
+def _jaccard_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
+    if not tokens_a or not tokens_b:
+        return 0.0
+    union = len(tokens_a | tokens_b)
+    if union == 0:
+        return 0.0
+    return len(tokens_a & tokens_b) / union
+
+
+def apply_mmr(
+    matches: list[RetrievalMatch],
+    *,
+    lambda_param: float = 0.7,
+    top_k: int = 10,
+) -> list[RetrievalMatch]:
+    """Maximal Marginal Relevance over token Jaccard similarity.
+
+    Balances relevance with diversity:
+    MMR = lambda * relevance - (1 - lambda) * max_similarity(c, selected).
+    """
+    if not matches or len(matches) <= 1:
+        for m in matches:
+            m.score_components["diversity"] = 1.0
+        return matches[:top_k]
+
+    token_cache = [
+        _token_set(f"{m.title} {m.summary} {m.body}") for m in matches
+    ]
+
+    selected_indices: list[int] = []
+    remaining_indices = list(range(len(matches)))
+
+    best_first = max(remaining_indices, key=lambda idx: matches[idx].score or 0.0)
+    selected_indices.append(best_first)
+    remaining_indices.remove(best_first)
+    matches[best_first].score_components["diversity"] = 1.0
+
+    while remaining_indices and len(selected_indices) < top_k:
+        best_idx = -1
+        best_mmr_score = -float("inf")
+        best_diversity = 1.0
+
+        for idx in remaining_indices:
+            cand = matches[idx]
+            cand_score = cand.score or 0.0
+            cand_tokens = token_cache[idx]
+
+            max_sim = max(
+                _jaccard_similarity(cand_tokens, token_cache[sel_idx])
+                for sel_idx in selected_indices
+            )
+            diversity = 1.0 - max_sim
+            mmr_score = lambda_param * cand_score - (1.0 - lambda_param) * max_sim
+
+            if mmr_score > best_mmr_score:
+                best_mmr_score = mmr_score
+                best_idx = idx
+                best_diversity = diversity
+
+        if best_idx >= 0:
+            matches[best_idx].score_components["diversity"] = round(best_diversity, 4)
+            matches[best_idx].score = round(best_mmr_score, 4)
+            selected_indices.append(best_idx)
+            remaining_indices.remove(best_idx)
+        else:
+            break
+
+    return [matches[i] for i in selected_indices]
+
+
+def _compute_score_components(
+    home: Path,
+    row: dict[str, Any],
+    query_tokens: set[str],
+    project_id: str | None,
+) -> tuple[dict[str, float], bool, list[str]]:
+    bm25 = row.get("_bm25")
+    score_val = row.get("_score")
+    relevance = float(bm25) if bm25 is not None else (float(score_val) if score_val is not None else 0.8)
+
+    grade = row.get("evidence_grade") or "OBSERVED"
+    authority_ceiling = row.get("authority_ceiling") or "advisory"
+    authority = 1.0 if authority_ceiling == "policy" else (0.9 if authority_ceiling == "project_rule" else 0.8)
+    if grade == "VERIFIED":
+        authority = max(authority, 0.95)
+
+    mem_project = row.get("project_id")
+    mem_scope = row.get("scope") or "project"
+    if mem_scope == "global":
+        scope_score = 1.0
+    elif project_id and mem_project == project_id:
+        scope_score = 1.0
+    else:
+        scope_score = 0.8
+
+    freshness_score = 1.0
+    contradiction_count = int(row.get("contradiction_count") or 0)
+    contradiction_with = row.get("contradiction_with") or []
+    has_contradiction = contradiction_count > 0 or bool(contradiction_with)
+    contradiction_score = 0.5 if has_contradiction else 1.0
+    contradiction_details = []
+    if contradiction_count > 0:
+        contradiction_details.append(f"Contradiction count: {contradiction_count}")
+    if contradiction_with:
+        contradiction_details.append(f"Contradicts with: {', '.join(str(x) for x in contradiction_with)}")
+
+    try:
+        from . import reconsolidation
+        p_need = reconsolidation.compute_p_need(home, row.get("memory_id", ""))
+    except Exception:
+        p_need = 0.5
+
+    components = {
+        "relevance": round(relevance, 4),
+        "authority": round(authority, 4),
+        "scope": round(scope_score, 4),
+        "freshness": round(freshness_score, 4),
+        "contradiction": round(contradiction_score, 4),
+        "activation_need": round(p_need, 4),
+        "diversity": 1.0,
+        "final_score": round(float(score_val if score_val is not None else relevance), 4),
+    }
+    return components, has_contradiction, contradiction_details
 
 
 class HybridCascadeRetriever:
@@ -113,7 +253,7 @@ class HybridCascadeRetriever:
         self._config_cache: dict[str, tuple[int, semantic.RetrievalConfig]] = {}
         self._epoch_cache: dict[str, tuple[tuple[int, int], int]] = {}
         self._last_home: Path | None = None
-
+        self.multiview_enabled: bool = False
     def _query_hash(self, query: str) -> str:
         norm = " ".join(re.findall(r"[a-z0-9]+", query.lower()))
         return hashlib.sha256(norm.encode("utf-8")).hexdigest()
@@ -226,6 +366,8 @@ class HybridCascadeRetriever:
         top_k: int = 10,
         vector_searcher: Callable[[str, str | None], list[dict[str, Any]]] | None = None,
         lane: str = "semantic",
+        multiview: bool = False,
+        lambda_param: float = 0.7,
     ) -> CascadeResult:
         """Execute multi-tier retrieval cascade and score-gap abstention gate."""
         t0 = time.perf_counter()
@@ -282,14 +424,63 @@ class HybridCascadeRetriever:
                 mem_data = semantic.show_memory(home_path, cand_id)
                 if mem_data:
                     row = mem_data.get("row", mem_data)
+                    # Authority safety check: policy lane cannot inject advisory memory
+                    authority_ceiling = row.get("authority_ceiling") or "advisory"
+                    if lane == "policy" and authority_ceiling != "policy":
+                        lat = (time.perf_counter() - t0) * 1000.0
+                        return CascadeResult(
+                            query=query, project_id=project_id,
+                            tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
+                            matches=[], vector_invoked=False, latency_ms=lat,
+                            short_circuited=True, decision="NO_INJECTION",
+                            reason="AUTHORITY_VIOLATION",
+                        )
+
+                    # Status safety check: rejected and archived memories excluded
+                    if row.get("evidence_grade") == "REJECTED" or row.get("status") in ("archived", "superseded"):
+                        lat = (time.perf_counter() - t0) * 1000.0
+                        return CascadeResult(
+                            query=query, project_id=project_id,
+                            tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
+                            matches=[], vector_invoked=False, latency_ms=lat,
+                            short_circuited=True, decision="NO_INJECTION",
+                            reason="EXCLUDED_STATUS",
+                        )
+
+                    contradiction_count = int(row.get("contradiction_count") or 0)
+                    has_contradiction = contradiction_count > 0
+                    contradictions_list = []
+                    if has_contradiction:
+                        contradictions_list.append({
+                            "memory_id": cand_id,
+                            "title": row.get("title", ""),
+                            "contradiction_count": contradiction_count,
+                            "details": [f"Contradiction count: {contradiction_count}"],
+                        })
+
+                    components = {
+                        "relevance": 1.0,  # Exact ref bypasses semantic uncertainty
+                        "authority": 1.0 if authority_ceiling in ("project_rule", "policy") else 0.8,
+                        "scope": 1.0,
+                        "freshness": 1.0,
+                        "contradiction": 0.5 if has_contradiction else 1.0,
+                        "activation_need": 1.0,
+                        "diversity": 1.0,
+                        "final_score": 1.0,
+                    }
+
                     match = RetrievalMatch(
                         memory_id=row.get("memory_id") or cand_id,
                         title=row.get("title", ""),
                         score=1.0,
                         tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
                         summary=row.get("summary", ""),
+                        body=mem_data.get("body", ""),
                         confidence=1.0,
                         raw_row=dict(row),
+                        score_components=components,
+                        has_contradiction=has_contradiction,
+                        contradiction_details=[f"Contradiction count: {contradiction_count}"] if has_contradiction else [],
                     )
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
@@ -297,6 +488,7 @@ class HybridCascadeRetriever:
                         tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
                         matches=[match], vector_invoked=False, latency_ms=lat,
                         short_circuited=True, decision="INJECT", reason="EXACT_REF_MATCH",
+                        contradictions=contradictions_list,
                     )
             except BrainError:
                 pass
@@ -304,27 +496,46 @@ class HybridCascadeRetriever:
         retrieval_error = False
         try:
             fts_rows = semantic.search_memories(
-                home_path, clean_q, project_id=project_id, top_k=top_k
+                home_path, clean_q, project_id=project_id, top_k=max(top_k * 2, 20), include_duplicates=True
             )
         except Exception:
             retrieval_error = True
             fts_rows = []
 
         matches: list[RetrievalMatch] = []
+        contradictions_list: list[dict[str, Any]] = []
         if fts_rows:
-            scores = [self._number(row.get("_score")) for row in fts_rows]
-            matches = [
-                RetrievalMatch(
+            query_tokens = set(re.findall(r"\b\w+\b", clean_q.lower()))
+            for m in fts_rows:
+                components, has_c, c_details = _compute_score_components(
+                    home_path, m, query_tokens, project_id
+                )
+                body_val = m.get("body", "")
+                match = RetrievalMatch(
                     memory_id=m["memory_id"],
                     title=m.get("title", ""),
                     score=self._number(m.get("_score")),
                     tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
                     summary=m.get("summary", ""),
+                    body=body_val,
                     confidence=self._number(m.get("_score")),
                     raw_row=dict(m),
+                    score_components=components,
+                    has_contradiction=has_c,
+                    contradiction_details=c_details,
                 )
-                for m in fts_rows
-            ]
+                matches.append(match)
+                if has_c:
+                    contradictions_list.append({
+                        "memory_id": match.memory_id,
+                        "title": match.title,
+                        "contradiction_count": m.get("contradiction_count", 0),
+                        "details": c_details,
+                    })
+
+            # Apply MMR for diversity over token Jaccard
+            matches = apply_mmr(matches, lambda_param=lambda_param, top_k=top_k)
+            scores = [m.score for m in matches]
             if self._gate_passes(scores, gate, lane, confidence_threshold):
                 lat = (time.perf_counter() - t0) * 1000.0
                 return CascadeResult(
@@ -333,6 +544,8 @@ class HybridCascadeRetriever:
                     matches=matches, vector_invoked=False, latency_ms=lat,
                     short_circuited=True, decision="INJECT",
                     reason="LEXICAL_HIGH_CONFIDENCE",
+                    contradictions=contradictions_list,
+                    multiview_invoked=multiview or self.multiview_enabled,
                 )
 
         if vector_searcher is not None:
@@ -402,9 +615,10 @@ class HybridCascadeRetriever:
                 reason="LEXICAL_HIGH_CONFIDENCE"
                 if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
                 else "LOW_CONFIDENCE",
+                contradictions=contradictions_list,
+                multiview_invoked=multiview or self.multiview_enabled,
             )
             return result
-
         try:
             cache_conn = self._cache_conn(home_path)
             cache_conn.execute(
