@@ -49,6 +49,7 @@ from . import (
     freshness,
     governor,
     hybrid_retrieval,
+    ledger,
     model_routing,
     reconsolidation,
     registry,
@@ -1258,28 +1259,39 @@ def _append_telemetry(
         return False
 
 
-def _has_session_started(home: Path | str, host_session_id: str) -> bool:
-    """Best-effort idempotency check: has a session_started record already
-    been appended for this host_session_id? Reuses the same per-session
-    telemetry file _append_telemetry writes to -- no separate registry.
-    Fails open (returns False, i.e. "allow the write") on any read error so
-    a corrupt/unreadable file never blocks lifecycle telemetry."""
+def _session_started_marker_path(home: Path | str, host_session_id: str) -> Path | None:
     try:
-        path = telemetry.telemetry_dir(Path(home)) / f"{_sanitize_stem(host_session_id)}.jsonl"
-        if not path.exists():
-            return False
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("kind") == "session_started":
-                return True
+        return ledger.session_dir(home, host_session_id) / "session-started.marker"
+    except Exception:
+        return None
+
+
+def _has_session_started(home: Path | str, host_session_id: str) -> bool:
+    """O(1) idempotency check: has a durable marker for this host_session_id
+    already been written? Replaces a prior full JSONL-telemetry-file scan
+    (re-reading the whole growing per-session file on every call) with a
+    single ``Path.exists()``. Fails open (returns False, i.e. "allow the
+    write") on any read error so a corrupt/unreadable state directory never
+    blocks lifecycle telemetry."""
+    try:
+        marker = _session_started_marker_path(home, host_session_id)
+        return marker is not None and marker.exists()
+    except OSError:
+        return False
+
+
+def _mark_session_started(home: Path | str, host_session_id: str) -> None:
+    """Create the durable marker checked by `_has_session_started`. Never
+    raises: a marker-write failure only means the next call re-scans the
+    (fail-open) idempotency check, never blocks lifecycle telemetry."""
+    try:
+        marker = _session_started_marker_path(home, host_session_id)
+        if marker is None:
+            return
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
     except OSError:
         pass
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1402,12 +1414,14 @@ class BrainLifecycle:
         duplicate record."""
         self._session = identity
         if not _has_session_started(self._home, identity.host_session_id):
-            _append_telemetry(
+            recorded = _append_telemetry(
                 self._home,
                 identity.host_session_id,
                 "session_started",
                 {"host": identity.host, "host_session_id": identity.host_session_id},
             )
+            if recorded:
+                _mark_session_started(self._home, identity.host_session_id)
         return identity
 
     def prepare_injection(

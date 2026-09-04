@@ -4384,7 +4384,7 @@ def cmd_action_cache(args) -> int:
         return 0
 
     if args.action_cache_command == "search":
-        return _action_cache_search(store, home, args)
+        return _action_cache_search(home, args)
 
     return 2
 
@@ -4440,45 +4440,31 @@ def _code_search_git_tracked(target_dir: Path, pattern: str, max_matches: int) -
     return "\n".join(matches)
 
 
-def _action_cache_search(store, home: Path, args) -> int:
+def _action_cache_search(home: Path, args) -> int:
     """
     Narrowest Brain-owned execution-bypass layer (Phase R5): Prime's
     tool_call hook cannot supply a result and skip execution
     (ToolCallEventResult has no content field — confirmed in
     outputs/reports/rc4/02-prime-live-callgraph.md), so this cache
     integration lives BELOW Prime, as a Brain-owned CLI action a caller
-    invokes instead of running the search directly. A cache hit genuinely
-    skips re-running `_code_search_git_tracked` (real execution bypass);
-    a miss computes it once and stores it, gated by git_tree_hash so any
-    commit invalidates every cached search for that tree.
+    invokes instead of running the search directly.
+
+    T6.2: this NEVER caches. `git_tree_hash_for` only gates on the
+    COMMITTED tree (`git rev-parse HEAD^{tree}`), so an uncommitted
+    (staged/unstaged/untracked) edit to a searched file was invisible to
+    invalidation and a stale cached result could be served as a "hit"
+    even though on-disk content changed. Always compute fresh instead —
+    the real worktree-fingerprint-gated cache is deferred to T6.5
+    (DependencyClass-based dirty-worktree fingerprinting).
     """
     import json
-
-    from . import action_cache
+    import time
 
     target_dir = Path(args.path) if args.path else home
-    tree_hash = action_cache.git_tree_hash_for(target_dir)
-    if tree_hash is None:
-        # Not a git worktree (or `git` unavailable): validate_proof only
-        # checks git_tree_hash when it is non-None, so caching with no tree
-        # hash would never be invalidated by a real content change. Compute
-        # directly instead of caching an un-gated result.
-        content = _code_search_git_tracked(target_dir, args.pattern, args.max_matches)
-        was_hit, latency_ms = False, 0.0
-    else:
-        proof = action_cache.ActionProof(
-            git_tree_hash=tree_hash,
-            verification_predicate="git_tree_unchanged",
-        )
-        content, was_hit, latency_ms = store.get_or_execute(
-            action_type=action_cache.ActionType.CODE_SEARCH,
-            target=f"{target_dir}::{args.pattern}",
-            compute_fn=lambda: _code_search_git_tracked(target_dir, args.pattern, args.max_matches),
-            params={"pattern": args.pattern, "max_matches": args.max_matches},
-            proof=proof,
-            output_summary=f"code search for {args.pattern!r} in {target_dir}",
-            cwd=target_dir,
-        )
+    started = time.perf_counter()
+    content = _code_search_git_tracked(target_dir, args.pattern, args.max_matches)
+    latency_ms = (time.perf_counter() - started) * 1000
+    was_hit = False
     if args.json:
         print(
             json.dumps(

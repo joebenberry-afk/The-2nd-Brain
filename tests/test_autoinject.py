@@ -19,6 +19,7 @@ from second_brain.contracts import (
     BrainDeliveryRecord,
     BrainInjectionDecision,
     BrainPacket,
+    BrainSessionIdentity,
     InjectionDecision,
     NoInjectionReason,
     PacketItem,
@@ -897,3 +898,76 @@ def test_domain_unknown_project_survives_known_project_prefilter(brain_home) -> 
     )
     assert decision.decision is InjectionDecision.INJECT
     assert decision.selected_ids == [mid]
+
+
+class TestHasSessionStartedMarker:
+    """T6.2: `_has_session_started` is an O(1) marker-file check, not a
+    full-file JSONL telemetry scan."""
+
+    def test_marker_check_is_idempotent(self, brain_home) -> None:
+        host_session_id = "claude-marker-idem-1"
+        assert autoinject._has_session_started(brain_home, host_session_id) is False
+
+        autoinject._mark_session_started(brain_home, host_session_id)
+
+        assert autoinject._has_session_started(brain_home, host_session_id) is True
+
+    def test_marker_check_fails_open_on_error(self, brain_home, monkeypatch) -> None:
+        def _boom(home, host_session_id):
+            raise OSError("simulated corrupt/missing state directory")
+
+        monkeypatch.setattr(autoinject, "_session_started_marker_path", _boom)
+
+        assert autoinject._has_session_started(brain_home, "any-session") is False
+
+
+class TestSessionStartedMarkerOnlyOnSuccessfulTelemetry:
+    """T6.2 review finding 1: the durable session-started marker must only
+    be written when the session_started telemetry append it accompanies
+    actually succeeds, so a transient telemetry-write failure is retried
+    (self-healed) on the next lifecycle call instead of being silently and
+    permanently swallowed."""
+
+    def _identity(self, host_session_id: str) -> BrainSessionIdentity:
+        return BrainSessionIdentity(
+            internal_session_id="is-" + host_session_id,
+            host="claude-code",
+            host_session_id=host_session_id,
+            project_id="proj-a",
+            created_at="2026-08-16T01:00:00Z",
+            status="active",
+            pinned=False,
+            schema_version=1,
+        )
+
+    def test_marker_not_written_when_telemetry_append_fails(
+        self, brain_home, monkeypatch
+    ) -> None:
+        host_session_id = "claude-marker-telemetry-fail-1"
+        monkeypatch.setattr(autoinject, "_append_telemetry", lambda *a, **kw: False)
+
+        lifecycle = autoinject.BrainLifecycle(brain_home)
+        lifecycle.start_session(self._identity(host_session_id))
+
+        assert autoinject._has_session_started(brain_home, host_session_id) is False
+
+    def test_marker_written_and_retried_once_telemetry_succeeds(
+        self, brain_home, monkeypatch
+    ) -> None:
+        host_session_id = "claude-marker-telemetry-retry-1"
+        calls: list[int] = []
+
+        def flaky(home, session, kind, extra):
+            calls.append(1)
+            return len(calls) > 1  # first call fails, every later call succeeds
+
+        monkeypatch.setattr(autoinject, "_append_telemetry", flaky)
+        lifecycle = autoinject.BrainLifecycle(brain_home)
+        identity = self._identity(host_session_id)
+
+        lifecycle.start_session(identity)  # append fails -> marker must not be written
+        assert autoinject._has_session_started(brain_home, host_session_id) is False
+
+        lifecycle.start_session(identity)  # retried (no stale marker) -> succeeds -> marker written
+        assert autoinject._has_session_started(brain_home, host_session_id) is True
+        assert len(calls) == 2  # exactly one retry, not swallowed by a premature marker

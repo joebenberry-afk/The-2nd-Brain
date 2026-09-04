@@ -168,7 +168,7 @@ def create_handoff(
     with contextlib.suppress(Exception):
         capsule = working_set.show_capsule(home_path, session_id)
 
-    final_objective = objective or capsule.get("current_objective") or "Continue session task"
+    final_objective = objective or capsule.get("objective") or "Continue session task"
     final_decisions = key_decisions or capsule.get("decisions_this_session") or []
     final_blockers = pending_blockers or capsule.get("open_questions") or []
     final_files = relevant_files or capsule.get("files_touched") or []

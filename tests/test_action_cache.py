@@ -181,6 +181,65 @@ class TestActionCacheStoreAndReplay:
         stats_after = store.get_stats()
         assert stats_after["total_entries"] == 0
 
+    def test_invalidate_by_path_uses_target_index(self, brain_home, tmp_path):
+        """T6.2: invalidate_by_path's target-match branch must use the
+        `idx_action_target` index via a direct `target IN (...)` lookup,
+        not a full-table scan. Proof entries here carry no `input_hashes`,
+        so a match is only reachable through the indexed target branch.
+
+        Traces the exact SQL `invalidate_by_path` itself issues (via
+        `sqlite3.Connection.set_trace_callback`) rather than running an
+        independent hand-written query — asserting a query plan for a
+        hardcoded query never actually proves what the method under test
+        does. The old full-table-scan implementation issues an unfiltered
+        `SELECT ... FROM action_cache` with no `WHERE target`, so this test
+        fails against it both on "no WHERE-filtered target query observed"
+        and (if it somehow did) on the query plan check."""
+        store = ActionCacheStore(brain_home)
+        f1 = tmp_path / "f1.py"
+        f1.write_text("f1", encoding="utf-8")
+        f2 = tmp_path / "f2.py"
+        f2.write_text("f2", encoding="utf-8")
+
+        store.store_action(
+            action_type=ActionType.FILE_READ,
+            target=str(f1),
+            content="f1 content",
+            proof=ActionProof(),
+        )
+        store.store_action(
+            action_type=ActionType.FILE_READ,
+            target=str(f2),
+            content="f2 content",
+            proof=ActionProof(),
+        )
+        assert store.get_stats()["total_entries"] == 2
+
+        conn = store._get_conn()
+        executed: list[str] = []
+        conn.set_trace_callback(executed.append)
+        try:
+            invalidated = store.invalidate_by_path(f1)
+        finally:
+            conn.set_trace_callback(None)
+
+        assert invalidated == 1
+        assert store.get_stats()["total_entries"] == 1
+
+        target_where_queries = [
+            sql
+            for sql in executed
+            if "action_cache" in sql
+            and "target" in sql.lower()
+            and "where" in sql.lower()
+            and sql.strip().upper().startswith("SELECT")
+        ]
+        assert target_where_queries, executed  # must actually filter by target in SQL, not in Python
+
+        plan = conn.execute(f"EXPLAIN QUERY PLAN {target_where_queries[0]}").fetchall()
+        details = [" ".join(str(v) for v in row) for row in plan]
+        assert any("USING INDEX idx_action_target" in d for d in details), (target_where_queries, details)
+
 
 class TestActionCacheGateBenchmark:
     """Phase 4 Gate: Prove repeated queries hit cache in <1ms and save tokens."""

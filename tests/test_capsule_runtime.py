@@ -75,3 +75,29 @@ def test_capsule_metadata_hashes_atomic_file(brain_home):
     assert path.is_file()
     assert result["capsule_sha256"]
     assert result["capsule_bytes"] == path.stat().st_size
+
+
+def test_update_drops_oldest_item_to_capsule_history_beyond_max(brain_home):
+    capsule_runtime.ensure_capsule(brain_home, "s2", objective="Build it")
+    items = [f"decision-{i}" for i in range(8)]
+    capsule_runtime.update_capsule(brain_home, "s2", decisions=items)
+
+    history_path = brain_home / "state" / "sessions" / "s2" / "capsule-history.jsonl"
+    assert not history_path.exists()
+
+    result = capsule_runtime.update_capsule(brain_home, "s2", decisions=["decision-8"])
+
+    capsule = result["capsule"]
+    assert capsule["decisions_this_session"] == [f"decision-{i}" for i in range(1, 9)]
+    assert len(capsule["decisions_this_session"]) == capsule_runtime.MAX_ITEMS
+
+    lines = [
+        json.loads(line)
+        for line in history_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(lines) == 1
+    assert lines[0]["dropped_item"] == "decision-0"
+    assert lines[0]["field"] == "decisions_this_session"
+    assert lines[0]["session_id"] == "s2"
+    assert lines[0]["ts"]
