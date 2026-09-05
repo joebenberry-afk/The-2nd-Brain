@@ -1,0 +1,26 @@
+{
+  "brain_product": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+  "brain_evidence": "e9fc61cb623699cb982be4466d053944e2f8426a",
+  "brain_branch": "brain/v2-lifecycle-receipts",
+  "host_base": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+  "host_branch": "proof/lifecycle-receipts",
+  "metadata_pr_heads_preserved": [
+    "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+    "ddce3599c63b5ff7100e07d62a76ab8ecec912cb"
+  ],
+  "product_diff_between_source_and_evidence": "empty for src/scripts/tests/brainstem/pyproject.toml/uv.lock",
+  "controller_dirty_work_preserved": true,
+  "runtime": {
+    "bun": "1.4.0",
+    "python": "prior verified venv; PYTHONHOME/PYTHONPATH removed; explicit isolated src import",
+    "worker_module": "src\\second_brain\\worker_protocol.py",
+    "actual_source_tree_sha256": "d513fe25cefa62fae82e32c34e4df63aaf77138bd606dd9d7ae8b4ba927242d2",
+    "prior_capture_source_tree_sha256": "bbeb0cc5596940f26605d586663cc5f4bbdba4e88ce9393fad67a110b790f13b",
+    "note": "Fresh checkout raw-byte fingerprint differs; Git product paths are unchanged. No carry-forward claim of identical raw runtime bytes.",
+    "native_binary_sha256": "24ba88ed08de5eb21b2559c3dbd6b9494d6d5c599cb8c4d146881c207b32e088"
+  },
+  "subagent_execution": "Unavailable: both scouts failed before execution with getWorkPoolYieldItems TypeError; inspection continued inline; active installation unchanged.",
+  "graph_and_index": "No existing graph or RepoWise index in inspected checkpoint; neither created.",
+  "provider_calls": 0,
+  "release": "HOLD"
+}

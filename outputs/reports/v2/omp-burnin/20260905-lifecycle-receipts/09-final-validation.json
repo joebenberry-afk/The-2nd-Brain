@@ -1,0 +1,34 @@
+{
+  "command_cwd": "<host-worktree>",
+  "reproducer": "02-real-owner-boundary.ts",
+  "typecheck_initial": {
+    "exit": 1,
+    "stdout": "error TS5112: tsconfig.json is present but will not be loaded if files are specified on commandline. Use '--ignoreConfig' to skip this error.\n",
+    "stderr": ""
+  },
+  "typecheck_intermediate": {
+    "exit": 1,
+    "stdout": "../The-Second-Brain-lifecycle-receipts/outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/02-real-owner-boundary.ts(14,12): error TS2339: Property 'PYTHONHOME' does not exist on type '{ SECOND_BRAIN_HOME: string; PI_CODING_AGENT_DIR: string; NODE_ENV?: string | undefined; TZ?: string | undefined; }'.\n../The-Second-Brain-lifecycle-receipts/outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/02-real-owner-boundary.ts(15,12): error TS2339: Property 'PYTHONPATH' does not exist on type '{ SECOND_BRAIN_HOME: string; PI_CODING_AGENT_DIR: string; NODE_ENV?: string | undefined; TZ?: string | undefined; }'.\n../The-Second-Brain-lifecycle-receipts/outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/02-real-owner-boundary.ts(39,54): error TS7031: Binding element 'signal' implicitly has an 'any' type.\n",
+    "stderr": ""
+  },
+  "typecheck_final": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "acceptance_checks": [
+    {
+      "flag": "--require-retained-obligation",
+      "exit": 1,
+      "stdout": "{\"verdict\":\"PRIMITIVE_ABSENT\",\"source\":{\"source_tree_sha256\":\"d513fe25cefa62fae82e32c34e4df63aaf77138bd606dd9d7ae8b4ba927242d2\",\"module\":\"src\\\\second_brain\\\\worker_protocol.py\"},\"host_base\":\"e874b613654fd493b2bcb45c832e68f8d1a9a23e\",\"brain_base\":\"e9fc61cb623699cb982be4466d053944e2f8426a\",\"firstAdmission\":\"prepared\",\"secondAdmission\":\"prepared\",\"nativeIds\":[\"NativeJob\",\"NativeJob\"],\"childIds\":[\"WriterOne\",\"WriterTwo\"],\"acceptedCancellation\":true,\"visibleRowEvicted\":true,\"claimedOwnerSettlement\":true,\"realWriterStillRunningAtClaim\":true,\"concurrentWritersOnSameFile\":true,\"actualCleanupObserved\":true,\"automaticCancellationDeliveries\":0,\"providerCalls\":0,\"productionUsage\":null,\"state\":{\"workers\":[[\"writer-one\",\"WORKING\"],[\"writer-two\",\"WORKING\"]],\"credit_events\":0,\"worker_columns\":[\"task_id\",\"state\",\"lease_expires_at\",\"packet_sha256\",\"accepted_at\",\"settled_at\",\"updated_at\"],\"meta_columns\":[\"task_id\",\"redeliveries\",\"failure_reason\",\"session_id\",\"delivered_at\",\"dispatch_payload\",\"updated_at\"]},\"overhead\":{\"cancel_ms\":0.30139999999994416,\"total_ms\":575.4432999999999,\"cpu_microseconds\":{\"user\":0,\"system\":31000},\"disposable_output_bytes\":484},\"scope\":\"Actual manager and Brain worker_context/SQLite; two real directly owned Python file writers. Native TaskTool, supported extension observer, resource admission/fencing and arbitrary descendants are NOT proven. No test-only mutex or release attestation is substituted.\"}\n",
+      "stderr": "\n[Uncaught Exception] AssertionError: eviction must not fabricate execution settlement\n\ntrue !== false\n\n\ntrue !== false\n\n    at <USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\outputs\\reports\\v2\\omp-burnin\\20260905-lifecycle-receipts\\02-real-owner-boundary.ts:93:10\n"
+    },
+    {
+      "flag": "--require-scope-admission",
+      "exit": 1,
+      "stdout": "{\"verdict\":\"PRIMITIVE_ABSENT\",\"source\":{\"source_tree_sha256\":\"d513fe25cefa62fae82e32c34e4df63aaf77138bd606dd9d7ae8b4ba927242d2\",\"module\":\"src\\\\second_brain\\\\worker_protocol.py\"},\"host_base\":\"e874b613654fd493b2bcb45c832e68f8d1a9a23e\",\"brain_base\":\"e9fc61cb623699cb982be4466d053944e2f8426a\",\"firstAdmission\":\"prepared\",\"secondAdmission\":\"prepared\",\"nativeIds\":[\"NativeJob\",\"NativeJob\"],\"childIds\":[\"WriterOne\",\"WriterTwo\"],\"acceptedCancellation\":true,\"visibleRowEvicted\":true,\"claimedOwnerSettlement\":true,\"realWriterStillRunningAtClaim\":true,\"concurrentWritersOnSameFile\":true,\"actualCleanupObserved\":true,\"automaticCancellationDeliveries\":0,\"providerCalls\":0,\"productionUsage\":null,\"state\":{\"workers\":[[\"writer-one\",\"WORKING\"],[\"writer-two\",\"WORKING\"]],\"credit_events\":0,\"worker_columns\":[\"task_id\",\"state\",\"lease_expires_at\",\"packet_sha256\",\"accepted_at\",\"settled_at\",\"updated_at\"],\"meta_columns\":[\"task_id\",\"redeliveries\",\"failure_reason\",\"session_id\",\"delivered_at\",\"dispatch_payload\",\"updated_at\"]},\"overhead\":{\"cancel_ms\":0.30299999999999727,\"total_ms\":578.8132,\"cpu_microseconds\":{\"user\":0,\"system\":0},\"disposable_output_bytes\":528},\"scope\":\"Actual manager and Brain worker_context/SQLite; two real directly owned Python file writers. Native TaskTool, supported extension observer, resource admission/fencing and arbitrary descendants are NOT proven. No test-only mutex or release attestation is substituted.\"}\n",
+      "stderr": "\n[Uncaught Exception] AssertionError: unknown cleanup must block a conflicting admitted writer\n\ntrue !== false\n\n\ntrue !== false\n\n    at <USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\outputs\\reports\\v2\\omp-burnin\\20260905-lifecycle-receipts\\02-real-owner-boundary.ts:96:10\n"
+    }
+  ],
+  "scope": "Typecheck passes; both behavioral acceptance checks fail on unchanged product, as recorded. Not an implementation pass."
+}

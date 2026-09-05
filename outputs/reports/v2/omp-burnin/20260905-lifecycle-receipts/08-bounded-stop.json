@@ -1,0 +1,56 @@
+{
+  "outcome": "BLOCKED_AT_RESOURCE_ADMISSION_PRIMITIVE",
+  "primitive": "An authoritative attempt-to-resource conflict-domain binding with an actually enforced writer admission/quarantine boundary",
+  "observed_facts": [
+    {
+      "source": "src/second_brain/contracts.py:643-658",
+      "fact": "scope/repo_root validated as bounded text, not resource identities or permissions"
+    },
+    {
+      "source": "src/second_brain/worker_protocol.py:670-724",
+      "fact": "Transactional registration deduplicates task/packet only; no conflicting-resource admission predicate"
+    },
+    {
+      "source": "src/second_brain/omp_adapter.py:67-119",
+      "fact": "Native adapter creates a worker packet using free-form scope and parent cwd, then marks it WORKING before host execution"
+    },
+    {
+      "source": "packages/coding-agent/src/task/index.ts:1114-1144,1249-1251",
+      "fact": "Task semaphore is concurrency capacity, not resource-scope exclusivity"
+    },
+    {
+      "source": "packages/coding-agent/src/task/isolation-ownership.ts:60-105",
+      "fact": "Isolation marker protects sandbox reclamation using process liveness; it is not conflicting-writer admission"
+    },
+    {
+      "source": "packages/coding-agent/src/utils/repo-lock.ts:4-38",
+      "fact": "Repository lock serializes in-process Git operations, is not reentrant, and is not a persistent task scope lease"
+    },
+    {
+      "source": "packages/coding-agent/src/async/job-manager.ts:619-637",
+      "fact": "Owner wait discovers obligations through evictable rows; real writer probe demonstrates a false settlement result after eviction"
+    }
+  ],
+  "decision": "Treat introduction of the first enforced resource-arbitration policy as exceeding the reuse-existing-owner/interface boundary. Do not silently reinterpret free-form scope as authorization or serialize every task sharing cwd.",
+  "decision_classification": "Engineering scope judgment based on observed missing semantics; not a claim that implementation is impossible.",
+  "minimal_extension_proposal": [
+    "Define the participating managed writers and canonical conflict domain, including read-only and isolated-task treatment. This policy is not currently encoded by worker packet scope.",
+    "Implement an atomic attempt-bound admission/quarantine check in the existing task/worker owner and records; no new database, daemon or scheduler is proposed.",
+    "Bind scoped release to retained actual cleanup obligations. Preserve cleanup errors independently of outcome and keep unknown authority quarantined.",
+    "Then add the supported bounded observer/acknowledgment path and finish the supplied acceptance matrix."
+  ],
+  "within_scope_but_not_implemented": [
+    "Retaining actual owner obligations beyond visible row eviction",
+    "Separating deferred cleanup failure from promise fulfillment",
+    "Supported lifecycle observation transport",
+    "Durable idempotent Brain observations and reaper uncertainty"
+  ],
+  "why_not_partial_runtime_patch": "The requested contract couples observation to safe scope reuse. Stopping before a partial runtime cutover avoids creating a receipt surface that has no production authority consumer/enforcer.",
+  "not_claimed": [
+    "Local lifecycle contract proven",
+    "Local outcome accounting repaired",
+    "Cleanup or scope exclusion qualified",
+    "A new frozen product candidate",
+    "A requirement satisfied merely by a diagnostic script exiting zero"
+  ]
+}

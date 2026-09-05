@@ -1,0 +1,6 @@
+{
+  "native_binary_sha256": "24ba88ed08de5eb21b2559c3dbd6b9494d6d5c599cb8c4d146881c207b32e088",
+  "exit": 1,
+  "stdout": "",
+  "stderr": "\n[Uncaught Exception] AssertionError: deadline waiting for both admitted writers writing the same real file\n    at <anonymous> (<USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\outputs\\reports\\v2\\omp-burnin\\20260905-lifecycle-receipts\\02-real-owner-boundary.ts:27:5)\n"
+}
