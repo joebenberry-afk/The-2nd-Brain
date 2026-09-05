@@ -1,0 +1,35 @@
+{
+  "prior_evidence_head": "36d6755a6020c2f53494e77b8dffd68e9ad072c6",
+  "brain_source_sha": "1099eb37b01f282365922b337a6069e31692b2cd",
+  "omp_base_sha": "5964a0f7649275bcde818f20073193fd032451f2",
+  "omp_pinned_sha": "f241301c83726afe75a847e919b89977a54dafbe",
+  "omp_patch_sha": "874fe1f20bc5f906812ff52c0a6a5698a59c191e",
+  "omp_patch_branch": "fix/structured-async-result-metadata",
+  "omp_pr": "https://github.com/can1357/oh-my-pi/pull/10928",
+  "omp_pr_draft": true,
+  "decision": "HOLD",
+  "gates": {
+    "pyright_errors": 0,
+    "python_full_passed": 1827,
+    "vitest_full_passed": 689,
+    "tsc": "PASS",
+    "changed_eslint": "PASS",
+    "ruff_findings": 430,
+    "ruff_new_findings": 0,
+    "doctor_passed": 19,
+    "doctor_warnings": 0,
+    "pester_passed": 18,
+    "omp_current_focused_passed": 47,
+    "omp_pinned_focused_passed": 47,
+    "omp_full": "TIMEOUT900s;58 observed failures;clean CI required"
+  },
+  "provider_calls": 0,
+  "default_deployment": false,
+  "tag_created": false,
+  "evidence_head": "Containing evidence commit; exact SHA reported after commit/publication",
+  "remaining_prerequisites": [
+    "Clean upstream host CI/platform validation and reviewed release",
+    "Native batch/collision job-ID dispatch binding proof",
+    "Separately authorized deployment/restart and live qualification"
+  ]
+}

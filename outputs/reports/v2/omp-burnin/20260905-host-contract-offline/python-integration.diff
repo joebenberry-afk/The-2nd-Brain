@@ -1,0 +1,811 @@
+diff --git a/src/second_brain/action_cache.py b/src/second_brain/action_cache.py
+index f9d2df5..42977fc 100644
+--- a/src/second_brain/action_cache.py
++++ b/src/second_brain/action_cache.py
+@@ -221,7 +221,13 @@ def worktree_fingerprint_for(
+         "--",
+         normalized_scope,
+     )
+-    if None in (head_tree, index_tree, dirty, untracked_raw, dirty_names):
++    if (
++        head_tree is None
++        or index_tree is None
++        or dirty is None
++        or untracked_raw is None
++        or dirty_names is None
++    ):
+         return None
+ 
+     untracked: list[tuple[str, str]] = []
+diff --git a/src/second_brain/autoinject.py b/src/second_brain/autoinject.py
+index a130d4a..7659130 100644
+--- a/src/second_brain/autoinject.py
++++ b/src/second_brain/autoinject.py
+@@ -1361,7 +1361,7 @@ def _feedback_exists(
+     """Check one session-bound feedback row without exposing its contents."""
+     if table not in {"memory_retrievals", "memory_activations"}:
+         return False
+-    conn = db.connect(db_path(home), readonly=True)
++    conn = db.connect(db_path(Path(home)), readonly=True)
+     try:
+         row = conn.execute(
+             f"SELECT 1 FROM {table} WHERE memory_id = ? AND session_id = ? LIMIT 1",
+@@ -1380,7 +1380,7 @@ def _record_delivery_feedback(
+         try:
+             if not _feedback_exists(home, "memory_retrievals", memory_id, session_id):
+                 reconsolidation.record_retrieval(
+-                    home, memory_id, session_id=session_id, idempotent=True
++                    Path(home), memory_id, session_id=session_id, idempotent=True
+                 )
+         except Exception:
+             logger.debug("retrieval feedback failed", exc_info=True)
+@@ -1429,7 +1429,7 @@ def _record_activation_feedback(
+             logger.debug("activation feedback failed", exc_info=True)
+ 
+ def _delivered_memory_ids(home: Path | str, session_id: str) -> list[str]:
+-    conn = db.connect(db_path(home), readonly=True)
++    conn = db.connect(db_path(Path(home)), readonly=True)
+     try:
+         rows = conn.execute(
+             "SELECT DISTINCT memory_id FROM deliveries WHERE root_session_id = ?",
+diff --git a/src/second_brain/cli.py b/src/second_brain/cli.py
+index f4a1bbd..303e4f1 100644
+--- a/src/second_brain/cli.py
++++ b/src/second_brain/cli.py
+@@ -4587,7 +4587,7 @@ def cmd_worker_plane(args) -> int:
+         except Exception as exc:
+             results = []
+             error = f"{type(exc).__name__}: {exc}"
+-        output = {"reaped": results}
++        output: dict[str, object] = {"reaped": results}
+         if error:
+             output["error"] = error
+         if args.json:
+diff --git a/src/second_brain/contracts.py b/src/second_brain/contracts.py
+index eec678b..9e12b42 100644
+--- a/src/second_brain/contracts.py
++++ b/src/second_brain/contracts.py
+@@ -299,7 +299,10 @@ def estimate_tokens(
+ ) -> int:
+     """Estimate text tokens using calibrated chars/token, defaulting explicitly to 4.0."""
+     info = token_estimator_info(model, home=home)
+-    return max(1, int(len(text or "") / float(info["chars_per_token"])))
++    ratio = info["chars_per_token"]
++    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
++        ratio = DEFAULT_CHARS_PER_TOKEN
++    return max(1, int(len(text or "") / float(ratio)))
+ 
+ 
+ 
+diff --git a/src/second_brain/economics.py b/src/second_brain/economics.py
+index 59371e8..f490ef6 100644
+--- a/src/second_brain/economics.py
++++ b/src/second_brain/economics.py
+@@ -132,15 +132,17 @@ def cost_per_run(
+     bases = _price_values(prices)
+     if bases is None:
+         return None
+-    values = [
+-        _number(_value(usage, "input_tokens", "input", "uncached_in")),
+-        _number(_value(usage, "cache_read_tokens", "cache_read")),
+-        _number(_value(usage, "cache_write_tokens", "cache_write")),
+-        _number(_value(usage, "output_tokens", "output")),
+-    ]
+-    if any(value is None for value in values):
++    uncached_in = _number(_value(usage, "input_tokens", "input", "uncached_in"))
++    cache_read = _number(_value(usage, "cache_read_tokens", "cache_read"))
++    cache_write = _number(_value(usage, "cache_write_tokens", "cache_write"))
++    output = _number(_value(usage, "output_tokens", "output"))
++    if (
++        uncached_in is None
++        or cache_read is None
++        or cache_write is None
++        or output is None
++    ):
+         return None
+-    uncached_in, cache_read, cache_write, output = values  # type: ignore[misc]
+     multipliers = multipliers or {}
+     mi_value = _number(_value(multipliers, "uncached_in", "uncached_in_multiplier"))
+     mi = 1.0 if mi_value is None else mi_value
+diff --git a/src/second_brain/frontier.py b/src/second_brain/frontier.py
+index b892266..968b3dd 100644
+--- a/src/second_brain/frontier.py
++++ b/src/second_brain/frontier.py
+@@ -563,6 +563,8 @@ def choose_cheapest_experiment(home: Path | str, frontier_id: str) -> dict[str,
+         cost = exp.get("cost") or exp.get("expected_cost")
+         if cost == "local" or cost == 0:
+             return 0.0
++        if cost is None:
++            return 1000.0
+         try:
+             return float(cost)
+         except (ValueError, TypeError):
+diff --git a/src/second_brain/governor.py b/src/second_brain/governor.py
+index e134f5a..338380c 100644
+--- a/src/second_brain/governor.py
++++ b/src/second_brain/governor.py
+@@ -17,6 +17,7 @@ import logging
+ import os
+ import re
+ import sqlite3
++from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any, Literal
+@@ -639,9 +640,9 @@ def feature_source(key: str, home: Path, env: dict[str, str] | None = None) -> s
+ class ROIVerdict:
+     """Result of ROI classification."""
+     status: Literal['POSITIVE_ROI', 'NEUTRAL', 'NEGATIVE_ROI', 'INSUFFICIENT_EVIDENCE']
+-    on_tokens: int | None = None
+-    off_tokens: int | None = None
+-    savings: int | None = None  # on_tokens - off_tokens (negative = savings)
++    on_tokens: float | None = None
++    off_tokens: float | None = None
++    savings: float | None = None  # on_tokens - off_tokens (negative = savings)
+     on_sessions: int = 0
+     off_sessions: int = 0
+     neutral_band: float = 0.02
+@@ -693,20 +694,23 @@ def classify_roi(
+         and abs(result.get("r_bar") or 0) <= neutral_band + 1e-9
+     ):
+         verdict.status = "NEUTRAL"
++    elif status == "POSITIVE":
++        verdict.status = "POSITIVE_ROI"
++    elif status == "NEGATIVE":
++        verdict.status = "NEGATIVE_ROI"
+     else:
+-        verdict.status = {
+-            "POSITIVE": "POSITIVE_ROI",
+-            "NEGATIVE": "NEGATIVE_ROI",
+-        }.get(status, "INSUFFICIENT_EVIDENCE")
++        verdict.status = "INSUFFICIENT_EVIDENCE"
+     if any(session.cost_total is None or session.cost_total_seen == 0 for session in (*on, *off)):
+         verdict.status = "INSUFFICIENT_EVIDENCE"
+         verdict.reason = "cost_total missing from host telemetry"
+     on_costs = [session.cost_total for session in on if session.cost_total is not None]
+     off_costs = [session.cost_total for session in off if session.cost_total is not None]
+     if len(on_costs) == len(on) and len(off_costs) == len(off):
+-        verdict.on_tokens = sum(on_costs)
+-        verdict.off_tokens = sum(off_costs)
+-        verdict.savings = verdict.on_tokens - verdict.off_tokens
++        on_total = sum(on_costs)
++        off_total = sum(off_costs)
++        verdict.on_tokens = on_total
++        verdict.off_tokens = off_total
++        verdict.savings = on_total - off_total
+     if not verdict.reason:
+         verdict.reason = f"mSPRT verdict={status}; n={result.get('n', 0)}"
+     return verdict
+@@ -851,12 +855,10 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
+     except OSError as exc:
+         raise ValueError("session ledgers unavailable") from exc
+ 
+-    descendants_by_internal_id: dict[str, str] = {}
+-    internal_id_by_host: dict[str, str] = {}
+-    for child in children:
++    def read_descendants(child: Path) -> list[sqlite3.Row]:
+         dbfile = child / "ledger.sqlite"
+         if not dbfile.is_file():
+-            continue
++            return []
+         try:
+             conn = sqlite3.connect(
+                 dbfile.absolute().as_uri() + "?mode=ro",
+@@ -865,7 +867,7 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
+             )
+             conn.row_factory = sqlite3.Row
+             try:
+-                rows = conn.execute(
++                return conn.execute(
+                     "SELECT internal_session_id, host_session_id "
+                     "FROM sessions WHERE root_parent_session_id = ?",
+                     (root_id,),
+@@ -874,19 +876,26 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
+                 conn.close()
+         except sqlite3.Error as exc:
+             raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
+-        for row in rows:
+-            internal_id = row["internal_session_id"]
+-            host_id = row["host_session_id"]
+-            if not internal_id or not host_id:
+-                raise ValueError("descendant ledger identity is incomplete")
+-            known_host = descendants_by_internal_id.get(internal_id)
+-            known_internal = internal_id_by_host.get(host_id)
+-            if (known_host is not None and known_host != host_id) or (
+-                known_internal is not None and known_internal != internal_id
+-            ):
+-                raise ValueError("conflicting descendant ledger identities")
+-            descendants_by_internal_id[internal_id] = host_id
+-            internal_id_by_host[host_id] = internal_id
++
++    descendants_by_internal_id: dict[str, str] = {}
++    internal_id_by_host: dict[str, str] = {}
++    # Independent read-only ledgers are I/O-bound; never share connections or
++    # accumulate identity state in workers. map preserves validation order.
++    with ThreadPoolExecutor(max_workers=8) as readers:
++        for rows in readers.map(read_descendants, children):
++            for row in rows:
++                internal_id = row["internal_session_id"]
++                host_id = row["host_session_id"]
++                if not internal_id or not host_id:
++                    raise ValueError("descendant ledger identity is incomplete")
++                known_host = descendants_by_internal_id.get(internal_id)
++                known_internal = internal_id_by_host.get(host_id)
++                if (known_host is not None and known_host != host_id) or (
++                    known_internal is not None and known_internal != internal_id
++                ):
++                    raise ValueError("conflicting descendant ledger identities")
++                descendants_by_internal_id[internal_id] = host_id
++                internal_id_by_host[host_id] = internal_id
+ 
+     return sum(
+         _session_total_tokens(home, host_id)
+diff --git a/src/second_brain/hermes_adapter.py b/src/second_brain/hermes_adapter.py
+index ffef822..32084e2 100644
+--- a/src/second_brain/hermes_adapter.py
++++ b/src/second_brain/hermes_adapter.py
+@@ -1152,7 +1152,9 @@ def review_worker_result(
+     packet_sha256 = result_data.get("packet_sha256")
+     result_sha256 = result_data.get("result_sha256")
+     if (
+-        not worker_protocol._is_sha256(packet_sha256)
++        not isinstance(packet_sha256, str)
++        or not isinstance(result_sha256, str)
++        or not worker_protocol._is_sha256(packet_sha256)
+         or not worker_protocol._is_sha256(result_sha256)
+         or result_sha256 != result.canonical_hash()
+     ):
+diff --git a/src/second_brain/ledger.py b/src/second_brain/ledger.py
+index 0c064a8..013256f 100644
+--- a/src/second_brain/ledger.py
++++ b/src/second_brain/ledger.py
+@@ -716,6 +716,7 @@ class LedgerStore:
+         scoped; used by replay(), not by integrity()/checkpoint_ledger's hot
+         path — see integrity()'s docstring)."""
+         bad: list[str] = []
++        assert self._conn is not None
+         for obj in self._conn.execute("SELECT sha256, size FROM object_refs").fetchall():
+             try:
+                 path = _contained(self._dir, f"{_OBJECT_DIR}/{obj['sha256']}")
+diff --git a/src/second_brain/promotion.py b/src/second_brain/promotion.py
+index 74c970e..919675c 100644
+--- a/src/second_brain/promotion.py
++++ b/src/second_brain/promotion.py
+@@ -14,8 +14,10 @@ from __future__ import annotations
+ import hashlib
+ import json
+ import os
++import sqlite3
+ from datetime import UTC, datetime
+ from pathlib import Path
++from typing import Any
+ 
+ from . import contracts, db, decisions, frontier, immune, paths, skillforge
+ from .errors import BrainError
+diff --git a/src/second_brain/reconsolidation.py b/src/second_brain/reconsolidation.py
+index f51d17e..04af35d 100644
+--- a/src/second_brain/reconsolidation.py
++++ b/src/second_brain/reconsolidation.py
+@@ -843,12 +843,16 @@ def revert_supersede(
+     finally:
+         conn.close()
+ 
++    grade = row.get("evidence_grade")
++    status = row.get("status")
++    if not isinstance(grade, str) or not isinstance(status, str):
++        raise BrainError(f"Corrupt memory metadata for {memory_id}")
+     target_path = home_p / target_row["body_path"]
+     semantic._sync_file_metadata(
+         home_p,
+         target_path,
+-        grade=row.get("evidence_grade"),
+-        status=row.get("status"),
++        grade=grade,
++        status=status,
+     )
+     semantic._safe_index(home_p, memory_id)
+ 
+diff --git a/src/second_brain/semantic.py b/src/second_brain/semantic.py
+index 92f8ec8..8b87219 100644
+--- a/src/second_brain/semantic.py
++++ b/src/second_brain/semantic.py
+@@ -14,6 +14,7 @@ every previous file, so history is preserved.
+ 
+ from __future__ import annotations
+ 
++from collections.abc import Iterable, Sequence
+ import contextlib
+ import hashlib
+ import logging
+@@ -428,9 +429,9 @@ def _signal_key(payload: dict) -> str:
+     return ""
+ 
+ 
+-def _extract_candidate_evidence(events: list[object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+-    if not isinstance(events, list):
+-        raise BrainError("events must be a list of ledger or telemetry records")
++def _extract_candidate_evidence(events: Sequence[object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
++    if not isinstance(events, Sequence) or isinstance(events, (str, bytes, bytearray)):
++        raise BrainError("events must be a sequence of ledger or telemetry records")
+     if len(events) > _CANDIDATE_EVENT_LIMIT:
+         raise BrainError(f"events must contain at most {_CANDIDATE_EVENT_LIMIT} records")
+ 
+@@ -520,7 +521,7 @@ def _extract_candidate_evidence(events: list[object]) -> tuple[tuple[str, ...],
+     return triggers, refs
+ 
+ 
+-def extract_candidate_triggers(events: list[object]) -> tuple[str, ...]:
++def extract_candidate_triggers(events: Sequence[object]) -> tuple[str, ...]:
+     """Return normalized evidence triggers; model confidence is never a signal."""
+     return _extract_candidate_evidence(events)[0]
+ 
+@@ -546,7 +547,7 @@ def evaluate_candidate(
+     title: str,
+     body: str,
+     *,
+-    events: list[object],
++    events: Sequence[object],
+     session_id: str,
+     task_id: str | None = None,
+     scope: str = "project",
+@@ -671,15 +672,14 @@ def evaluate_candidate(
+ 
+ def corroboration_count(rows: object) -> int:
+     """Count independent corroboration roots, ignoring missing roots."""
+-    if not isinstance(rows, (list, tuple, set, frozenset)):
+-        rows = list(rows) if rows is not None else []
+-    roots = {
+-        str(row.get("origin_root_sha")).lower()
+-        for row in rows
+-        if isinstance(row, dict)
+-        and isinstance(row.get("origin_root_sha"), str)
+-        and row.get("origin_root_sha").strip()
+-    }
++    iterable = rows if isinstance(rows, Iterable) else ()
++    roots: set[str] = set()
++    for row in iterable:
++        if not isinstance(row, dict):
++            continue
++        root = row.get("origin_root_sha")
++        if isinstance(root, str) and root.strip():
++            roots.add(root.lower())
+     return len(roots)
+ 
+ 
+@@ -856,7 +856,10 @@ def build_query(
+ ) -> str | list:
+     """Build a bounded, parameter-safe FTS5 OR query using IDF-ranked terms."""
+     expression, query_terms, _required = _query_plan(text, k=k, msm=msm, conn=conn)
+-    return expression if len(query_terms) >= 2 else []
++    if len(query_terms) < 2:
++        return []
++    assert expression is not None
++    return expression
+ 
+ 
+ 
+diff --git a/src/second_brain/v2_policy.py b/src/second_brain/v2_policy.py
+index 7209281..347a832 100644
+--- a/src/second_brain/v2_policy.py
++++ b/src/second_brain/v2_policy.py
+@@ -221,6 +221,9 @@ def load_policy(home: Path) -> V2Policy:
+     learning = _table(raw["learning"], "learning")
+     frontier = _table(raw["frontier"], "frontier")
+     verification = _table(raw["verification"], "verification")
++    verification_floor = verification["floor"]
++    if not isinstance(verification_floor, str):
++        raise _fail("verification.floor must be 'targeted' or 'full'")
+     return V2Policy(
+         schema_version=schema_version,
+         rollout=rollout,
+@@ -233,7 +236,7 @@ def load_policy(home: Path) -> V2Policy:
+         premium_model_turns=_positive_int(brainstem["premium_model_turns"], "brainstem.premium_model_turns"),
+         surprise_threshold=_bounded_float(learning["surprise_threshold"], "learning.surprise_threshold"),
+         frontier_min_importance=_bounded_float(frontier["min_importance"], "frontier.min_importance"),
+-        verification_floor=verification["floor"],
++        verification_floor=verification_floor,
+     )
+ 
+ 
+diff --git a/src/second_brain/worker_protocol.py b/src/second_brain/worker_protocol.py
+index 6e58aac..15c8661 100644
+--- a/src/second_brain/worker_protocol.py
++++ b/src/second_brain/worker_protocol.py
+@@ -14,7 +14,7 @@ import sqlite3
+ import tomllib
+ from datetime import UTC, datetime, timedelta
+ from pathlib import Path
+-from typing import Any
++from typing import Any, TypeGuard
+ 
+ from . import artifacts, db, jit, ledger, semantic
+ from .contracts import (
+@@ -905,6 +905,7 @@ def record_worker_event(
+             return _result(changed, duplicate=True)
+         if target == WorkerLifecycle.COMPLETED and row["accepted_at"] is None:
+             raise WorkerPacketError("PROTOCOL_ERROR", "completed task has no ACCEPTED fact")
++        assert target is not None
+         new_state = WorkerLifecycle.transition(row["state"], target)
+         lease = _renewal_lease(
+             row["lease_expires_at"], current, _lease_seconds(home, lease_seconds)
+@@ -973,8 +974,12 @@ def process_worker_event(
+     if not isinstance(event, dict):
+         raise WorkerPacketError("PROTOCOL_ERROR", "worker event must be an object")
+     task_id = event.get("task_id")
+-    digest = event.get("packet_sha256")
++    if not isinstance(task_id, str) or not task_id.strip():
++        raise WorkerPacketError("PROTOCOL_ERROR", "worker event must include a task_id")
++    digest = _packet_hash(event.get("packet_sha256"))
+     kind = event.get("event") or event.get("type") or event.get("status")
++    if not isinstance(kind, str) or not kind.strip():
++        raise WorkerPacketError("PROTOCOL_ERROR", "worker event must include an event")
+     return record_worker_event(
+         home,
+         task_id,
+@@ -986,7 +991,7 @@ def process_worker_event(
+     )
+ 
+ 
+-def _is_sha256(value: object) -> bool:
++def _is_sha256(value: object) -> TypeGuard[str]:
+     return isinstance(value, str) and len(value) == 64 and all(
+         char in "0123456789abcdefABCDEF" for char in value
+     )
+diff --git a/tests/test_action_cache.py b/tests/test_action_cache.py
+index 3f66ac6..ff1e5ad 100644
+--- a/tests/test_action_cache.py
++++ b/tests/test_action_cache.py
+@@ -381,6 +381,7 @@ class TestActionCacheArtifactRefs:
+             action_type=ActionType.GENERIC_PURE, target="f3.py", content="c3",
+             proof=proof, params={"p": 3},
+         )
++        assert e1 is not None and e2 is not None and e3 is not None
+         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+         owners = {r["owner"] for r in conn.execute("SELECT owner FROM artifact_refs").fetchall()}
+         conn.close()
+@@ -401,6 +402,7 @@ class TestActionCacheArtifactRefs:
+                 constant_fingerprint={"test": "artifact-ref-key"},
+             ),
+         )
++        assert entry is not None
+         owner = f"action_cache:{entry.action_key}"
+         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
+         before = conn.execute(
+diff --git a/tests/test_capabilities.py b/tests/test_capabilities.py
+index f0cfcf2..f24e143 100644
+--- a/tests/test_capabilities.py
++++ b/tests/test_capabilities.py
+@@ -362,7 +362,7 @@ def test_unknown_capability_never_assumed(brain_home):
+ def test_declare_rejects_non_bool_supported(brain_home):
+     """No truthy-string coercion -- `supported` must be an actual bool."""
+     with pytest.raises(TypeError):
+-        capabilities.declare(brain_home, "h", "session_events", "true")
++        capabilities.declare(brain_home, "h", "session_events", json.loads('"true"'))
+ 
+ 
+ def test_declare_persists_explicit_false_distinct_from_never_recorded(brain_home):
+diff --git a/tests/test_cleanup_t61.py b/tests/test_cleanup_t61.py
+index 57eb17f..4fbcd41 100644
+--- a/tests/test_cleanup_t61.py
++++ b/tests/test_cleanup_t61.py
+@@ -190,6 +190,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
+         proof=proof,
+         params={"p": 3},
+     )
++    assert e1 is not None and e2 is not None and e3 is not None
+ 
+     stats = cache.get_stats()
+     assert stats["total_entries"] == 3
+@@ -208,6 +209,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
+         proof=proof,
+         params={"p": 4},
+     )
++    assert e4 is not None
+ 
+     stats = cache.get_stats()
+     assert stats["total_entries"] == 3
+diff --git a/tests/test_economics.py b/tests/test_economics.py
+index 9b41a63..fe7808e 100644
+--- a/tests/test_economics.py
++++ b/tests/test_economics.py
+@@ -280,6 +280,7 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
+         "acceptance": {"command": "private acceptance", "expect_exit": 0},
+     }
+     record = runner._run_one("prime", task, "ON", ["host"])
++    assert record is not None
+     assert record["telemetry"]["input_tokens"] == 20
+     assert record["dollars"] == economics.cost_per_run(
+         {"input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 2, "cache_write_tokens": 0},
+@@ -345,7 +346,7 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
+     def fake_host(command, prompt, worktree, env):
+         telemetry = Path(env["SECOND_BRAIN_HOME"]) / "telemetry" / "agent-performance"
+         telemetry.mkdir(parents=True)
+-        rows = [
++        rows: list[dict[str, object]] = [
+             {"kind": "assistant_usage", "model": "deepseek-v4-flash"},
+             {"kind": "assistant_usage"},
+         ]
+@@ -366,6 +367,7 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
+         "acceptance": {"command": "private acceptance", "expect_exit": 0},
+     }
+     record = runner._run_one("prime", task, "ON", ["host"])
++    assert record is not None
+     assert record["usage_capture"] is True
+     assert record["telemetry"]["mixed_model"] is True
+     assert record["dollars"] is None
+diff --git a/tests/test_engrams_v2.py b/tests/test_engrams_v2.py
+index e915db7..91e9635 100644
+--- a/tests/test_engrams_v2.py
++++ b/tests/test_engrams_v2.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++from collections.abc import Mapping
+ from pathlib import Path
+ 
+ from second_brain import crossmodel, engram
+@@ -68,7 +69,7 @@ def test_engram_run_uses_zero_model_calls(brain_home: Path) -> None:
+ 
+     tool_call_count = 0
+ 
+-    def mock_runner(tool: str, args: dict) -> dict:
++    def mock_runner(tool: str, args: Mapping[str, object]) -> dict[str, object]:
+         nonlocal tool_call_count
+         tool_call_count += 1
+         return {"tool": tool, "args": args, "status": "ok"}
+diff --git a/tests/test_freshness.py b/tests/test_freshness.py
+index 2f6cdec..9c5f930 100644
+--- a/tests/test_freshness.py
++++ b/tests/test_freshness.py
+@@ -209,7 +209,9 @@ def test_verified_annotation_uses_matching_source(brain_home: Path, tmp_path: Pa
+     mid = semantic.add_memory(brain_home, "fact", "second", scope="global", sources=[first, second])
+     (repo / "first.txt").write_text("changed\n", encoding="utf-8")
+     assert freshness.resolve(brain_home, mid, repo)["state"] == "VERIFIED_CURRENT"
+-    assert freshness.current_source(brain_home, mid, repo)["path"] == "second.txt"
++    current = freshness.current_source(brain_home, mid, repo)
++    assert current is not None
++    assert current["path"] == "second.txt"
+ 
+ 
+ def test_cache_recomputes_after_edit_revert(brain_home: Path, tmp_path: Path) -> None:
+diff --git a/tests/test_hermes_adapter.py b/tests/test_hermes_adapter.py
+index d51f1f2..9230a57 100644
+--- a/tests/test_hermes_adapter.py
++++ b/tests/test_hermes_adapter.py
+@@ -299,11 +299,22 @@ def test_approved_worker_review_without_real_evidence_stays_unsettled(
+     assert response["status"] == "failed"
+     assert response["failure_code"] == "SETTLEMENT_REJECTED"
+     coerced = hermes_adapter.review_worker_result(
+-        brain_home, binding, json.loads(result.canonical_json()), approved="false"
++        brain_home, binding, json.loads(result.canonical_json()), approved=json.loads('"false"')
+     )
+     assert coerced["status"] == "failed"
+     assert coerced["failure_code"] == "PROTOCOL_ERROR"
+ 
++
++def test_worker_event_missing_task_id_is_protocol_error(brain_home: Path) -> None:
++    binding = hermes_adapter.resolve_binding(brain_home, _start_payload())
++    response = hermes_adapter.handle_worker_event(
++        brain_home,
++        binding,
++        {"packet_sha256": "b" * 64, "event": "accepted"},
++    )
++    assert response["status"] == "failed"
++    assert response["failure_code"] == "PROTOCOL_ERROR"
++
+ def test_approved_worker_review_rejects_unbounded_raw_evidence(
+     brain_home: Path,
+ ) -> None:
+diff --git a/tests/test_origin_authority.py b/tests/test_origin_authority.py
+index 4777b7b..75acb6d 100644
+--- a/tests/test_origin_authority.py
++++ b/tests/test_origin_authority.py
+@@ -48,6 +48,10 @@ def test_two_summaries_same_root_count_as_one_corroboration(brain_home: Path) ->
+     assert semantic.corroboration_count(rows) == 1
+ 
+ 
++def test_corroboration_ignores_non_iterable_input() -> None:
++    assert semantic.corroboration_count(object()) == 0
++
++
+ def test_policy_lane_rejects_advisory_items(brain_home: Path) -> None:
+     advisory = semantic.add_memory(
+         brain_home,
+@@ -80,11 +84,15 @@ def test_invalid_origin_class_and_ceiling_rejected(brain_home: Path) -> None:
+ 
+ def test_curate_can_only_lower_authority_ceiling(brain_home: Path) -> None:
+     mid = semantic.add_memory(brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED")
+-    assert semantic._row(brain_home, mid)["authority_ceiling"] == "project_rule"
++    before = semantic._row(brain_home, mid)
++    assert before is not None
++    assert before["authority_ceiling"] == "project_rule"
+     with pytest.raises(BrainError):
+         semantic.curate(brain_home, mid, authority_ceiling="policy")
+     semantic.curate(brain_home, mid, authority_ceiling="advisory")
+-    assert semantic._row(brain_home, mid)["authority_ceiling"] == "advisory"
++    after = semantic._row(brain_home, mid)
++    assert after is not None
++    assert after["authority_ceiling"] == "advisory"
+ 
+ 
+ def test_origin_columns_migrate_fresh_database(tmp_path: Path) -> None:
+diff --git a/tests/test_risk_calibration.py b/tests/test_risk_calibration.py
+index 2a6ea96..fe8f81e 100644
+--- a/tests/test_risk_calibration.py
++++ b/tests/test_risk_calibration.py
+@@ -92,9 +92,7 @@ def test_is_central_function_direct():
+ 
+ def test_logistic_regression_synthetic():
+     """Unit test for calibrate_risk.py logistic regression training."""
+-    import sys
+-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+-    import calibrate_risk
++    from scripts import calibrate_risk
+     
+     feature_names = ["blast_radius", "centrality", "concurrency"]
+     X = [
+@@ -125,9 +123,7 @@ def test_logistic_regression_synthetic():
+ 
+ def test_precision_recall_computation():
+     """Unit test for precision and recall calculation in calibrate_risk.py."""
+-    import sys
+-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+-    import calibrate_risk
++    from scripts import calibrate_risk
+     
+     samples = [
+         {"signals": [{"name": "centrality", "points": 2}, {"name": "blast_radius", "points": 1}], "failed": 1},
+@@ -154,9 +150,7 @@ def test_precision_recall_computation():
+ 
+ def test_toml_updating(tmp_path: Path):
+     """Test updating [risk_weights] in verification.toml without corrupting other sections."""
+-    import sys
+-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+-    import calibrate_risk
++    from scripts import calibrate_risk
+     
+     toml_path = tmp_path / "verification.toml"
+     toml_path.write_text("""# test config
+@@ -185,9 +179,7 @@ flag = true
+ 
+ def test_collect_session_data_and_calibrate_end_to_end(tmp_path: Path):
+     """End-to-end test for data collection, logistic regression fitting, and config writing."""
+-    import sys
+-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+-    import calibrate_risk
++    from scripts import calibrate_risk
+     import json
+     import tomllib
+ 
+diff --git a/tests/test_v2_policy.py b/tests/test_v2_policy.py
+index b9bc42c..f6e5fb4 100644
+--- a/tests/test_v2_policy.py
++++ b/tests/test_v2_policy.py
+@@ -63,7 +63,7 @@ def test_policy_rollout_is_immutable_and_stage_gate_is_strict(tmp_path):
+     with pytest.raises(TypeError):
+         policy.rollout["admission"] = v2_policy.RolloutStage.ACTIVE
+     with pytest.raises(FrozenInstanceError):
+-        policy.worker_slots = 2
++        setattr(policy, "worker_slots", 2)
+     assert v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.SHADOW) is v2_policy.RolloutStage.SHADOW
+     with pytest.raises(BrainError, match="requires"):
+         v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.CANARY)
+diff --git a/tests/test_vmem.py b/tests/test_vmem.py
+index 57432b9..927dcfd 100644
+--- a/tests/test_vmem.py
++++ b/tests/test_vmem.py
+@@ -1531,8 +1531,12 @@ class TestCostModelEvictionT21:
+         # Therefore obj_b must be evicted before obj_a!
+         assert len(evicted) == 1
+         assert evicted[0].obj_id == obj_b.obj_id
+-        assert store.get_object(obj_a.obj_id).residency_state == ResidencyState.RESIDENT
+-        assert store.get_object(obj_b.obj_id).residency_state == ResidencyState.EVICTED
++        stored_a = store.get_object(obj_a.obj_id)
++        stored_b = store.get_object(obj_b.obj_id)
++        assert stored_a is not None
++        assert stored_b is not None
++        assert stored_a.residency_state == ResidencyState.RESIDENT
++        assert stored_b.residency_state == ResidencyState.EVICTED
+ 
+     def test_no_positive_net_means_no_eviction_under_budget_slack(self, brain_home):
+         """Under-budget session performs no evictions even if candidates exist."""
+@@ -1547,7 +1551,9 @@ class TestCostModelEvictionT21:
+         budget = obj.token_estimate + 1000
+         evicted = store.evict_to_budget(max_tokens=budget)
+         assert evicted == []
+-        assert store.get_object(obj.obj_id).residency_state == ResidencyState.RESIDENT
++        stored = store.get_object(obj.obj_id)
++        assert stored is not None
++        assert stored.residency_state == ResidencyState.RESIDENT
+ 
+     def test_forced_eviction_logged_when_over_budget(self, brain_home, caplog):
+         """When all candidates have net <= 0 but session is over budget,
+@@ -1646,7 +1652,9 @@ class TestFaultInHysteresisT22:
+         # Evict obj1 via claim_pages
+         claimed = store.claim_pages([{"obj_id": obj1.obj_id, "kind": obj1.kind.value}])
+         assert obj1.obj_id in claimed
+-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
++        stored = store.get_object(obj1.obj_id)
++        assert stored is not None
++        assert stored.residency_state == ResidencyState.EVICTED
+ 
+         # Advance session to turn T=2 by inserting 2 turn_start events
+         with sqlite3.connect(store._dbfile) as conn:
+@@ -1676,6 +1684,7 @@ class TestFaultInHysteresisT22:
+         # Pinned until T + 3 = 2 + 3 = 5
+         assert faulted.pinned_until_turn == 5
+         persisted = store.get_object(obj1.obj_id)
++        assert persisted is not None
+         assert persisted.pinned_until_turn == 5
+ 
+         # Turn T+1 = 3: insert 1 more turn_start
+@@ -1691,7 +1700,9 @@ class TestFaultInHysteresisT22:
+         evicted = store.evict_to_budget(max_tokens=0)
+         evicted_ids = {e.obj_id for e in evicted}
+         assert obj1.obj_id not in evicted_ids
+-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
++        stored = store.get_object(obj1.obj_id)
++        assert stored is not None
++        assert stored.residency_state == ResidencyState.FAULTED_IN
+ 
+         # Turn T+2 = 4: insert 1 more turn_start
+         with sqlite3.connect(store._dbfile) as conn:
+@@ -1706,7 +1717,9 @@ class TestFaultInHysteresisT22:
+         evicted = store.evict_to_budget(max_tokens=0)
+         evicted_ids = {e.obj_id for e in evicted}
+         assert obj1.obj_id not in evicted_ids
+-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
++        stored = store.get_object(obj1.obj_id)
++        assert stored is not None
++        assert stored.residency_state == ResidencyState.FAULTED_IN
+ 
+         # Turn T+3 = 5: insert 1 more turn_start
+         with sqlite3.connect(store._dbfile) as conn:
+@@ -1722,7 +1735,9 @@ class TestFaultInHysteresisT22:
+         evicted = store.evict_to_budget(max_tokens=0)
+         evicted_ids = {e.obj_id for e in evicted}
+         assert obj1.obj_id in evicted_ids
+-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
++        stored = store.get_object(obj1.obj_id)
++        assert stored is not None
++        assert stored.residency_state == ResidencyState.EVICTED
+ 
+     def test_pinned_until_turn_schema_idempotency(self, brain_home, tmp_path):
+         """Fresh and existing DBs get pinned_until_turn INTEGER DEFAULT 0 idempotently."""
+diff --git a/tests/test_vmem_coverage.py b/tests/test_vmem_coverage.py
+index fc013ff..92c8dcf 100644
+--- a/tests/test_vmem_coverage.py
++++ b/tests/test_vmem_coverage.py
+@@ -308,14 +308,18 @@ class TestCoverageClassBoundaries:
+         )
+ 
+         assert store.cover(obj) is False
+-        assert store.get_object(obj.obj_id).durability == DURABILITY_DIRTY
++        stored = store.get_object(obj.obj_id)
++        assert stored is not None
++        assert stored.durability == DURABILITY_DIRTY
+ 
+         working_set.add_requirement(
+             brain_home, "sess-cov-class-3", "Do the thing", req_id="REQ-001"
+         )
+ 
+         assert store.cover(obj) is True
+-        assert store.get_object(obj.obj_id).durability == DURABILITY_CLEAN
++        stored = store.get_object(obj.obj_id)
++        assert stored is not None
++        assert stored.durability == DURABILITY_CLEAN
+ 
+     def test_canonical_state_capsule_ref_covers_when_capsule_exists(self, brain_home):
+         store = VMemStore(brain_home, "sess-cov-class-4")
+@@ -358,7 +362,9 @@ class TestCoverageClassBoundaries:
+         )
+ 
+         assert store.cover(obj) is True
+-        assert store.get_object(obj.obj_id).recovery_class == "DISPOSABLE_DERIVED"
++        stored = store.get_object(obj.obj_id)
++        assert stored is not None
++        assert stored.recovery_class == "DISPOSABLE_DERIVED"
+ 
+     def test_disposable_derived_without_derived_kind_tag_never_covers(self, brain_home):
+         store = VMemStore(brain_home, "sess-cov-class-7")

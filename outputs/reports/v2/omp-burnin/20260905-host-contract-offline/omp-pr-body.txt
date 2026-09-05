@@ -1,0 +1,18 @@
+## Problem
+AsyncJobManager retains terminal status and agentId in its delivery snapshot and reconstructs them after live-row eviction. async-result details.jobs[] drops both fields. Extensions cannot safely recover them from rendered text or an expired live snapshot.
+
+## Change
+Six additive production lines: optional status?: AsyncJob["status"] and agentId?: string, populated exclusively from entry.job and forwarded to details.jobs[]. Rendering, retention, delivery ownership and existing schema payloads stay unchanged.
+
+## Proof
+- Audited main base:5964a0f7649275bcde818f20073193fd032451f2.
+- Exact pinned18.1.10 base:f241301c83726afe75a847e919b89977a54dafbe.
+- Tests-first on both bases:5 expected failures for missing metadata,1 compatibility pass.
+- Patched focused suites:47 passed,0 failed on each base;134 assertions. Covers completed/failed/cancelled, differing jobId/agentId, forged markup, schema payloads and old consumers/rendering.
+- Eviction regression asserts the live job is absent inside the successful retry sink, then verifies metadata from the reconstructed job. Production retention unchanged.
+- Coding-agent typecheck and changed-file oxlint pass.
+
+## Full-suite limitation
+Full coding-agent suite attempted on Windows with E2E=0 (no provider opt-in). It timed out after900s with58 observed failures, including EBUSY cleanup failures and unrelated assertions; installed-extension environment leakage also appeared. This is not a clean full-suite claim and does not establish those failures as baseline or patch regressions. Draft pending clean CI/platform validation. Local focused tests used the matching official pi-natives-win32-x6418.1.10 binary in the ignored native directory; no binary/dependency changes are committed.
+
+Follow-up with an isolated agent directory and the Brain extension disabled: the context-promotion test passes, while the representative settings-reload cleanup still fails with Windows EBUSY. Full-suite validation remains open.
