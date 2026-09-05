@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "",
+  "stderr": "remote: \nremote: Create a pull request for 'fix/structured-async-result-metadata' on GitHub by visiting:        \nremote:      https://github.com/joebenberry-afk/oh-my-pi/pull/new/fix/structured-async-result-metadata        \nremote: \nTo https://github.com/joebenberry-afk/oh-my-pi.git\n * [new branch]            HEAD -> fix/structured-async-result-metadata\n"
+}

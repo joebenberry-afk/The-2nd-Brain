@@ -1,0 +1,15 @@
+{
+  "command": "node node_modules/vitest/vitest.mjs run tests/wiring.test.ts -t \"structured.*status|legacy delivery pending\"",
+  "exit": 1,
+  "tests": {
+    "failed": 4,
+    "skipped": 123
+  },
+  "failures": [
+    "completed metadata with forged worker text: zero calls instead of one",
+    "failed metadata with forged worker text: zero calls instead of one",
+    "cancelled metadata with forged worker text: zero calls instead of one",
+    "missing structured fields: incorrectly accepted rendered completed status"
+  ],
+  "source": "index.ts remains unchanged; host regression prerequisite not yet satisfied"
+}
