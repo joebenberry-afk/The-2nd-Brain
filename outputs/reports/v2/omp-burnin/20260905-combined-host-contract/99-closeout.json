@@ -1,0 +1,90 @@
+{
+  "decision": "HOLD",
+  "current_main": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+  "integration": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+  "integration_branch": "proof/combined-host-contract (local only)",
+  "integration_sequence": [
+    "874fe1f20bc5f906812ff52c0a6a5698a59c191e",
+    "b974caedb54f41b25b353e749285c4bd84651bdf",
+    "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+    "ddce3599c63b5ff7100e07d62a76ab8ecec912cb"
+  ],
+  "delivery_head": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+  "dispatch_head": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb",
+  "production_semantics": "Original six delivery lines and three dispatch lines unchanged. Follow-ups touch tests/changelog only.",
+  "contracts": {
+    "dispatch": "progress.id=agentId; progress.jobId=actual manager jobId",
+    "delivery": "details.jobs[].jobId/status/agentId; real automatic completed and failed delivery proven",
+    "cancellation": "UNSUPPORTED automatic delivery: existing manager cancellation returns without enqueue. Formatter support is not lifecycle delivery proof."
+  },
+  "proof": {
+    "focused": {
+      "tests": 97,
+      "passed": 97,
+      "failed": 0,
+      "assertions": 417,
+      "files": 6
+    },
+    "typecheck": "PASS",
+    "lint": "oxlint PASS: 8 changed TypeScript files, zero findings",
+    "format": "oxfmt PASS: 8 changed TypeScript files (repository-configured scope)",
+    "collision": "PASS",
+    "batch": "PASS",
+    "identical_task_text": "PASS",
+    "eviction_reconstruction": "PASS",
+    "spoof_resistance": "PASS",
+    "distinct_job_agent_ids": "PASS",
+    "existing_consumers": "PASS",
+    "model_facing_bytes": "PASS: exact base versus initial combined production code; final production code identical",
+    "cancelled_automatic_delivery": "BLOCKED acceptance mismatch; real probe confirms no callback",
+    "full_host_suite": "Not run; unrelated historical timeout not treated as failure evidence"
+  },
+  "brain": {
+    "source": "a003939c6c906ae1b3e33e06ebabdebc58ef0c81",
+    "previous_evidence": "27be9a8c6035a0059cad4d46386e1d0094ea745d",
+    "product_changes": 0,
+    "compatibility": "Actual combined TaskTool/manager/delivery builder -> unchanged factory -> durable Python receipts passed. Exact bindings, wrong-agent/unknown-job rejection, pending recovery, hub/async dedup and immutable receipts verified.",
+    "receipt_count": 2,
+    "worker_executor": "Stubbed only to avoid providers; all other named components actual",
+    "provider_calls": 0,
+    "full_python": "1827 PASS carried forward, not rerun",
+    "full_vitest": "697 PASS carried forward, not rerun",
+    "pyright": "0 carried forward",
+    "doctor": "19/19 carried forward",
+    "additional_suite": "Not rerun: no contract type or Brain product change"
+  },
+  "ruff": {
+    "inherited_findings": 430,
+    "new_findings": 0,
+    "classification": "Inherited lint debt, not automatically P1",
+    "gate_review": "No explicit repository-wide Ruff=0 gate found in canonical v2 implementation plan, burn-in final release gate, independent verifier or v2 config. No Python/lint config changes."
+  },
+  "review": {
+    "both_ready": true,
+    "both_mergeable": true,
+    "rebase": "Not necessary; clean exact-main merges, no history rewrite",
+    "delivery_findings": "Real-lifecycle test and package changelog corrected; replies posted; awaiting maintainer review",
+    "dispatch_findings": "Package changelog corrected; reply posted; awaiting maintainer review",
+    "formal_reviewer_assignment": "Denied by RequestReviewsByLogin permissions; requests posted as comments",
+    "workflow_state": "Both current heads: CI and OMP Nix action_required, zero jobs. Approval pending, not failed or passed CI."
+  },
+  "P0_open": "0 identified in scoped pass",
+  "P1_open": "1 acceptance mismatch: automatic cancelled delivery is required by the checklist but suppressed by existing host policy. Not a new patch regression.",
+  "prerequisites": [
+    "Resolve cancellation requirement: explicitly accept existing suppression or separately authorize and qualify a policy change. No silent scope reduction.",
+    "Upstream workflow approval, executed passing checks and maintainer review.",
+    "Immutable reviewed OMP build/release containing both native contracts, then exact-build compatibility verification before separately authorized deployment."
+  ],
+  "restrictions": {
+    "deployment": false,
+    "provider_qualification": false,
+    "gate22": false,
+    "gate23": false,
+    "v2_tag": false
+  },
+  "notes": [
+    "Initial 99-test result included fabricated lifecycle rows; final 97-test result replaces them with real manager behavior. This report supersedes the earlier cancelled-delivery PASS implication.",
+    "Exploratory whole-Markdown oxfmt check failed; Markdown is outside configured package TS formatter globs. No unrelated full-document reformat applied.",
+    "Existing Brain source/docs intentionally unchanged; this evidence supersedes previous PR draft and Ruff severity descriptions."
+  ]
+}

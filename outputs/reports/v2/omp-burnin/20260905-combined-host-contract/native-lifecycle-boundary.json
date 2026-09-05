@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "{\"observed\":[{\"jobId\":\"completed-job\",\"type\":\"task\",\"status\":\"completed\",\"agentId\":\"CompletedAgent\",\"label\":\"complete\",\"durationMs\":0},{\"jobId\":\"failed-job\",\"type\":\"task\",\"status\":\"failed\",\"agentId\":\"FailedAgent\",\"label\":\"failure\",\"durationMs\":0}],\"cancelledJob\":\"cancelled\",\"cancelledAutoDelivery\":false,\"policy\":\"native cancellation suppresses automatic delivery; unchanged\"}\n",
+  "stderr": ""
+}
