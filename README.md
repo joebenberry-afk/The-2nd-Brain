@@ -29,9 +29,18 @@ Lean-code candidate showed measured negative ROI and activation was
 correctly refused. That refusal is the qualifying evidence, not a promotion
 of the candidate.
 
-**V2 boundary:** no V2-A or later v2 behavior has been started. Everything
-below the `v1.0.0` tag is the frozen v1 baseline that V2 will build on top
-of, not replace.
+**V2 boundary:** `v1.0.0` remains the released baseline. The v2 RC is
+unqualified and remains **HOLD**. Native worker correlation requires both
+OMP [#10928](https://github.com/can1357/oh-my-pi/pull/10928) (delivered
+`jobId`, `status`, `agentId`) and
+[#10948](https://github.com/can1357/oh-my-pi/pull/10948) (dispatch progress
+`id` = child agent ID, `jobId` = exact manager-returned ID).
+Brain binds and journals each native job ID to its packet and expected
+child identity. Missing bindings, mismatched agents, and legacy unbound
+journals are not guessed from names or rendered output. Neither draft PR
+is a released host capability. No deployment, provider qualification,
+Gate 22/23, or v2 release tag is authorized by the
+[offline proof](outputs/reports/v2/omp-burnin/20260905-dispatch-binding/).
 
 The status table and campaign notes below this section describe the earlier
 Phase 0-23 / "v4.3 optimization campaign" build history and are retained as

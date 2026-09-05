@@ -1,3 +1,18 @@
+## 2026-09-05 — Exact native dispatch binding (unreleased, HOLD)
+
+- Bind pending workers by the manager-returned `progress.jobId`; retain
+  `progress.id` as the expected child agent identity. Preserve the exact
+  pair across restart; reject unknown jobs and conflicting delivered agents.
+- Keep explicit hub and structured async delivery on one durable acceptance
+  path. Do not infer missing bindings from agent names, task text, or legacy
+  journals.
+- OMP dispatch draft [#10948](https://github.com/can1357/oh-my-pi/pull/10948)
+  remains separate from delivery metadata draft
+  [#10928](https://github.com/can1357/oh-my-pi/pull/10928).
+- Prove collision, batch, replay, and restart against native host components
+  and durable Python receipts offline. No deployment or provider calls.
+  [Evidence](outputs/reports/v2/omp-burnin/20260905-dispatch-binding/).
+
 ## 2026-09-05 — Structured async authority (unreleased, HOLD)
 
 - Replace rendered-result status/identity parsing with native OMP delivery
