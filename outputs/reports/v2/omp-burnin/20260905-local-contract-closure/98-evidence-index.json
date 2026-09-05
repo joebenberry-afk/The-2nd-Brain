@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "source_commit": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+  "source_tree_sha256": "bbeb0cc5596940f26605d586663cc5f4bbdba4e88ce9393fad67a110b790f13b",
+  "release_qualification_eligible": false,
+  "purpose": "Local repair and offline contract evidence, not installed-host/economic qualification.",
+  "hash_scope": "SHA-256 of UTF-8 text with CRLF normalized to LF; raw_capture_sha256 precedes path redaction. Re-normalize checkout CRLF before comparing sha256.",
+  "sanitization": "Personal home-path prefix and local machine hostname redacted; outcomes, counts, source and artifact identities retained. Portable proof programs take explicit brain/python/host/home arguments.",
+  "files": [
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/99-closeout.json",
+      "classification": "inventory_contract_or_disposition",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "d9739bd1f18aa9bb78d727f7d94bdd45cae2379f207d888277740df7798793b3",
+      "sha256": "d9739bd1f18aa9bb78d727f7d94bdd45cae2379f207d888277740df7798793b3",
+      "bytes": 11676
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/29-python-full-final.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "6cc18c42dfd88091f4d147907117832d08f74ea66957a7edc60f2d8cca0e36a5",
+      "sha256": "6cc18c42dfd88091f4d147907117832d08f74ea66957a7edc60f2d8cca0e36a5",
+      "bytes": 455
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/55-frozen-cancellation-accounting.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "3ce6f9233ba8756c8ef46d768c53e6bff2741e703dbc36d1f52dead85021c8c5",
+      "sha256": "66f0a195571231169df3826eb3de08b97d09226460ffbdb9c9c0f727dac5f9cd",
+      "bytes": 984
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/52-source-commit.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "8f97b6a28101424bdaa00b0d2c28c3c39336d6617c0c6c98825c237498a6adfc",
+      "sha256": "8f97b6a28101424bdaa00b0d2c28c3c39336d6617c0c6c98825c237498a6adfc",
+      "bytes": 599
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/54-final-verifier-hold.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "66450838f18eb92aab7c6547586ace6cb5a3410fa7841494a75756e01aaf454a",
+      "sha256": "792cf688866882f6622901b225720cdce47f72771d1b0ef3e6a95995202f25d9",
+      "bytes": 4040
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/53-frozen-lost-authority.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "e6ef1dcec237283a1553a6df0dc61d8f0d8536b4235f950869cf435ade532842",
+      "sha256": "905b93616ecf630eb7c7528730f815e7bd04270bcc131bc112ea4b4f404d4aa2",
+      "bytes": 2310
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/51-frozen-native-smoke.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "4a739f1ff121e5c3bbe093f65bd42edc87349edd7b6276cfc7a49255380856d4",
+      "sha256": "d14c419bdfaece17a19dc05fca267f2bea90bfbd5333f9161445bb37be78f2db",
+      "bytes": 12786
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/python-full-junit.xml",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "db1ad2f6899f16f54d8afc2dc0aee8013787c5cef6121ce759d7f4c0870d8cc2",
+      "sha256": "fd3f56a9f3d0465a4aa1d2b6c58d4a08406f3f3980187492c65acb8f70e01dbb",
+      "bytes": 234645
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/50-frozen-source-tree.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "220fa0fd79bc4f66fc3321ce55721adaa56cd803bcb1d5b8830c32e59b3d94b1",
+      "sha256": "fad7aa4a293a1d87b09972a6e123de4b846f49bf4fc93d9b950a62dc76bebb14",
+      "bytes": 440
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/00-reconciliation.json",
+      "classification": "inventory_contract_or_disposition",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "a77e4f5034ee75b4bb0695e11ab48554b684c76767b1f77f482e08dbf803ccf4",
+      "sha256": "24d075de3359c9fce33206854c8af77c94bb8efe2480184d0a4234d2c816b78d",
+      "bytes": 8869
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/01-cancellation-acceptance.json",
+      "classification": "inventory_contract_or_disposition",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "ff8d44148979b5cd7af98735116b5498ac4c67d8a59703dc0429c73a999db13e",
+      "sha256": "083394d1468f4a097f6e4e8a087cd856e7278d5239ba922be070f0a159a77a7a",
+      "bytes": 2198
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/10-budget-red.json",
+      "classification": "baseline_expected_failure",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "a8979a8cbfbf4db63ca47eb99a66aab0db2c3d9eed9442c252c8e760a9d022e3",
+      "sha256": "a909ed51a050fdc27b8b32d39ec3421b391ed2097f26ff675477b04c382b85ce",
+      "bytes": 1643
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/02-cancellation-native.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "3137397a5ec8bc2e5bc8dc99b9c5f726239603e2398b1c0a7f06d3d5913ddf1e",
+      "sha256": "ced04f4dcf3b2a0b010c46914ceba02853673223b4a3c7032c5b1856a9fb49a8",
+      "bytes": 5257
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/02-cancellation-native-final.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "a12629a04826a0929a141d55e58e6e70903ac32756d20997e84dcc96d6c6ec04",
+      "sha256": "388b973b1c4948a7fc2207c5a52ef82ef86c8cb2d0dd4b2f7642711714dc2224",
+      "bytes": 12430
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/20-focused-initial.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "b6f0ffdbb35a66f3b71c4544e5e84e7be22c4cc8d4ca1d958cdf6ee5a6b81d46",
+      "sha256": "b64c7852eacc88189ba1b36897c1f72020e0e722482a0f13e5b27e67708442bb",
+      "bytes": 214
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/11-qualification-red.json",
+      "classification": "baseline_expected_failure",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "fb0da93b8f5132663f130df958d4044a7266e1dc1177def3f4e9eba9841b54d1",
+      "sha256": "feaff701c2fa58a651b772a774969e2db5f1b0709df1fd258c01d49583cc6846",
+      "bytes": 732
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/12-qualification-cli-hold.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "0f0cd2edddd3abc78b0cc2c6df89f3b18ecf4a6bb7816b3a14cd0ad0e35f4f86",
+      "sha256": "60fa42bfdd7b879dfb23ae630d6ccbcb9eab17d633be6500b3af6ae380cb45de",
+      "bytes": 3337
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/21-ruff-initial.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "da39a2cc149568ec03abec8881445fb201d5c0ba56e7b8697c043e220d467aa3",
+      "sha256": "90e29b72daec5566d94527b125d45c29420755c0f5e83051cea7c1371bead513",
+      "bytes": 16830
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/22-pyright-initial.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "8e7252ba74d9704e8d4454d5bc2e7d3020a0ed1722ed3b4abc5354f4032cf619",
+      "sha256": "0f126badeed83753a51f60b529dfee90948c8a36c58eed4624b7b28f98c640f9",
+      "bytes": 1265
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/03-cancellation-lost-authority.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "c01e665601ef7cec4430347fe8c1322065192e2242798a280ca2fec2897dadb7",
+      "sha256": "c60dd1de1d654da5a7173a94654c2624b6c7c637c8545d8359a83951ab04e44e",
+      "bytes": 2057
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/40-upstream-checkpoint.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "fd65bc7c36125d4324592d815499ac7978dd2858dc01ab8e53d74b6d5a55fd80",
+      "sha256": "e37cfc7f793527c344962f969ae8509ff0394dd6061b0120f098aefc78ace126",
+      "bytes": 5631
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/41-upstream-workflows.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "74508470389956ad22389d175e7172b6c22561c5c068722dd619d8bc25f501ee",
+      "sha256": "c74cb5eb638dd44f2b5a2c17669e2d43a0fd765adece21eedc04308b7f348288",
+      "bytes": 2063
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/30-extension-vitest.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "dddeb834d689a4e6fd2a75348f75be0fc922977f1a48e4a33ff639fc9b5d9335",
+      "sha256": "d079ee7e4096a4238d85694ed9b7dbf69e774309bec3d79e11889d6dfd984a72",
+      "bytes": 25371
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/30-extension-typescript.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "598605456dc9651f85e4cd82c15f23bea4aafc89571f4844f0b7b586f2092f39",
+      "sha256": "732883d74fff105b6916110dd67928d04765fdfa4fce96791f3d3be410b4440f",
+      "bytes": 48
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/30-extension-eslint.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "542129d7d66f2751dc9eabb965fb9ba73e4a85bdb47a83448625ea8f19757bec",
+      "sha256": "3fe838ffc6db7f57afe2791236ef366a37a733648f06e3286b40b061526bb1a2",
+      "bytes": 780
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/04-cancellation-scope-credit.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "4b693feb56ae8281ddfd754bd59f5f6a5942fdbe493d17fc131d2e7e9d33c591",
+      "sha256": "6be72bfb25459635bce1e6daf592e6ab450b02be8d07f27c3dc88060e0ce791f",
+      "bytes": 736
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/05-cancellation-disposition.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "1251aab9a253a43383a830dd4dcc0452260af92f655ef1fec1559e90255a2d29",
+      "sha256": "1251aab9a253a43383a830dd4dcc0452260af92f655ef1fec1559e90255a2d29",
+      "bytes": 3054
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/31-inherited-lint-classification.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "6bfaa3eeb1e0f9741b21d125cda8a728b52e0d99fdfd6facc7a9bdcb01152ed2",
+      "sha256": "0e380c8a5b38bcec8d78173e5ea10b3fff84dae4cefbee7345beae361a46fbd0",
+      "bytes": 710
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/23-source-fingerprint-smoke.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "b688bdc25a2a1969df39f36fe0a7e8e38d6638cd011f66a1e614df2b23f5d047",
+      "sha256": "d9fe9cec551d59d8637ec057d83bd097e815f744229b8eb741b58563047170aa",
+      "bytes": 281
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/24-focused-final.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "f97da059a185687ac4190e332e8e1af02d9107bd3e08b90ecb9629d0d30f74da",
+      "sha256": "bf7fd1f3885fa4d6544b05aa353fcfc97cbccba00150bd1336cfaf1ee8068d5e",
+      "bytes": 321
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/25-ruff-final.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "70f625ca26055f1ab2180480c8187c5b3a554c00d620038e98a74211ea8bc0b3",
+      "sha256": "215ecb3eda755439a0c30fbc8e440d506127b7420eef3539d595e54f6ef8cf1b",
+      "bytes": 528
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/25-pyright-final.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "8132cbe775a10b1441c7ab1633ead4980032c55bb2f41dc95ce351f9b51d426a",
+      "sha256": "6890b2a4036941228b39a104bd6c0ceef15f9e08cdc3203db82beadb878b5b8a",
+      "bytes": 545
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/26-mechanism-cli.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "ce8763219264202cc9cd7d8415bc0edeb2231e105270b9f0b9c177d21f16f255",
+      "sha256": "a13f7904564bd952b95b52daa0c84653021d66df2fd18073fa9f3c44eaa4bbd2",
+      "bytes": 639
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/27-doctor.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "457f5dd343c499a714e16c617c5509bfc16e421b38c5953886272b44a00d474f",
+      "sha256": "90663d52d4a0d98cbf748d9a823c616af100537302fd49e1cd8b72fae360cfca",
+      "bytes": 2359
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/27-doctor-final.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "732fd5302516e2fb07b0d422bdcdad121093fae59ce88d5ebb3200b47d092983",
+      "sha256": "70d970d9422108cda2073bc2c0118bdbfe20ee303626a11b8d13ac01695ddc40",
+      "bytes": 3052
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/28-backup-restore.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "358f9a05ac84d6bb42425c0c811d3ac8c7346bd03b52afad2c8202f97e076c71",
+      "sha256": "1126cdbd1bc7aa95b504dd3fde54f1daf173258701d32b467c54bc11f14be37a",
+      "bytes": 858
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/25-ruff-final-clean.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "c7421798d280e44acf0389f137b4cc5e198998dae8580a12afd51de06b8cbb8b",
+      "sha256": "4744238ad8f223ab1d780fbf2ac9e4755d9f4d1a958224fb5532a6964344daf0",
+      "bytes": 68
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/25-pyright-final-clean.json",
+      "classification": "fresh_scoped_result",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "a4f37e3efbb7aa91a05d59d38c09897220b82165ab0a454de795a36479f260de",
+      "sha256": "1ae063ddaea6db740027954f41f0f22736253146703ba5fb301d62c60a5aadd9",
+      "bytes": 86
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/29-python-full-interrupted.json",
+      "classification": "intermediate_not_used_as_final_gate",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "f3414f14be9754e2eadd5e0134a89df8c26088b7bda44cd4a14b0441b0985eb4",
+      "sha256": "fca71ca6faef56809004f38269e3ed4623268b94ae032e106f08d2b609c9bfd7",
+      "bytes": 280
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/qualification-contract.json",
+      "classification": "inventory_contract_or_disposition",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "e7f412edb0d073ae582a3fcf57f0a006ed77b76f5a6d04c4542b8743b1b1c704",
+      "sha256": "76ad826da37f2ea772952e7a79f1350a45f79b46ff30aebcee2f59680e2c5969",
+      "bytes": 11562
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/lost-authority-proof.ts",
+      "classification": "reproducible_offline_fixture",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "016ef658f1c24067163299ef973e38c069e3375737e085b01ce2f216b07ebdce",
+      "sha256": "016ef658f1c24067163299ef973e38c069e3375737e085b01ce2f216b07ebdce",
+      "bytes": 5764
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-local-contract-closure/native-cancellation-proof.ts",
+      "classification": "reproducible_offline_fixture",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "8dfe0bd9089e0b520fcc8c1c407bebd6fbbe74ab198f254d97effdf3e95389c2",
+      "sha256": "8dfe0bd9089e0b520fcc8c1c407bebd6fbbe74ab198f254d97effdf3e95389c2",
+      "bytes": 9801
+    },
+    {
+      "path": "outputs/reports/v2/v2-i/qualification-mechanism.json",
+      "classification": "simulation_mechanism_only",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "6dce19773f8fb971f2e4544690d0d897e4d8e896e5c5528dae198826a2e30d9b",
+      "sha256": "ab06fe0afb5d23af75d0195472b43f787283dad51ab8fc9b59737baca4ea1752",
+      "bytes": 676
+    },
+    {
+      "path": "outputs/reports/v2/v2-i/scenario-a-mechanism.json",
+      "classification": "simulation_mechanism_only",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "bc77a697f57e0b19a8575d3c19242f3d71a79419af0606426ee3a7008e2cc78a",
+      "sha256": "f21d601402e8c9aeb79dabc916435eaa67f0654cf18029480b934ac7255cdd74",
+      "bytes": 2055
+    },
+    {
+      "path": "outputs/reports/v2/v2-i/scenario-b-mechanism.json",
+      "classification": "simulation_mechanism_only",
+      "qualification_eligible": false,
+      "raw_capture_sha256": "e62d8a4316d7b9c82e65635b876770f1ab81ab5a407d760a6932b8dc2ec71c0d",
+      "sha256": "ae25672a451a5055399012f984de2298663cecf30d545d5311d7868115333241",
+      "bytes": 2716
+    }
+  ]
+}

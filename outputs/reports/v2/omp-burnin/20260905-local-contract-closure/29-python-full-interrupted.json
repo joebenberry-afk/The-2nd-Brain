@@ -1,0 +1,5 @@
+{
+  "status": "UNAVAILABLE_NOT_PASS",
+  "reason": "Eval capture timed out and reset its VM before returning the full-suite result. No repair pytest process remained in process inventory. Rerun uses supervised Bash capture plus persisted JUnit XML.",
+  "replacement_job": "bg_1"
+}

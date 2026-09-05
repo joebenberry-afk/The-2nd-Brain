@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "{\"migration_sql_invalidates_source_identity\": true, \"bytecode_does_not_change_identity\": true, \"evidence_only_file_does_not_change_identity\": true, \"configuration_changes_invalidate_identity\": true, \"provider_calls\": 0}\r\n",
+  "stderr": ""
+}
