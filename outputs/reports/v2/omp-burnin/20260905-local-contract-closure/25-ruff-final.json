@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "E501 Line too long (125 > 100)\n   --> src\\second_brain\\promotion.py:733:101\n    |\n731 |                 ).hexdigest()[:24]\n732 |             )\n733 |             evidence_list = [*list(evidence_refs or []), f\"observation:{credit_observation_id}\", \"credit:UNRELATED_NEGATIVE\"]\n    |                                                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^\n734 |             now = _utcnow()\n    |\n\nFound 1 error.\n",
+  "stderr": ""
+}

@@ -1,0 +1,32 @@
+{
+  "sourceCommit": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+  "counts": {
+    "native": {
+      "credit_events": 0,
+      "v2_observations": 0,
+      "v2_rollout_events": 0
+    },
+    "lost_authority": {
+      "credit_events": 0,
+      "v2_observations": 0,
+      "v2_rollout_events": 0
+    }
+  },
+  "unfinishedScopePreserved": [
+    {
+      "task_id": "omp-c9887553d3d130910ec59f54bb9845d2a76bba7f2f06437f30fc3fc7452a157a",
+      "objective": "Inspect the same bounded local fixture",
+      "scope": "<disposable-native-fixture>",
+      "settled_at": null
+    },
+    {
+      "task_id": "omp-0176004f6f16d7b49f3db6710d49f70aa0466152e22c3a15ebb896fc2a1faa66",
+      "objective": "Inspect the same bounded local fixture",
+      "scope": "<disposable-native-fixture>",
+      "settled_at": null
+    }
+  ],
+  "productionUsage": null,
+  "providerCalls": 0,
+  "note": "Logical cancellation receipts do not prove physical cleanup; no positive learning or rollout events were recorded."
+}

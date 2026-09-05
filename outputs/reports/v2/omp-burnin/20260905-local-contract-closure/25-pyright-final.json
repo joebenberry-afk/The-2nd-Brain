@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "<USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\tests\\test_verify_qualification.py\n  <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\tests\\test_verify_qualification.py:882:13 - error: No parameter named \"credit_class\" (reportCallIssue)\n  <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\tests\\test_verify_qualification.py:883:13 - error: No parameter named \"verifier_passed\" (reportCallIssue)\n2 errors, 0 warnings, 0 informations\n",
+  "stderr": ""
+}

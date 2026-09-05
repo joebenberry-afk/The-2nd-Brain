@@ -1,0 +1,78 @@
+{
+  "scenario": "Scenario B — Negative Mechanism Simulation",
+  "classification": "simulation",
+  "qualification_eligible": false,
+  "live_economics_eligible": false,
+  "production_activation_eligible": false,
+  "feature": "speculative_prefetch_injection",
+  "evidence": {
+    "intervention_id": "intv-b050b859c4e8cab7ebabf021",
+    "observation_id": "obs-f3d5ead403b84447550e5e1c",
+    "credit_class": "UNRELATED_NEGATIVE",
+    "demotion_event": {
+      "event_id": "event-6363ce530c1a2704b101a7be",
+      "feature": "speculative_prefetch_injection",
+      "from_stage": "CANARY",
+      "to_stage": "SHADOW",
+      "status": "HELD",
+      "promotion_refused": true,
+      "reason": "Promotion refused due to negative effect; candidate demoted to SHADOW",
+      "evidence_refs": [
+        "observation:obs-f3d5ead403b84447550e5e1c",
+        "credit:UNRELATED_NEGATIVE"
+      ],
+      "created_at": "2026-09-05T17:18:03.322929+00:00"
+    },
+    "final_stage": "SHADOW"
+  },
+  "rollout_transitions": [
+    {
+      "event_id": "event-2afe3116fe163b5ed87917a7",
+      "feature": "speculative_prefetch_injection",
+      "from_stage": "OFF",
+      "to_stage": "SHADOW",
+      "reason": "Simulated shadow",
+      "evidence_refs_json": "[]",
+      "actor": "system",
+      "created_at": "2026-09-05T17:18:03.241915+00:00",
+      "evidence_refs": []
+    },
+    {
+      "event_id": "event-39856be6cc0ebf3a611fd572",
+      "feature": "speculative_prefetch_injection",
+      "from_stage": "SHADOW",
+      "to_stage": "ADVISORY",
+      "reason": "Simulated advisory",
+      "evidence_refs_json": "[]",
+      "actor": "system",
+      "created_at": "2026-09-05T17:18:03.262180+00:00",
+      "evidence_refs": []
+    },
+    {
+      "event_id": "event-1a5ab2c65980bd75469da5d8",
+      "feature": "speculative_prefetch_injection",
+      "from_stage": "ADVISORY",
+      "to_stage": "CANARY",
+      "reason": "Simulated canary",
+      "evidence_refs_json": "[]",
+      "actor": "system",
+      "created_at": "2026-09-05T17:18:03.281309+00:00",
+      "evidence_refs": []
+    },
+    {
+      "event_id": "event-6363ce530c1a2704b101a7be",
+      "feature": "speculative_prefetch_injection",
+      "from_stage": "CANARY",
+      "to_stage": "SHADOW",
+      "reason": "PROMOTION_REFUSED_NEGATIVE_EFFECT: Exercise negative-evidence refusal",
+      "evidence_refs_json": "[\"observation:obs-f3d5ead403b84447550e5e1c\",\"credit:UNRELATED_NEGATIVE\"]",
+      "actor": "system",
+      "created_at": "2026-09-05T17:18:03.322929+00:00",
+      "evidence_refs": [
+        "observation:obs-f3d5ead403b84447550e5e1c",
+        "credit:UNRELATED_NEGATIVE"
+      ]
+    }
+  ],
+  "conclusion": "SHADOW: negative mechanism exercised and evidence preserved."
+}

@@ -1,3 +1,25 @@
+## 2026-09-05 — Local budget and qualification closure (unreleased, HOLD)
+
+- Bound every Brainstem injection decision by remaining total allowance,
+  operation cap, and available context. Preserve explicit zero; reject invalid
+  token counts; abstain when the useful minimum cannot fit.
+- Make qualification fail closed on missing or incomplete manifests, canonical
+  Gate coverage, source/configuration mismatch, unsupported provenance, and
+  unresolved or tampered evidence. Bind SQL/package data as well as Python.
+- Keep simulated self-improvement reports as mechanism evidence, ineligible
+  for production activation, economics, or release qualification.
+- Replace rollout caller booleans with persisted `credit_observation_id` and
+  `qualification_manifest`. Recompute authenticated causal credit and require
+  the actual verifier process to bind the exact observation artifact.
+- Adopt cancellation accounting in place of automatic cancelled delivery;
+  preserve OMP suppression. Cancellation remains unqualified: lost host
+  authority and per-job physical-cleanup authority are not closed.
+- Fresh proof: 1,914 Python tests, 697 extension tests, Pyright, changed-file
+  Ruff, disposable Doctor, backup/restore, and native host-to-Brain smoke.
+  Full ESLint retains four inherited unused-import errors in unchanged tests.
+- No deployment, provider calls, active rollout, Gate 22/23 closure, or tag.
+  [Evidence and contract](outputs/reports/v2/omp-burnin/20260905-local-contract-closure/).
+
 ## 2026-09-05 — Exact native dispatch binding (unreleased, HOLD)
 
 - Bind pending workers by the manager-returned `progress.jobId`; retain

@@ -1,0 +1,8 @@
+{
+  "classification": "simulation",
+  "productionActivation": false,
+  "qualificationEligible": false,
+  "exit": 0,
+  "stdout": "Wrote Scenario A mechanism evidence to <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\outputs\\reports\\v2\\v2-i\\scenario-a-mechanism.json\r\nWrote Scenario B mechanism evidence to <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\outputs\\reports\\v2\\v2-i\\scenario-b-mechanism.json\r\nWrote ineligible mechanism report to <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\outputs\\reports\\v2\\v2-i\\qualification-mechanism.json\r\n",
+  "stderr": ""
+}
