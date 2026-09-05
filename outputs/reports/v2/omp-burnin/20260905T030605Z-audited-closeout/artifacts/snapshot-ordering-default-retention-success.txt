@@ -1,0 +1,4 @@
+exit=0
+signal=null
+killed=false
+{"defaultRetentionMs":300000,"visibleAtSinkEntry":true,"visibleBeforeDelayedMessageCommit":false,"deliveryStillPending":true,"statusBefore":"completed","agentIdBefore":"worker"}
