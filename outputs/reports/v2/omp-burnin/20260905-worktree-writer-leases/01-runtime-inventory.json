@@ -1,0 +1,13 @@
+{
+  "process_inventory": {
+    "exit": 0,
+    "stdout": "[{\"ProcessId\":48124,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":62064,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":46348,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":59140,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":53932,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":22268,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"},{\"ProcessId\":33172,\"ExecutablePath\":\"<USERPROFILE>\\\\.bun\\\\bin\\\\bun.exe\"}]\r\n",
+    "stderr": ""
+  },
+  "scope": "Executable inventory only; not proof that current disk source is loaded into an existing process.",
+  "environment_preparation": {
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Using CPython 3.11.15 interpreter at: <USERPROFILE>\\Documents\\The-Second-Brain-local-contract-closure\\.venv\\Scripts\\python.exe\nCreating virtual environment at: .venv\nerror: Unable to find lockfile at `uv.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.\n"
+  }
+}
