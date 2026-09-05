@@ -77,7 +77,7 @@ def test_detach_keeps_whitespace_only_agents_file(brain_home, repo):
     changes = registry.detach_project(brain_home, repo.name)
     assert changes["marker_removed"] is True
     assert (repo / "AGENTS.md").exists()
-    assert (repo / "AGENTS.md").read_text(encoding="utf-8", newline="") == "\n\n"
+    assert (repo / "AGENTS.md").read_bytes() == b"\n\n"
 
 
 def test_detach_removes_managed_manifest_keeps_user_manifest(brain_home, repo, tmp_path):
