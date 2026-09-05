@@ -263,7 +263,8 @@ def test_unresolved_project_default_memory_suppressed_and_global_policy_allowed(
     default_proj_mem = _add_memory(
         brain_home,
         "Fallback runtime config default",
-        "Default project local configuration for internal worker timeout",
+        "Default project local configuration for internal worker timeout. "
+        "Violetwidget beaconthrottle localonly settingresolve.",
         project_id="default",
         scope="project",
     )
@@ -295,7 +296,7 @@ def test_unresolved_project_default_memory_suppressed_and_global_policy_allowed(
 
     # Query matching ONLY the default project-scoped memory -> NO_INJECTION (WRONG_PROJECT)
     dec_only_default = lifecycle.prepare_injection(
-        "fallback runtime config default local configuration",
+        "violetwidget beaconthrottle localonly settingresolve",
         project_id=None,
         cwd=None,
         agent_id="driver",

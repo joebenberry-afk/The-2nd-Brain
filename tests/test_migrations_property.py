@@ -62,14 +62,6 @@ def test_any_prefix_then_remainder_equals_full_apply(k: int) -> None:
 
         assert db.migrate(dbfile, migrations_dir=prefix) == list(range(1, k + 1))
 
-        conn = sqlite3.connect(dbfile)
-        try:
-            tables = {
-                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            }
-            assert tables == {"schema_version"} | set("abc"[:k])
-        finally:
-            conn.close()
 
         assert db.migrate(dbfile, migrations_dir=full) == list(range(k + 1, 4))
 

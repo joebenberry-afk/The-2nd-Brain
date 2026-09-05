@@ -27,6 +27,7 @@ from .contracts import (
     WorkerContextResolution,
     WorkerLifecycle,
     WorkerPacketError,
+    WorkerResultPacket,
     WorkerTaskPacket,
     canonical_json,
     estimate_tokens,
@@ -611,6 +612,15 @@ def verify_result_binding(
         return "PROTOCOL_ERROR"
     conn = db.connect(_worker_db(home))
     try:
+        receipt = conn.execute(
+            "SELECT packet_sha256,result_sha256 FROM worker_task_results WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        if receipt is not None and (
+            receipt["packet_sha256"] == packet_sha256.lower()
+            and receipt["result_sha256"] == result_sha256.lower()
+        ):
+            return None
         meta = conn.execute(
             "SELECT session_id FROM worker_task_meta WHERE task_id=?", (task_id,)
         ).fetchone()
@@ -803,6 +813,22 @@ def record_worker_event(
     target = _WORKER_EVENT_STATES.get(event_key)
     if target is None and event_key != "delivered":
         raise WorkerPacketError("INVALID_TRANSITION", f"unknown worker event: {event}")
+    result_digest: str | None = None
+    receipt_json: str | None = None
+    if (
+        target in WorkerLifecycle.TERMINAL_STATES
+        and isinstance(payload, dict)
+        and payload.get("result_sha256")
+    ):
+        result_digest = _packet_hash(payload["result_sha256"])
+        result_packet = WorkerResultPacket.from_dict(payload)
+        if (
+            result_packet.task_id != task_id
+            or _WORKER_EVENT_STATES[result_packet.status] != target
+            or result_packet.canonical_hash() != result_digest
+        ):
+            raise WorkerPacketError("PROTOCOL_ERROR", "result payload does not match its receipt")
+        receipt_json = result_packet.canonical_json()
     current = _as_dt(now)
     updated = current.isoformat()
     conn = db.connect(_worker_db(home))
@@ -817,8 +843,14 @@ def record_worker_event(
         if row["state"] in WorkerLifecycle.TERMINAL_STATES:
             # Terminal tasks are immutable; a late transport ack is harmless.
             if event_key == "delivered" or row["state"] == target:
+                receipt = conn.execute(
+                    "SELECT result_sha256 FROM worker_task_results WHERE task_id=?", (task_id,)
+                ).fetchone()
                 conn.commit()
-                return _result(row, duplicate=True)
+                out = _result(row, duplicate=True)
+                if receipt is not None:
+                    out["result_sha256"] = receipt["result_sha256"]
+                return out
             raise WorkerPacketError("INVALID_TRANSITION", "terminal worker task is immutable")
         if event_key == "delivered":
             meta = conn.execute(
@@ -888,6 +920,18 @@ def record_worker_event(
             "UPDATE worker_task_meta SET session_id=COALESCE(session_id,?), updated_at=? WHERE task_id=?",
             (session_id, updated, task_id),
         )
+        if receipt_json is not None:
+            conn.execute(
+                "INSERT INTO worker_task_results("
+                "task_id,packet_sha256,result_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?)",
+                (
+                    task_id,
+                    digest,
+                    result_digest,
+                    receipt_json,
+                    updated,
+                ),
+            )
         conn.commit()
         changed = _task_row(conn, task_id)
         assert changed is not None
@@ -910,6 +954,8 @@ def record_worker_event(
                 },
             )
         out = _result(changed)
+        if isinstance(payload, dict) and payload.get("result_sha256"):
+            out["result_sha256"] = payload["result_sha256"]
     except Exception:
         conn.rollback()
         raise

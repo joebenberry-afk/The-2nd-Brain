@@ -296,7 +296,11 @@ describe("index.ts wiring (real factory, fake ExtensionAPI)", () => {
         handlers.set(name, handler);
       },
     } as unknown as ExtensionAPI;
-    factory(pi);
+    factory(pi, {
+      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+      ompRoutingRunner: async () => ({ decision: null }),
+      ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
+    });
     return { handlers, api: pi };
   }
 
@@ -424,7 +428,11 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
         handlers.set(name, handler);
       },
     } as unknown as ExtensionAPI;
-    factory(pi);
+    factory(pi, {
+      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+      ompRoutingRunner: async () => ({ decision: null }),
+      ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
+    });
     return handlers;
   }
 

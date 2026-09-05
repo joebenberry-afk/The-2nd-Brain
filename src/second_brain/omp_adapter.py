@@ -7,7 +7,6 @@ calls the existing Brain primitives.
 
 from __future__ import annotations
 
-import contextlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -251,58 +250,15 @@ def _worker_result_identity(
     }
 
 
-def _synthesize_failed_result(
-    home: Path, task_id: str, failure_code: str
-) -> contracts.WorkerResultPacket:
-    dispatch = worker_protocol.dispatch_snapshot(home, task_id)
-    requested_role = dispatch.get("requested_role") if isinstance(dispatch, dict) else None
-    role = requested_role if requested_role in contracts.WORKER_ROLES else "worker"
-    return contracts.WorkerResultPacket(
-        task_id=task_id,
-        worker_identity=contracts.AgentIdentity(
-            agent_id=f"omp-unavailable:{task_id}",
-            internal_session_id="unavailable",
-            host_agent_id="omp",
-            parent_agent_id=None,
-            role_profile=role,
-            model="unknown",
-            provider="omp",
-            created_at=datetime.now(UTC).isoformat(),
-        ),
-        status="failed",
-        failure_code=failure_code,
-        retryable=True,
-    ).validate()
-
-
-def _fail_worker_result(
-    home: Path,
-    task_id: str,
-    packet_sha256: str,
-    failure_code: str,
-    session_id: str | None,
-) -> dict[str, Any]:
-    with contextlib.suppress(Exception):
-        _synthesize_failed_result(home, task_id, failure_code)
-    with contextlib.suppress(Exception):
-        worker_protocol.record_worker_event(
-            home,
-            task_id,
-            packet_sha256,
-            "failed",
-            payload={"failure_code": failure_code, "task_id": task_id},
-            session_id=session_id,
-            host="omp",
-        )
-    return {"status": "failed", "failure_code": failure_code, "task_id": task_id}
-
-
 def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     task_id = _text(payload.get("task_id"))
     packet_sha256 = _text(payload.get("packet_sha256"))
     if not task_id or not packet_sha256:
         return {"status": "failed", "failure_code": "MALFORMED_RESULT"}
     session_id = _text(payload.get("host_session_id") or payload.get("session_id")) or None
+    owner = worker_protocol.task_owner_session(home, task_id, packet_sha256)
+    if session_id is None or owner != session_id:
+        return {"status": "failed", "failure_code": "UNAUTHORIZED_WORKER", "task_id": task_id}
     try:
         result = to_result_packet(
             {
@@ -311,7 +267,7 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
             }
         )
     except contracts.WorkerPacketError as exc:
-        return _fail_worker_result(home, task_id, packet_sha256, exc.code, session_id)
+        return {"status": "failed", "failure_code": exc.code, "task_id": task_id}
     dispatch = worker_protocol.dispatch_snapshot(home, result.task_id)
     if isinstance(dispatch, dict):
         requested_role = dispatch.get("requested_role")
@@ -319,11 +275,9 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
             isinstance(requested_role, str)
             and result.worker_identity.role_profile != requested_role
         ):
-            return _fail_worker_result(
-                home, task_id, packet_sha256, "UNAUTHORIZED_WORKER", session_id
-            )
+            return {"status": "failed", "failure_code": "UNAUTHORIZED_WORKER", "task_id": task_id}
     try:
-        worker_protocol.record_worker_event(
+        receipt = worker_protocol.record_worker_event(
             home,
             result.task_id,
             packet_sha256,
@@ -337,13 +291,21 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
         )
     except contracts.WorkerPacketError as exc:
         return {"status": "failed", "failure_code": exc.code, "task_id": result.task_id}
+    result_sha256 = receipt.get("result_sha256")
+    if not isinstance(result_sha256, str):
+        return {
+            "status": "failed",
+            "failure_code": "RESULT_NOT_RECORDED",
+            "task_id": result.task_id,
+        }
     return {
         "status": result.status,
         "failure_code": result.failure_code,
         "task_id": result.task_id,
         "packet_sha256": packet_sha256,
-        "result_sha256": result.canonical_hash(),
+        "result_sha256": result_sha256,
     }
+
 
 def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return one bounded OMP routing or worker-context response."""

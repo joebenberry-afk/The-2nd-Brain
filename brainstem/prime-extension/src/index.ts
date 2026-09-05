@@ -539,6 +539,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       home: config.home ?? "",
       hostSessionId: sessionId,
       cwd: opts.cwd,
+      parentSessionId: workerParentSessions.get(sessionId),
       record: {
         kind,
         fields,
@@ -563,39 +564,39 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const stopStates = new Map<string, StopBoundaryState>();
   const stopControlCalls = new Set<string>();
   const workerParentSessions = new Map<string, string>();
-  // Correlates an OMP async job/agent id (e.g. "ConsistentTarantula") back to
-  // the Second Brain worker packet identity, captured from the SPAWNING
-  // `tool_result`'s `details.progress[]` (which always carries the marker-
-  // embedded task text, even when `details.results` is empty for a
-  // background spawn — the default execution mode observed live in this
-  // qualification campaign). Without this, worker completion telemetry and
-  // durable lifecycle recording never fire, because the actual completion
-  // for a background spawn is delivered through a LATER `hub` tool_result
-  // (`op:"wait"`/`"jobs"`), never a second `tool_result` for `toolName ===
-  // "task"`.
+  // Spawn progress binds native job ids to packets; async-result and hub
+  // deliveries later settle those same correlations.
   const pendingWorkerJobs = new Map<
     string,
     { taskId: string; packetSha256: string; parentSessionId: string; agent: string }
   >();
-  /**
-   * Atomically read and remove one pending worker-job correlation record so
-   * two independent completion observers (`hub jobs`/`wait` tool_result and
-   * OMP's auto-delivered `message_end` async-result notice) can race safely
-   * without either double-consuming the same spawn-time correlation entry.
-   * `emitWorkerCompletion`'s `reportedWorkerTaskIds` dedupe is the second,
-   * independent guard against a duplicate Second Brain result.
-   */
+  const pendingWorkerTaskIds = new Set<string>();
+  const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
+    try {
+      pi.appendEntry?.(customType, data);
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    }
+  };
+  // Retain correlation until durable acceptance; claims serialize observers.
   const takePendingWorkerJob = (
     agentId: string,
-  ): { taskId: string; packetSha256: string; parentSessionId: string; agent: string } | undefined => {
-    const pending = pendingWorkerJobs.get(agentId);
-    if (pending === undefined) return undefined;
-    pendingWorkerJobs.delete(agentId);
-    return pending;
-  };
+    session: string,
+  ): { taskId: string; packetSha256: string; parentSessionId: string; agent: string } | undefined =>
+    pendingWorkerJobs.get(JSON.stringify([session, agentId]));
   // A settled hub job can be re-observed by repeated `hub jobs`/`wait` polls;
   // report each worker's completion exactly once.
   const reportedWorkerTaskIds = new Set<string>();
+  const workerCompletionsInFlight = new Set<string>();
+  const observedWorkerTaskIds = new Set<string>();
+  const rememberWorkerIdentity = (set: Set<string>, id: string): void => {
+    set.add(id);
+    if (set.size > 1024) {
+      const oldest = set.values().next().value;
+      if (oldest !== undefined) set.delete(oldest);
+    }
+  };
+  const workerRecoverySessions = new Set<string>();
   const environmentTaskHashes = new Map<string, string>();
   const stopStateFor = (session: string): StopBoundaryState => {
     const existing = stopStates.get(session);
@@ -613,7 +614,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const lastProvider = new Map<string, string | null>();
   const lastModel = new Map<string, string | null>();
   const lastCacheReadTokens = new Map<string, number | null>();
-  const previousRenderedView = new Map<string, unknown>();
   const sessionBeforeCompactOccurred = new Set<string>();
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
@@ -663,9 +663,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       return { block: true, reason: "P3.2 worker context requires object task items" };
     }
     if (items.length === 0 && typeof input.task === "string") {
-      items.push({ task: input.task, agent: input.agent, name: input.name });
+      items.push(input);
     }
     if (items.length === 0) return undefined;
+    if (typeof event.toolCallId !== "string" || event.toolCallId.length === 0) {
+      return { block: true, reason: "BRAIN_WORKER_DISPATCH_ID_REQUIRED" };
+    }
+    if (items.some((item) => typeof item.task !== "string" || item.task.trim() === "")) {
+      return { block: true, reason: "P3.2 worker context requires a non-empty task" };
+    }
+    const taskIds = items.map((_, index) => `omp-${taskSha256(JSON.stringify([session, event.toolCallId, index]))}`);
+    const reservations = taskIds.filter((id) => !pendingWorkerTaskIds.has(id));
+    if (pendingWorkerTaskIds.size + reservations.length > 1024) {
+      return { block: true, reason: "BRAIN_WORKER_PENDING_LIMIT" };
+    }
+    for (const id of reservations) pendingWorkerTaskIds.add(id);
     const batch = batchItems.length > 0;
     const modelId = sensors.modelToString(ctx.model) ?? "unknown";
     const provider = typeof ctx.model?.provider === "string" ? ctx.model.provider : "unknown";
@@ -674,12 +686,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     const augmented: Array<Record<string, unknown>> = [];
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
-      const rawTask = item.task;
-      if (typeof rawTask !== "string" || rawTask.trim() === "") {
-        return { block: true, reason: "P3.2 worker context requires a non-empty task" };
-      }
+      const rawTask = item.task as string;
       const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
-      const taskId = `omp-${taskSha256(`${session}:${task}`)}`;
+      const taskId = taskIds[index];
       const result = await safeWorkerContextRunner({
         home: config.home ?? "",
         sessionId: session,
@@ -700,6 +709,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         contextRefs: Array.isArray(input.context_refs) ? input.context_refs.filter((ref): ref is string => typeof ref === "string") : undefined,
       });
       if (!result.ok || result.contextHandoff === undefined || result.contextMetadata === undefined) {
+        for (const id of reservations) pendingWorkerTaskIds.delete(id);
         const reason = result.error ?? "P3.2 worker context preparation failed";
         getStore(session)?.append(
           ompRoutingRecord("omp_worker_context_failure", session, {
@@ -733,7 +743,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       getStore(session)?.append(ompRoutingRecord("omp_worker_context_handoff", session, metadataRecord));
       mirror(session, "task_context_resolved", metadataRecord, { cwd: ctxCwd(ctx) });
       augmented.push({
-        task: `${task}\n\n[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${renderOmpWorkerContext(result.contextHandoff)}`,
+        ...item,
+        task: `${rawTask}\n\n[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${renderOmpWorkerContext(result.contextHandoff)}`,
       });
     }
     if (batch) return { input: { ...input, tasks: augmented } };
@@ -753,12 +764,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     },
     summaryText: string,
   ): Promise<void> => {
-    if (reportedWorkerTaskIds.has(fields.task_id)) return;
-    reportedWorkerTaskIds.add(fields.task_id);
-    getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
-    mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+    if (reportedWorkerTaskIds.has(fields.task_id) || workerCompletionsInFlight.has(fields.task_id)) return;
+    workerCompletionsInFlight.add(fields.task_id);
+    if (!observedWorkerTaskIds.has(fields.task_id)) {
+      rememberWorkerIdentity(observedWorkerTaskIds, fields.task_id);
+      getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
+    }
     try {
-      await workerResultRunner({
+      // The host journal is recovery input, not a Brain acceptance receipt.
+      journalWorkerEvent(session, "second-brain.worker-result-pending", { session, fields, summary: summaryText.slice(0, 2048) });
+      const outcome = await workerResultRunner({
         home: config.home ?? "",
         sessionId: session,
         taskId: fields.task_id,
@@ -769,24 +784,100 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         summary: summaryText.slice(0, 2048),
         childOmpAgentId: fields.child_omp_agent_id ?? "",
       });
-    } catch {
-      // Brain-side lifecycle recording is best-effort; local telemetry above
-      // already captured this result and must never be blocked by it.
+      if (!outcome.ok) throw new Error(outcome.error ?? "BRAIN_WORKER_RESULT_NOT_ACCEPTED");
+      rememberWorkerIdentity(reportedWorkerTaskIds, fields.task_id);
+      pendingWorkerTaskIds.delete(fields.task_id);
+      for (const [key, job] of pendingWorkerJobs) if (job.taskId === fields.task_id) pendingWorkerJobs.delete(key);
+      journalWorkerEvent(session, "second-brain.worker-result-accepted", { session, taskId: fields.task_id });
+      mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    } finally {
+      workerCompletionsInFlight.delete(fields.task_id);
+    }
+  };
+  const recoverWorkerResults = async (session: string, ctx: ExtensionContext): Promise<void> => {
+    if (workerRecoverySessions.has(session)) return;
+    rememberWorkerIdentity(workerRecoverySessions, session);
+    const pending = new Map<string, { fields: Parameters<typeof emitWorkerCompletion>[2]; summary: string }>();
+    let recoveryLimited = false;
+    for (const entry of ctx.sessionManager?.getEntries?.() ?? []) {
+      if (entry === null || typeof entry !== "object" || !("type" in entry) || entry.type !== "custom" ||
+          !("customType" in entry) || !("data" in entry)) continue;
+      const data = entry.data;
+      if (data === null || typeof data !== "object" || !("session" in data) || data.session !== session) continue;
+      if (entry.customType === "second-brain.worker-job-pending" &&
+          "agentId" in data && typeof data.agentId === "string" && data.agentId.length <= 512 &&
+          "taskId" in data && typeof data.taskId === "string" && data.taskId.length <= 512 &&
+          "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
+          "agent" in data && typeof data.agent === "string" && data.agent.length <= 512) {
+        if (reportedWorkerTaskIds.has(data.taskId)) continue;
+        const key = JSON.stringify([session, data.agentId]);
+        if ((!pendingWorkerJobs.has(key) && pendingWorkerJobs.size >= 1024) ||
+            (!pendingWorkerTaskIds.has(data.taskId) && pendingWorkerTaskIds.size >= 1024)) {
+          recoveryLimited = true;
+          continue;
+        }
+        pendingWorkerTaskIds.add(data.taskId);
+        pendingWorkerJobs.set(JSON.stringify([session, data.agentId]), {
+          taskId: data.taskId, packetSha256: data.packetSha256, parentSessionId: session, agent: data.agent,
+        });
+        continue;
+      }
+      if (entry.customType === "second-brain.worker-result-accepted" && "taskId" in data && typeof data.taskId === "string") {
+        pending.delete(data.taskId);
+        pendingWorkerTaskIds.delete(data.taskId);
+        rememberWorkerIdentity(reportedWorkerTaskIds, data.taskId);
+        for (const [key, job] of pendingWorkerJobs) if (job.taskId === data.taskId) pendingWorkerJobs.delete(key);
+        continue;
+      }
+      if (entry.customType !== "second-brain.worker-result-pending" || !("fields" in data)) continue;
+      const f = data.fields;
+      if (f === null || typeof f !== "object" ||
+          !("task_id" in f) || typeof f.task_id !== "string" || f.task_id.length > 512 ||
+          !("packet_sha256" in f) || typeof f.packet_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(f.packet_sha256) ||
+          !("status" in f) || (f.status !== "completed" && f.status !== "failed" && f.status !== "cancelled") ||
+          !("worker_agent" in f) || typeof f.worker_agent !== "string") continue;
+      if (reportedWorkerTaskIds.has(f.task_id)) continue;
+      if (!pending.has(f.task_id) && pending.size >= 1024) {
+        recoveryLimited = true;
+        continue;
+      }
+      pending.set(f.task_id, {
+        fields: {
+          task_id: f.task_id, packet_sha256: f.packet_sha256, status: f.status, worker_agent: f.worker_agent,
+          child_omp_agent_id: "child_omp_agent_id" in f && typeof f.child_omp_agent_id === "string" ? f.child_omp_agent_id : null,
+          child_omp_session_file: "child_omp_session_file" in f && typeof f.child_omp_session_file === "string" ? f.child_omp_session_file : null,
+          worker_model: "worker_model" in f && typeof f.worker_model === "string" ? f.worker_model : null,
+        },
+        summary: "summary" in data && typeof data.summary === "string" ? data.summary.slice(0, 2048) : "",
+      });
+    }
+    // Bound work at each native resume; overflow stays in the journal, not lost.
+    if (pending.size > 128 || recoveryLimited) {
+      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RECOVERY_LIMIT"));
+      workerRecoverySessions.delete(session);
+    }
+    for (const { fields, summary } of [...pending.values()].slice(0, 128)) {
+      rememberWorkerIdentity(observedWorkerTaskIds, fields.task_id);
+      await emitWorkerCompletion(session, ctx, fields, summary);
     }
   };
   const WORKER_TASK_MARKER_RE = /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/;
-  // Matches one OMP auto-delivered `<task-result id="..." ... status="...">...`
-  // block embedded as text inside a `message_end` custom `async-result`
-  // notice (live-confirmed shape, see 09-worker-result-undercount-defect.md).
-  // Group 1 = OMP agent id, group 2 = terminal status; the full match is
-  // reused verbatim as the worker-result summary text.
-  const TASK_RESULT_BLOCK_RE = /<task-result\s+id="([^"]*)"[^>]*\sstatus="([^"]*)"[^>]*>[\s\S]*?<\/task-result>/g;
   const recordWorkerChildResults = async (
     event: ToolResultEvent,
     ctx: ExtensionContext,
     session: string,
   ): Promise<void> => {
-    if (event.toolName !== "task" || event.details == null || typeof event.details !== "object") return;
+    if (event.toolName !== "task") return;
+    if (event.isError) {
+      const count = Array.isArray(event.input.tasks) ? event.input.tasks.length : 1;
+      for (let index = 0; index < count; index += 1) {
+        pendingWorkerTaskIds.delete(`omp-${taskSha256(JSON.stringify([session, event.toolCallId, index]))}`);
+      }
+    }
+    if (event.details == null || typeof event.details !== "object") return;
+    await recoverWorkerResults(session, ctx);
     const details = event.details as Record<string, unknown>;
     // Background spawns (this OMP version's default for the generic `task`
     // agent, confirmed live) return `results: []` on the spawning tool_result
@@ -801,13 +892,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         const agentId = typeof entry.id === "string" ? entry.id : undefined;
         const entryTask = typeof entry.task === "string" ? entry.task : "";
         const marker = entryTask.match(WORKER_TASK_MARKER_RE);
-        if (agentId === undefined || marker === null || pendingWorkerJobs.has(agentId)) continue;
-        pendingWorkerJobs.set(agentId, {
+        if (agentId === undefined || marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
+        if (reportedWorkerTaskIds.has(marker[1])) continue;
+        const key = JSON.stringify([session, agentId]);
+        if (pendingWorkerJobs.has(key)) continue;
+        if (pendingWorkerJobs.size >= 1024 ||
+            (!pendingWorkerTaskIds.has(marker[1]) && pendingWorkerTaskIds.size >= 1024)) {
+          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_PENDING_LIMIT"));
+          continue;
+        }
+        pendingWorkerTaskIds.add(marker[1]);
+        pendingWorkerJobs.set(key, {
           taskId: marker[1],
           packetSha256: marker[2],
           parentSessionId: marker[3] ?? session,
           agent: typeof entry.agent === "string" ? entry.agent : "unknown",
         });
+        journalWorkerEvent(session, "second-brain.worker-job-pending", { session, agentId, ...pendingWorkerJobs.get(key) });
       }
     }
     const rawResults = details.results;
@@ -817,7 +918,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const result = rawResult as Record<string, unknown>;
       const taskText = typeof result.task === "string" ? result.task : "";
       const marker = taskText.match(WORKER_TASK_MARKER_RE);
-      if (marker === null) continue;
+      if (marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
+      if (result.aborted !== true && typeof result.abortReason !== "string" && event.isError !== true &&
+          (typeof result.exitCode !== "number" || !Number.isFinite(result.exitCode))) continue;
       const status =
         result.aborted === true || typeof result.abortReason === "string"
           ? "cancelled"
@@ -825,7 +928,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             ? "failed"
             : "completed";
       const agentId = typeof result.id === "string" ? result.id : null;
-      if (agentId !== null) pendingWorkerJobs.delete(agentId);
       const firstBlock = Array.isArray(event.content) ? event.content[0] : undefined;
       const summaryText =
         firstBlock != null && typeof firstBlock === "object" && "text" in firstBlock && typeof firstBlock.text === "string"
@@ -847,32 +949,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       );
     }
   };
-  /**
-   * Background task completions never produce a second `tool_result` for
-   * `toolName === "task"`; the caller instead learns about them by polling
-   * `hub` (`op:"jobs"`/`"wait"`), whose settled `details.jobs[]` entries
-   * (`{ id, type, status: "running"|"completed"|"failed" }`, live-confirmed
-   * shape) carry only the OMP-assigned agent id, not the Second Brain packet
-   * identity. Correlate via the `pendingWorkerJobs` map populated by
-   * `recordWorkerChildResults` at spawn time.
-   */
+  /** Observe explicit hub delivery using the same durable settlement as auto-delivery. */
   const recordAsyncWorkerCompletions = async (
     event: ToolResultEvent,
     ctx: ExtensionContext,
-    _session: string,
+    session: string,
   ): Promise<void> => {
     if (event.toolName !== "hub" || event.details == null || typeof event.details !== "object") return;
     const rawJobs = (event.details as Record<string, unknown>).jobs;
     if (!Array.isArray(rawJobs)) return;
+    await recoverWorkerResults(session, ctx);
     for (const rawJob of rawJobs) {
       if (rawJob == null || typeof rawJob !== "object") continue;
       const job = rawJob as Record<string, unknown>;
-      if (job.type !== "task" || job.status === "running") continue;
+      if (job.type !== "task" || !["completed", "failed", "cancelled"].includes(String(job.status))) continue;
       const agentId = typeof job.id === "string" ? job.id : undefined;
       if (agentId === undefined) continue;
-      const pending = takePendingWorkerJob(agentId);
+      const pending = takePendingWorkerJob(agentId, session);
       if (pending === undefined) continue;
-      const status = job.status === "completed" ? "completed" : "failed";
+      const status = job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed";
       const summaryText =
         typeof job.resultText === "string"
           ? job.resultText
@@ -913,31 +1008,60 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     ctx: ExtensionContext,
   ): Promise<void> => {
     if (message.role !== "custom" || message.customType !== "async-result") return;
-    const content = message.content;
-    if (typeof content !== "string") return;
-    const blocks = content.matchAll(TASK_RESULT_BLOCK_RE);
-    for (const block of blocks) {
-      const agentId = block[1];
-      const rawStatus = block[2];
-      if (typeof agentId !== "string" || agentId.length === 0) continue;
-      const pending = takePendingWorkerJob(agentId);
-      if (pending === undefined) continue;
-      const status: "completed" | "failed" = rawStatus === "completed" ? "completed" : "failed";
-      await emitWorkerCompletion(
-        pending.parentSessionId,
-        ctx,
-        {
-          task_id: pending.taskId,
-          packet_sha256: pending.packetSha256,
-          child_omp_agent_id: agentId,
-          child_omp_session_file: null,
-          worker_agent: pending.agent,
-          worker_model: null,
-          status,
-        },
-        block[0],
-      );
+    const details = message.details;
+    if (details === null || typeof details !== "object" || !("jobs" in details) || !Array.isArray(details.jobs)) {
+      throw new Error("BRAIN_WORKER_RESULT_MALFORMED_ENVELOPE");
     }
+    if (details.jobs.length > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
+    const session = resolveSessionId(ctx, anonSession);
+    await recoverWorkerResults(session, ctx);
+    const allowedIds = new Set<string>();
+    for (const job of details.jobs) {
+      if (job !== null && typeof job === "object" && job.type === "task" && typeof job.jobId === "string") allowedIds.add(job.jobId);
+    }
+    if (allowedIds.size === 0) return;
+    const content = typeof message.content === "string" ? message.content :
+      Array.isArray(message.content) ? message.content.flatMap((part) =>
+        part !== null && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n") : "";
+    if (content.length > 256 * 1024) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
+    let depth = 0;
+    let outerStart = 0;
+    let outerHeader = "";
+    let blocks = 0;
+    for (const tag of content.matchAll(/<\/?task-result\b[^>]*>/g)) {
+      if (!tag[0].startsWith("</")) {
+        if (depth === 0) {
+          outerStart = tag.index;
+          outerHeader = tag[0];
+        }
+        depth += 1;
+        continue;
+      }
+      if (depth === 0 || --depth !== 0) continue;
+      blocks += 1;
+      if (blocks > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
+      const agentId = outerHeader.match(/\bid="([^"]+)"/)?.[1];
+      const rawStatus = outerHeader.match(/\bstatus="([^"]+)"/)?.[1];
+      if (!agentId || !allowedIds.has(agentId)) continue;
+      const status = rawStatus === "completed" || rawStatus === "cancelled" ? rawStatus :
+        rawStatus === "failed" || rawStatus === "merge failed" || /^failed \(exit -?[1-9]\d*\)$/.test(rawStatus ?? "") ? "failed" : undefined;
+      if (status === undefined) {
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_INVALID_STATUS"));
+        continue;
+      }
+      const pending = takePendingWorkerJob(agentId, session);
+      if (pending === undefined || pending.parentSessionId !== session) continue;
+      await emitWorkerCompletion(pending.parentSessionId, ctx, {
+        task_id: pending.taskId,
+        packet_sha256: pending.packetSha256,
+        child_omp_agent_id: agentId,
+        child_omp_session_file: null,
+        worker_agent: pending.agent,
+        worker_model: null,
+        status,
+      }, content.slice(outerStart, tag.index + tag[0].length));
+    }
+    if (depth !== 0 || blocks === 0) throw new Error("BRAIN_WORKER_RESULT_MALFORMED_ENVELOPE");
   };
   const mirrorWorkerContextReceipt = (
     prompt: string,
@@ -1328,6 +1452,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session: string,
     event: BeforeAgentStartEvent,
     context: ExtensionContext,
+    roleProfile: string,
   ): AdvisoryAutoInjectCall => ({
     home: config.home ?? "",
     session,
@@ -1336,6 +1461,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     cwd: typeof context.cwd === "string" ? context.cwd : undefined,
     projectId: resolvedProjectIdForSession(session) ?? resolveProject(),
     cfg: loadAutoInjectHostConfig(config.home),
+    roleProfile,
     append: (record) => getStore(session)?.append(record),
   });
 
@@ -1472,6 +1598,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
       session = resolveSessionId(ctx, anonSession);
+      const modelId = sensors.modelToString(ctx.model) ?? undefined;
+      const guardCfg = loadOrchestratorGuardConfig();
+      const role = resolveAgentRole(
+        modelId,
+        loadDriverOrchestratorConfig(),
+        guardCfg.orchestratorModels,
+      );
+      await recoverWorkerResults(session, ctx);
       mirrorWorkerContextReceipt(typeof event.prompt === "string" ? event.prompt : "", session, ctx);
       const environmentPrompt = typeof event.prompt === "string" ? event.prompt : "";
       const taskHash = taskSha256(environmentPrompt);
@@ -1546,7 +1680,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
-        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
+        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx, role));
         // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
         // (delivery_id + packet_tokens) is the structured, non-transcript
         // reference already computed by messageFromOutcome (autoinject.ts)
@@ -1598,7 +1732,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           }
         }
       } else {
-        void runShadowAutoInject(autoinjectCall(session, event, ctx));
+        void runShadowAutoInject(autoinjectCall(session, event, ctx, role));
       }
       if (config.home && taskText.trim().length > 0) {
         try {
@@ -1644,19 +1778,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         // it MUST carry the cwd or project_id resolves to ''.
         { cwd: ctxCwd(ctx) },
       );
-      const modelId = sensors.modelToString(ctx.model) ?? undefined;
-      const guardCfg = loadOrchestratorGuardConfig();
-      const role = resolveAgentRole(
-        modelId,
-        loadDriverOrchestratorConfig(),
-        guardCfg.orchestratorModels,
-      );
       const budgetCheck = await budgetRunner({
         home: config.home ?? "",
         sessionId: session,
         role,
-      }).catch(() => ({ state: "OK" as const, used: 0, cap: 0 }));
+      }).catch(() => ({ state: "OK" as const, used: null, cap: 0, error: "ACCOUNTING_UNAVAILABLE" }));
       sessionBudgetStates.set(session, budgetCheck.state);
+      if (budgetCheck.error) getStore(session)?.append(sensors.extensionError(session, budgetCheck.error));
       const task = typeof event.prompt === "string" ? event.prompt.slice(0, 2048) : "";
       if (task.length > 0) {
         await ensureRoutingDecision(session, task, ctx, role);
@@ -1910,11 +2038,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         const condE = residentTokens > capacityHard;
 
         const breakPoint = condA || condB || condC || condD || condE;
-        const prevView = previousRenderedView.get(session);
 
         if (!breakPoint) {
-          // Skip paging: return previous view unchanged if available, else undefined
-          return prevView !== undefined && Array.isArray(prevView) ? { messages: prevView } : undefined;
+          // No transformation is needed; preserve the host's current sequence.
+          return undefined;
         }
 
         const paged = pageContext({
@@ -1930,11 +2057,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         lastContextProvider.set(session, currentIdentity.provider);
         lastContextModel.set(session, currentIdentity.model);
 
-        if (paged.messages !== undefined) {
-          previousRenderedView.set(session, paged.messages);
-        } else {
-          previousRenderedView.set(session, event.messages);
-        }
         // the RESIDENT/FAULTED_IN group no longer forces the WHOLE event to
         // discard its patch — `paged.messages` can be defined (Path B
         // reprojection succeeded independently) AT THE SAME TIME as
@@ -2287,18 +2409,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         if (record) getStore(session)?.append(record);
       }
-      // P1 repair: OMP auto-delivered worker-completion notices arrive as a
-      // `message_end` custom message, never a second `tool_result`. This
-      // handler's declared return type is synchronous ({ message } only), so
-      // the correlation/telemetry work below is fire-and-forget; it never
-      // affects the returned message.
-      if (message != null) {
-        void recordAsyncResultDeliveries(message, ctx).catch((error: unknown) => {
+      // Native OMP 18.1.10 awaits extension handlers. Await settlement instead
+      // of abandoning its child process when the host finishes this turn.
+      if (message?.role === "custom" && message.customType === "async-result") {
+        return recordAsyncResultDeliveries(message, ctx).then(() => ({ message: event.message })).catch((error: unknown) => {
           try {
             getStore(session)?.append(sensors.extensionError(session, error));
           } catch {
             // storage failed too — measurement must not crash the session.
           }
+          return { message: event.message };
         });
       }
     } catch (error) {

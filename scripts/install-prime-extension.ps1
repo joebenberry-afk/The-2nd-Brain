@@ -1,7 +1,7 @@
 # Install the Second Brain OMP extension (historically named prime-extension)
 # from this repository, never from Brain state. Defaults to OMP's real
 # auto-discovery directory (~/.omp/agent/extensions); pass -ExtensionsDir to
-# target a different install (for example a separate "Prime Agent" binary).
+# target a different install. Settings are never modified.
 
 [CmdletBinding()]
 param(
@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 if (-not $SourceRoot) { $SourceRoot = Split-Path $PSScriptRoot -Parent }
 $SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
 if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".omp\agent\extensions" }
-if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".omp\agent\settings.json" }
+$ExtensionsDir = [System.IO.Path]::GetFullPath($ExtensionsDir)
 
 $Src = Join-Path $SourceRoot "brainstem\prime-extension\src"
 $TypesSrc = Join-Path $SourceRoot "brainstem\prime-extension\types"
@@ -42,22 +42,50 @@ if (-not (Test-Path (Join-Path $Src "index.ts") -PathType Leaf)) {
     throw "Extension source missing index.ts: $Src"
 }
 
-$SourceManifest = Get-ExtensionManifest (Join-Path $SourceRoot "brainstem\prime-extension")
-if ($SourceManifest.Count -eq 0) { throw "Extension source manifest is empty: $SourceRoot" }
+$ExpectedManifest = @(
+    Get-ChildItem -Path $Src -File -Filter "*.ts" | ForEach-Object {
+        "$($_.Name)`t$((Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant())"
+    }
+    if (Test-Path $TypesSrc -PathType Container) {
+        Get-ChildItem -Path $TypesSrc -File -Filter "*.d.ts" | ForEach-Object {
+            "types/$($_.Name)`t$((Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant())"
+        }
+    }
+) | Sort-Object
+if ($ExpectedManifest.Count -eq 0) { throw "Extension source manifest is empty: $SourceRoot" }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 $BackupDir = Join-Path $SourceRoot "backups\$stamp-prime-extension-pre-install"
 $Stage = Join-Path $ExtensionsDir ".second-brain-install-$stamp"
-
+$Displaced = Join-Path $ExtensionsDir ".second-brain-previous-$stamp"
+if ((Test-Path $ExtensionsDir) -and -not (Test-Path $ExtensionsDir -PathType Container)) {
+    throw "Extensions destination is not a directory: $ExtensionsDir"
+}
+if ((Test-Path $Target) -and -not (Test-Path $Target -PathType Container)) {
+    throw "Extension destination is not a directory: $Target"
+}
 New-Item -ItemType Directory -Force -Path $ExtensionsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
-if (Test-Path $Target) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $BackupDir "extensions") | Out-Null
-    Copy-Item -Recurse -Force $Target (Join-Path $BackupDir "extensions\second-brain")
+$BackupManifest = @(Get-ExtensionManifest $Target)
+$HadExtension = Test-Path $Target -PathType Container
+if ($HadExtension) {
+    $Previous = Join-Path $BackupDir "extensions\second-brain"
+    New-Item -ItemType Directory -Force -Path (Split-Path $Previous) | Out-Null
+    Copy-Item -Recurse -Force $Target $Previous
+    if ((Compare-Object $BackupManifest (Get-ExtensionManifest $Previous)).Count -ne 0) {
+        throw "Pre-install backup does not match the existing extension"
+    }
 }
-if (Test-Path $SettingsFile -PathType Leaf) {
+if ($SettingsFile -and (Test-Path $SettingsFile -PathType Leaf)) {
     New-Item -ItemType Directory -Force -Path (Join-Path $BackupDir "settings") | Out-Null
     Copy-Item -Force $SettingsFile (Join-Path $BackupDir "settings\settings.json")
 }
+$BackupRecord = [ordered]@{
+    schema_version = 1
+    target = $Target
+    had_extension = [bool]$HadExtension
+    extension_manifest = @($BackupManifest)
+}
+$BackupRecord | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 -Path (Join-Path $BackupDir "install.json")
 
 try {
     New-Item -ItemType Directory -Force -Path $Stage | Out-Null
@@ -66,14 +94,25 @@ try {
         New-Item -ItemType Directory -Force -Path (Join-Path $Stage "types") | Out-Null
         Copy-Item -Force (Join-Path $TypesSrc "*.d.ts") (Join-Path $Stage "types")
     }
-    $InstalledManifest = Get-ExtensionManifest $Stage
-    $ExpectedManifest = @($SourceManifest | Where-Object { $_ -match "^(src/.*\.ts|types/.*\.d\.ts)`t" } |
-        ForEach-Object { $_ -replace "^src/", "" })
+    $InstalledManifest = @(Get-ExtensionManifest $Stage)
     if ((Compare-Object $ExpectedManifest $InstalledManifest).Count -ne 0) {
         throw "Installed extension manifest does not match source"
     }
-    if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
-    Move-Item $Stage $Target
+    $TargetDisplaced = $false
+    if (Test-Path $Target) {
+        Move-Item $Target $Displaced
+        $TargetDisplaced = $true
+    }
+    try {
+        Move-Item $Stage $Target
+    } catch {
+        if ($TargetDisplaced) {
+            if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
+            Move-Item $Displaced $Target
+        }
+        throw
+    }
+    if (Test-Path $Displaced) { Remove-Item -Recurse -Force $Displaced }
 } catch {
     if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
     throw

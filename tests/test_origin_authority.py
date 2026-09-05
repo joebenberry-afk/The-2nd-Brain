@@ -1,5 +1,5 @@
 import hashlib
-import sqlite3
+import shutil
 from pathlib import Path
 
 import pytest
@@ -104,20 +104,21 @@ def test_origin_columns_migrate_fresh_database(tmp_path: Path) -> None:
 
 def test_origin_columns_migrate_existing_0012_database(tmp_path: Path) -> None:
     dbfile = tmp_path / "brain.sqlite"
-    conn = sqlite3.connect(dbfile)
-    conn.executescript(
-        """
-        CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-        CREATE TABLE memories(memory_id TEXT PRIMARY KEY, title TEXT NOT NULL, scope TEXT NOT NULL,
-          project_id TEXT, status TEXT NOT NULL, evidence_grade TEXT NOT NULL, current_version INTEGER NOT NULL,
-          created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_verified_at TEXT, strength REAL NOT NULL,
-          stability REAL NOT NULL, summary TEXT, body_path TEXT);
-        CREATE TABLE memory_sources(id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT,
-          source_ref TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'evidence', added_at TEXT NOT NULL);
-        INSERT INTO schema_version VALUES (12, 'old');
-        INSERT INTO memories VALUES ('mem-preexisting', 'Old fact', 'global', NULL, 'current',
-          'OBSERVED', 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 1.0, 1.0, NULL, NULL);
-        """
+    prefix = tmp_path / "legacy-migrations"
+    prefix.mkdir()
+    for migration in db.migration_files():
+        if int(migration.name[:4]) <= 12:
+            shutil.copy2(migration, prefix / migration.name)
+    db.migrate(dbfile, migrations_dir=prefix)
+    conn = db.connect(dbfile)
+    for column in ("origin_class", "origin_root_sha", "authority_ceiling"):
+        conn.execute(f"ALTER TABLE memories DROP COLUMN {column}")
+    conn.execute(
+        "INSERT INTO memories "
+        "(memory_id, title, scope, project_id, status, evidence_grade, current_version, "
+        "created_at, updated_at, last_verified_at, strength, stability, summary, body_path) "
+        "VALUES ('mem-preexisting', 'Old fact', 'global', NULL, 'current', "
+        "'OBSERVED', 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 1.0, 1.0, NULL, NULL)"
     )
     conn.commit()
     conn.close()

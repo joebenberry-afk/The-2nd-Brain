@@ -90,6 +90,50 @@ def test_init_manifest_and_header(tmp_path) -> None:
     assert manifest["host_session_id"] == HOST
 
 
+def test_manifest_replacement_recovers_after_a_windows_reader_releases(store, monkeypatch) -> None:
+    if ledger_mod.os.name != "nt":
+        pytest.skip("Windows file-sharing contract")
+    _seed(store, 2)
+    target = store.session_path / "manifest.json"
+    replace = ledger_mod.os.replace
+    with target.open("rb") as reader:
+
+        def replace_then_release(source, destination):
+            try:
+                replace(source, destination)
+            finally:
+                reader.close()
+
+        monkeypatch.setattr(ledger_mod.os, "replace", replace_then_release)
+        reopened = ledger_mod.LedgerStore(store._home, HOST, host="test")
+        try:
+            reopened.open(create=True)
+            assert [event.event_id for event in reopened.replay(["e-1", "e-2"]).events] == [
+                "e-1",
+                "e-2",
+            ]
+        finally:
+            reopened.close()
+
+
+def test_manifest_replacement_preserves_existing_file_on_permanent_error(
+    store, monkeypatch
+) -> None:
+    target = store.session_path / "manifest.json"
+    before = target.read_bytes()
+
+    def deny_replace(source, destination):
+        error = PermissionError("persistent destination denial")
+        error.winerror = 5
+        raise error
+
+    monkeypatch.setattr(ledger_mod.os, "replace", deny_replace)
+    with pytest.raises(PermissionError, match="persistent destination denial"):
+        store._write_manifest()
+    assert target.read_bytes() == before
+    assert not list(store.session_path.glob("manifest.json.tmp.*"))
+
+
 def test_internal_id_is_hash_not_raw(tmp_path) -> None:
     with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True):
         pass
@@ -443,6 +487,144 @@ def _cli_env(tmp_path):
         )
 
     return home, run
+
+
+def test_cli_ledger_init_persists_canonical_ancestry_and_resume(tmp_path) -> None:
+    home, run = _cli_env(tmp_path)
+
+    def dbfile(host: str):
+        return (
+            home
+            / "state"
+            / "sessions"
+            / ledger_mod.internal_session_id(host)
+            / "ledger.sqlite"
+        )
+
+    def identity(host: str) -> tuple:
+        conn = sqlite3.connect(dbfile(host))
+        try:
+            row = conn.execute(
+                "SELECT host, host_session_id, project_id, created_at, status, "
+                "pinned, schema_version, current_segment_id, root_parent_session_id "
+                "FROM sessions WHERE internal_session_id = ?",
+                (ledger_mod.internal_session_id(host),),
+            ).fetchone()
+            assert row is not None
+            return row
+        finally:
+            conn.close()
+
+    root_a = "root-a"
+    child_b = "child-b"
+    grandchild_c = "grandchild-c"
+    root_d = "root-d"
+    root_a_internal = ledger_mod.internal_session_id(root_a)
+
+    assert run("ledger", "init", "--session", root_a).returncode == 0
+    child = run(
+        "ledger",
+        "init",
+        "--session",
+        child_b,
+        "--parent-session",
+        root_a,
+        "--project",
+        "project-original",
+    )
+    assert child.returncode == 0, child.stderr
+    original_child_identity = identity(child_b)
+    assert original_child_identity[-1] == root_a_internal
+
+    parent_bytes = dbfile(child_b).read_bytes()
+    grandchild = run(
+        "ledger",
+        "init",
+        "--session",
+        grandchild_c,
+        "--parent-session",
+        child_b,
+    )
+    assert grandchild.returncode == 0, grandchild.stderr
+    assert identity(grandchild_c)[-1] == root_a_internal
+    assert dbfile(child_b).read_bytes() == parent_bytes
+
+    cycle = run(
+        "ledger", "init", "--session", root_a, "--parent-session", grandchild_c
+    )
+    assert cycle.returncode == 2
+    assert "cannot resolve to the child session itself" in cycle.stderr
+    assert identity(root_a)[-1] is None
+
+    resumed = run("ledger", "init", "--session", child_b)
+    assert resumed.returncode == 0, resumed.stderr
+    assert identity(child_b) == original_child_identity
+    repeated = run(
+        "ledger", "init", "--session", child_b, "--parent-session", root_a
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert identity(child_b) == original_child_identity
+
+    assert run("ledger", "init", "--session", root_d).returncode == 0
+    conflict = run(
+        "ledger", "init", "--session", child_b, "--parent-session", root_d
+    )
+    assert conflict.returncode == 2
+    assert "conflicting root parent" in conflict.stderr
+    assert identity(child_b) == original_child_identity
+
+
+def test_cli_ledger_parent_resolution_rejects_unowned_parent_without_writes(
+    tmp_path,
+) -> None:
+    home, run = _cli_env(tmp_path)
+    parent = "claimed-parent"
+    child = "unattributed-child"
+    missing = run(
+        "ledger", "init", "--session", child, "--parent-session", "missing-parent"
+    )
+    assert missing.returncode == 2
+    assert "parent ledger not initialized" in missing.stderr
+    assert not (
+        home
+        / "state"
+        / "sessions"
+        / ledger_mod.internal_session_id(child)
+        / "ledger.sqlite"
+    ).exists()
+    assert run("ledger", "init", "--session", parent).returncode == 0
+    parent_db = (
+        home
+        / "state"
+        / "sessions"
+        / ledger_mod.internal_session_id(parent)
+        / "ledger.sqlite"
+    )
+    conn = sqlite3.connect(parent_db)
+    try:
+        conn.execute(
+            "UPDATE sessions SET host_session_id = 'different-owner' "
+            "WHERE internal_session_id = ?",
+            (ledger_mod.internal_session_id(parent),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    parent_bytes = parent_db.read_bytes()
+
+    result = run(
+        "ledger", "init", "--session", child, "--parent-session", parent
+    )
+    assert result.returncode == 2
+    assert "not owned by host session" in result.stderr
+    assert parent_db.read_bytes() == parent_bytes
+    assert not (
+        home
+        / "state"
+        / "sessions"
+        / ledger_mod.internal_session_id(child)
+        / "ledger.sqlite"
+    ).exists()
 
 
 def _mirror_event(eid: str, event_type: str, **payload) -> dict:

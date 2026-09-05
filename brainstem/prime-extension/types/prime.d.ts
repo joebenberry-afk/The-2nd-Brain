@@ -28,6 +28,7 @@ export interface ContextUsage {
 /** Read-only session manager surface used by this extension. */
 export interface SessionManagerSurface {
   getSessionFile(): string | undefined;
+  getEntries?(): unknown[];
 }
 
 /** Context passed to every event handler. */
@@ -300,7 +301,7 @@ export interface ExtensionAPI {
   /** P3-B: message_end handlers may replace the finalized message (role must be preserved). */
   on(
     event: "message_end",
-    handler: (event: MessageEndEvent, ctx: ExtensionContext) => MessageEndEventResult | undefined,
+    handler: (event: MessageEndEvent, ctx: ExtensionContext) => MessageEndEventResult | undefined | Promise<MessageEndEventResult | undefined>,
   ): void;
   /** tool_result handlers may patch content/details/isError (only defined fields apply). */
   on(

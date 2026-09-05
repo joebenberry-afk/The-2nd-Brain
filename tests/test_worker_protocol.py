@@ -43,6 +43,30 @@ def _packet(
     ).validate()
 
 
+def test_terminal_receipt_rejects_payload_that_does_not_match_its_hash(brain_home) -> None:
+    task, digest = "authenticated-receipt", "b" * 64
+    worker_protocol.register_task(brain_home, task, digest, session_id="driver")
+    worker_protocol.record_worker_event(brain_home, task, digest, "accepted")
+    result = contracts.WorkerResultPacket(
+        task,
+        _identity("worker", session="worker-session", bot="worker"),
+        "completed",
+        summary="verified outcome",
+    ).validate()
+    payload = {**json.loads(result.canonical_json()), "result_sha256": result.canonical_hash()}
+    with pytest.raises(contracts.WorkerPacketError, match="PROTOCOL_ERROR"):
+        worker_protocol.record_worker_event(
+            brain_home, task, digest, "completed", payload={**payload, "summary": "altered outcome"}
+        )
+    task_state = worker_protocol.lookup_task(brain_home, task, digest)
+    assert task_state is not None
+    assert task_state["state"] == "WORKING"
+    worker_protocol.record_worker_event(brain_home, task, digest, "completed", payload=payload)
+    assert worker_protocol.verify_result_binding(
+        brain_home, task, digest, result.canonical_hash()
+    ) is None
+
+
 def test_context_refs_resolve_memory_and_artifact_with_bounded_metadata(brain_home: Path) -> None:
     memory_id = semantic.add_memory(
         brain_home,

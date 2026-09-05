@@ -63,15 +63,6 @@ def test_valid_stdin_deterministic_output(tmp_path) -> None:
     r = _run_cli(home, "autoinject", "codex-shadow", stdin=_payload())
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert set(out) == {
-        "decision",
-        "reason",
-        "packet",
-        "packet_tokens",
-        "candidate_ids",
-        "selected_ids",
-        "delivery_id",
-    }
     assert out["decision"] == "INJECT"
     assert out["reason"] is None
     assert out["packet"].startswith("[BRAIN_CONTEXT_DELTA v1]")

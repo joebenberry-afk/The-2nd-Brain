@@ -902,11 +902,10 @@ def request_worker_task(
                 **{**unavailable.__dict__, "failure_code": exc.code}
             ).validate()
     try:
-        event_payload = (
-            {**result_data, "result_sha256": result.canonical_hash()}
-            if isinstance(result_data, dict)
-            else {"result_sha256": result.canonical_hash()}
-        )
+        event_payload = {
+            **json.loads(result.canonical_json()),
+            "result_sha256": result.canonical_hash(),
+        }
         worker_protocol.record_worker_event(
             home_path,
             packet.task_id,

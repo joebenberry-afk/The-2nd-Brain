@@ -66,11 +66,11 @@ def test_project_filter(brain_home):
 
     # global query: everything
     assert _search_ids(brain_home, "token") == {p1, p2, dom}
-    # project context: only that project (domain/global memories excluded too)
-    assert _search_ids(brain_home, "token", project_id="proj-a") == {p1}
-    assert _search_ids(brain_home, "token", project_id="proj-b") == {p2}
-    # unknown project: no results
-    assert _search_ids(brain_home, "token", project_id="nope") == set()
+    # Project context includes shared domain knowledge but excludes foreign projects.
+    assert _search_ids(brain_home, "token", project_id="proj-a") == {p1, dom}
+    assert _search_ids(brain_home, "token", project_id="proj-b") == {p2, dom}
+    # Unknown projects may still retrieve explicitly shared knowledge.
+    assert _search_ids(brain_home, "token", project_id="nope") == {dom}
 
 
 def test_linear_fallback_applies_same_filters(brain_home, monkeypatch):

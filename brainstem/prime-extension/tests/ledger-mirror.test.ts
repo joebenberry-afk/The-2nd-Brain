@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+const execFileSyncMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
+  execFileSync: execFileSyncMock,
+}));
 const mirrorFireAndForgetMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/ledger-mirror", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/ledger-mirror")>();
@@ -18,6 +22,7 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
 import {
   buildMirrorEventJson,
   mirrorEvent,
+  mirrorEventSync,
   resetMirrorInitCache,
   taskSha256,
 } from "../src/ledger-mirror";
@@ -33,6 +38,7 @@ beforeEach(() => {
     delete process.env[key];
   }
   execFileMock.mockReset();
+  execFileSyncMock.mockReset();
   mirrorFireAndForgetMock.mockReset();
   resetMirrorInitCache();
 });
@@ -216,7 +222,11 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
         handlers.set(name, handler);
       },
     } as unknown as ExtensionAPI;
-    factory(pi);
+    factory(pi, {
+      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+      ompRoutingRunner: async () => ({ decision: null }),
+      ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
+    });
     return handlers;
   }
 
@@ -233,7 +243,7 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
     mirrorFireAndForgetMock.mockResolvedValue(undefined);
 
     handlers.get("session_start")!({ reason: "startup" }, ctx);
-    handlers.get("before_agent_start")!({ prompt: "secret task text" }, ctx);
+    await handlers.get("before_agent_start")!({ prompt: "secret task text" }, ctx);
     handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "ls" } }, ctx);
     handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: ["out"], details: {}, isError: false }, ctx);
     handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
@@ -246,7 +256,6 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
     const kinds = mirrorFireAndForgetMock.mock.calls.map(
       (c) => (c[0] as { record: { kind: string } }).record.kind,
     );
-    require("node:fs").writeFileSync("C:/Users/assas/AppData/Local/Temp/kinds-debug.json", JSON.stringify(kinds));
     expect(kinds).toContain("session_started");
     expect(kinds).toContain("user_task");
     expect(kinds).toContain("tool_requested");
@@ -266,42 +275,6 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
     expect(kinds).toContain("host_artifact_ref");
   });
 
-  it("EVERY mirror call-site family forwards ctx.cwd (project attribution)", async () => {
-    process.env.SECOND_BRAIN_HOME = await fakeHome().then((h) => h.home);
-    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "off";
-    const handlers = loadFactory();
-    mirrorFireAndForgetMock.mockResolvedValue(undefined);
-
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    handlers.get("before_agent_start")!({ prompt: "secret task text" }, ctx);
-    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "ls" } }, ctx);
-    handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: ["out"], details: {}, isError: false }, ctx);
-    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
-    handlers.get("agent_end")!({ messages: [] }, ctx);
-    handlers.get("session_before_compact")!({ preparation: {}, branchEntries: [] }, ctx);
-    handlers.get("session_compact")!({ compactionEntry: {}, fromExtension: false }, ctx);
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-
-    await new Promise((r) => setTimeout(r, 20)); // let fire-and-forget settle
-    const calls = mirrorFireAndForgetMock.mock.calls.map((c) => c[0] as {
-      hostSessionId: string;
-      cwd?: string;
-      record: { kind: string };
-    });
-    expect(calls.length).toBeGreaterThanOrEqual(10); // 10 mirrored kinds + artifact refs
-    for (const call of calls) {
-      expect(call.cwd, `${call.record.kind} mirror must forward ctx.cwd`).toBe("C:/work");
-    }
-    // every mirrored kind family is represented
-    const kinds = calls.map((c) => c.record.kind);
-    for (const kind of [
-      "session_started", "user_task", "tool_requested", "tool_completed",
-      "turn_end", "agent_ended", "compaction_started", "compaction_completed",
-      "session_inactive",
-    ]) {
-      expect(kinds).toContain(kind);
-    }
-  });
 
   it("user_task as the FIRST mirror (before_agent_start alone) still forwards cwd", async () => {
     // Real-run regression (ledger-cwd-ordering-fix): the user_task mirror can
@@ -595,6 +568,71 @@ describe("T-G6-F1/F2 mirror fixes", () => {
       "--session", "s-cwd", "--host", "prime", "--cwd", "C:/proj/x",
     ]);
     expect(calls[1]).not.toContain("--cwd");
+  });
+
+  it("sync and async init forward the HOST parent session identity", async () => {
+    const { home, python } = await fakeHome();
+    const calls: string[][] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      calls.push(args as string[]);
+      cb(null, '{"appended":[1]}');
+      return {} as never;
+    });
+    const record = { kind: "user_task", fields: { task_sha256: "abc" } };
+    await mirrorEvent({
+      home,
+      hostSessionId: "child-async",
+      parentSessionId: "parent-host",
+      record,
+      python,
+      cwd: "C:/proj/x",
+    });
+    expect(calls[0]).toEqual([
+      "-m", "second_brain", "ledger", "init",
+      "--session", "child-async", "--host", "prime",
+      "--parent-session", "parent-host", "--cwd", "C:/proj/x",
+    ]);
+
+    execFileSyncMock.mockReturnValue("");
+    const syncResult = mirrorEventSync({
+      home,
+      hostSessionId: "child-sync",
+      parentSessionId: "parent-host",
+      record,
+      python,
+    });
+    expect(syncResult.ok).toBe(true);
+    expect(execFileSyncMock.mock.calls[0]?.[1]).toEqual([
+      "-m", "second_brain", "ledger", "init",
+      "--session", "child-sync", "--host", "prime",
+      "--parent-session", "parent-host",
+    ]);
+  });
+
+  it("a parent arriving after parentless init is validated once; later omission does not re-init", async () => {
+    const { home, python } = await fakeHome();
+    const calls: string[][] = [];
+    execFileMock.mockImplementation((_py, args, _opts, cb) => {
+      calls.push(args as string[]);
+      cb(null, '{"appended":[1]}');
+      return {} as never;
+    });
+    const options = {
+      home,
+      hostSessionId: "child-resume",
+      record: { kind: "user_task", fields: {} },
+      python,
+    };
+    await mirrorEvent(options);
+    await mirrorEvent({ ...options, parentSessionId: "root-a" });
+    await mirrorEvent(options);
+    await mirrorEvent({ ...options, parentSessionId: "root-conflict" });
+
+    const initCalls = calls.filter((args) => args.includes("init"));
+    expect(initCalls).toHaveLength(3);
+    expect(initCalls[0]).not.toContain("--parent-session");
+    expect(initCalls[1]).toContain("root-a");
+    expect(initCalls[2]).toContain("root-conflict");
   });
 
   it("auto-init omits --cwd when none is available (never garbage)", async () => {

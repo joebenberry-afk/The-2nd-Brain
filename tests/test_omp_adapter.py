@@ -288,7 +288,7 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
     db.migrate(db.db_path(tmp_path))
     db_path = tmp_path / "db" / "brain.sqlite"
 
-    # -- malformed result: a registered task must transition to FAILED --
+    # Malformed transport input must not manufacture a failed worker outcome.
     session = "omp-result-parent"
     malformed_task = "omp-result-malformed"
     context_response = omp_adapter.handle_request(
@@ -296,6 +296,10 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
     )
     assert context_response["status"] == "prepared"
     packet_sha256 = context_response["packet_sha256"]
+    with sqlite3.connect(db_path) as conn:
+        state_before = conn.execute(
+            "SELECT state FROM worker_tasks WHERE task_id=?", (malformed_task,)
+        ).fetchone()[0]
 
     malformed_response = omp_adapter.handle_request(
         tmp_path,
@@ -311,7 +315,7 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
         state = conn.execute(
             "SELECT state FROM worker_tasks WHERE task_id=?", (malformed_task,)
         ).fetchone()[0]
-    assert state == contracts.WorkerLifecycle.FAILED
+    assert state == state_before
 
     # -- valid result, using the ACTUAL flat bridge wire shape (no hand-crafted
     # nested worker_identity -- that is assembled server-side): lifecycle
@@ -337,6 +341,98 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
             "SELECT state FROM worker_tasks WHERE task_id=?", (valid_task,)
         ).fetchone()[0]
     assert state == contracts.WorkerLifecycle.COMPLETED
+
+
+def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    from second_brain import db, ledger, worker_protocol
+
+    db.migrate(db.db_path(tmp_path))
+    session, task = "receipt-parent", "receipt-task"
+    context = omp_adapter.handle_request(
+        tmp_path, _worker_context_payload(session, task, context_refs=[])
+    )
+    digest = context["packet_sha256"]
+    payload = _worker_result_payload(session, task, digest)
+
+    def unavailable(*args, **kwargs):
+        raise OSError("injected host ledger failure")
+
+    monkeypatch.setattr(ledger.LedgerStore, "append_events", unavailable)
+    accepted = omp_adapter.handle_request(tmp_path, payload)
+    assert accepted["status"] == "completed"
+    # Simulate losing the first response: a fresh request must return the
+    # original persisted receipt, not a newly timestamped result hash.
+    replay = omp_adapter.handle_request(tmp_path, payload)
+    assert replay["result_sha256"] == accepted["result_sha256"]
+    assert (
+        worker_protocol.verify_result_binding(tmp_path, task, digest, replay["result_sha256"])
+        is None
+    )
+    wrong_parent = omp_adapter.handle_request(
+        tmp_path, _worker_result_payload("other-parent", task, digest)
+    )
+    assert wrong_parent["status"] == "failed"
+    assert "result_sha256" not in wrong_parent
+    db.migrate(db.db_path(tmp_path))
+    with (
+        sqlite3.connect(db.db_path(tmp_path)) as source,
+        sqlite3.connect(tmp_path / "restored.sqlite") as restored,
+    ):
+        source.backup(restored)
+        receipt = restored.execute(
+            "SELECT result_sha256,payload_json FROM worker_task_results WHERE task_id=?", (task,)
+        ).fetchone()
+        assert receipt[0] == accepted["result_sha256"]
+        assert '"status":"completed"' in receipt[1]
+
+
+def test_omp_result_receipt_failure_rolls_back_terminal_transition(tmp_path) -> None:
+    import sqlite3
+
+    from second_brain import db
+
+    db.migrate(db.db_path(tmp_path))
+    session, task = "atomic-parent", "atomic-task"
+    context = omp_adapter.handle_request(
+        tmp_path, _worker_context_payload(session, task, context_refs=[])
+    )
+    payload = _worker_result_payload(session, task, context["packet_sha256"])
+    with sqlite3.connect(db.db_path(tmp_path)) as conn:
+        before = conn.execute("SELECT state FROM worker_tasks WHERE task_id=?", (task,)).fetchone()[
+            0
+        ]
+        conn.execute(
+            "CREATE TRIGGER reject_receipt BEFORE INSERT ON worker_task_results "
+            "BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END"
+        )
+    rejected = omp_adapter.handle_request(tmp_path, payload)
+    assert rejected["status"] == "failed"
+    assert "result_sha256" not in rejected
+    with sqlite3.connect(db.db_path(tmp_path)) as conn:
+        assert (
+            conn.execute("SELECT state FROM worker_tasks WHERE task_id=?", (task,)).fetchone()[0]
+            == before
+        )
+        conn.execute("DROP TRIGGER reject_receipt")
+    recovered = omp_adapter.handle_request(tmp_path, payload)
+    assert recovered["status"] == "completed"
+
+
+def test_omp_result_cannot_adopt_an_ownerless_task(tmp_path) -> None:
+    from second_brain import worker_protocol
+
+    task, digest = "unowned-result", "a" * 64
+    worker_protocol.register_task(tmp_path, task, digest)
+    worker_protocol.record_worker_event(tmp_path, task, digest, "accepted")
+    result = omp_adapter.handle_request(
+        tmp_path, _worker_result_payload("unrelated-parent", task, digest)
+    )
+    assert result["failure_code"] == "UNAUTHORIZED_WORKER"
+    task_state = worker_protocol.lookup_task(tmp_path, task, digest)
+    assert task_state is not None
+    assert task_state["state"] == "WORKING"
 
 
 def test_omp_worker_result_bridge_flat_shape_round_trips_and_preserves_host(
@@ -427,7 +523,11 @@ def test_omp_worker_result_rejects_role_mismatch(tmp_path) -> None:
         state = conn.execute(
             "SELECT state FROM worker_tasks WHERE task_id=?", (task_id,)
         ).fetchone()[0]
-    assert state == contracts.WorkerLifecycle.FAILED
+    assert state == contracts.WorkerLifecycle.WORKING
+    corrected = omp_adapter.handle_request(
+        tmp_path, _worker_result_payload(session, task_id, packet_sha256)
+    )
+    assert corrected["status"] == "completed"
 
 
 def test_omp_dispatch_snapshot_round_trips_requested_role(tmp_path) -> None:
