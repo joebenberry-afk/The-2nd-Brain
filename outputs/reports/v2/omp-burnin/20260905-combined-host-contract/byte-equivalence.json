@@ -1,0 +1,14 @@
+{
+  "baseline": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+  "candidate": "28c9ec39da548fbd3a6f4b6658715f81f1b523ed",
+  "task_before": [
+    "MODEL_CONTENT:[{\"type\":\"text\",\"text\":\"Spawned agent `Spawnling` (job `Spawnling`). Its result auto-delivers on yield unless a settled `hub jobs`/`wait` snapshot consumes it first. DM `Spawnling` via `hub` send to coordinate while it runs; use `hub` only to inspect (`jobs`), wait, or cancel a stuck task.\\nNo polling needed.\\n\\nSettled-job inspection: `hub jobs` | `hub wait` delivers its snapshot → no duplicate `async-result`.\\n\\nJob IDs: process memory ~5min after settlement; afterward use agent ID: `hub send`, `agent://<id>`, `history://<id>`.\\n\\n`completed`: subagent yielded successfully; claimed artifacts unverified.\"}]"
+  ],
+  "task_after": [
+    "MODEL_CONTENT:[{\"type\":\"text\",\"text\":\"Spawned agent `Spawnling` (job `Spawnling`). Its result auto-delivers on yield unless a settled `hub jobs`/`wait` snapshot consumes it first. DM `Spawnling` via `hub` send to coordinate while it runs; use `hub` only to inspect (`jobs`), wait, or cancel a stuck task.\\nNo polling needed.\\n\\nSettled-job inspection: `hub jobs` | `hub wait` delivers its snapshot → no duplicate `async-result`.\\n\\nJob IDs: process memory ~5min after settlement; afterward use agent ID: `hub send`, `agent://<id>`, `history://<id>`.\\n\\n`completed`: subagent yielded successfully; claimed artifacts unverified.\"}]"
+  ],
+  "delivery_before": "[\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\",\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\",\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\"]\n",
+  "delivery_after": "[\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\",\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\",\"<system-notice>\\nBackground job Foo-2 has completed. Resume your work using the result below.\\nunchanged offline result\\n</system-notice>\"]\n",
+  "task_byte_identical": true,
+  "delivery_byte_identical": true
+}

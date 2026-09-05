@@ -1,0 +1,26 @@
+[
+  {
+    "pr": 10928,
+    "result": {
+      "exit": 0,
+      "stdout": "https://github.com/can1357/oh-my-pi/pull/10928\n",
+      "stderr": ""
+    }
+  },
+  {
+    "pr": 10948,
+    "result": {
+      "exit": 0,
+      "stdout": "https://github.com/can1357/oh-my-pi/pull/10948\n",
+      "stderr": ""
+    }
+  },
+  {
+    "reply": 3941035210,
+    "result": {
+      "exit": 0,
+      "stdout": "{\"url\":\"https://api.github.com/repos/can1357/oh-my-pi/pulls/comments/3941076517\",\"pull_request_review_id\":5121833615,\"id\":3941076517,\"node_id\":\"PRRC_kwDOQxs0bc7q6A4l\",\"diff_hunk\":\"@@ -417,6 +417,8 @@ export interface YieldItem {\\n export interface AgentProgress {\\n \\tindex: number;\\n \\tid: string;\\n+\\t/** Actual async manager job id; differs from `id` when registration resolves a collision. */\\n+\\tjobId?: string;\",\"path\":\"packages/coding-agent/src/task/types.ts\",\"commit_id\":\"ddce3599c63b5ff7100e07d62a76ab8ecec912cb\",\"original_commit_id\":\"b974caedb54f41b25b353e749285c4bd84651bdf\",\"user\":{\"login\":\"joebenberry-afk\",\"id\":232087035,\"node_id\":\"U_kgDODdVd-w\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/232087035?v=4\",\"gravatar_id\":\"\",\"url\":\"https://api.github.com/users/joebenberry-afk\",\"html_url\":\"https://github.com/joebenberry-afk\",\"followers_url\":\"https://api.github.com/users/joebenberry-afk/followers\",\"following_url\":\"https://api.github.com/users/joebenberry-afk/following{/other_user}\",\"gists_url\":\"https://api.github.com/users/joebenberry-afk/gists{/gist_id}\",\"starred_url\":\"https://api.github.com/users/joebenberry-afk/starred{/owner}{/repo}\",\"subscriptions_url\":\"https://api.github.com/users/joebenberry-afk/subscriptions\",\"organizations_url\":\"https://api.github.com/users/joebenberry-afk/orgs\",\"repos_url\":\"https://api.github.com/users/joebenberry-afk/repos\",\"events_url\":\"https://api.github.com/users/joebenberry-afk/events{/privacy}\",\"received_events_url\":\"https://api.github.com/users/joebenberry-afk/received_events\",\"type\":\"User\",\"user_view_type\":\"public\",\"site_admin\":false},\"body\":\"Added the coding-agent Unreleased entry in ddce3599c63b5ff7100e07d62a76ab8ecec912cb. Documentation only; dispatch semantics remain unchanged. The final combined integration e874b613654fd493b2bcb45c832e68f8d1a9a23e passes 97 focused tests, coding-agent typecheck, and configured changed-file lint/format.\",\"created_at\":\"2026-09-05T15:26:24Z\",\"updated_at\":\"2026-09-05T15:26:24Z\",\"html_url\":\"https://github.com/can1357/oh-my-pi/pull/10948#discussion_r3941076517\",\"pull_request_url\":\"https://api.github.com/repos/can1357/oh-my-pi/pulls/10948\",\"_links\":{\"self\":{\"href\":\"https://api.github.com/repos/can1357/oh-my-pi/pulls/comments/3941076517\"},\"html\":{\"href\":\"https://github.com/can1357/oh-my-pi/pull/10948#discussion_r3941076517\"},\"pull_request\":{\"href\":\"https://api.github.com/repos/can1357/oh-my-pi/pulls/10948\"}},\"reactions\":{\"url\":\"https://api.github.com/repos/can1357/oh-my-pi/pulls/comments/3941076517/reactions\",\"total_count\":0,\"+1\":0,\"-1\":0,\"laugh\":0,\"hooray\":0,\"confused\":0,\"heart\":0,\"rocket\":0,\"eyes\":0},\"start_line\":null,\"original_start_line\":null,\"start_side\":null,\"line\":421,\"original_line\":421,\"side\":\"RIGHT\",\"in_reply_to_id\":3941035210,\"author_association\":\"NONE\",\"original_position\":5,\"position\":5,\"subject_type\":\"line\"}",
+      "stderr": ""
+    }
+  }
+]

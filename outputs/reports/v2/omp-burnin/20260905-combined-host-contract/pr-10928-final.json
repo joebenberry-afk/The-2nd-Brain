@@ -1,0 +1,61 @@
+{
+  "baseRefOid": "5964a0f7649275bcde818f20073193fd032451f2",
+  "comments": [
+    {
+      "id": "IC_kwDOQxs0bc8AAAABSvdiXQ",
+      "author": {
+        "login": "joebenberry-afk"
+      },
+      "authorAssociation": "NONE",
+      "body": "Current-main combined proof is clean: 99 focused tests, typecheck, changed-file lint/format, and byte-equivalence pass. Both contract PRs remain separate and unchanged. Please approve the pending fork workflow runs (CI and OMP Nix) and review this scoped change. Their current action_required conclusions have zero executed jobs; they are approval-pending, not failed CI. Full evidence and exact tested base/integration SHAs are in the updated PR description.",
+      "createdAt": "2026-09-05T15:06:21Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/can1357/oh-my-pi/pull/10928#issuecomment-5552693853",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOQxs0bc8AAAABSvdkfQ",
+      "author": {
+        "login": "chatgpt-codex-connector"
+      },
+      "authorAssociation": "NONE",
+      "body": "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\nThis comment shows the latest Codex review activity on this pull request.\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-09-05T15:08:51.419817Z\">2026-09-05T15:08:51.419817Z</relative-time> | `874fe1f` | Draft marked ready |\n\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\" or \"@codex security review\".\n\nCodex reacts with 👀 while any review is running, comments if it has suggestions, and reacts with 👍 once all reviews finish with no findings.\n\n</details>",
+      "createdAt": "2026-09-05T15:06:27Z",
+      "includesCreatedEdit": true,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/can1357/oh-my-pi/pull/10928#issuecomment-5552694397",
+      "viewerDidAuthor": false
+    }
+  ],
+  "headRefOid": "874fe1f20bc5f906812ff52c0a6a5698a59c191e",
+  "isDraft": false,
+  "mergeStateStatus": "UNKNOWN",
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "reviewRequests": [],
+  "reviews": [
+    {
+      "id": "PRR_kwDOQxs0bc8AAAABMUgqlQ",
+      "author": {
+        "login": "chatgpt-codex-connector"
+      },
+      "authorAssociation": "NONE",
+      "body": "\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `874fe1f20b`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+      "submittedAt": "2026-09-05T15:08:49Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "COMMENTED",
+      "commit": {
+        "oid": "874fe1f20bc5f906812ff52c0a6a5698a59c191e"
+      }
+    }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [],
+  "url": "https://github.com/can1357/oh-my-pi/pull/10928"
+}

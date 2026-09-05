@@ -1,0 +1,15 @@
+{
+  "baseRefOid": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+  "body": "## Contract\n\nExpose an optional per-row `AgentProgress.jobId` containing the exact ID returned by the native async manager. `progress.id` remains the child agent ID.\n\nThe manager can suffix a requested ID on collision: `{ id: \"Foo\", jobId: \"Foo-2\" }`. Consumers otherwise cannot bind each dispatch to structured async deliveries without guessing or parsing model-facing output.\n\n## Scope\n\nProduction patch: one optional documented field and one assignment immediately after successful job registration. Existing `buildAsyncDetails()` spreading exposes it automatically. No prompts, storage, polling, concurrency, delivery, or rendering changes. Separate from #10928; that PR remains limited to delivered status and agent identity.\n\n## Verification\n\n- Audited main base: `be6cb8217cd4c1dafcc86793ae5d809ea4d7396a`.\n- Candidate: `b974caedb54f41b25b353e749285c4bd84651bdf`.\n- Exact pinned compatibility base: `f241301c83726afe75a847e919b89977a54dafbe`.\n- Both bases: 4 new binding regressions fail before the source patch; 48/48 contract tests pass after.\n- Both bases: 94/94 focused task/manager/delivery regressions, 410 assertions, pass.\n- Both bases: coding-agent tsgo typecheck passes.\n- Changed-file oxlint and oxfmt checks pass.\n- Single spawn, batch, collision, identical task text, live/final updates, legacy consumers, unchanged terminal rendering covered.\n- Paired actual TaskTool execution captures prove model-facing content byte-identical before/after.\n\nOffline, provider-disabled Windows validation with the matching official ignored native binary. No provider calls or deployment. Full upstream platform/CI validation is still required; this PR does not attribute previously observed Windows full-suite failures to this patch.\n",
+  "comments": [],
+  "headRefName": "fix/task-progress-job-id",
+  "headRefOid": "b974caedb54f41b25b353e749285c4bd84651bdf",
+  "isDraft": true,
+  "mergeStateStatus": "UNSTABLE",
+  "mergeable": "MERGEABLE",
+  "reviewDecision": "",
+  "reviews": [],
+  "state": "OPEN",
+  "statusCheckRollup": [],
+  "url": "https://github.com/can1357/oh-my-pi/pull/10948"
+}

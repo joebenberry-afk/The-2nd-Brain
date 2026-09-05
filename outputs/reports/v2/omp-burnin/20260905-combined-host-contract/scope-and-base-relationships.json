@@ -1,0 +1,38 @@
+{
+  "baseRelations": [
+    {
+      "pr": 10928,
+      "head": "874fe1f20bc5f906812ff52c0a6a5698a59c191e",
+      "current_main": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+      "fork_point": "5964a0f7649275bcde818f20073193fd032451f2",
+      "local_merge_exit": 0,
+      "local_merge_tree": "d9f21cc0be166f7da4dbd703dd70691809e96cd4",
+      "rebase_needed": false,
+      "reason": "Both unchanged patches apply conflict-free to exact current main; combined focused and static proof passes. Preserve pending workflow heads."
+    },
+    {
+      "pr": 10948,
+      "head": "b974caedb54f41b25b353e749285c4bd84651bdf",
+      "current_main": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+      "fork_point": "be6cb8217cd4c1dafcc86793ae5d809ea4d7396a",
+      "local_merge_exit": 0,
+      "local_merge_tree": "4e39830e684bf2bd3858492698900c05730c701b",
+      "rebase_needed": false,
+      "reason": "Both unchanged patches apply conflict-free to exact current main; combined focused and static proof passes. Preserve pending workflow heads."
+    }
+  ],
+  "unchangedBrain": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "new_ruff_findings": 0,
+  "ruff_reason": "No Python or lint configuration changes; reuse reported inherited findings.",
+  "ruff_gate_sources": [
+    "docs/superpowers/plans/2026-09-02-second-brain-v2-implementation.md",
+    "Second_Brain_v2_Burnin_Repair_and_Release_Plan.md:986-1028",
+    "scripts/verify_qualification.py",
+    "config/v2.toml"
+  ],
+  "ruff_classification": "Inherited lint debt; these canonical v2 gates do not explicitly require whole-repository Ruff=0. Not automatically P1."
+}
