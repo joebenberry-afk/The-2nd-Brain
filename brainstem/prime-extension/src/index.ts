@@ -26,6 +26,7 @@
  */
 import type {
   AgentEndEvent,
+  AsyncJobLifecycleObservation,
   BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
@@ -164,6 +165,15 @@ import {
   type OmpWorkerResultOptions,
   type OmpWorkerResultOutcome,
 } from "./worker-result-bridge";
+import {
+  runOmpWorkerBind,
+  runOmpWorkerDispatchFailed,
+  runOmpWorkerLifecycle,
+  type OmpWorkerBindOptions,
+  type OmpWorkerCallbackResult,
+  type OmpWorkerDispatchFailedOptions,
+  type OmpWorkerLifecycleOptions,
+} from "./worker-lifecycle-bridge";
 import {
   STOP_CONTROL_COMMAND,
   StopBoundaryState,
@@ -455,6 +465,11 @@ export interface ExtensionOptions {
   ompWorkerContextRunner?: (options: OmpWorkerContextOptions) => Promise<OmpWorkerContextResult>;
   /** OMP worker-result -> T4.1 lifecycle seam; production uses the bounded Brain CLI bridge. */
   ompWorkerResultRunner?: (options: OmpWorkerResultOptions) => Promise<OmpWorkerResultOutcome>;
+  ompWorkerBindRunner?: (options: OmpWorkerBindOptions) => Promise<OmpWorkerCallbackResult>;
+  ompWorkerLifecycleRunner?: (options: OmpWorkerLifecycleOptions) => Promise<OmpWorkerCallbackResult>;
+  ompWorkerDispatchFailedRunner?: (
+    options: OmpWorkerDispatchFailedOptions,
+  ) => Promise<OmpWorkerCallbackResult>;
   ompRoutingRunner?: (options: OmpRoutingOptions) => Promise<OmpRoutingResult>;
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
@@ -598,6 +613,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     string,
     { taskId: string; packetSha256: string; parentSessionId: string; agent: string; agentId: string }
   >();
+  interface WorkerAdmission {
+    taskId: string;
+    attemptId: string;
+    packetSha256: string;
+    projectId: string;
+    worktreeId: string | null;
+    accessIntent: "read_only" | "mutating";
+    callbackToken?: string;
+    parentSessionId: string;
+    agent: string;
+    toolCallId: string;
+    sourceIndex: number;
+    lifecycleSequence: number;
+    lifecycleRevision: number;
+    callbackChain: Promise<boolean>;
+    nativeAttemptId?: string;
+    nativeJobId?: string;
+    agentId?: string;
+    hostGeneration?: number;
+    cleanupAccepted: boolean;
+  }
+  const workerAdmissionsByTask = new Map<string, WorkerAdmission>();
+  const workerAdmissionsBySource = new Map<string, WorkerAdmission>();
+  const workerObservationDisposers = new Map<string, () => void>();
   const pendingWorkerTaskIds = new Set<string>();
   const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
     try {
@@ -664,6 +703,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
   const workerResultRunner = options.ompWorkerResultRunner ?? runOmpWorkerResult;
+  const workerBindRunner = options.ompWorkerBindRunner ?? runOmpWorkerBind;
+  const workerLifecycleRunner = options.ompWorkerLifecycleRunner ?? runOmpWorkerLifecycle;
+  const workerDispatchFailedRunner = options.ompWorkerDispatchFailedRunner ?? runOmpWorkerDispatchFailed;
   const sessionBudgetStates = options.sessionBudgetStates ?? new Map<string, BudgetState>();
   const budgetRunner = options.budgetRunner ?? runBudgetCheck;
   const safeWorkerContextRunner = async (
@@ -679,9 +721,197 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const workerRoleForAgent = (agent: unknown): string =>
     typeof agent === "string" && agent.toLowerCase().includes("validator") ? "validator" : "worker";
 
-  const projectIdForCwd = (cwd: string): string => {
-    const parts = cwd.split(/[\\/]/).filter(Boolean);
-    return parts.at(-1) ?? "default";
+  const releaseUndispatchedAdmission = async (
+    admission: WorkerAdmission,
+    failureCode: string,
+  ): Promise<boolean> => {
+    if (
+      admission.accessIntent !== "mutating" ||
+      admission.worktreeId === null ||
+      admission.callbackToken === undefined ||
+      admission.nativeAttemptId !== undefined
+    ) {
+      return admission.accessIntent === "read_only";
+    }
+    try {
+      const receipt = await workerDispatchFailedRunner({
+        home: config.home ?? "",
+        sessionId: admission.parentSessionId,
+        taskId: admission.taskId,
+        packetSha256: admission.packetSha256,
+        attemptId: admission.attemptId,
+        projectId: admission.projectId,
+        worktreeId: admission.worktreeId,
+        callbackToken: admission.callbackToken,
+        failureCode,
+      });
+      if (!receipt.ok) return false;
+      admission.cleanupAccepted = true;
+      pendingWorkerTaskIds.delete(admission.taskId);
+      workerAdmissionsByTask.delete(admission.taskId);
+      workerAdmissionsBySource.delete(
+        JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
+      );
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-dispatch-failed-accepted", {
+        session: admission.parentSessionId,
+        taskId: admission.taskId,
+        attemptId: admission.attemptId,
+        failureCode,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const observeWorkerAttempt = async (
+    admission: WorkerAdmission,
+    observation: Readonly<AsyncJobLifecycleObservation>,
+    ctx: ExtensionContext,
+  ): Promise<boolean> => {
+    if (
+      observation.type !== "task" ||
+      observation.sourceToolCallId !== admission.toolCallId ||
+      observation.sourceIndex !== admission.sourceIndex ||
+      !observation.agentId
+    ) {
+      return false;
+    }
+    if (
+      admission.nativeAttemptId !== undefined &&
+      (admission.nativeAttemptId !== observation.nativeAttemptId ||
+        admission.nativeJobId !== observation.jobId ||
+        admission.agentId !== observation.agentId ||
+        admission.hostGeneration !== observation.generation)
+    ) {
+      return false;
+    }
+    const binding: OmpWorkerBindOptions = {
+      home: config.home ?? "",
+      sessionId: admission.parentSessionId,
+      taskId: admission.taskId,
+      packetSha256: admission.packetSha256,
+      attemptId: admission.attemptId,
+      projectId: admission.projectId,
+      worktreeId: admission.worktreeId ?? "",
+      callbackToken: admission.callbackToken ?? "",
+      hostGeneration: observation.generation,
+      nativeAttemptId: observation.nativeAttemptId,
+      nativeJobId: observation.jobId,
+      agentId: observation.agentId,
+    };
+    if (admission.nativeAttemptId === undefined) {
+      let bound: OmpWorkerCallbackResult;
+      try {
+        bound = await workerBindRunner(binding);
+      } catch {
+        return false;
+      }
+      if (!bound.ok) return false;
+      admission.nativeAttemptId = observation.nativeAttemptId;
+      admission.nativeJobId = observation.jobId;
+      admission.agentId = observation.agentId;
+      admission.hostGeneration = observation.generation;
+      pendingWorkerJobs.set(JSON.stringify([admission.parentSessionId, observation.jobId]), {
+        taskId: admission.taskId,
+        packetSha256: admission.packetSha256,
+        parentSessionId: admission.parentSessionId,
+        agent: admission.agent,
+        agentId: observation.agentId,
+      });
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-job-pending", {
+        session: admission.parentSessionId,
+        jobId: observation.jobId,
+        accessIntent: admission.accessIntent,
+        toolCallId: admission.toolCallId,
+        sourceIndex: admission.sourceIndex,
+        taskId: admission.taskId,
+        attemptId: admission.attemptId,
+        packetSha256: admission.packetSha256,
+        parentSessionId: admission.parentSessionId,
+        agent: admission.agent,
+        agentId: observation.agentId,
+        hostGeneration: observation.generation,
+        nativeAttemptId: observation.nativeAttemptId,
+        projectId: admission.projectId,
+        worktreeId: admission.worktreeId,
+      });
+    }
+    if (observation.revision <= admission.lifecycleRevision) return true;
+    const sequence = admission.lifecycleSequence + 1;
+    let lifecycle: OmpWorkerCallbackResult;
+    try {
+      lifecycle = await workerLifecycleRunner({
+        ...binding,
+        sequence,
+        outcome:
+          observation.status === "completed"
+            ? "completed"
+            : observation.status === "failed"
+              ? "failed"
+              : observation.status === "cancelled"
+                ? "cancelled"
+                : null,
+        executorSettled: observation.executorSettled,
+        cleanupComplete: observation.cleanupComplete,
+      });
+    } catch {
+      return false;
+    }
+    if (!lifecycle.ok) return false;
+    admission.lifecycleSequence = sequence;
+    admission.lifecycleRevision = observation.revision;
+    journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-accepted", {
+      session: admission.parentSessionId,
+      taskId: admission.taskId,
+      attemptId: admission.attemptId,
+      lifecycleSequence: sequence,
+      nativeAttemptId: observation.nativeAttemptId,
+      nativeJobId: observation.jobId,
+      agentId: observation.agentId,
+      hostGeneration: observation.generation,
+      status: observation.status,
+      executorSettled: observation.executorSettled,
+      cleanupComplete: observation.cleanupComplete,
+    });
+    if (observation.status !== "running") {
+      await emitWorkerCompletion(admission.parentSessionId, ctx, {
+        task_id: admission.taskId,
+        packet_sha256: admission.packetSha256,
+        child_omp_agent_id: observation.agentId,
+        child_omp_session_file: null,
+        worker_agent: admission.agent,
+        worker_model: null,
+        status: observation.status,
+      }, "");
+    }
+    if (observation.executorSettled && observation.cleanupComplete) {
+      admission.cleanupAccepted = true;
+      pendingWorkerTaskIds.delete(admission.taskId);
+      for (const [key, job] of pendingWorkerJobs) if (job.taskId === admission.taskId) pendingWorkerJobs.delete(key);
+      const sourceKey = JSON.stringify([
+        admission.parentSessionId,
+        admission.toolCallId,
+        admission.sourceIndex,
+      ]);
+      workerAdmissionsBySource.delete(sourceKey);
+      if (reportedWorkerTaskIds.has(admission.taskId)) {
+        workerAdmissionsByTask.delete(admission.taskId);
+      }
+      const stillPending = Array.from(workerAdmissionsBySource.values()).some(
+        (candidate) =>
+          candidate.parentSessionId === admission.parentSessionId &&
+          candidate.toolCallId === admission.toolCallId &&
+          candidate.accessIntent === "mutating" &&
+          !candidate.cleanupAccepted,
+      );
+      if (!stillPending) {
+        const observerKey = JSON.stringify([admission.parentSessionId, admission.toolCallId]);
+        workerObservationDisposers.get(observerKey)?.();
+        workerObservationDisposers.delete(observerKey);
+      }
+    }
+    return true;
   };
 
   const prepareWorkerTaskInput = async (
@@ -717,6 +947,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (items.some((item) => typeof item.task !== "string" || item.task.trim() === "")) {
       return { block: true, reason: "P3.2 worker context requires a non-empty task" };
     }
+    if (
+      items.some(
+        (item) => item.access_intent !== "read_only" && item.access_intent !== "mutating",
+      )
+    ) {
+      return { block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_REQUIRED" };
+    }
+    const hasMutating = items.some((item) => item.access_intent === "mutating");
+    if (hasMutating && typeof ctx.observeAsyncJobLifecycle !== "function") {
+      return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
+    }
+    const projectId = resolvedProjectIdForSession(session) ?? resolveProject();
+    if (typeof projectId !== "string" || projectId.trim() === "") {
+      return { block: true, reason: "BRAIN_WORKER_PROJECT_ID_REQUIRED" };
+    }
     const taskIds = items.map((_, index) => `omp-${taskSha256(JSON.stringify([session, event.toolCallId, index]))}`);
     const reservations = taskIds.filter((id) => !pendingWorkerTaskIds.has(id));
     if (pendingWorkerTaskIds.size + reservations.length > 1024) {
@@ -729,22 +974,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     const guardCfg = loadOrchestratorGuardConfig();
     const role = resolveAgentRole(modelId, loadDriverOrchestratorConfig(), guardCfg.orchestratorModels);
     const augmented: Array<Record<string, unknown>> = [];
+    const preparedAdmissions: WorkerAdmission[] = [];
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       const rawTask = item.task as string;
       const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
       const taskId = taskIds[index];
+      const accessIntent = item.access_intent as "read_only" | "mutating";
       const result = await safeWorkerContextRunner({
         home: config.home ?? "",
         sessionId: session,
         taskId,
         task,
-        scope: typeof input.scope === "string" ? input.scope : ctx.cwd,
+        scope: ctx.cwd,
         completionCondition:
           typeof input.completion_condition === "string"
             ? input.completion_condition
             : "Return bounded evidence for the delegated task",
-        projectId: typeof input.project_id === "string" ? input.project_id : projectIdForCwd(ctx.cwd),
+        projectId,
+        accessIntent,
         cwd: ctx.cwd,
         role,
         provider,
@@ -753,7 +1001,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         depth: typeof input.depth === "number" ? input.depth : 0,
         contextRefs: Array.isArray(input.context_refs) ? input.context_refs.filter((ref): ref is string => typeof ref === "string") : undefined,
       });
-      if (!result.ok || result.contextHandoff === undefined || result.contextMetadata === undefined) {
+      if (
+        !result.ok ||
+        result.contextHandoff === undefined ||
+        result.contextMetadata === undefined ||
+        result.taskId !== taskId ||
+        result.attemptId === undefined ||
+        result.packetSha256 === undefined ||
+        result.projectId !== projectId ||
+        result.accessIntent !== accessIntent ||
+        (accessIntent === "mutating" &&
+          (typeof result.worktreeId !== "string" || result.callbackToken === undefined))
+      ) {
+        await Promise.all(
+          preparedAdmissions.map((admission) =>
+            releaseUndispatchedAdmission(admission, "OMP_BATCH_PREPARATION_FAILED"),
+          ),
+        );
         for (const id of reservations) pendingWorkerTaskIds.delete(id);
         const reason = result.error ?? "P3.2 worker context preparation failed";
         getStore(session)?.append(
@@ -765,6 +1029,39 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         return { block: true, reason };
       }
+      const admission: WorkerAdmission = {
+        taskId,
+        attemptId: result.attemptId,
+        packetSha256: result.packetSha256,
+        projectId,
+        worktreeId: result.worktreeId ?? null,
+        accessIntent,
+        ...(result.callbackToken ? { callbackToken: result.callbackToken } : {}),
+        parentSessionId: session,
+        agent: typeof item.agent === "string" ? item.agent : "default",
+        toolCallId: event.toolCallId,
+        sourceIndex: index,
+        lifecycleSequence: -1,
+        lifecycleRevision: 0,
+        callbackChain: Promise.resolve(true),
+        cleanupAccepted: accessIntent === "read_only",
+      };
+      preparedAdmissions.push(admission);
+      journalWorkerEvent(session, "second-brain.worker-admission-pending", {
+        session,
+        taskId,
+        attemptId: admission.attemptId,
+        packetSha256: admission.packetSha256,
+        projectId: admission.projectId,
+        worktreeId: admission.worktreeId,
+        accessIntent: admission.accessIntent,
+        parentSessionId: session,
+        agent: admission.agent,
+        toolCallId: event.toolCallId,
+        sourceIndex: index,
+      });
+      workerAdmissionsByTask.set(taskId, admission);
+      workerAdmissionsBySource.set(JSON.stringify([session, event.toolCallId, index]), admission);
       const metadata = result.contextMetadata;
       const metadataRecord = {
         task_id: taskId,
@@ -772,6 +1069,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         worker_agent: typeof item.agent === "string" ? item.agent : "default",
         worker_role: workerRoleForAgent(item.agent),
         parent_role: role,
+        attempt_id: result.attemptId,
+        access_intent: accessIntent,
+        project_id: result.projectId,
+        worktree_id: result.worktreeId,
         parent_session_id: session,
         context_ref_count: metadata.resolved_count,
         context_source_bytes: metadata.visible_bytes ?? 0,
@@ -793,6 +1094,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         task: `[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${rawTask}\n\n${renderOmpWorkerContext(result.contextHandoff)}`,
       });
     }
+    if (hasMutating) {
+      const disposer = ctx.observeAsyncJobLifecycle?.(
+        (observation) => {
+          const admission = workerAdmissionsBySource.get(
+            JSON.stringify([session, event.toolCallId, observation.sourceIndex]),
+          );
+          if (!admission || admission.accessIntent !== "mutating") return false;
+          admission.callbackChain = admission.callbackChain
+            .catch(() => false)
+            .then(() => observeWorkerAttempt(admission, observation, ctx));
+          return admission.callbackChain;
+        },
+        { sourceToolCallId: event.toolCallId },
+      );
+      if (!disposer) {
+        await Promise.all(
+          preparedAdmissions.map((admission) =>
+            releaseUndispatchedAdmission(admission, "OMP_SETTLEMENT_CAPABILITY_UNAVAILABLE"),
+          ),
+        );
+        return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
+      }
+      workerObservationDisposers.set(JSON.stringify([session, event.toolCallId]), disposer);
+    }
     if (batch) return { input: { ...input, tasks: augmented } };
     return { input: { ...input, task: String(augmented[0].task ?? "") } };
   };
@@ -810,6 +1135,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     },
     summaryText: string,
   ): Promise<void> => {
+    const admission = workerAdmissionsByTask.get(fields.task_id);
+    if (!admission || admission.packetSha256 !== fields.packet_sha256) {
+      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_ATTEMPT_BINDING_UNAVAILABLE"));
+      return;
+    }
     if (reportedWorkerTaskIds.has(fields.task_id) || workerCompletionsInFlight.has(fields.task_id)) return;
     workerCompletionsInFlight.add(fields.task_id);
     if (!observedWorkerTaskIds.has(fields.task_id)) {
@@ -818,11 +1148,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
     try {
       // The host journal is recovery input, not a Brain acceptance receipt.
-      journalWorkerEvent(session, "second-brain.worker-result-pending", { session, fields, summary: summaryText.slice(0, 2048) });
+      journalWorkerEvent(session, "second-brain.worker-result-pending", {
+        session,
+        attemptId: admission.attemptId,
+        fields,
+        summary: summaryText.slice(0, 2048),
+      });
       const outcome = await workerResultRunner({
         home: config.home ?? "",
         sessionId: session,
         taskId: fields.task_id,
+        attemptId: admission.attemptId,
         packetSha256: fields.packet_sha256,
         status: fields.status,
         workerAgent: fields.worker_agent,
@@ -832,9 +1168,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
       if (!outcome.ok) throw new Error(outcome.error ?? "BRAIN_WORKER_RESULT_NOT_ACCEPTED");
       rememberWorkerIdentity(reportedWorkerTaskIds, fields.task_id);
-      pendingWorkerTaskIds.delete(fields.task_id);
-      for (const [key, job] of pendingWorkerJobs) if (job.taskId === fields.task_id) pendingWorkerJobs.delete(key);
-      journalWorkerEvent(session, "second-brain.worker-result-accepted", { session, taskId: fields.task_id });
+      if (admission.accessIntent === "read_only" || admission.cleanupAccepted) {
+        pendingWorkerTaskIds.delete(fields.task_id);
+        workerAdmissionsByTask.delete(fields.task_id);
+        workerAdmissionsBySource.delete(
+          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
+        );
+      }
+      journalWorkerEvent(session, "second-brain.worker-result-accepted", {
+        session,
+        taskId: fields.task_id,
+        attemptId: admission.attemptId,
+      });
       mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
@@ -852,13 +1197,68 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           !("customType" in entry) || !("data" in entry)) continue;
       const data = entry.data;
       if (data === null || typeof data !== "object" || !("session" in data) || data.session !== session) continue;
+      if (
+        entry.customType === "second-brain.worker-admission-pending" &&
+        "taskId" in data && typeof data.taskId === "string" &&
+        "attemptId" in data && typeof data.attemptId === "string" &&
+        "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
+        "projectId" in data && typeof data.projectId === "string" &&
+        "accessIntent" in data && (data.accessIntent === "read_only" || data.accessIntent === "mutating") &&
+        "parentSessionId" in data && typeof data.parentSessionId === "string" &&
+        "agent" in data && typeof data.agent === "string" &&
+        "toolCallId" in data && typeof data.toolCallId === "string" &&
+        "sourceIndex" in data && typeof data.sourceIndex === "number" &&
+        ("worktreeId" in data && (data.worktreeId === null || typeof data.worktreeId === "string"))
+      ) {
+        const admission: WorkerAdmission = {
+          taskId: data.taskId,
+          attemptId: data.attemptId,
+          packetSha256: data.packetSha256,
+          projectId: data.projectId,
+          worktreeId: data.worktreeId,
+          accessIntent: data.accessIntent,
+          parentSessionId: data.parentSessionId,
+          agent: data.agent,
+          toolCallId: data.toolCallId,
+          sourceIndex: data.sourceIndex,
+          lifecycleSequence: -1,
+          lifecycleRevision: 0,
+          callbackChain: Promise.resolve(true),
+          cleanupAccepted: data.accessIntent === "read_only",
+        };
+        workerAdmissionsByTask.set(admission.taskId, admission);
+        workerAdmissionsBySource.set(
+          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
+          admission,
+        );
+        pendingWorkerTaskIds.add(admission.taskId);
+        continue;
+      }
+      if (
+        entry.customType === "second-brain.worker-lifecycle-accepted" &&
+        "taskId" in data && typeof data.taskId === "string" &&
+        "attemptId" in data && typeof data.attemptId === "string" &&
+        "executorSettled" in data && data.executorSettled === true &&
+        "cleanupComplete" in data && data.cleanupComplete === true
+      ) {
+        const admission = workerAdmissionsByTask.get(data.taskId);
+        if (!admission || admission.attemptId !== data.attemptId) continue;
+        admission.cleanupAccepted = true;
+        pendingWorkerTaskIds.delete(admission.taskId);
+        if (reportedWorkerTaskIds.has(admission.taskId)) {
+          workerAdmissionsByTask.delete(admission.taskId);
+        }
+        workerAdmissionsBySource.delete(
+          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
+        );
+        continue;
+      }
       if (entry.customType === "second-brain.worker-job-pending" &&
           "jobId" in data && typeof data.jobId === "string" && data.jobId.length > 0 && data.jobId.length <= 512 &&
           "agentId" in data && typeof data.agentId === "string" && data.agentId.length > 0 && data.agentId.length <= 512 &&
           "taskId" in data && typeof data.taskId === "string" && data.taskId.length <= 512 &&
           "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
           "agent" in data && typeof data.agent === "string" && data.agent.length <= 512) {
-        if (reportedWorkerTaskIds.has(data.taskId)) continue;
         const key = JSON.stringify([session, data.jobId]);
         if (pendingWorkerJobs.has(key)) continue;
         if (pendingWorkerJobs.size >= 1024 ||
@@ -871,13 +1271,37 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           taskId: data.taskId, packetSha256: data.packetSha256, parentSessionId: session, agent: data.agent,
           agentId: data.agentId,
         });
+        const admission = workerAdmissionsByTask.get(data.taskId);
+        if (
+          admission &&
+          "attemptId" in data && data.attemptId === admission.attemptId &&
+          "nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
+          "hostGeneration" in data && typeof data.hostGeneration === "number"
+        ) {
+          admission.nativeJobId = data.jobId;
+          admission.nativeAttemptId = data.nativeAttemptId;
+          admission.agentId = data.agentId;
+          admission.hostGeneration = data.hostGeneration;
+        }
         continue;
       }
-      if (entry.customType === "second-brain.worker-result-accepted" && "taskId" in data && typeof data.taskId === "string") {
+      if (
+        entry.customType === "second-brain.worker-result-accepted" &&
+        "taskId" in data && typeof data.taskId === "string" &&
+        "attemptId" in data && typeof data.attemptId === "string"
+      ) {
         pending.delete(data.taskId);
-        pendingWorkerTaskIds.delete(data.taskId);
+        const admission = workerAdmissionsByTask.get(data.taskId);
+        if (!admission || admission.attemptId !== data.attemptId) continue;
         rememberWorkerIdentity(reportedWorkerTaskIds, data.taskId);
-        for (const [key, job] of pendingWorkerJobs) if (job.taskId === data.taskId) pendingWorkerJobs.delete(key);
+        if (admission.accessIntent === "read_only" || admission.cleanupAccepted) {
+          pendingWorkerTaskIds.delete(data.taskId);
+          workerAdmissionsByTask.delete(data.taskId);
+          workerAdmissionsBySource.delete(
+            JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
+          );
+          for (const [key, job] of pendingWorkerJobs) if (job.taskId === data.taskId) pendingWorkerJobs.delete(key);
+        }
         continue;
       }
       if (entry.customType !== "second-brain.worker-result-pending" || !("fields" in data)) continue;
@@ -887,6 +1311,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           !("packet_sha256" in f) || typeof f.packet_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(f.packet_sha256) ||
           !("status" in f) || (f.status !== "completed" && f.status !== "failed" && f.status !== "cancelled") ||
           !("worker_agent" in f) || typeof f.worker_agent !== "string") continue;
+      if (!("attemptId" in data) || data.attemptId !== workerAdmissionsByTask.get(f.task_id)?.attemptId) continue;
       if (reportedWorkerTaskIds.has(f.task_id)) continue;
       if (!pending.has(f.task_id) && pending.size >= 1024) {
         recoveryLimited = true;
@@ -922,7 +1347,27 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (event.isError) {
       const count = Array.isArray(event.input.tasks) ? event.input.tasks.length : 1;
       for (let index = 0; index < count; index += 1) {
-        pendingWorkerTaskIds.delete(`omp-${taskSha256(JSON.stringify([session, event.toolCallId, index]))}`);
+        const sourceKey = JSON.stringify([session, event.toolCallId, index]);
+        const admission = workerAdmissionsBySource.get(sourceKey);
+        if (!admission) continue;
+        if (admission.accessIntent === "mutating") {
+          await releaseUndispatchedAdmission(admission, "OMP_TASK_DISPATCH_FAILED");
+        } else {
+          pendingWorkerTaskIds.delete(admission.taskId);
+          workerAdmissionsByTask.delete(admission.taskId);
+          workerAdmissionsBySource.delete(sourceKey);
+        }
+      }
+      const observerKey = JSON.stringify([session, event.toolCallId]);
+      const hasBoundAttempt = Array.from(workerAdmissionsBySource.values()).some(
+        (admission) =>
+          admission.parentSessionId === session &&
+          admission.toolCallId === event.toolCallId &&
+          admission.accessIntent === "mutating",
+      );
+      if (!hasBoundAttempt) {
+        workerObservationDisposers.get(observerKey)?.();
+        workerObservationDisposers.delete(observerKey);
       }
     }
     if (event.details == null || typeof event.details !== "object") return;
@@ -945,6 +1390,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
             jobId === undefined || jobId.length === 0 || jobId.length > 512 ||
             marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
+        if (workerAdmissionsByTask.get(marker[1])?.accessIntent === "mutating") continue;
         if (reportedWorkerTaskIds.has(marker[1])) continue;
         const key = JSON.stringify([session, jobId]);
         if (pendingWorkerJobs.has(key)) continue;
@@ -3011,6 +3457,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<SessionShutdownEvent>(
     "session_shutdown",
     (event, ctx, session) => {
+      for (const [key, dispose] of workerObservationDisposers) {
+        const parsed = JSON.parse(key) as unknown[];
+        if (parsed[0] !== session) continue;
+        dispose();
+        workerObservationDisposers.delete(key);
+      }
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {
         const activeState = runActiveStateUpdateSync({

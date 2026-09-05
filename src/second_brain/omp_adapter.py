@@ -24,6 +24,17 @@ def _text(value: Any, limit: int = _MAX_IDENTITY_CHARS) -> str:
     return value[:limit] if isinstance(value, str) else ""
 
 
+def _required_text(
+    payload: Mapping[str, Any], name: str, limit: int = contracts.WORKER_TEXT_MAX_CHARS
+) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value or len(value) > limit:
+        raise contracts.WorkerPacketError(
+            "PROTOCOL_ERROR", f"{name} must be a bounded non-empty string"
+        )
+    return value
+
+
 def _worker_text(value: Any, default: str) -> str:
     text = value if isinstance(value, str) else default
     return text[: contracts.WORKER_TEXT_MAX_CHARS]
@@ -89,45 +100,38 @@ def _prepare_worker_context(home: Path, payload: Mapping[str, Any]) -> dict[str,
         fanout_index=0,
         fanout=1,
         depth=int(payload.get("depth", 0)),
-        project_id=_text(payload.get("project_id")) or "default",
-        repo_root=_text(payload.get("cwd")) or str(home),
+        project_id=_text(payload.get("project_id")),
+        repo_root=_text(payload.get("cwd")),
+        access_intent=_text(payload.get("access_intent")),
     ).validate()
     context_handoff = worker_protocol.prepare_context_handoff(home, packet, host="omp")
-    registration = worker_protocol.register_task(
-        home,
-        packet.task_id,
-        packet.canonical_hash(),
-        session_id=host_session_id,
-        dispatch_payload=json.loads(packet.canonical_json()),
-    )
-    duplicate_terminal = bool(
-        registration.get("duplicate")
-        and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
-    )
-    if duplicate_terminal:
-        return {
-            "status": str(registration["state"]).lower(),
-            "duplicate": True,
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-        }
-    worker_protocol.record_worker_event(
-        home,
-        packet.task_id,
-        packet.canonical_hash(),
-        "worker_started",
-        session_id=host_session_id,
-        host="omp",
-    )
-    return {
+    registration = worker_protocol.admit_worker_attempt(home, packet)
+    if packet.access_intent == "read_only":
+        worker_protocol.record_worker_event(
+            home,
+            packet.task_id,
+            packet.canonical_hash(),
+            "worker_started",
+            attempt_id=registration["attempt_id"],
+            session_id=host_session_id,
+            host="omp",
+        )
+    response = {
         "status": "prepared",
         "task_id": packet.task_id,
+        "attempt_id": registration["attempt_id"],
         "packet_sha256": packet.canonical_hash(),
+        "project_id": packet.project_id,
+        "worktree_id": registration["worktree_id"],
+        "access_intent": packet.access_intent,
         "worker_role": packet.requested_role,
         "worker_model": model,
         "context_metadata": worker_protocol.handoff_metadata(context_handoff),
         "context_handoff": context_handoff,
     }
+    if "callback_token" in registration:
+        response["callback_token"] = registration["callback_token"]
+    return response
 
 
 def _prepare_skill_visibility(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -253,12 +257,15 @@ def _worker_result_identity(
 def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     task_id = _text(payload.get("task_id"))
     packet_sha256 = _text(payload.get("packet_sha256"))
-    if not task_id or not packet_sha256:
+    attempt_id = _text(payload.get("attempt_id"))
+    session_id = _text(payload.get("host_session_id") or payload.get("session_id"))
+    if not task_id or not packet_sha256 or not attempt_id or not session_id:
         return {"status": "failed", "failure_code": "MALFORMED_RESULT"}
-    session_id = _text(payload.get("host_session_id") or payload.get("session_id")) or None
-    owner = worker_protocol.task_owner_session(home, task_id, packet_sha256)
-    if session_id is None or owner != session_id:
-        return {"status": "failed", "failure_code": "UNAUTHORIZED_WORKER", "task_id": task_id}
+    binding_error = worker_protocol.verify_attempt_binding(
+        home, task_id, packet_sha256, attempt_id, session_id
+    )
+    if binding_error is not None:
+        return {"status": "failed", "failure_code": binding_error, "task_id": task_id}
     try:
         result = to_result_packet(
             {
@@ -286,6 +293,7 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
                 **json.loads(result.canonical_json()),
                 "result_sha256": result.canonical_hash(),
             },
+            attempt_id=attempt_id,
             session_id=session_id,
             host="omp",
         )
@@ -303,8 +311,65 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
         "failure_code": result.failure_code,
         "task_id": result.task_id,
         "packet_sha256": packet_sha256,
+        "attempt_id": attempt_id,
         "result_sha256": result_sha256,
     }
+
+
+def _prepare_worker_bind(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return worker_protocol.bind_worker_attempt(
+        home,
+        task_id=_required_text(payload, "task_id"),
+        packet_sha256=_required_text(payload, "packet_sha256"),
+        host_session_id=_required_text(payload, "host_session_id"),
+        attempt_id=_required_text(payload, "attempt_id"),
+        project_id=_required_text(payload, "project_id"),
+        worktree_id=_required_text(payload, "worktree_id"),
+        callback_token=_required_text(payload, "callback_token"),
+        host_generation=payload.get("host_generation"),
+        native_attempt_id=payload.get("native_attempt_id"),
+        native_job_id=payload.get("native_job_id"),
+        agent_id=payload.get("agent_id"),
+    )
+
+
+def _prepare_worker_dispatch_failed(
+    home: Path, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    return worker_protocol.record_worker_dispatch_failure(
+        home,
+        task_id=_required_text(payload, "task_id"),
+        packet_sha256=_required_text(payload, "packet_sha256"),
+        host_session_id=_required_text(payload, "host_session_id"),
+        attempt_id=_required_text(payload, "attempt_id"),
+        project_id=_required_text(payload, "project_id"),
+        worktree_id=_required_text(payload, "worktree_id"),
+        callback_token=_required_text(payload, "callback_token"),
+        failure_code=payload.get("failure_code"),
+        host="omp",
+    )
+
+
+def _prepare_worker_lifecycle(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return worker_protocol.ingest_worker_lifecycle(
+        home,
+        task_id=_required_text(payload, "task_id"),
+        packet_sha256=_required_text(payload, "packet_sha256"),
+        host_session_id=_required_text(payload, "host_session_id"),
+        attempt_id=_required_text(payload, "attempt_id"),
+        project_id=_required_text(payload, "project_id"),
+        worktree_id=_required_text(payload, "worktree_id"),
+        callback_token=_required_text(payload, "callback_token"),
+        host_generation=payload.get("host_generation"),
+        native_attempt_id=payload.get("native_attempt_id"),
+        native_job_id=payload.get("native_job_id"),
+        agent_id=payload.get("agent_id"),
+        sequence=payload.get("sequence"),
+        outcome=payload.get("outcome"),
+        executor_settled=payload.get("executor_settled"),
+        cleanup_complete=payload.get("cleanup_complete"),
+        host="omp",
+    )
 
 
 def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -318,6 +383,21 @@ def handle_request(home: Path | str, payload: Mapping[str, Any] | None) -> dict[
             return {"status": "failed", "failure_code": exc.code}
         except Exception:
             return {"status": "failed", "failure_code": "CONTEXT_UNAVAILABLE"}
+    if payload.get("operation") in {
+        "worker_bind",
+        "worker_dispatch_failed",
+        "worker_lifecycle",
+    }:
+        try:
+            if payload.get("operation") == "worker_bind":
+                return _prepare_worker_bind(Path(home), payload)
+            if payload.get("operation") == "worker_dispatch_failed":
+                return _prepare_worker_dispatch_failed(Path(home), payload)
+            return _prepare_worker_lifecycle(Path(home), payload)
+        except contracts.WorkerPacketError as exc:
+            return {"status": "rejected", "failure_code": exc.code}
+        except Exception:
+            return {"status": "rejected", "failure_code": "PERSISTENCE_UNAVAILABLE"}
     if payload.get("operation") == "worker_result":
         try:
             return _prepare_worker_result(Path(home), payload)

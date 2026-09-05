@@ -14,6 +14,7 @@ export interface OmpWorkerResultOutcome {
   status?: string;
   failureCode?: string;
   taskId?: string;
+  attemptId?: string;
   packetSha256?: string;
   resultSha256?: string;
   error?: string;
@@ -23,6 +24,7 @@ export interface OmpWorkerResultOptions {
   home: string;
   sessionId: string;
   taskId: string;
+  attemptId: string;
   packetSha256: string;
   status: OmpWorkerResultStatus;
   workerAgent: string;
@@ -57,14 +59,15 @@ export function parseOmpWorkerResultOutput(stdout: string): OmpWorkerResultOutco
   }
   const value = parsed as Record<string, unknown>;
   const taskId = bounded(value.task_id, 512);
+  const attemptId = bounded(value.attempt_id, 128);
   const status = bounded(value.status, 32);
-  if (!taskId || !status) {
+  if (!taskId || !attemptId || !status) {
     return { ok: false, error: "BRAIN_WORKER_RESULT_INVALID_RESPONSE" };
   }
   // Worker failure is an accepted outcome when the lifecycle supplies its receipt.
   const accepted = ["completed", "failed", "cancelled"].includes(status) &&
     sha256(value.packet_sha256) && sha256(value.result_sha256);
-  const outcome: OmpWorkerResultOutcome = { ok: accepted, status, taskId };
+  const outcome: OmpWorkerResultOutcome = { ok: accepted, status, taskId, attemptId };
   const failureCode = bounded(value.failure_code, 128);
   if (failureCode) outcome.failureCode = failureCode;
   if (sha256(value.packet_sha256)) outcome.packetSha256 = value.packet_sha256;
@@ -98,6 +101,7 @@ export function runOmpWorkerResult(
     session_id: bounded(options.sessionId, 128),
     task_id: bounded(options.taskId, 512),
     packet_sha256: bounded(options.packetSha256, 128),
+    attempt_id: bounded(options.attemptId, 128),
     status: options.status,
     ...(options.status === "failed" ? { failure_code: "OMP_WORKER_FAILED" } : {}),
     worker_agent: bounded(options.workerAgent, 128),
@@ -124,6 +128,7 @@ export function runOmpWorkerResult(
         }
         const outcome = parseOmpWorkerResultOutput(stdout);
         if (outcome.ok && (outcome.taskId !== payload.task_id ||
+            outcome.attemptId !== payload.attempt_id ||
             outcome.packetSha256 !== payload.packet_sha256 || outcome.status !== payload.status)) {
           resolve({ ok: false, error: "BRAIN_WORKER_RESULT_RECEIPT_MISMATCH" });
           return;

@@ -33,6 +33,7 @@ def test_omp_adapter_prepares_bounded_worker_context_handoff(tmp_path) -> None:
             "provider": "openai-codex",
             "model": "gpt-5.6-luna",
             "worker_role": "worker",
+            "access_intent": "read_only",
         },
     )
 
@@ -60,6 +61,7 @@ def _worker_context_payload(session: str, task_id: str, **extra: object) -> dict
         "provider": "openai-codex",
         "model": "gpt-5.6-luna",
         "worker_role": "worker",
+        "access_intent": "read_only",
         **extra,
     }
 
@@ -304,7 +306,11 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
     malformed_response = omp_adapter.handle_request(
         tmp_path,
         _worker_result_payload(
-            session, malformed_task, packet_sha256, status="not-a-real-status"
+            session,
+            malformed_task,
+            packet_sha256,
+            attempt_id=context_response["attempt_id"],
+            status="not-a-real-status",
         ),
     )
     assert malformed_response["status"] == "failed"
@@ -328,7 +334,13 @@ def test_omp_result_validated_as_packet(tmp_path) -> None:
     packet_sha256 = context_response["packet_sha256"]
 
     valid_response = omp_adapter.handle_request(
-        tmp_path, _worker_result_payload(session, valid_task, packet_sha256)
+        tmp_path,
+        _worker_result_payload(
+            session,
+            valid_task,
+            packet_sha256,
+            attempt_id=context_response["attempt_id"],
+        ),
     )
     assert valid_response["status"] == "completed"
     assert valid_response["failure_code"] is None
@@ -354,7 +366,9 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
         tmp_path, _worker_context_payload(session, task, context_refs=[])
     )
     digest = context["packet_sha256"]
-    payload = _worker_result_payload(session, task, digest)
+    payload = _worker_result_payload(
+        session, task, digest, attempt_id=context["attempt_id"]
+    )
 
     def unavailable(*args, **kwargs):
         raise OSError("injected host ledger failure")
@@ -371,7 +385,10 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
         is None
     )
     wrong_parent = omp_adapter.handle_request(
-        tmp_path, _worker_result_payload("other-parent", task, digest)
+        tmp_path,
+        _worker_result_payload(
+            "other-parent", task, digest, attempt_id=context["attempt_id"]
+        ),
     )
     assert wrong_parent["status"] == "failed"
     assert "result_sha256" not in wrong_parent
@@ -382,7 +399,9 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
     ):
         source.backup(restored)
         receipt = restored.execute(
-            "SELECT result_sha256,payload_json FROM worker_task_results WHERE task_id=?", (task,)
+            "SELECT result_sha256,payload_json FROM worker_attempt_results "
+            "WHERE attempt_id=?",
+            (context["attempt_id"],),
         ).fetchone()
         assert receipt[0] == accepted["result_sha256"]
         assert '"status":"completed"' in receipt[1]
@@ -398,13 +417,18 @@ def test_omp_result_receipt_failure_rolls_back_terminal_transition(tmp_path) -> 
     context = omp_adapter.handle_request(
         tmp_path, _worker_context_payload(session, task, context_refs=[])
     )
-    payload = _worker_result_payload(session, task, context["packet_sha256"])
+    payload = _worker_result_payload(
+        session,
+        task,
+        context["packet_sha256"],
+        attempt_id=context["attempt_id"],
+    )
     with sqlite3.connect(db.db_path(tmp_path)) as conn:
         before = conn.execute("SELECT state FROM worker_tasks WHERE task_id=?", (task,)).fetchone()[
             0
         ]
         conn.execute(
-            "CREATE TRIGGER reject_receipt BEFORE INSERT ON worker_task_results "
+            "CREATE TRIGGER reject_receipt BEFORE INSERT ON worker_attempt_results "
             "BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END"
         )
     rejected = omp_adapter.handle_request(tmp_path, payload)
@@ -427,9 +451,12 @@ def test_omp_result_cannot_adopt_an_ownerless_task(tmp_path) -> None:
     worker_protocol.register_task(tmp_path, task, digest)
     worker_protocol.record_worker_event(tmp_path, task, digest, "accepted")
     result = omp_adapter.handle_request(
-        tmp_path, _worker_result_payload("unrelated-parent", task, digest)
+        tmp_path,
+        _worker_result_payload(
+            "unrelated-parent", task, digest, attempt_id="attempt-unowned"
+        ),
     )
-    assert result["failure_code"] == "UNAUTHORIZED_WORKER"
+    assert result["failure_code"] == "STALE_ATTEMPT"
     task_state = worker_protocol.lookup_task(tmp_path, task, digest)
     assert task_state is not None
     assert task_state["state"] == "WORKING"
@@ -470,6 +497,7 @@ def test_omp_worker_result_bridge_flat_shape_round_trips_and_preserves_host(
         "session_id": session,
         "task_id": task_id,
         "packet_sha256": packet_sha256,
+        "attempt_id": context_response["attempt_id"],
         "status": "completed",
         "worker_agent": "codex-worker-1",
         "worker_model": "gpt-5.6-luna",
@@ -512,6 +540,7 @@ def test_omp_worker_result_rejects_role_mismatch(tmp_path) -> None:
             session,
             task_id,
             packet_sha256,
+            attempt_id=context_response["attempt_id"],
             worker_role="dev",  # the task requested_role was "worker"
         ),
     )
@@ -525,7 +554,13 @@ def test_omp_worker_result_rejects_role_mismatch(tmp_path) -> None:
         ).fetchone()[0]
     assert state == contracts.WorkerLifecycle.WORKING
     corrected = omp_adapter.handle_request(
-        tmp_path, _worker_result_payload(session, task_id, packet_sha256)
+        tmp_path,
+        _worker_result_payload(
+            session,
+            task_id,
+            packet_sha256,
+            attempt_id=context_response["attempt_id"],
+        ),
     )
     assert corrected["status"] == "completed"
 

@@ -173,7 +173,56 @@ function loadFactory(options?: ExtensionOptions, journal?: unknown[], journalErr
       journal?.push({ type: "custom", customType, data });
     },
   } as unknown as ExtensionAPI;
-  factory(pi, { budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }), ...options });
+  const originalWorkerContextRunner = options?.ompWorkerContextRunner;
+  const ompWorkerContextRunner: ExtensionOptions["ompWorkerContextRunner"] =
+    originalWorkerContextRunner === undefined
+      ? undefined
+      : async (request) => {
+          const result = await originalWorkerContextRunner(request);
+          if (!result.ok) return result;
+          return {
+            ...result,
+            taskId: request.taskId,
+            attemptId: `attempt-${request.taskId}`,
+            projectId: request.projectId,
+            worktreeId: request.accessIntent === "mutating" ? "worktree-test" : null,
+            accessIntent: request.accessIntent,
+            ...(request.accessIntent === "mutating" ? { callbackToken: "callback-test" } : {}),
+          };
+        };
+  factory(pi, {
+    budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+    ...options,
+    ompWorkerContextRunner,
+  });
+  const toolCall = handlers.get("tool_call");
+  if (toolCall !== undefined) {
+    handlers.set("tool_call", (event, ctx) => {
+      if (
+        !event ||
+        typeof event !== "object" ||
+        !("toolName" in event) ||
+        event.toolName !== "task" ||
+        !("input" in event) ||
+        !event.input ||
+        typeof event.input !== "object"
+      ) {
+        return toolCall(event, ctx);
+      }
+      const input = event.input;
+      const tasks =
+        "tasks" in input && Array.isArray(input.tasks)
+          ? input.tasks.map((item) =>
+              item && typeof item === "object" ? { ...item, access_intent: "read_only" } : item)
+          : undefined;
+      return toolCall({
+        ...event,
+        input: tasks === undefined
+          ? { ...input, access_intent: "read_only" }
+          : { ...input, tasks },
+      }, ctx);
+    });
+  }
   return handlers;
 }
 
@@ -2739,6 +2788,10 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     ok: true,
     taskId: "omp-task-async-1",
     packetSha256: "d".repeat(64),
+    attemptId: "attempt-async-1",
+    projectId: "default",
+    worktreeId: null,
+    accessIntent: "read_only" as const,
     contextHandoff: {
       mode: "full" as const,
       resolved_context: [],
@@ -2797,26 +2850,32 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("audited closeout bounds recovered correlations and resumes overflow after settlement", async () => {
+  it("fails closed for legacy recovered job rows without an exact attempt binding", async () => {
     const journal: unknown[] = Array.from({ length: 1025 }, (_, index) => ({
-      type: "custom", customType: "second-brain.worker-job-pending",
-      data: { session: "wiring-test", jobId: `recovered-job-${index}`, agentId: `recovered-${index}`, taskId: `task-${index}`, packetSha256: "a".repeat(64), agent: "worker" },
+      type: "custom",
+      customType: "second-brain.worker-job-pending",
+      data: {
+        session: "wiring-test",
+        jobId: `recovered-job-${index}`,
+        agentId: `recovered-${index}`,
+        taskId: `task-${index}`,
+        packetSha256: "a".repeat(64),
+        agent: "worker",
+      },
     }));
     const runner = vi.fn(async () => ({ ok: true }));
     const handlers = loadFactory({ ompWorkerResultRunner: runner }, journal);
     const initial = makeCtx();
-    const ctx = makeCtx({ sessionManager: { getSessionFile: initial.sessionManager.getSessionFile, getEntries: () => journal } });
-    const overflow = asyncResultMessage([{
-      jobId: "recovered-job-1024", agentId: "recovered-1024", status: "completed",
-    }]);
-    await handlers.get("message_end")!(overflow, ctx);
+    const ctx = makeCtx({
+      sessionManager: { getSessionFile: initial.sessionManager.getSessionFile, getEntries: () => journal },
+    });
+
+    await handlers.get("message_end")!(asyncResultMessage([
+      { jobId: "recovered-job-0", agentId: "recovered-0", status: "completed" },
+      { jobId: "recovered-job-1024", agentId: "recovered-1024", status: "completed" },
+    ]), ctx);
+
     expect(runner).not.toHaveBeenCalled();
-    await handlers.get("message_end")!(asyncResultMessage([{
-      jobId: "recovered-job-0", agentId: "recovered-0", status: "completed",
-    }]), ctx);
-    await handlers.get("message_end")!(overflow, ctx);
-    expect(runner).toHaveBeenCalledTimes(2);
-    expect(runner).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: "task-1024" }));
   });
 
 
@@ -3062,7 +3121,9 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
         !("customType" in entry) || entry.customType !== "second-brain.worker-result-accepted" ||
         !("data" in entry)) return false;
     const data = entry.data;
-    return data !== null && typeof data === "object" && "taskId" in data && data.taskId === taskId;
+    return data !== null && typeof data === "object" &&
+      "taskId" in data && data.taskId === taskId &&
+      "attemptId" in data && typeof data.attemptId === "string";
   }
 
   it("binds a collision-suffixed manager job id to the original dispatch agent", async () => {
@@ -3111,7 +3172,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId: binding.taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId: binding.taskId }),
     });
   });
 
@@ -3182,12 +3243,12 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       {
         type: "custom",
         customType: "second-brain.worker-result-accepted",
-        data: { session: "wiring-test", taskId: firstTaskId },
+        data: expect.objectContaining({ session: "wiring-test", taskId: firstTaskId }),
       },
       {
         type: "custom",
         customType: "second-brain.worker-result-accepted",
-        data: { session: "wiring-test", taskId: secondTaskId },
+        data: expect.objectContaining({ session: "wiring-test", taskId: secondTaskId }),
       },
     ]));
   });
@@ -3223,12 +3284,12 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       {
         type: "custom",
         customType: "second-brain.worker-result-accepted",
-        data: { session: "wiring-test", taskId: first.taskId },
+        data: expect.objectContaining({ session: "wiring-test", taskId: first.taskId }),
       },
       {
         type: "custom",
         customType: "second-brain.worker-result-accepted",
-        data: { session: "wiring-test", taskId: second.taskId },
+        data: expect.objectContaining({ session: "wiring-test", taskId: second.taskId }),
       },
     ]));
   });
@@ -3245,7 +3306,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const receipt = {
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId: binding.taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId: binding.taskId }),
     };
 
     await handlers.get("message_end")!(
@@ -3288,7 +3349,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const receipt = {
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId: binding.taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId: binding.taskId }),
     };
     const hubResult = (agentId?: string) => ({
       toolName: "hub",
@@ -3333,7 +3394,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const receipt = {
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId: binding.taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId: binding.taskId }),
     };
 
     await handlers.get("message_end")!(
@@ -3408,7 +3469,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).not.toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId }),
     });
   });
 
@@ -3449,7 +3510,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).not.toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId }),
     });
   });
 
@@ -3504,7 +3565,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId: prepared[0].taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId: prepared[0].taskId }),
     });
   });
 
@@ -3692,7 +3753,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId }),
     });
   });
 
@@ -3714,7 +3775,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).not.toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
-      data: { session: "wiring-test", taskId },
+      data: expect.objectContaining({ session: "wiring-test", taskId }),
     });
     const records = (await readFile(telemetryFile(), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(records.filter((record) => record.kind === "extension_error" &&

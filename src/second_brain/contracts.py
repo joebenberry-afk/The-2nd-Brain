@@ -31,10 +31,9 @@ import os
 import typing
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from .errors import BrainError
 
@@ -271,7 +270,10 @@ def token_estimator_info(
     pair_count = 0
     try:
         data = json.loads(_token_calibration_path(home).read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("schema_version") == TOKEN_CALIBRATION_SCHEMA_VERSION:
+        if (
+            isinstance(data, dict)
+            and data.get("schema_version") == TOKEN_CALIBRATION_SCHEMA_VERSION
+        ):
             models = data.get("models")
             entry = models.get(model or "default") if isinstance(models, dict) else None
             if isinstance(entry, dict):
@@ -394,7 +396,10 @@ def calibrate_tokens(home: Path) -> dict[str, object]:
     }
     path = home / "state" / "calibration" / "tokens.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
     return state
 
 
@@ -508,6 +513,7 @@ WORKER_MAX_DEPTH = 1
 WORKER_MAX_CORRECTION_ATTEMPTS = 3
 COORDINATOR_ROLES = frozenset({"integrator", "driver", "orchestrator", "hard_orchestrator"})
 WORKER_ROLES = frozenset({"dev", "validator", "worker"})
+WORKER_ACCESS_INTENTS = frozenset({"read_only", "mutating"})
 
 
 class WorkerPacketError(BrainError):
@@ -530,6 +536,7 @@ class WorkerLifecycle:
     CANCELED = "CANCELED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
+    UNRESOLVED = "UNRESOLVED"
 
     STATES = frozenset({
         SUBMITTED,
@@ -540,6 +547,7 @@ class WorkerLifecycle:
         CANCELED,
         FAILED,
         REJECTED,
+        UNRESOLVED,
     })
 
     TERMINAL_STATES = frozenset({
@@ -549,14 +557,15 @@ class WorkerLifecycle:
         REJECTED,
     })
 
-    TRANSITIONS = {
+    TRANSITIONS: ClassVar[dict[str, frozenset[str]]] = {
         SUBMITTED: frozenset({WORKING, REJECTED, CANCELED}),
         WORKING: frozenset({INPUT_REQUIRED, AUTH_REQUIRED, COMPLETED, FAILED, CANCELED}),
         INPUT_REQUIRED: frozenset({WORKING, CANCELED, FAILED}),
         AUTH_REQUIRED: frozenset({WORKING, CANCELED, FAILED}),
+        UNRESOLVED: frozenset({COMPLETED, FAILED, CANCELED}),
     }
 
-    _SYNONYMS = {
+    _SYNONYMS: ClassVar[dict[str, str]] = {
         "CANCELLED": "CANCELED",
         "WORKER_STARTED": "WORKING",
         "WORKER_COMPLETED": "COMPLETED",
@@ -570,7 +579,9 @@ class WorkerLifecycle:
     def __init__(self, initial_state: str = SUBMITTED) -> None:
         self.state = self.normalize_state(initial_state)
         if self.state not in self.STATES:
-            raise WorkerPacketError("INVALID_TRANSITION", f"unknown initial state: {initial_state!r}")
+            raise WorkerPacketError(
+                "INVALID_TRANSITION", f"unknown initial state: {initial_state!r}"
+            )
 
     @classmethod
     def normalize_state(cls, state: str) -> str:
@@ -619,9 +630,9 @@ def _check_worker_list(values: Any, field_name: str) -> None:
 def _check_wire_lists(
     values: Mapping[str, Any], fields: tuple[str, ...], code: str
 ) -> None:
-    for field in fields:
-        if field in values and not isinstance(values[field], list):
-            raise WorkerPacketError(code, f"invalid {field}")
+    for name in fields:
+        if name in values and not isinstance(values[name], list):
+            raise WorkerPacketError(code, f"invalid {name}")
 
 
 def _check_sha256(value: Any, field_name: str, code: str = "MALFORMED_RESULT") -> None:
@@ -650,6 +661,7 @@ class WorkerTaskPacket:
     depth: int = 0
     project_id: str = ""
     repo_root: str = ""
+    access_intent: str = ""
 
     def validate(self) -> WorkerTaskPacket:
         for name in ("task_id", "parent_session_id", "requested_role", "project_id", "repo_root"):
@@ -659,6 +671,11 @@ class WorkerTaskPacket:
         _check_worker_list(self.constraints, "constraints")
         _check_worker_list(self.evidence_requirements, "evidence_requirements")
         _check_worker_list(self.context_refs, "context_refs")
+        if self.access_intent not in WORKER_ACCESS_INTENTS:
+            raise WorkerPacketError(
+                "ACCESS_INTENT_REQUIRED",
+                "access_intent must be explicitly read_only or mutating",
+            )
         if self.driver_identity.role_profile not in COORDINATOR_ROLES:
             raise WorkerPacketError("UNAUTHORIZED_COORDINATOR", "driver role is not authorized")
         if self.requested_role not in WORKER_ROLES:
