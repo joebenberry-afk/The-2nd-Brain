@@ -96,12 +96,21 @@ export interface AfterProviderResponseEvent {
   headers: Record<string, string>;
 }
 
-/** Minimal assistant-message surface consumed by message_end (usage capture only). */
+/**
+ * Minimal assistant-message surface consumed by message_end (usage capture,
+ * plus OMP auto-delivered worker-result observation). `customType`/`content`
+ * are populated on the auto-delivered "async-result" custom-message shape
+ * (live-confirmed): `role: "custom"`, `customType: "async-result"`,
+ * `content` a text blob embedding one or more `<task-result id="..."
+ * status="...">...</task-result>` blocks.
+ */
 export interface MessageEndMessage {
   role?: string;
   provider?: unknown;
   model?: unknown;
   usage?: Usage;
+  customType?: string;
+  content?: unknown;
   [key: string]: unknown;
 }
 

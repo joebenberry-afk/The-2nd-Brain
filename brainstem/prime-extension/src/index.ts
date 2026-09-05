@@ -29,6 +29,7 @@ import type {
   BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
+  MessageEndMessage,
   PrimeEvent,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
@@ -576,6 +577,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     string,
     { taskId: string; packetSha256: string; parentSessionId: string; agent: string }
   >();
+  /**
+   * Atomically read and remove one pending worker-job correlation record so
+   * two independent completion observers (`hub jobs`/`wait` tool_result and
+   * OMP's auto-delivered `message_end` async-result notice) can race safely
+   * without either double-consuming the same spawn-time correlation entry.
+   * `emitWorkerCompletion`'s `reportedWorkerTaskIds` dedupe is the second,
+   * independent guard against a duplicate Second Brain result.
+   */
+  const takePendingWorkerJob = (
+    agentId: string,
+  ): { taskId: string; packetSha256: string; parentSessionId: string; agent: string } | undefined => {
+    const pending = pendingWorkerJobs.get(agentId);
+    if (pending === undefined) return undefined;
+    pendingWorkerJobs.delete(agentId);
+    return pending;
+  };
   // A settled hub job can be re-observed by repeated `hub jobs`/`wait` polls;
   // report each worker's completion exactly once.
   const reportedWorkerTaskIds = new Set<string>();
@@ -758,6 +775,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
   };
   const WORKER_TASK_MARKER_RE = /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/;
+  // Matches one OMP auto-delivered `<task-result id="..." ... status="...">...`
+  // block embedded as text inside a `message_end` custom `async-result`
+  // notice (live-confirmed shape, see 09-worker-result-undercount-defect.md).
+  // Group 1 = OMP agent id, group 2 = terminal status; the full match is
+  // reused verbatim as the worker-result summary text.
+  const TASK_RESULT_BLOCK_RE = /<task-result\s+id="([^"]*)"[^>]*\sstatus="([^"]*)"[^>]*>[\s\S]*?<\/task-result>/g;
   const recordWorkerChildResults = async (
     event: ToolResultEvent,
     ctx: ExtensionContext,
@@ -847,9 +870,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (job.type !== "task" || job.status === "running") continue;
       const agentId = typeof job.id === "string" ? job.id : undefined;
       if (agentId === undefined) continue;
-      const pending = pendingWorkerJobs.get(agentId);
+      const pending = takePendingWorkerJob(agentId);
       if (pending === undefined) continue;
-      pendingWorkerJobs.delete(agentId);
       const status = job.status === "completed" ? "completed" : "failed";
       const summaryText =
         typeof job.resultText === "string"
@@ -870,6 +892,50 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           status,
         },
         summaryText,
+      );
+    }
+  };
+  /**
+   * OMP auto-delivers a settled background `task` job as a `message_end`
+   * custom message (`role: "custom"`, `customType: "async-result"`) instead
+   * of a `hub` `tool_result` when the caller does not explicitly poll
+   * `hub jobs`/`wait` before the job settles (live-confirmed shape; see
+   * `09-worker-result-undercount-defect.md`). Without observing this path,
+   * real successful/failed workers are silently invisible to
+   * `omp_worker_child_result` telemetry and the durable worker-result
+   * lifecycle. This mirrors `recordAsyncWorkerCompletions` exactly, sharing
+   * `pendingWorkerJobs` correlation and `emitWorkerCompletion` so the same
+   * worker is never reported twice regardless of which path observes it
+   * first (`takePendingWorkerJob` + `reportedWorkerTaskIds` dedupe).
+   */
+  const recordAsyncResultDeliveries = async (
+    message: MessageEndMessage,
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    if (message.role !== "custom" || message.customType !== "async-result") return;
+    const content = message.content;
+    if (typeof content !== "string") return;
+    const blocks = content.matchAll(TASK_RESULT_BLOCK_RE);
+    for (const block of blocks) {
+      const agentId = block[1];
+      const rawStatus = block[2];
+      if (typeof agentId !== "string" || agentId.length === 0) continue;
+      const pending = takePendingWorkerJob(agentId);
+      if (pending === undefined) continue;
+      const status: "completed" | "failed" = rawStatus === "completed" ? "completed" : "failed";
+      await emitWorkerCompletion(
+        pending.parentSessionId,
+        ctx,
+        {
+          task_id: pending.taskId,
+          packet_sha256: pending.packetSha256,
+          child_omp_agent_id: agentId,
+          child_omp_session_file: null,
+          worker_agent: pending.agent,
+          worker_model: null,
+          status,
+        },
+        block[0],
       );
     }
   };
@@ -2220,6 +2286,20 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           message.usage,
         );
         if (record) getStore(session)?.append(record);
+      }
+      // P1 repair: OMP auto-delivered worker-completion notices arrive as a
+      // `message_end` custom message, never a second `tool_result`. This
+      // handler's declared return type is synchronous ({ message } only), so
+      // the correlation/telemetry work below is fire-and-forget; it never
+      // affects the returned message.
+      if (message != null) {
+        void recordAsyncResultDeliveries(message, ctx).catch((error: unknown) => {
+          try {
+            getStore(session)?.append(sensors.extensionError(session, error));
+          } catch {
+            // storage failed too — measurement must not crash the session.
+          }
+        });
       }
     } catch (error) {
       try {
