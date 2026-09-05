@@ -215,6 +215,14 @@ def internal_session_id(host_session_id: str) -> str:
     return hashlib.sha256((host_session_id or "").encode("utf-8")).hexdigest()
 
 
+def _is_internal_session_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
 def _resolve_under_retry(root: Path, relative: str) -> Path:
     """resolve_under with a bounded retry for the FIRST-INIT RACE.
 
@@ -239,6 +247,51 @@ def session_dir(home: Path | str, host_session_id: str) -> Path:
     root = Path(home) / "state" / "sessions"
     internal = internal_session_id(host_session_id)
     return _resolve_under_retry(root, internal)
+
+
+def resolve_root_parent_session_id(
+    home: Path | str, parent_host_session_id: str
+) -> str:
+    """Resolve a HOST parent to its canonical internal root without writes."""
+    if not parent_host_session_id:
+        raise BrainError("parent host session id must not be empty")
+    parent_internal = internal_session_id(parent_host_session_id)
+    dbfile = _resolve_under_retry(
+        session_dir(home, parent_host_session_id), "ledger.sqlite"
+    )
+    if not dbfile.is_file():
+        raise BrainError(
+            f"parent ledger not initialized for {parent_host_session_id!r}"
+        )
+    try:
+        conn = sqlite3.connect(
+            f"{dbfile.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT host_session_id, root_parent_session_id "
+                "FROM sessions WHERE internal_session_id = ?",
+                (parent_internal,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise BrainError(
+            f"parent ledger unreadable for {parent_host_session_id!r}: {exc}"
+        ) from exc
+    if row is None or row["host_session_id"] != parent_host_session_id:
+        raise BrainError(
+            f"parent ledger is not owned by host session {parent_host_session_id!r}"
+        )
+    root = row["root_parent_session_id"]
+    if root is None:
+        return parent_internal
+    if not _is_internal_session_id(root):
+        raise BrainError(
+            f"parent ledger has invalid canonical root for {parent_host_session_id!r}"
+        )
+    return root
 
 
 def _contained(session_path: Path, relative: str) -> Path:
@@ -388,27 +441,76 @@ class LedgerStore:
     # -- session/agent registration -----------------------------------------
 
     def create_session(self, identity: BrainSessionIdentity) -> None:
+        """Create once; repeated registration preserves the durable identity."""
         assert self._conn is not None
-        self._conn.execute(
-            "INSERT OR REPLACE INTO sessions (internal_session_id, host, host_session_id, "
-            " project_id, created_at, last_active_at, status, pinned, schema_version, "
-            " current_segment_id, root_parent_session_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                identity.internal_session_id,
-                identity.host,
-                identity.host_session_id,
-                identity.project_id,
-                identity.created_at,
-                _now(),
-                identity.status,
-                1 if identity.pinned else 0,
-                identity.schema_version,
-                identity.current_segment_id,
-                identity.root_parent_session_id,
-            ),
-        )
-        self._conn.commit()
+        if (
+            identity.internal_session_id != self._internal
+            or identity.host_session_id != self._host_session_id
+        ):
+            raise BrainError(
+                f"session identity does not own ledger {self._host_session_id!r}"
+            )
+        incoming_root = identity.root_parent_session_id
+        if incoming_root is not None and not _is_internal_session_id(incoming_root):
+            raise BrainError(
+                f"invalid canonical root parent for session {self._host_session_id!r}"
+            )
+        if incoming_root == self._internal:
+            raise BrainError(
+                f"root parent cannot be the session itself: {self._host_session_id!r}"
+            )
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self._conn.execute(
+                "SELECT host_session_id, root_parent_session_id "
+                "FROM sessions WHERE internal_session_id = ?",
+                (self._internal,),
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    "INSERT INTO sessions (internal_session_id, host, host_session_id, "
+                    " project_id, created_at, last_active_at, status, pinned, schema_version, "
+                    " current_segment_id, root_parent_session_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        identity.internal_session_id,
+                        identity.host,
+                        identity.host_session_id,
+                        identity.project_id,
+                        identity.created_at,
+                        _now(),
+                        identity.status,
+                        1 if identity.pinned else 0,
+                        identity.schema_version,
+                        identity.current_segment_id,
+                        incoming_root,
+                    ),
+                )
+            else:
+                if existing["host_session_id"] != identity.host_session_id:
+                    raise BrainError(
+                        f"conflicting session identity for {self._host_session_id!r}"
+                    )
+                existing_root = existing["root_parent_session_id"]
+                if (
+                    existing_root is not None
+                    and incoming_root is not None
+                    and existing_root != incoming_root
+                ):
+                    raise BrainError(
+                        f"conflicting root parent for session {self._host_session_id!r}"
+                    )
+                self._conn.execute(
+                    "UPDATE sessions SET last_active_at = ?, "
+                    "root_parent_session_id = COALESCE(root_parent_session_id, ?), "
+                    "project_id = CASE WHEN project_id = '' THEN ? ELSE project_id END "
+                    "WHERE internal_session_id = ?",
+                    (_now(), incoming_root, identity.project_id, self._internal),
+                )
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
 
     def register_agent(self, agent: dict[str, Any]) -> None:
         assert self._conn is not None
@@ -996,15 +1098,22 @@ class LedgerStore:
             "host_artifacts": host_artifacts or [],
         }
         # P3-E fix: a FIXED tmp name collided under concurrent init of the
-        # same fresh session (Windows sharing violation on write). Use a
-        # unique temp name per process, then one atomic os.replace.
+        # same fresh session. Readers can also briefly deny replacement on
+        # Windows; retry only those errors, without removing the destination.
         fd, tmp_name = tempfile.mkstemp(
             prefix=f"{_MANIFEST}.tmp.", dir=self._dir, text=True
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(canonical_json(manifest) + "\n")
-            os.replace(Path(tmp_name), target)
+            for attempt in range(4):
+                try:
+                    os.replace(Path(tmp_name), target)
+                    break
+                except PermissionError as exc:
+                    if getattr(exc, "winerror", None) not in (5, 32) or attempt == 3:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp_name)

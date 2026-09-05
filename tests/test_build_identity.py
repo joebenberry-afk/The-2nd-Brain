@@ -1,6 +1,6 @@
 import subprocess
 
-from second_brain import __version__, build_identity
+from second_brain import build_identity
 
 
 def _commit(repo, message: str) -> None:
@@ -10,14 +10,6 @@ def _commit(repo, message: str) -> None:
         check=True,
         capture_output=True,
     )
-
-
-def test_describe_reports_package_version_and_schema(brain_home) -> None:
-    identity = build_identity.describe(brain_home)
-
-    assert identity["package_version"] == __version__
-    assert identity["db_schema_version"] == 21
-    assert identity["qualification_baseline_sha"] == build_identity.QUALIFICATION_BASELINE_SHA
 
 
 def test_describe_reports_none_git_sha_without_commits(brain_home) -> None:

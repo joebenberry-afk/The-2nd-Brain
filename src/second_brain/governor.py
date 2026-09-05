@@ -715,12 +715,12 @@ def classify_roi(
 # ---------------------------------------------------------------------------
 # T3.1 hard/soft budget caps (plan §... token governor enforcement).
 #
-# `used` is this session's own telemetry `total_tokens` plus every
+# `used` is this session's own telemetry `total_tokens` plus every unique
 # descendant worker session's `total_tokens`. Descendants are discovered by
 # scanning `home/state/sessions/*/ledger.sqlite` for `sessions` rows whose
-# `root_parent_session_id` equals this session's internal id -- a real
-# filesystem scan, bounded to that one directory, every unreadable/missing
-# file skipped rather than raised.
+# `root_parent_session_id` equals this session's internal id. Ledger and
+# telemetry reads are read-only; incomplete or malformed accounting fails
+# open with an explicit diagnostic instead of asserting a factual zero.
 #
 # T3.1-brief investigation note: `assistant_usage`/`session_start` and every
 # other kind in SCHEMA.md were checked for a field that already reports
@@ -768,72 +768,154 @@ def _telemetry_stem(session_id: str) -> str:
     return stem or "unknown"
 
 
+def _session_telemetry_paths(home: Path, session_id: str) -> list[Path]:
+    """Existing telemetry writers use raw and Python-sanitized session stems."""
+    telemetry_dir = home / "telemetry" / "agent-performance"
+    paths: list[Path] = []
+    for stem in (session_id, _telemetry_stem(session_id)):
+        candidate = telemetry_dir / f"{stem}.jsonl"
+        try:
+            if candidate.resolve().parent != telemetry_dir.resolve():
+                continue
+        except OSError:
+            continue
+        if candidate.is_file() and candidate not in paths:
+            paths.append(candidate)
+    return paths
+
+
 def _session_total_tokens(home: Path, session_id: str) -> int:
-    """This session's own `total_tokens`; 0 if its telemetry is absent/unparseable."""
-    path = home / "telemetry" / "agent-performance" / f"{_telemetry_stem(session_id)}.jsonl"
-    try:
-        tokens = parse_telemetry_session(path)
-    except Exception:
-        return 0
-    return tokens.total_tokens or 0
+    """Return known usage for one telemetry identity; raise when it is unknown."""
+    paths = _session_telemetry_paths(home, session_id)
+    if not paths:
+        raise FileNotFoundError(f"telemetry unavailable for session {session_id!r}")
+
+    total = 0
+    usage_seen = False
+    for path in paths:
+        with path.open(encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"malformed telemetry for session {session_id!r} at "
+                        f"{path.name}:{line_number}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        f"malformed telemetry for session {session_id!r} at "
+                        f"{path.name}:{line_number}"
+                    )
+                telemetry_session = record.get("session")
+                if telemetry_session is not None and telemetry_session != session_id:
+                    raise ValueError(
+                        f"telemetry identity mismatch for session {session_id!r} "
+                        f"in {path.name}:{line_number}"
+                    )
+                kind = record.get("kind")
+                if kind not in ("assistant_usage", "model_invocation_completed"):
+                    continue
+                usage = record if kind == "assistant_usage" else record.get("usage")
+                if not isinstance(usage, dict):
+                    raise ValueError(
+                        f"malformed usage for session {session_id!r} at "
+                        f"{path.name}:{line_number}"
+                    )
+                value = usage.get("total_tokens")
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ValueError(
+                        f"unknown total_tokens for session {session_id!r} at "
+                        f"{path.name}:{line_number}"
+                    )
+                total += value
+                usage_seen = True
+    if not usage_seen:
+        raise ValueError(f"token usage unavailable for session {session_id!r}")
+    return total
 
 
 def _descendant_total_tokens(home: Path, session_id: str) -> int:
-    """Sum `total_tokens` for every ledger session rooted at `session_id`."""
+    """Sum each unique ledger session rooted at ``session_id`` exactly once."""
     root_id = ledger.internal_session_id(session_id)
     sessions_dir = home / "state" / "sessions"
-    total = 0
     try:
         children = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
-    except OSError:
-        return 0
+    except OSError as exc:
+        raise ValueError("session ledgers unavailable") from exc
+
+    descendants_by_internal_id: dict[str, str] = {}
+    internal_id_by_host: dict[str, str] = {}
     for child in children:
         dbfile = child / "ledger.sqlite"
         if not dbfile.is_file():
             continue
         try:
-            conn = sqlite3.connect(dbfile, timeout=1.0)
+            conn = sqlite3.connect(
+                dbfile.absolute().as_uri() + "?mode=ro",
+                timeout=1.0,
+                uri=True,
+            )
             conn.row_factory = sqlite3.Row
             try:
                 rows = conn.execute(
-                    "SELECT host_session_id, root_parent_session_id FROM sessions"
+                    "SELECT internal_session_id, host_session_id "
+                    "FROM sessions WHERE root_parent_session_id = ?",
+                    (root_id,),
                 ).fetchall()
             finally:
                 conn.close()
-        except sqlite3.Error:
-            continue
+        except sqlite3.Error as exc:
+            raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
         for row in rows:
-            if row["root_parent_session_id"] != root_id:
-                continue
-            descendant_host_id = row["host_session_id"]
-            if not descendant_host_id:
-                continue
-            total += _session_total_tokens(home, descendant_host_id)
-    return total
+            internal_id = row["internal_session_id"]
+            host_id = row["host_session_id"]
+            if not internal_id or not host_id:
+                raise ValueError("descendant ledger identity is incomplete")
+            known_host = descendants_by_internal_id.get(internal_id)
+            known_internal = internal_id_by_host.get(host_id)
+            if (known_host is not None and known_host != host_id) or (
+                known_internal is not None and known_internal != internal_id
+            ):
+                raise ValueError("conflicting descendant ledger identities")
+            descendants_by_internal_id[internal_id] = host_id
+            internal_id_by_host[host_id] = internal_id
+
+    return sum(
+        _session_total_tokens(home, host_id)
+        for host_id in descendants_by_internal_id.values()
+    )
 
 
 def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]:
     """T3.1 hard/soft budget caps.
 
-    Returns ``{"state": "OK"|"SOFT"|"HARD", "used": int, "cap": int}``.
-    Fail-open (§ brief): any read/parse error anywhere in the computation
-    returns OK rather than blocking on an infrastructure failure.
+    Returns ``{"state": "OK"|"SOFT"|"HARD", "used": int, "cap": int}``
+    when accounting is complete. Accounting failures preserve fail-open
+    policy but report ``used=None`` and ``error=ACCOUNTING_UNAVAILABLE``.
     """
+    home_path = Path(home)
+    budgets = _budget_config(home_path)
+    cap = int(budgets['worker_tokens'] if role == 'worker' else budgets['session_tokens'])
+    soft_ratio = float(budgets['soft_ratio'])
     try:
-        home_path = Path(home)
-        budgets = _budget_config(home_path)
-        cap = int(budgets['worker_tokens'] if role == 'worker' else budgets['session_tokens'])
-        soft_ratio = float(budgets['soft_ratio'])
         used = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
             home_path, session_id
         )
-        if used >= cap:
-            state = "HARD"
-        elif used >= cap * soft_ratio:
-            state = "SOFT"
-        else:
-            state = "OK"
-        return {"state": state, "used": used, "cap": cap}
     except Exception:
-        logger.debug("check_budget failed (fail-open -> OK)", exc_info=True)
-        return {"state": "OK", "used": 0, "cap": 0}
+        logger.debug("check_budget accounting unavailable (fail-open -> OK)", exc_info=True)
+        return {
+            "state": "OK",
+            "used": None,
+            "cap": cap,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
+    if used >= cap:
+        state = "HARD"
+    elif used >= cap * soft_ratio:
+        state = "SOFT"
+    else:
+        state = "OK"
+    return {"state": state, "used": used, "cap": cap}

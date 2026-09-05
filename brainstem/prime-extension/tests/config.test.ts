@@ -63,18 +63,18 @@ describe("config gate", () => {
     await mkdir(join(tmp, "home"), { recursive: true });
     process.env.SECOND_BRAIN_HOME = join(tmp, "home");
     process.env.SECOND_BRAIN_OBSERVABILITY = "off";
-    expect(loadConfig()).toEqual({ enabled: false, home: null, telemetryDir: null });
+    expect(loadConfig()).toMatchObject({ enabled: false, home: null, telemetryDir: null });
   });
 
   it("missing brain home -> silently disabled", () => {
     process.env.SECOND_BRAIN_HOME = join(tmp, "does-not-exist");
-    expect(loadConfig()).toEqual({ enabled: false, home: null, telemetryDir: null });
+    expect(loadConfig()).toMatchObject({ enabled: false, home: null, telemetryDir: null });
   });
 
   it("existing brain home -> enabled with telemetry dir", async () => {
     await mkdir(join(tmp, "brain"), { recursive: true });
     process.env.SECOND_BRAIN_HOME = join(tmp, "brain");
-    expect(loadConfig()).toEqual({
+    expect(loadConfig()).toMatchObject({
       enabled: true,
       home: join(tmp, "brain"),
       telemetryDir: join(tmp, "brain", "telemetry", "agent-performance"),

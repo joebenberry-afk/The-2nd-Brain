@@ -7,10 +7,7 @@ import factory from "../src/index";
 import { resetAutoInjectEmitCache } from "../src/autoinject";
 import {
   appendLeanKernel,
-  applyLeanCooldown,
-  computeLeanSeverity,
   decideLeanRuntime,
-  evaluateLeanOpportunity,
   extractRuntimeKernel,
   extractRuntimeNudge,
   LEAN_KERNEL_MARKER,
@@ -87,7 +84,7 @@ afterEach(async () => {
     if (SAVED_ENV[key] === undefined) delete process.env[key];
     else process.env[key] = SAVED_ENV[key] as string;
   }
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
 });
 
 function writeSkillsToml(evalValue?: string): string {
@@ -120,7 +117,11 @@ function loadFactory(): Map<string, Handler> {
       handlers.set(name, handler);
     },
   } as unknown as ExtensionAPI;
-  factory(pi);
+  factory(pi, {
+    budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+    ompRoutingRunner: async () => ({ decision: null }),
+    ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
+  });
   return handlers;
 }
 

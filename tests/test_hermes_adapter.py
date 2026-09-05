@@ -192,7 +192,7 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
         "review-task",
         "b" * 64,
         "completed",
-        payload={"result_sha256": result.canonical_hash()},
+        payload={**json.loads(result.canonical_json()), "result_sha256": result.canonical_hash()},
         session_id=binding.host_session_id,
     )
 
@@ -419,7 +419,7 @@ def test_pre_llm_routes_existing_skill_and_preserves_bounded_injection(
     payload = {
         **_start_payload(session="router-runtime", bot="Brain-Dev"),
         "event": "pre_llm_call",
-        "task": "run the migration verifier on the patch",
+        "task": "run the migration verifier on the patch; retrieve Hermes bounded project context",
         "turn_id": "router-turn-1",
     }
 

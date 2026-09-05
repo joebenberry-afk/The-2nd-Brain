@@ -21,7 +21,7 @@ export interface BudgetCheckOptions {
 
 export interface BudgetCheckResult {
   state: BudgetState;
-  used: number;
+  used: number | null;
   cap: number;
   error?: string;
 }
@@ -88,20 +88,24 @@ export function runBudgetCheck(options: BudgetCheckOptions): Promise<BudgetCheck
     },
     (error, stdout) => {
       if (error) {
-        resolve({ state: "OK", used: 0, cap: 0, error: error.message });
+        resolve({ state: "OK", used: null, cap: 0, error: error.message });
         return;
       }
       try {
         const parsed = JSON.parse(stdout) as Record<string, unknown>;
         const state: BudgetState =
           parsed.state === "HARD" ? "HARD" : parsed.state === "SOFT" ? "SOFT" : "OK";
+        const validUsed = typeof parsed.used === "number" && Number.isFinite(parsed.used) && parsed.used >= 0;
+        const degraded = typeof parsed.error === "string" ? parsed.error.slice(0, 256) :
+          !validUsed ? "ACCOUNTING_UNAVAILABLE" : undefined;
         resolve({
-          state,
-          used: typeof parsed.used === "number" ? parsed.used : 0,
+          state: degraded ? "OK" : state,
+          used: validUsed ? Number(parsed.used) : null,
           cap: typeof parsed.cap === "number" ? parsed.cap : 0,
+          ...(degraded ? { error: degraded } : {}),
         });
       } catch {
-        resolve({ state: "OK", used: 0, cap: 0, error: "INVALID_JSON" });
+        resolve({ state: "OK", used: null, cap: 0, error: "INVALID_JSON" });
       }
     },
   );

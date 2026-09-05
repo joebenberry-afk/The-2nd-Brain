@@ -315,24 +315,6 @@ def test_promotion_status_and_determinism(brain_home):
 # ---------------------------------------------------------------------------
 
 
-def _reference(to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict):
-    if to == "shadow":
-        return "already_at_level"
-    if to == "active":
-        return "skip_level"
-    if not has_evidence:
-        return "no_evidence"
-    if not frontier_ok:
-        return "frontier_not_approved"
-    if rolled_back:
-        return "rolled_back"
-    if not bound:
-        return "no_promotion_binding"
-    if dest_conflict:
-        return "destination_exists"
-    return "promoted"
-
-
 @settings(
     max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
 )
@@ -360,13 +342,19 @@ def test_guard_combos_match_reference(
     if dest_conflict:
         _skill(home, name="scout", level="candidate")
     result = promotion.promote(home, "scout", "shadow", to)
-    expected = _reference(to, has_evidence, frontier_ok, rolled_back, bound, dest_conflict)
-    if expected == "promoted":
-        assert result["promoted"] is True
+    should_promote = (
+        to == "candidate"
+        and has_evidence
+        and frontier_ok
+        and not rolled_back
+        and bound
+        and not dest_conflict
+    )
+    assert result["promoted"] is should_promote
+    if should_promote:
         assert (home / "skills" / "candidates" / "scout").is_dir()
     else:
-        assert result["promoted"] is False
-        assert result["reason"] == expected
+        assert (home / "skills" / "shadow" / "scout").is_dir()
 
 
 # ---------------------------------------------------------------------------

@@ -166,6 +166,7 @@ def test_migration_guard_is_case_insensitive(tmp_path: Path) -> None:
     dbfile = tmp_path / "legacy.sqlite"
     conn = db.connect(dbfile)
     conn.execute("CREATE TABLE memory_sources (id INTEGER PRIMARY KEY, REPO_ID TEXT)")
+    conn.execute("CREATE TABLE memories (memory_id TEXT PRIMARY KEY)")
     conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
     conn.execute("INSERT INTO schema_version VALUES (11, 'legacy')")
     conn.commit()

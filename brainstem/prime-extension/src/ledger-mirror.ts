@@ -51,6 +51,8 @@ export interface MirrorRecord {
 export interface MirrorOptions {
   home: string;
   hostSessionId: string;
+  /** HOST parent session identity. The CLI resolves it to the canonical root. */
+  parentSessionId?: string;
   record: MirrorRecord;
   python?: string;
   timeoutMs?: number;
@@ -60,11 +62,11 @@ export interface MirrorOptions {
 }
 
 /**
- * Sessions whose ledger was auto-initialized in THIS process (T-G6-F3).
- * Process-scoped; a recovered worker re-inits (idempotent: `ledger init`
- * uses create_session INSERT OR REPLACE), so races are tolerated.
+ * Parent identity used for each ledger auto-init in THIS process (T-G6-F3).
+ * A later authoritative parent re-runs init so the CLI can persist or reject
+ * ancestry; an omitted parent never erases an established root.
  */
-const initializedSessions = new Set<string>();
+const initializedSessions = new Map<string, string | undefined>();
 
 /** Test seam: clear the per-process init cache. */
 export function resetMirrorInitCache(): void {
@@ -156,6 +158,12 @@ export function mirrorEventSync(options: MirrorOptions): MirrorResult {
     "--host",
     "prime",
   ];
+  if (
+    typeof options.parentSessionId === "string" &&
+    options.parentSessionId.length > 0
+  ) {
+    initArgs.push("--parent-session", options.parentSessionId);
+  }
   if (typeof options.cwd === "string" && options.cwd.length > 0) {
     initArgs.push("--cwd", options.cwd);
   }
@@ -215,6 +223,13 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
     "--host",
     "prime",
   ];
+  const requestedParent =
+    typeof options.parentSessionId === "string" && options.parentSessionId.length > 0
+      ? options.parentSessionId
+      : undefined;
+  if (requestedParent !== undefined) {
+    initArgs.push("--parent-session", requestedParent);
+  }
   // Project attribution: pass the caller's cwd through to `ledger init` so
   // the ledger's project_id resolves through the same ladder AutoInject uses.
   // Only when a real cwd is available — never garbage.
@@ -258,10 +273,19 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
     // (fire-and-forget chain; idempotent across races and recovered workers).
     // Only added to the cache on SUCCESS, so a retry after a failed init
     // re-runs the init chain.
-    const ensureInit = initializedSessions.has(options.hostSessionId)
+    const alreadyInitialized = initializedSessions.has(options.hostSessionId);
+    const cachedParent = initializedSessions.get(options.hostSessionId);
+    const parentNeedsValidation =
+      requestedParent !== undefined && requestedParent !== cachedParent;
+    const ensureInit = alreadyInitialized && !parentNeedsValidation
       ? Promise.resolve({ error: undefined, stdout: "" })
       : run(initArgs).then((result) => {
-          if (!result.error) initializedSessions.add(options.hostSessionId);
+          if (!result.error) {
+            initializedSessions.set(
+              options.hostSessionId,
+              requestedParent ?? cachedParent,
+            );
+          }
           return result;
         });
     return ensureInit.then((initResult) => {

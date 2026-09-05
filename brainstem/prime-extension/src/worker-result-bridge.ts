@@ -61,7 +61,10 @@ export function parseOmpWorkerResultOutput(stdout: string): OmpWorkerResultOutco
   if (!taskId || !status) {
     return { ok: false, error: "BRAIN_WORKER_RESULT_INVALID_RESPONSE" };
   }
-  const outcome: OmpWorkerResultOutcome = { ok: status !== "failed", status, taskId };
+  // Worker failure is an accepted outcome when the lifecycle supplies its receipt.
+  const accepted = ["completed", "failed", "cancelled"].includes(status) &&
+    sha256(value.packet_sha256) && sha256(value.result_sha256);
+  const outcome: OmpWorkerResultOutcome = { ok: accepted, status, taskId };
   const failureCode = bounded(value.failure_code, 128);
   if (failureCode) outcome.failureCode = failureCode;
   if (sha256(value.packet_sha256)) outcome.packetSha256 = value.packet_sha256;
@@ -96,6 +99,7 @@ export function runOmpWorkerResult(
     task_id: bounded(options.taskId, 512),
     packet_sha256: bounded(options.packetSha256, 128),
     status: options.status,
+    ...(options.status === "failed" ? { failure_code: "OMP_WORKER_FAILED" } : {}),
     worker_agent: bounded(options.workerAgent, 128),
     worker_model: bounded(options.workerModel ?? "", 128),
     worker_role: bounded(options.workerRole ?? "", 128),
@@ -118,7 +122,13 @@ export function runOmpWorkerResult(
           resolve({ ok: false, error: "BRAIN_WORKER_RESULT_UNAVAILABLE" });
           return;
         }
-        resolve(parseOmpWorkerResultOutput(stdout));
+        const outcome = parseOmpWorkerResultOutput(stdout);
+        if (outcome.ok && (outcome.taskId !== payload.task_id ||
+            outcome.packetSha256 !== payload.packet_sha256 || outcome.status !== payload.status)) {
+          resolve({ ok: false, error: "BRAIN_WORKER_RESULT_RECEIPT_MISMATCH" });
+          return;
+        }
+        resolve(outcome);
       },
     );
     child.stdin?.end(JSON.stringify(payload));

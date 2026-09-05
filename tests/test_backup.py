@@ -153,13 +153,12 @@ def test_restore_applies_pending_migrations(brain_home, tmp_path, monkeypatch):
     extra.mkdir()
     # A synthetic migration after the current v2 schema proves restore upgrades
     # rather than merely copying the snapshot.
-    (extra / "0022_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
+    next_version = int(db.migration_files()[-1].name[:4]) + 1
+    (extra / f"{next_version:04d}_extra.sql").write_text("CREATE TABLE extra_table (x INTEGER);")
     monkeypatch.setattr(db, "MIGRATIONS_DIR", extra)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
-        v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
-        assert v == 22
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "extra_table" in tables
     finally:

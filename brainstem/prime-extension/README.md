@@ -120,8 +120,8 @@ mid-session home swap must never happen invisibly.
 
 ## Privacy
 
-Per `constitution/security-boundaries.md`: **no content is ever stored** —
-no message text, prompts, tool I/O payloads, or chain-of-thought. Only:
+Lifecycle telemetry excludes message text, prompts, raw tool outputs and
+chain-of-thought. It records:
 
 - counts (messages, turns, tool results, branch entries),
 - sizes (`input_bytes`, `output_bytes`, `prompt_chars`),
@@ -129,6 +129,11 @@ no message text, prompts, tool I/O payloads, or chain-of-thought. Only:
 - tool names and ids,
 - the bash command text (`command`), **only** for the `bash` tool, truncated to
   500 chars.
+
+Worker lifecycle receipts are separate from telemetry: schema 22 stores the
+bounded canonical result summary and hash in the existing Brain database.
+Native OMP custom journal entries retain bounded pending-result data for
+recovery; neither journal presence nor a telemetry observation proves acceptance.
 
 ## Install
 
@@ -146,6 +151,22 @@ and is reversible via `scripts\uninstall-prime-extension.ps1`. Restart OMP
 <path>` to target a different location explicitly (for example a separate
 "Prime Agent" binary's own extensions directory) without changing the
 default.
+
+`-SourceRoot` selects the checkout independently of `SECOND_BRAIN_HOME`.
+Installation manifests cover exactly the flattened top-level `src/*.ts` and
+`types/*.d.ts` files. Restore requires an explicit, destination-bound
+`-BackupDir`; uninstall without that flag does not select a latest backup.
+`-SettingsFile` remains snapshot-only compatibility input: neither script
+modifies or restores that configuration.
+
+Worker receipt replay is idempotent, including failed and cancelled outcomes.
+Historical terminal tasks without a durable receipt return
+`RESULT_NOT_RECORDED`; they are not retroactively credited. Native OMP 18.1.10
+async-result framing cannot unambiguously represent all literal worker output.
+Ambiguous results remain pending for explicit recovery rather than being
+misattributed. The audited candidate remains
+[HOLD](../../outputs/reports/v2/omp-burnin/20260905T030605Z-audited-closeout/14-release-readiness.md)
+pending the recorded correctness and live qualification gates.
 
 `npm install` inside this directory is for DEVELOPMENT only (tests/lint/type
 check; the extension itself has zero runtime dependencies beyond Node

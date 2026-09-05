@@ -391,6 +391,12 @@ def _parser() -> argparse.ArgumentParser:
     lin.add_argument("--session", dest="host_session_id", required=True, help="HOST session id")
     lin.add_argument("--project", dest="project_id", default=None)
     lin.add_argument(
+        "--parent-session",
+        dest="parent_session_id",
+        default=None,
+        help="HOST parent session id; persisted as the parent's canonical internal root",
+    )
+    lin.add_argument(
         "--cwd",
         default=None,
         help="working directory for project resolution "
@@ -3485,10 +3491,21 @@ def cmd_ledger(args) -> int:
             if args.cwd
             else (args.project_id or "")
         )
+        internal = ledger.internal_session_id(args.host_session_id)
+        root_parent_session_id = None
+        if args.parent_session_id:
+            if args.parent_session_id == args.host_session_id:
+                raise BrainError("a ledger session cannot be its own parent")
+            root_parent_session_id = ledger.resolve_root_parent_session_id(
+                home, args.parent_session_id
+            )
+            if root_parent_session_id == internal:
+                raise BrainError(
+                    "parent ancestry cannot resolve to the child session itself"
+                )
         store = ledger.LedgerStore(home, args.host_session_id, host=args.host)
         store._init_host_artifacts = artifacts  # carried into the manifest at open
         with store.open(create=True):
-            internal = ledger.internal_session_id(args.host_session_id)
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=internal,
@@ -3499,6 +3516,7 @@ def cmd_ledger(args) -> int:
                     status="active",
                     pinned=False,
                     schema_version=contracts.LEDGER_SCHEMA_VERSION,
+                    root_parent_session_id=root_parent_session_id,
                 )
             )
         print(contracts.canonical_json({"initialized": internal, "schema_version": 1}))

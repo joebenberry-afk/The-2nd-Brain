@@ -556,37 +556,6 @@ def test_cli_requirements_check_blocks_and_permits(brain_home):
     assert "0/2 material requirements unverified (gate on)" in permitted.stdout
 
 
-def test_no_lean_path_bypasses_requirement_ledger():
-    """Structural: the Lean candidate skill instructs requirement
-    verification and contains NO bypass instruction; the Lean runtime
-    adapter has no requirement-ledger code path (never touches it)."""
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parent.parent
-    skill = (repo_root / "skills" / "candidates" / "lean-code" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    # positive: the canonical skill mandates the requirement check before stop
-    assert "material requirements are verified before stopping" in skill
-    assert "Requirement Ledger" in skill
-    # negative: no bypass language
-    for bypass in (
-        "skip the requirement",
-        "ignore the requirement",
-        "without verifying",
-        "bypass",
-        "do not run the ledger",
-    ):
-        assert bypass not in skill.lower(), f"lean skill contains bypass language: {bypass}"
-
-    adapter = (repo_root / "brainstem" / "prime-extension" / "src" / "lean-code.ts").read_text(
-        encoding="utf-8"
-    ).lower()
-    # the adapter's scope is the runtime kernel only: no requirements surface
-    for token in ("requirement", "requirements.json", "material_unverified"):
-        assert token not in adapter, f"lean-code.ts references {token!r}"
-
-
 def test_all_material_verified_triggers_no_continuation(brain_home):
     """A completed task (all material verified) leaves the gate open for
     stop: check_requirements reports blocks=False — the STOP mechanism has

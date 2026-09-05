@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,33 @@ def _write_session(home: Path, session_id: str, records: list[dict]) -> None:
     with open(session_file, "w", encoding="utf-8") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
+
+
+def _write_ledger_session(
+    home: Path,
+    host_session_id: str,
+    *,
+    project_id: str,
+    root_parent_session_id: str | None = None,
+) -> Path:
+    """Create one production-shaped session identity and return its ledger."""
+    from second_brain import contracts, ledger
+
+    with ledger.LedgerStore(home, host_session_id, host="prime").open(create=True) as store:
+        store.create_session(
+            contracts.BrainSessionIdentity(
+                internal_session_id=ledger.internal_session_id(host_session_id),
+                host="prime",
+                host_session_id=host_session_id,
+                project_id=project_id,
+                created_at="2026-08-18T10:00:00.000Z",
+                status="active",
+                pinned=False,
+                schema_version=ledger.LEDGER_SCHEMA_VERSION,
+                root_parent_session_id=root_parent_session_id,
+            )
+        )
+        return store.dbfile
 
 
 class TestSessionTokensBasic:
@@ -854,7 +882,15 @@ class TestCheckBudget:
 
     def test_ok_below_soft_threshold(self, brain_home):
         """Usage below cap * soft_ratio is OK."""
-        records = [_rec("assistant_usage", input_tokens=100, output_tokens=100, total_tokens=200)]
+        records = [
+            _rec(
+                "assistant_usage",
+                session="budget-ok",
+                input_tokens=100,
+                output_tokens=100,
+                total_tokens=200,
+            )
+        ]
         _write_session(brain_home, "budget-ok", records)
         result = governor.check_budget(brain_home, "budget-ok", "driver")
         assert result == {"state": "OK", "used": 200, "cap": 400000}
@@ -862,21 +898,31 @@ class TestCheckBudget:
     def test_soft_cap_at_boundary(self, brain_home):
         """Usage exactly at cap * soft_ratio is SOFT (>= boundary)."""
         # worker cap defaults to 120000; soft_ratio 0.8 -> soft threshold 96000.
-        records = [_rec("assistant_usage", total_tokens=96000)]
+        records = [
+            _rec("assistant_usage", session="budget-soft", total_tokens=96000)
+        ]
         _write_session(brain_home, "budget-soft", records)
         result = governor.check_budget(brain_home, "budget-soft", "worker")
         assert result == {"state": "SOFT", "used": 96000, "cap": 120000}
 
     def test_soft_cap_just_below_boundary_is_ok(self, brain_home):
         """One token below the soft threshold stays OK."""
-        records = [_rec("assistant_usage", total_tokens=95999)]
+        records = [
+            _rec(
+                "assistant_usage",
+                session="budget-soft-under",
+                total_tokens=95999,
+            )
+        ]
         _write_session(brain_home, "budget-soft-under", records)
         result = governor.check_budget(brain_home, "budget-soft-under", "worker")
         assert result["state"] == "OK"
 
     def test_hard_cap_at_boundary(self, brain_home):
         """Usage exactly at cap is HARD (>= boundary)."""
-        records = [_rec("assistant_usage", total_tokens=120000)]
+        records = [
+            _rec("assistant_usage", session="budget-hard", total_tokens=120000)
+        ]
         _write_session(brain_home, "budget-hard", records)
         result = governor.check_budget(brain_home, "budget-hard", "worker")
         assert result == {"state": "HARD", "used": 120000, "cap": 120000}
@@ -891,10 +937,15 @@ class TestCheckBudget:
         result = governor.check_budget(brain_home, "no-telemetry-driver", "driver")
         assert result["cap"] == 400000
 
-    def test_missing_telemetry_fails_open_to_ok(self, brain_home):
-        """No telemetry file for the session -> used=0, state=OK (fail-open)."""
+    def test_missing_telemetry_fails_open_without_factual_zero(self, brain_home):
+        """Unavailable accounting is explicit while the governor remains fail-open."""
         result = governor.check_budget(brain_home, "never-existed", "driver")
-        assert result == {"state": "OK", "used": 0, "cap": 400000}
+        assert result == {
+            "state": "OK",
+            "used": None,
+            "cap": 400000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
 
     def test_malformed_config_falls_back_to_defaults(self, brain_home):
         """Malformed governor.toml never raises; defaults apply."""
@@ -908,7 +959,9 @@ class TestCheckBudget:
             "[budgets]\nsession_tokens = 1000\nworker_tokens = 500\nsoft_ratio = 0.5\n",
             encoding="utf-8",
         )
-        records = [_rec("assistant_usage", total_tokens=500)]
+        records = [
+            _rec("assistant_usage", session="budget-custom", total_tokens=500)
+        ]
         _write_session(brain_home, "budget-custom", records)
         result = governor.check_budget(brain_home, "budget-custom", "driver")
         assert result == {"state": "SOFT", "used": 500, "cap": 1000}
@@ -926,12 +979,24 @@ class TestCheckBudget:
         _write_session(
             brain_home,
             parent_host_id,
-            [_rec("assistant_usage", total_tokens=1000, session="parent")],
+            [
+                _rec(
+                    "assistant_usage",
+                    total_tokens=1000,
+                    session=parent_host_id,
+                )
+            ],
         )
         _write_session(
             brain_home,
             child_host_id,
-            [_rec("assistant_usage", total_tokens=2500, session="child")],
+            [
+                _rec(
+                    "assistant_usage",
+                    total_tokens=2500,
+                    session=child_host_id,
+                )
+            ],
         )
 
         with ledger.LedgerStore(brain_home, child_host_id, host="hermes").open(create=True) as store:
@@ -962,10 +1027,14 @@ class TestCheckBudget:
         stray_host_id = "stray-child-of-other-parent"
 
         _write_session(
-            brain_home, parent_host_id, [_rec("assistant_usage", total_tokens=10)]
+            brain_home,
+            parent_host_id,
+            [_rec("assistant_usage", session=parent_host_id, total_tokens=10)],
         )
         _write_session(
-            brain_home, stray_host_id, [_rec("assistant_usage", total_tokens=99999)]
+            brain_home,
+            stray_host_id,
+            [_rec("assistant_usage", session=stray_host_id, total_tokens=99999)],
         )
 
         with ledger.LedgerStore(brain_home, stray_host_id, host="hermes").open(create=True) as store:
@@ -985,3 +1054,127 @@ class TestCheckBudget:
 
         result = governor.check_budget(brain_home, parent_host_id, "driver")
         assert result["used"] == 10
+
+    def test_independent_roots_nested_worker_duplicate_resume_and_old_home(
+        self, brain_home
+    ):
+        """A/B/C scope, nested A usage, duplicate rows, resume, and old history."""
+        from second_brain import ledger
+
+        (brain_home / "config" / "governor.toml").write_text(
+            "[budgets]\nsession_tokens = 100\nworker_tokens = 40\nsoft_ratio = 0.8\n",
+            encoding="utf-8",
+        )
+        root_a = "root-a"
+        child_a = "root-a-child"
+        nested_a = "root-a-nested-child"
+        root_b = "root-b"
+        root_c = "root-c"
+        historical = "historical-high-usage-root"
+        for session_id, total in (
+            (root_a, 10),
+            (child_a, 15),
+            (nested_a, 40),
+            (root_b, 5),
+            (root_c, 90),
+            (historical, 500),
+        ):
+            _write_session(
+                brain_home,
+                session_id,
+                [_rec("assistant_usage", session=session_id, total_tokens=total)],
+            )
+
+        _write_ledger_session(brain_home, root_a, project_id="project-one")
+        _write_ledger_session(brain_home, root_b, project_id="project-one")
+        _write_ledger_session(brain_home, root_c, project_id="project-two")
+        _write_ledger_session(brain_home, historical, project_id="project-one")
+        root_a_internal = ledger.internal_session_id(root_a)
+        _write_ledger_session(
+            brain_home,
+            child_a,
+            project_id="project-one",
+            root_parent_session_id=root_a_internal,
+        )
+        nested_db = _write_ledger_session(
+            brain_home,
+            nested_a,
+            project_id="project-one",
+            root_parent_session_id=root_a_internal,
+        )
+
+        duplicate_dir = brain_home / "state" / "sessions" / "duplicate-nested-row"
+        duplicate_dir.mkdir(parents=True)
+        shutil.copy2(nested_db, duplicate_dir / "ledger.sqlite")
+
+        expected_a = {"state": "OK", "used": 65, "cap": 100}
+        assert governor.check_budget(brain_home, root_a, "driver") == expected_a
+        _write_ledger_session(brain_home, root_a, project_id="project-one")
+        assert governor.check_budget(brain_home, root_a, "driver") == expected_a
+        assert governor.check_budget(brain_home, root_b, "driver") == {
+            "state": "OK",
+            "used": 5,
+            "cap": 100,
+        }
+        assert governor.check_budget(brain_home, root_c, "driver") == {
+            "state": "SOFT",
+            "used": 90,
+            "cap": 100,
+        }
+        assert governor.check_budget(brain_home, nested_a, "worker") == {
+            "state": "HARD",
+            "used": 40,
+            "cap": 40,
+        }
+
+    def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(
+        self, brain_home
+    ):
+        session_id = "worker.child"
+        _write_session(
+            brain_home,
+            session_id,
+            [_rec("assistant_usage", session=session_id, total_tokens=12)],
+        )
+        _write_session(
+            brain_home,
+            "worker-child",
+            [_rec("session_start", session=session_id)],
+        )
+
+        assert governor.check_budget(brain_home, session_id, "worker") == {
+            "state": "OK",
+            "used": 12,
+            "cap": 120000,
+        }
+
+    def test_malformed_telemetry_fails_open_with_diagnostic(self, brain_home):
+        telemetry_dir = brain_home / "telemetry" / "agent-performance"
+        telemetry_dir.mkdir(parents=True, exist_ok=True)
+        (telemetry_dir / "malformed.jsonl").write_text(
+            "{not-json}\n", encoding="utf-8"
+        )
+
+        assert governor.check_budget(brain_home, "malformed", "worker") == {
+            "state": "OK",
+            "used": None,
+            "cap": 120000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
+
+    def test_unreadable_ledger_fails_open_with_diagnostic(self, brain_home):
+        _write_session(
+            brain_home,
+            "healthy-session",
+            [_rec("assistant_usage", session="healthy-session", total_tokens=10)],
+        )
+        corrupt_dir = brain_home / "state" / "sessions" / "corrupt-ledger"
+        corrupt_dir.mkdir(parents=True)
+        (corrupt_dir / "ledger.sqlite").write_bytes(b"not sqlite")
+
+        assert governor.check_budget(brain_home, "healthy-session", "driver") == {
+            "state": "OK",
+            "used": None,
+            "cap": 400000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
