@@ -14,7 +14,7 @@ import sqlite3
 import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from . import artifacts, db, jit, ledger, semantic
 from .contracts import (
@@ -905,6 +905,7 @@ def record_worker_event(
             return _result(changed, duplicate=True)
         if target == WorkerLifecycle.COMPLETED and row["accepted_at"] is None:
             raise WorkerPacketError("PROTOCOL_ERROR", "completed task has no ACCEPTED fact")
+        assert target is not None
         new_state = WorkerLifecycle.transition(row["state"], target)
         lease = _renewal_lease(
             row["lease_expires_at"], current, _lease_seconds(home, lease_seconds)
@@ -973,8 +974,12 @@ def process_worker_event(
     if not isinstance(event, dict):
         raise WorkerPacketError("PROTOCOL_ERROR", "worker event must be an object")
     task_id = event.get("task_id")
-    digest = event.get("packet_sha256")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise WorkerPacketError("PROTOCOL_ERROR", "worker event must include a task_id")
+    digest = _packet_hash(event.get("packet_sha256"))
     kind = event.get("event") or event.get("type") or event.get("status")
+    if not isinstance(kind, str) or not kind.strip():
+        raise WorkerPacketError("PROTOCOL_ERROR", "worker event must include an event")
     return record_worker_event(
         home,
         task_id,
@@ -986,7 +991,7 @@ def process_worker_event(
     )
 
 
-def _is_sha256(value: object) -> bool:
+def _is_sha256(value: object) -> TypeGuard[str]:
     return isinstance(value, str) and len(value) == 64 and all(
         char in "0123456789abcdefABCDEF" for char in value
     )

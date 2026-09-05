@@ -280,6 +280,7 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
         "acceptance": {"command": "private acceptance", "expect_exit": 0},
     }
     record = runner._run_one("prime", task, "ON", ["host"])
+    assert record is not None
     assert record["telemetry"]["input_tokens"] == 20
     assert record["dollars"] == economics.cost_per_run(
         {"input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 2, "cache_write_tokens": 0},
@@ -345,7 +346,7 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
     def fake_host(command, prompt, worktree, env):
         telemetry = Path(env["SECOND_BRAIN_HOME"]) / "telemetry" / "agent-performance"
         telemetry.mkdir(parents=True)
-        rows = [
+        rows: list[dict[str, object]] = [
             {"kind": "assistant_usage", "model": "deepseek-v4-flash"},
             {"kind": "assistant_usage"},
         ]
@@ -366,6 +367,7 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
         "acceptance": {"command": "private acceptance", "expect_exit": 0},
     }
     record = runner._run_one("prime", task, "ON", ["host"])
+    assert record is not None
     assert record["usage_capture"] is True
     assert record["telemetry"]["mixed_model"] is True
     assert record["dollars"] is None

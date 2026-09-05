@@ -1,3 +1,18 @@
+## 2026-09-05 — Structured async authority (unreleased, HOLD)
+
+- Replace rendered-result status/identity parsing with native OMP delivery
+  metadata. Stock hosts remain pending with one capability diagnostic;
+  patched hosts preserve immutable receipts across replay and restart.
+- Prove the six-line upstream OMP patch against current main and pinned
+  18.1.10, including delivery reconstructed after live-row eviction.
+- Resolve all 85 Pyright errors without blanket suppression; regress
+  non-iterable corroboration and malformed worker-event identity boundaries.
+- Reduce measured populated-home budget checks from 934 ms to 141 ms using
+  eight bounded read-only ledger readers. Preserve root scoping, deduplication,
+  unavailable-accounting semantics, and real caps.
+- No deployment, provider qualification, Gate 22/23, or release tag.
+  [Offline evidence](outputs/reports/v2/omp-burnin/20260905-host-contract-offline/).
+
 ## 2026-09-05 — Audited OMP closeout (unreleased, HOLD)
 
 - Preserve native task options and distinct dispatch identities; acknowledge

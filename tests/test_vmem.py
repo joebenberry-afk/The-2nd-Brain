@@ -1531,8 +1531,12 @@ class TestCostModelEvictionT21:
         # Therefore obj_b must be evicted before obj_a!
         assert len(evicted) == 1
         assert evicted[0].obj_id == obj_b.obj_id
-        assert store.get_object(obj_a.obj_id).residency_state == ResidencyState.RESIDENT
-        assert store.get_object(obj_b.obj_id).residency_state == ResidencyState.EVICTED
+        stored_a = store.get_object(obj_a.obj_id)
+        stored_b = store.get_object(obj_b.obj_id)
+        assert stored_a is not None
+        assert stored_b is not None
+        assert stored_a.residency_state == ResidencyState.RESIDENT
+        assert stored_b.residency_state == ResidencyState.EVICTED
 
     def test_no_positive_net_means_no_eviction_under_budget_slack(self, brain_home):
         """Under-budget session performs no evictions even if candidates exist."""
@@ -1547,7 +1551,9 @@ class TestCostModelEvictionT21:
         budget = obj.token_estimate + 1000
         evicted = store.evict_to_budget(max_tokens=budget)
         assert evicted == []
-        assert store.get_object(obj.obj_id).residency_state == ResidencyState.RESIDENT
+        stored = store.get_object(obj.obj_id)
+        assert stored is not None
+        assert stored.residency_state == ResidencyState.RESIDENT
 
     def test_forced_eviction_logged_when_over_budget(self, brain_home, caplog):
         """When all candidates have net <= 0 but session is over budget,
@@ -1646,7 +1652,9 @@ class TestFaultInHysteresisT22:
         # Evict obj1 via claim_pages
         claimed = store.claim_pages([{"obj_id": obj1.obj_id, "kind": obj1.kind.value}])
         assert obj1.obj_id in claimed
-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
+        stored = store.get_object(obj1.obj_id)
+        assert stored is not None
+        assert stored.residency_state == ResidencyState.EVICTED
 
         # Advance session to turn T=2 by inserting 2 turn_start events
         with sqlite3.connect(store._dbfile) as conn:
@@ -1676,6 +1684,7 @@ class TestFaultInHysteresisT22:
         # Pinned until T + 3 = 2 + 3 = 5
         assert faulted.pinned_until_turn == 5
         persisted = store.get_object(obj1.obj_id)
+        assert persisted is not None
         assert persisted.pinned_until_turn == 5
 
         # Turn T+1 = 3: insert 1 more turn_start
@@ -1691,7 +1700,9 @@ class TestFaultInHysteresisT22:
         evicted = store.evict_to_budget(max_tokens=0)
         evicted_ids = {e.obj_id for e in evicted}
         assert obj1.obj_id not in evicted_ids
-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
+        stored = store.get_object(obj1.obj_id)
+        assert stored is not None
+        assert stored.residency_state == ResidencyState.FAULTED_IN
 
         # Turn T+2 = 4: insert 1 more turn_start
         with sqlite3.connect(store._dbfile) as conn:
@@ -1706,7 +1717,9 @@ class TestFaultInHysteresisT22:
         evicted = store.evict_to_budget(max_tokens=0)
         evicted_ids = {e.obj_id for e in evicted}
         assert obj1.obj_id not in evicted_ids
-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.FAULTED_IN
+        stored = store.get_object(obj1.obj_id)
+        assert stored is not None
+        assert stored.residency_state == ResidencyState.FAULTED_IN
 
         # Turn T+3 = 5: insert 1 more turn_start
         with sqlite3.connect(store._dbfile) as conn:
@@ -1722,7 +1735,9 @@ class TestFaultInHysteresisT22:
         evicted = store.evict_to_budget(max_tokens=0)
         evicted_ids = {e.obj_id for e in evicted}
         assert obj1.obj_id in evicted_ids
-        assert store.get_object(obj1.obj_id).residency_state == ResidencyState.EVICTED
+        stored = store.get_object(obj1.obj_id)
+        assert stored is not None
+        assert stored.residency_state == ResidencyState.EVICTED
 
     def test_pinned_until_turn_schema_idempotency(self, brain_home, tmp_path):
         """Fresh and existing DBs get pinned_until_turn INTEGER DEFAULT 0 idempotently."""

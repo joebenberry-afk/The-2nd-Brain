@@ -190,6 +190,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
         proof=proof,
         params={"p": 3},
     )
+    assert e1 is not None and e2 is not None and e3 is not None
 
     stats = cache.get_stats()
     assert stats["total_entries"] == 3
@@ -208,6 +209,7 @@ def test_action_cache_lru_eviction(tmp_path: Path) -> None:
         proof=proof,
         params={"p": 4},
     )
+    assert e4 is not None
 
     stats = cache.get_stats()
     assert stats["total_entries"] == 3

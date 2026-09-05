@@ -1361,7 +1361,7 @@ def _feedback_exists(
     """Check one session-bound feedback row without exposing its contents."""
     if table not in {"memory_retrievals", "memory_activations"}:
         return False
-    conn = db.connect(db_path(home), readonly=True)
+    conn = db.connect(db_path(Path(home)), readonly=True)
     try:
         row = conn.execute(
             f"SELECT 1 FROM {table} WHERE memory_id = ? AND session_id = ? LIMIT 1",
@@ -1380,7 +1380,7 @@ def _record_delivery_feedback(
         try:
             if not _feedback_exists(home, "memory_retrievals", memory_id, session_id):
                 reconsolidation.record_retrieval(
-                    home, memory_id, session_id=session_id, idempotent=True
+                    Path(home), memory_id, session_id=session_id, idempotent=True
                 )
         except Exception:
             logger.debug("retrieval feedback failed", exc_info=True)
@@ -1429,7 +1429,7 @@ def _record_activation_feedback(
             logger.debug("activation feedback failed", exc_info=True)
 
 def _delivered_memory_ids(home: Path | str, session_id: str) -> list[str]:
-    conn = db.connect(db_path(home), readonly=True)
+    conn = db.connect(db_path(Path(home)), readonly=True)
     try:
         rows = conn.execute(
             "SELECT DISTINCT memory_id FROM deliveries WHERE root_session_id = ?",

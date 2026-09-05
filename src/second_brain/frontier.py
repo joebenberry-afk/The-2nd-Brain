@@ -563,6 +563,8 @@ def choose_cheapest_experiment(home: Path | str, frontier_id: str) -> dict[str, 
         cost = exp.get("cost") or exp.get("expected_cost")
         if cost == "local" or cost == 0:
             return 0.0
+        if cost is None:
+            return 1000.0
         try:
             return float(cost)
         except (ValueError, TypeError):

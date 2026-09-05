@@ -221,6 +221,9 @@ def load_policy(home: Path) -> V2Policy:
     learning = _table(raw["learning"], "learning")
     frontier = _table(raw["frontier"], "frontier")
     verification = _table(raw["verification"], "verification")
+    verification_floor = verification["floor"]
+    if not isinstance(verification_floor, str):
+        raise _fail("verification.floor must be 'targeted' or 'full'")
     return V2Policy(
         schema_version=schema_version,
         rollout=rollout,
@@ -233,7 +236,7 @@ def load_policy(home: Path) -> V2Policy:
         premium_model_turns=_positive_int(brainstem["premium_model_turns"], "brainstem.premium_model_turns"),
         surprise_threshold=_bounded_float(learning["surprise_threshold"], "learning.surprise_threshold"),
         frontier_min_importance=_bounded_float(frontier["min_importance"], "frontier.min_importance"),
-        verification_floor=verification["floor"],
+        verification_floor=verification_floor,
     )
 
 

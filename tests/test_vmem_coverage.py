@@ -308,14 +308,18 @@ class TestCoverageClassBoundaries:
         )
 
         assert store.cover(obj) is False
-        assert store.get_object(obj.obj_id).durability == DURABILITY_DIRTY
+        stored = store.get_object(obj.obj_id)
+        assert stored is not None
+        assert stored.durability == DURABILITY_DIRTY
 
         working_set.add_requirement(
             brain_home, "sess-cov-class-3", "Do the thing", req_id="REQ-001"
         )
 
         assert store.cover(obj) is True
-        assert store.get_object(obj.obj_id).durability == DURABILITY_CLEAN
+        stored = store.get_object(obj.obj_id)
+        assert stored is not None
+        assert stored.durability == DURABILITY_CLEAN
 
     def test_canonical_state_capsule_ref_covers_when_capsule_exists(self, brain_home):
         store = VMemStore(brain_home, "sess-cov-class-4")
@@ -358,7 +362,9 @@ class TestCoverageClassBoundaries:
         )
 
         assert store.cover(obj) is True
-        assert store.get_object(obj.obj_id).recovery_class == "DISPOSABLE_DERIVED"
+        stored = store.get_object(obj.obj_id)
+        assert stored is not None
+        assert stored.recovery_class == "DISPOSABLE_DERIVED"
 
     def test_disposable_derived_without_derived_kind_tag_never_covers(self, brain_home):
         store = VMemStore(brain_home, "sess-cov-class-7")

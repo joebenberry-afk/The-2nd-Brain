@@ -299,10 +299,21 @@ def test_approved_worker_review_without_real_evidence_stays_unsettled(
     assert response["status"] == "failed"
     assert response["failure_code"] == "SETTLEMENT_REJECTED"
     coerced = hermes_adapter.review_worker_result(
-        brain_home, binding, json.loads(result.canonical_json()), approved="false"
+        brain_home, binding, json.loads(result.canonical_json()), approved=json.loads('"false"')
     )
     assert coerced["status"] == "failed"
     assert coerced["failure_code"] == "PROTOCOL_ERROR"
+
+
+def test_worker_event_missing_task_id_is_protocol_error(brain_home: Path) -> None:
+    binding = hermes_adapter.resolve_binding(brain_home, _start_payload())
+    response = hermes_adapter.handle_worker_event(
+        brain_home,
+        binding,
+        {"packet_sha256": "b" * 64, "event": "accepted"},
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "PROTOCOL_ERROR"
 
 def test_approved_worker_review_rejects_unbounded_raw_evidence(
     brain_home: Path,

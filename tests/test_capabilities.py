@@ -362,7 +362,7 @@ def test_unknown_capability_never_assumed(brain_home):
 def test_declare_rejects_non_bool_supported(brain_home):
     """No truthy-string coercion -- `supported` must be an actual bool."""
     with pytest.raises(TypeError):
-        capabilities.declare(brain_home, "h", "session_events", "true")
+        capabilities.declare(brain_home, "h", "session_events", json.loads('"true"'))
 
 
 def test_declare_persists_explicit_false_distinct_from_never_recorded(brain_home):

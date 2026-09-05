@@ -299,7 +299,10 @@ def estimate_tokens(
 ) -> int:
     """Estimate text tokens using calibrated chars/token, defaulting explicitly to 4.0."""
     info = token_estimator_info(model, home=home)
-    return max(1, int(len(text or "") / float(info["chars_per_token"])))
+    ratio = info["chars_per_token"]
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+        ratio = DEFAULT_CHARS_PER_TOKEN
+    return max(1, int(len(text or "") / float(ratio)))
 
 
 

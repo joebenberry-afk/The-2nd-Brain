@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from second_brain import crossmodel, engram
@@ -68,7 +69,7 @@ def test_engram_run_uses_zero_model_calls(brain_home: Path) -> None:
 
     tool_call_count = 0
 
-    def mock_runner(tool: str, args: dict) -> dict:
+    def mock_runner(tool: str, args: Mapping[str, object]) -> dict[str, object]:
         nonlocal tool_call_count
         tool_call_count += 1
         return {"tool": tool, "args": args, "status": "ok"}
