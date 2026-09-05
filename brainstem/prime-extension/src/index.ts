@@ -43,7 +43,7 @@ import type {
 } from "../types/prime";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
@@ -73,7 +73,7 @@ import {
   loadVmemConfig,
 } from "./config";
 import { estimateTokens, pageContext } from "./context-paging";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   cliArtifactPreserver,
   cliRtdPreserver,
@@ -233,6 +233,13 @@ CORRECTION LOOP: all five pass -> accept. One fails -> send a narrow correction 
 
 FINAL RESPONSE: conclusion, important evidence, material caveats, next action if needed. No giant retelling of worker activity, raw logs, or unverified speculation. Keep your reasoning and output compact.`;
 
+/** Resolve one native transcript path with the same identity rules as ctx. */
+function sessionIdFromFile(file: string): string | undefined {
+  const base = file.split(/[\\/]/).pop() ?? file;
+  const stem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+  return stem.length > 0 ? sanitizeSessionStem(stem) : undefined;
+}
+
 /**
  * Resolve the session id for the current ctx. Prefers the persisted session
  * file stem (unchanged, always wins); falls back to `anonSession()` — the
@@ -243,14 +250,33 @@ function resolveSessionId(ctx: ExtensionContext, anonSession: () => string): str
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
     if (typeof file === "string" && file.length > 0) {
-      const base = file.split(/[\\/]/).pop() ?? file;
-      const stem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-      if (stem.length > 0) return sanitizeSessionStem(stem);
+      const session = sessionIdFromFile(file);
+      if (session !== undefined) return session;
     }
   } catch {
     // fall through to anonymous id
   }
   return anonSession();
+}
+
+/**
+ * Follow OMP's native transcript ancestry: a child at
+ * `<parent-without-jsonl>/<agent>.jsonl` has the existing sibling
+ * `<parent-without-jsonl>.jsonl`. This matches OMP 18.1.10's bounded
+ * breadcrumb resolver without reading transcript content or trusting headers.
+ */
+function resolveNativeRootSessionId(ctx: ExtensionContext): string | undefined {
+  const file = ctx?.sessionManager?.getSessionFile?.();
+  if (typeof file !== "string" || !file.endsWith(".jsonl")) return undefined;
+  let current = resolve(file);
+  let foundAncestor = false;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const parent = `${dirname(current)}.jsonl`;
+    if (!existsSync(parent)) break;
+    current = parent;
+    foundAncestor = true;
+  }
+  return foundAncestor ? sessionIdFromFile(current) : undefined;
 }
 
 type Mapper<E extends PrimeEvent> = (
@@ -539,7 +565,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       home: config.home ?? "",
       hostSessionId: sessionId,
       cwd: opts.cwd,
-      parentSessionId: workerParentSessions.get(sessionId),
+      parentSessionId: workerRootSessions.get(sessionId),
       record: {
         kind,
         fields,
@@ -563,7 +589,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const visibilityCache = new Map<string, Promise<OmpVisibilityResult>>();
   const stopStates = new Map<string, StopBoundaryState>();
   const stopControlCalls = new Set<string>();
-  const workerParentSessions = new Map<string, string>();
+  // Child HOST session -> canonical native transcript root; never prompt/header-derived.
+  const workerRootSessions = new Map<string, string>();
+  const workerAncestrySessions = new Set<string>();
   // Spawn progress binds native job ids to packets; async-result and hub
   // deliveries later settle those same correlations.
   const pendingWorkerJobs = new Map<
@@ -594,6 +622,24 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (set.size > 1024) {
       const oldest = set.values().next().value;
       if (oldest !== undefined) set.delete(oldest);
+    }
+  };
+  const establishWorkerRootSession = (session: string, ctx: ExtensionContext): void => {
+    if (workerAncestrySessions.has(session)) return;
+    rememberWorkerIdentity(workerAncestrySessions, session);
+    try {
+      const rootSession = resolveNativeRootSessionId(ctx);
+      if (rootSession === undefined || rootSession === session) return;
+      if (!workerRootSessions.has(session) && workerRootSessions.size >= 1024) {
+        const oldest = workerRootSessions.keys().next().value;
+        if (oldest !== undefined) {
+          workerRootSessions.delete(oldest);
+          workerAncestrySessions.delete(oldest);
+        }
+      }
+      workerRootSessions.set(session, rootSession);
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
     }
   };
   const workerRecoverySessions = new Set<string>();
@@ -645,8 +691,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session: string,
   ): Promise<ToolCallEventResult | undefined> => {
     if (event.toolName !== "task") return undefined;
-    const parentSession = workerParentSessions.get(session) ?? session;
-    if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(parentSession) === "HARD") {
+    const rootSession = workerRootSessions.get(session) ?? session;
+    if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
       getStore(session)?.append(
         ompRoutingRecord("omp_worker_context_failure", session, {
           task_id: "omp-budget-blocked",
@@ -742,9 +788,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       };
       getStore(session)?.append(ompRoutingRecord("omp_worker_context_handoff", session, metadataRecord));
       mirror(session, "task_context_resolved", metadataRecord, { cwd: ctxCwd(ctx) });
+      // Own marker must be first: raw task text may quote marker-shaped data.
       augmented.push({
         ...item,
-        task: `${rawTask}\n\n[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${renderOmpWorkerContext(result.contextHandoff)}`,
+        task: `[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${rawTask}\n\n${renderOmpWorkerContext(result.contextHandoff)}`,
       });
     }
     if (batch) return { input: { ...input, tasks: augmented } };
@@ -1070,15 +1117,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   ): void => {
     const marker = prompt.match(WORKER_TASK_MARKER_RE);
     if (marker === null) return;
-    const parentSession = marker[3] ?? null;
-    if (parentSession !== null) workerParentSessions.set(session, parentSession);
+    const rootSession = workerRootSessions.get(session) ?? null;
+    if (rootSession === null) {
+      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_ANCESTRY_UNVERIFIED"));
+    }
     mirror(
       session,
       "task_context_resolved",
       {
         task_id: marker[1],
         packet_sha256: marker[2],
-        parent_session_id: parentSession,
+        parent_session_id: rootSession,
         worker_session_id: session,
         status: "child_received",
       },
@@ -1308,6 +1357,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
+    establishWorkerRootSession(session, ctx);
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
     void runShadowAutoInject({
@@ -1598,6 +1648,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
       session = resolveSessionId(ctx, anonSession);
+      establishWorkerRootSession(session, ctx);
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
@@ -2466,8 +2517,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
-      const parentSession = workerParentSessions.get(session) ?? session;
-      if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(parentSession) === "HARD") {
+      const rootSession = workerRootSessions.get(session) ?? session;
+      if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
         return { block: true, reason: BUDGET_HARD_LINE };
       }
       const command =
@@ -2475,10 +2526,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const isStopControl =
         event.toolName === "bash" && STOP_CONTROL_COMMAND.test(command);
       const rewrittenCommand =
-        isStopControl || rewriteSessionPlaceholders(command, session, parentSession) !== command
+        isStopControl || rewriteSessionPlaceholders(command, session, rootSession) !== command
           ? (isStopControl
-            ? rewriteStopControlCommand(command, session, parentSession)
-            : rewriteSessionPlaceholders(command, session, parentSession))
+            ? rewriteStopControlCommand(command, session, rootSession)
+            : rewriteSessionPlaceholders(command, session, rootSession))
           : command;
       const stopState = stopStateFor(session);
       if (stopState.shouldBlock(event.toolName) && !isStopControl) {

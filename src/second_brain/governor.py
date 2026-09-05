@@ -809,15 +809,20 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
                         f"malformed telemetry for session {session_id!r} at "
                         f"{path.name}:{line_number}"
                     )
+                kind = record.get("kind")
                 telemetry_session = record.get("session")
                 if telemetry_session is not None and telemetry_session != session_id:
                     raise ValueError(
                         f"telemetry identity mismatch for session {session_id!r} "
                         f"in {path.name}:{line_number}"
                     )
-                kind = record.get("kind")
                 if kind not in ("assistant_usage", "model_invocation_completed"):
                     continue
+                if telemetry_session != session_id:
+                    raise ValueError(
+                        f"telemetry identity missing for session {session_id!r} "
+                        f"in {path.name}:{line_number}"
+                    )
                 usage = record if kind == "assistant_usage" else record.get("usage")
                 if not isinstance(usage, dict):
                     raise ValueError(
