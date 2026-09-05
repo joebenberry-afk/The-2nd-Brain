@@ -1,0 +1,5 @@
+# Brain project manifest for projects/<id>/ (canonical copy of registration facts).
+schema_version = 1
+id = "p22-project-gamma"
+name = "OMP P22 Gamma"
+repo_path = "C:/tmp/omp-p22-gamma"
