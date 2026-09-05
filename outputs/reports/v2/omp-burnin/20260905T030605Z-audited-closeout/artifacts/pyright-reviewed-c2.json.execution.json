@@ -1,0 +1,15 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-m",
+    "pyright",
+    "--outputjson"
+  ],
+  "exit": 1,
+  "signal": null,
+  "killed": false,
+  "error": "Command failed: C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe -m pyright --outputjson",
+  "elapsed_ms": 9229,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

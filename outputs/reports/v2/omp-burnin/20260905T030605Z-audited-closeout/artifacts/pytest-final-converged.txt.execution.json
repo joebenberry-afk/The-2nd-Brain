@@ -1,0 +1,16 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-m",
+    "pytest",
+    "-q",
+    "--junitxml=C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\outputs\\reports\\v2\\omp-burnin\\20260905T030605Z-audited-closeout\\artifacts\\pytest-final-converged.xml"
+  ],
+  "exit": 1,
+  "signal": null,
+  "killed": false,
+  "error": "Command failed: C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe -m pytest -q --junitxml=C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\outputs\\reports\\v2\\omp-burnin\\20260905T030605Z-audited-closeout\\artifacts\\pytest-final-converged.xml",
+  "elapsed_ms": 506547,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

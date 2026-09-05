@@ -1,0 +1,15 @@
+{
+  "command": "bunx",
+  "args": [
+    "eslint",
+    "src/index.ts",
+    "tests/wiring.test.ts"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 14963,
+  "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\brainstem\\prime-extension",
+  "stderr": ""
+}

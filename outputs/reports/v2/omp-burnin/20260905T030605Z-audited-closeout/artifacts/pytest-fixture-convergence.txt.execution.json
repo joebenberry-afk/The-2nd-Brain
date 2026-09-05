@@ -1,0 +1,17 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-m",
+    "pytest",
+    "-q",
+    "tests/test_autoinject_codex.py::test_valid_stdin_deterministic_output",
+    "tests/test_hermes_adapter.py::test_pre_llm_routes_existing_skill_and_preserves_bounded_injection"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 2766,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

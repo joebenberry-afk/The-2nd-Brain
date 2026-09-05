@@ -1,0 +1,14 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-c",
+    "import json,sqlite3,time,hashlib,statistics\nfrom pathlib import Path\nfrom second_brain import ledger\nhome=Path(\"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot\"); files=sorted((home/'state'/'sessions').glob('*/ledger.sqlite')); root=ledger.internal_session_id(\"2026-09-05T02-16-14-068Z_01a06f5a-25f4-762b-b74e-1464fa61981f\")\nbefore={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}; times={'ro':[],'rw_query_only':[]}\nfor _ in range(4):\n    for name in times:\n        start=time.perf_counter()\n        for p in files:\n            conn=sqlite3.connect(p.as_uri()+('?mode=ro' if name=='ro' else '?mode=rw'),uri=True)\n            try:\n                if name=='rw_query_only': conn.execute('PRAGMA query_only=ON')\n                conn.execute('SELECT internal_session_id,host_session_id FROM sessions WHERE root_parent_session_id=?',(root,)).fetchall()\n            finally: conn.close()\n        times[name].append((time.perf_counter()-start)*1000)\nprint(json.dumps({'ledger_files':len(files),'samples_ms':times,'medians_ms':{k:statistics.median(v) for k,v in times.items()},'changed_database_files':[str(p) for p in files if hashlib.sha256(p.read_bytes()).hexdigest()!=before[str(p)]]},indent=2))"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 5155,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

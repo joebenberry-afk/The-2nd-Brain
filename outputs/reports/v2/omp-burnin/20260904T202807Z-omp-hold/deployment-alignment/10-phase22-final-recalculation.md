@@ -1,5 +1,10 @@
 # Phase 22 Final Counter Recalculation (Post-Deployment-Fix Live Activity)
 
+> Historical checkpoint. Current readiness is superseded by the
+> [audited closeout](../../20260905T030605Z-audited-closeout/14-release-readiness.md)
+> and [inheritance matrix](../../20260905T030605Z-audited-closeout/QUALIFICATION_INHERITANCE.md).
+> Original observations and conclusions below are retained, not rewritten.
+
 ## Method
 
 Read-only aggregation of `telemetry/agent-performance/*.jsonl` via:

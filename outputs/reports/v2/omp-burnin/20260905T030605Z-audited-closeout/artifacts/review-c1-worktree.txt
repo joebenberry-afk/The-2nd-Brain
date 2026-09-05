@@ -1,0 +1,5 @@
+exit=0
+signal=null
+killed=false
+HEAD is now at 75b80d2 brain(core): correct legacy regression fixtures
+Preparing worktree (detached HEAD 75b80d2)

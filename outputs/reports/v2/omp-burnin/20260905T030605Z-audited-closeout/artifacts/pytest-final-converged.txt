@@ -1,0 +1,112 @@
+exit=1
+signal=null
+killed=false
+........................................................................ [  3%]
+.....................................F.................................. [  7%]
+........................................................................ [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 27%]
+........................................................................ [ 31%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................................................................ [ 43%]
+........................................................................ [ 47%]
+........................................................F............... [ 51%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 67%]
+........................................................................ [ 71%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+.............................F.......................................... [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 98%]
+.......................                                                  [100%]
+================================== FAILURES ===================================
+________________ test_detach_keeps_whitespace_only_agents_file ________________
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_detach_keeps_whitespace_o0/brain')
+repo = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_detach_keeps_whitespace_o0/some-repo')
+
+    def test_detach_keeps_whitespace_only_agents_file(brain_home, repo):
+        (repo / "AGENTS.md").write_text("\n\n", encoding="utf-8", newline="")
+        _attach(repo, brain_home)
+        changes = registry.detach_project(brain_home, repo.name)
+        assert changes["marker_removed"] is True
+        assert (repo / "AGENTS.md").exists()
+>       assert (repo / "AGENTS.md").read_text(encoding="utf-8", newline="") == "\n\n"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: Path.read_text() got an unexpected keyword argument 'newline'
+
+tests\test_attach.py:80: TypeError
+__________________ test_cli_concurrent_init_and_append_burst __________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_cli_concurrent_init_and_a0')
+
+    def test_cli_concurrent_init_and_append_burst(tmp_path) -> None:
+        """P3-E fix regression (plan �24.8: zero recurrence of ledger error
+        classes): a BURST of concurrent init+append chains on a BRAND-NEW session
+        ledger (one process per event, exactly how the extension mirrors events
+        at child-session spawn / task-arrival moments) must ALL succeed. Covers
+        the first-init race the 8-way append test cannot: busy_timeout before any
+        statement, bounded journal_mode=WAL retry, unique manifest temp names,
+        and the resolve retry keep it self-healing; seq stays contiguous and the
+        durable ledger remains the sequence authority."""
+        import concurrent.futures
+        import time as _time
+    
+        _home, run = _cli_env(tmp_path)
+        host = f"burst-{_time.time_ns()}"
+    
+        def init_and_append(i: int):
+            init = run("ledger", "init", "--session", host, "--host", "prime")
+            if init.returncode != 0:
+                return init
+            return run(
+                "ledger", "append", "--session", host, "--stdin-json",
+                stdin=json.dumps(_mirror_event(f"burst-{i}", "user_task", task_sha256=str(i))),
+            )
+    
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            results = list(ex.map(init_and_append, range(8)))
+        bad = [r for r in results if r.returncode != 0]
+>       assert not bad, [r.stderr for r in bad]
+E       AssertionError: ['Traceback (most recent call last):
+E           File "<frozen runpy>", line 198, in _run_module_as_main
+E           File "<frozen runpy...\\brain\\\\state\\\\sessions\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\manifest.json\'
+E         ']
+E       assert not [CompletedProcess(args=['C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\pytho...\brain\\\\state\\\\sessions\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\manifest.json\'\n')]
+
+tests\test_ledger.py:725: AssertionError
+________________________ test_defaults_are_all_shadow _________________________
+
+    def test_defaults_are_all_shadow():
+>       policy = v2_policy.load_policy(v2_policy.REPOSITORY_HOME)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_v2_policy.py:47: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\second_brain\v2_policy.py:194: in load_policy
+    _check_unknown(raw, _TOP_KEYS, "root")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+table = {'schema_version': 1, 'rollout': {'admission': 'SHADOW', 'retrieval': 'SHADOW', 'brainstem': 'SHADOW', 'learning': 'SHADOW', ...}, 'admission': {'min_score': 0.75}, 'retrieval': {'max_candidates': 20, 'top_k': 5, 'token_budget': 1200}, ...}
+allowed = frozenset({'admission', 'brainstem', 'culture', 'economics', 'frontier', 'learning', ...})
+name = 'root'
+
+    def _check_unknown(table: Mapping[str, object], allowed: frozenset[str], name: str) -> None:
+        unknown = sorted(set(table) - allowed)
+        if unknown:
+>           raise _fail(f"unknown key(s) in {name}: {', '.join(unknown)}")
+E           second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers
+
+src\second_brain\v2_policy.py:118: BrainError
+=========================== short test summary info ===========================
+FAILED tests/test_attach.py::test_detach_keeps_whitespace_only_agents_file - ...
+FAILED tests/test_ledger.py::test_cli_concurrent_init_and_append_burst - Asse...
+FAILED tests/test_v2_policy.py::test_defaults_are_all_shadow - second_brain.e...

@@ -1,0 +1,340 @@
+{
+  "historical_report_commit": "f5089ac1b6e27f0b3329196cec7e74f402cd0636",
+  "matrix_sha256": "e5be7375a14cdc263eaf00e25ad6e62bff53dfc9ddfb8bc23bac9dde147c48e0",
+  "gates": [
+    {
+      "gate": 0,
+      "capability": "baseline/rollback protected",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/19-rollback/ROLLBACK_VERIFICATION.md",
+          "sha256": "de54777a3897dbc9a0a4e38261512b79bd8a82fa402a01324f92ed96f9cc8390"
+        }
+      ]
+    },
+    {
+      "gate": 1,
+      "capability": "exact OMP runtime/build identity",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/20-final-regression/FINAL_REGRESSION.md",
+          "sha256": "9ef1ff6350c577217a14be2a210954753d7fb7d6ef8f35573ec2e5f59d0740e1"
+        }
+      ]
+    },
+    {
+      "gate": 2,
+      "capability": "lifecycle integration map",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/02-static-integration-audit/OMP_EVENT_MATRIX.md",
+          "sha256": "34a5a197e3dc2591a8a2b01cf952069b9b269529a24855ab9539b7ca9770f281"
+        }
+      ]
+    },
+    {
+      "gate": 3,
+      "capability": "metadata/package audit",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/03-regression/TEST_DELTA.md",
+          "sha256": "12910e077084c4c7b81dfda5c639de51508f21c04765831f92ad31e7231948fd"
+        }
+      ]
+    },
+    {
+      "gate": 4,
+      "capability": "pre-live regressions",
+      "historical_report_decision": "PASS*",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/03-regression/TEST_DELTA.md",
+          "sha256": "12910e077084c4c7b81dfda5c639de51508f21c04765831f92ad31e7231948fd"
+        },
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/20-final-regression/FINAL_REGRESSION.md",
+          "sha256": "9ef1ff6350c577217a14be2a210954753d7fb7d6ef8f35573ec2e5f59d0740e1"
+        }
+      ]
+    },
+    {
+      "gate": 5,
+      "capability": "OMP native startup",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/05-deploy-exact-build/DEPLOY_VERIFICATION.md",
+          "sha256": "2ae47348866833b5393fc5eca786ef2bce7844e5ab0061909407c73d26f9ac82"
+        }
+      ]
+    },
+    {
+      "gate": 6,
+      "capability": "lifecycle telemetry/identity",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/02-static-integration-audit/OMP_EVENT_MATRIX.md",
+          "sha256": "34a5a197e3dc2591a8a2b01cf952069b9b269529a24855ab9539b7ca9770f281"
+        }
+      ]
+    },
+    {
+      "gate": 7,
+      "capability": "canonical project resolution",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/10-cross-project-isolation/CROSS_PROJECT_ISOLATION.md",
+          "sha256": "4efddceeabbfff6291cbbf19163db2e5e9f935062f243d70999a799534d28365"
+        }
+      ]
+    },
+    {
+      "gate": 8,
+      "capability": "AutoInject actual context injection",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T163000Z-0129e235/07-autoinject/GATE8-injection-proof.md",
+          "sha256": "7763be2a2154f8a3ac54bd4e5524f1c9549d7fd0859fca5d369457480ff910df"
+        }
+      ]
+    },
+    {
+      "gate": 9,
+      "capability": "AutoInject cache correctness",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/09-cache-correctness/CACHE_CORRECTNESS.md",
+          "sha256": "53bb55662dfce54dc2a1a2912c6522d044f0affb2ff453952e148f7954cff378"
+        },
+        {
+          "path": "outputs/reports/v2/omp-burnin/09a-autoinject-cache-corpus-generation-fix.md",
+          "sha256": "f7b9f867bf15c71837a669448ad342639f44e703f69572dd21735b6cf4850780"
+        }
+      ]
+    },
+    {
+      "gate": 10,
+      "capability": "cross-project isolation",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/10-cross-project-isolation/CROSS_PROJECT_ISOLATION.md",
+          "sha256": "4efddceeabbfff6291cbbf19163db2e5e9f935062f243d70999a799534d28365"
+        }
+      ]
+    },
+    {
+      "gate": 11,
+      "capability": "worker context capsule",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/11-worker-context-capsule/WORKER_CONTEXT_CAPSULE.md",
+          "sha256": "d6acffce593b85b7e350a1cc08ed98c5a099435fc0720560acf9f81758a6eb59"
+        }
+      ]
+    },
+    {
+      "gate": 12,
+      "capability": "worker result lifecycle",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/12-worker-result-lifecycle/WORKER_RESULT_LIFECYCLE.md",
+          "sha256": "6b78e0e0848fda0a737092711c298cd9219b75688ea864413c5cee130a306dae"
+        }
+      ]
+    },
+    {
+      "gate": 13,
+      "capability": "model routing",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/13-model-routing/MODEL_ROUTING.md",
+          "sha256": "535ef1b5b28940ce1661f5c075e34144c348960ba623cf05f8297a9505cc78e0"
+        }
+      ]
+    },
+    {
+      "gate": 14,
+      "capability": "skill/visibility",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/14-skills-visibility/SKILLS_VISIBILITY.md",
+          "sha256": "1b3466416439ad0126b0cc4c4421c03de01820a093653ad0eca0440773efc193"
+        }
+      ]
+    },
+    {
+      "gate": 15,
+      "capability": "compaction continuity",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/15-compaction-continuity/COMPACTION_CONTINUITY.md",
+          "sha256": "68ed3f9bae2d2df61097c5428e8ce0a98c112ff350634c4768acfe37ec75aa1b"
+        }
+      ]
+    },
+    {
+      "gate": 16,
+      "capability": "restart persistence",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/16-restart-persistence/RESTART_PERSISTENCE.md",
+          "sha256": "3fc699ec698261aef027f1dd3de033e9693b38db50a9b24cc573b21ff9fca420"
+        }
+      ]
+    },
+    {
+      "gate": 17,
+      "capability": "runtime/state separation",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/17-runtime-state-separation/RUNTIME_STATE_SEPARATION.md",
+          "sha256": "108ffb71a84ea01db835500a074cd3360f8a08dd404549b6f4e5c5f034f06080"
+        }
+      ]
+    },
+    {
+      "gate": 18,
+      "capability": "backup/restore",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/18-backup-restore/BACKUP_RESTORE.md",
+          "sha256": "016345b88975b3ed6d0c8037b2679bd994e4985330e3f98279d7b18dc773bee3"
+        },
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/19-rollback/ROLLBACK_VERIFICATION.md",
+          "sha256": "de54777a3897dbc9a0a4e38261512b79bd8a82fa402a01324f92ed96f9cc8390"
+        }
+      ]
+    },
+    {
+      "gate": 19,
+      "capability": "fail-open behavior",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/19-failure-injection/FAIL_OPEN_MATRIX.md",
+          "sha256": "5dd5c0eb1be63828cace6b469f93c05461364099d124ea5b58199da5985ec1a9"
+        }
+      ]
+    },
+    {
+      "gate": 20,
+      "capability": "token efficiency",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20-token-efficiency/TOKEN_EFFICIENCY.md",
+          "sha256": "48e761ba79d48337c489b1e9e219af4ebd928cf6f0b565fc368c3bef80f6a8d5"
+        }
+      ]
+    },
+    {
+      "gate": 21,
+      "capability": "latency",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/21-latency-qualification/LATENCY_QUALIFICATION.md",
+          "sha256": "6ca7f5f7ff178c3b089b89445a01ae8de005f9ef61161a164823405336916541"
+        }
+      ]
+    },
+    {
+      "gate": 22,
+      "capability": "sustained burn-in",
+      "historical_report_decision": "HOLD",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/22-sustained-burn-in/SUSTAINED_BURN_IN.md",
+          "sha256": "05ea27f5de161bf20e948511b760adaa77917f246075c11b93a6fca4308224ea"
+        }
+      ]
+    },
+    {
+      "gate": 23,
+      "capability": "final clean-candidate regression",
+      "historical_report_decision": "HOLD",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/20-final-regression/FINAL_REGRESSION.md",
+          "sha256": "9ef1ff6350c577217a14be2a210954753d7fb7d6ef8f35573ec2e5f59d0740e1"
+        }
+      ]
+    },
+    {
+      "gate": 24,
+      "capability": "rollback from final candidate",
+      "historical_report_decision": "PASS",
+      "source_sha": "86585e114115bc43bf932145e716f2ed4d3dd30e",
+      "reports": [
+        {
+          "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/19-rollback/ROLLBACK_VERIFICATION.md",
+          "sha256": "de54777a3897dbc9a0a4e38261512b79bd8a82fa402a01324f92ed96f9cc8390"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/deployment-alignment/10-phase22-final-recalculation.md",
+      "report_commit": "f5089ac1b6e27f0b3329196cec7e74f402cd0636",
+      "sha256": "6563fa33ecc30299f2278bd5a5a863c583515280337bbe89c3825f64e28cfa04"
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/deployment-alignment/11-final-release-decision.md",
+      "report_commit": "f5089ac1b6e27f0b3329196cec7e74f402cd0636",
+      "sha256": "debff9945e68e1efc385bd33ecb9ceb40fd469159ccf1a14652b324ff1ed9546"
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/final-p1-repair/18-final-release-decision.md",
+      "report_commit": "f5089ac1b6e27f0b3329196cec7e74f402cd0636",
+      "sha256": "bada82a128e4ae39ececc241d40b6d1e07c93410371ee58c96b7a97c50d35614"
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/final-p1-repair/17-release-gate-checklist.md",
+      "report_commit": "f5089ac1b6e27f0b3329196cec7e74f402cd0636",
+      "sha256": "56384f263315ca65be37c9e7ef852d76b13d83799ad3854641b8a1bc48e32649"
+    }
+  ]
+}

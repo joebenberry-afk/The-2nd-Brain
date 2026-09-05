@@ -1,0 +1,49 @@
+{
+  "suites": [
+    {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "3",
+      "skipped": "0",
+      "tests": "1823",
+      "time": "505.577",
+      "timestamp": "2026-09-05T01:31:14.781693-04:00",
+      "hostname": "TheChosenOne"
+    }
+  ],
+  "failures": [
+    {
+      "name": {
+        "classname": "tests.test_attach",
+        "name": "test_detach_keeps_whitespace_only_agents_file",
+        "time": "0.218"
+      },
+      "message": {
+        "message": "TypeError: Path.read_text() got an unexpected keyword argument 'newline'"
+      },
+      "detail": "brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_detach_keeps_whitespace_o0/brain')\nrepo = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_detach_keeps_whitespace_o0/some-repo')\n\n    def test_detach_keeps_whitespace_only_agents_file(brain_home, repo):\n        (repo / \"AGENTS.md\").write_text(\"\\n\\n\", encoding=\"utf-8\", newline=\"\")\n        _attach(repo, brain_home)\n        changes = registry.detach_project(brain_home, repo.name)\n        assert changes[\"marker_removed\"] is True\n        assert (repo / \"AGENTS.md\").exists()\n>       assert (repo / \"AGENTS.md\").read_text(encoding=\"utf-8\", newline=\"\") == \"\\n\\n\"\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       TypeError: Path.read_text() got an unexpected keyword argument 'newline'\n\ntests\\test_attach.py:80: TypeError"
+    },
+    {
+      "name": {
+        "classname": "tests.test_ledger",
+        "name": "test_cli_concurrent_init_and_append_burst",
+        "time": "0.519"
+      },
+      "message": {
+        "message": "AssertionError: ['Traceback (most recent call last):\n    File \"<frozen runpy>\", line 198, in _run_module_as_main\n    File \"<frozen runpy...\\\\brain\\\\\\\\state\\\\\\\\sessions\\\\\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\\\\\manifest.json\\'\n  ']\nassert not [CompletedProcess(args=['C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v2-one-shot\\\\.venv\\\\Scripts\\\\pytho...\\brain\\\\\\\\state\\\\\\\\sessions\\\\\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\\\\\manifest.json\\'\\n')]"
+      },
+      "detail": "tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3466/test_cli_concurrent_init_and_a0')\n\n    def test_cli_concurrent_init_and_append_burst(tmp_path) -> None:\n        \"\"\"P3-E fix regression (plan \u00a724.8: zero recurrence of ledger error\n        classes): a BURST of concurrent init+append chains on a BRAND-NEW session\n        ledger (one process per event, exactly how the extension mirrors events\n        at child-session spawn / task-arrival moments) must ALL succeed. Covers\n        the first-init race the 8-way append test cannot: busy_timeout before any\n        statement, bounded journal_mode=WAL retry, unique manifest temp names,\n        and the resolve retry keep it self-healing; seq stays contiguous and the\n        durable ledger remains the sequence authority.\"\"\"\n        import concurrent.futures\n        import time as _time\n    \n        _home, run = _cli_env(tmp_path)\n        host = f\"burst-{_time.time_ns()}\"\n    \n        def init_and_append(i: int):\n            init = run(\"ledger\", \"init\", \"--session\", host, \"--host\", \"prime\")\n            if init.returncode != 0:\n                return init\n            return run(\n                \"ledger\", \"append\", \"--session\", host, \"--stdin-json\",\n                stdin=json.dumps(_mirror_event(f\"burst-{i}\", \"user_task\", task_sha256=str(i))),\n            )\n    \n        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:\n            results = list(ex.map(init_and_append, range(8)))\n        bad = [r for r in results if r.returncode != 0]\n>       assert not bad, [r.stderr for r in bad]\nE       AssertionError: ['Traceback (most recent call last):\nE           File \"<frozen runpy>\", line 198, in _run_module_as_main\nE           File \"<frozen runpy...\\\\brain\\\\\\\\state\\\\\\\\sessions\\\\\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\\\\\manifest.json\\'\nE         ']\nE       assert not [CompletedProcess(args=['C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v2-one-shot\\\\.venv\\\\Scripts\\\\pytho...\\brain\\\\\\\\state\\\\\\\\sessions\\\\\\\\b200e72f1b970400693f7d50cacb3886c2a122af3ea69a4fc14a51d41f1b508b\\\\\\\\manifest.json\\'\\n')]\n\ntests\\test_ledger.py:725: AssertionError"
+    },
+    {
+      "name": {
+        "classname": "tests.test_v2_policy",
+        "name": "test_defaults_are_all_shadow",
+        "time": "0.001"
+      },
+      "message": {
+        "message": "second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers"
+      },
+      "detail": "def test_defaults_are_all_shadow():\n>       policy = v2_policy.load_policy(v2_policy.REPOSITORY_HOME)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests\\test_v2_policy.py:47: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nsrc\\second_brain\\v2_policy.py:194: in load_policy\n    _check_unknown(raw, _TOP_KEYS, \"root\")\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\n\ntable = {'schema_version': 1, 'rollout': {'admission': 'SHADOW', 'retrieval': 'SHADOW', 'brainstem': 'SHADOW', 'learning': 'SHADOW', ...}, 'admission': {'min_score': 0.75}, 'retrieval': {'max_candidates': 20, 'top_k': 5, 'token_budget': 1200}, ...}\nallowed = frozenset({'admission', 'brainstem', 'culture', 'economics', 'frontier', 'learning', ...})\nname = 'root'\n\n    def _check_unknown(table: Mapping[str, object], allowed: frozenset[str], name: str) -> None:\n        unknown = sorted(set(table) - allowed)\n        if unknown:\n>           raise _fail(f\"unknown key(s) in {name}: {', '.join(unknown)}\")\nE           second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers\n\nsrc\\second_brain\\v2_policy.py:118: BrainError"
+    }
+  ]
+}

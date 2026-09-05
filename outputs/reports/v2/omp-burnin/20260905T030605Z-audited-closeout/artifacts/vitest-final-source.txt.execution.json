@@ -1,0 +1,16 @@
+{
+  "command": "cmd.exe",
+  "args": [
+    "/d",
+    "/s",
+    "/c",
+    "npx vitest run --reporter=json --outputFile=C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\outputs\\reports\\v2\\omp-burnin\\20260905T030605Z-audited-closeout\\artifacts\\vitest-final-source.json"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 34669,
+  "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\brainstem\\prime-extension",
+  "stderr": ""
+}

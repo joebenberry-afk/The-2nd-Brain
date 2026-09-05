@@ -1,0 +1,16 @@
+{
+  "command": "cmd.exe",
+  "args": [
+    "/d",
+    "/s",
+    "/c",
+    "del \"C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\receipt_smoke.ts\""
+  ],
+  "exit": 1,
+  "signal": null,
+  "killed": false,
+  "error": "Command failed: cmd.exe /d /s /c del \"C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\receipt_smoke.ts\"\nThe filename, directory name, or volume label syntax is incorrect.\r\n",
+  "elapsed_ms": 26,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": "The filename, directory name, or volume label syntax is incorrect.\r\n"
+}

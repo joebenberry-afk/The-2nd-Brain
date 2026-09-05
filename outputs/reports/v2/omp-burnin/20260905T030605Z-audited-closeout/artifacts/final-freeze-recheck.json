@@ -1,0 +1,12 @@
+{
+  "at_utc": "2026-09-05T07:13:28.891Z",
+  "candidate_source_sha": "75b80d2aab33929923d4d9323bcaf639bc69591b",
+  "mismatches": {
+    "runtime": [],
+    "adapter": [],
+    "configuration": [],
+    "installed": []
+  },
+  "installed_matches_candidate": false,
+  "note": "Source/config/installed files match their recorded freeze, but installed source remains the old deployment, not this candidate."
+}

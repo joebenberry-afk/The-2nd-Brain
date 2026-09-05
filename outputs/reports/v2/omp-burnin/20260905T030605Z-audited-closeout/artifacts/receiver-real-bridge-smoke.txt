@@ -1,0 +1,62 @@
+exit=0
+{
+  "offlineOnly": true,
+  "outcomes": [
+    {
+      "status": "completed",
+      "first": {
+        "ok": true,
+        "status": "completed",
+        "taskId": "receipt-smoke-completed",
+        "packetSha256": "e96348f7d8ef96885d81692559d0e357525fd3e5bc1b447f1a8eafb128a319ba",
+        "resultSha256": "9f02971d1722ace42b4777c2b22b5c317e618c39b28154613b72618ee806d572"
+      },
+      "replay": {
+        "ok": true,
+        "status": "completed",
+        "taskId": "receipt-smoke-completed",
+        "packetSha256": "e96348f7d8ef96885d81692559d0e357525fd3e5bc1b447f1a8eafb128a319ba",
+        "resultSha256": "9f02971d1722ace42b4777c2b22b5c317e618c39b28154613b72618ee806d572"
+      },
+      "wrongParentRejected": true
+    },
+    {
+      "status": "failed",
+      "first": {
+        "ok": true,
+        "status": "failed",
+        "taskId": "receipt-smoke-failed",
+        "failureCode": "OMP_WORKER_FAILED",
+        "packetSha256": "5a9b0dde90f982ea1dfd7f0419fd4b206862f23b9204e53ea51888587404550f",
+        "resultSha256": "4b91e2757161744c36e3103839c806f68943da5cb501b4f864d52b5801816eea"
+      },
+      "replay": {
+        "ok": true,
+        "status": "failed",
+        "taskId": "receipt-smoke-failed",
+        "failureCode": "OMP_WORKER_FAILED",
+        "packetSha256": "5a9b0dde90f982ea1dfd7f0419fd4b206862f23b9204e53ea51888587404550f",
+        "resultSha256": "4b91e2757161744c36e3103839c806f68943da5cb501b4f864d52b5801816eea"
+      },
+      "wrongParentRejected": true
+    },
+    {
+      "status": "cancelled",
+      "first": {
+        "ok": true,
+        "status": "cancelled",
+        "taskId": "receipt-smoke-cancelled",
+        "packetSha256": "aba18737ea04f3f4dc951436dc1022c922492768cad388798d60dc8a16104d9e",
+        "resultSha256": "72ceb31f83143e21e511c170518944491981524d400e7a5a1731e7b2bf270014"
+      },
+      "replay": {
+        "ok": true,
+        "status": "cancelled",
+        "taskId": "receipt-smoke-cancelled",
+        "packetSha256": "aba18737ea04f3f4dc951436dc1022c922492768cad388798d60dc8a16104d9e",
+        "resultSha256": "72ceb31f83143e21e511c170518944491981524d400e7a5a1731e7b2bf270014"
+      },
+      "wrongParentRejected": true
+    }
+  ]
+}

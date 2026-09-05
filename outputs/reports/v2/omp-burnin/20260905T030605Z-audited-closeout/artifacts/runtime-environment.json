@@ -1,0 +1,67 @@
+{
+  "python": "3.11.15 (main, Apr  7 2026, 20:47:24) [MSC v.1944 64 bit (AMD64)]",
+  "executable": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "distributions": [
+    {
+      "name": "colorama",
+      "version": "0.4.6"
+    },
+    {
+      "name": "coverage",
+      "version": "7.16.0"
+    },
+    {
+      "name": "hypothesis",
+      "version": "6.167.1"
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.0"
+    },
+    {
+      "name": "nodeenv",
+      "version": "1.10.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.21.0"
+    },
+    {
+      "name": "pyright",
+      "version": "1.1.411"
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1"
+    },
+    {
+      "name": "pytest-cov",
+      "version": "7.1.0"
+    },
+    {
+      "name": "ruff",
+      "version": "0.16.5"
+    },
+    {
+      "name": "second-brain",
+      "version": "0.1.0"
+    },
+    {
+      "name": "sortedcontainers",
+      "version": "2.4.0"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0"
+    }
+  ]
+}
