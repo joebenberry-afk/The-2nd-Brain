@@ -1,0 +1,31 @@
+{
+  "observed_at": "2026-09-05T20:59:20.901Z",
+  "prs": [
+    {
+      "number": 10928,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "mergeable_state": "unstable",
+      "head": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+      "head_repo": "joebenberry-afk/oh-my-pi",
+      "base": "5964a0f7649275bcde818f20073193fd032451f2",
+      "base_ref": "main",
+      "url": "https://github.com/can1357/oh-my-pi/pull/10928"
+    },
+    {
+      "number": 10948,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "mergeable_state": "unstable",
+      "head": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb",
+      "head_repo": "joebenberry-afk/oh-my-pi",
+      "base": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+      "base_ref": "main",
+      "url": "https://github.com/can1357/oh-my-pi/pull/10948"
+    }
+  ]
+}

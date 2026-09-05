@@ -1,0 +1,9 @@
+{
+  "prior_failures": "Carried forward unchanged from 15-native-gates.json and 20-baseline-native-cleanup.json",
+  "fresh_runs_maximum": {"isolated_settings_handle_owner_smoke": 1, "baseline_selected_failing_test": 1, "candidate_selected_repaired_test": 1, "candidate_representative_four_file_native_suite": 1},
+  "selection": "reloads model roles before resolving an agent added during the session",
+  "file": "packages/coding-agent/test/task/structured-subagent.test.ts",
+  "representative_files": ["packages/coding-agent/test/async-job-manager.test.ts", "packages/coding-agent/test/task/structured-subagent.test.ts", "packages/coding-agent/test/task/task-spawn.test.ts", "packages/coding-agent/test/extension-context-async-jobs.test.ts"],
+  "prohibited": ["skip", "catch-and-ignore EBUSY", "arbitrary sleep", "retry until green", "kill unrelated process", "antivirus or permission changes"],
+  "cause_status": "Source identifies fixture-owned SQLite storage left open; awaiting controlled ownership smoke before runtime cause claim"
+}

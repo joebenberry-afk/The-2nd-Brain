@@ -1,0 +1,159 @@
+{
+  "status": "SCOPED_REVIEW_COMPLETE / MATERIAL_SAFETY_FINDINGS / RELEASE_HOLD",
+  "original_brain_product": "95fc02e82e1878b44d8902411ff905634bae114b",
+  "final_brain_product": "95fc02e82e1878b44d8902411ff905634bae114b",
+  "original_brain_evidence": "c22eb78f0b6ba9c019bb6045915aa17a4f47bb91",
+  "original_host_product": "dc4dbc5ced040d3dde79d93d4fb9dd48bbf2e7cc",
+  "final_host_checkpoint": "5a4c45ff3e77c6b797623424c4284a54d01e0474",
+  "host_runtime_product_unchanged": true,
+  "only_code_change": "Test-only dedicated process fixture, await exit before recursive removal",
+  "material_findings": {
+    "confirmed_runtime": "P0: alpha and beta registry labels admit two held writers on identical canonical worktree identity. Independently reproduced through real omp_adapter; 09-alias-reproduction.json.",
+    "source_review": [
+      "read_only narrows definition but does not set restrictToolNames; exec-tier hub can be restored",
+      "Cleanup Promise.all short-circuits on rejection while downstream consumers assume successful completion",
+      "Synchronous/blocking tasks bypass observable manager registration"
+    ],
+    "unproven_candidates": "Full independent reports retain further hypotheses with Main adjudication in 10-independent-reviews.json; not all are accepted defects"
+  },
+  "writer_checkpoint_disposition": "Preserved immutable old acceptance evidence, but its broad safety qualification is reopened for explicit reproduced alias defect and source-reviewed host boundary gaps. Not claiming safe for deployment or only awaiting upstream.",
+  "windows": {
+    "cause": "Fixture-owned AgentStorage/Bun SQLite lifetime. cancelPendingSaves cancels timers only; Database.close default retains outstanding prepared statements. Exact surviving wrapper not instrumented.",
+    "negative_owner_smoke": "Explicit AgentStorage.close still EBUSY; retained, not counted as pass.",
+    "actual_release_boundary": "Dedicated fixture process exits before parent deletion; repaired test and representative suite pass",
+    "baseline_selected": {
+      "pass": 0,
+      "fail": 1,
+      "filtered": 27
+    },
+    "candidate_selected": {
+      "pass": 1,
+      "fail": 0,
+      "filtered": 29
+    },
+    "candidate_four_file_native": {
+      "pass": 78,
+      "fail": 0
+    },
+    "retries": 0,
+    "scope": "Representative Windows selection qualified; no general all-host-suite or impossible-race claim"
+  },
+  "fresh": [
+    "Independent scoped reviews",
+    "Main actual adapter project-alias reproduction",
+    "Predeclared four Windows diagnostics, including both failures",
+    "Host typecheck exit0",
+    "Changed fixture oxlint0",
+    "Current PR API/workflow reads",
+    "Scratch no-commit merge of10928 into recorded base"
+  ],
+  "carried_forward": [
+    "1928 Python tests",
+    "702 extension tests",
+    "Brain static checks",
+    "19/19 disposable Doctor",
+    "Migration backup restore restart and old real-manager writer probe"
+  ],
+  "supported_path": "Prior proof reaches real extension factory, real manager and real Brain adapter. It supplies its own ExtensionContext and manager registration; complete AgentSession/ExtensionRunner/TaskTool production path is not established. No fresh native writer proof claimed because runtime source unchanged.",
+  "metadata_prs": [
+    {
+      "number": 10928,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "mergeable_state": "unstable",
+      "head": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+      "head_repo": "joebenberry-afk/oh-my-pi",
+      "base": "5964a0f7649275bcde818f20073193fd032451f2",
+      "base_ref": "main",
+      "url": "https://github.com/can1357/oh-my-pi/pull/10928"
+    },
+    {
+      "number": 10948,
+      "state": "open",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "mergeable_state": "unstable",
+      "head": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb",
+      "head_repo": "joebenberry-afk/oh-my-pi",
+      "base": "feba7f113fd041542afac0f44c0d3529b81c50a6",
+      "base_ref": "main",
+      "url": "https://github.com/can1357/oh-my-pi/pull/10948"
+    }
+  ],
+  "metadata_workflows": [
+    {
+      "pr": 10928,
+      "runs": [
+        {
+          "id": 33974402528,
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "action_required",
+          "head_sha": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+          "url": "https://github.com/can1357/oh-my-pi/actions/runs/33974402528"
+        },
+        {
+          "id": 33974402551,
+          "name": "OMP Nix",
+          "status": "completed",
+          "conclusion": "action_required",
+          "head_sha": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+          "url": "https://github.com/can1357/oh-my-pi/actions/runs/33974402551"
+        }
+      ]
+    },
+    {
+      "pr": 10948,
+      "runs": [
+        {
+          "id": 33974759903,
+          "name": "CI",
+          "status": "completed",
+          "conclusion": "action_required",
+          "head_sha": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb",
+          "url": "https://github.com/can1357/oh-my-pi/actions/runs/33974759903"
+        },
+        {
+          "id": 33974759910,
+          "name": "OMP Nix",
+          "status": "completed",
+          "conclusion": "action_required",
+          "head_sha": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb",
+          "url": "https://github.com/can1357/oh-my-pi/actions/runs/33974759910"
+        }
+      ]
+    }
+  ],
+  "merge_trial": {
+    "base": "5964a0f7649275bcde818f20073193fd032451f2",
+    "head": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+    "exit": 0,
+    "conflicts": "",
+    "scratch": "C:\\Users\\assas\\AppData\\Local\\Temp/omp-review-merge-BJPNYy/worktree"
+  },
+  "review_package": {
+    "lifecycle": "host-lifecycle.patch (e874..dc4 only)",
+    "fixture": "windows-fixture.patch (dc4..5a4 test only)",
+    "brain": "brain-writer.patch (adeb..95fc, private)",
+    "publication": "Not ready to approve publication as safe; fix/adjudicate material findings first. No combined replacement PR."
+  },
+  "remaining_gates": [
+    "Local alias exclusivity repair with safe existing-owner migration and regression proof",
+    "Focused reproduction/repair or rejection of host read-only and cleanup findings",
+    "Actual supported production chain proof",
+    "Upstream human review and workflow approval/execution",
+    "Exact integrated artifact and rollback qualification",
+    "Separately authorized deployment/provider canary and existing live gates"
+  ],
+  "provider_calls": 0,
+  "production_usage": null,
+  "remote_writes": false,
+  "deployment": false,
+  "adaptive_activation": false,
+  "gate22_23": false,
+  "release_tag": false,
+  "scope_note": "Review and bounded EBUSY repair complete. User handoff explicitly permits a findings-qualified HOLD; successful only-external-gates state was not reached. No broad product repair campaign silently begun."
+}
