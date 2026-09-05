@@ -947,6 +947,27 @@ class TestCheckBudget:
             "error": "ACCOUNTING_UNAVAILABLE",
         }
 
+    @pytest.mark.parametrize("identity", ["missing", "null"])
+    def test_usage_without_session_identity_is_accounting_unavailable(
+        self, brain_home, identity
+    ):
+        """Malformed usage cannot become factual cap consumption."""
+        record = _rec("assistant_usage", total_tokens=500000)
+        if identity == "missing":
+            del record["session"]
+        else:
+            record["session"] = None
+        _write_session(brain_home, f"{identity}-usage-session", [record])
+
+        assert governor.check_budget(
+            brain_home, f"{identity}-usage-session", "driver"
+        ) == {
+            "state": "OK",
+            "used": None,
+            "cap": 400000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
+
     def test_malformed_config_falls_back_to_defaults(self, brain_home):
         """Malformed governor.toml never raises; defaults apply."""
         (brain_home / "config" / "governor.toml").write_text("not valid toml [[[", encoding="utf-8")
@@ -1139,12 +1160,15 @@ class TestCheckBudget:
         _write_session(
             brain_home,
             "worker-child",
-            [_rec("session_start", session=session_id)],
+            [
+                _rec("session_start", session=session_id),
+                _rec("assistant_usage", session=session_id, total_tokens=8),
+            ],
         )
 
         assert governor.check_budget(brain_home, session_id, "worker") == {
             "state": "OK",
-            "used": 12,
+            "used": 20,
             "cap": 120000,
         }
 
