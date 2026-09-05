@@ -596,7 +596,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // deliveries later settle those same correlations.
   const pendingWorkerJobs = new Map<
     string,
-    { taskId: string; packetSha256: string; parentSessionId: string; agent: string }
+    { taskId: string; packetSha256: string; parentSessionId: string; agent: string; agentId: string }
   >();
   const pendingWorkerTaskIds = new Set<string>();
   const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
@@ -608,10 +608,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   };
   // Retain correlation until durable acceptance; claims serialize observers.
   const takePendingWorkerJob = (
-    agentId: string,
+    jobId: string,
     session: string,
-  ): { taskId: string; packetSha256: string; parentSessionId: string; agent: string } | undefined =>
-    pendingWorkerJobs.get(JSON.stringify([session, agentId]));
+  ) => pendingWorkerJobs.get(JSON.stringify([session, jobId]));
   // A settled hub job can be re-observed by repeated `hub jobs`/`wait` polls;
   // report each worker's completion exactly once.
   const reportedWorkerTaskIds = new Set<string>();
@@ -854,20 +853,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const data = entry.data;
       if (data === null || typeof data !== "object" || !("session" in data) || data.session !== session) continue;
       if (entry.customType === "second-brain.worker-job-pending" &&
-          "agentId" in data && typeof data.agentId === "string" && data.agentId.length <= 512 &&
+          "jobId" in data && typeof data.jobId === "string" && data.jobId.length > 0 && data.jobId.length <= 512 &&
+          "agentId" in data && typeof data.agentId === "string" && data.agentId.length > 0 && data.agentId.length <= 512 &&
           "taskId" in data && typeof data.taskId === "string" && data.taskId.length <= 512 &&
           "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
           "agent" in data && typeof data.agent === "string" && data.agent.length <= 512) {
         if (reportedWorkerTaskIds.has(data.taskId)) continue;
-        const key = JSON.stringify([session, data.agentId]);
-        if ((!pendingWorkerJobs.has(key) && pendingWorkerJobs.size >= 1024) ||
+        const key = JSON.stringify([session, data.jobId]);
+        if (pendingWorkerJobs.has(key)) continue;
+        if (pendingWorkerJobs.size >= 1024 ||
             (!pendingWorkerTaskIds.has(data.taskId) && pendingWorkerTaskIds.size >= 1024)) {
           recoveryLimited = true;
           continue;
         }
         pendingWorkerTaskIds.add(data.taskId);
-        pendingWorkerJobs.set(JSON.stringify([session, data.agentId]), {
+        pendingWorkerJobs.set(key, {
           taskId: data.taskId, packetSha256: data.packetSha256, parentSessionId: session, agent: data.agent,
+          agentId: data.agentId,
         });
         continue;
       }
@@ -929,19 +931,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // Background spawns (this OMP version's default for the generic `task`
     // agent, confirmed live) return `results: []` on the spawning tool_result
     // and instead expose the marker-embedded task text via `progress[]`.
-    // Remember agent-id -> packet identity now so a LATER settled `hub` job
-    // report (see recordAsyncWorkerCompletions) can still be attributed.
+    // Bind the actual manager job id to packet identity and expected child id;
+    // rendered output and agent-name equality are not correlation sources.
     const rawProgress = details.progress;
     if (Array.isArray(rawProgress)) {
       for (const rawEntry of rawProgress) {
         if (rawEntry == null || typeof rawEntry !== "object") continue;
         const entry = rawEntry as Record<string, unknown>;
         const agentId = typeof entry.id === "string" ? entry.id : undefined;
+        const jobId = typeof entry.jobId === "string" ? entry.jobId : undefined;
         const entryTask = typeof entry.task === "string" ? entry.task : "";
         const marker = entryTask.match(WORKER_TASK_MARKER_RE);
-        if (agentId === undefined || marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
+        if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
+            jobId === undefined || jobId.length === 0 || jobId.length > 512 ||
+            marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
         if (reportedWorkerTaskIds.has(marker[1])) continue;
-        const key = JSON.stringify([session, agentId]);
+        const key = JSON.stringify([session, jobId]);
         if (pendingWorkerJobs.has(key)) continue;
         if (pendingWorkerJobs.size >= 1024 ||
             (!pendingWorkerTaskIds.has(marker[1]) && pendingWorkerTaskIds.size >= 1024)) {
@@ -954,8 +959,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           packetSha256: marker[2],
           parentSessionId: marker[3] ?? session,
           agent: typeof entry.agent === "string" ? entry.agent : "unknown",
+          agentId,
         });
-        journalWorkerEvent(session, "second-brain.worker-job-pending", { session, agentId, ...pendingWorkerJobs.get(key) });
+        journalWorkerEvent(session, "second-brain.worker-job-pending", { session, jobId, ...pendingWorkerJobs.get(key) });
       }
     }
     const rawResults = details.results;
@@ -1010,10 +1016,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (rawJob == null || typeof rawJob !== "object") continue;
       const job = rawJob as Record<string, unknown>;
       if (job.type !== "task" || !["completed", "failed", "cancelled"].includes(String(job.status))) continue;
-      const agentId = typeof job.id === "string" ? job.id : undefined;
-      if (agentId === undefined) continue;
-      const pending = takePendingWorkerJob(agentId, session);
+      const jobId = typeof job.id === "string" ? job.id : undefined;
+      if (jobId === undefined) continue;
+      const pending = takePendingWorkerJob(jobId, session);
       if (pending === undefined) continue;
+      if (job.agentId !== undefined && job.agentId !== pending.agentId) {
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
+        continue;
+      }
       const status = job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed";
       const summaryText =
         typeof job.resultText === "string"
@@ -1027,7 +1037,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         {
           task_id: pending.taskId,
           packet_sha256: pending.packetSha256,
-          child_omp_agent_id: agentId,
+          child_omp_agent_id: pending.agentId,
           child_omp_session_file: null,
           worker_agent: pending.agent,
           worker_model: typeof job.resolvedModel === "string" ? job.resolvedModel : null,
@@ -1071,6 +1081,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           structuredAsyncUnavailableReported = true;
           getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_STRUCTURED_ASYNC_UNAVAILABLE"));
         }
+        continue;
+      }
+      if (job.agentId !== pending.agentId) {
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
         continue;
       }
       const status = job.status === "completed" || job.status === "failed" || job.status === "cancelled" ? job.status : undefined;
