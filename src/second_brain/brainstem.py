@@ -9,11 +9,12 @@ can never bypass hard budget caps or authority floors.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-from . import contracts, db, decisions
+from . import contracts, decisions
 from .errors import BrainError
 
 _VERIFY_LEVEL_RANKS: dict[str, int] = {
@@ -32,18 +33,61 @@ _ROUTE_FLOOR_RANKS: dict[str, int] = {
     "premium": 2,
 }
 
+_MIN_USEFUL_INJECTION_TOKENS = 200
+_CONSERVATIVE_INJECTION_TOKENS = 500
+_CONTEXT_ACTIVE_NUMERATOR = 4
+_CONTEXT_ACTIVE_DENOMINATOR = 5
+
+
+def _token_count(value: object, field: str, *, nullable: bool = True) -> int | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        suffix = " or None" if nullable else ""
+        raise BrainError(f"{field} must be a non-negative integer{suffix}")
+    return value
+
+
+def _bound_injection(
+    requested: int,
+    *,
+    operation_cap: int | None,
+    hard_cap: int | None,
+    used: int | None,
+    resident: int | None,
+    context_limit: int | None,
+    reasons: list[str],
+) -> int:
+    """Bound optional injected tokens while preserving 20% context headroom."""
+    allowance = requested
+    if operation_cap is not None:
+        allowance = min(allowance, operation_cap)
+    if hard_cap is not None:
+        remaining = hard_cap if used is None else max(0, hard_cap - used)
+        allowance = min(allowance, remaining)
+    if context_limit is not None:
+        active_limit = (context_limit * _CONTEXT_ACTIVE_NUMERATOR) // _CONTEXT_ACTIVE_DENOMINATOR
+        available_context = active_limit if resident is None else max(0, active_limit - resident)
+        allowance = min(allowance, available_context)
+    if allowance < requested:
+        reasons.append(f"INJECTION_BUDGET_CAPPED_AT_APPLICABLE_LIMIT:{allowance}")
+    if 0 < allowance < _MIN_USEFUL_INJECTION_TOKENS:
+        reasons.append(f"INJECTION_ABSTAINED_BELOW_USEFUL_MINIMUM:{allowance}")
+        return 0
+    return allowance
+
 
 @dataclass(frozen=True)
 class BrainstemSignals:
-    """Repository-true structured signals. Missing signals are None."""
+    """Token counts share one integer-token unit; missing signals are None."""
 
-    budget_tokens_used: int | None = None
-    budget_tokens_cap: int | None = None
-    budget_hard_cap: int | None = None
+    budget_tokens_used: int | None = None  # cumulative total-budget usage
+    budget_tokens_cap: int | None = None  # per-operation injection cap
+    budget_hard_cap: int | None = None  # total allowance for the same usage scope
     cache_epoch: int | None = None
     cache_is_cold: bool | None = None
-    resident_tokens: int | None = None
-    context_token_limit: int | None = None
+    resident_tokens: int | None = None  # current context occupancy
+    context_token_limit: int | None = None  # context-window capacity
     model_provider: str | None = None
     model_name: str | None = None
     model_tier: str | None = None
@@ -126,33 +170,52 @@ def decide(
     reasons: list[str] = []
     task = (signals_obj.task_class or "standard").lower()
     risk = (signals_obj.risk_class or "LOW").upper()
+    used = _token_count(signals_obj.budget_tokens_used, "budget_tokens_used")
+    cap = _token_count(signals_obj.budget_tokens_cap, "budget_tokens_cap")
+    hard_cap = _token_count(signals_obj.budget_hard_cap, "budget_hard_cap")
+    resident = _token_count(signals_obj.resident_tokens, "resident_tokens")
+    limit = _token_count(signals_obj.context_token_limit, "context_token_limit")
+    complete_budget_context = (
+        used is not None
+        and cap is not None
+        and hard_cap is not None
+        and resident is not None
+        and limit is not None
+    )
 
     # Check for empty / all-missing signals
     if _is_empty_signals(signals_obj):
         retrieve = False
-        inject_budget = 500
+        requested_budget = _CONSERVATIVE_INJECTION_TOKENS
         route_floor = "T0"
         evict = False
         verify_level = "targeted"
         scout_allowed = False
         reasons.append("CONSERVATIVE_DEFAULTS_APPLIED")
-        hard_cap = 3000
     else:
         # 1. Context pressure & Eviction
-        resident = signals_obj.resident_tokens
-        limit = signals_obj.context_token_limit or 8000
-        cap = signals_obj.budget_tokens_cap or 2000
-        hard_cap = signals_obj.budget_hard_cap or 3000
-        used = signals_obj.budget_tokens_used or 0
-
-        if resident is not None and limit is not None and resident >= 0.8 * limit:
-            evict = True
+        pressure = (
+            resident is not None
+            and limit is not None
+            and resident * _CONTEXT_ACTIVE_DENOMINATOR >= limit * _CONTEXT_ACTIVE_NUMERATOR
+        )
+        evict = pressure
+        if pressure:
             reasons.append("CONTEXT_PRESSURE_HIGH")
-            inject_budget = max(200, int(0.5 * cap))
-        else:
-            evict = False
-            inject_budget = min(cap, max(200, hard_cap - used))
 
+        if used is None or cap is None or hard_cap is None or resident is None or limit is None:
+            requested_budget = _CONSERVATIVE_INJECTION_TOKENS
+            reasons.append("CONSERVATIVE_BUDGET_DEFAULT_APPLIED")
+        elif pressure:
+            requested_budget = max(
+                _MIN_USEFUL_INJECTION_TOKENS,
+                cap // 2,
+            )
+        else:
+            requested_budget = min(
+                cap,
+                max(_MIN_USEFUL_INJECTION_TOKENS, hard_cap - used),
+            )
         # 2. Retrieval scheduling
         if task in ("trivial", "clear"):
             retrieve = False
@@ -178,18 +241,18 @@ def decide(
             scout_allowed = False
             reasons.append("STANDARD_DISPATCH")
     # 4. Adaptive learned override validation in SHADOW
+    override_budget: int | None = None
     if learned_override:
-        # Guard A: Hard budget cap cannot be bypassed
         req_budget = learned_override.get("inject_budget")
-        if req_budget is not None and isinstance(req_budget, (int, float)):
-            req_budget_int = int(req_budget)
-            if req_budget_int > hard_cap:
-                inject_budget = hard_cap
-                reasons.append(f"OVERRIDE_BUDGET_CAPPED_AT_HARD_LIMIT:{hard_cap}")
-            else:
-                inject_budget = req_budget_int
-                reasons.append("OVERRIDE_BUDGET_APPLIED")
-
+        if req_budget is not None:
+            validated_override = _token_count(
+                req_budget,
+                "learned_override.inject_budget",
+                nullable=False,
+            )
+            assert validated_override is not None
+            override_budget = validated_override
+            requested_budget = validated_override
         # Guard B: Verification floor cannot be downgraded below risk requirement
         req_verify = learned_override.get("verify_level")
         if req_verify is not None:
@@ -218,11 +281,36 @@ def decide(
             if not req_scout:
                 scout_allowed = False
                 reasons.append("OVERRIDE_SCOUT_DISALLOWED")
-            elif (signals_obj.risk_class or "LOW").upper() in ("HIGH", "CRITICAL") or task in ("debugging", "verification", "exploration"):
+            elif (signals_obj.risk_class or "LOW").upper() in ("HIGH", "CRITICAL") or task in (
+                "debugging",
+                "verification",
+                "exploration",
+            ):
                 scout_allowed = True
                 reasons.append("OVERRIDE_SCOUT_ALLOWED")
             else:
                 reasons.append("OVERRIDE_SCOUT_REJECTED_FOR_LOW_RISK")
+
+    if not complete_budget_context:
+        requested_budget = min(
+            requested_budget,
+            _CONSERVATIVE_INJECTION_TOKENS,
+        )
+
+    inject_budget = _bound_injection(
+        requested_budget,
+        operation_cap=cap,
+        hard_cap=hard_cap,
+        used=used,
+        resident=resident,
+        context_limit=limit,
+        reasons=reasons,
+    )
+    if override_budget is not None:
+        if inject_budget == override_budget:
+            reasons.append("OVERRIDE_BUDGET_APPLIED")
+        else:
+            reasons.append(f"OVERRIDE_BUDGET_CAPPED_AT_APPLICABLE_LIMIT:{inject_budget}")
 
     decision_dict = {
         "retrieve": retrieve,
@@ -235,9 +323,7 @@ def decide(
     }
 
     signals_dict = signals_obj.to_dict()
-    inputs_hash = hashlib.sha256(
-        contracts.canonical_json(signals_dict).encode("utf-8")
-    ).hexdigest()
+    inputs_hash = hashlib.sha256(contracts.canonical_json(signals_dict).encode("utf-8")).hexdigest()
 
     decision_id = decisions.record(
         home_p,

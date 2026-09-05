@@ -15,11 +15,13 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import contracts, db, decisions, frontier, immune, paths, skillforge
+from . import contracts, credit, db, decisions, frontier, immune, paths, skillforge
 from .errors import BrainError
 from .security.identifiers import validate_skill_name
 
@@ -69,6 +71,7 @@ def _count(home: Path, table: str, column: str, value: str) -> int:
     finally:
         conn.close()
 
+
 def _causal_credit_count(home: Path, skill_name: str) -> int:
     conn = db.connect(db.db_path(home))
     try:
@@ -82,7 +85,6 @@ def _causal_credit_count(home: Path, skill_name: str) -> int:
         return 0
     finally:
         conn.close()
-
 
 
 def _evidence_counts(home: Path, skill_name: str) -> dict:
@@ -272,7 +274,11 @@ def promote(
     demotion = LEVEL_RANK[to_level] < LEVEL_RANK[from_level]
     guards = None
     details = {
-        "evidence_counts": {"credit_events": 0, "causal_credit_events": 0, "model_skill_outcomes": 0},
+        "evidence_counts": {
+            "credit_events": 0,
+            "causal_credit_events": 0,
+            "model_skill_outcomes": 0,
+        },
         "frontier_verdict": None,
         "rolled_back": False,
     }
@@ -379,7 +385,11 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         "session_id": "",
         "guards": None,
         "frontier_verdict": None,
-        "evidence_counts": {"credit_events": 0, "causal_credit_events": 0, "model_skill_outcomes": 0},
+        "evidence_counts": {
+            "credit_events": 0,
+            "causal_credit_events": 0,
+            "model_skill_outcomes": 0,
+        },
         "reason": reason,
     }
     record_path = _write_record(home, record)
@@ -467,6 +477,201 @@ def get_feature_stage(home: Path | str, feature: str) -> str:
     return "OFF"
 
 
+def _contained_evidence_file(home: Path, ref: object) -> Path | None:
+    if not isinstance(ref, str) or not ref:
+        return None
+    raw = Path(ref)
+    if ".." in raw.parts:
+        return None
+    root = home.resolve()
+    path = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path
+
+
+def _credit_observation(home: Path, feature: str, observation_id: str | None) -> dict[str, Any]:
+    if not isinstance(observation_id, str) or not observation_id:
+        raise BrainError("Promotion to ACTIVE requires a persisted credit observation")
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        row = conn.execute(
+            """SELECT o.*, i.intervention_type, i.target_ref, i.expected_json,
+                      i.baseline_ref, i.provenance_hash AS intervention_provenance_hash
+               FROM v2_observations AS o
+               JOIN v2_interventions AS i ON i.intervention_id = o.intervention_id
+               WHERE o.observation_id = ?""",
+            (observation_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise BrainError("Promotion credit observation is missing")
+
+    try:
+        expected = json.loads(row["expected_json"])
+        observed = json.loads(row["observed_json"])
+        prediction_error = json.loads(row["prediction_error_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise BrainError("Promotion credit observation is malformed") from exc
+    if (
+        not isinstance(expected, dict)
+        or not isinstance(observed, dict)
+        or not isinstance(prediction_error, dict)
+    ):
+        raise BrainError("Promotion credit observation is malformed")
+
+    intervention = {
+        "intervention_type": row["intervention_type"],
+        "target_ref": row["target_ref"],
+        "baseline_ref": row["baseline_ref"],
+    }
+    expected_intervention_hash = hashlib.sha256(
+        contracts.canonical_json({"intervention": intervention, "expected": expected}).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    if row["intervention_provenance_hash"] != expected_intervention_hash:
+        raise BrainError("Promotion credit intervention provenance is tampered")
+    if row["target_ref"] != f"policy:{feature}":
+        raise BrainError("Promotion credit observation is bound to a different feature")
+
+    expected_observation_hash = hashlib.sha256(
+        contracts.canonical_json({"obs": observed, "pred_err": prediction_error}).encode("utf-8")
+    ).hexdigest()
+    if row["provenance_hash"] != expected_observation_hash:
+        raise BrainError("Promotion credit observation provenance is tampered")
+
+    credit_evidence = observed.get("_credit_evidence")
+    if not isinstance(credit_evidence, dict):
+        raise BrainError("Promotion credit has no authenticated normalized evidence")
+    derived_credit = str(credit.classify_credit(credit_evidence))
+    if row["credit_class"] != derived_credit:
+        raise BrainError("Promotion credit class is tampered")
+    return {
+        **dict(row),
+        "observed": observed,
+        "derived_credit_class": derived_credit,
+    }
+
+
+def _require_eligible_credit_evidence(
+    home: Path, feature: str, observation: dict[str, Any]
+) -> dict[str, Any]:
+    metadata = observation["observed"].get("_evidence")
+    if not isinstance(metadata, dict):
+        raise BrainError("Promotion credit evidence has no independently resolvable provenance")
+    if (
+        metadata.get("classification") != "observed"
+        or metadata.get("qualification_eligible") is not True
+    ):
+        raise BrainError("Simulated or unresolved credit evidence cannot authorize promotion")
+    if (
+        metadata.get("feature") != feature
+        or metadata.get("target_ref") != observation["target_ref"]
+        or not isinstance(metadata.get("source_commit"), str)
+        or not isinstance(metadata.get("source_tree_sha256"), str)
+        or not isinstance(metadata.get("config_sha256"), str)
+    ):
+        raise BrainError("Promotion credit evidence is bound to different production inputs")
+    path = _contained_evidence_file(home, metadata.get("path"))
+    expected_hash = metadata.get("sha256")
+    if path is None or not path.is_file() or not isinstance(expected_hash, str):
+        raise BrainError("Promotion credit evidence is unavailable")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+        raise BrainError("Promotion credit evidence is stale or tampered")
+    return metadata
+
+
+def _run_independent_qualification(
+    home: Path,
+    manifest_ref: str | Path | None,
+    credit_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    path = _contained_evidence_file(home, str(manifest_ref) if manifest_ref is not None else None)
+    if path is None or not path.is_file():
+        raise BrainError("Promotion to ACTIVE requires a contained qualification manifest")
+    repo = Path(__file__).resolve().parents[2]
+    verifier = repo / "scripts" / "verify_qualification.py"
+    verifier_hash = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    manifest_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    try:
+        process = subprocess.run(
+            [
+                sys.executable,
+                str(verifier),
+                "--home",
+                str(home),
+                "--manifest",
+                str(path),
+                "--json",
+            ],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BrainError(f"Independent qualification verifier could not run: {exc}") from exc
+    try:
+        report = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise BrainError(
+            "Independent qualification verifier produced no valid process artifact"
+        ) from exc
+
+    expected_manifest_path = str(path.resolve())
+    expected_binding = {
+        key: credit_evidence[key]
+        for key in (
+            "path",
+            "sha256",
+            "feature",
+            "source_commit",
+            "source_tree_sha256",
+            "config_sha256",
+        )
+    }
+    validated_bindings = report.get("validated_evidence_bindings")
+    if (
+        process.returncode != 0
+        or report.get("ok") is not True
+        or report.get("verifier") != "scripts/verify_qualification.py"
+        or report.get("verifier_sha256") != verifier_hash
+        or report.get("manifest_path") != expected_manifest_path
+        or report.get("manifest_sha256") != manifest_hash
+        or report.get("source_commit") != credit_evidence["source_commit"]
+        or report.get("source_tree_sha256") != credit_evidence["source_tree_sha256"]
+        or report.get("config_sha256") != credit_evidence["config_sha256"]
+        or not isinstance(report.get("scope"), list)
+        or not report["scope"]
+        or not isinstance(validated_bindings, list)
+        or expected_binding not in validated_bindings
+    ):
+        raise BrainError(
+            "Independent qualification verifier did not pass the exact credit evidence binding"
+        )
+    return {
+        "exit_code": process.returncode,
+        "artifact_sha256": hashlib.sha256(process.stdout.encode("utf-8")).hexdigest(),
+        "verifier": report["verifier"],
+        "verifier_sha256": verifier_hash,
+        "source_commit": report["source_commit"],
+        "source_tree_sha256": report["source_tree_sha256"],
+        "config_sha256": report["config_sha256"],
+        "scope": report["scope"],
+        "validated_evidence_binding": expected_binding,
+        "manifest_path": expected_manifest_path,
+        "manifest_sha256": manifest_hash,
+    }
+
+
 def transition_rollout_stage(
     home: Path | str,
     feature: str,
@@ -475,8 +680,8 @@ def transition_rollout_stage(
     reason: str,
     evidence_refs: list[str] | None = None,
     actor: str = "system",
-    credit_class: str | None = None,
-    verifier_passed: bool | None = None,
+    credit_observation_id: str | None = None,
+    qualification_manifest: str | Path | None = None,
     session_id: str | None = None,
     task_id: str | None = None,
 ) -> dict[str, Any]:
@@ -484,8 +689,8 @@ def transition_rollout_stage(
 
     Rule 1: Stages must progress adjacent: OFF -> SHADOW -> ADVISORY -> CANARY -> ACTIVE.
             Skipping stages (e.g. SHADOW -> ACTIVE) is strictly forbidden.
-    Rule 2: Promotion to ACTIVE requires verified causal credit (DIRECT or CONTRIBUTORY)
-            AND an independent verifier pass.
+    Rule 2: Promotion to ACTIVE independently resolves persisted causal credit
+            and runs the canonical qualification verifier against a bound manifest.
     Rule 3: Negative or regressed evidence refuses promotion and holds or demotes the candidate.
     Rule 4: Demotion and rollback write full audit records and preserve all history.
     """
@@ -500,103 +705,129 @@ def transition_rollout_stage(
     current_rank = STAGE_RANKS[current_stage]
     target_rank = STAGE_RANKS[target_stage]
 
-    # Check for negative / unsafe evidence refusing promotion
-    if credit_class == "UNRELATED_NEGATIVE" and target_rank >= current_rank:
-        demote_target = "SHADOW" if current_stage in ("CANARY", "ADVISORY") else "OFF"
-        event_id = "event-" + hashlib.sha256(
-            f"{feature}:{current_stage}:{demote_target}:{_utcnow()}".encode("utf-8")
-        ).hexdigest()[:24]
-        evidence_list = list(evidence_refs or []) + ["credit:UNRELATED_NEGATIVE"]
-        now = _utcnow()
+    credit_class: str | None = None
+    verifier_process: dict[str, Any] | None = None
+    observation: dict[str, Any] | None = None
 
-        conn = db.connect(db.db_path(home_p))
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """INSERT INTO v2_rollout_events(
-                    event_id, feature, from_stage, to_stage, reason, evidence_refs_json, actor, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    event_id,
-                    feature,
-                    current_stage,
-                    demote_target,
-                    f"PROMOTION_REFUSED_NEGATIVE_EFFECT: {reason}",
-                    contracts.canonical_json(evidence_list),
-                    actor,
-                    now,
-                ),
+    # Check for skip-stage attempts before resolving promotion evidence.
+    if target_rank > current_rank and target_rank > current_rank + 1:
+        raise BrainError(
+            f"Cannot skip rollout stages: attempted {current_stage} -> {target_stage}. "
+            "Must advance sequentially (OFF -> SHADOW -> ADVISORY -> CANARY -> ACTIVE)."
+        )
+
+    if target_rank > current_rank and target_stage == "ACTIVE":
+        observation = _credit_observation(home_p, feature, credit_observation_id)
+        credit_class = str(observation["derived_credit_class"])
+
+        # Negative evidence may safely refuse promotion even when it is simulated;
+        # positive evidence must meet the stronger production eligibility boundary.
+        if credit_class == "UNRELATED_NEGATIVE":
+            demote_target = "SHADOW" if current_stage in ("CANARY", "ADVISORY") else "OFF"
+            event_id = (
+                "event-"
+                + hashlib.sha256(
+                    f"{feature}:{current_stage}:{demote_target}:{_utcnow()}".encode()
+                ).hexdigest()[:24]
             )
-            conn.commit()
-        finally:
-            conn.close()
+            evidence_list = [
+                *(evidence_refs or ()),
+                f"observation:{credit_observation_id}",
+                "credit:UNRELATED_NEGATIVE",
+            ]
+            now = _utcnow()
 
-        decisions.record(
-            home_p,
-            kind="learning",
-            session_id=session_id or f"rollout-{event_id}",
-            task_id=task_id or f"task-{event_id}",
-            chosen={
-                "action": "demote_feature",
+            conn = db.connect(db.db_path(home_p))
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """INSERT INTO v2_rollout_events(
+                        event_id, feature, from_stage, to_stage, reason,
+                        evidence_refs_json, actor, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event_id,
+                        feature,
+                        current_stage,
+                        demote_target,
+                        f"PROMOTION_REFUSED_NEGATIVE_EFFECT: {reason}",
+                        contracts.canonical_json(evidence_list),
+                        actor,
+                        now,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            decisions.record(
+                home_p,
+                kind="learning",
+                session_id=session_id or f"rollout-{event_id}",
+                task_id=task_id or f"task-{event_id}",
+                chosen={
+                    "action": "demote_feature",
+                    "feature": feature,
+                    "from_stage": current_stage,
+                    "to_stage": demote_target,
+                },
+                alternatives=[{"action": "promote"}],
+                propensity=1.0,
+                randomized=False,
+                policy_version="v7.9",
+                stage=demote_target,
+                inputs={
+                    "feature": feature,
+                    "credit_observation_id": credit_observation_id,
+                    "credit_class": credit_class,
+                    "reason": reason,
+                },
+            )
+
+            return {
+                "event_id": event_id,
                 "feature": feature,
                 "from_stage": current_stage,
                 "to_stage": demote_target,
-            },
-            alternatives=[{"action": "promote"}],
-            propensity=1.0,
-            randomized=False,
-            policy_version="v7.9",
-            stage=demote_target,
-            inputs={
-                "feature": feature,
-                "credit_class": credit_class,
-                "reason": reason,
-            },
-        )
+                "status": "HELD",
+                "promotion_refused": True,
+                "reason": (
+                    "Promotion refused due to negative effect; "
+                    f"candidate demoted to {demote_target}"
+                ),
+                "evidence_refs": evidence_list,
+                "created_at": now,
+            }
 
-        return {
-            "event_id": event_id,
-            "feature": feature,
-            "from_stage": current_stage,
-            "to_stage": demote_target,
-            "status": "HELD",
-            "promotion_refused": True,
-            "reason": f"Promotion refused due to negative effect; candidate demoted to {demote_target}",
-            "evidence_refs": evidence_list,
-            "created_at": now,
-        }
-
-    # Check for skip-stage attempts when advancing
-    if target_rank > current_rank:
-        if target_rank > current_rank + 1:
+        if credit_class not in ("DIRECT", "CONTRIBUTORY"):
             raise BrainError(
-                f"Cannot skip rollout stages: attempted {current_stage} -> {target_stage}. "
-                "Must advance sequentially (OFF -> SHADOW -> ADVISORY -> CANARY -> ACTIVE)."
+                "Promotion to ACTIVE requires independently resolved causal credit "
+                f"DIRECT or CONTRIBUTORY (got {credit_class!r})"
             )
-
-        # Rule 2: Promotion to ACTIVE requires credit and verifier pass
-        if target_stage == "ACTIVE":
-            if credit_class not in ("DIRECT", "CONTRIBUTORY"):
-                raise BrainError(
-                    f"Promotion to ACTIVE requires causal credit DIRECT or CONTRIBUTORY (got {credit_class!r})"
-                )
-            if verifier_passed is not True:
-                raise BrainError(
-                    "Promotion to ACTIVE requires an independent verifier pass (verifier_passed must be True)"
-                )
-
+        credit_evidence = _require_eligible_credit_evidence(home_p, feature, observation)
+        verifier_process = _run_independent_qualification(
+            home_p, qualification_manifest, credit_evidence
+        )
     now = _utcnow()
-    event_id = "event-" + hashlib.sha256(
-        f"{feature}:{current_stage}:{target_stage}:{now}".encode("utf-8")
-    ).hexdigest()[:24]
+    event_id = (
+        "event-"
+        + hashlib.sha256(f"{feature}:{current_stage}:{target_stage}:{now}".encode()).hexdigest()[
+            :24
+        ]
+    )
     evidence_list = list(evidence_refs or [])
+    if observation is not None:
+        evidence_list.append(f"observation:{credit_observation_id}")
+    if verifier_process is not None:
+        evidence_list.append(f"verifier-result:sha256:{verifier_process['artifact_sha256']}")
 
     conn = db.connect(db.db_path(home_p))
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """INSERT INTO v2_rollout_events(
-                event_id, feature, from_stage, to_stage, reason, evidence_refs_json, actor, created_at
+                event_id, feature, from_stage, to_stage, reason,
+                evidence_refs_json, actor, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 event_id,
@@ -634,8 +865,9 @@ def transition_rollout_stage(
         stage=target_stage,
         inputs={
             "feature": feature,
+            "credit_observation_id": credit_observation_id,
             "credit_class": credit_class,
-            "verifier_passed": verifier_passed,
+            "verifier_process": verifier_process,
             "reason": reason,
         },
     )
@@ -655,9 +887,7 @@ def transition_rollout_stage(
     }
 
 
-def list_rollout_events(
-    home: Path | str, feature: str | None = None
-) -> list[dict[str, Any]]:
+def list_rollout_events(home: Path | str, feature: str | None = None) -> list[dict[str, Any]]:
     home_p = Path(home)
     _ensure_v2_migrated(home_p)
     conn = db.connect(db.db_path(home_p), readonly=True)
