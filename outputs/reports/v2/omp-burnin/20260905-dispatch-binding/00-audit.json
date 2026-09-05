@@ -1,0 +1,20 @@
+{
+  "brain_source": "1099eb37b01f282365922b337a6069e31692b2cd",
+  "brain_evidence": "c262cb7a2db8b7c92172d7c12e5e838e93d7c25d",
+  "omp_dispatch_base": "be6cb8217cd4c1dafcc86793ae5d809ea4d7396a",
+  "delivery_pr_status": {
+    "baseRefOid": "5964a0f7649275bcde818f20073193fd032451f2",
+    "comments": [],
+    "headRefOid": "874fe1f20bc5f906812ff52c0a6a5698a59c191e",
+    "isDraft": true,
+    "reviewDecision": "",
+    "reviews": [],
+    "state": "OPEN",
+    "statusCheckRollup": [],
+    "url": "https://github.com/can1357/oh-my-pi/pull/10928"
+  },
+  "restrictions": [
+    "Separate PR; do not broaden10928",
+    "No deployment/provider qualification/Gate22/Gate23/tag"
+  ]
+}
