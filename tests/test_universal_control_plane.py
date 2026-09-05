@@ -38,6 +38,7 @@ def test_worker_packet_roundtrip_across_adapters() -> None:
         context_refs=["ref:doc-01", "ref:doc-02"],
         project_id="second-brain",
         repo_root=".",
+        access_intent="read_only",
     )
     task_packet.validate()
 
@@ -114,7 +115,7 @@ def test_missing_capability_degrades_not_fakes_support(brain_home: Path) -> None
 
 
 def test_host_identity_not_canonical_state(brain_home: Path) -> None:
-    """Host-specific session identifiers are adapter translations only; canonical state remains shared."""
+    """Host session IDs are adapter translations; canonical state stays shared."""
     task_id = "task-cross-adapter-001"
     task_hash = "a" * 64
     driver_sess = "canonical-driver-sess"

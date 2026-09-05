@@ -8,6 +8,7 @@ export const OMP_WORKER_CONTEXT_MAX_STDOUT_CHARS = 256 * 1024;
 export const OMP_WORKER_CONTEXT_MAX_TEXT_CHARS = 4096;
 
 type HandoffMode = "full" | "unchanged" | "delta";
+export type OmpWorkerAccessIntent = "read_only" | "mutating";
 
 export interface OmpWorkerContextHandoff {
   mode: HandoffMode;
@@ -33,7 +34,12 @@ export interface OmpWorkerContextMetadata {
 export interface OmpWorkerContextResult {
   ok: boolean;
   taskId?: string;
+  attemptId?: string;
   packetSha256?: string;
+  projectId?: string;
+  worktreeId?: string | null;
+  accessIntent?: OmpWorkerAccessIntent;
+  callbackToken?: string;
   contextHandoff?: OmpWorkerContextHandoff;
   contextMetadata?: OmpWorkerContextMetadata;
   error?: string;
@@ -47,6 +53,7 @@ export interface OmpWorkerContextOptions {
   scope: string;
   completionCondition: string;
   projectId: string;
+  accessIntent: OmpWorkerAccessIntent;
   cwd: string;
   role: string;
   provider: string;
@@ -68,6 +75,10 @@ function sha256(value: unknown): value is string {
 
 function validMode(value: unknown): value is HandoffMode {
   return value === "full" || value === "unchanged" || value === "delta";
+}
+
+function validAccessIntent(value: unknown): value is OmpWorkerAccessIntent {
+  return value === "read_only" || value === "mutating";
 }
 
 function parseMetadata(value: unknown): OmpWorkerContextMetadata | undefined {
@@ -119,17 +130,43 @@ export function parseOmpWorkerContextOutput(stdout: string): OmpWorkerContextRes
     return { ok: false, error: "BRAIN_WORKER_CONTEXT_INVALID_RESPONSE" };
   }
   const value = parsed as Record<string, unknown>;
-  if (value.status === "failed") {
+  if (value.status !== "prepared") {
     return { ok: false, error: bounded(value.failure_code, 128) || "BRAIN_WORKER_CONTEXT_FAILED" };
   }
   const taskId = bounded(value.task_id, 512);
+  const attemptId = bounded(value.attempt_id, 128);
   const packetSha256 = value.packet_sha256;
+  const projectId = bounded(value.project_id, 128);
+  const accessIntent = value.access_intent;
+  const worktreeId = value.worktree_id === null ? null : bounded(value.worktree_id, 512);
+  const callbackToken = bounded(value.callback_token, 512);
   const contextMetadata = parseMetadata(value.context_metadata);
   const contextHandoff = parseHandoff(value.context_handoff);
-  if (!taskId || !sha256(packetSha256) || contextMetadata === undefined || contextHandoff === undefined) {
+  if (
+    !taskId ||
+    !attemptId ||
+    !sha256(packetSha256) ||
+    !projectId ||
+    !validAccessIntent(accessIntent) ||
+    contextMetadata === undefined ||
+    contextHandoff === undefined ||
+    (accessIntent === "mutating" && (!worktreeId || !callbackToken)) ||
+    (accessIntent === "read_only" && (worktreeId !== null || callbackToken))
+  ) {
     return { ok: false, error: "BRAIN_WORKER_CONTEXT_INVALID_RESPONSE" };
   }
-  return { ok: true, taskId, packetSha256, contextMetadata, contextHandoff };
+  return {
+    ok: true,
+    taskId,
+    attemptId,
+    packetSha256,
+    projectId,
+    worktreeId,
+    accessIntent,
+    ...(callbackToken ? { callbackToken } : {}),
+    contextMetadata,
+    contextHandoff,
+  };
 }
 
 export function renderOmpWorkerContext(handoff: OmpWorkerContextHandoff): string {
@@ -157,6 +194,7 @@ export function runOmpWorkerContext(options: OmpWorkerContextOptions): Promise<O
     task: bounded(options.task, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS),
     scope: bounded(options.scope, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS),
     completion_condition: bounded(options.completionCondition, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS),
+    access_intent: options.accessIntent,
     project_id: bounded(options.projectId, 128),
     cwd: bounded(options.cwd, 512),
     role: bounded(options.role, 128),
@@ -182,7 +220,17 @@ export function runOmpWorkerContext(options: OmpWorkerContextOptions): Promise<O
           resolve({ ok: false, error: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" });
           return;
         }
-        resolve(parseOmpWorkerContextOutput(stdout));
+        const result = parseOmpWorkerContextOutput(stdout);
+        if (
+          result.ok &&
+          (result.taskId !== payload.task_id ||
+            result.projectId !== payload.project_id ||
+            result.accessIntent !== payload.access_intent)
+        ) {
+          resolve({ ok: false, error: "BRAIN_WORKER_CONTEXT_RECEIPT_MISMATCH" });
+          return;
+        }
+        resolve(result);
       },
     );
     child.stdin?.end(JSON.stringify(payload));

@@ -40,6 +40,7 @@ def _packet(
         context_refs=[ref],
         project_id="second-brain",
         repo_root=str(REPO_ROOT),
+        access_intent="read_only",
     ).validate()
 
 
@@ -503,7 +504,12 @@ def test_worker_numeric_fields_reject_bool_and_float(brain_home: Path) -> None:
             ).validate()
     with pytest.raises(contracts.WorkerPacketError, match="retryable"):
         contracts.WorkerResultPacket(
-            **{**result.__dict__, "correction_attempt": 0, "correction_of_hash": None, "retryable": 1}
+            **{
+                **result.__dict__,
+                "correction_attempt": 0,
+                "correction_of_hash": None,
+                "retryable": 1,
+            }
         ).validate()
 
     correction = contracts.WorkerCorrectionPacket(

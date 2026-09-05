@@ -22,6 +22,7 @@ def _packet(role: str = "integrator") -> contracts.WorkerTaskPacket:
         task_id="task-1", parent_session_id="parent-1", driver_identity=_identity(role),
         requested_role="dev", objective="Inspect the bounded seam", scope="src only",
         completion_condition="return evidence refs", project_id="second-brain", repo_root="repo",
+        access_intent="read_only",
     )
 
 

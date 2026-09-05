@@ -746,6 +746,7 @@ def test_hard_cap_blocks_worker_dispatch_with_budget_exceeded(brain_home: Path) 
         context_refs=[],
         project_id=binding.project_id,
         repo_root=binding.repo_root,
+        access_intent="read_only",
     ).validate()
 
     response = hermes_adapter.request_worker_task(
@@ -785,6 +786,7 @@ def test_below_hard_cap_worker_dispatch_proceeds(brain_home: Path) -> None:
         context_refs=[],
         project_id=binding.project_id,
         repo_root=binding.repo_root,
+        access_intent="read_only",
     ).validate()
 
     response = hermes_adapter.request_worker_task(
@@ -1601,7 +1603,11 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
     )
     assert initial["status"] == "ok"
     objects_after_break = store.list_objects(kind=vmem.SessionObjectKind.TOOL_OBSERVATION)
-    cold = next(obj for obj in objects_after_break if obj.residency_state == vmem.ResidencyState.EVICTED)
+    cold = next(
+        obj
+        for obj in objects_after_break
+        if obj.residency_state == vmem.ResidencyState.EVICTED
+    )
     assert cold.residency_state == vmem.ResidencyState.EVICTED
     assert cold.metadata["tool_call_id"] in {"tool-1", "tool-2"}
 
@@ -1849,7 +1855,12 @@ def test_pre_tool_call_active_does_not_replace_selected_read(brain_home: Path) -
     target = brain_home / "stable.txt"
     target.write_text("stable", encoding="utf-8")
     working_set.record_read(
-        brain_home, binding.brain_session_id, str(target), "read", turn=4, distilled_ref="sha256:distilled"
+        brain_home,
+        binding.brain_session_id,
+        str(target),
+        "read",
+        turn=4,
+        distilled_ref="sha256:distilled",
     )
     (brain_home / "config" / "context.toml").write_text(
         '[rollout]\nreread_avoidance = "ACTIVE"\n', encoding="utf-8"
@@ -1878,11 +1889,14 @@ def test_pre_tool_call_shadow_retains_read_and_records_decision(brain_home: Path
     assert result["replacement"] is None
     with sqlite3.connect(brain_home / "db" / "brain.sqlite") as conn:
         row = conn.execute(
-            "SELECT kind, propensity FROM decisions WHERE kind = 'reread' ORDER BY created_at DESC LIMIT 1"
+            "SELECT kind, propensity FROM decisions "
+            "WHERE kind = 'reread' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
     assert row == ("reread", 1.0)
 
-def test_pre_tool_call_off_skips_lookup_and_telemetry(brain_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pre_tool_call_off_skips_lookup_and_telemetry(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     payload = _start_payload(session="reread-off")
     target = brain_home / "stable.txt"
     target.write_text("stable", encoding="utf-8")

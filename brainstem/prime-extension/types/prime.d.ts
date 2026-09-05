@@ -31,6 +31,21 @@ export interface SessionManagerSurface {
   getEntries?(): unknown[];
 }
 
+
+export interface AsyncJobLifecycleObservation {
+  jobId: string;
+  generation: number;
+  nativeAttemptId: string;
+  type: "bash" | "task" | "eval";
+  ownerId?: string;
+  agentId?: string;
+  sourceToolCallId?: string;
+  sourceIndex?: number;
+  status: "running" | "completed" | "failed" | "cancelled";
+  executorSettled: boolean;
+  cleanupComplete: boolean;
+  revision: number;
+}
 /** Context passed to every event handler. */
 export interface ExtensionContext {
   cwd: string;
@@ -39,6 +54,10 @@ export interface ExtensionContext {
   getContextUsage(): ContextUsage | undefined;
   /** Effective system prompt sections returned by the current OMP runtime. */
   getSystemPrompt(): string | string[];
+  observeAsyncJobLifecycle?(
+    observer: (observation: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>,
+    options?: { sourceToolCallId?: string },
+  ): (() => void) | undefined;
   signal: AbortSignal | undefined;
   hasUI: boolean;
   ui: unknown;
