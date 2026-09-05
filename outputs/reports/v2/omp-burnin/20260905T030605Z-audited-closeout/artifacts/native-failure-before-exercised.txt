@@ -1,0 +1,4 @@
+exit=1
+signal=null
+killed=false
+JSON report written to C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot/outputs/reports/v2/omp-burnin/20260905T030605Z-audited-closeout/artifacts/native-failure-before-exercised.json

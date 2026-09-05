@@ -1,0 +1,32 @@
+exit=0
+session_entries 329
+         74822 function calls (74821 primitive calls) in 1.705 seconds
+
+   Ordered by: cumulative time
+   List reduced from 165 to 22 due to restriction <22>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        3    0.000    0.000    1.705    0.568 C:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot\src\second_brain\governor.py:893(check_budget)
+        3    0.004    0.001    1.694    0.565 C:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot\src\second_brain\governor.py:840(_descendant_total_tokens)
+      495    1.561    0.003    1.561    0.003 {method 'execute' of 'sqlite3.Connection' objects}
+      495    0.039    0.000    0.043    0.000 {built-in method _sqlite3.connect}
+      495    0.037    0.000    0.037    0.000 {method 'close' of 'sqlite3.Connection' objects}
+      993    0.001    0.000    0.033    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:1261(is_file)
+     1011    0.000    0.000    0.033    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:1008(stat)
+     1011    0.029    0.000    0.032    0.000 {built-in method nt.stat}
+     1011    0.000    0.000    0.009    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:765(__truediv__)
+     1011    0.002    0.000    0.009    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:530(_make_child)
+        3    0.002    0.001    0.008    0.003 C:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot\src\second_brain\governor.py:787(_session_total_tokens)
+     1029    0.002    0.000    0.007    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:484(_parse_args)
+        3    0.000    0.000    0.005    0.002 {built-in method builtins.sorted}
+     1029    0.003    0.000    0.004    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:56(parse_parts)
+     1197    0.001    0.000    0.004    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\json\__init__.py:299(loads)
+      495    0.001    0.000    0.004    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\functools.py:518(decorating_function)
+     1197    0.001    0.000    0.003    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\json\decoder.py:332(decode)
+      984    0.000    0.000    0.003    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:590(__lt__)
+     1032    0.000    0.000    0.003    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:546(__fspath__)
+      495    0.001    0.000    0.003    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\functools.py:35(update_wrapper)
+     1527    0.002    0.000    0.003    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:536(__str__)
+     1986    0.001    0.000    0.002    0.000 C:\Users\assas\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:569(_cparts)
+
+

@@ -1,0 +1,6 @@
+exit=0
+signal=null
+killed=false
+warning: in the working copy of 'brainstem/tests/install-prime-extension.Tests.ps1', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_build_identity.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/second_brain/migrations/0022_worker_result_receipts.sql', LF will be replaced by CRLF the next time Git touches it

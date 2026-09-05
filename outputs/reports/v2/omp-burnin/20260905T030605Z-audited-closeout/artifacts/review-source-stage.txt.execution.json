@@ -1,0 +1,18 @@
+{
+  "command": "git",
+  "args": [
+    "add",
+    "--",
+    "src/second_brain/governor.py",
+    "tests/test_governor.py",
+    "brainstem/prime-extension/src/index.ts",
+    "brainstem/prime-extension/tests/wiring.test.ts"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 47,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

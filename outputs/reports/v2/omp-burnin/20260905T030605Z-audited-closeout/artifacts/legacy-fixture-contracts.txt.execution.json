@@ -1,0 +1,17 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-m",
+    "pytest",
+    "-q",
+    "tests/test_attach.py",
+    "tests/test_v2_policy.py"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 51673,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

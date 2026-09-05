@@ -1,0 +1,16 @@
+{
+  "command": "cmd.exe",
+  "args": [
+    "/d",
+    "/s",
+    "/c",
+    "npx vitest run tests/wiring.test.ts -t \"native terminal failure status\" --reporter=json --outputFile=C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\outputs\\reports\\v2\\omp-burnin\\20260905T030605Z-audited-closeout\\artifacts\\native-failure-before.json"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 2332,
+  "cwd": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\brainstem\\prime-extension",
+  "stderr": ""
+}

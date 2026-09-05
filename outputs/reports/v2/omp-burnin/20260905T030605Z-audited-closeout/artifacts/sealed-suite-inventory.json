@@ -1,0 +1,94 @@
+{
+  "pytest-baseline-full.xml": {
+    "suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "13",
+        "skipped": "0",
+        "tests": "1815",
+        "time": "560.485",
+        "timestamp": "2026-09-05T00:03:57.508494-04:00",
+        "hostname": "TheChosenOne"
+      }
+    ],
+    "failures": [
+      {
+        "test": "tests.test_attach::test_detach_keeps_whitespace_only_agents_file",
+        "message": "TypeError: Path.read_text() got an unexpected keyword argument 'newline'"
+      },
+      {
+        "test": "tests.test_autoinject_codex::test_valid_stdin_deterministic_output",
+        "message": "AssertionError: assert {'candidate_i...ject_id', ...} == {'candidate_i...'reason', ...}\n  \n  Extra items in the left set:\n  'project_id'\n  'project_resolution'\n  Use -v to get more diff"
+      },
+      {
+        "test": "tests.test_earned_memory::test_fresh_reopen_and_repeat_migration_preserve_existing_rows",
+        "message": "assert [1, 2, 3, 4, 5, 6, ...] == [1, 2, 3, 4, 5, 6, ...]\n  \n  Left contains 2 more items, first extra item: 20\n  Use -v to get more diff"
+      },
+      {
+        "test": "tests.test_episodes::test_lazy_migration_0002_on_v1_brain",
+        "message": "assert [2, 3, 4, 5, 6, 7, ...] == [2, 3, 4, 5, 6, 7, ...]\n  \n  Left contains 11 more items, first extra item: 11\n  Use -v to get more diff"
+      },
+      {
+        "test": "tests.test_freshness::test_migration_guard_is_case_insensitive",
+        "message": "sqlite3.OperationalError: no such table: memories"
+      },
+      {
+        "test": "tests.test_hermes_adapter::test_pre_llm_routes_existing_skill_and_preserves_bounded_injection",
+        "message": "AssertionError: assert 'NO_INJECTION' == 'INJECT'\n  \n  - INJECT\n  + NO_INJECTION"
+      },
+      {
+        "test": "tests.test_memory_index::test_migration_0007_fresh_create",
+        "message": "assert 21 == 10"
+      },
+      {
+        "test": "tests.test_migrations_property::test_any_prefix_then_remainder_equals_full_apply",
+        "message": "AssertionError: assert {'brain_meta'...hema_version'} == {'schema_version'}\n  \n  Extra items in the left set:\n  'brain_meta'\n  Use -v to get more diff\nFailing test case: test_any_prefix_then_remainder_equals_full_apply(\n    k=0,\n)"
+      },
+      {
+        "test": "tests.test_origin_authority::test_origin_columns_migrate_existing_0012_database",
+        "message": "sqlite3.OperationalError: no such table: main.model_skill_outcomes"
+      },
+      {
+        "test": "tests.test_retrieval_filters::test_project_filter",
+        "message": "AssertionError: assert {'mem-c9b19d1...f6f100e78707'} == {'mem-c9b19d15d173'}\n  \n  Extra items in the left set:\n  'mem-f6f100e78707'\n  Use -v to get more diff"
+      },
+      {
+        "test": "tests.test_retrieval_isolation::test_unresolved_project_default_memory_suppressed_and_global_policy_allowed",
+        "message": "AssertionError: assert <InjectionDecision.INJECT: 'INJECT'> is <InjectionDecision.NO_INJECTION: 'NO_INJECTION'>\n +  where <InjectionDecision.INJECT: 'INJECT'> = BrainInjectionDecision(decision=<InjectionDecision.INJECT: 'INJECT'>, reason=None, candidate_ids=['mem-54c51e4eeb52', ...203'], selected_ids=['mem-418f385aa203'], packet_ref='pkt-1dd83a8b6565a0db', packet_token_size=132, recipient='driver').decision\n +  and   <InjectionDecision.NO_INJECTION: 'NO_INJECTION'> = InjectionDecision.NO_INJECTION"
+      },
+      {
+        "test": "tests.test_v2_policy::test_defaults_are_all_shadow",
+        "message": "second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers"
+      },
+      {
+        "test": "tests.test_working_set::test_no_lean_path_bypasses_requirement_ledger",
+        "message": "AssertionError: lean-code.ts references 'requirement'\nassert 'requirement' not in '/**\\n * p3-...rnel}`;\\n}\\n'\n  \n  'requirement' is contained here:\n    ng[] };\n      requirements?: array<{ id?: string; requirement?: string; status?: string; importance?: string; refs?: string[]; evidence?: string[] }>;\n  ?   +++++++++++\n      modifiedfiles?: string[];\n      requirementrefs?: string[];...\n  \n  ...Full output truncated (234 lines hidden), use '-vv' to show"
+      }
+    ]
+  },
+  "pytest-sealed-source.xml": {
+    "suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "2",
+        "skipped": "0",
+        "tests": "1825",
+        "time": "444.730",
+        "timestamp": "2026-09-05T01:59:48.742141-04:00",
+        "hostname": "TheChosenOne"
+      }
+    ],
+    "failures": [
+      {
+        "test": "tests.test_attach::test_detach_keeps_whitespace_only_agents_file",
+        "message": "TypeError: Path.read_text() got an unexpected keyword argument 'newline'"
+      },
+      {
+        "test": "tests.test_v2_policy::test_defaults_are_all_shadow",
+        "message": "second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers"
+      }
+    ]
+  }
+}

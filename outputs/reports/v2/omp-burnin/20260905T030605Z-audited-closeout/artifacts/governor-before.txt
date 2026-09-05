@@ -1,0 +1,189 @@
+exit=1
+...........................................F....FFFF                     [100%]
+================================== FAILURES ===================================
+___ TestCheckBudget.test_missing_telemetry_fails_open_without_factual_zero ____
+
+self = <test_governor.TestCheckBudget object at 0x00000182EB05D890>
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_missing_telemetry_fails_o0/brain')
+
+    def test_missing_telemetry_fails_open_without_factual_zero(self, brain_home):
+        """Unavailable accounting is explicit while the governor remains fail-open."""
+        result = governor.check_budget(brain_home, "never-existed", "driver")
+>       assert result == {
+            "state": "OK",
+            "used": None,
+            "cap": 400000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
+E       AssertionError: assert {'state': 'OK...'cap': 400000} == {'state': 'OK..._UNAVAILABLE'}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Differing items:
+E         {'used': 0} != {'used': None}
+E         Right contains 1 more item:
+E         {'error': 'ACCOUNTING_UNAVAILABLE'}
+E         Use -v to get more diff
+
+tests\test_governor.py:943: AssertionError
+_ TestCheckBudget.test_independent_roots_nested_worker_duplicate_resume_and_old_home _
+
+self = <test_governor.TestCheckBudget object at 0x00000182EB05CE50>
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_independent_roots_nested_0/brain')
+
+    def test_independent_roots_nested_worker_duplicate_resume_and_old_home(
+        self, brain_home
+    ):
+        """A/B/C scope, nested A usage, duplicate rows, resume, and old history."""
+        from second_brain import ledger
+    
+        (brain_home / "config" / "governor.toml").write_text(
+            "[budgets]\nsession_tokens = 100\nworker_tokens = 40\nsoft_ratio = 0.8\n",
+            encoding="utf-8",
+        )
+        root_a = "root-a"
+        child_a = "root-a-child"
+        nested_a = "root-a-nested-child"
+        root_b = "root-b"
+        root_c = "root-c"
+        historical = "historical-high-usage-root"
+        for session_id, total in (
+            (root_a, 10),
+            (child_a, 15),
+            (nested_a, 40),
+            (root_b, 5),
+            (root_c, 90),
+            (historical, 500),
+        ):
+            _write_session(
+                brain_home,
+                session_id,
+                [_rec("assistant_usage", session=session_id, total_tokens=total)],
+            )
+    
+        _write_ledger_session(brain_home, root_a, project_id="project-one")
+        _write_ledger_session(brain_home, root_b, project_id="project-one")
+        _write_ledger_session(brain_home, root_c, project_id="project-two")
+        _write_ledger_session(brain_home, historical, project_id="project-one")
+        root_a_internal = ledger.internal_session_id(root_a)
+        _write_ledger_session(
+            brain_home,
+            child_a,
+            project_id="project-one",
+            root_parent_session_id=root_a_internal,
+        )
+        nested_db = _write_ledger_session(
+            brain_home,
+            nested_a,
+            project_id="project-one",
+            root_parent_session_id=root_a_internal,
+        )
+    
+        duplicate_dir = brain_home / "state" / "sessions" / "duplicate-nested-row"
+        duplicate_dir.mkdir(parents=True)
+        shutil.copy2(nested_db, duplicate_dir / "ledger.sqlite")
+    
+        expected_a = {"state": "OK", "used": 65, "cap": 100}
+>       assert governor.check_budget(brain_home, root_a, "driver") == expected_a
+E       AssertionError: assert {'state': 'HA...5, 'cap': 100} == {'state': 'OK...5, 'cap': 100}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Differing items:
+E         {'used': 105} != {'used': 65}
+E         {'state': 'HARD'} != {'state': 'OK'}
+E         Use -v to get more diff
+
+tests\test_governor.py:1111: AssertionError
+_ TestCheckBudget.test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar _
+
+self = <test_governor.TestCheckBudget object at 0x00000182EB05FF10>
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_raw_telemetry_identity_is0/brain')
+
+    def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(
+        self, brain_home
+    ):
+        session_id = "worker.child"
+        _write_session(
+            brain_home,
+            session_id,
+            [_rec("assistant_usage", session=session_id, total_tokens=12)],
+        )
+        _write_session(
+            brain_home,
+            "worker-child",
+            [_rec("session_start", session=session_id)],
+        )
+    
+>       assert governor.check_budget(brain_home, session_id, "worker") == {
+            "state": "OK",
+            "used": 12,
+            "cap": 120000,
+        }
+E       AssertionError: assert {'state': 'OK...'cap': 120000} == {'state': 'OK...'cap': 120000}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Differing items:
+E         {'used': 0} != {'used': 12}
+E         Use -v to get more diff
+
+tests\test_governor.py:1145: AssertionError
+_____ TestCheckBudget.test_malformed_telemetry_fails_open_with_diagnostic _____
+
+self = <test_governor.TestCheckBudget object at 0x00000182EB031350>
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_malformed_telemetry_fails0/brain')
+
+    def test_malformed_telemetry_fails_open_with_diagnostic(self, brain_home):
+        telemetry_dir = brain_home / "telemetry" / "agent-performance"
+>       telemetry_dir.mkdir(parents=True)
+
+tests\test_governor.py:1153: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_malformed_telemetry_fails0/brain/telemetry/agent-performance')
+mode = 511, parents = True, exist_ok = False
+
+    def mkdir(self, mode=0o777, parents=False, exist_ok=False):
+        """
+        Create a new directory at this given path.
+        """
+        try:
+>           os.mkdir(self, mode)
+E           FileExistsError: [WinError 183] Cannot create a file when that file already exists: 'C:\\Users\\assas\\AppData\\Local\\Temp\\pytest-of-Joseph\\pytest-3442\\test_malformed_telemetry_fails0\\brain\\telemetry\\agent-performance'
+
+..\..\..\Roaming\uv\python\cpython-3.11-windows-x86_64-none\Lib\pathlib.py:1116: FileExistsError
+______ TestCheckBudget.test_unreadable_ledger_fails_open_with_diagnostic ______
+
+self = <test_governor.TestCheckBudget object at 0x00000182EB031F50>
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3442/test_unreadable_ledger_fails_o0/brain')
+
+    def test_unreadable_ledger_fails_open_with_diagnostic(self, brain_home):
+        _write_session(
+            brain_home,
+            "healthy-session",
+            [_rec("assistant_usage", session="healthy-session", total_tokens=10)],
+        )
+        corrupt_dir = brain_home / "state" / "sessions" / "corrupt-ledger"
+        corrupt_dir.mkdir(parents=True)
+        (corrupt_dir / "ledger.sqlite").write_bytes(b"not sqlite")
+    
+>       assert governor.check_budget(brain_home, "healthy-session", "driver") == {
+            "state": "OK",
+            "used": None,
+            "cap": 400000,
+            "error": "ACCOUNTING_UNAVAILABLE",
+        }
+E       AssertionError: assert {'state': 'OK...'cap': 400000} == {'state': 'OK..._UNAVAILABLE'}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Differing items:
+E         {'used': 10} != {'used': None}
+E         Right contains 1 more item:
+E         {'error': 'ACCOUNTING_UNAVAILABLE'}
+E         Use -v to get more diff
+
+tests\test_governor.py:1175: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_governor.py::TestCheckBudget::test_missing_telemetry_fails_open_without_factual_zero
+FAILED tests/test_governor.py::TestCheckBudget::test_independent_roots_nested_worker_duplicate_resume_and_old_home
+FAILED tests/test_governor.py::TestCheckBudget::test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar
+FAILED tests/test_governor.py::TestCheckBudget::test_malformed_telemetry_fails_open_with_diagnostic
+FAILED tests/test_governor.py::TestCheckBudget::test_unreadable_ledger_fails_open_with_diagnostic

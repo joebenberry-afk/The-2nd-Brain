@@ -1,0 +1,19 @@
+{
+  "current_kinds": {
+    "tool_call": 9,
+    "omp_worker_context_handoff": 5,
+    "omp_worker_context_failure": 2,
+    "stop_control_result": 2,
+    "stop_boundary": 2,
+    "tool_result": 1
+  },
+  "current_sessions": [
+    "omp-session",
+    "session"
+  ],
+  "invalid_record_count": 708,
+  "invalid_kinds": {
+    "heartbeat_pulse": 708
+  },
+  "invalid_last_ts": "2026-09-05T02:37:35.052Z"
+}

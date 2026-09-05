@@ -1,0 +1,501 @@
+exit=1
+........................................................................ [  3%]
+.....................................F.................................. [  7%]
+...................F.................................................... [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+..................................................F..................... [ 27%]
+...............................................................F........ [ 31%]
+................................................F....................... [ 35%]
+........................................................................ [ 39%]
+.......................................F................................ [ 43%]
+........................................................................ [ 47%]
+........................................................................ [ 51%]
+F..................F.................................................... [ 55%]
+.............................................F.......................... [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 67%]
+........................................................................ [ 71%]
+.............F..................F....................................... [ 75%]
+........................................................................ [ 79%]
+........................................................................ [ 83%]
+........................................................................ [ 87%]
+.....................F.................................................. [ 91%]
+........................................................................ [ 95%]
+........................................................................ [ 99%]
+.............F.                                                          [100%]
+================================== FAILURES ===================================
+________________ test_detach_keeps_whitespace_only_agents_file ________________
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_detach_keeps_whitespace_o0/brain')
+repo = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_detach_keeps_whitespace_o0/some-repo')
+
+    def test_detach_keeps_whitespace_only_agents_file(brain_home, repo):
+        (repo / "AGENTS.md").write_text("\n\n", encoding="utf-8", newline="")
+        _attach(repo, brain_home)
+        changes = registry.detach_project(brain_home, repo.name)
+        assert changes["marker_removed"] is True
+        assert (repo / "AGENTS.md").exists()
+>       assert (repo / "AGENTS.md").read_text(encoding="utf-8", newline="") == "\n\n"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: Path.read_text() got an unexpected keyword argument 'newline'
+
+tests\test_attach.py:80: TypeError
+____________________ test_valid_stdin_deterministic_output ____________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_valid_stdin_deterministic0')
+
+    def test_valid_stdin_deterministic_output(tmp_path) -> None:
+        home = tmp_path / "brain"
+        _init_and_seed(home)
+        r = _run_cli(home, "autoinject", "codex-shadow", stdin=_payload())
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+>       assert set(out) == {
+            "decision",
+            "reason",
+            "packet",
+            "packet_tokens",
+            "candidate_ids",
+            "selected_ids",
+            "delivery_id",
+        }
+E       AssertionError: assert {'candidate_i...ject_id', ...} == {'candidate_i...'reason', ...}
+E         
+E         Extra items in the left set:
+E         'project_id'
+E         'project_resolution'
+E         Use -v to get more diff
+
+tests\test_autoinject_codex.py:66: AssertionError
+________ test_fresh_reopen_and_repeat_migration_preserve_existing_rows ________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_fresh_reopen_and_repeat_m0')
+
+    def test_fresh_reopen_and_repeat_migration_preserve_existing_rows(tmp_path) -> None:
+        dbfile = db.db_path(tmp_path / "brain")
+        prefix = tmp_path / "pre-earned-migrations"
+        prefix.mkdir()
+        migrations = db.migration_files()
+        for path in migrations:
+            if not path.name.startswith("0019_"):
+                shutil.copy2(path, prefix / path.name)
+>       assert db.migrate(dbfile, migrations_dir=prefix) == list(range(1, 19))
+E       assert [1, 2, 3, 4, 5, 6, ...] == [1, 2, 3, 4, 5, 6, ...]
+E         
+E         Left contains 2 more items, first extra item: 20
+E         Use -v to get more diff
+
+tests\test_earned_memory.py:264: AssertionError
+____________________ test_lazy_migration_0002_on_v1_brain _____________________
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_lazy_migration_0002_on_v10/brain')
+
+    def test_lazy_migration_0002_on_v1_brain(brain_home):
+        dbfile = db.db_path(brain_home)
+        # Simulate a v1 brain: drop the phase 9/10 tables and forget versions >= 2.
+        conn = db.connect(dbfile)
+        try:
+            for table in (
+                "model_skill_outcomes",
+                "model_profiles",
+                "memory_activations",
+                "memory_retrievals",
+                "credit_events",
+                "prediction_errors",
+                "outcomes",
+                "predictions",
+                "memory_versions",
+                "memory_sources",
+                "memories",
+                "episodes",
+                "memory_index",
+                "memory_fts",
+            ):
+                conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.execute("DELETE FROM schema_version WHERE version >= 2")
+            conn.commit()
+        finally:
+            conn.close()
+>       assert db.pending_migrations(dbfile) == [2, 3, 4, 5, 6, 7, 8, 9, 10]
+E       assert [2, 3, 4, 5, 6, 7, ...] == [2, 3, 4, 5, 6, 7, ...]
+E         
+E         Left contains 11 more items, first extra item: 11
+E         Use -v to get more diff
+
+tests\test_episodes.py:215: AssertionError
+__________________ test_migration_guard_is_case_insensitive ___________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_migration_guard_is_case_i0')
+
+    def test_migration_guard_is_case_insensitive(tmp_path: Path) -> None:
+        dbfile = tmp_path / "legacy.sqlite"
+        conn = db.connect(dbfile)
+        conn.execute("CREATE TABLE memory_sources (id INTEGER PRIMARY KEY, REPO_ID TEXT)")
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_version VALUES (11, 'legacy')")
+        conn.commit()
+        conn.close()
+        migration_dir = tmp_path / "migrations"
+        migration_dir.mkdir()
+        source = Path(__file__).parents[1] / "src" / "second_brain" / "migrations" / "0012_evidence_freshness.sql"
+        (migration_dir / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+>       assert db.migrate(dbfile, migration_dir) == [12]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_freshness.py:177: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\second_brain\db.py:185: in migrate
+    apply_migration(conn, path, version, datetime.now(UTC).isoformat())
+src\second_brain\db.py:160: in apply_migration
+    _execute_migration_statement(conn, stmt, version=version)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+conn = <sqlite3.Connection object at 0x000001FB8844A890>
+stmt = "ALTER TABLE memories ADD COLUMN origin_class TEXT NOT NULL DEFAULT 'MODEL_INFERENCE'\n    CHECK (origin_class IN ('US...             'TOOL_OBSERVATION', 'EXTERNAL_WEB', 'MODEL_INFERENCE',\n                            'IMPORTED_FOREIGN'));"
+
+    def _execute_migration_statement(
+        conn: sqlite3.Connection, stmt: str, *, version: int
+    ) -> None:
+        """Execute one migration statement, guarding additive column changes.
+    
+        SQLite has no portable ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``.
+        Inspecting ``table_info`` before the narrow additive form keeps migration
+        0012 restartable if a manually-created database already has some columns.
+        """
+        del version  # reserved for future migration-specific guards
+        clean_stmt = re.sub(r"--[^\n]*\n?", "", stmt).strip()
+        clean_stmt = re.sub(r"/\*.*?\*/", "", clean_stmt, flags=re.DOTALL).strip()
+        match = re.match(
+            r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+(?:COLUMN\s+)?"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b",
+            clean_stmt,
+            re.IGNORECASE,
+        )
+        if match:
+            table, column = match.groups()
+            existing = {
+                str(row["name"]).casefold()
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column.casefold() in existing:
+                return
+>       conn.execute(stmt)
+E       sqlite3.OperationalError: no such table: memories
+
+src\second_brain\db.py:149: OperationalError
+_____ test_pre_llm_routes_existing_skill_and_preserves_bounded_injection ______
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_pre_llm_routes_existing_s0/brain')
+
+    def test_pre_llm_routes_existing_skill_and_preserves_bounded_injection(
+        brain_home: Path,
+    ) -> None:
+        _current_memory(brain_home)
+        _router_skill(brain_home)
+        (brain_home / "config" / "autoinject.toml").write_text(
+            '[autoinject]\nmode = "active"\n', encoding="utf-8"
+        )
+        payload = {
+            **_start_payload(session="router-runtime", bot="Brain-Dev"),
+            "event": "pre_llm_call",
+            "task": "run the migration verifier on the patch",
+            "turn_id": "router-turn-1",
+        }
+    
+        result = _run_hook(brain_home, payload)
+    
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+>       assert out["decision"] == "INJECT"
+E       AssertionError: assert 'NO_INJECTION' == 'INJECT'
+E         
+E         - INJECT
+E         + NO_INJECTION
+
+tests\test_hermes_adapter.py:431: AssertionError
+______________________ test_migration_0007_fresh_create _______________________
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_migration_0007_fresh_crea0/brain')
+
+    def test_migration_0007_fresh_create(brain_home):
+        dbf = db.db_path(brain_home)
+        conn = db.connect(dbf)
+        try:
+            v = conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0]
+>           assert v == 10
+E           assert 21 == 10
+
+tests\test_memory_index.py:24: AssertionError
+______________ test_any_prefix_then_remainder_equals_full_apply _______________
+
+    @settings(max_examples=8, deadline=None)
+>   @given(k=st.integers(min_value=0, max_value=3))
+                   ^^^
+
+tests\test_migrations_property.py:51: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+k = 0
+
+    @settings(max_examples=8, deadline=None)
+    @given(k=st.integers(min_value=0, max_value=3))
+    def test_any_prefix_then_remainder_equals_full_apply(k: int) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            full = _migration_chain(base)
+            dbfile = base / "brain.sqlite"
+    
+            prefix = base / "prefix"
+            prefix.mkdir()
+            for f in sorted(full.glob("*.sql"))[:k]:
+                shutil.copy2(f, prefix / f.name)
+    
+            assert db.migrate(dbfile, migrations_dir=prefix) == list(range(1, k + 1))
+    
+            conn = sqlite3.connect(dbfile)
+            try:
+                tables = {
+                    r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                }
+>               assert tables == {"schema_version"} | set("abc"[:k])
+E               AssertionError: assert {'brain_meta'...hema_version'} == {'schema_version'}
+E                 
+E                 Extra items in the left set:
+E                 'brain_meta'
+E                 Use -v to get more diff
+E               Failing test case: test_any_prefix_then_remainder_equals_full_apply(
+E                   k=0,
+E               )
+
+tests\test_migrations_property.py:70: AssertionError
+_____________ test_origin_columns_migrate_existing_0012_database ______________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_origin_columns_migrate_ex0')
+
+    def test_origin_columns_migrate_existing_0012_database(tmp_path: Path) -> None:
+        dbfile = tmp_path / "brain.sqlite"
+        conn = sqlite3.connect(dbfile)
+        conn.executescript(
+            """
+            CREATE TABLE schema_version(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+            CREATE TABLE memories(memory_id TEXT PRIMARY KEY, title TEXT NOT NULL, scope TEXT NOT NULL,
+              project_id TEXT, status TEXT NOT NULL, evidence_grade TEXT NOT NULL, current_version INTEGER NOT NULL,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_verified_at TEXT, strength REAL NOT NULL,
+              stability REAL NOT NULL, summary TEXT, body_path TEXT);
+            CREATE TABLE memory_sources(id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT,
+              source_ref TEXT NOT NULL, source_kind TEXT NOT NULL DEFAULT 'evidence', added_at TEXT NOT NULL);
+            INSERT INTO schema_version VALUES (12, 'old');
+            INSERT INTO memories VALUES ('mem-preexisting', 'Old fact', 'global', NULL, 'current',
+              'OBSERVED', 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', NULL, 1.0, 1.0, NULL, NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+>       db.migrate(dbfile)
+
+tests\test_origin_authority.py:124: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\second_brain\db.py:185: in migrate
+    apply_migration(conn, path, version, datetime.now(UTC).isoformat())
+src\second_brain\db.py:160: in apply_migration
+    _execute_migration_statement(conn, stmt, version=version)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+conn = <sqlite3.Connection object at 0x000001FB884815D0>
+stmt = '-- 0013_routing_cascade: fast lookup for model/skill outcomes by model, skill, and timestamp.\nCREATE INDEX IF NOT EXISTS idx_outcomes_model_skill ON model_skill_outcomes(model_id, skill_name, created_at);'
+
+    def _execute_migration_statement(
+        conn: sqlite3.Connection, stmt: str, *, version: int
+    ) -> None:
+        """Execute one migration statement, guarding additive column changes.
+    
+        SQLite has no portable ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``.
+        Inspecting ``table_info`` before the narrow additive form keeps migration
+        0012 restartable if a manually-created database already has some columns.
+        """
+        del version  # reserved for future migration-specific guards
+        clean_stmt = re.sub(r"--[^\n]*\n?", "", stmt).strip()
+        clean_stmt = re.sub(r"/\*.*?\*/", "", clean_stmt, flags=re.DOTALL).strip()
+        match = re.match(
+            r"^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+(?:COLUMN\s+)?"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b",
+            clean_stmt,
+            re.IGNORECASE,
+        )
+        if match:
+            table, column = match.groups()
+            existing = {
+                str(row["name"]).casefold()
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column.casefold() in existing:
+                return
+>       conn.execute(stmt)
+E       sqlite3.OperationalError: no such table: main.model_skill_outcomes
+
+src\second_brain\db.py:149: OperationalError
+_____________________________ test_project_filter _____________________________
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_project_filter0/brain')
+
+    def test_project_filter(brain_home):
+        p1 = _add(brain_home, title="P1 memory", body="shared token", project_id="proj-a")
+        p2 = _add(brain_home, title="P2 memory", body="shared token", project_id="proj-b")
+        dom = _add(
+            brain_home, title="Domain memory", body="shared token", scope="domain", project_id=None
+        )
+    
+        # global query: everything
+        assert _search_ids(brain_home, "token") == {p1, p2, dom}
+        # project context: only that project (domain/global memories excluded too)
+>       assert _search_ids(brain_home, "token", project_id="proj-a") == {p1}
+E       AssertionError: assert {'mem-c9b19d1...f6f100e78707'} == {'mem-c9b19d15d173'}
+E         
+E         Extra items in the left set:
+E         'mem-f6f100e78707'
+E         Use -v to get more diff
+
+tests\test_retrieval_filters.py:70: AssertionError
+_ test_unresolved_project_default_memory_suppressed_and_global_policy_allowed _
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3451/test_unresolved_project_defaul0/brain')
+
+    def test_unresolved_project_default_memory_suppressed_and_global_policy_allowed(
+        brain_home: Path,
+    ) -> None:
+        """Adversarial: unresolved identity must be GLOBAL-ONLY.
+    
+        A project-scoped memory tagged project_id='default' must NOT inject under an
+        unresolved project, while an explicit global policy with matching text CAN inject.
+        """
+        default_proj_mem = _add_memory(
+            brain_home,
+            "Fallback runtime config default",
+            "Default project local configuration for internal worker timeout",
+            project_id="default",
+            scope="project",
+        )
+        global_policy_mem = _add_memory(
+            brain_home,
+            "Global runtime config policy",
+            "Default project global configuration for internal worker timeout",
+            project_id=None,
+            scope="global",
+        )
+    
+        lifecycle = autoinject.BrainLifecycle(brain_home)
+    
+        # Query with unresolved project identity matching both memories
+        decision = lifecycle.prepare_injection(
+            "default project configuration for internal worker timeout",
+            project_id=None,
+            cwd=None,
+            agent_id="driver",
+            session_id="sess-unres-default-gate",
+        )
+    
+        assert decision.decision is InjectionDecision.INJECT
+        # Global policy MUST inject
+        assert global_policy_mem in decision.selected_ids
+        # Project-scoped memory with project_id='default' MUST NOT inject
+        assert default_proj_mem not in decision.selected_ids
+        assert decision.selected_ids == [global_policy_mem]
+    
+        # Query matching ONLY the default project-scoped memory -> NO_INJECTION (WRONG_PROJECT)
+        dec_only_default = lifecycle.prepare_injection(
+            "fallback runtime config default local configuration",
+            project_id=None,
+            cwd=None,
+            agent_id="driver",
+            session_id="sess-unres-default-only",
+        )
+>       assert dec_only_default.decision is InjectionDecision.NO_INJECTION
+E       AssertionError: assert <InjectionDecision.INJECT: 'INJECT'> is <InjectionDecision.NO_INJECTION: 'NO_INJECTION'>
+E        +  where <InjectionDecision.INJECT: 'INJECT'> = BrainInjectionDecision(decision=<InjectionDecision.INJECT: 'INJECT'>, reason=None, candidate_ids=['mem-54c51e4eeb52', ...203'], selected_ids=['mem-418f385aa203'], packet_ref='pkt-1dd83a8b6565a0db', packet_token_size=132, recipient='driver').decision
+E        +  and   <InjectionDecision.NO_INJECTION: 'NO_INJECTION'> = InjectionDecision.NO_INJECTION
+
+tests\test_retrieval_isolation.py:304: AssertionError
+________________________ test_defaults_are_all_shadow _________________________
+
+    def test_defaults_are_all_shadow():
+>       policy = v2_policy.load_policy(v2_policy.REPOSITORY_HOME)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\test_v2_policy.py:47: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\second_brain\v2_policy.py:194: in load_policy
+    _check_unknown(raw, _TOP_KEYS, "root")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+table = {'schema_version': 1, 'rollout': {'admission': 'SHADOW', 'retrieval': 'SHADOW', 'brainstem': 'SHADOW', 'learning': 'SHADOW', ...}, 'admission': {'min_score': 0.75}, 'retrieval': {'max_candidates': 20, 'top_k': 5, 'token_budget': 1200}, ...}
+allowed = frozenset({'admission', 'brainstem', 'culture', 'economics', 'frontier', 'learning', ...})
+name = 'root'
+
+    def _check_unknown(table: Mapping[str, object], allowed: frozenset[str], name: str) -> None:
+        unknown = sorted(set(table) - allowed)
+        if unknown:
+>           raise _fail(f"unknown key(s) in {name}: {', '.join(unknown)}")
+E           second_brain.errors.BrainError: Invalid v2 policy: unknown key(s) in root: models, providers
+
+src\second_brain\v2_policy.py:118: BrainError
+________________ test_no_lean_path_bypasses_requirement_ledger ________________
+
+    def test_no_lean_path_bypasses_requirement_ledger():
+        """Structural: the Lean candidate skill instructs requirement
+        verification and contains NO bypass instruction; the Lean runtime
+        adapter has no requirement-ledger code path (never touches it)."""
+        from pathlib import Path
+    
+        repo_root = Path(__file__).resolve().parent.parent
+        skill = (repo_root / "skills" / "candidates" / "lean-code" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        # positive: the canonical skill mandates the requirement check before stop
+        assert "material requirements are verified before stopping" in skill
+        assert "Requirement Ledger" in skill
+        # negative: no bypass language
+        for bypass in (
+            "skip the requirement",
+            "ignore the requirement",
+            "without verifying",
+            "bypass",
+            "do not run the ledger",
+        ):
+            assert bypass not in skill.lower(), f"lean skill contains bypass language: {bypass}"
+    
+        adapter = (repo_root / "brainstem" / "prime-extension" / "src" / "lean-code.ts").read_text(
+            encoding="utf-8"
+        ).lower()
+        # the adapter's scope is the runtime kernel only: no requirements surface
+        for token in ("requirement", "requirements.json", "material_unverified"):
+>           assert token not in adapter, f"lean-code.ts references {token!r}"
+E           AssertionError: lean-code.ts references 'requirement'
+E           assert 'requirement' not in '/**\n * p3-...rnel}`;\n}\n'
+E             
+E             'requirement' is contained here:
+E               ng[] };
+E                 requirements?: array<{ id?: string; requirement?: string; status?: string; importance?: string; refs?: string[]; evidence?: string[] }>;
+E             ?   +++++++++++
+E                 modifiedfiles?: string[];
+E                 requirementrefs?: string[];...
+E             
+E             ...Full output truncated (234 lines hidden), use '-vv' to show
+
+tests\test_working_set.py:587: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_attach.py::test_detach_keeps_whitespace_only_agents_file - ...
+FAILED tests/test_autoinject_codex.py::test_valid_stdin_deterministic_output
+FAILED tests/test_earned_memory.py::test_fresh_reopen_and_repeat_migration_preserve_existing_rows
+FAILED tests/test_episodes.py::test_lazy_migration_0002_on_v1_brain - assert ...
+FAILED tests/test_freshness.py::test_migration_guard_is_case_insensitive - sq...
+FAILED tests/test_hermes_adapter.py::test_pre_llm_routes_existing_skill_and_preserves_bounded_injection
+FAILED tests/test_memory_index.py::test_migration_0007_fresh_create - assert ...
+FAILED tests/test_migrations_property.py::test_any_prefix_then_remainder_equals_full_apply
+FAILED tests/test_origin_authority.py::test_origin_columns_migrate_existing_0012_database
+FAILED tests/test_retrieval_filters.py::test_project_filter - AssertionError:...
+FAILED tests/test_retrieval_isolation.py::test_unresolved_project_default_memory_suppressed_and_global_policy_allowed
+FAILED tests/test_v2_policy.py::test_defaults_are_all_shadow - second_brain.e...
+FAILED tests/test_working_set.py::test_no_lean_path_bypasses_requirement_ledger

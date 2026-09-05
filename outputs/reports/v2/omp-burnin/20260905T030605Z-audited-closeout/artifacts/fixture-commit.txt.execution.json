@@ -1,0 +1,17 @@
+{
+  "command": "git",
+  "args": [
+    "commit",
+    "-m",
+    "brain(core): correct legacy regression fixtures",
+    "-m",
+    "Compare preserved whitespace bytes using Python 3.11-compatible APIs.\nRemove shipped-default and forwarding-only tests; retain strict policy\nvalidation, immutable rollout, and stage-transition behavior tests.\n\nThe legacy policy parser still rejects the newer canonical metadata\nsections; do not represent test cleanup as a runtime compatibility fix."
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 170,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

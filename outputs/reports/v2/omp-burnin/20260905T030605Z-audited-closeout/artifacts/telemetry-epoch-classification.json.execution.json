@@ -1,0 +1,14 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-c",
+    "import json,collections\nfrom pathlib import Path\nfrom second_brain import telemetry\nrows=telemetry.iter_records(Path(\"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot\"))\ncur=[r for _,_,r in rows if isinstance(r,dict) and str(r.get('ts',''))>=\"2026-09-05T03:06:28.977Z\"]\nbad=[(f,n,r,telemetry._record_issues(r,f'{f}:{n}')) for f,n,r in rows if telemetry._record_issues(r,f'{f}:{n}')]\nprint(json.dumps({'current_kinds':dict(collections.Counter(r.get('kind') for r in cur)),'current_sessions':sorted(set(r.get('session','') for r in cur)),'invalid_record_count':len(bad),'invalid_kinds':dict(collections.Counter(r.get('kind') for _,_,r,_ in bad)),'invalid_last_ts':max((str(r.get('ts','')) for _,_,r,_ in bad),default=None)},indent=2))"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 140,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

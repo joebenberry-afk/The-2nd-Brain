@@ -1,0 +1,127 @@
+exit=1
+FFF                                                                      [100%]
+================================== FAILURES ===================================
+_____________________ test_omp_result_validated_as_packet _____________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3441/test_omp_result_validated_as_p0')
+
+    def test_omp_result_validated_as_packet(tmp_path) -> None:
+        import sqlite3
+    
+        from second_brain import contracts, db
+    
+        db.migrate(db.db_path(tmp_path))
+        db_path = tmp_path / "db" / "brain.sqlite"
+    
+        # Malformed transport input must not manufacture a failed worker outcome.
+        session = "omp-result-parent"
+        malformed_task = "omp-result-malformed"
+        context_response = omp_adapter.handle_request(
+            tmp_path, _worker_context_payload(session, malformed_task, context_refs=[])
+        )
+        assert context_response["status"] == "prepared"
+        packet_sha256 = context_response["packet_sha256"]
+        with sqlite3.connect(db_path) as conn:
+            state_before = conn.execute(
+                "SELECT state FROM worker_tasks WHERE task_id=?", (malformed_task,)
+            ).fetchone()[0]
+    
+        malformed_response = omp_adapter.handle_request(
+            tmp_path,
+            _worker_result_payload(
+                session, malformed_task, packet_sha256, status="not-a-real-status"
+            ),
+        )
+        assert malformed_response["status"] == "failed"
+        assert malformed_response["failure_code"]
+        assert malformed_response["task_id"] == malformed_task
+    
+        with sqlite3.connect(db_path) as conn:
+            state = conn.execute(
+                "SELECT state FROM worker_tasks WHERE task_id=?", (malformed_task,)
+            ).fetchone()[0]
+>       assert state == state_before
+E       AssertionError: assert 'FAILED' == 'WORKING'
+E         
+E         - WORKING
+E         + FAILED
+
+tests\test_omp_adapter.py:318: AssertionError
+________ test_omp_result_receipt_survives_lost_ack_and_ledger_failure _________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3441/test_omp_result_receipt_surviv0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001CD7E1A80D0>
+
+    def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monkeypatch) -> None:
+        import sqlite3
+    
+        from second_brain import db, ledger, worker_protocol
+    
+        db.migrate(db.db_path(tmp_path))
+        session, task = "receipt-parent", "receipt-task"
+        context = omp_adapter.handle_request(tmp_path, _worker_context_payload(session, task, context_refs=[]))
+        digest = context["packet_sha256"]
+        payload = _worker_result_payload(session, task, digest)
+    
+        def unavailable(*args, **kwargs):
+            raise OSError("injected host ledger failure")
+    
+        monkeypatch.setattr(ledger.LedgerStore, "append_events", unavailable)
+        accepted = omp_adapter.handle_request(tmp_path, payload)
+        assert accepted["status"] == "completed"
+        # Simulate losing the first response: a fresh request must return the
+        # original persisted receipt, not a newly timestamped result hash.
+        replay = omp_adapter.handle_request(tmp_path, payload)
+>       assert replay["result_sha256"] == accepted["result_sha256"]
+E       AssertionError: assert '63021ed70703...dfc94f2ce0594' == '20f8c51fcec3...c6db9f8547942'
+E         
+E         - 20f8c51fcec3a6d8d091d2310e39effeb6b3c7d996560c91870c6db9f8547942
+E         + 63021ed70703c8a0235e6a0127696feaee13c171c5524a1523cdfc94f2ce0594
+
+tests\test_omp_adapter.py:366: AssertionError
+________________ test_omp_worker_result_rejects_role_mismatch _________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3441/test_omp_worker_result_rejects0')
+
+    def test_omp_worker_result_rejects_role_mismatch(tmp_path) -> None:
+        import sqlite3
+    
+        from second_brain import contracts, db
+    
+        db.migrate(db.db_path(tmp_path))
+        session = "omp-result-parent-2"
+        task_id = "omp-result-role-mismatch"
+        context_response = omp_adapter.handle_request(
+            tmp_path, _worker_context_payload(session, task_id, context_refs=[])
+        )
+        assert context_response["status"] == "prepared"
+        packet_sha256 = context_response["packet_sha256"]
+    
+        response = omp_adapter.handle_request(
+            tmp_path,
+            _worker_result_payload(
+                session,
+                task_id,
+                packet_sha256,
+                worker_role="dev",  # the task requested_role was "worker"
+            ),
+        )
+        assert response["status"] == "failed"
+        assert response["failure_code"] == "UNAUTHORIZED_WORKER"
+        assert response["task_id"] == task_id
+    
+        with sqlite3.connect(tmp_path / "db" / "brain.sqlite") as conn:
+            state = conn.execute(
+                "SELECT state FROM worker_tasks WHERE task_id=?", (task_id,)
+            ).fetchone()[0]
+>       assert state == contracts.WorkerLifecycle.WORKING
+E       AssertionError: assert 'FAILED' == 'WORKING'
+E         
+E         - WORKING
+E         + FAILED
+
+tests\test_omp_adapter.py:491: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_omp_adapter.py::test_omp_result_validated_as_packet - Asser...
+FAILED tests/test_omp_adapter.py::test_omp_result_receipt_survives_lost_ack_and_ledger_failure
+FAILED tests/test_omp_adapter.py::test_omp_worker_result_rejects_role_mismatch

@@ -1,0 +1,14 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-c",
+    "import json\nfrom pathlib import Path\nfrom second_brain import telemetry\nhome=Path(\"C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot\")\nrows=telemetry.iter_records(home)\ncurrent=[(f,n,r) for f,n,r in rows if isinstance(r,dict) and str(r.get('ts',''))>=\"2026-09-05T03:06:28.977Z\"]\nprint(json.dumps({'all_history':telemetry.validate(home),'since_utc':\"2026-09-05T03:06:28.977Z\",'current_epoch_records':len(current),'current_epoch_issues':[issue for f,n,r in current for issue in telemetry._record_issues(r,f'{f}:{n}')],'offline_bridge_fixture':telemetry.validate(Path(\"C:\\\\Users\\\\assas\\\\AppData\\\\Local\\\\Temp\\\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\\\receipt-smoke-home\"))},indent=2))"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 1229,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

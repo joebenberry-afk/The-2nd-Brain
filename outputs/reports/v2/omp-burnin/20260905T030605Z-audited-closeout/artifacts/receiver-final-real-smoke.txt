@@ -1,0 +1,64 @@
+exit=0
+signal=null
+killed=false
+{
+  "offlineOnly": true,
+  "outcomes": [
+    {
+      "status": "completed",
+      "first": {
+        "ok": true,
+        "status": "completed",
+        "taskId": "receipt-smoke-completed-e598904b-4664-493b-926e-1e992a465858",
+        "packetSha256": "3aafab22584b797ad9e3bbe4a261c854ffbfd0a28955dc8c151ab51b2ae2c547",
+        "resultSha256": "e1fa568b47d7f928a1245d4c26bd0115fa6cc8f072957ba53b67146bdbf2e8e6"
+      },
+      "replay": {
+        "ok": true,
+        "status": "completed",
+        "taskId": "receipt-smoke-completed-e598904b-4664-493b-926e-1e992a465858",
+        "packetSha256": "3aafab22584b797ad9e3bbe4a261c854ffbfd0a28955dc8c151ab51b2ae2c547",
+        "resultSha256": "e1fa568b47d7f928a1245d4c26bd0115fa6cc8f072957ba53b67146bdbf2e8e6"
+      },
+      "wrongParentRejected": true
+    },
+    {
+      "status": "failed",
+      "first": {
+        "ok": true,
+        "status": "failed",
+        "taskId": "receipt-smoke-failed-7867d154-a3c5-4b48-a01b-fa726485d48d",
+        "failureCode": "OMP_WORKER_FAILED",
+        "packetSha256": "fb277ac5256ae976de264f0da9333d35ed6715154b99746066025a14a955b2f3",
+        "resultSha256": "115e27dbdb12569f4079fc8ba571abf121ad00e56b75ab45cf6dc35f6a8adac5"
+      },
+      "replay": {
+        "ok": true,
+        "status": "failed",
+        "taskId": "receipt-smoke-failed-7867d154-a3c5-4b48-a01b-fa726485d48d",
+        "failureCode": "OMP_WORKER_FAILED",
+        "packetSha256": "fb277ac5256ae976de264f0da9333d35ed6715154b99746066025a14a955b2f3",
+        "resultSha256": "115e27dbdb12569f4079fc8ba571abf121ad00e56b75ab45cf6dc35f6a8adac5"
+      },
+      "wrongParentRejected": true
+    },
+    {
+      "status": "cancelled",
+      "first": {
+        "ok": true,
+        "status": "cancelled",
+        "taskId": "receipt-smoke-cancelled-1758699a-eeb9-42a2-90fe-4500bb8cb0cc",
+        "packetSha256": "49c5bd5433f043ccabe403811d8f5fdd454a09a5a32da418fa7f30acd9abb3fe",
+        "resultSha256": "0f7fd0fdc97542848ad47e74696962c8940eacff99cf22fe3a4924642928b739"
+      },
+      "replay": {
+        "ok": true,
+        "status": "cancelled",
+        "taskId": "receipt-smoke-cancelled-1758699a-eeb9-42a2-90fe-4500bb8cb0cc",
+        "packetSha256": "49c5bd5433f043ccabe403811d8f5fdd454a09a5a32da418fa7f30acd9abb3fe",
+        "resultSha256": "0f7fd0fdc97542848ad47e74696962c8940eacff99cf22fe3a4924642928b739"
+      },
+      "wrongParentRejected": true
+    }
+  ]
+}

@@ -1,5 +1,10 @@
 # Second Brain v2 OMP Qualification Matrix
 
+> Historical checkpoint. Current readiness is superseded by the
+> [audited closeout](../20260905T030605Z-audited-closeout/14-release-readiness.md)
+> and [inheritance matrix](../20260905T030605Z-audited-closeout/QUALIFICATION_INHERITANCE.md).
+> Original observations and conclusions below are retained, not rewritten.
+
 Run ID: `20260904T202807Z-omp-hold`  
 Candidate SHA: `86585e114115bc43bf932145e716f2ed4d3dd30e`  
 Branch: `brain/v2-omp-qualification`  

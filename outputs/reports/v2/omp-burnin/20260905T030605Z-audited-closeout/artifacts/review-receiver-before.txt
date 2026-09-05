@@ -1,0 +1,44 @@
+exit=1
+signal=null
+killed=false
+FF                                                                       [100%]
+================================== FAILURES ===================================
+_______________ test_omp_result_cannot_adopt_an_ownerless_task ________________
+
+tmp_path = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3460/test_omp_result_cannot_adopt_a0')
+
+    def test_omp_result_cannot_adopt_an_ownerless_task(tmp_path) -> None:
+        from second_brain import worker_protocol
+    
+        task, digest = "unowned-result", "a" * 64
+        worker_protocol.register_task(tmp_path, task, digest)
+        worker_protocol.record_worker_event(tmp_path, task, digest, "accepted")
+        result = omp_adapter.handle_request(
+            tmp_path, _worker_result_payload("unrelated-parent", task, digest)
+        )
+>       assert result["failure_code"] == "UNAUTHORIZED_WORKER"
+E       AssertionError: assert None == 'UNAUTHORIZED_WORKER'
+
+tests\test_omp_adapter.py:432: AssertionError
+_____ test_terminal_receipt_rejects_payload_that_does_not_match_its_hash ______
+
+brain_home = WindowsPath('C:/Users/assas/AppData/Local/Temp/pytest-of-Joseph/pytest-3460/test_terminal_receipt_rejects_0/brain')
+
+    def test_terminal_receipt_rejects_payload_that_does_not_match_its_hash(brain_home) -> None:
+        task, digest = "authenticated-receipt", "b" * 64
+        worker_protocol.register_task(brain_home, task, digest, session_id="driver")
+        worker_protocol.record_worker_event(brain_home, task, digest, "accepted")
+        result = contracts.WorkerResultPacket(
+            task,
+            _identity("worker", session="worker-session", bot="worker"),
+            "completed",
+            summary="verified outcome",
+        ).validate()
+        payload = {**json.loads(result.canonical_json()), "result_sha256": result.canonical_hash()}
+>       with pytest.raises(contracts.WorkerPacketError, match="PROTOCOL_ERROR"):
+E       Failed: DID NOT RAISE WorkerPacketError
+
+tests\test_worker_protocol.py:57: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_omp_adapter.py::test_omp_result_cannot_adopt_an_ownerless_task
+FAILED tests/test_worker_protocol.py::test_terminal_receipt_rejects_payload_that_does_not_match_its_hash

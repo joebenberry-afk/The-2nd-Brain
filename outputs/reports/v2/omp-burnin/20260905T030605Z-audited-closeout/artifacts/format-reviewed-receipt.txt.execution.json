@@ -1,0 +1,18 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-m",
+    "ruff",
+    "format",
+    "--range",
+    "818:1-827:1",
+    "src/second_brain/worker_protocol.py"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 687,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

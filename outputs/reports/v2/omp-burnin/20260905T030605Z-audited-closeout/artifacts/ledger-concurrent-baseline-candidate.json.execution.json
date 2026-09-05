@@ -1,0 +1,14 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-c",
+    "import concurrent.futures,json,os,subprocess,tempfile,time,uuid,sqlite3\nfrom pathlib import Path\nfrom second_brain.ledger import internal_session_id\nvariants=[('candidate',\"C:\\\\Users\\\\assas\\\\Documents\\\\The-Second-Brain\\\\.worktrees\\\\v2-one-shot\\\\.venv\\\\Scripts\\\\python.exe\"),('baseline',\"C:\\\\Users\\\\assas\\\\AppData\\\\Local\\\\Temp\\\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\\\baseline-venv\\\\Scripts\\\\python.exe\")]\nenv=dict(os.environ)\nfor key in ('PYTHONHOME','PYTHONPATH','UV_INTERNAL__PYTHONHOME','PYTHONSTARTUP'):env.pop(key,None)\nresults=[]\nfor name,python in variants:\n for round in range(5):\n  home=Path(tempfile.mkdtemp(prefix='ledger-burst-'+name+'-',dir=\"C:\\\\Users\\\\assas\\\\AppData\\\\Local\\\\Temp\\\\brain-closeout-baseline-20260905T030605Z-audited-closeout\"));host='burst-'+str(uuid.uuid4())\n  def work(i):\n   for args,payload in [(['ledger','init','--session',host,'--host','prime'],''),(['ledger','append','--session',host,'--stdin-json'],json.dumps({'event_id':'burst-'+str(i),'agent_id':'a1','parent_event_id':None,'event_type':'user_task','timestamp':'2026-08-16T01:00:00Z','surface_visibility':'raw_only','ignorable':False,'payload':{'task_sha256':str(i)}}))]:\n    r=subprocess.run([python,'-m','second_brain','--home',str(home),*args],input=payload,text=True,capture_output=True,env=env,cwd=home,timeout=120)\n    if r.returncode:return {'worker':i,'args':args,'exit':r.returncode,'stderr':r.stderr}\n   return None\n  start=time.perf_counter()\n  with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:bad=[r for r in pool.map(work,range(8)) if r]\n  with sqlite3.connect(home/'state'/'sessions'/internal_session_id(host)/'ledger.sqlite') as conn:count=conn.execute('SELECT COUNT(*) FROM events').fetchone()[0]\n  results.append({'variant':name,'round':round,'errors':bad,'durable_events':count,'elapsed_ms':(time.perf_counter()-start)*1000})\nprint(json.dumps({'provider_calls':0,'cases':results},indent=2))"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 5647,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}

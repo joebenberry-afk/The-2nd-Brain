@@ -1,0 +1,1050 @@
+{
+  "candidate_source_sha": "75b80d2aab33929923d4d9323bcaf639bc69591b",
+  "qualified_runtime_source_sha": null,
+  "frozen_at_utc": "2026-09-05T06:04:49.232Z",
+  "schema_version": 22,
+  "version": "2.0.0-rc.1",
+  "runtime_source": {
+    "sha256": "62e9397efc6a171fc896d5f941c8252a7f53d5c661062d5722611e6b961d8ae4",
+    "files": [
+      {
+        "path": "brainctl.cmd",
+        "bytes": 313,
+        "sha256": "143fe2f503b8dd735f19e39762de8c920ff6da429df7a86b1740981d40074032"
+      },
+      {
+        "path": "pyproject.toml",
+        "bytes": 1012,
+        "sha256": "90e5afdde4bb0fe1137d8b144db056d467742c1fa73505d66dd5eac2151ec061"
+      },
+      {
+        "path": "scripts/install-prime-extension.ps1",
+        "bytes": 5782,
+        "sha256": "fda919fa583ef2c2521b9d948f305db41a7d4dfc048d2e0d291c8adde5ea1d92"
+      },
+      {
+        "path": "scripts/uninstall-prime-extension.ps1",
+        "bytes": 5183,
+        "sha256": "2a10cf2d05a75055f1a5d7e383e8064b8647bf5924a9192781dd4d63140d6c3b"
+      },
+      {
+        "path": "src/second_brain/__init__.py",
+        "bytes": 120,
+        "sha256": "291a59824b1f2801d3e473c218cef1ec55850e1c0a5f79ab5a427c1c3240f5a1"
+      },
+      {
+        "path": "src/second_brain/__main__.py",
+        "bytes": 83,
+        "sha256": "d220d88dd9a25cd0629c5176dd6532a2db1da40eb014a8e80796b0ddeb134918"
+      },
+      {
+        "path": "src/second_brain/action_cache.py",
+        "bytes": 50393,
+        "sha256": "299c9527bc55994d7a7f5379254d664977e29ab0ecac2fa5a595921488dd9b42"
+      },
+      {
+        "path": "src/second_brain/adapters/__init__.py",
+        "bytes": 362,
+        "sha256": "2a1c6aea9db56221f177a5e5c1992fb06a121083159142eca14d138417a75a9c"
+      },
+      {
+        "path": "src/second_brain/adapters/antigravity.py",
+        "bytes": 16488,
+        "sha256": "d941d87e40d233c1e730927e8e28d3ced987d657e26d82aa88e7c32562f70365"
+      },
+      {
+        "path": "src/second_brain/adapters/claude_code.py",
+        "bytes": 16212,
+        "sha256": "4961ae1e83a7f956e49610cd9fc289dd27418399d4d603c4f4b076f6e5b73883"
+      },
+      {
+        "path": "src/second_brain/adapters/codex.py",
+        "bytes": 6050,
+        "sha256": "c944e9fcbfcb1ee73fec51ee9b56063b83a58094768e190ebfd5bd2914c5b7f8"
+      },
+      {
+        "path": "src/second_brain/antigravity_transcript.py",
+        "bytes": 10807,
+        "sha256": "b5f84452dd9facd095dc194deec394204416cba2d3357a95f2f1ea6663c49c51"
+      },
+      {
+        "path": "src/second_brain/artifacts.py",
+        "bytes": 17807,
+        "sha256": "86686ac661cc81e160d6df60b64df8cbefa51c64eaf9fddc19ad1b4fc66b6c35"
+      },
+      {
+        "path": "src/second_brain/autoinject.py",
+        "bytes": 70880,
+        "sha256": "0bd749527041cce143f5ad7908ff0342666af1585527bd3c3c3a3e42294104ae"
+      },
+      {
+        "path": "src/second_brain/backup.py",
+        "bytes": 16357,
+        "sha256": "97b8c513c3ff89595bbf3930cb247589cc4c439bdd8a85d22800beaadb59f0b0"
+      },
+      {
+        "path": "src/second_brain/brainstem.py",
+        "bytes": 9892,
+        "sha256": "a94949d50d0d299dfcad9a8ca99bb323c02f34207c641c5be0a80a984803f073"
+      },
+      {
+        "path": "src/second_brain/build_identity.py",
+        "bytes": 3627,
+        "sha256": "55af63f4135ffbd63c291c3b38da0c79d0e9a46a22c28f70f116d00113962e5b"
+      },
+      {
+        "path": "src/second_brain/capabilities.py",
+        "bytes": 18161,
+        "sha256": "0e84a6e35551d22da2b0ab25b2576319f5fd85700a913bb619b2b0345303e61f"
+      },
+      {
+        "path": "src/second_brain/capsule_runtime.py",
+        "bytes": 8021,
+        "sha256": "cf62da33bae8e8d3c1e2781f5adb79e3ecc4c37dd5850838faa661f751915129"
+      },
+      {
+        "path": "src/second_brain/cerebellum.py",
+        "bytes": 12276,
+        "sha256": "a122e7c4eb033c1833b08f8d317f58dbabc3d110a815b1d8022bc9d8d79ccb96"
+      },
+      {
+        "path": "src/second_brain/cli.py",
+        "bytes": 202635,
+        "sha256": "422caf62506a415757877877603dd7ff05c99587608243d71d3afe5c262d8caa"
+      },
+      {
+        "path": "src/second_brain/contracts.py",
+        "bytes": 55651,
+        "sha256": "66d43e94dca00f02e7892dc4b4896d55814e4683d6b4ac59869f35aec04571d9"
+      },
+      {
+        "path": "src/second_brain/credit.py",
+        "bytes": 37344,
+        "sha256": "6f0632390ba5a9631ec92ec42915d8da5b6a5f2a70ad9d00700767b275efd68e"
+      },
+      {
+        "path": "src/second_brain/crossmodel.py",
+        "bytes": 13093,
+        "sha256": "96f8dfd6af7270906444fe9b7b52e48068e9c559c6efa246cf4844e21f7fe4d4"
+      },
+      {
+        "path": "src/second_brain/db.py",
+        "bytes": 7836,
+        "sha256": "76a5baca825406ec9da1d2a87ef69e747f5fca3186406c9acd06818e08bcf6b1"
+      },
+      {
+        "path": "src/second_brain/decisions.py",
+        "bytes": 12580,
+        "sha256": "983b464c37d90c93fb9cef4136b389fb7172a413e26bc27ee5e8ed5d07852f80"
+      },
+      {
+        "path": "src/second_brain/defaults/VERSION",
+        "bytes": 12,
+        "sha256": "8d1683bce395e62c365e28bdd5cba99583a2aba23191901ab48ad6e6b2064d1c"
+      },
+      {
+        "path": "src/second_brain/defaults/config/autoinject.toml",
+        "bytes": 742,
+        "sha256": "552ea1f87d8c99417dc720597db9b5f6610c29ef6a1967086ece143eac1ada21"
+      },
+      {
+        "path": "src/second_brain/defaults/config/brain.toml",
+        "bytes": 1050,
+        "sha256": "e7fdce4668f555d240fdb8dc6fdc19436825bcbb0623a85718767451049d0a7e"
+      },
+      {
+        "path": "src/second_brain/defaults/config/context.toml",
+        "bytes": 2995,
+        "sha256": "ffc222a3d284319e855d79744f7b049d555fe3757122acb60a08f813aa0d1485"
+      },
+      {
+        "path": "src/second_brain/defaults/config/environment.toml",
+        "bytes": 900,
+        "sha256": "8205738f42ca62fca531414fc1354ebe893ef9ad3ddc73cae2c57af8ee6000c4"
+      },
+      {
+        "path": "src/second_brain/defaults/config/learning.toml",
+        "bytes": 1151,
+        "sha256": "0ee96c9cb802c720d643ecc4ab00b44a5d2e5dd6fa6c467eabd36f0313d59a79"
+      },
+      {
+        "path": "src/second_brain/defaults/config/orchestration.toml",
+        "bytes": 664,
+        "sha256": "ca3b73ecedf4d40b3d3f1197e74288cb1bd3dd1f99b3f378a8a9832ee94c1f53"
+      },
+      {
+        "path": "src/second_brain/defaults/config/retrieval.toml",
+        "bytes": 2303,
+        "sha256": "f299dfc6f66f33c24fc416d469e0e3b702f5372bda80074e42163b77e89d7be9"
+      },
+      {
+        "path": "src/second_brain/defaults/config/session-retention.toml",
+        "bytes": 645,
+        "sha256": "b94258aff9370e2002e7d3c0f7df762d9e36db027230869fef9a6da226262f10"
+      },
+      {
+        "path": "src/second_brain/defaults/config/skills.toml",
+        "bytes": 1241,
+        "sha256": "2c9855251240dc5eddb875c96443bf8df27193ac126fa289596329934ab7b4b4"
+      },
+      {
+        "path": "src/second_brain/defaults/config/sleep.toml",
+        "bytes": 704,
+        "sha256": "a9481298ab8e869578a40fc97c4f4e6d5fbe2752f391a125c5487ca23ba82339"
+      },
+      {
+        "path": "src/second_brain/defaults/config/verification.toml",
+        "bytes": 1152,
+        "sha256": "2c467295183e03ee2e5b5528e8b6ed4f54379a7f72182b3d2e5b346d3ed952fa"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/.gitkeep",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/architecture.md",
+        "bytes": 164,
+        "sha256": "3d68e920d998132dc4a90cb413ee47fa1e3f93466f5204e9331f15e4b50d79a5"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/current-state.md",
+        "bytes": 76,
+        "sha256": "7e5509bec47067b55f04a6aa8b216d35c435622df2e49248616722dbf2db9a9c"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/decisions.md",
+        "bytes": 99,
+        "sha256": "a8a8f6d43c2cc1fa4b28c5c9d44a28a486e3b2aefb2f56a36ad2bfd44952aafb"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/knowledge-gaps.md",
+        "bytes": 128,
+        "sha256": "8ce9501df9ff862c2f70f3a525a895eb79476b59236207817da9924cc7b4cd4e"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/known-issues.md",
+        "bytes": 106,
+        "sha256": "0e231e49ac466df841e9ea9215398c7459560cf9d2e7c59fd53bdfa0e8b37272"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/lexicon.md",
+        "bytes": 179,
+        "sha256": "2f16d13f458a03b4408b1f23961bf9ac357d3e6de3acf2cf31c9b54880dc08a8"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/overview.md",
+        "bytes": 80,
+        "sha256": "75e37e5ca95d9e3b8691e4ea2398a12ea85e201c8a05e1bd62a2d0b0d38ac8ca"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/project.toml",
+        "bytes": 162,
+        "sha256": "85ae708b100bd17ffa5e5b9ead6905cd0800c4c5de4f42844ed9e6e07e456a5e"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/references.md",
+        "bytes": 113,
+        "sha256": "833fdd642812426b158e8804c9f2b7b9cc0b5e93f32a3f96475eb378d7a2c37a"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/rejected-findings.md",
+        "bytes": 124,
+        "sha256": "41b6a5756a13066ec2ce5989bcf510ce9688ae9067a56c07214eefa3ef7c5bbb"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/roadmap.md",
+        "bytes": 87,
+        "sha256": "72a8513d89e67a9210a3d74236c29754154f1b5bd9ae762464527e732c754827"
+      },
+      {
+        "path": "src/second_brain/defaults/templates/project/simplification-debt.md",
+        "bytes": 194,
+        "sha256": "54999539ac9c143933377114d3cb0562da3cbf1bf2ccea799d537e2402012ed6"
+      },
+      {
+        "path": "src/second_brain/delta_sync.py",
+        "bytes": 17008,
+        "sha256": "580d4ab3b28d70b5b6f1178dd56cb686dd2a8445c74c0d040c31f208dbc42aca"
+      },
+      {
+        "path": "src/second_brain/doctor.py",
+        "bytes": 11476,
+        "sha256": "364d14fb350ebae67afb8442da2f11e4a1048aba6592d3853691fda14acc2b41"
+      },
+      {
+        "path": "src/second_brain/economics.py",
+        "bytes": 16495,
+        "sha256": "b483f8de09018886e77ad739d9fbbc20413d6a9c7d4a3c360c68dc5f81f50665"
+      },
+      {
+        "path": "src/second_brain/engram.py",
+        "bytes": 17789,
+        "sha256": "962c0c4b2dc99a5b90b0f574de0214372e732c7f0842a1e6796770e6c2945a23"
+      },
+      {
+        "path": "src/second_brain/envsteward.py",
+        "bytes": 20013,
+        "sha256": "d5f7174c1c4c1e07f5f384fa5ebfe9109f44844168e43a26079125cc147dc574"
+      },
+      {
+        "path": "src/second_brain/episodes.py",
+        "bytes": 13662,
+        "sha256": "7342dff42ccbefba78a275c9b16905e67c9dc175de770a6f9e26925b6ac5c76b"
+      },
+      {
+        "path": "src/second_brain/errors.py",
+        "bytes": 408,
+        "sha256": "24de77b96f9d966473776aa05f90dcdef59e19e5016f72c042eb85a307995f34"
+      },
+      {
+        "path": "src/second_brain/fingerprints.py",
+        "bytes": 16336,
+        "sha256": "52f83f3bc6fdd780804bc8007184cdfdfc756b0c22eefdae0155d56db494ba2d"
+      },
+      {
+        "path": "src/second_brain/firewall.py",
+        "bytes": 21298,
+        "sha256": "ab0e1ddcc009a922b1a209abac78961fda574b98fa365b0c61e0afa6c3e6af59"
+      },
+      {
+        "path": "src/second_brain/fresh_verifier.py",
+        "bytes": 7092,
+        "sha256": "28d6c013678bc3d1bc8c0c39c47947f9c924ac7024af1895d07f638dc68e3beb"
+      },
+      {
+        "path": "src/second_brain/freshness.py",
+        "bytes": 10049,
+        "sha256": "e3ec0bcba8b950310cd04b26178b7091db0c330230d911d6e9a0d8c51b7a98a3"
+      },
+      {
+        "path": "src/second_brain/frontier.py",
+        "bytes": 20873,
+        "sha256": "f38cd44f39a73bc86a405387478173f829a9b63d845d09dd083ea442570068f1"
+      },
+      {
+        "path": "src/second_brain/gardener.py",
+        "bytes": 96956,
+        "sha256": "a1723975e05e5873a3d27c7d772b51fe33c00399f42c5a83109b00349c6d6495"
+      },
+      {
+        "path": "src/second_brain/goals.py",
+        "bytes": 21531,
+        "sha256": "e3cd429142c976ab152a2024f32cb931bbb85521a2fd0fc3724d068c9b7e4b6e"
+      },
+      {
+        "path": "src/second_brain/governor.py",
+        "bytes": 35637,
+        "sha256": "425c8d67684b11f3f9f219a17e6fc6a5806a03a25608062b8e10f64faa59329d"
+      },
+      {
+        "path": "src/second_brain/handoff.py",
+        "bytes": 18352,
+        "sha256": "da98b07a507e2ef7fa61e79dd66eb2c19ff0db498bd7983ef852cdc1e25cc40d"
+      },
+      {
+        "path": "src/second_brain/heartbeat.py",
+        "bytes": 13664,
+        "sha256": "5a87d6f33da1a03f4885897753b7a1dae177af5a97c612a3df0e843cbb499126"
+      },
+      {
+        "path": "src/second_brain/hermes_adapter.py",
+        "bytes": 120356,
+        "sha256": "468cecb7c213db0afa231fa4de90838ca6ebe70e05c5e6c9e6f799d51c4f7767"
+      },
+      {
+        "path": "src/second_brain/hybrid_retrieval.py",
+        "bytes": 27523,
+        "sha256": "f295b42be55fc8d57fa24143c76c9b36db675fdfc2d608146179a15db795d842"
+      },
+      {
+        "path": "src/second_brain/immune.py",
+        "bytes": 15040,
+        "sha256": "735a05c490cbe66d14c101b3c561844a4ba85d6b3adf4f12c1505e32991ca570"
+      },
+      {
+        "path": "src/second_brain/injection_slots.py",
+        "bytes": 7923,
+        "sha256": "92131af0f47d108cf5323858ba9e48fdeba534a777fa1568754571df50f23129"
+      },
+      {
+        "path": "src/second_brain/jit.py",
+        "bytes": 7054,
+        "sha256": "8aada7e7ef359a954b6571abe75a91ceecaed0f339b91b1080145e3a0d6d4864"
+      },
+      {
+        "path": "src/second_brain/lean_runtime.py",
+        "bytes": 31725,
+        "sha256": "d3aa83090987d4db1820e67d4b796ef744b28caaadc24a40eb9f79c631b69cce"
+      },
+      {
+        "path": "src/second_brain/ledger.py",
+        "bytes": 78373,
+        "sha256": "4723d3eca5e8ccacdd07b748d5a63145023d10bae65b85539cef91d89dca58c2"
+      },
+      {
+        "path": "src/second_brain/migrations/0001_init.sql",
+        "bytes": 680,
+        "sha256": "9ace04dfa37f5f56b3d34f54fad2767fb6b4c08c9aba75e408106fd44f02c019"
+      },
+      {
+        "path": "src/second_brain/migrations/0002_episodes.sql",
+        "bytes": 713,
+        "sha256": "e7b190c64c24af5eeb2de794dc0d8c7bcf3bf36cc8d01e3551951018f8633058"
+      },
+      {
+        "path": "src/second_brain/migrations/0003_semantic.sql",
+        "bytes": 1596,
+        "sha256": "d28e6f232d9bdb9214bc1520dea2fbf08a81537a4165e71d3f93f22d35e28bfd"
+      },
+      {
+        "path": "src/second_brain/migrations/0004_plasticity.sql",
+        "bytes": 1455,
+        "sha256": "7995126a6f5c8bcdbb645d05623fa0bbfe1a761e66ba5e0bc40825527bdabb51"
+      },
+      {
+        "path": "src/second_brain/migrations/0005_reconsolidation.sql",
+        "bytes": 1023,
+        "sha256": "37db4ddd0bacb9c3243d18d28a1cb1312ed3c1c314f7f3c23a58ac4c417f7fbe"
+      },
+      {
+        "path": "src/second_brain/migrations/0006_model_profiles.sql",
+        "bytes": 681,
+        "sha256": "de342fbf11c05b03b44db7b5ff68ec39f114e0c131d963b15486c70e23a8b8a9"
+      },
+      {
+        "path": "src/second_brain/migrations/0007_memory_index.sql",
+        "bytes": 1039,
+        "sha256": "b627ca7d3be8f5ef14fc5265a2342c486e6bd4a935437aefed73df1240f34e25"
+      },
+      {
+        "path": "src/second_brain/migrations/0008_deliveries.sql",
+        "bytes": 1320,
+        "sha256": "924e2b7395cd8a8301f1727986f178e9276b1008101cae10fe22bb405581b67b"
+      },
+      {
+        "path": "src/second_brain/migrations/0009_purge_receipts.sql",
+        "bytes": 645,
+        "sha256": "88d67d8987c68fe17c99e8c62b623d6860eb293d51eb5ec634037523fdc0798a"
+      },
+      {
+        "path": "src/second_brain/migrations/0010_p4_operations.sql",
+        "bytes": 2407,
+        "sha256": "5205d8a095e320d07fd84732a04b0820f38a1bdb16efc4b674ec8b790a44a236"
+      },
+      {
+        "path": "src/second_brain/migrations/0011_decisions.sql",
+        "bytes": 690,
+        "sha256": "a7f20491c254178a5942f8e42379d708a8c485711c1e4aac7c3216896427bb04"
+      },
+      {
+        "path": "src/second_brain/migrations/0012_evidence_freshness.sql",
+        "bytes": 1146,
+        "sha256": "e5fe69d7755f15b0f550d4738d6e01ddde946b3f8de745d6c0dddc7199f5e1e9"
+      },
+      {
+        "path": "src/second_brain/migrations/0013_routing_cascade.sql",
+        "bytes": 207,
+        "sha256": "b82619e619ef5b9a3697aeddb1a326b2e88a1adce6226d18c877684ef2de3557"
+      },
+      {
+        "path": "src/second_brain/migrations/0014_worker_leases.sql",
+        "bytes": 746,
+        "sha256": "79c8f23ceeaefd17844aa5bba16633ccdb8df5e1712d0761c5a5ea10d793ce12"
+      },
+      {
+        "path": "src/second_brain/migrations/0015_harness_capabilities.sql",
+        "bytes": 449,
+        "sha256": "f8c9e1db50ec4e7582108736e4a44ffdc988496124a565fcf5ab42d81c2e4353"
+      },
+      {
+        "path": "src/second_brain/migrations/0016_actr_activation.sql",
+        "bytes": 405,
+        "sha256": "7ce1be5b0345c1a4e03b0a55df1be959c71500ff8e67e124087cd888280130ea"
+      },
+      {
+        "path": "src/second_brain/migrations/0017_decision_inputs.sql",
+        "bytes": 129,
+        "sha256": "db487ea281a92fe7b2f404771ca3ce7e6283b7712cc20f50dca61e8b9d014be2"
+      },
+      {
+        "path": "src/second_brain/migrations/0018_artifact_gc.sql",
+        "bytes": 292,
+        "sha256": "345df53e57bdacb354f2cafc93174748db5c9e1abe2a7d178ce4162aa4de1a2f"
+      },
+      {
+        "path": "src/second_brain/migrations/0019_earned_memory.sql",
+        "bytes": 1169,
+        "sha256": "acb49dccd084a536ca15a978d2a8c52b919a8a7ade072f72fd64f1d33725deae"
+      },
+      {
+        "path": "src/second_brain/migrations/0020_causal_learning.sql",
+        "bytes": 1475,
+        "sha256": "632d38c572ed10494fc087d1e7d3e6c874c17afba29e0d43a44afd69e7ea7429"
+      },
+      {
+        "path": "src/second_brain/migrations/0021_frontier.sql",
+        "bytes": 1616,
+        "sha256": "ab314e962ebfb983036ffde5ccba4d049e20cc7cadc2e6cfa73365d07a842d3e"
+      },
+      {
+        "path": "src/second_brain/migrations/0022_worker_result_receipts.sql",
+        "bytes": 398,
+        "sha256": "052b5ca544ad2ce42251bbc874530e03ff14b389291898915aa7ee3b5921a8cd"
+      },
+      {
+        "path": "src/second_brain/model_routing.py",
+        "bytes": 56808,
+        "sha256": "f0dda321c05bd975699191811957e94fbb59c324b199f8886ce65ce574f0c722"
+      },
+      {
+        "path": "src/second_brain/monitor.py",
+        "bytes": 10864,
+        "sha256": "f37c998e9850ee74c6d26bae20adc2914ca74b12a94649205509b319735a6e09"
+      },
+      {
+        "path": "src/second_brain/omp_adapter.py",
+        "bytes": 17115,
+        "sha256": "f7a540d884e9938295d0f5725b9abb91948830af5ea87a5e426de7dd13cfccf6"
+      },
+      {
+        "path": "src/second_brain/optimization.py",
+        "bytes": 21010,
+        "sha256": "b1798877e37407ecbeed02edbc0049f0517bee4407ee916a3df224b9b0c6eff8"
+      },
+      {
+        "path": "src/second_brain/p4.py",
+        "bytes": 4104,
+        "sha256": "6112990a0f6c3f069f1aeaf60d7f371c286f7a709402e1c159d822014caba7af"
+      },
+      {
+        "path": "src/second_brain/paths.py",
+        "bytes": 3571,
+        "sha256": "ea1742a3ea50b9edcf939e72eb2d17786f45441ed9a54d9e438b8d461ec9cd1c"
+      },
+      {
+        "path": "src/second_brain/plasticity.py",
+        "bytes": 13975,
+        "sha256": "7e9e52ed6cccc54513413414d14cdccf832851e1566459c99be55234045eafcb"
+      },
+      {
+        "path": "src/second_brain/promotion.py",
+        "bytes": 26002,
+        "sha256": "0475a5ba63402e833f49c0dab7bcd9b65829fc674f74d0e2bcd1bd893317d877"
+      },
+      {
+        "path": "src/second_brain/radar.py",
+        "bytes": 20478,
+        "sha256": "60c1c4ec31fca1e5046e7aae885e31fde016ef6fcdee298bc4db5034b4a67eb0"
+      },
+      {
+        "path": "src/second_brain/reconsolidation.py",
+        "bytes": 29982,
+        "sha256": "b02e96d03fe6b248cbffbfa4580137f16b07942155ca7aa2c437ac5b3f4fd2a7"
+      },
+      {
+        "path": "src/second_brain/registry.py",
+        "bytes": 18136,
+        "sha256": "ee8d2b8ef356fd042f165bc79b90fddcd01d16c8123458d1ea7fde196d920ef3"
+      },
+      {
+        "path": "src/second_brain/repository_intelligence.py",
+        "bytes": 14880,
+        "sha256": "30190907129788407d6c01df662a83ac81aed4d70450442ef5cf87350053c450"
+      },
+      {
+        "path": "src/second_brain/risk.py",
+        "bytes": 8984,
+        "sha256": "7e074ec7871fe323e3ef488a47918662c5122159e606654a863d2fb4cc1cacbb"
+      },
+      {
+        "path": "src/second_brain/router.py",
+        "bytes": 11983,
+        "sha256": "a86c229cca35f6a8b81ce2747abb34ea526bc92268a3930c6cdd5fb2365eec86"
+      },
+      {
+        "path": "src/second_brain/scout.py",
+        "bytes": 13659,
+        "sha256": "e13ddb06ce5626c2de07fec7cf97e402b606ebc90c47f7df5c3bab3118cdea29"
+      },
+      {
+        "path": "src/second_brain/security/__init__.py",
+        "bytes": 773,
+        "sha256": "ec3c173e96a3ea1228d6ae037c39ecde7c1ca1eb17859f034c682d14e6d374ed"
+      },
+      {
+        "path": "src/second_brain/security/identifiers.py",
+        "bytes": 3856,
+        "sha256": "bdabaf96d56f8c998cbb7f97d1f662d04aa940243703012133ce6fb36a644ab1"
+      },
+      {
+        "path": "src/second_brain/security/paths.py",
+        "bytes": 7562,
+        "sha256": "4b9d970e38d1256787f97f66d13883f7e6a5296bf0415448278d17d86d5ea104"
+      },
+      {
+        "path": "src/second_brain/semantic.py",
+        "bytes": 92228,
+        "sha256": "51e2cfde2182d390e7da41651ecc0758d9d7867032f4e4f9dd083995d3d8028b"
+      },
+      {
+        "path": "src/second_brain/simplification.py",
+        "bytes": 8701,
+        "sha256": "af44213031a3ffe1b13f3d63f9742c6ab7c16da821c89060c30b1c14db39c012"
+      },
+      {
+        "path": "src/second_brain/skillforge.py",
+        "bytes": 38118,
+        "sha256": "a0df83deba76b6294a04a1d1c1d85a109f9326f86f0ca934e628514cb220c5bd"
+      },
+      {
+        "path": "src/second_brain/skills.py",
+        "bytes": 13471,
+        "sha256": "d99bdd02d3a776ea4ccd0dc0cb50e8e5b2ad8962780854ad385387e009f81ac2"
+      },
+      {
+        "path": "src/second_brain/sleep.py",
+        "bytes": 11687,
+        "sha256": "83187a89c7b897b901172ffc7a96322d1187698df05006aa617e185175c7f44c"
+      },
+      {
+        "path": "src/second_brain/telemetry.py",
+        "bytes": 27150,
+        "sha256": "40d3567b60d7f65efaebb6ff13af5b30633fbf195398cd3de1fe1b0945912833"
+      },
+      {
+        "path": "src/second_brain/v2_policy.py",
+        "bytes": 11069,
+        "sha256": "6d2fc68f049ffe0848eac8ad7762f13c3faa22ca0c1ef10b1e51618a97828850"
+      },
+      {
+        "path": "src/second_brain/verify.py",
+        "bytes": 25369,
+        "sha256": "756676a9667eec603ea44a1a7f442d553ba8a6d8f3f3a38e1e19c28f86aae166"
+      },
+      {
+        "path": "src/second_brain/vmem.py",
+        "bytes": 70701,
+        "sha256": "5b8d050808a3f7216eadb821e129f2fb7ed40dba7fd45c588c75a080fa3abea0"
+      },
+      {
+        "path": "src/second_brain/worker_protocol.py",
+        "bytes": 51785,
+        "sha256": "9b22ee54bc8375605ae3c0cbedd46431d9a30450e3427b050f8ab965707b69fe"
+      },
+      {
+        "path": "src/second_brain/working_set.py",
+        "bytes": 20589,
+        "sha256": "c639e775d87bdd5d6c95dcbd5de96e279f8d26b55770a65140c9ee64ea49f0dc"
+      }
+    ]
+  },
+  "adapter_source": {
+    "sha256": "8eef1a6716c2050a559f336c25179d8b8a2de1679a53c2b9981aca61734715be",
+    "files": [
+      {
+        "path": "brainstem/prime-extension/src/active-state-mirror.ts",
+        "bytes": 7196,
+        "sha256": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08"
+      },
+      {
+        "path": "brainstem/prime-extension/src/autoinject.ts",
+        "bytes": 27904,
+        "sha256": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b"
+      },
+      {
+        "path": "brainstem/prime-extension/src/budget-bridge.ts",
+        "bytes": 3547,
+        "sha256": "02e8b8ec14978e805ecbd3ef49c4b8755e97ca929f71d5d6d20a62183e90ef3d"
+      },
+      {
+        "path": "brainstem/prime-extension/src/config.ts",
+        "bytes": 22613,
+        "sha256": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d"
+      },
+      {
+        "path": "brainstem/prime-extension/src/context-paging.ts",
+        "bytes": 36235,
+        "sha256": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94"
+      },
+      {
+        "path": "brainstem/prime-extension/src/driver-orchestrator.ts",
+        "bytes": 7354,
+        "sha256": "a2971d525f763996661c0bd18c3dec7abbd680c1e2716429200a2e1fb0ce3272"
+      },
+      {
+        "path": "brainstem/prime-extension/src/environment-mirror.ts",
+        "bytes": 3312,
+        "sha256": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda"
+      },
+      {
+        "path": "brainstem/prime-extension/src/index.ts",
+        "bytes": 137103,
+        "sha256": "42803ee24ae06f4e4ae63a2b3bbeba4d7fdae7d78f872ee6d4a050da223f7906"
+      },
+      {
+        "path": "brainstem/prime-extension/src/injection-slots.ts",
+        "bytes": 6410,
+        "sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35"
+      },
+      {
+        "path": "brainstem/prime-extension/src/lean-code.ts",
+        "bytes": 25359,
+        "sha256": "ae91d081d014d77fb4d678cc4b0f175a3bf21d367dde72b1652387bcf6679a74"
+      },
+      {
+        "path": "brainstem/prime-extension/src/ledger-mirror.ts",
+        "bytes": 17337,
+        "sha256": "d09428e0b144f34e1a5edcf8a4b02fe25c64009325a79fb05bacd5a996bfb844"
+      },
+      {
+        "path": "brainstem/prime-extension/src/orchestrator-guard.ts",
+        "bytes": 6027,
+        "sha256": "98f2166215541074f9571c171c345e99aca51a80915c744cbf56889114fc0d13"
+      },
+      {
+        "path": "brainstem/prime-extension/src/p4-mirror.ts",
+        "bytes": 5128,
+        "sha256": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff"
+      },
+      {
+        "path": "brainstem/prime-extension/src/recall-gate.ts",
+        "bytes": 10921,
+        "sha256": "bc0c9ca3745a1af789fc1aa77303dc5f830f4c070fd112252b7326173de5edd6"
+      },
+      {
+        "path": "brainstem/prime-extension/src/routing-bridge.ts",
+        "bytes": 8587,
+        "sha256": "0df72d0ebc73a10ded6e28bc43cb562ff95c9fa63f6a2354fcf572b582627fbe"
+      },
+      {
+        "path": "brainstem/prime-extension/src/rtd.ts",
+        "bytes": 33840,
+        "sha256": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab"
+      },
+      {
+        "path": "brainstem/prime-extension/src/sensors.ts",
+        "bytes": 57265,
+        "sha256": "b4a96ad63f921207f32798d18ca2f26d7e68566d93605e733710e6696d4a9cb7"
+      },
+      {
+        "path": "brainstem/prime-extension/src/stop-boundary.ts",
+        "bytes": 4409,
+        "sha256": "1ee1ba9b0d26ef9bd092ff6323f6a258478225d369d3d5361b6fcc2b9b3d36d3"
+      },
+      {
+        "path": "brainstem/prime-extension/src/storage.ts",
+        "bytes": 5843,
+        "sha256": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18"
+      },
+      {
+        "path": "brainstem/prime-extension/src/visibility-bridge.ts",
+        "bytes": 7954,
+        "sha256": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0"
+      },
+      {
+        "path": "brainstem/prime-extension/src/vmem.ts",
+        "bytes": 23707,
+        "sha256": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7"
+      },
+      {
+        "path": "brainstem/prime-extension/src/worker-context-bridge.ts",
+        "bytes": 6721,
+        "sha256": "27619bc9927fed934e931dfa11288f356f1f5fca292f320aea4610d63143c116"
+      },
+      {
+        "path": "brainstem/prime-extension/src/worker-result-bridge.ts",
+        "bytes": 5131,
+        "sha256": "6d934033c8b6a75542addd2c10189ea2b9b7c248a562c28d41b9a25df98c1117"
+      },
+      {
+        "path": "brainstem/prime-extension/types/prime.d.ts",
+        "bytes": 10613,
+        "sha256": "abea5962de13af960e5128e5edb8d5955c6b264d96158ce0c7e308a1940bf51d"
+      }
+    ]
+  },
+  "configuration_files": {
+    "sha256": "75d20238938a787bce51d172a808ff46d09f9107570e203a37745a7ecbd297b3",
+    "files": [
+      {
+        "path": "config/autoinject.toml",
+        "bytes": 881,
+        "sha256": "e1c47acba8e5ac4ea36907f99054bb4ec2cc153d87b9f7fbdfa26e2d92ac6258"
+      },
+      {
+        "path": "config/brain.toml",
+        "bytes": 1050,
+        "sha256": "e7fdce4668f555d240fdb8dc6fdc19436825bcbb0623a85718767451049d0a7e"
+      },
+      {
+        "path": "config/context.toml",
+        "bytes": 7364,
+        "sha256": "17f4bab99da00f10ec423684b34b2d0b83c46656586bbb29ac0895bd37b51787"
+      },
+      {
+        "path": "config/environment.toml",
+        "bytes": 900,
+        "sha256": "8205738f42ca62fca531414fc1354ebe893ef9ad3ddc73cae2c57af8ee6000c4"
+      },
+      {
+        "path": "config/governor.toml",
+        "bytes": 1541,
+        "sha256": "51c492cf830e9fe8c49271a686ba40397917ca0e6f04fd081fcc376f494d8e35"
+      },
+      {
+        "path": "config/learning.toml",
+        "bytes": 1151,
+        "sha256": "0ee96c9cb802c720d643ecc4ab00b44a5d2e5dd6fa6c467eabd36f0313d59a79"
+      },
+      {
+        "path": "config/orchestration.toml",
+        "bytes": 664,
+        "sha256": "ca3b73ecedf4d40b3d3f1197e74288cb1bd3dd1f99b3f378a8a9832ee94c1f53"
+      },
+      {
+        "path": "config/retrieval.toml",
+        "bytes": 2682,
+        "sha256": "c347954517a48d105cef52516a3f503ecc12a72966234e6146b9e8c2541e56a5"
+      },
+      {
+        "path": "config/session-retention.toml",
+        "bytes": 645,
+        "sha256": "b94258aff9370e2002e7d3c0f7df762d9e36db027230869fef9a6da226262f10"
+      },
+      {
+        "path": "config/skills.toml",
+        "bytes": 2068,
+        "sha256": "c10bc3ebc97bf70f3ace9be810d7bfad9e1a187443e10cd5b87b27b409c333ab"
+      },
+      {
+        "path": "config/sleep.toml",
+        "bytes": 704,
+        "sha256": "a9481298ab8e869578a40fc97c4f4e6d5fbe2752f391a125c5487ca23ba82339"
+      },
+      {
+        "path": "config/storage-classes.toml",
+        "bytes": 320,
+        "sha256": "b0b51a092963c48419384bd602c0f952aea0f5aed20327e950200618486256a7"
+      },
+      {
+        "path": "config/v2.toml",
+        "bytes": 1004,
+        "sha256": "d40624ba971b1937a0fadc20b528b53abba798ffa042ced7814a0cd0c2cf4b16"
+      },
+      {
+        "path": "config/verification.toml",
+        "bytes": 1497,
+        "sha256": "b7a9fba5c26d8a82562e6f07b6dac30e022680589728835b0f400b0657be031f"
+      }
+    ]
+  },
+  "config_profile": {
+    "sha256": "65ec1298da95db9282aee4b19864a26f850af5122399a37325341661f25337a5",
+    "qualified_profile_hash": null,
+    "snapshot": {
+      "scope": "Canonical configuration plus selected nonsecret verification/native-shell settings; not a loaded-candidate profile",
+      "configuration_manifest_sha256": "75d20238938a787bce51d172a808ff46d09f9107570e203a37745a7ecbd297b3",
+      "native_config": {
+        "path": "C:/Users/assas/.omp/agent/config.yml",
+        "sha256": "64f6a76209b21c7116f73b181bfea0a16b084c0588638aee21681830db8ebb60"
+      },
+      "verification_environment": {
+        "SECOND_BRAIN_HOME": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+        "SECOND_BRAIN_PYTHON": null,
+        "SECOND_BRAIN_OBSERVABILITY": null,
+        "SECOND_BRAIN_RECALL": null,
+        "SECOND_BRAIN_RTD": null,
+        "SECOND_BRAIN_RTD_THRESHOLD": null,
+        "SECOND_BRAIN_FAIL_OPEN": null,
+        "SECOND_BRAIN_SHADOW": null,
+        "DRIVER_MODELS": null,
+        "WORKER_MODELS": null,
+        "ORCHESTRATOR_MODELS": null,
+        "ORCHESTRATOR_BLOCKED_TOOLS": null,
+        "OMP_PROFILE": null,
+        "OMP_AGENT_DIR": null,
+        "PI_CODING_AGENT_DIR": null
+      },
+      "native_process_environment": {
+        "SECOND_BRAIN_HOME": "C:\\Users\\assas\\Documents\\The-Second-Brain",
+        "SECOND_BRAIN_PYTHON": null,
+        "SECOND_BRAIN_OBSERVABILITY": null,
+        "SECOND_BRAIN_RECALL": null,
+        "SECOND_BRAIN_RTD": null,
+        "SECOND_BRAIN_RTD_THRESHOLD": null,
+        "SECOND_BRAIN_FAIL_OPEN": null,
+        "SECOND_BRAIN_SHADOW": null,
+        "DRIVER_MODELS": null,
+        "WORKER_MODELS": null,
+        "ORCHESTRATOR_MODELS": null,
+        "ORCHESTRATOR_BLOCKED_TOOLS": null,
+        "OMP_PROFILE": null,
+        "OMP_AGENT_DIR": null,
+        "PI_CODING_AGENT_DIR": null
+      }
+    }
+  },
+  "dependency_lock_hashes": [
+    {
+      "path": "brainstem/prime-extension/package-lock.json",
+      "bytes": 108694,
+      "sha256": "1f68997206fabb0502a2209d60f2096277fae2191cf4e562be174866453cabcc"
+    }
+  ],
+  "python_dependency_lock": "No tracked Python lock found in the inspected scope; installed distribution versions recorded separately",
+  "installed_extension": {
+    "path": "C:/Users/assas/.omp/agent/extensions/second-brain",
+    "sha256": "cbcc46d28cd0b1b82c979bef66940f519beb33d3d92f0bb73aeaccc23a67875d",
+    "expected_candidate_sha256": "da9b55bf6f150a41b546fa126f8a452717ec47a01729730b400c94ed9515a47b",
+    "matches_candidate": false,
+    "changed_files": [
+      "budget-bridge.ts",
+      "index.ts",
+      "ledger-mirror.ts",
+      "worker-result-bridge.ts",
+      "types/prime.d.ts"
+    ],
+    "files": [
+      {
+        "path": "active-state-mirror.ts",
+        "bytes": 7196,
+        "sha256": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08"
+      },
+      {
+        "path": "autoinject.ts",
+        "bytes": 27904,
+        "sha256": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b"
+      },
+      {
+        "path": "budget-bridge.ts",
+        "bytes": 3203,
+        "sha256": "84bf063694e3bdac53f0f6f92ea48611b1e86fc88b04a50ad18280ad0a4458c3"
+      },
+      {
+        "path": "config.ts",
+        "bytes": 22613,
+        "sha256": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d"
+      },
+      {
+        "path": "context-paging.ts",
+        "bytes": 36235,
+        "sha256": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94"
+      },
+      {
+        "path": "driver-orchestrator.ts",
+        "bytes": 7354,
+        "sha256": "a2971d525f763996661c0bd18c3dec7abbd680c1e2716429200a2e1fb0ce3272"
+      },
+      {
+        "path": "environment-mirror.ts",
+        "bytes": 3312,
+        "sha256": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda"
+      },
+      {
+        "path": "index.ts",
+        "bytes": 129507,
+        "sha256": "d2b44f3dbc0e1082ac6d17859953ffb36afeedd6fba92c79cb7ef2f94ffddd68"
+      },
+      {
+        "path": "injection-slots.ts",
+        "bytes": 6410,
+        "sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35"
+      },
+      {
+        "path": "lean-code.ts",
+        "bytes": 25359,
+        "sha256": "ae91d081d014d77fb4d678cc4b0f175a3bf21d367dde72b1652387bcf6679a74"
+      },
+      {
+        "path": "ledger-mirror.ts",
+        "bytes": 16385,
+        "sha256": "7c83d36d050fd94e0128f571e4020902cbc8020512de5d0ee39c45bab2a317d2"
+      },
+      {
+        "path": "orchestrator-guard.ts",
+        "bytes": 6027,
+        "sha256": "98f2166215541074f9571c171c345e99aca51a80915c744cbf56889114fc0d13"
+      },
+      {
+        "path": "p4-mirror.ts",
+        "bytes": 5128,
+        "sha256": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff"
+      },
+      {
+        "path": "recall-gate.ts",
+        "bytes": 10921,
+        "sha256": "bc0c9ca3745a1af789fc1aa77303dc5f830f4c070fd112252b7326173de5edd6"
+      },
+      {
+        "path": "routing-bridge.ts",
+        "bytes": 8587,
+        "sha256": "0df72d0ebc73a10ded6e28bc43cb562ff95c9fa63f6a2354fcf572b582627fbe"
+      },
+      {
+        "path": "rtd.ts",
+        "bytes": 33840,
+        "sha256": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab"
+      },
+      {
+        "path": "sensors.ts",
+        "bytes": 57265,
+        "sha256": "b4a96ad63f921207f32798d18ca2f26d7e68566d93605e733710e6696d4a9cb7"
+      },
+      {
+        "path": "stop-boundary.ts",
+        "bytes": 4409,
+        "sha256": "1ee1ba9b0d26ef9bd092ff6323f6a258478225d369d3d5361b6fcc2b9b3d36d3"
+      },
+      {
+        "path": "storage.ts",
+        "bytes": 5843,
+        "sha256": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18"
+      },
+      {
+        "path": "visibility-bridge.ts",
+        "bytes": 7954,
+        "sha256": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0"
+      },
+      {
+        "path": "vmem.ts",
+        "bytes": 23707,
+        "sha256": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7"
+      },
+      {
+        "path": "worker-context-bridge.ts",
+        "bytes": 6721,
+        "sha256": "27619bc9927fed934e931dfa11288f356f1f5fca292f320aea4610d63143c116"
+      },
+      {
+        "path": "worker-result-bridge.ts",
+        "bytes": 4518,
+        "sha256": "04b4190a7128f15e80edd95a839e6c02db5674150fde432f9720c4443fedaea9"
+      },
+      {
+        "path": "types/prime.d.ts",
+        "bytes": 10539,
+        "sha256": "927f807d7cc1eb3566a54f3f28a194800f9605baec12652316b78b81fa5925f0"
+      }
+    ],
+    "new_host_loaded_candidate": false
+  },
+  "omp": {
+    "version": "18.1.10",
+    "executable": "C:/Users/assas/.bun/bin/omp.exe",
+    "source_reference": "f241301c83726afe75a847e919b89977a54dafbe",
+    "source_url": "https://github.com/can1357/oh-my-pi/tree/f241301c83726afe75a847e919b89977a54dafbe",
+    "installed_file_hashes": [
+      {
+        "path": "C:/Users/assas/.bun/bin/omp.exe",
+        "sha256": "d2af3f9969d9ed23eb46e1fe78d959ecf3748e2cde44d1e7ad66b4c403f1023f"
+      },
+      {
+        "path": "C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js",
+        "sha256": "935fc62e88b15fac2648fd42dbbf91079eb5ae0b311f65bb768f423bf14db441"
+      }
+    ]
+  },
+  "implementation_commit": "64694bb32f02cd6a736ec65a24660bd8acd6a3f6",
+  "verification_only_commit_note": "Final candidate differs from implementation commit only in two test files; runtime and adapter manifest bytes unchanged."
+}

@@ -1,0 +1,20 @@
+{
+  "source": "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-c1-review-20260905T030605Z\\src\\second_brain\\governor.py",
+  "cases": {
+    "missing": {
+      "state": "HARD",
+      "used": 400001,
+      "cap": 400000
+    },
+    "null": {
+      "state": "HARD",
+      "used": 400001,
+      "cap": 400000
+    },
+    "matching": {
+      "state": "HARD",
+      "used": 400001,
+      "cap": 400000
+    }
+  }
+}

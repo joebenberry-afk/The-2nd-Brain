@@ -1,0 +1,1230 @@
+﻿{
+    "TagFilter":  [
+                      ""
+                  ],
+    "ExcludeTagFilter":  [
+                             ""
+                         ],
+    "TestNameFilter":  null,
+    "TotalCount":  18,
+    "PassedCount":  5,
+    "FailedCount":  13,
+    "SkippedCount":  0,
+    "PendingCount":  0,
+    "Time":  {
+                 "Ticks":  79511929,
+                 "Days":  0,
+                 "Hours":  0,
+                 "Milliseconds":  951,
+                 "Minutes":  0,
+                 "Seconds":  7,
+                 "TotalDays":  9.2027695601851854E-05,
+                 "TotalHours":  0.0022086646944444442,
+                 "TotalMilliseconds":  7951.1929,
+                 "TotalMinutes":  0.13251988166666667,
+                 "TotalSeconds":  7.9511929
+             },
+    "TestResult":  [
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "uses explicit destination and deploys only flattened src plus types",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  11492329,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  149,
+                                        "Minutes":  0,
+                                        "Seconds":  1,
+                                        "TotalDays":  1.3301306712962962E-05,
+                                        "TotalHours":  0.00031923136111111107,
+                                        "TotalMilliseconds":  1149.2329,
+                                        "TotalMinutes":  0.019153881666666667,
+                                        "TotalSeconds":  1.1492329
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 112 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n112:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "112"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 112\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 108\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "is idempotent and backs up the previous target",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  5096185,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  509,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  5.8983622685185181E-06,
+                                        "TotalHours":  0.00014156069444444443,
+                                        "TotalMilliseconds":  509.61850000000004,
+                                        "TotalMinutes":  0.008493641666666666,
+                                        "TotalSeconds":  0.5096185
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 124 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n124:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "124"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 124\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 121\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "selects source independently of SECOND_BRAIN_HOME",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3556527,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  355,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.1163506944444443E-06,
+                                        "TotalHours":  9.8792416666666663E-05,
+                                        "TotalMilliseconds":  355.65270000000004,
+                                        "TotalMinutes":  0.005927545,
+                                        "TotalSeconds":  0.3556527
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 144 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n144:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "144"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 144\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 137\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "defaults install to an alternate USERPROFILE OMP root without claiming settings",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  5633046,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  563,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  6.5197291666666663E-06,
+                                        "TotalHours":  0.0001564735,
+                                        "TotalMilliseconds":  563.3046,
+                                        "TotalMinutes":  0.00938841,
+                                        "TotalSeconds":  0.56330459999999993
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 158 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n158:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "158"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 158\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 149\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "defaults uninstall to an alternate USERPROFILE OMP root",
+                           "Result":  "Passed",
+                           "Passed":  true,
+                           "Time":  {
+                                        "Ticks":  4216880,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  421,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.8806481481481478E-06,
+                                        "TotalHours":  0.00011713555555555555,
+                                        "TotalMilliseconds":  421.68800000000005,
+                                        "TotalMinutes":  0.0070281333333333338,
+                                        "TotalSeconds":  0.421688
+                                    },
+                           "FailureMessage":  "",
+                           "StackTrace":  "",
+                           "ErrorRecord":  null,
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "backs up and restores the previous extension byte exactly",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3935363,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  393,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.5548182870370365E-06,
+                                        "TotalHours":  0.00010931563888888889,
+                                        "TotalMilliseconds":  393.53630000000004,
+                                        "TotalMinutes":  0.0065589383333333334,
+                                        "TotalSeconds":  0.3935363
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 189 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n189:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "189"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 189\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 181\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "preserves the current extension when staging cannot start",
+                           "Result":  "Passed",
+                           "Passed":  true,
+                           "Time":  {
+                                        "Ticks":  3890187,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  389,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.50253125E-06,
+                                        "TotalHours":  0.00010806074999999999,
+                                        "TotalMilliseconds":  389.0187,
+                                        "TotalMinutes":  0.0064836450000000006,
+                                        "TotalSeconds":  0.3890187
+                                    },
+                           "FailureMessage":  "",
+                           "StackTrace":  "",
+                           "ErrorRecord":  null,
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "preserves the current extension when staging copy fails",
+                           "Result":  "Passed",
+                           "Passed":  true,
+                           "Time":  {
+                                        "Ticks":  3848354,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  384,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.4541134259259258E-06,
+                                        "TotalHours":  0.00010689872222222222,
+                                        "TotalMilliseconds":  384.8354,
+                                        "TotalMinutes":  0.0064139233333333334,
+                                        "TotalSeconds":  0.3848354
+                                    },
+                           "FailureMessage":  "",
+                           "StackTrace":  "",
+                           "ErrorRecord":  null,
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "restores the current extension when replacement move fails",
+                           "Result":  "Passed",
+                           "Passed":  true,
+                           "Time":  {
+                                        "Ticks":  3816783,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  381,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.4175729166666669E-06,
+                                        "TotalHours":  0.00010602174999999999,
+                                        "TotalMilliseconds":  381.67830000000004,
+                                        "TotalMinutes":  0.006361305,
+                                        "TotalSeconds":  0.38167829999999997
+                                    },
+                           "FailureMessage":  "",
+                           "StackTrace":  "",
+                           "ErrorRecord":  null,
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "rejects a missing explicit backup before touching the current extension",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  2615562,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  261,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  3.0272708333333331E-06,
+                                        "TotalHours":  7.26545E-05,
+                                        "TotalMilliseconds":  261.5562,
+                                        "TotalMinutes":  0.00435927,
+                                        "TotalSeconds":  0.26155619999999996
+                                    },
+                           "FailureMessage":  "Expected: value was {0}, but should not have been the same",
+                           "StackTrace":  "at line: 242 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n242:         $LASTEXITCODE | Should Not Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Not Be 0",
+                                                                    "Line":  "242"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 242\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 235\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "rejects a wrong explicit backup before touching the current extension",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3483789,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  348,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.0321631944444443E-06,
+                                        "TotalHours":  9.6771916666666657E-05,
+                                        "TotalMilliseconds":  348.37890000000004,
+                                        "TotalMinutes":  0.005806315,
+                                        "TotalSeconds":  0.3483789
+                                    },
+                           "FailureMessage":  "Expected: value was {0}, but should not have been the same",
+                           "StackTrace":  "at line: 258 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n258:         $LASTEXITCODE | Should Not Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Not Be 0",
+                                                                    "Line":  "258"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 258\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 246\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "rejects a tampered installer backup before touching the current extension",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3831801,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  383,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.4349548611111108E-06,
+                                        "TotalHours":  0.00010643891666666666,
+                                        "TotalMilliseconds":  383.18010000000004,
+                                        "TotalMinutes":  0.006386335,
+                                        "TotalSeconds":  0.38318009999999997
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 267 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n267:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "267"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 267\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 262\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "rejects an installer backup recorded for another destination",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3613779,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  361,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.1826145833333334E-06,
+                                        "TotalHours":  0.00010038275,
+                                        "TotalMilliseconds":  361.3779,
+                                        "TotalMinutes":  0.006022965,
+                                        "TotalSeconds":  0.3613779
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 284 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n284:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "284"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 284\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 279\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "does not choose an unrelated latest backup when none is explicit",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  2668750,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  266,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  3.0888310185185185E-06,
+                                        "TotalHours":  7.4131944444444443E-05,
+                                        "TotalMilliseconds":  266.875,
+                                        "TotalMinutes":  0.0044479166666666669,
+                                        "TotalSeconds":  0.266875
+                                    },
+                           "FailureMessage":  "Expected: {False}\nBut was:  {True}",
+                           "StackTrace":  "at line: 309 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n309:         (Test-Path $script:target) | Should Be $false",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {False}\nBut was:  {True}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {False}\nBut was:  {True}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        (Test-Path $script:target) | Should Be $false",
+                                                                    "Line":  "309"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 309\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 299\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "never restores or changes configuration it does not own",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  3589718,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  358,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  4.1547662037037039E-06,
+                                        "TotalHours":  9.971438888888888E-05,
+                                        "TotalMilliseconds":  358.97180000000003,
+                                        "TotalMinutes":  0.0059828633333333337,
+                                        "TotalSeconds":  0.3589718
+                                    },
+                           "FailureMessage":  "Expected: {0}\nBut was:  {1}",
+                           "StackTrace":  "at line: 317 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n317:         $LASTEXITCODE | Should Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: {0}\nBut was:  {1}",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $LASTEXITCODE | Should Be 0",
+                                                                    "Line":  "317"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 317\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 313\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "leaves the current extension intact when restore staging copy fails",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  5918364,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  591,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  6.8499583333333329E-06,
+                                        "TotalHours":  0.000164399,
+                                        "TotalMilliseconds":  591.8364,
+                                        "TotalMinutes":  0.00986394,
+                                        "TotalSeconds":  0.59183639999999993
+                                    },
+                           "FailureMessage":  "Expected: value was {0}, but should not have been the same",
+                           "StackTrace":  "at line: 340 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n340:         $result.ExitCode | Should Not Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $result.ExitCode | Should Not Be 0",
+                                                                    "Line":  "340"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 340\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 329\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "restores the current extension when restore replacement move fails",
+                           "Result":  "Failed",
+                           "Passed":  false,
+                           "Time":  {
+                                        "Ticks":  5740355,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  574,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  6.6439293981481479E-06,
+                                        "TotalHours":  0.00015945430555555556,
+                                        "TotalMilliseconds":  574.03550000000007,
+                                        "TotalMinutes":  0.0095672583333333335,
+                                        "TotalSeconds":  0.57403549999999992
+                                    },
+                           "FailureMessage":  "Expected: value was {0}, but should not have been the same",
+                           "StackTrace":  "at line: 355 in C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1\n355:         $result.ExitCode | Should Not Be 0",
+                           "ErrorRecord":  {
+                                               "Exception":  {
+                                                                 "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                 "Data":  {
+
+                                                                          },
+                                                                 "InnerException":  null,
+                                                                 "TargetSite":  null,
+                                                                 "StackTrace":  null,
+                                                                 "HelpLink":  null,
+                                                                 "Source":  null,
+                                                                 "HResult":  -2146233088
+                                                             },
+                                               "TargetObject":  {
+                                                                    "Message":  "Expected: value was {0}, but should not have been the same",
+                                                                    "File":  "C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1",
+                                                                    "LineText":  "        $result.ExitCode | Should Not Be 0",
+                                                                    "Line":  "355"
+                                                                },
+                                               "CategoryInfo":  {
+                                                                    "Category":  8,
+                                                                    "Activity":  "",
+                                                                    "Reason":  "Exception",
+                                                                    "TargetName":  "System.Collections.Hashtable",
+                                                                    "TargetType":  "Hashtable"
+                                                                },
+                                               "FullyQualifiedErrorId":  "PesterAssertionFailed",
+                                               "ErrorDetails":  null,
+                                               "InvocationInfo":  {
+                                                                      "MyCommand":  null,
+                                                                      "BoundParameters":  {
+
+                                                                                          },
+                                                                      "UnboundArguments":  [
+
+                                                                                           ],
+                                                                      "ScriptLineNumber":  92,
+                                                                      "OffsetInLine":  17,
+                                                                      "HistoryId":  -1,
+                                                                      "ScriptName":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "Line":  "                throw ( New-ShouldErrorRecord -Message $failureMessage -File $file -Line $line -LineText $lineText)\r\n",
+                                                                      "PositionMessage":  "At C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1:92 char:17\r\n+ ...             throw ( New-ShouldErrorRecord -Message $failureMessage -F ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                                                                      "PSScriptRoot":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions",
+                                                                      "PSCommandPath":  "C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1",
+                                                                      "InvocationName":  "",
+                                                                      "PipelineLength":  0,
+                                                                      "PipelinePosition":  0,
+                                                                      "ExpectingInput":  false,
+                                                                      "CommandOrigin":  1,
+                                                                      "DisplayScriptPosition":  null
+                                                                  },
+                                               "ScriptStackTrace":  "at Should\u003cEnd\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Assertions\\Should.ps1: line 92\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 355\r\nat Invoke-Test, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 253\r\nat ItImpl, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 203\r\nat It, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\It.ps1: line 117\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 344\r\nat Describe, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Functions\\Describe.ps1: line 100\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\brainstem\\tests\\install-prime-extension.Tests.ps1: line 59\r\nat \u003cScriptBlock\u003e, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 297\r\nat Invoke-Pester, C:\\Program Files\\WindowsPowerShell\\Modules\\Pester\\3.4.0\\Pester.psm1: line 310\r\nat \u003cScriptBlock\u003e, C:\\Users\\assas\\AppData\\Local\\Temp\\brain-closeout-baseline-20260905T030605Z-audited-closeout\\installer_probe.ps1: line 1",
+                                               "PipelineIterationInfo":  [
+
+                                                                         ]
+                                           },
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       },
+                       {
+                           "Describe":  "OMP extension install and rollback",
+                           "Context":  "",
+                           "Name":  "fails on missing source without deleting the current extension",
+                           "Result":  "Passed",
+                           "Passed":  true,
+                           "Time":  {
+                                        "Ticks":  2564157,
+                                        "Days":  0,
+                                        "Hours":  0,
+                                        "Milliseconds":  256,
+                                        "Minutes":  0,
+                                        "Seconds":  0,
+                                        "TotalDays":  2.9677743055555554E-06,
+                                        "TotalHours":  7.1226583333333337E-05,
+                                        "TotalMilliseconds":  256.4157,
+                                        "TotalMinutes":  0.004273595,
+                                        "TotalSeconds":  0.25641569999999997
+                                    },
+                           "FailureMessage":  "",
+                           "StackTrace":  "",
+                           "ErrorRecord":  null,
+                           "ParameterizedSuiteName":  "",
+                           "Parameters":  {
+
+                                          }
+                       }
+                   ]
+}

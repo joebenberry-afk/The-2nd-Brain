@@ -1,0 +1,2 @@
+exit=0
+Backup created: C:\Users\assas\Documents\The-Second-Brain\.worktrees\v2-one-shot\backups\backup-20260905-042829-573966

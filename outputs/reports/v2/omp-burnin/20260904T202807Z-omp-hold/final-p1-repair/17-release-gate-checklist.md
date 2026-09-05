@@ -1,5 +1,10 @@
 # Phase 22 — Full v2.0.0 Release Gate Checklist (Post-P1-Repair)
 
+> Historical checkpoint. Current readiness is superseded by the
+> [audited closeout](../../20260905T030605Z-audited-closeout/14-release-readiness.md)
+> and [inheritance matrix](../../20260905T030605Z-audited-closeout/QUALIFICATION_INHERITANCE.md).
+> Original observations and conclusions below are retained, not rewritten.
+
 ## Authoritative gate source
 
 `outputs/reports/v2/omp-burnin/20260904T202807Z-omp-hold/OMP_V2_QUALIFICATION_MATRIX.md`

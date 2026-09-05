@@ -1,3 +1,18 @@
+## 2026-09-05 — Audited OMP closeout (unreleased, HOLD)
+
+- Preserve native task options and distinct dispatch identities; acknowledge
+  results only after packet/owner-bound durable acceptance. Schema 22 adds
+  atomic result receipts to the existing worker database.
+- Preserve current messages when no paging breakpoint exists. Deduplicate
+  root-owned ledger usage and report unavailable accounting explicitly.
+- Validate destination-bound installer backups before mutation; retain
+  unrelated settings. Retry bounded transient Windows manifest contention
+  without suppressing permanent errors.
+- RC remains unqualified: native result framing, populated-home latency,
+  type checking and final live/economics gates remain open. No release tag.
+- Evidence and exact remaining work:
+  [audited closeout](outputs/reports/v2/omp-burnin/20260905T030605Z-audited-closeout/14-release-readiness.md).
+
 ## 2026-08-15 — Driver Orchestration Contract (Prime extension)
 
 - `brainstem/prime-extension/src/driver-orchestrator.ts` (new): pure role

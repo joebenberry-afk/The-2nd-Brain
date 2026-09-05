@@ -1,0 +1,15 @@
+{
+  "command": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\.venv\\Scripts\\python.exe",
+  "args": [
+    "-c",
+    "import sys,json,tempfile\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nfrom second_brain import governor\nout={'source':governor.__file__,'cases':{}}\nfor case in ('missing','null','matching'):\n with tempfile.TemporaryDirectory() as tmp:\n  home=Path(tmp); folder=home/'telemetry'/'agent-performance'; folder.mkdir(parents=True)\n  record={'v':3,'ts':'2026-09-05T00:00:00Z','kind':'assistant_usage','total_tokens':400001}\n  if case!='missing': record['session']=None if case=='null' else 'driver'\n  (folder/'driver.jsonl').write_text(json.dumps(record)+'\\n',encoding='utf-8')\n  out['cases'][case]=governor.check_budget(home,'driver','driver')\nprint(json.dumps(out,indent=2))",
+    "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v2-one-shot\\src"
+  ],
+  "exit": 0,
+  "signal": null,
+  "killed": false,
+  "error": null,
+  "elapsed_ms": 160,
+  "cwd": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/v2-one-shot",
+  "stderr": ""
+}
