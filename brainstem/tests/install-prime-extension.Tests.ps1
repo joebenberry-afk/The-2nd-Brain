@@ -65,6 +65,39 @@ Describe "prime extension install/uninstall scripts" {
         $LASTEXITCODE | Should Be 0
     }
 
+    It "install defaults ExtensionsDir/SettingsFile to the OMP auto-discovery path, not .prime" {
+        $fakeHome = Join-Path $testRoot "userprofile-install"
+        New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+        $oldUserProfile = $env:USERPROFILE
+        $env:USERPROFILE = $fakeHome
+        try {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:repo "scripts\install-prime-extension.ps1") -SourceRoot $script:brain
+            $LASTEXITCODE | Should Be 0
+        } finally {
+            $env:USERPROFILE = $oldUserProfile
+        }
+        (Test-Path (Join-Path $fakeHome ".omp\agent\extensions\second-brain\index.ts")) | Should Be $true
+        (Test-Path (Join-Path $fakeHome ".prime\agent\extensions\second-brain\index.ts")) | Should Be $false
+        (Test-Path (Join-Path $fakeHome ".prime")) | Should Be $false
+    }
+
+    It "uninstall defaults ExtensionsDir/SettingsFile to the OMP auto-discovery path, not .prime" {
+        $fakeHome = Join-Path $testRoot "userprofile-uninstall"
+        $extDir = Join-Path $fakeHome ".omp\agent\extensions"
+        New-Item -ItemType Directory -Force -Path (Join-Path $extDir "second-brain") | Out-Null
+        Set-Content -Path (Join-Path $extDir "second-brain\marker.txt") -Value "present"
+        $oldUserProfile = $env:USERPROFILE
+        $env:USERPROFILE = $fakeHome
+        try {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:repo "scripts\uninstall-prime-extension.ps1") -SourceRoot $script:brain
+            $LASTEXITCODE | Should Be 0
+        } finally {
+            $env:USERPROFILE = $oldUserProfile
+        }
+        (Test-Path (Join-Path $extDir "second-brain\marker.txt")) | Should Be $false
+        (Test-Path (Join-Path $fakeHome ".prime")) | Should Be $false
+    }
+
     It "fails when source index.ts is missing" {
         Remove-Item -Recurse -Force (Join-Path $script:brain "brainstem\prime-extension\src")
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:repo "scripts\install-prime-extension.ps1") -ExtensionsDir $script:extRoot -SettingsFile $script:settings

@@ -1,4 +1,7 @@
-# Install the Prime Agent extension from this repository, never from Brain state.
+# Install the Second Brain OMP extension (historically named prime-extension)
+# from this repository, never from Brain state. Defaults to OMP's real
+# auto-discovery directory (~/.omp/agent/extensions); pass -ExtensionsDir to
+# target a different install (for example a separate "Prime Agent" binary).
 
 [CmdletBinding()]
 param(
@@ -11,8 +14,8 @@ $ErrorActionPreference = "Stop"
 
 if (-not $SourceRoot) { $SourceRoot = Split-Path $PSScriptRoot -Parent }
 $SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
-if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".prime\agent\extensions" }
-if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".prime\agent\settings.json" }
+if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".omp\agent\extensions" }
+if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".omp\agent\settings.json" }
 
 $Src = Join-Path $SourceRoot "brainstem\prime-extension\src"
 $TypesSrc = Join-Path $SourceRoot "brainstem\prime-extension\types"
@@ -87,5 +90,5 @@ Write-Host "Target: $Target"
 Write-Host "File count: $($InstalledManifest.Count)"
 Write-Host "Manifest SHA-256: $ManifestHash"
 Write-Host "Pre-install backup: $BackupDir"
-Write-Host "Restart Prime Agent or run /reload to load the extension."
+Write-Host "Restart OMP or run /reload to load the extension."
 exit 0
