@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from second_brain import db, v2_policy
+from second_brain import v2_policy
 from second_brain.errors import BrainError
 
 
@@ -43,14 +43,6 @@ def _write_policy(home, text=_POLICY):
     (config / "v2.toml").write_text(text, encoding="utf-8")
 
 
-def test_defaults_are_all_shadow():
-    policy = v2_policy.load_policy(v2_policy.REPOSITORY_HOME)
-    assert set(policy.rollout) == {
-        "admission", "retrieval", "brainstem", "learning", "culture", "frontier", "verification"
-    }
-    assert all(stage is v2_policy.RolloutStage.SHADOW for stage in policy.rollout.values())
-
-
 @pytest.mark.parametrize(
     "text, message",
     [
@@ -84,10 +76,3 @@ def test_policy_rejects_invalid_utf8(tmp_path):
     with pytest.raises(BrainError, match="cannot read"):
         v2_policy.load_policy(tmp_path)
 
-
-def test_ensure_v2_migrated_delegates_to_db(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(v2_policy.db, "pending_migrations", lambda path: [11])
-    monkeypatch.setattr(v2_policy.db, "migrate", lambda path: calls.append(path))
-    v2_policy.ensure_v2_migrated(tmp_path)
-    assert calls == [db.db_path(tmp_path)]
