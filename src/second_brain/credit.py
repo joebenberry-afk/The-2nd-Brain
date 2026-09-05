@@ -39,10 +39,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import contracts, db, decisions, plasticity, router, telemetry
+from . import build_identity, contracts, db, decisions, plasticity, router, telemetry
 from .errors import BrainError
 
 CREDIT_LEVELS: tuple[str, ...] = plasticity.CREDIT_LEVELS
+
 
 class CreditClass(enum.StrEnum):
     DIRECT = "DIRECT"
@@ -110,6 +111,7 @@ def classify_credit(evidence: Mapping[str, Any] | Any) -> str:
         return CreditClass.DIRECT
 
     return CreditClass.CORRELATED
+
 
 # Deterministic subject-kind inference contract (assign_credit).
 _SKILL_DIRS = ("skills/shadow", "skills/candidates")
@@ -637,7 +639,9 @@ def record_intervention(
         db.migrate(db.db_path(home_p))
 
     if not isinstance(expected_outcome, Mapping) or not expected_outcome:
-        raise BrainError("Intervention requires non-empty prior measurable expected_outcome mapping")
+        raise BrainError(
+            "Intervention requires non-empty prior measurable expected_outcome mapping"
+        )
 
     has_measurable = any(
         k in expected_outcome
@@ -661,11 +665,10 @@ def record_intervention(
         "baseline_ref": str(baseline_ref),
     }
 
-    identity_str = f"{intervention_type}:{target_ref}:{baseline_ref}:{contracts.canonical_json(expected_dict)}"
-    intervention_id = (
-        "intv-"
-        + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
+    identity_str = (
+        f"{intervention_type}:{target_ref}:{baseline_ref}:{contracts.canonical_json(expected_dict)}"
     )
+    intervention_id = "intv-" + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
     provenance_hash = hashlib.sha256(
         contracts.canonical_json(
             {"intervention": intervention_dict, "expected": expected_dict}
@@ -736,6 +739,77 @@ def record_intervention(
     }
 
 
+def _observation_evidence(
+    home: Path,
+    evidence_ref: str,
+    classification: str,
+    observed_data: Mapping[str, Any],
+    target_ref: str,
+) -> dict[str, Any]:
+    requested_classification = str(classification).strip().lower()
+    if requested_classification not in {"observed", "simulation"}:
+        raise BrainError("evidence_classification must be 'observed' or 'simulation'")
+
+    raw = Path(evidence_ref)
+    path: Path | None = None
+    if not raw.is_absolute() and ".." not in raw.parts:
+        root = home.resolve()
+        candidate = (root / raw).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            pass
+        else:
+            path = candidate
+
+    artifact: dict[str, Any] = {}
+    artifact_hash: str | None = None
+    if path is not None and path.is_file():
+        try:
+            raw_artifact = path.read_bytes()
+            loaded = json.loads(raw_artifact)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            loaded = None
+        else:
+            artifact_hash = hashlib.sha256(raw_artifact).hexdigest()
+        if isinstance(loaded, dict):
+            artifact = loaded
+
+    artifact_classification = str(artifact.get("classification", "unknown")).strip().lower()
+    derived_classification = (
+        "simulation" if requested_classification == "simulation" else artifact_classification
+    )
+    feature = target_ref.removeprefix("policy:") if target_ref.startswith("policy:") else None
+    repo = Path(__file__).resolve().parents[2]
+    binding_matches = (
+        derived_classification == "observed"
+        and artifact.get("qualification_eligible") is True
+        and isinstance(feature, str)
+        and bool(feature)
+        and artifact.get("feature") == feature
+        and artifact.get("target_ref") == target_ref
+        and isinstance(artifact.get("source_commit"), str)
+        and artifact["source_commit"] == build_identity.git_sha(repo)
+        and isinstance(artifact.get("source_tree_sha256"), str)
+        and artifact["source_tree_sha256"] == build_identity.source_tree_fingerprint(repo)
+        and isinstance(artifact.get("config_sha256"), str)
+        and artifact["config_sha256"] == build_identity.configuration_fingerprint(home)
+        and contracts.canonical_json(artifact.get("observed_data"))
+        == contracts.canonical_json(dict(observed_data))
+    )
+    return {
+        "classification": derived_classification,
+        "path": evidence_ref,
+        "sha256": artifact_hash,
+        "feature": artifact.get("feature"),
+        "target_ref": artifact.get("target_ref"),
+        "source_commit": artifact.get("source_commit"),
+        "source_tree_sha256": artifact.get("source_tree_sha256"),
+        "config_sha256": artifact.get("config_sha256"),
+        "qualification_eligible": binding_matches,
+    }
+
+
 def record_observation(
     home: Path | str,
     intervention_id: str,
@@ -745,10 +819,11 @@ def record_observation(
     *,
     evaluator_ref: str = "evaluator-system",
     evidence_strength: float = 1.0,
+    evidence_classification: str = "observed",
     session_id: str | None = None,
     task_id: str | None = None,
 ) -> dict[str, Any]:
-    """Record an observation from telemetry/test evidence, compute prediction error & credit."""
+    """Record bounded evidence; unresolved/simulated evidence remains non-promotable."""
     home_p = Path(home)
     if db.pending_migrations(db.db_path(home_p)):
         db.migrate(db.db_path(home_p))
@@ -790,13 +865,17 @@ def record_observation(
 
     expected_dict = json.loads(expected_raw)
     observed_dict = dict(observed_data)
-
+    observed_dict["_evidence"] = _observation_evidence(
+        home_p,
+        evidence_ref,
+        evidence_classification,
+        observed_dict,
+        str(row["target_ref"]),
+    )
     metric_name = expected_dict.get("metric", "delta")
     exp_val = expected_dict.get(
         "expected_delta",
-        expected_dict.get(
-            "expected_value", expected_dict.get("expected_pass")
-        ),
+        expected_dict.get("expected_value", expected_dict.get("expected_pass")),
     )
     obs_val = observed_dict.get(
         metric_name,
@@ -841,11 +920,10 @@ def record_observation(
         "design": design,
         "verdict": verdict_str,
         "effect": effect,
-        "interaction_significant": observed_dict.get(
-            "interaction_significant", False
-        ),
+        "interaction_significant": observed_dict.get("interaction_significant", False),
     }
     derived_credit = classify_credit(credit_evidence)
+    observed_dict["_credit_evidence"] = credit_evidence
 
     target_ref = row["target_ref"]
     if derived_credit == CreditClass.UNRELATED_NEGATIVE or (
@@ -858,10 +936,7 @@ def record_observation(
             "reason": "negative_causal_effect",
             "effect_size": effect,
         }
-    elif (
-        derived_credit in (CreditClass.DIRECT, CreditClass.CONTRIBUTORY)
-        and surprise_score >= 0.2
-    ):
+    elif derived_credit in (CreditClass.DIRECT, CreditClass.CONTRIBUTORY) and surprise_score >= 0.2:
         candidate_action = {
             "action": "propose_candidate_update",
             "target_ref": target_ref,
@@ -880,15 +955,12 @@ def record_observation(
 
     now = datetime.now(UTC).isoformat()
     obs_id = (
-        "obs-"
-        + hashlib.sha256(
-            f"{intervention_id}:{evidence_ref}:{now}".encode("utf-8")
-        ).hexdigest()[:24]
+        "obs-" + hashlib.sha256(f"{intervention_id}:{evidence_ref}:{now}".encode()).hexdigest()[:24]
     )
     prov_hash = hashlib.sha256(
-        contracts.canonical_json(
-            {"obs": observed_dict, "pred_err": prediction_error_dict}
-        ).encode("utf-8")
+        contracts.canonical_json({"obs": observed_dict, "pred_err": prediction_error_dict}).encode(
+            "utf-8"
+        )
     ).hexdigest()
 
     conn = db.connect(db.db_path(home_p))
@@ -916,7 +988,8 @@ def record_observation(
             ),
         )
         conn.execute(
-            "UPDATE v2_interventions SET status = 'OBSERVED', updated_at = ? WHERE intervention_id = ?",
+            "UPDATE v2_interventions SET status = 'OBSERVED', updated_at = ? "
+            "WHERE intervention_id = ?",
             (now, intervention_id),
         )
         conn.commit()
@@ -961,6 +1034,7 @@ def record_observation(
         "candidate_action": candidate_action,
         "evidence_type": clean_ev_type,
         "evaluator_ref": evaluator_ref,
+        "qualification_eligible": observed_dict["_evidence"]["qualification_eligible"],
         "provenance_hash": prov_hash,
         "created_at": now,
     }
