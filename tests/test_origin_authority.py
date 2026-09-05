@@ -48,6 +48,10 @@ def test_two_summaries_same_root_count_as_one_corroboration(brain_home: Path) ->
     assert semantic.corroboration_count(rows) == 1
 
 
+def test_corroboration_ignores_non_iterable_input() -> None:
+    assert semantic.corroboration_count(object()) == 0
+
+
 def test_policy_lane_rejects_advisory_items(brain_home: Path) -> None:
     advisory = semantic.add_memory(
         brain_home,
@@ -80,11 +84,15 @@ def test_invalid_origin_class_and_ceiling_rejected(brain_home: Path) -> None:
 
 def test_curate_can_only_lower_authority_ceiling(brain_home: Path) -> None:
     mid = semantic.add_memory(brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED")
-    assert semantic._row(brain_home, mid)["authority_ceiling"] == "project_rule"
+    before = semantic._row(brain_home, mid)
+    assert before is not None
+    assert before["authority_ceiling"] == "project_rule"
     with pytest.raises(BrainError):
         semantic.curate(brain_home, mid, authority_ceiling="policy")
     semantic.curate(brain_home, mid, authority_ceiling="advisory")
-    assert semantic._row(brain_home, mid)["authority_ceiling"] == "advisory"
+    after = semantic._row(brain_home, mid)
+    assert after is not None
+    assert after["authority_ceiling"] == "advisory"
 
 
 def test_origin_columns_migrate_fresh_database(tmp_path: Path) -> None:

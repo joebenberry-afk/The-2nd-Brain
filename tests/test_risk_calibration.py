@@ -92,9 +92,7 @@ def test_is_central_function_direct():
 
 def test_logistic_regression_synthetic():
     """Unit test for calibrate_risk.py logistic regression training."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-    import calibrate_risk
+    from scripts import calibrate_risk
     
     feature_names = ["blast_radius", "centrality", "concurrency"]
     X = [
@@ -125,9 +123,7 @@ def test_logistic_regression_synthetic():
 
 def test_precision_recall_computation():
     """Unit test for precision and recall calculation in calibrate_risk.py."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-    import calibrate_risk
+    from scripts import calibrate_risk
     
     samples = [
         {"signals": [{"name": "centrality", "points": 2}, {"name": "blast_radius", "points": 1}], "failed": 1},
@@ -154,9 +150,7 @@ def test_precision_recall_computation():
 
 def test_toml_updating(tmp_path: Path):
     """Test updating [risk_weights] in verification.toml without corrupting other sections."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-    import calibrate_risk
+    from scripts import calibrate_risk
     
     toml_path = tmp_path / "verification.toml"
     toml_path.write_text("""# test config
@@ -185,9 +179,7 @@ flag = true
 
 def test_collect_session_data_and_calibrate_end_to_end(tmp_path: Path):
     """End-to-end test for data collection, logistic regression fitting, and config writing."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-    import calibrate_risk
+    from scripts import calibrate_risk
     import json
     import tomllib
 

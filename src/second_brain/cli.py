@@ -4587,7 +4587,7 @@ def cmd_worker_plane(args) -> int:
         except Exception as exc:
             results = []
             error = f"{type(exc).__name__}: {exc}"
-        output = {"reaped": results}
+        output: dict[str, object] = {"reaped": results}
         if error:
             output["error"] = error
         if args.json:

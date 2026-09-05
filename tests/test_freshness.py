@@ -209,7 +209,9 @@ def test_verified_annotation_uses_matching_source(brain_home: Path, tmp_path: Pa
     mid = semantic.add_memory(brain_home, "fact", "second", scope="global", sources=[first, second])
     (repo / "first.txt").write_text("changed\n", encoding="utf-8")
     assert freshness.resolve(brain_home, mid, repo)["state"] == "VERIFIED_CURRENT"
-    assert freshness.current_source(brain_home, mid, repo)["path"] == "second.txt"
+    current = freshness.current_source(brain_home, mid, repo)
+    assert current is not None
+    assert current["path"] == "second.txt"
 
 
 def test_cache_recomputes_after_edit_revert(brain_home: Path, tmp_path: Path) -> None:

@@ -1152,7 +1152,9 @@ def review_worker_result(
     packet_sha256 = result_data.get("packet_sha256")
     result_sha256 = result_data.get("result_sha256")
     if (
-        not worker_protocol._is_sha256(packet_sha256)
+        not isinstance(packet_sha256, str)
+        or not isinstance(result_sha256, str)
+        or not worker_protocol._is_sha256(packet_sha256)
         or not worker_protocol._is_sha256(result_sha256)
         or result_sha256 != result.canonical_hash()
     ):

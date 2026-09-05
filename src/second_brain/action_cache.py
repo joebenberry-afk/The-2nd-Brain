@@ -221,7 +221,13 @@ def worktree_fingerprint_for(
         "--",
         normalized_scope,
     )
-    if None in (head_tree, index_tree, dirty, untracked_raw, dirty_names):
+    if (
+        head_tree is None
+        or index_tree is None
+        or dirty is None
+        or untracked_raw is None
+        or dirty_names is None
+    ):
         return None
 
     untracked: list[tuple[str, str]] = []

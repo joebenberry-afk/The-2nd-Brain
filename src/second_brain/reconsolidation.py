@@ -788,6 +788,10 @@ def revert_supersede(
     if current_v <= 1:
         raise BrainError(f"Cannot revert memory {memory_id}: already at version {current_v}")
     target_v = target_version if target_version is not None else current_v - 1
+    grade = row.get("evidence_grade")
+    status = row.get("status")
+    if not isinstance(grade, str) or not isinstance(status, str):
+        raise BrainError(f"Corrupt memory metadata for {memory_id}")
 
     conn = db.connect(_dbfile(home_p))
     try:
@@ -847,8 +851,8 @@ def revert_supersede(
     semantic._sync_file_metadata(
         home_p,
         target_path,
-        grade=row.get("evidence_grade"),
-        status=row.get("status"),
+        grade=grade,
+        status=status,
     )
     semantic._safe_index(home_p, memory_id)
 

@@ -381,6 +381,7 @@ class TestActionCacheArtifactRefs:
             action_type=ActionType.GENERIC_PURE, target="f3.py", content="c3",
             proof=proof, params={"p": 3},
         )
+        assert e1 is not None and e2 is not None and e3 is not None
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
         owners = {r["owner"] for r in conn.execute("SELECT owner FROM artifact_refs").fetchall()}
         conn.close()
@@ -401,6 +402,7 @@ class TestActionCacheArtifactRefs:
                 constant_fingerprint={"test": "artifact-ref-key"},
             ),
         )
+        assert entry is not None
         owner = f"action_cache:{entry.action_key}"
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)
         before = conn.execute(

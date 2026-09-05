@@ -63,7 +63,7 @@ def test_policy_rollout_is_immutable_and_stage_gate_is_strict(tmp_path):
     with pytest.raises(TypeError):
         policy.rollout["admission"] = v2_policy.RolloutStage.ACTIVE
     with pytest.raises(FrozenInstanceError):
-        policy.worker_slots = 2
+        policy.__setattr__("worker_slots", 2)
     assert v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.SHADOW) is v2_policy.RolloutStage.SHADOW
     with pytest.raises(BrainError, match="requires"):
         v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.CANARY)

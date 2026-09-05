@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -639,9 +640,9 @@ def feature_source(key: str, home: Path, env: dict[str, str] | None = None) -> s
 class ROIVerdict:
     """Result of ROI classification."""
     status: Literal['POSITIVE_ROI', 'NEUTRAL', 'NEGATIVE_ROI', 'INSUFFICIENT_EVIDENCE']
-    on_tokens: int | None = None
-    off_tokens: int | None = None
-    savings: int | None = None  # on_tokens - off_tokens (negative = savings)
+    on_tokens: float | None = None
+    off_tokens: float | None = None
+    savings: float | None = None  # on_tokens - off_tokens (negative = savings)
     on_sessions: int = 0
     off_sessions: int = 0
     neutral_band: float = 0.02
@@ -693,20 +694,23 @@ def classify_roi(
         and abs(result.get("r_bar") or 0) <= neutral_band + 1e-9
     ):
         verdict.status = "NEUTRAL"
+    elif status == "POSITIVE":
+        verdict.status = "POSITIVE_ROI"
+    elif status == "NEGATIVE":
+        verdict.status = "NEGATIVE_ROI"
     else:
-        verdict.status = {
-            "POSITIVE": "POSITIVE_ROI",
-            "NEGATIVE": "NEGATIVE_ROI",
-        }.get(status, "INSUFFICIENT_EVIDENCE")
+        verdict.status = "INSUFFICIENT_EVIDENCE"
     if any(session.cost_total is None or session.cost_total_seen == 0 for session in (*on, *off)):
         verdict.status = "INSUFFICIENT_EVIDENCE"
         verdict.reason = "cost_total missing from host telemetry"
     on_costs = [session.cost_total for session in on if session.cost_total is not None]
     off_costs = [session.cost_total for session in off if session.cost_total is not None]
     if len(on_costs) == len(on) and len(off_costs) == len(off):
-        verdict.on_tokens = sum(on_costs)
-        verdict.off_tokens = sum(off_costs)
-        verdict.savings = verdict.on_tokens - verdict.off_tokens
+        on_total = sum(on_costs)
+        off_total = sum(off_costs)
+        verdict.on_tokens = on_total
+        verdict.off_tokens = off_total
+        verdict.savings = on_total - off_total
     if not verdict.reason:
         verdict.reason = f"mSPRT verdict={status}; n={result.get('n', 0)}"
     return verdict
@@ -851,12 +855,10 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
     except OSError as exc:
         raise ValueError("session ledgers unavailable") from exc
 
-    descendants_by_internal_id: dict[str, str] = {}
-    internal_id_by_host: dict[str, str] = {}
-    for child in children:
+    def read_descendants(child: Path) -> list[sqlite3.Row]:
         dbfile = child / "ledger.sqlite"
         if not dbfile.is_file():
-            continue
+            return []
         try:
             conn = sqlite3.connect(
                 dbfile.absolute().as_uri() + "?mode=ro",
@@ -865,7 +867,7 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
             )
             conn.row_factory = sqlite3.Row
             try:
-                rows = conn.execute(
+                return conn.execute(
                     "SELECT internal_session_id, host_session_id "
                     "FROM sessions WHERE root_parent_session_id = ?",
                     (root_id,),
@@ -874,19 +876,26 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
                 conn.close()
         except sqlite3.Error as exc:
             raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
-        for row in rows:
-            internal_id = row["internal_session_id"]
-            host_id = row["host_session_id"]
-            if not internal_id or not host_id:
-                raise ValueError("descendant ledger identity is incomplete")
-            known_host = descendants_by_internal_id.get(internal_id)
-            known_internal = internal_id_by_host.get(host_id)
-            if (known_host is not None and known_host != host_id) or (
-                known_internal is not None and known_internal != internal_id
-            ):
-                raise ValueError("conflicting descendant ledger identities")
-            descendants_by_internal_id[internal_id] = host_id
-            internal_id_by_host[host_id] = internal_id
+
+    descendants_by_internal_id: dict[str, str] = {}
+    internal_id_by_host: dict[str, str] = {}
+    # Independent read-only ledgers are I/O-bound; never share connections or
+    # accumulate identity state in workers. map preserves validation order.
+    with ThreadPoolExecutor(max_workers=8) as readers:
+        for rows in readers.map(read_descendants, children):
+            for row in rows:
+                internal_id = row["internal_session_id"]
+                host_id = row["host_session_id"]
+                if not internal_id or not host_id:
+                    raise ValueError("descendant ledger identity is incomplete")
+                known_host = descendants_by_internal_id.get(internal_id)
+                known_internal = internal_id_by_host.get(host_id)
+                if (known_host is not None and known_host != host_id) or (
+                    known_internal is not None and known_internal != internal_id
+                ):
+                    raise ValueError("conflicting descendant ledger identities")
+                descendants_by_internal_id[internal_id] = host_id
+                internal_id_by_host[host_id] = internal_id
 
     return sum(
         _session_total_tokens(home, host_id)

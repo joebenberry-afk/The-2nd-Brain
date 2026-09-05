@@ -132,15 +132,17 @@ def cost_per_run(
     bases = _price_values(prices)
     if bases is None:
         return None
-    values = [
-        _number(_value(usage, "input_tokens", "input", "uncached_in")),
-        _number(_value(usage, "cache_read_tokens", "cache_read")),
-        _number(_value(usage, "cache_write_tokens", "cache_write")),
-        _number(_value(usage, "output_tokens", "output")),
-    ]
-    if any(value is None for value in values):
+    uncached_in = _number(_value(usage, "input_tokens", "input", "uncached_in"))
+    cache_read = _number(_value(usage, "cache_read_tokens", "cache_read"))
+    cache_write = _number(_value(usage, "cache_write_tokens", "cache_write"))
+    output = _number(_value(usage, "output_tokens", "output"))
+    if (
+        uncached_in is None
+        or cache_read is None
+        or cache_write is None
+        or output is None
+    ):
         return None
-    uncached_in, cache_read, cache_write, output = values  # type: ignore[misc]
     multipliers = multipliers or {}
     mi_value = _number(_value(multipliers, "uncached_in", "uncached_in_multiplier"))
     mi = 1.0 if mi_value is None else mi_value

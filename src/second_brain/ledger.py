@@ -716,6 +716,7 @@ class LedgerStore:
         scoped; used by replay(), not by integrity()/checkpoint_ledger's hot
         path — see integrity()'s docstring)."""
         bad: list[str] = []
+        assert self._conn is not None
         for obj in self._conn.execute("SELECT sha256, size FROM object_refs").fetchall():
             try:
                 path = _contained(self._dir, f"{_OBJECT_DIR}/{obj['sha256']}")

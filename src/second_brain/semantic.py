@@ -14,6 +14,7 @@ every previous file, so history is preserved.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 import contextlib
 import hashlib
 import logging
@@ -428,9 +429,11 @@ def _signal_key(payload: dict) -> str:
     return ""
 
 
-def _extract_candidate_evidence(events: list[object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if not isinstance(events, list):
-        raise BrainError("events must be a list of ledger or telemetry records")
+def _extract_candidate_evidence(
+    events: Sequence[object],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not isinstance(events, Sequence) or isinstance(events, (str, bytes, bytearray)):
+        raise BrainError("events must be a sequence of ledger or telemetry records")
     if len(events) > _CANDIDATE_EVENT_LIMIT:
         raise BrainError(f"events must contain at most {_CANDIDATE_EVENT_LIMIT} records")
 
@@ -520,7 +523,7 @@ def _extract_candidate_evidence(events: list[object]) -> tuple[tuple[str, ...], 
     return triggers, refs
 
 
-def extract_candidate_triggers(events: list[object]) -> tuple[str, ...]:
+def extract_candidate_triggers(events: Sequence[object]) -> tuple[str, ...]:
     """Return normalized evidence triggers; model confidence is never a signal."""
     return _extract_candidate_evidence(events)[0]
 
@@ -546,7 +549,7 @@ def evaluate_candidate(
     title: str,
     body: str,
     *,
-    events: list[object],
+    events: Sequence[object],
     session_id: str,
     task_id: str | None = None,
     scope: str = "project",
@@ -671,15 +674,14 @@ def evaluate_candidate(
 
 def corroboration_count(rows: object) -> int:
     """Count independent corroboration roots, ignoring missing roots."""
-    if not isinstance(rows, (list, tuple, set, frozenset)):
-        rows = list(rows) if rows is not None else []
-    roots = {
-        str(row.get("origin_root_sha")).lower()
-        for row in rows
-        if isinstance(row, dict)
-        and isinstance(row.get("origin_root_sha"), str)
-        and row.get("origin_root_sha").strip()
-    }
+    iterable = rows if isinstance(rows, Iterable) else ()
+    roots: set[str] = set()
+    for row in iterable:
+        if not isinstance(row, dict):
+            continue
+        root = row.get("origin_root_sha")
+        if isinstance(root, str) and root.strip():
+            roots.add(root.lower())
     return len(roots)
 
 
@@ -856,7 +858,10 @@ def build_query(
 ) -> str | list:
     """Build a bounded, parameter-safe FTS5 OR query using IDF-ranked terms."""
     expression, query_terms, _required = _query_plan(text, k=k, msm=msm, conn=conn)
-    return expression if len(query_terms) >= 2 else []
+    if len(query_terms) < 2:
+        return []
+    assert expression is not None
+    return expression
 
 
 

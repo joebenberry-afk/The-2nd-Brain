@@ -161,12 +161,26 @@ modifies or restores that configuration.
 
 Worker receipt replay is idempotent, including failed and cancelled outcomes.
 Historical terminal tasks without a durable receipt return
-`RESULT_NOT_RECORDED`; they are not retroactively credited. Native OMP 18.1.10
-async-result framing cannot unambiguously represent all literal worker output.
-Ambiguous results remain pending for explicit recovery rather than being
-misattributed. The audited candidate remains
-[HOLD](../../outputs/reports/v2/omp-burnin/20260905T030605Z-audited-closeout/14-release-readiness.md)
-pending the recorded correctness and live qualification gates.
+`RESULT_NOT_RECORDED`; they are not retroactively credited.
+
+Automatic result capture requires native `async-result` `details.jobs[]`
+entries with `jobId`, `type`, `status`, and `agentId`. Correlation uses `jobId`;
+the child identity and terminal status come only from structured metadata.
+Rendered content is limited to a 2,048-character, non-authoritative batch summary.
+No rendered `<task-result>` attributes or live snapshot polling provide authority.
+
+Stock OMP 18.1.10 lacks this metadata: automatic results remain pending and
+emit `BRAIN_WORKER_STRUCTURED_ASYNC_UNAVAILABLE` once per extension lifecycle.
+Synchronous results and explicit structured `hub` observations retain their
+existing settlement path. Patched-host compatibility was verified on both
+pinned `f241301c83726afe75a847e919b89977a54dafbe` and current-main base
+`5964a0f7649275bcde818f20073193fd032451f2`, using upstream patch
+[`874fe1f20b`](https://github.com/joebenberry-afk/oh-my-pi/commit/874fe1f20bc5f906812ff52c0a6a5698a59c191e).
+The patch preserves status/identity even after the live job row is evicted.
+
+The candidate remains **HOLD**: no default deployment or provider qualification
+was performed. See the
+[structured-contract offline evidence](../../outputs/reports/v2/omp-burnin/20260905-host-contract-offline/).
 
 `npm install` inside this directory is for DEVELOPMENT only (tests/lint/type
 check; the extension itself has zero runtime dependencies beyond Node

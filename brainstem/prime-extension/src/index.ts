@@ -1037,19 +1037,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       );
     }
   };
-  /**
-   * OMP auto-delivers a settled background `task` job as a `message_end`
-   * custom message (`role: "custom"`, `customType: "async-result"`) instead
-   * of a `hub` `tool_result` when the caller does not explicitly poll
-   * `hub jobs`/`wait` before the job settles (live-confirmed shape; see
-   * `09-worker-result-undercount-defect.md`). Without observing this path,
-   * real successful/failed workers are silently invisible to
-   * `omp_worker_child_result` telemetry and the durable worker-result
-   * lifecycle. This mirrors `recordAsyncWorkerCompletions` exactly, sharing
-   * `pendingWorkerJobs` correlation and `emitWorkerCompletion` so the same
-   * worker is never reported twice regardless of which path observes it
-   * first (`takePendingWorkerJob` + `reportedWorkerTaskIds` dedupe).
-   */
+  let structuredAsyncUnavailableReported = false;
+  /** Native delivery metadata is authoritative; rendered text is summary only. */
   const recordAsyncResultDeliveries = async (
     message: MessageEndMessage,
     ctx: ExtensionContext,
@@ -1062,53 +1051,43 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (details.jobs.length > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
     const session = resolveSessionId(ctx, anonSession);
     await recoverWorkerResults(session, ctx);
-    const allowedIds = new Set<string>();
-    for (const job of details.jobs) {
-      if (job !== null && typeof job === "object" && job.type === "task" && typeof job.jobId === "string") allowedIds.add(job.jobId);
-    }
-    if (allowedIds.size === 0) return;
-    const content = typeof message.content === "string" ? message.content :
-      Array.isArray(message.content) ? message.content.flatMap((part) =>
-        part !== null && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n") : "";
-    if (content.length > 256 * 1024) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
-    let depth = 0;
-    let outerStart = 0;
-    let outerHeader = "";
-    let blocks = 0;
-    for (const tag of content.matchAll(/<\/?task-result\b[^>]*>/g)) {
-      if (!tag[0].startsWith("</")) {
-        if (depth === 0) {
-          outerStart = tag.index;
-          outerHeader = tag[0];
+    let summary = typeof message.content === "string" ? message.content.slice(0, 2048) : "";
+    if (Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (summary.length >= 2048) break;
+        if (part !== null && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
+          summary += part.text.slice(0, 2048 - summary.length);
         }
-        depth += 1;
+      }
+    }
+    for (const job of details.jobs) {
+      if (job === null || typeof job !== "object" || job.type !== "task" ||
+          typeof job.jobId !== "string" || job.jobId.length > 512) continue;
+      const pending = takePendingWorkerJob(job.jobId, session);
+      if (pending === undefined || pending.parentSessionId !== session) continue;
+      if (typeof job.status !== "string" || typeof job.agentId !== "string" ||
+          job.agentId.length === 0 || job.agentId.length > 512) {
+        if (!structuredAsyncUnavailableReported) {
+          structuredAsyncUnavailableReported = true;
+          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_STRUCTURED_ASYNC_UNAVAILABLE"));
+        }
         continue;
       }
-      if (depth === 0 || --depth !== 0) continue;
-      blocks += 1;
-      if (blocks > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
-      const agentId = outerHeader.match(/\bid="([^"]+)"/)?.[1];
-      const rawStatus = outerHeader.match(/\bstatus="([^"]+)"/)?.[1];
-      if (!agentId || !allowedIds.has(agentId)) continue;
-      const status = rawStatus === "completed" || rawStatus === "cancelled" ? rawStatus :
-        rawStatus === "failed" || rawStatus === "merge failed" || /^failed \(exit -?[1-9]\d*\)$/.test(rawStatus ?? "") ? "failed" : undefined;
+      const status = job.status === "completed" || job.status === "failed" || job.status === "cancelled" ? job.status : undefined;
       if (status === undefined) {
         getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_INVALID_STATUS"));
         continue;
       }
-      const pending = takePendingWorkerJob(agentId, session);
-      if (pending === undefined || pending.parentSessionId !== session) continue;
       await emitWorkerCompletion(pending.parentSessionId, ctx, {
         task_id: pending.taskId,
         packet_sha256: pending.packetSha256,
-        child_omp_agent_id: agentId,
+        child_omp_agent_id: job.agentId,
         child_omp_session_file: null,
         worker_agent: pending.agent,
         worker_model: null,
         status,
-      }, content.slice(outerStart, tag.index + tag[0].length));
+      }, summary);
     }
-    if (depth !== 0 || blocks === 0) throw new Error("BRAIN_WORKER_RESULT_MALFORMED_ENVELOPE");
   };
   const mirrorWorkerContextReceipt = (
     prompt: string,
