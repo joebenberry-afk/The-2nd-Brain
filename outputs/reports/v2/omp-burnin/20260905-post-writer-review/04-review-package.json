@@ -1,0 +1,11 @@
+{
+  "host_base": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+  "host_head": "dc4dbc5ced040d3dde79d93d4fb9dd48bbf2e7cc",
+  "reachable_delta_commits": "dc4dbc5ced040d3dde79d93d4fb9dd48bbf2e7cc e874b613654fd493b2bcb45c832e68f8d1a9a23e fix(task): expose exact cleanup settlement\n",
+  "metadata_dependencies": [
+    "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+    "ddce3599c63b5ff7100e07d62a76ab8ecec912cb"
+  ],
+  "scope": "Local/private delta only; do not publish combined history or Brain repository",
+  "sanitization": "Git product-path diffs only, excludes old reports, canonical state, credentials and runtime env. Subject to scoped reviewer findings; not public-release approval."
+}

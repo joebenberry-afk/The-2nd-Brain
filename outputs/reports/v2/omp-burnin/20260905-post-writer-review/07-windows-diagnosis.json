@@ -1,0 +1,24 @@
+{
+  "owner_smoke": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "\n[Uncaught Exception] Error: EBUSY: resource busy or locked, rm 'C:\\Users\\assas\\AppData\\Local\\Temp\\omp-settings-owner-proof-k07yfA'\n"
+  },
+  "baseline": {
+    "exit": 1,
+    "stdout": "bun test v1.4.0 (34cbb9a40)\n",
+    "stderr": "\npackages\\coding-agent\\test\\task\\structured-subagent.test.ts:\n205 | \n206 | \t\t\texpect(policy.modelRole).toBe(\"hot_worker\");\n207 | \t\t\texpect(policy.modelOverride).toEqual([\"kimi-code/k3:max\"]);\n208 | \t\t} finally {\n209 | \t\t\tliveSettings.cancelPendingSaves();\n210 | \t\t\tawait fs.rm(root, { recursive: true, force: true });\n                  ^\nEBUSY: resource busy or locked, rm 'C:\\Users\\assas\\AppData\\Local\\Temp\\omp-task-hot-reload-kW3frn'\n    path: \"C:\\\\Users\\\\assas\\\\AppData\\\\Local\\\\Temp\\\\omp-task-hot-reload-kW3frn\",\n syscall: \"rm\",\n   errno: -4082,\n    code: \"EBUSY\"\n\n      at async <anonymous> (C:\\Users\\assas\\Documents\\omp-combined-contract-proof\\packages\\coding-agent\\test\\task\\structured-subagent.test.ts:210:13)\n(fail) structured subagent primitive > reloads model roles before resolving an agent added during the session [53.28ms]\n\n 0 pass\n 27 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [3.59s]\n"
+  },
+  "candidate": {
+    "exit": 0,
+    "stdout": "bun test v1.4.0 (34cbb9a40)\n",
+    "stderr": "\npackages\\coding-agent\\test\\task\\structured-subagent.test.ts:\n(pass) structured subagent primitive > reloads model roles before resolving an agent added during the session [721.94ms]\n\n 1 pass\n 29 filtered out\n 0 fail\n 2 expect() calls\nRan 1 test across 1 file. [1401.00ms]\n"
+  },
+  "command": [
+    "test",
+    "packages/coding-agent/test/task/structured-subagent.test.ts",
+    "-t",
+    "reloads model roles before resolving an agent added during the session"
+  ],
+  "provider_calls": 0
+}

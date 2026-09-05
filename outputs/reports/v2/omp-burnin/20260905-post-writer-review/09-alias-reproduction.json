@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "{\"source\": \"95fc02e82e1878b44d8902411ff905634bae114b\", \"results\": [{\"status\": \"prepared\", \"failure_code\": null, \"attempt_id\": \"attempt-5969384fa32ae9abc6043fb7a6f1c8ee\", \"worktree_id\": \"750663238577137ec1887eedce1c46e2cdb43d01fc95aac27c9f574897969fe4\"}, {\"status\": \"prepared\", \"failure_code\": null, \"attempt_id\": \"attempt-0e4e30a7f64cfc123dc7ce8f5a57ae4b\", \"worktree_id\": \"750663238577137ec1887eedce1c46e2cdb43d01fc95aac27c9f574897969fe4\"}], \"two_writers_admitted\": true, \"same_resource\": true}\r\n",
+  "stderr": ""
+}
