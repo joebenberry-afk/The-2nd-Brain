@@ -2631,16 +2631,17 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     handlers: Map<string, Handler>,
     ctx: ExtensionContext,
     toolCallId: string,
+    agentId = "AsyncWorkerOne",
+    task = "Reply with exactly: OK",
   ): Promise<{ agentId: string; augmentedTask: string; taskId: string }> {
     const spawnResult = (await handlers.get("tool_call")!(
-      { toolName: "task", toolCallId, input: { agent: "task", task: "Reply with exactly: OK" } },
+      { toolName: "task", toolCallId, input: { agent: "task", task } },
       ctx,
     )) as { input: { task: string } };
     const augmentedTask = spawnResult.input.task;
     const taskIdMatch = augmentedTask.match(/\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+)/);
     if (taskIdMatch === null) throw new Error("augmented task missing SECOND_BRAIN_WORKER_TASK marker");
     const taskId = taskIdMatch[1];
-    const agentId = "AsyncWorkerOne";
     // The spawning tool_result: background mode, `results` empty, only
     // `progress[]` carries the marker-embedded task text + OMP agent id.
     await handlers.get("tool_result")!(
@@ -2789,5 +2790,231 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records.some((r) => r.kind === "omp_worker_child_result")).toBe(false);
     expect(resultRunner).not.toHaveBeenCalled();
+  });
+
+  function asyncResultMessage(blocks: Array<{ id: string; status: string; output?: string }>) {
+    const body = blocks
+      .map(
+        (b) =>
+          `── Job ${b.id} (${b.id}) ──\n<task-result id="${b.id}" agent="task" status="${b.status}" duration="1.0s">\n<meta lines="1" size="1B" />\n<output>\n${b.output ?? "{}"}\n</output>\n</task-result>\n\n${b.id} is now idle — message it via \`hub\` to follow up; transcript at history://${b.id}`,
+      )
+      .join("\n");
+    return {
+      type: "message_end" as const,
+      message: {
+        role: "custom",
+        customType: "async-result",
+        content: `<system-notice>\n${blocks.length} background jobs have completed. Resume your work using the results below.\n\n${body}\n</system-notice>`,
+      },
+    };
+  }
+
+  it("correlates a completed worker delivered via message_end async-result auto-delivery (never a second task tool_result)", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "auto-call-1");
+
+    handlers.get("message_end")!(asyncResultMessage([{ id: agentId, status: "completed", output: '{"result":"ok"}' }]), ctx);
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completion = records.find((r) => r.kind === "omp_worker_child_result");
+    expect(completion).toMatchObject({
+      task_id: taskId,
+      packet_sha256: "d".repeat(64),
+      child_omp_agent_id: agentId,
+      status: "completed",
+    });
+    expect(resultRunner).toHaveBeenCalledTimes(1);
+    expect(resultRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId, status: "completed", childOmpAgentId: agentId }),
+    );
+  });
+
+  it("correlates a failed worker delivered via message_end async-result auto-delivery", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "auto-call-2");
+
+    handlers.get("message_end")!(asyncResultMessage([{ id: agentId, status: "failed" }]), ctx);
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completion = records.find((r) => r.kind === "omp_worker_child_result");
+    expect(completion).toMatchObject({ task_id: taskId, status: "failed" });
+  });
+
+  it("emits all correlated results from multiple task-result blocks in one async-result message", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const first = await spawnAndAugment(handlers, ctx, "auto-call-3a", "AsyncWorkerA", "Reply with exactly: A");
+    const second = await spawnAndAugment(handlers, ctx, "auto-call-3b", "AsyncWorkerB", "Reply with exactly: B");
+    const third = await spawnAndAugment(handlers, ctx, "auto-call-3c", "AsyncWorkerC", "Reply with exactly: C");
+
+    handlers.get("message_end")!(
+      asyncResultMessage([
+        { id: first.agentId, status: "completed" },
+        { id: second.agentId, status: "completed" },
+        { id: third.agentId, status: "failed" },
+      ]),
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completions = records.filter((r) => r.kind === "omp_worker_child_result");
+    expect(completions).toHaveLength(3);
+    expect(completions.map((c) => c.task_id).sort()).toEqual(
+      [first.taskId, second.taskId, third.taskId].sort(),
+    );
+    expect(completions.find((c) => c.task_id === third.taskId)).toMatchObject({ status: "failed" });
+    expect(resultRunner).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores an unrelated custom message", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    await spawnAndAugment(handlers, ctx, "auto-call-4");
+
+    handlers.get("message_end")!(
+      { type: "message_end", message: { role: "custom", customType: "brain.active-state", content: "unrelated" } },
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.some((r) => r.kind === "omp_worker_child_result")).toBe(false);
+    expect(resultRunner).not.toHaveBeenCalled();
+  });
+
+  it("fails open on a malformed async-result message with no task-result blocks", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    await spawnAndAugment(handlers, ctx, "auto-call-5");
+
+    let threw = false;
+    let result: { message?: unknown } | undefined;
+    try {
+      result = handlers.get("message_end")!(
+        { type: "message_end", message: { role: "custom", customType: "async-result", content: "no blocks here" } },
+        ctx,
+      ) as { message?: unknown };
+    } catch {
+      threw = true;
+    }
+
+    await settle();
+    expect(threw).toBe(false);
+    expect(result?.message).toBeDefined();
+    const records = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.some((r) => r.kind === "omp_worker_child_result")).toBe(false);
+    expect(resultRunner).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unknown/untracked task-result id safely (no fabricated result)", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+
+    handlers.get("message_end")!(asyncResultMessage([{ id: "NeverSpawnedAgent", status: "completed" }]), ctx);
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records.some((r) => r.kind === "omp_worker_child_result")).toBe(false);
+    expect(resultRunner).not.toHaveBeenCalled();
+  });
+
+  it("does not double-report when hub observes first, then the same job auto-delivers via async-result", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "dedup-call-1");
+
+    await handlers.get("tool_result")!(
+      {
+        toolName: "hub",
+        toolCallId: "hub-wait-dedup-1",
+        input: { op: "wait" },
+        isError: false,
+        content: [{ type: "text", text: "settled" }],
+        details: { op: "wait", jobs: [{ id: agentId, type: "task", status: "completed", resultText: "OK" }] },
+      },
+      ctx,
+    );
+    // The same settled job auto-delivers afterward (OMP may still emit both
+    // surfaces); pendingWorkerJobs is already consumed, so this must be a no-op.
+    handlers.get("message_end")!(asyncResultMessage([{ id: agentId, status: "completed" }]), ctx);
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completions = records.filter((r) => r.kind === "omp_worker_child_result" && r.task_id === taskId);
+    expect(completions).toHaveLength(1);
+    expect(resultRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not double-report when async-result observes first, then the same job is later polled via hub", async () => {
+    const contextRunner = vi.fn(async () => workerContextResult);
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, ompWorkerResultRunner: resultRunner });
+    const ctx = makeCtx();
+    const { agentId, taskId } = await spawnAndAugment(handlers, ctx, "dedup-call-2");
+
+    handlers.get("message_end")!(asyncResultMessage([{ id: agentId, status: "completed" }]), ctx);
+    await settle();
+    // A later redundant hub poll observing the same already-settled job must
+    // not re-emit (pendingWorkerJobs already consumed by the async-result path).
+    await handlers.get("tool_result")!(
+      {
+        toolName: "hub",
+        toolCallId: "hub-jobs-dedup-2",
+        input: { op: "jobs" },
+        isError: false,
+        content: [{ type: "text", text: "settled" }],
+        details: { op: "jobs", jobs: [{ id: agentId, type: "task", status: "completed", resultText: "OK" }] },
+      },
+      ctx,
+    );
+
+    await settle();
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const completions = records.filter((r) => r.kind === "omp_worker_child_result" && r.task_id === taskId);
+    expect(completions).toHaveLength(1);
+    expect(resultRunner).toHaveBeenCalledTimes(1);
   });
 });
