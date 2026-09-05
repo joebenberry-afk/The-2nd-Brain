@@ -1,0 +1,7 @@
+{
+  "host_agent_dir": "<HOST_TEST_HOME>",
+  "provider_opt_in": "E2E=0",
+  "installed_brain_extension": "SECOND_BRAIN_OBSERVABILITY=0",
+  "native_binary": "official pi-natives-win32-x64@18.1.10 baseline; copied only to ignored native directories",
+  "host_full_suite": "Not rerun; requested focused gates only. Prior58 Windows failures remain unattributed."
+}
