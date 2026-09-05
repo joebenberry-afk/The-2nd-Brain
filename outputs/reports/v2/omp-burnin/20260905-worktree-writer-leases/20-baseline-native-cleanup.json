@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "bun test v1.4.0 (34cbb9a40)\n",
+  "stderr": "\npackages\\coding-agent\\test\\task\\structured-subagent.test.ts:\n205 | \n206 | \t\t\texpect(policy.modelRole).toBe(\"hot_worker\");\n207 | \t\t\texpect(policy.modelOverride).toEqual([\"kimi-code/k3:max\"]);\n208 | \t\t} finally {\n209 | \t\t\tliveSettings.cancelPendingSaves();\n210 | \t\t\tawait fs.rm(root, { recursive: true, force: true });\n                  ^\nEBUSY: resource busy or locked, rm '<USERPROFILE>\\AppData\\Local\\Temp\\omp-task-hot-reload-prRBpv'\n    path: \"<USERPROFILE>\\\\AppData\\\\Local\\\\Temp\\\\omp-task-hot-reload-prRBpv\",\n syscall: \"rm\",\n   errno: -4082,\n    code: \"EBUSY\"\n\n      at async <anonymous> (<USERPROFILE>\\Documents\\omp-combined-contract-proof\\packages\\coding-agent\\test\\task\\structured-subagent.test.ts:210:13)\n(fail) structured subagent primitive > reloads model roles before resolving an agent added during the session [51.32ms]\n\n 0 pass\n 27 filtered out\n 1 fail\n 2 expect() calls\nRan 1 test across 1 file. [3.62s]\n"
+}

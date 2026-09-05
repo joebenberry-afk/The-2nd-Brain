@@ -1,0 +1,11 @@
+{
+  "policy": "One Brain-managed mutating attempt per canonical worktree; explicit read_only workers concurrent; different canonical worktrees concurrent",
+  "brain_base": "adeb8784c183aba7c20101e46a767752a11bf645",
+  "preserved_product": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+  "host_base": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+  "path_arbitration": false,
+  "provider_calls_authorized": false,
+  "remote_push_authorized": false,
+  "release": "HOLD",
+  "status": "Implementation in progress; no acceptance results yet"
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "exit": 0,
+    "stdout": "0 errors, 0 warnings, 0 informations\n",
+    "stderr": ""
+  },
+  {
+    "exit": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  }
+]

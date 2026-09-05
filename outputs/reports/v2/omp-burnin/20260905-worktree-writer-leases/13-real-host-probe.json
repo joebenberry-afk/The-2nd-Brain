@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "",
+  "stderr": "\n[Uncaught Exception] Error: Timed out waiting for <USERPROFILE>\\AppData\\Local\\Temp\\brain-writer-proof-GGUHEc\\worktree-a\\.second-brain-probe-a.running\n    at waitForFile (<USERPROFILE>\\Documents\\The-Second-Brain-lifecycle-receipts\\brainstem\\prime-extension\\tests\\worker-lease.probe.ts:70:13)\n    at async main (unknown)\n    at processTicksAndRejections (native:7:39)\n"
+}
