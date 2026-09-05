@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "outcome": "BLOCKED_AT_RESOURCE_ADMISSION_PRIMITIVE",
+  "brain_product": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+  "brain_base": "e9fc61cb623699cb982be4466d053944e2f8426a",
+  "host_base": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+  "hash_scope": "UTF-8 LF-normalized text; user-profile paths redacted from captures",
+  "qualification_eligible": false,
+  "files": [
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/99-closeout.json",
+      "sha256": "5b3d9e44a9644c75aee749d78c2bbfd8eb9efbd0fa0ee20bed265640b1a503a8",
+      "bytes": 11222,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/09-final-validation.json",
+      "sha256": "492b21cc421329bcbcedee85e29b39dc844c6f45051c5929b024dcf2bd21b634",
+      "bytes": 5385,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/02-real-owner-boundary.ts",
+      "sha256": "e7fa02498a0f4a3908ed2892976926d3981539d7530fe755b4291af6c3aa2a99",
+      "bytes": 8073,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/08-bounded-stop.json",
+      "sha256": "1b634c1b766984b7e6bdbfa782711a43fdb28c4f71c5dfd25e8d2de3dbe939e5",
+      "bytes": 3468,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/07-qualification-hold.json",
+      "sha256": "5f3804311064719c038249fd6d976265b936cf8ac2a9d01e71fbdf2ad5854069",
+      "bytes": 7139,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/06-acceptance-red.json",
+      "sha256": "f7f24ad463edfee45720070f4c78737b5bb5e58ff3f1f34e32e54fb2e41c9af5",
+      "bytes": 3985,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/00-checkpoint.json",
+      "sha256": "fe17c51f1363efbc7a2aac18da8515dfb7471ed9901ba7e3888d471ecbdff582",
+      "bytes": 1543,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/05-real-owner-boundary-proof.json",
+      "sha256": "6aa9f48cd5339d50627bd0a2e47d53c4faf36a4721b5005d53db806b341f829c",
+      "bytes": 1688,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/04-real-owner-boundary-final.json",
+      "sha256": "c5352c376b7a030a1463dc3f4ae179a3b79f8c068d6fcb6208af4266c389a218",
+      "bytes": 431,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/03-real-owner-boundary-result.json",
+      "sha256": "92a2c9437010e0b5ad1728fb517384d849b5f90fce93ded47156c5536159e00c",
+      "bytes": 2744,
+      "qualification_eligible": false
+    },
+    {
+      "path": "outputs/reports/v2/omp-burnin/20260905-lifecycle-receipts/01-interface-ownership.md",
+      "sha256": "a6c4cfb26fd3f76f3cfca905ad78901730bbccfb1bb62e0e9e7382acc2341610",
+      "bytes": 4179,
+      "qualification_eligible": false
+    }
+  ]
+}

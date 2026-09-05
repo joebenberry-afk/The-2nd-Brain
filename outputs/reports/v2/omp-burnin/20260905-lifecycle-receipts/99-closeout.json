@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "outcome": "BLOCKED_AT_RESOURCE_ADMISSION_PRIMITIVE",
+  "release": "HOLD",
+  "qualification_eligible": false,
+  "captured_utc": "2026-09-05T18:52:53.798Z",
+  "authority": {
+    "plan": "Second_Brain_Lifecycle_Receipt_and_Cleanup_Interface_Plan_2026-09-05.md",
+    "sha256": "2ee3134a174ec9f5a223c47ee86035dd3438e3821c573a0df20b2f760a9049da",
+    "stop_sections": [
+      "9.F",
+      "10: Blocked at a precisely named unsupported primitive"
+    ]
+  },
+  "sources": {
+    "preserved_brain_product": "c166c9816b963d7f0e3e4f2c83179ea897651c1e",
+    "brain_starting_evidence": "e9fc61cb623699cb982be4466d053944e2f8426a",
+    "brain_branch": "brain/v2-lifecycle-receipts",
+    "brain_worktree": "../The-Second-Brain-lifecycle-receipts",
+    "host_base": "e874b613654fd493b2bcb45c832e68f8d1a9a23e",
+    "host_branch": "proof/lifecycle-receipts",
+    "host_worktree": "../omp-lifecycle-receipts",
+    "new_product_candidate": null,
+    "product_changes": false,
+    "host_source_changes": false,
+    "db_schema_changes": false,
+    "actual_brain_runtime_tree_sha256": "d513fe25cefa62fae82e32c34e4df63aaf77138bd606dd9d7ae8b4ba927242d2",
+    "native_dependency_sha256": "24ba88ed08de5eb21b2559c3dbd6b9494d6d5c599cb8c4d146881c207b32e088",
+    "evidence_commit_binding": "Exact evidence-only commit and final worktree states are recorded in post-commit receipt; no product source is replaced."
+  },
+  "preserved": {
+    "three_brain_repairs": true,
+    "adopted_cancellation_accounting_amendment": true,
+    "automatic_cancelled_result_suppression": true,
+    "dirty_controller_worktree": true,
+    "historical_proof_worktrees": true,
+    "pr_10928_head": "26e02fc02b2eab374aedf04bc931dc8f4a6555e9",
+    "pr_10948_head": "ddce3599c63b5ff7100e07d62a76ab8ecec912cb"
+  },
+  "fresh_evidence": {
+    "real_writer_diagnostic": {
+      "file": "05-real-owner-boundary-proof.json",
+      "exit": 0,
+      "meaning": "Successful diagnostic execution demonstrating missing safety primitives, NOT successful lifecycle acceptance",
+      "actual_components": [
+        "AsyncJobManager registration/cancel/eviction/owner wait/delivery drain",
+        "Brain omp_adapter worker_context and worker_protocol registration",
+        "Disposable real SQLite persistence/reopen",
+        "Two real directly owned Python subprocess file writers"
+      ],
+      "not_exercised": [
+        "Native TaskTool execution chain",
+        "Supported extension observation interface (not implemented)",
+        "Production resource-scope admission or fencing (absent)",
+        "Arbitrary unmanaged descendant cleanup or external effects"
+      ],
+      "observed": {
+        "first_admission": "prepared",
+        "second_same_scope_admission": "prepared",
+        "owner_wait_claimed_settled_while_real_writer_running": true,
+        "concurrent_writers_same_file": true,
+        "native_id_reused_after_eviction": true,
+        "native_id_different_from_child_identity": true,
+        "real_child_exit_and_cleanup_observed": true,
+        "automatic_cancellation_delivery_count": 0,
+        "credit_event_count": 0,
+        "production_usage": null,
+        "provider_calls": 0
+      }
+    },
+    "final_acceptance_assertions": {
+      "file": "09-final-validation.json",
+      "retained_obligation": "FAIL, expected assertion reproduced",
+      "conflicting_scope_admission": "FAIL, expected assertion reproduced",
+      "reproducer_typecheck": "PASS",
+      "interpretation": "No failed or unexecuted lifecycle case is classified PASS"
+    },
+    "qualification": {
+      "file": "07-qualification-hold.json",
+      "exit": 1,
+      "status": "HOLD",
+      "scope": "Actual repaired verifier rejects the diagnostic artifact supplied as manifest; no valid production manifest or new qualification row was created"
+    },
+    "overhead": {
+      "probe": {
+        "cancel_ms": 0.31749999999999545,
+        "total_ms": 571.4158,
+        "cpu_microseconds": {
+          "user": 0,
+          "system": 0
+        },
+        "disposable_output_bytes": 484
+      },
+      "measurement_scope": "Diagnostic parent Bun process only; child Python CPU and startup are not included. Windows CPU API reported zero at this resolution, not zero work.",
+      "observer_latency_cpu_storage": "NOT_MEASURED — observer not implemented",
+      "production_economics": "NOT_QUALIFIED"
+    },
+    "failed_attempts": [
+      {
+        "file": "03-real-owner-boundary-result.json",
+        "reason": "Missing isolated native addon; no product conclusion"
+      },
+      {
+        "file": "04-real-owner-boundary-final.json",
+        "reason": "Probe incorrectly matched LF against Windows CRLF writer output; corrected and rerun"
+      },
+      {
+        "file": "09-final-validation.json",
+        "reason": "Initial standalone tsc option/type errors retained; final reproducer typecheck passed"
+      }
+    ]
+  },
+  "primitive": "An authoritative attempt-to-resource conflict-domain binding with an actually enforced writer admission/quarantine boundary",
+  "scope_decision": "Treat introduction of the first enforced resource-arbitration policy as exceeding the reuse-existing-owner/interface boundary. Do not silently reinterpret free-form scope as authorization or serialize every task sharing cwd.",
+  "scope_decision_classification": "Engineering scope judgment based on observed missing semantics; not a claim that implementation is impossible.",
+  "minimal_extension_proposal": [
+    "Define the participating managed writers and canonical conflict domain, including read-only and isolated-task treatment. This policy is not currently encoded by worker packet scope.",
+    "Implement an atomic attempt-bound admission/quarantine check in the existing task/worker owner and records; no new database, daemon or scheduler is proposed.",
+    "Bind scoped release to retained actual cleanup obligations. Preserve cleanup errors independently of outcome and keep unknown authority quarantined.",
+    "Then add the supported bounded observer/acknowledgment path and finish the supplied acceptance matrix."
+  ],
+  "requirement_dispositions": {
+    "plan_section_5": "No authoritative scoped release or outcome reconciliation implementation; all four combinations remain unqualified",
+    "plan_section_6": "Observer/durability requirements blocked at resource-authority definition; no partial surface shipped",
+    "plan_section_7": "Existing reaper remains unchanged; its known expiry/failure defect is not declared repaired",
+    "plan_section_8": {
+      "rows_2_5_6_9_13": "Negative primitive evidence relevant to delayed settlement, lost authority, eviction, reuse and writer exclusion; NOT complete acceptance coverage",
+      "all_other_rows": "NOT_RUN/BLOCKED; prior cancellation tests do not qualify a new observation interface"
+    },
+    "plan_section_9_E": "New-candidate regression/migration/Doctor campaign not run because no product/schema change was made"
+  },
+  "carried_forward": {
+    "prior_evidence": "../20260905-local-contract-closure/99-closeout.json",
+    "python_tests": 1914,
+    "targeted_python_tests": 162,
+    "targeted_overlap": "Included in full suite; never add counts",
+    "extension_tests": 697,
+    "doctor_checks": 19,
+    "backup_restore": "Prior repaired-candidate proof only",
+    "historical_host_tests": 97,
+    "historical_host_assertions": 417,
+    "scope": "Historical results are preserved, not rerun or promoted to this missing contract. Fresh checkout raw fingerprint is recorded separately."
+  },
+  "not_performed": [
+    "Lifecycle API implementation",
+    "Worker schema/reaper/admission modification",
+    "Deployment or active installation change",
+    "Remote push or public PR",
+    "Provider requests",
+    "Adaptive activation",
+    "Gate 22/23 closure",
+    "Release tag",
+    "Live maintainer/CI polling"
+  ],
+  "task_disposition": {
+    "completed": 5,
+    "blocked": 43,
+    "pending": 0,
+    "total": 48
+  },
+  "blocked_tasks": [
+    "Expose supported host observations without cancellation wakeups",
+    "Persist observations and repair bounded uncertainty handling",
+    "Prove queued cancellation without execution or wake",
+    "Prove delayed settlement blocks conflicting scope reuse",
+    "Prove deferred cleanup outlives generic executor return",
+    "Prove persisted cancellation survives eviction and restart",
+    "Prove pre persistence loss remains bounded uncertainty",
+    "Prove pending cleanup survives live row eviction",
+    "Prove replay repairs interrupted worker projection updates",
+    "Prove duplicate reordered observations remain idempotent",
+    "Prove reused identities cannot release new attempts",
+    "Prove wrong identities and spoofed observations rejected",
+    "Prove authoritative cancellation completion race ordering",
+    "Prove resumable interruption survives shutdown and restart",
+    "Prove unavailable slow failing sinks degrade boundedly",
+    "Prove cleanup failure preserves narrow scope restrictions",
+    "Prove late authentic reconciliation without automatic replay",
+    "Prove absent unsupported capabilities fail narrowly",
+    "Prove disposable real writer cleanup and exclusion",
+    "Measure local overhead and unchanged provider behavior",
+    "Run fresh combined compatibility and applicable regressions",
+    "Verify migration recovery backup restore and inspection",
+    "Freeze candidates and verify evidence eligibility",
+    "Observe cancellation independently from provider facing delivery",
+    "Install observer before authoritative native dispatch registration",
+    "Commit durable observations before acknowledging projection updates",
+    "Permit replay with idempotent observation application",
+    "Define durable receipt retention and retry bounds",
+    "Preserve persisted outcomes after host retention expiry",
+    "Preserve unknown across unprotected host crash windows",
+    "Require durable authority before claiming lossless handoff",
+    "Bound slow failing observers without delaying cancellation",
+    "Preserve result sinks and subscription teardown ownership",
+    "Stop ordinary retries at bounded reconciliation deadline",
+    "Persist idempotent uncertainty with trustworthy identity",
+    "Retain known cancellation across failed host lookups",
+    "Prevent credit inference and automatic side effect replay",
+    "Persist narrow unsafe scope restrictions across expiry",
+    "Reconcile late valid receipts through supported commands",
+    "Keep cancelled outcome blocked until cleanup authority",
+    "Release known safe scope without inventing lost outcome",
+    "Quarantine unknown outcome and unknown cleanup narrowly",
+    "Permit cancelled safe scope under normal admission"
+  ],
+  "cleanup": {
+    "all_disposable_writer_processes_awaited": true,
+    "disposable_brain_homes_removed": true,
+    "no_unknown_pid_kill": true,
+    "proof_program_retained_for_reproduction": true,
+    "worktrees_preserved": true
+  },
+  "next": "Define/authorize the first managed resource conflict-domain and enforced admission/quarantine semantics. Reuse existing records afterward; do not create a new scheduler/database. Then implement the observer/reaper cutover and complete all blocked acceptance cases."
+}
