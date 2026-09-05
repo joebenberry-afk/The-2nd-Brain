@@ -1,4 +1,7 @@
-# Remove the Prime extension and restore its installer-owned backup.
+# Remove the Second Brain OMP extension (historically named prime-extension)
+# and restore its installer-owned backup. Defaults to OMP's real
+# auto-discovery directory (~/.omp/agent/extensions); pass -ExtensionsDir to
+# target a different install.
 
 [CmdletBinding()]
 param(
@@ -12,8 +15,8 @@ $ErrorActionPreference = "Stop"
 
 if (-not $SourceRoot) { $SourceRoot = Split-Path $PSScriptRoot -Parent }
 $SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
-if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".prime\agent\extensions" }
-if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".prime\agent\settings.json" }
+if (-not $ExtensionsDir) { $ExtensionsDir = Join-Path $env:USERPROFILE ".omp\agent\extensions" }
+if (-not $SettingsFile) { $SettingsFile = Join-Path $env:USERPROFILE ".omp\agent\settings.json" }
 
 $Target = Join-Path $ExtensionsDir "second-brain"
 if (-not $BackupDir) {

@@ -139,17 +139,20 @@ powershell -ExecutionPolicy Bypass -File scripts\install-prime-extension.ps1
 ```
 
 It copies `src/*.ts` and `types/*.d.ts` to
-`~/.prime/agent/extensions/second-brain/` (global auto-discovery), never edits
-settings.json, and is reversible via
-`scripts\uninstall-prime-extension.ps1`. Restart Prime Agent (`/reload` works
-for auto-discovered extensions).
+`~/.omp/agent/extensions/second-brain/` (OMP's real auto-discovery
+directory, live-confirmed against OMP 18.1.10), never edits settings.json,
+and is reversible via `scripts\uninstall-prime-extension.ps1`. Restart OMP
+(`/reload` works for auto-discovered extensions). Pass `-ExtensionsDir
+<path>` to target a different location explicitly (for example a separate
+"Prime Agent" binary's own extensions directory) without changing the
+default.
 
 `npm install` inside this directory is for DEVELOPMENT only (tests/lint/type
 check; the extension itself has zero runtime dependencies beyond Node
 built-ins). For a quick uninstalled test:
 
 ```bash
-prime-agent -p -e ./src/index.ts "Reply with exactly: ok"
+omp -p -e ./src/index.ts "Reply with exactly: ok"
 ```
 
 ## Config gate
