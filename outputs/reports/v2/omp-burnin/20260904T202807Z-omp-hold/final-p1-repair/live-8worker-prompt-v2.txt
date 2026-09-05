@@ -1,0 +1,5 @@
+Use the task tool to launch exactly 8 independent background subagents in ONE batch call. Each subagent's job: reply with exactly the text "worker-N-ok" where N is its number (1 through 8), nothing else, no tool calls of its own.
+
+CRITICAL: after spawning the batch, you must NEVER call the hub tool for the rest of this session (no hub jobs, no hub wait, no polling of any kind). Instead, immediately run this exact bash command to pass time without polling anything job-related: `sleep 150`. After that bash command returns, do not call hub. If you have received any automatic completion notices during that wait (delivered on their own, not fetched by you), report them; otherwise say you received none.
+
+Finally reply with exactly one last line: "ALL8DONE: <n> succeeded, <n> failed, <n> unknown" using the real counts of auto-delivered notices you actually observed (unknown = spawned but no notice arrived).
