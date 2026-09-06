@@ -1,0 +1,200 @@
+{
+  "artifact": "122-main-continuation-evidence.json",
+  "recorded_at": "2026-09-06T21:30:00Z",
+  "status": "CONTINUATION_EVIDENCE_COMPLETE_WITH_V01_CLEANUP_QUALIFICATION",
+  "campaign": "physical-worktree-safety",
+  "coordinator": {
+    "native_uuid": "01a0773c-ad32-7031-9492-f11a68d64da8",
+    "adapter_session_file_stem": "2026-09-06T15-01-00-338Z_01a0773c-ad32-7031-9492-f11a68d64da8",
+    "canonical_brain_home": "C:/Users/assas/Documents/The-Second-Brain",
+    "brain_repair_checkout": "C:/Users/assas/Documents/The-Second-Brain-physical-safety",
+    "host_checkout": "C:/Users/assas/Documents/omp-physical-safety",
+    "prior_stop_sequence": 1539,
+    "prior_stop_decision": "continue",
+    "continuation_forbidden_at_start": false
+  },
+  "operator_policy": {
+    "artifact": "119-operator-a09-policy-aligned-disposition.json",
+    "decision": "Approve policy-aligned A09 proof; no migration behavior change.",
+    "required_proofs": [
+      "Clean-state production transactional DDL/mutation interruption before commit, fresh startup recovery, schema/version convergence, and idempotent retry.",
+      "Representative held and quarantined production pre-DDL refusal with unchanged protective attempt/physical-resource records and continued competitor exclusion across restart."
+    ],
+    "not_required": "No populated-state post-DDL crash execution is required or claimed under this approved disposition.",
+    "artifact_path": "C:/Users/assas/Documents/The-Second-Brain-physical-safety/outputs/reports/v2/omp-burnin/20260905-physical-worktree-safety/119-operator-a09-policy-aligned-disposition.json"
+  },
+  "source_checkpoints_before_continuation_commit": {
+    "brain": "3720ee30c53b87c5f7bb93c9ad626200220fd861",
+    "host": "8ba451d031e0ce3e5c1cb68e4b662e5ebc3ea105",
+    "qualification": "These are unqualified pre-commit checkpoints; this report does not infer campaign closure from them."
+  },
+  "fresh_source_bound_evidence": {
+    "A03_A09_C06": {
+      "command": "cmd /d /c set PYTHONHOME=& set PYTHONPATH=& .venv\\Scripts\\python.exe scripts\\probe_eight_gate_brain.py --output C:\\Users\\assas\\AppData\\Local\\Temp\\sb-a09-continuation-r3",
+      "events": "C:/Users/assas/AppData/Local/Temp/sb-a09-continuation-r3/events.json",
+      "production_source_changed": false,
+      "providers_used": 0,
+      "A03": "PASS_BRAIN_API",
+      "A09": {
+        "status": "PASS_POLICY_ALIGNED",
+        "clean_post_DDL_crash_recovery": "PASS",
+        "held_pre_DDL": "PASS_SUPPORTED_PRE_DDL_REFUSAL",
+        "quarantined_pre_DDL": "PASS_SUPPORTED_PRE_DDL_REFUSAL",
+        "held_current_schema_startup": "PASS_CURRENT_SCHEMA_STARTUP_EXCLUSION",
+        "quarantined_current_schema_startup": "PASS_CURRENT_SCHEMA_STARTUP_EXCLUSION",
+        "populated_post_DDL_crash": "NOT_REQUIRED_BY_APPROVED_POLICY",
+        "policy_authority": "119-operator-a09-policy-aligned-disposition.json"
+      },
+      "C06": "PASS_BRAIN_ADAPTER",
+      "brain_probe_E01": "PASS_PYTHON_FIXTURE_ONLY; exact native selection requires host evidence"
+    },
+    "C05": {
+      "command": "bun brainstem/prime-extension/tests/observer-expiry.probe.ts C:/Users/assas/AppData/Local/Temp/sb-c05-continuation-r1",
+      "events": "C:/Users/assas/AppData/Local/Temp/sb-c05-continuation-r1/events.json",
+      "status": "PASS_SOURCE_BOUND_OBSERVER_EXPIRY",
+      "observed": [
+        "Unknown-outcome writer remains held with null logical outcome after observer expiry.",
+        "Cancelled writer remains quarantined with logical outcome cancelled.",
+        "Both contender admissions denied.",
+        "Both subscriptions disposed once.",
+        "Protection retained without replay."
+      ],
+      "providers_used": 0
+    },
+    "R04": {
+      "unavailable_command": "bun scripts/eight-gate-host.probe.ts proof/eight-gates-host/r04-continuation-final-unavailable --r04-unavailable",
+      "unavailable_evidence": "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/r04-continuation-final-unavailable/r04-selection.json",
+      "restored_command": "bun scripts/eight-gate-host.probe.ts proof/eight-gates-host/r04-continuation-final-restored --r04-only",
+      "restored_evidence": "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/r04-continuation-final-restored/r04-restored.json",
+      "status": "PASS_BOUNDED_R04_SELECTION",
+      "unavailable": {
+        "reason": "NATIVE_READ_ONLY_TASK_CAPABILITY_UNAVAILABLE",
+        "replacementExecutions": 0,
+        "admissionHookCalls": 0,
+        "childCallsBeforeResult": 0,
+        "before_after_database_snapshots_identical": true,
+        "sentinel": false
+      },
+      "restored": "Native TaskTool permitted the read-only read and denied the write control.",
+      "qualification": "One agent-loop tool_execution_start notification precedes the blocked record; it is not tool.execute entry."
+    },
+    "D04": {
+      "command": "bun scripts/eight-gate-host.probe.ts proof/eight-gates-host/r04-continuation-d04",
+      "evidence": "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/r04-continuation-d04/summary.json",
+      "status": "PASS_SOURCE_BOUND_D04",
+      "providerCalls": 0,
+      "childCalls": 27,
+      "freshNativeAttempts": 7,
+      "observed": [
+        "Deliberate first attempt failure and fresh retry writer.",
+        "Stale lifecycle duplicate containment and STALE_ATTEMPT rejection.",
+        "Third-writer WORKTREE_WRITER_BUSY denial.",
+        "Settle/release followed by fresh writer admission.",
+        "Nested denied and permitted control, observer replay, and disconnect."
+      ]
+    },
+    "V01": {
+      "command": "bun scripts/eight-gate-native-fixture.probe.ts proof/eight-gates-host/v01-continuation-final-r2 --review",
+      "output_root": "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/v01-continuation-final-r2",
+      "functional_status": "PASS_BOUNDED_FUNCTIONAL_REVIEW",
+      "selected_tests": [
+        {"path": "packages/coding-agent/test/async-job-manager.test.ts", "pass": 33, "fail": 0, "exitCode": 0},
+        {"path": "packages/coding-agent/test/extension-context-async-jobs.test.ts", "pass": 3, "fail": 0, "exitCode": 0},
+        {"path": "packages/coding-agent/test/task/structured-subagent.test.ts", "pass": 30, "fail": 0, "exitCode": 0},
+        {"path": "packages/coding-agent/test/task/task-spawn.test.ts", "pass": 12, "fail": 0, "exitCode": 0}
+      ],
+      "selected_total": 78,
+      "manifest": {
+        "files": 53765,
+        "bytes": 2121153583,
+        "before_after_hash_mismatches": 0,
+        "sets": {
+          "frozen-candidate": 7063,
+          "pinned-dependency": 43995,
+          "pinned-native-dependency": 30,
+          "runtime": 1,
+          "python-runtime": 8,
+          "python-native-runtime": 46,
+          "python-stdlib": 2601,
+          "trusted-windows-bootstrap": 21
+        }
+      },
+      "reviewer": {
+        "provider": "local deterministic createMockModel through real createAgentSession.prompt; not a live LLM",
+        "allowed_tools": ["read", "verify_selected"],
+        "forbidden_dispatch_results": {"write": "error Tool write not found", "bash": "error Tool bash not found", "eval": "error Tool eval not found"},
+        "fixed_verification_invocations": 1,
+        "verify_selected_arguments": {},
+        "protected_source_unchanged": true
+      },
+      "guard": {
+        "guarded_processes": 5,
+        "python_canary": "PASS",
+        "native_denials_before_execution": true,
+        "outside_module_denials_before_execution": true,
+        "approved_native_positive_control": true,
+        "loaded_image_and_frozen_hash_audit": true,
+        "evidence": [
+          "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/v01-continuation-final-r2/before-manifest.json",
+          "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/v01-continuation-final-r2/after-manifest.json",
+          "C:/Users/assas/Documents/omp-physical-safety/proof/eight-gates-host/v01-continuation-final-r2/reviewer.json"
+        ]
+      },
+      "cleanup": {
+        "runner_result": "EPERM while fs.rm attempted to remove the exact owned fixture after all proofs and hash checks completed.",
+        "external_exact_cleanup_command": "cmd /d /c rmdir /s /q C:\\Users\\assas\\Documents\\omp-physical-safety\\proof\\eight-gates-host\\v01-continuation-final-r2\\owned-native-XXG8X7",
+        "external_exact_cleanup_exitCode": 0,
+        "fixture_absent_after_cleanup": true,
+        "sibling_output_retained": true,
+        "qualification": "Functional V01 evidence is complete; the in-process cleanup assertion did not run. External cleanup targeted only the owned fixture and was independently observed absent."
+      },
+      "limitations": [
+        "Trusted deterministic reviewer and preload boundary, not a hostile JavaScript or OS sandbox.",
+        "Workers, alternate FFI, direct native syscalls, and transient load/unload closure are not exhaustively traced.",
+        "Trusted Windows OS DLL boundary is observed and hashed but not claimed as a complete installed-DLL closure."
+      ]
+    },
+    "E01": {
+      "status": "PASS_SCOPED_RETAINED",
+      "evidence": "C:/Users/assas/AppData/Local/Temp/sb-v01-final-20260906-r13/summary.json",
+      "qualification": "The prior exact unguarded fixture proof remains retained; this continuation's exact four tests also passed under V01."
+    }
+  },
+  "validation": {
+    "host": [
+      "bunx oxlint on eight changed source/probe files: passed with 0 errors and 0 warnings",
+      "bunx oxfmt --check on eight changed source/probe files: passed",
+      "bun test packages/coding-agent/test/physical-worktree-safety.test.ts packages/coding-agent/test/task/structured-subagent.test.ts: 60 passed, 0 failed, 198 expect calls",
+      "bun run --cwd packages/coding-agent check:types: passed"
+    ],
+    "brain": [
+      "ruff check scripts/probe_eight_gate_brain.py: passed",
+      "pyright: 0 errors, 0 warnings, 0 infos",
+      "pytest tests/test_writer_admission.py: 27 passed"
+    ]
+  },
+  "changed_paths": {
+    "host": [
+      "packages/coding-agent/src/extensibility/extensions/wrapper.ts",
+      "packages/coding-agent/src/session/agent-session.ts",
+      "packages/coding-agent/src/task/index.ts",
+      "packages/coding-agent/src/task/read-only-policy.ts",
+      "scripts/eight-gate-host.probe.ts",
+      "scripts/eight-gate-native-fixture.probe.ts",
+      "scripts/eight-gate-review-guard.probe.ts",
+      "scripts/eight-gate-reviewer.probe.ts",
+      "scripts/eight-gate-review-python.probe.py"
+    ],
+    "brain": [
+      "scripts/probe_eight_gate_brain.py",
+      "outputs/reports/v2/omp-burnin/20260905-physical-worktree-safety/121-main-a09-policy-disposition.json"
+    ],
+    "raw_evidence_policy": "Raw proof directories and temporary evidence remain untracked and are not staged."
+  },
+  "negative_claims": [
+    "No live LLM reviewer claim; reviewer was deterministic local createMockModel through the real session prompt path.",
+    "No hostile arbitrary-native sandbox claim.",
+    "No populated-state post-DDL crash claim beyond the approved policy disposition.",
+    "No release approval or blanket 29-ID closure claim is made by this report."
+  ]
+}

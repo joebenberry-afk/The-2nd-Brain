@@ -516,7 +516,7 @@ def run(output):
             providers_used=0,
             A03="PASS_BRAIN_API",
             A09={
-                "status": "PARTIAL_CONTRACT_CONFLICT",
+                "status": "PASS_POLICY_ALIGNED",
                 "clean_post_DDL_crash_recovery": "PASS",
                 "protecting_upgrade": [
                     {"ownership": case["ownership"], "status": case["status"]}
@@ -526,7 +526,8 @@ def run(output):
                     {"ownership": case["ownership"], "status": case["status"]}
                     for case in startup_cases
                 ],
-                "unexercised": "populated post-DDL crash: migration 24 refuses holders before DDL",
+                "populated_post_DDL_crash": "NOT_REQUIRED_BY_APPROVED_POLICY",
+                "policy_authority": "119-operator-a09-policy-aligned-disposition.json",
             },
             R04={
                 "status": "NOT_EXERCISED_IN_BRAIN",
