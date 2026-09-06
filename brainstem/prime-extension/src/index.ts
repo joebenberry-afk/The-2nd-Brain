@@ -45,6 +45,7 @@ import type {
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { setTimeout as scheduleObserverExpiry, clearTimeout as cancelObserverExpiry } from "node:timers";
 import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
@@ -181,6 +182,9 @@ import {
   parseStopDecisionOutput,
   rewriteSessionPlaceholders,
   rewriteStopControlCommand,
+  stopControlIdentity,
+  stopEvidenceMatches,
+  type StopControlIdentity,
 } from "./stop-boundary";
 
 /** Random fallback session id (used only when no session file exists). */
@@ -603,7 +607,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const routingCache = new Map<string, Promise<OmpRoutingResult>>();
   const visibilityCache = new Map<string, Promise<OmpVisibilityResult>>();
   const stopStates = new Map<string, StopBoundaryState>();
-  const stopControlCalls = new Set<string>();
+  const stopControlCalls = new Map<string, {
+    session: string; command: string; originalCommand: string;
+    identity: StopControlIdentity | undefined; parentSession: string;
+  }>();
+  let stopRejections = 0;
+  const rejectStopEvidence = (session: string, reason: string): void => {
+    if (stopRejections >= 128) return;
+    stopRejections += 1;
+    getStore(session)?.append({
+      v: 2, ts: new Date().toISOString(), kind: "stop_evidence_rejected", session,
+      reason_code: reason,
+    });
+  };
   // Child HOST session -> canonical native transcript root; never prompt/header-derived.
   const workerRootSessions = new Map<string, string>();
   const workerAncestrySessions = new Set<string>();
@@ -625,11 +641,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     agent: string;
     toolCallId: string;
     sourceIndex: number;
-    lifecycleSequence: number;
     lifecycleRevision: number;
     callbackChain: Promise<boolean>;
     nativeAttemptId?: string;
-    nativeJobId?: string;
+    nativeJobId?: string | null;
     agentId?: string;
     hostGeneration?: number;
     cleanupAccepted: boolean;
@@ -637,6 +652,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const workerAdmissionsByTask = new Map<string, WorkerAdmission>();
   const workerAdmissionsBySource = new Map<string, WorkerAdmission>();
   const workerObservationDisposers = new Map<string, () => void>();
+  const workerObserverExpiry = new Map<string, NodeJS.Timeout>();
+  const disposeWorkerObserver = (key: string): void => {
+    const expiry = workerObserverExpiry.get(key);
+    if (expiry) cancelObserverExpiry(expiry);
+    workerObserverExpiry.delete(key);
+    workerObservationDisposers.get(key)?.();
+    workerObservationDisposers.delete(key);
+  };
   const pendingWorkerTaskIds = new Set<string>();
   const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
     try {
@@ -812,33 +835,37 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       admission.nativeJobId = observation.jobId;
       admission.agentId = observation.agentId;
       admission.hostGeneration = observation.generation;
-      pendingWorkerJobs.set(JSON.stringify([admission.parentSessionId, observation.jobId]), {
-        taskId: admission.taskId,
-        packetSha256: admission.packetSha256,
-        parentSessionId: admission.parentSessionId,
-        agent: admission.agent,
-        agentId: observation.agentId,
-      });
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-job-pending", {
-        session: admission.parentSessionId,
-        jobId: observation.jobId,
-        accessIntent: admission.accessIntent,
-        toolCallId: admission.toolCallId,
-        sourceIndex: admission.sourceIndex,
-        taskId: admission.taskId,
-        attemptId: admission.attemptId,
-        packetSha256: admission.packetSha256,
-        parentSessionId: admission.parentSessionId,
-        agent: admission.agent,
-        agentId: observation.agentId,
-        hostGeneration: observation.generation,
-        nativeAttemptId: observation.nativeAttemptId,
-        projectId: admission.projectId,
-        worktreeId: admission.worktreeId,
-      });
+      if (observation.jobId !== null) {
+        pendingWorkerJobs.set(JSON.stringify([admission.parentSessionId, observation.jobId]), {
+          taskId: admission.taskId,
+          packetSha256: admission.packetSha256,
+          parentSessionId: admission.parentSessionId,
+          agent: admission.agent,
+          agentId: observation.agentId,
+        });
+        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-job-pending", {
+          session: admission.parentSessionId,
+          jobId: observation.jobId,
+          accessIntent: admission.accessIntent,
+          toolCallId: admission.toolCallId,
+          sourceIndex: admission.sourceIndex,
+          taskId: admission.taskId,
+          attemptId: admission.attemptId,
+          packetSha256: admission.packetSha256,
+          parentSessionId: admission.parentSessionId,
+          agent: admission.agent,
+          agentId: observation.agentId,
+          hostGeneration: observation.generation,
+          nativeAttemptId: observation.nativeAttemptId,
+          projectId: admission.projectId,
+          worktreeId: admission.worktreeId,
+        });
+      }
     }
     if (observation.revision <= admission.lifecycleRevision) return true;
-    const sequence = admission.lifecycleSequence + 1;
+    // Native revisions identify immutable snapshots. A lost response must not
+    // cause a newer cleanup snapshot to reuse an already-persisted sequence.
+    const sequence = observation.revision;
     let lifecycle: OmpWorkerCallbackResult;
     try {
       lifecycle = await workerLifecycleRunner({
@@ -859,7 +886,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       return false;
     }
     if (!lifecycle.ok) return false;
-    admission.lifecycleSequence = sequence;
     admission.lifecycleRevision = observation.revision;
     journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-accepted", {
       session: admission.parentSessionId,
@@ -907,8 +933,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       );
       if (!stillPending) {
         const observerKey = JSON.stringify([admission.parentSessionId, admission.toolCallId]);
-        workerObservationDisposers.get(observerKey)?.();
-        workerObservationDisposers.delete(observerKey);
+        disposeWorkerObserver(observerKey);
       }
     }
     return true;
@@ -1041,7 +1066,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         agent: typeof item.agent === "string" ? item.agent : "default",
         toolCallId: event.toolCallId,
         sourceIndex: index,
-        lifecycleSequence: -1,
         lifecycleRevision: 0,
         callbackChain: Promise.resolve(true),
         cleanupAccepted: accessIntent === "read_only",
@@ -1221,7 +1245,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           agent: data.agent,
           toolCallId: data.toolCallId,
           sourceIndex: data.sourceIndex,
-          lifecycleSequence: -1,
           lifecycleRevision: 0,
           callbackChain: Promise.resolve(true),
           cleanupAccepted: data.accessIntent === "read_only",
@@ -1366,8 +1389,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           admission.accessIntent === "mutating",
       );
       if (!hasBoundAttempt) {
-        workerObservationDisposers.get(observerKey)?.();
-        workerObservationDisposers.delete(observerKey);
+        disposeWorkerObserver(observerKey);
       }
     }
     if (event.details == null || typeof event.details !== "object") return;
@@ -2956,6 +2978,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let session = "unknown";
     try {
       session = resolveSessionId(ctx, anonSession);
+      establishWorkerRootSession(session, ctx);
       const rootSession = workerRootSessions.get(session) ?? session;
       if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
         return { block: true, reason: BUDGET_HARD_LINE };
@@ -2971,7 +2994,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             : rewriteSessionPlaceholders(command, session, rootSession))
           : command;
       const stopState = stopStateFor(session);
-      if (stopState.shouldBlock(event.toolName) && !isStopControl) {
+      if (stopState.shouldBlock(event.toolName) && !(isStopControl && stopControlIdentity(rewrittenCommand))) {
         getStore(session)?.append({
           v: 2,
           ts: new Date().toISOString(),
@@ -2983,7 +3006,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         });
         return { block: true, reason: "Second Brain STOP boundary is active" };
       }
-      if (isStopControl) stopControlCalls.add(event.toolCallId);
       getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
       mirror(
         session,
@@ -3007,6 +3029,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         violation.session = session;
         getStore(session)?.append(violation);
         return { block: true, reason: decision.reason };
+      }
+      if (isStopControl) {
+        const key = `${session}\u0000${event.toolCallId}`;
+        const identity = stopControlIdentity(rewrittenCommand);
+        const targetRoot = identity ? workerRootSessions.get(identity.session) ?? identity.session : session;
+        const sessionFile = ctx?.sessionManager?.getSessionFile?.();
+        const applicable = identity !== undefined && typeof sessionFile === "string" &&
+          sessionIdFromFile(sessionFile) === session &&
+          (identity.session === session || workerRootSessions.get(identity.session) === session) &&
+          (identity.parent === undefined || identity.parent === targetRoot) &&
+          (identity.worker === undefined || identity.worker === identity.session);
+        if (!stopControlCalls.has(key) && stopControlCalls.size >= 1024) {
+          const oldest = stopControlCalls.keys().next().value;
+          if (oldest !== undefined) stopControlCalls.delete(oldest);
+        }
+        stopControlCalls.set(key, {
+          session, command: rewrittenCommand, originalCommand: command,
+          identity: applicable && !stopControlCalls.has(key) ? identity : undefined, parentSession: targetRoot,
+        });
       }
       if (event.toolName === "task") {
         return prepareWorkerTaskInput(event, ctx, session).catch((error) => {
@@ -3086,8 +3127,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           if (marker) rereadPatch = { content: [{ type: "text", text: marker }] };
         }
       }
+      const stopKey = `${session}\u0000${event.toolCallId}`;
+      const stopCall = stopControlCalls.get(stopKey);
+      const resultCommand = typeof event.input?.command === "string" ? event.input.command : "";
+      const isStopControl = stopCall !== undefined && event.toolName === "bash" &&
+        (resultCommand === stopCall.command || resultCommand === stopCall.originalCommand);
+      if (!isStopControl && (stopCall || (event.toolName === "bash" && STOP_CONTROL_COMMAND.test(resultCommand)))) {
+        rejectStopEvidence(session, "invocation_mismatch");
+        return undefined;
+      }
       const stopState = stopStateFor(session);
-      if (stopState.shouldBlock(event.toolName)) {
+      if (stopState.shouldBlock(event.toolName) && !isStopControl) {
         getStore(session)?.append({
           v: 2,
           ts: new Date().toISOString(),
@@ -3098,8 +3148,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         });
         return undefined;
       }
-      const isStopControl = stopControlCalls.delete(event.toolCallId);
       if (isStopControl) {
+        stopControlCalls.delete(stopKey);
         const content = Array.isArray(event.content) ? event.content : [];
         const stopText = extractTextContent(content);
         getStore(session)?.append({
@@ -3115,8 +3165,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           output_chars: stopText?.length ?? 0,
         });
         const evidence = parseStopDecisionOutput(stopText ?? "");
-        if (evidence !== undefined) {
-          stopState.accept(evidence);
+        if (event.isError || !evidence || !stopCall.identity ||
+            stopCall.session !== session || !stopEvidenceMatches(evidence, stopCall.identity, stopCall.parentSession)) {
+          rejectStopEvidence(session, event.isError ? "tool_error" : !evidence ? "malformed_evidence" : "identity_mismatch");
+        } else if (evidence.decision !== "stop" || !stopStateFor(stopCall.identity.session).stopped) {
+          const targetState = stopStateFor(stopCall.identity.session);
+          targetState.accept(evidence);
           const fields = {
             stop_id: evidence.stop_id,
             task_id: evidence.task_id,
@@ -3131,25 +3185,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             final_substantive_event: evidence.final_substantive_event,
             stop_boundary_seq:
               typeof evidence.sequence === "number" ? evidence.sequence : null,
-            substantive_events_after_boundary: stopState.substantiveEventsAfterBoundary,
+            substantive_events_after_boundary: targetState.substantiveEventsAfterBoundary,
             finalization_state:
               evidence.decision === "stop" ? "execution_blocked" : "not_triggered",
           };
-          getStore(session)?.append({
+          getStore(stopCall.identity.session)?.append({
             v: 2,
             ts: new Date().toISOString(),
             kind: evidence.decision === "stop" ? "stop_boundary" : "stop_not_triggered",
-            session,
+            session: stopCall.identity.session,
             ...fields,
           });
           if (evidence.decision === "stop") {
             const finalization = mirrorEventSync({
               home: config.home ?? "",
-              hostSessionId: session,
+              hostSessionId: stopCall.identity.session,
+              parentSessionId: stopCall.parentSession !== stopCall.identity.session ? stopCall.parentSession : undefined,
               record: {
                 kind: "stop_finalized",
                 fields,
-                agentId: evidence.worker_session_id || session,
+                agentId: stopCall.identity.session,
               },
               cwd: ctxCwd(ctx),
             });
@@ -3457,11 +3512,24 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<SessionShutdownEvent>(
     "session_shutdown",
     (event, ctx, session) => {
-      for (const [key, dispose] of workerObservationDisposers) {
-        const parsed = JSON.parse(key) as unknown[];
-        if (parsed[0] !== session) continue;
-        dispose();
-        workerObservationDisposers.delete(key);
+      for (const key of workerObservationDisposers.keys()) {
+        const [ownerSession, toolCallId] = JSON.parse(key) as unknown[];
+        if (ownerSession !== session) continue;
+        const awaitingCleanup = Array.from(workerAdmissionsBySource.values()).some(
+          (admission) => admission.parentSessionId === session &&
+            admission.toolCallId === toolCallId && admission.accessIntent === "mutating" &&
+            !admission.cleanupAccepted,
+        );
+        if (!awaitingCleanup) {
+          disposeWorkerObserver(key);
+        } else if (!workerObserverExpiry.has(key)) {
+          // Shutdown precedes host cancellation/reaping. Keep receipt consumers
+          // alive without awaiting them here (that would deadlock host disposal).
+          // Expiry only detaches observers: it never releases an unproven lease.
+          const expiry = scheduleObserverExpiry(() => disposeWorkerObserver(key), 30_000);
+          expiry.unref();
+          workerObserverExpiry.set(key, expiry);
+        }
       }
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -9,7 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from second_brain import backup, contracts, db, omp_adapter, registry, worker_protocol
+from second_brain.errors import MigrationError
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -43,7 +48,13 @@ def _repo(tmp_path: Path) -> tuple[Path, Path]:
     return root, side
 
 
-def _payload(repo: Path, task_id: str, *, access_intent: str = "mutating") -> dict[str, object]:
+def _payload(
+    repo: Path,
+    task_id: str,
+    *,
+    access_intent: str = "mutating",
+    project_id: str = "writer-project",
+) -> dict[str, object]:
     return {
         "operation": "worker_context",
         "host_session_id": f"session-{task_id}",
@@ -54,7 +65,7 @@ def _payload(repo: Path, task_id: str, *, access_intent: str = "mutating") -> di
         "evidence_requirements": [],
         "completion_condition": "marker written",
         "context_refs": [],
-        "project_id": "writer-project",
+        "project_id": project_id,
         "cwd": str(repo),
         "role": "driver",
         "provider": "test",
@@ -64,7 +75,9 @@ def _payload(repo: Path, task_id: str, *, access_intent: str = "mutating") -> di
     }
 
 
-def _packet(repo: Path, task_id: str) -> contracts.WorkerTaskPacket:
+def _packet(
+    repo: Path, task_id: str, *, project_id: str = "writer-project"
+) -> contracts.WorkerTaskPacket:
     return contracts.WorkerTaskPacket(
         task_id=task_id,
         parent_session_id=f"session-{task_id}",
@@ -82,14 +95,14 @@ def _packet(repo: Path, task_id: str) -> contracts.WorkerTaskPacket:
         objective="write a disposable marker",
         scope="repository",
         completion_condition="marker written",
-        project_id="writer-project",
+        project_id=project_id,
         repo_root=str(repo),
         access_intent="mutating",
     ).validate()
 
 
 def _bind_payload(
-    context: dict[str, object], *, generation: int = 1, job: str = "job-1"
+    context: dict[str, object], *, generation: int = 1, job: str | None = "job-1"
 ) -> dict[str, object]:
     return {
         "operation": "worker_bind",
@@ -150,8 +163,8 @@ def _bind(
     return payload
 
 
-def _register(brain_home: Path, repo: Path) -> None:
-    registry.add_project(brain_home, repo, project_id="writer-project")
+def _register(brain_home: Path, repo: Path, *, project_id: str = "writer-project") -> None:
+    registry.add_project(brain_home, repo, project_id=project_id)
 
 
 def test_access_intent_is_explicit_and_mutation_identity_fails_closed(brain_home, tmp_path) -> None:
@@ -180,6 +193,127 @@ def test_access_intent_is_explicit_and_mutation_identity_fails_closed(brain_home
     assert stale["failure_code"] == "WORKTREE_IDENTITY_INVALID"
 
 
+def test_same_physical_worktree_across_project_labels_has_one_owner(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root, project_id="alpha")
+    _register(brain_home, root, project_id="beta")
+
+    alpha_identity = registry.resolve_registered_worktree(brain_home, "alpha", root)
+    beta_identity = registry.resolve_registered_worktree(brain_home, "beta", root)
+    assert alpha_identity.worktree_id == beta_identity.worktree_id
+    assert alpha_identity.project_id == "alpha"
+    assert beta_identity.project_id == "beta"
+
+    first = omp_adapter.handle_request(
+        brain_home, _payload(root, "alpha-writer", project_id="alpha")
+    )
+    blocked = omp_adapter.handle_request(
+        brain_home, _payload(root, "beta-writer", project_id="beta")
+    )
+    assert first.get("status") == "prepared"
+    assert blocked.get("status") == "failed"
+    assert blocked.get("failure_code") == "WORKTREE_WRITER_BUSY"
+    assert "callback_token" not in blocked
+    with sqlite3.connect(db.db_path(brain_home)) as conn:
+        owners = conn.execute(
+            "SELECT task_id,project_id,worktree_id FROM worker_tasks "
+            "WHERE access_intent='mutating' "
+            "AND writer_ownership IN ('held','quarantined')"
+        ).fetchall()
+    assert owners == [
+        ("alpha-writer", "alpha", alpha_identity.worktree_id),
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path alias contract")
+def test_windows_case_and_junction_aliases_share_worktree_identity(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root, project_id="alias-project")
+    direct = registry.resolve_registered_worktree(brain_home, "alias-project", root)
+    case_alias = Path(str(root).swapcase())
+    junction = tmp_path / "registered-junction"
+    linked = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(root)],
+        capture_output=True,
+        text=True,
+    )
+    if linked.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {linked.stderr.strip()}")
+    try:
+        case_identity = registry.resolve_registered_worktree(
+            brain_home, "alias-project", case_alias
+        )
+        junction_identity = registry.resolve_registered_worktree(
+            brain_home, "alias-project", junction
+        )
+    finally:
+        os.rmdir(junction)
+
+    assert case_identity.worktree_id == direct.worktree_id
+    assert junction_identity.worktree_id == direct.worktree_id
+
+
+def test_moved_worktree_and_path_replacement_fail_closed_while_owner_is_held(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root, project_id="alpha")
+    first = omp_adapter.handle_request(
+        brain_home, _payload(root, "alpha-before-move", project_id="alpha")
+    )
+    assert first.get("status") == "prepared"
+
+    moved = tmp_path / "registered-moved"
+    root.rename(moved)
+    _register(brain_home, moved, project_id="beta")
+    root.mkdir()
+    _git(root, "init", "-q")
+    _register(brain_home, root, project_id="replacement")
+
+    replacement = omp_adapter.handle_request(
+        brain_home,
+        _payload(root, "replacement-writer", project_id="replacement"),
+    )
+    moved_request = omp_adapter.handle_request(
+        brain_home, _payload(moved, "moved-writer", project_id="beta")
+    )
+
+    assert replacement.get("status") == "failed"
+    assert replacement.get("failure_code") in {
+        "WORKTREE_IDENTITY_AMBIGUOUS",
+        "WORKTREE_WRITER_BUSY",
+    }
+    assert "callback_token" not in replacement
+    assert moved_request.get("status") == "failed"
+    assert moved_request.get("failure_code") in {
+        "WORKTREE_IDENTITY_AMBIGUOUS",
+        "WORKTREE_WRITER_BUSY",
+    }
+    assert "callback_token" not in moved_request
+
+
+def test_branch_change_does_not_partition_writer_identity(brain_home, tmp_path) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root)
+    first = _prepare(brain_home, root, "branch-holder")
+    before = registry.resolve_registered_worktree(brain_home, "writer-project", root)
+
+    _git(root, "switch", "-c", "branch-identity-challenge")
+
+    after = registry.resolve_registered_worktree(brain_home, "writer-project", root)
+    contender = omp_adapter.handle_request(brain_home, _payload(root, "branch-contender"))
+
+    assert before.worktree_id == after.worktree_id == first["worktree_id"]
+    assert contender == {
+        "status": "failed",
+        "failure_code": "WORKTREE_WRITER_BUSY",
+    }
+
+
 def test_real_git_worktrees_are_distinct_writer_resources(brain_home, tmp_path) -> None:
     root, side = _repo(tmp_path)
     _register(brain_home, root)
@@ -206,9 +340,9 @@ def test_parallel_same_worktree_admission_has_one_winner(brain_home, tmp_path) -
 
     def admit(task_id: str) -> str:
         try:
-            return worker_protocol.admit_worker_attempt(
-                brain_home, _packet(root, task_id)
-            )["attempt_id"]
+            return worker_protocol.admit_worker_attempt(brain_home, _packet(root, task_id))[
+                "attempt_id"
+            ]
         except contracts.WorkerPacketError as exc:
             return exc.code
 
@@ -267,9 +401,7 @@ def test_exact_binding_and_monotonic_receipts_are_durable_and_idempotent(
     )
     accepted = omp_adapter.handle_request(brain_home, receipt)
     duplicate = omp_adapter.handle_request(brain_home, receipt)
-    conflict = omp_adapter.handle_request(
-        brain_home, {**receipt, "outcome": "failed"}
-    )
+    conflict = omp_adapter.handle_request(brain_home, {**receipt, "outcome": "failed"})
     assert accepted["writer_ownership"] == "held"
     assert duplicate["duplicate"] is True
     assert conflict == {"status": "rejected", "failure_code": "RECEIPT_CONFLICT"}
@@ -285,6 +417,78 @@ def test_exact_binding_and_monotonic_receipts_are_durable_and_idempotent(
             (context["attempt_id"],),
         ).fetchone()
     assert row is not None
+
+
+def test_blocking_native_identity_with_null_job_id_binds_exactly_and_releases(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root)
+    context = _prepare(brain_home, root, "blocking-writer")
+    binding = _bind_payload(context, generation=7, job=None)
+
+    missing_identity = omp_adapter.handle_request(
+        brain_home, {**binding, "native_attempt_id": None}
+    )
+    assert missing_identity.get("status") == "rejected"
+    assert missing_identity.get("failure_code") == "PROTOCOL_ERROR"
+
+    accepted = omp_adapter.handle_request(brain_home, binding)
+    duplicate = omp_adapter.handle_request(brain_home, binding)
+    assert accepted.get("status") == "accepted"
+    assert duplicate.get("status") == "accepted"
+    assert duplicate.get("duplicate") is True
+
+    dispatch_failure = omp_adapter.handle_request(
+        brain_home,
+        {**binding, "operation": "worker_dispatch_failed", "failure_code": "not-started"},
+    )
+    assert dispatch_failure.get("failure_code") == "INVALID_TRANSITION"
+    for field, value, code in (
+        ("packet_sha256", "f" * 64, "BINDING_MISMATCH"),
+        ("host_session_id", "wrong-session", "BINDING_MISMATCH"),
+        ("project_id", "wrong-project", "BINDING_MISMATCH"),
+        ("worktree_id", "wrong-worktree", "BINDING_MISMATCH"),
+        ("callback_token", "wrong-token", "UNAUTHORIZED_CALLBACK"),
+        ("host_generation", 8, "BINDING_MISMATCH"),
+        ("native_attempt_id", "second-native-launch", "BINDING_MISMATCH"),
+        ("native_job_id", "fabricated-async-job", "BINDING_MISMATCH"),
+        ("agent_id", "other-agent", "BINDING_MISMATCH"),
+    ):
+        rejected = omp_adapter.handle_request(brain_home, {**binding, field: value})
+        assert rejected.get("status") == "rejected"
+        assert rejected.get("failure_code") == code
+
+    terminal = omp_adapter.handle_request(
+        brain_home,
+        _lifecycle_payload(
+            binding,
+            sequence=17,
+            outcome="completed",
+            executor_settled=True,
+            cleanup_complete=True,
+        ),
+    )
+    assert terminal.get("status") == "accepted"
+    assert terminal.get("writer_ownership") == "released"
+    assert terminal.get("lifecycle_sequence") == 17
+    with sqlite3.connect(db.db_path(brain_home)) as conn:
+        persisted_binding = conn.execute(
+            "SELECT host_generation,native_attempt_id,native_job_id,agent_id "
+            "FROM worker_tasks WHERE task_id='blocking-writer'"
+        ).fetchone()
+        receipt_json = conn.execute(
+            "SELECT payload_json FROM worker_lifecycle_receipts WHERE attempt_id=? AND sequence=17",
+            (context["attempt_id"],),
+        ).fetchone()[0]
+    assert persisted_binding == (
+        7,
+        f"native-{context['attempt_id']}",
+        None,
+        "agent-blocking-writer",
+    )
+    assert '"native_job_id":null' in receipt_json
+    assert _prepare(brain_home, root, "writer-after-blocking")["status"] == "prepared"
 
 
 def test_structured_task_outcome_never_releases_writer_without_cleanup(
@@ -336,13 +540,19 @@ def test_cancellation_does_not_release_until_exact_executor_cleanup(brain_home, 
     )
     assert cancelled["logical_outcome"] == "cancelled"
     assert cancelled["writer_ownership"] == "held"
-    assert omp_adapter.handle_request(
-        brain_home, _payload(root, "blocked-after-cancel")
-    )["failure_code"] == "WORKTREE_WRITER_BUSY"
-    assert omp_adapter.handle_request(
-        brain_home,
-        _payload(root, "reader-during-cancel", access_intent="read_only"),
-    )["status"] == "prepared"
+    assert (
+        omp_adapter.handle_request(brain_home, _payload(root, "blocked-after-cancel"))[
+            "failure_code"
+        ]
+        == "WORKTREE_WRITER_BUSY"
+    )
+    assert (
+        omp_adapter.handle_request(
+            brain_home,
+            _payload(root, "reader-during-cancel", access_intent="read_only"),
+        )["status"]
+        == "prepared"
+    )
 
     quarantined = omp_adapter.handle_request(
         brain_home,
@@ -354,10 +564,13 @@ def test_cancellation_does_not_release_until_exact_executor_cleanup(brain_home, 
             cleanup_complete=False,
         ),
     )
-    assert omp_adapter.handle_request(
-        brain_home,
-        _payload(root, "reader-during-quarantine", access_intent="read_only"),
-    )["status"] == "prepared"
+    assert (
+        omp_adapter.handle_request(
+            brain_home,
+            _payload(root, "reader-during-quarantine", access_intent="read_only"),
+        )["status"]
+        == "prepared"
+    )
     assert quarantined["writer_ownership"] == "quarantined"
     released = omp_adapter.handle_request(
         brain_home,
@@ -485,9 +698,7 @@ def test_reaper_quarantines_lost_authority_without_failure_or_redelivery(
     context = _prepare(brain_home, root, "expired-writer")
     _bind(brain_home, context)
 
-    reaped = worker_protocol.reap(
-        brain_home, now=datetime.now(UTC) + timedelta(seconds=301)
-    )
+    reaped = worker_protocol.reap(brain_home, now=datetime.now(UTC) + timedelta(seconds=301))
     assert reaped == [
         {
             "task_id": "expired-writer",
@@ -505,9 +716,12 @@ def test_reaper_quarantines_lost_authority_without_failure_or_redelivery(
     assert recovered is not None
     assert recovered["logical_outcome"] == "unresolved"
     assert recovered["writer_ownership"] == "quarantined"
-    assert omp_adapter.handle_request(
-        brain_home, _payload(root, "blocked-by-quarantine")
-    )["failure_code"] == "WORKTREE_WRITER_BUSY"
+    assert (
+        omp_adapter.handle_request(brain_home, _payload(root, "blocked-by-quarantine"))[
+            "failure_code"
+        ]
+        == "WORKTREE_WRITER_BUSY"
+    )
 
 
 def test_lifecycle_persistence_failure_and_missing_settlement_fail_closed(
@@ -630,11 +844,9 @@ def test_migration_preserves_legacy_worker_rows_and_is_repeatable(tmp_path) -> N
         )
         conn.execute("CREATE TABLE memories(id TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE memory_sources(id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version VALUES(22,'2026-09-05T00:00:00+00:00')")
         conn.execute(
-            "INSERT INTO schema_version VALUES(22,'2026-09-05T00:00:00+00:00')"
-        )
-        conn.execute(
-            "INSERT INTO worker_tasks VALUES('legacy','WORKING','2026-09-06',?,NULL,NULL,"
+            "INSERT INTO worker_tasks VALUES('legacy','COMPLETED','2026-09-06',?,NULL,NULL,"
             "'2026-09-05')",
             ("a" * 64,),
         )
@@ -642,13 +854,316 @@ def test_migration_preserves_legacy_worker_rows_and_is_repeatable(tmp_path) -> N
     finally:
         conn.close()
 
-    assert db.migrate(dbfile) == [23]
+    assert db.migrate(dbfile) == [23, 24]
     assert db.migrate(dbfile) == []
     with db.connect(dbfile) as migrated:
         row = migrated.execute(
             "SELECT task_id,attempt_id,writer_ownership FROM worker_tasks"
         ).fetchone()
         assert tuple(row) == ("legacy", None, None)
+
+
+def _migrate_through_23(dbfile: Path, migrations_dir: Path) -> None:
+    migrations_dir.mkdir()
+    for path in db.migration_files():
+        if int(path.name[:4]) <= 23:
+            shutil.copy2(path, migrations_dir / path.name)
+    applied = db.migrate(dbfile, migrations_dir=migrations_dir)
+    assert applied and applied[-1] == 23
+
+
+def _insert_protecting_attempt(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    project_id: str,
+    worktree_id: str | None,
+    worktree_root: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO worker_tasks("
+        "task_id,state,lease_expires_at,packet_sha256,updated_at,attempt_id,"
+        "access_intent,project_id,worktree_id,worktree_root,writer_ownership,"
+        "host_session_id,callback_token_sha256,ownership_updated_at"
+        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            task_id,
+            contracts.WorkerLifecycle.SUBMITTED,
+            "2026-09-06T00:00:00+00:00",
+            "a" * 64,
+            "2026-09-05T00:00:00+00:00",
+            f"attempt-{task_id}",
+            "mutating",
+            project_id,
+            worktree_id,
+            worktree_root,
+            "held",
+            f"session-{task_id}",
+            "b" * 64,
+            "2026-09-05T00:00:00+00:00",
+        ),
+    )
+
+
+def _physical_writer_index_columns(conn: sqlite3.Connection) -> list[str]:
+    return [
+        str(row[2])
+        for row in conn.execute("PRAGMA index_info(idx_worker_tasks_writer_physical)").fetchall()
+    ]
+
+
+def test_physical_writer_migration_reopens_clean_backup_and_enforces_identity(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "clean-home"
+    source = db.db_path(home)
+    restored = tmp_path / "restored-v23.sqlite"
+    root, _ = _repo(tmp_path)
+    _migrate_through_23(source, tmp_path / "migrations-v23-clean")
+    legacy_worktree_id = "c" * 64
+    with db.connect(source) as conn:
+        conn.execute(
+            "INSERT INTO projects(id,name,repo_path,created_at) VALUES(?,?,?,?)",
+            (
+                "alpha",
+                "alpha",
+                str(root.resolve()),
+                "2026-09-05T00:00:00+00:00",
+            ),
+        )
+        _insert_protecting_attempt(
+            conn,
+            task_id="alpha-historical",
+            project_id="alpha",
+            worktree_id=legacy_worktree_id,
+            worktree_root=str(root.resolve()),
+        )
+        conn.execute(
+            "UPDATE worker_tasks SET state=?,writer_ownership='released' "
+            "WHERE task_id='alpha-historical'",
+            (contracts.WorkerLifecycle.COMPLETED,),
+        )
+    with sqlite3.connect(source) as source_conn, sqlite3.connect(restored) as restored_conn:
+        source_conn.backup(restored_conn)
+
+    assert db.migrate(source) == [24]
+    expected_worktree_id = registry.resolve_registered_worktree(home, "alpha", root).worktree_id
+    assert expected_worktree_id != legacy_worktree_id
+    assert db.migrate(restored) == [24]
+    for database in (source, restored):
+        assert db.migrate(database) == []
+        with db.connect(database) as conn:
+            row = conn.execute(
+                "SELECT task_id,project_id,worktree_id,writer_ownership "
+                "FROM worker_tasks WHERE task_id='alpha-historical'"
+            ).fetchone()
+            assert tuple(row) == (
+                "alpha-historical",
+                "alpha",
+                legacy_worktree_id,
+                "released",
+            )
+            _insert_protecting_attempt(
+                conn,
+                task_id="alpha-held",
+                project_id="alpha",
+                worktree_id=expected_worktree_id,
+                worktree_root=str(root.resolve()),
+            )
+            assert _physical_writer_index_columns(conn) == ["worktree_id"]
+            with pytest.raises(sqlite3.IntegrityError):
+                _insert_protecting_attempt(
+                    conn,
+                    task_id="beta-held",
+                    project_id="beta",
+                    worktree_id=expected_worktree_id,
+                    worktree_root=str(root.resolve()),
+                )
+            for suffix, invalid in (("null", None), ("malformed", "not-a-physical-key")):
+                with pytest.raises(sqlite3.IntegrityError, match="physical worktree identity"):
+                    _insert_protecting_attempt(
+                        conn,
+                        task_id=f"invalid-{suffix}",
+                        project_id="other-project",
+                        worktree_id=invalid,
+                        worktree_root=str(root.resolve()),
+                    )
+            conn.execute(
+                "INSERT INTO worker_tasks("
+                "task_id,state,lease_expires_at,packet_sha256,updated_at,attempt_id,"
+                "access_intent,project_id,worktree_id,worktree_root,writer_ownership"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "upgrade-invalid",
+                    contracts.WorkerLifecycle.SUBMITTED,
+                    "2026-09-06T00:00:00+00:00",
+                    "d" * 64,
+                    "2026-09-05T00:00:00+00:00",
+                    "attempt-upgrade-invalid",
+                    "read_only",
+                    "other-project",
+                    None,
+                    None,
+                    "released",
+                ),
+            )
+            with pytest.raises(sqlite3.IntegrityError, match="physical worktree identity"):
+                conn.execute(
+                    "UPDATE worker_tasks SET access_intent='mutating',"
+                    "writer_ownership='held' WHERE task_id='upgrade-invalid'"
+                )
+
+
+def test_physical_writer_migration_refuses_conflicts_atomically_and_disables_dispatch(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "unsafe-home"
+    dbfile = db.db_path(home)
+    _migrate_through_23(dbfile, tmp_path / "migrations-v23-conflict")
+    root, _ = _repo(tmp_path)
+    with db.connect(dbfile) as conn:
+        for project_id in ("alpha", "beta", "gamma"):
+            conn.execute(
+                "INSERT INTO projects(id,name,repo_path,created_at) VALUES(?,?,?,?)",
+                (
+                    project_id,
+                    project_id,
+                    str(root.resolve()),
+                    "2026-09-05T00:00:00+00:00",
+                ),
+            )
+    identity = registry.resolve_registered_worktree(home, "alpha", root)
+    with db.connect(dbfile) as conn:
+        _insert_protecting_attempt(
+            conn,
+            task_id="alpha-held",
+            project_id="alpha",
+            worktree_id=identity.worktree_id,
+            worktree_root=identity.root,
+        )
+        _insert_protecting_attempt(
+            conn,
+            task_id="beta-quarantined",
+            project_id="beta",
+            worktree_id=identity.worktree_id,
+            worktree_root=identity.root,
+        )
+        conn.execute(
+            "UPDATE worker_tasks SET state=?,writer_ownership='quarantined' "
+            "WHERE task_id='beta-quarantined'",
+            (contracts.WorkerLifecycle.UNRESOLVED,),
+        )
+        before_rows = conn.execute(
+            "SELECT task_id,state,project_id,worktree_id,writer_ownership "
+            "FROM worker_tasks ORDER BY task_id"
+        ).fetchall()
+        old_index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND name='idx_worker_tasks_writer_worktree'"
+        ).fetchone()[0]
+
+    with pytest.raises((sqlite3.IntegrityError, MigrationError), match="physical worktree"):
+        db.migrate(dbfile)
+
+    with db.connect(dbfile) as conn:
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 23
+        after_rows = conn.execute(
+            "SELECT task_id,state,project_id,worktree_id,writer_ownership "
+            "FROM worker_tasks ORDER BY task_id"
+        ).fetchall()
+        assert [tuple(row) for row in after_rows] == [tuple(row) for row in before_rows]
+        assert (
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_worker_tasks_writer_worktree'"
+            ).fetchone()[0]
+            == old_index_sql
+        )
+        assert _physical_writer_index_columns(conn) == []
+    assert db.pending_migrations(dbfile) == [24]
+
+    with pytest.raises(contracts.WorkerPacketError) as blocked:
+        worker_protocol.admit_worker_attempt(
+            home, _packet(root, "gamma-writer", project_id="gamma")
+        )
+    assert blocked.value.code == "WORKTREE_SAFETY_MIGRATION_REQUIRED"
+
+
+@pytest.mark.parametrize("ownership", ["held", "quarantined", None])
+def test_physical_writer_migration_refuses_single_unresolved_history(
+    tmp_path: Path, ownership: str | None
+) -> None:
+    dbfile = tmp_path / "unresolved.sqlite"
+    _migrate_through_23(dbfile, tmp_path / "migrations-v23-single")
+    with db.connect(dbfile) as conn:
+        _insert_protecting_attempt(
+            conn,
+            task_id="unresolved",
+            project_id="missing-project",
+            worktree_id=None,
+            worktree_root=str(tmp_path / "missing-worktree"),
+        )
+        conn.execute(
+            "UPDATE worker_tasks SET state='UNRESOLVED',writer_ownership=?,access_intent=?",
+            (ownership, "mutating" if ownership else None),
+        )
+        before = tuple(conn.execute("SELECT * FROM worker_tasks").fetchone())
+    for _ in range(2):
+        with pytest.raises(MigrationError, match="physical worktree"):
+            db.migrate(dbfile)
+        with db.connect(dbfile) as conn:
+            assert db.current_version(conn) == 23
+            assert tuple(conn.execute("SELECT * FROM worker_tasks").fetchone()) == before
+            assert _physical_writer_index_columns(conn) == []
+
+
+def test_fresh_physical_writer_index_protects_quarantine_across_paths(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    with db.connect(db.db_path(brain_home)) as conn:
+        _insert_protecting_attempt(
+            conn,
+            task_id="original",
+            project_id="alpha",
+            worktree_id="a" * 64,
+            worktree_root=str(tmp_path / "original"),
+        )
+        conn.execute(
+            "UPDATE worker_tasks SET state='UNRESOLVED',writer_ownership='quarantined' "
+            "WHERE task_id='original'"
+        )
+    assert db.migrate(db.db_path(brain_home)) == []
+    with db.connect(db.db_path(brain_home)) as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_protecting_attempt(
+                conn,
+                task_id="renamed",
+                project_id="beta",
+                worktree_id="a" * 64,
+                worktree_root=str(tmp_path / "renamed"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_protecting_attempt(
+                conn,
+                task_id="replacement",
+                project_id="gamma",
+                worktree_id="b" * 64,
+                worktree_root=str(tmp_path / "original"),
+            )
+        assert conn.execute("SELECT task_id FROM worker_tasks").fetchall()[0][0] == "original"
+
+
+def test_concurrent_physical_writer_migration_applies_once(tmp_path: Path) -> None:
+    dbfile = tmp_path / "concurrent.sqlite"
+    _migrate_through_23(dbfile, tmp_path / "migrations-v23-concurrent")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(db.migrate, (dbfile, dbfile)))
+    assert sorted(results) == [[], [24]]
+    with db.connect(dbfile) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM schema_version WHERE version=24").fetchone()[0] == 1
+        )
+        assert _physical_writer_index_columns(conn) == ["worktree_id"]
 
 
 def _spawn_writer(target: Path, gate: Path, label: str) -> subprocess.Popen[str]:
@@ -679,6 +1194,91 @@ def _wait_for_line(path: Path, line: str) -> None:
     raise AssertionError(f"writer did not produce {line}")
 
 
+def _spawn_admission(
+    brain_home: Path,
+    payload: dict[str, object],
+    *,
+    ready: Path,
+    gate: Path,
+    output: Path,
+) -> subprocess.Popen[str]:
+    script = (
+        "import json,pathlib,sys,time\n"
+        "from second_brain import omp_adapter\n"
+        "home=pathlib.Path(sys.argv[1]); payload=json.loads(sys.argv[2])\n"
+        "ready=pathlib.Path(sys.argv[3]); gate=pathlib.Path(sys.argv[4])\n"
+        "output=pathlib.Path(sys.argv[5]); ready.write_text('ready\\n',encoding='utf-8')\n"
+        "deadline=time.monotonic()+10\n"
+        "while not gate.exists():\n"
+        "  if time.monotonic()>=deadline: raise TimeoutError('admission gate')\n"
+        "  time.sleep(0.005)\n"
+        "result=omp_adapter.handle_request(home,payload)\n"
+        "output.write_text(json.dumps(result),encoding='utf-8')\n"
+    )
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(brain_home),
+            json.dumps(payload),
+            str(ready),
+            str(gate),
+            str(output),
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def test_separate_process_project_alias_admission_is_atomic(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root, project_id="alpha")
+    _register(brain_home, root, project_id="beta")
+    gate = tmp_path / "admission-gate"
+    processes: list[subprocess.Popen[str]] = []
+    outputs: list[Path] = []
+    try:
+        for index, project_id in enumerate(("alpha", "beta")):
+            ready = tmp_path / f"admission-{index}.ready"
+            output = tmp_path / f"admission-{index}.json"
+            outputs.append(output)
+            processes.append(
+                _spawn_admission(
+                    brain_home,
+                    _payload(
+                        root,
+                        f"process-{project_id}",
+                        project_id=project_id,
+                    ),
+                    ready=ready,
+                    gate=gate,
+                    output=output,
+                )
+            )
+            _wait_for_line(ready, "ready")
+        gate.touch()
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=15)
+            assert process.returncode == 0, f"{stdout}\n{stderr}"
+        results = [json.loads(path.read_text(encoding="utf-8")) for path in outputs]
+        assert [result["status"] for result in results].count("prepared") == 1
+        assert [result.get("failure_code") for result in results].count("WORKTREE_WRITER_BUSY") == 1
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+
 def test_real_writer_process_cannot_overlap_after_logical_cancellation(
     brain_home, tmp_path
 ) -> None:
@@ -705,9 +1305,7 @@ def test_real_writer_process_cannot_overlap_after_logical_cancellation(
         )
         assert cancelled["writer_ownership"] == "held"
         assert process_one.poll() is None
-        blocked = omp_adapter.handle_request(
-            brain_home, _payload(root, "real-second")
-        )
+        blocked = omp_adapter.handle_request(brain_home, _payload(root, "real-second"))
         assert blocked["failure_code"] == "WORKTREE_WRITER_BUSY"
 
         gate_one.touch()
@@ -743,9 +1341,7 @@ def test_real_writer_process_cannot_overlap_after_logical_cancellation(
                 process.wait(timeout=10)
 
 
-def test_real_writers_can_run_in_parallel_in_distinct_git_worktrees(
-    brain_home, tmp_path
-) -> None:
+def test_real_writers_can_run_in_parallel_in_distinct_git_worktrees(brain_home, tmp_path) -> None:
     root, side = _repo(tmp_path)
     _register(brain_home, root)
     root_context = _prepare(brain_home, root, "concurrent-root")

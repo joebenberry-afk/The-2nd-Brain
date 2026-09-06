@@ -13,6 +13,7 @@ import re
 import sqlite3
 from datetime import UTC
 from pathlib import Path
+
 from .errors import MigrationError
 from .paths import db_path  # noqa: F401  (re-export; used as db.db_path)
 
@@ -149,13 +150,34 @@ def _execute_migration_statement(
     conn.execute(stmt)
 
 
-def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_at: str) -> None:
+def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_at: str) -> bool:
     script = path.read_text(encoding="utf-8")
     statements = split_statements(script)
     if not statements:
         raise MigrationError(f"Migration file {path.name} contains no statements")
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # Another process may have migrated after our caller read the version.
+        if current_version(conn) >= version:
+            conn.commit()
+            return False
+        if version == 24:
+            # Old path-derived identities cannot be rebound from today's paths:
+            # a rename/replacement may have occurred and live callbacks bind the
+            # old key. Require explicit reconciliation, never choose a winner.
+            unresolved = conn.execute(
+                "SELECT task_id FROM worker_tasks WHERE "
+                "writer_ownership IN ('held','quarantined') OR "
+                "(access_intent='mutating' AND "
+                "(writer_ownership IS NULL OR writer_ownership!='released')) OR "
+                "(access_intent IS NULL AND state NOT IN "
+                "('COMPLETED','CANCELED','FAILED','REJECTED')) LIMIT 1"
+            ).fetchone()
+            if unresolved is not None:
+                raise MigrationError(
+                    "Cannot migrate physical worktree ownership with unresolved "
+                    "historical holders; reconcile exact-attempt cleanup first"
+                )
         for stmt in statements:
             _execute_migration_statement(conn, stmt, version=version)
         conn.execute(
@@ -163,6 +185,7 @@ def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_
             (version, applied_at),
         )
         conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -182,8 +205,8 @@ def migrate(dbfile: str | Path, migrations_dir: Path | None = None) -> list[int]
             version = int(path.name[:4])
             if version <= applied:
                 continue
-            apply_migration(conn, path, version, datetime.now(UTC).isoformat())
-            out.append(version)
+            if apply_migration(conn, path, version, datetime.now(UTC).isoformat()):
+                out.append(version)
         # Migration 0012 was already marked applied by some installations
         # before its additive origin extension shipped. Replay only its
         # guarded ALTER statements so those databases converge without a

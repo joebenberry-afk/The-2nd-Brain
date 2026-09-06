@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -77,7 +78,8 @@ def _git_path(repo_path: str | Path, *args: str) -> Path:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BrainError(f"Could not inspect Git worktree {path}") from exc
-    value = result.stdout.strip().splitlines()[0] if result.returncode == 0 else ""
+    lines = result.stdout.strip().splitlines()
+    value = lines[0] if result.returncode == 0 and lines else ""
     if not value:
         raise BrainError(f"Could not resolve Git worktree identity for {path}")
     resolved = Path(value).expanduser()
@@ -94,7 +96,7 @@ def resolve_registered_worktree(
     """Resolve a concrete Git worktree and prove it belongs to an exact project.
 
     Linked worktrees share a Git common directory with the registered root, but
-    retain distinct canonical top-level paths and therefore distinct IDs.
+    retain distinct filesystem directory identities. Renames preserve exclusion.
     """
     conn = db.connect(db.db_path(Path(home)))
     try:
@@ -116,12 +118,19 @@ def resolve_registered_worktree(
     )
     if _canonical_path_key(registered_common) != _canonical_path_key(candidate_common):
         raise BrainError("Worktree is outside the registered project")
-    root_key = _canonical_path_key(candidate_root)
-    worktree_id = hashlib.sha256(f"worktree:{root_key}".encode()).hexdigest()
+    try:
+        physical = candidate_root.stat()
+    except OSError as exc:
+        raise BrainError("Could not inspect physical worktree identity") from exc
+    if not stat.S_ISDIR(physical.st_mode) or physical.st_ino <= 0 or physical.st_dev < 0:
+        raise BrainError("Physical worktree identity is unavailable")
+    worktree_id = hashlib.sha256(
+        f"worktree:{physical.st_dev}:{physical.st_ino}".encode()
+    ).hexdigest()
     return WorktreeIdentity(
         project_id=str(row["id"]),
         worktree_id=worktree_id,
-        root=str(candidate_root),
+        root=_canonical_path_key(candidate_root),
     )
 
 

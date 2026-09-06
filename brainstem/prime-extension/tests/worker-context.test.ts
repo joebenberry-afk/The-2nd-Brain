@@ -238,7 +238,7 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("binds exact native identity and releases only after executor cleanup persistence", async () => {
+  it.each([false, true])("preserves shutdown receipts and advances revisions after lost response=%s", async (loseResponse) => {
     const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) => contextResultForRequest(options));
     const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async (options) => ({
       ok: true,
@@ -246,13 +246,25 @@ describe("OMP worker Context Capsule bridge", () => {
       taskId: options.taskId,
       attemptId: options.attemptId,
     }));
-    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => ({
-      ok: true,
-      status: "accepted" as const,
-      taskId: options.taskId,
-      attemptId: options.attemptId,
-      sequence: options.sequence,
-    }));
+    const persisted = new Map<number, string>();
+    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => {
+      const payload = JSON.stringify(options);
+      const prior = persisted.get(options.sequence);
+      if (prior !== undefined && prior !== payload) {
+        return { ok: false, error: "RECEIPT_CONFLICT" };
+      }
+      persisted.set(options.sequence, payload);
+      if (loseResponse && options.sequence === 2) {
+        return { ok: false, error: "BRAIN_WORKER_CALLBACK_UNAVAILABLE" };
+      }
+      return {
+        ok: true,
+        status: "accepted" as const,
+        taskId: options.taskId,
+        attemptId: options.attemptId,
+        sequence: options.sequence,
+      };
+    });
     const resultRunner = vi.fn(async () => ({ ok: true }));
     let observer: ((observation: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>) | undefined;
     const disposeObserver = vi.fn();
@@ -280,7 +292,7 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(prepared).toMatchObject({ input: { access_intent: "mutating" } });
     expect(observer).toBeDefined();
     const base: AsyncJobLifecycleObservation = {
-      jobId: "native-job-1",
+      jobId: null,
       generation: 7,
       nativeAttemptId: "native-attempt-1",
       type: "task",
@@ -299,8 +311,9 @@ describe("OMP worker Context Capsule bridge", () => {
       status: "completed",
       executorSettled: true,
       revision: 2,
-    }))).resolves.toBe(true);
-    expect(resultRunner).toHaveBeenCalledTimes(1);
+    }))).resolves.toBe(!loseResponse);
+    expect(resultRunner).toHaveBeenCalledTimes(loseResponse ? 0 : 1);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, context);
     expect(disposeObserver).not.toHaveBeenCalled();
     await expect(Promise.resolve(observer!({
       ...base,
@@ -312,10 +325,11 @@ describe("OMP worker Context Capsule bridge", () => {
 
     expect(bindRunner).toHaveBeenCalledTimes(1);
     expect(lifecycleRunner).toHaveBeenCalledTimes(3);
+    expect([...persisted.keys()]).toEqual([1, 2, 3]);
     expect(lifecycleRunner).toHaveBeenLastCalledWith(expect.objectContaining({
       hostGeneration: 7,
       nativeAttemptId: "native-attempt-1",
-      nativeJobId: "native-job-1",
+      nativeJobId: null,
       cleanupComplete: true,
     }));
     expect(disposeObserver).toHaveBeenCalledTimes(1);

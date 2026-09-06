@@ -1,0 +1,135 @@
+{
+  "status": "LOCAL_SAFETY_FINDINGS_OPEN / RELEASE_HOLD",
+  "recorded_at": "2026-09-06T17:51:17Z",
+  "purpose": "Final evidence bottleneck execution record; source and dependency closure evidence only, not release approval.",
+  "authority": "Second_Brain_Final_Evidence_Bottleneck_Execution_Note_2026-09-06.md",
+  "coordinator": {
+    "native_uuid": "01a0773c-ad32-7031-9492-f11a68d64da8",
+    "adapter_session": "2026-09-06T15-01-00-338Z_01a0773c-ad32-7031-9492-f11a68d64da8",
+    "cwd": "C:/Users/assas/Documents/The-Second-Brain-physical-safety",
+    "canonical_home": "C:/Users/assas/Documents/The-Second-Brain",
+    "extension_default_home": "%USERPROFILE%/Documents/The-Second-Brain",
+    "environment_override": "none"
+  },
+  "worktrees": {
+    "brain": {
+      "root": "C:/Users/assas/Documents/The-Second-Brain-physical-safety",
+      "branch": "brain/v2-physical-worktree-safety",
+      "base_head_before_campaign_commit": "dbd0dd7b9ca0a3670427e05cbaae72519b273df0",
+      "python": "3.11.15",
+      "source_hashes": {
+        "brainstem/prime-extension/src/index.ts": "9842b04a05e8390c50325760eed75768233505da8273ae47f3e5823a6ad08db3",
+        "brainstem/prime-extension/src/stop-boundary.ts": "c98f4ce748fe0363e486f1249269225b7b44a1a9dccd6b08297288c8203ce373",
+        "brainstem/prime-extension/src/worker-lifecycle-bridge.ts": "1de696fd38e030a23c3ec2d35515e1d4f381b3dfb1fcb8e9babbaf0a3f5998af",
+        "brainstem/prime-extension/types/prime.d.ts": "4d528c37353e0ba62311cca92eeda424bc9258af55482b2a345ccd4212d6be19",
+        "brainstem/prime-extension/tests/injection-placement.test.ts": "18d5ff83920ed9072c02b2b563a6efff7e76ae1bd96992cf6efc07cb6abc1995",
+        "brainstem/prime-extension/tests/stop-boundary.test.ts": "74961bec1112f45cef4bf80bc36167f850fa1237d1c96b8286959a8f9dd0833f",
+        "brainstem/prime-extension/tests/worker-context.test.ts": "442f1efb1fb35d9423d6f71fa826c4d27ec76a2804fbce7662369316a6be0e0d",
+        "src/second_brain/db.py": "693c75cfc242d6b2aaefb20778d9021be5e98985d3d4c34ee88af345d2147a5c",
+        "src/second_brain/registry.py": "2a7cc647373e65ebd8fda84c9afa6baf0af86bc7af33d51e9be3896895b856eb",
+        "src/second_brain/worker_protocol.py": "c7c35bbbd5f1ac5bd35357314e56a3764a93de1b42d6f7afad58f3120559f120",
+        "src/second_brain/migrations/0024_physical_worktree_writer_leases.sql": "1d550259b507cd9bd3a54fe2810c15ded37c1b5cd0b7df4abd0c5ec782979bd3",
+        "tests/test_writer_admission.py": "e354f8e70439faa57163241171b555ae5cd72dd3fc834323a1db55baff102d19",
+        "scripts/probe_eight_gate_brain.py": "a2bd5ed48e6021f664e50f8e7a1a4666c2a51ff7289891da687317733f10daed"
+      }
+    },
+    "host": {
+      "root": "C:/Users/assas/Documents/omp-physical-safety",
+      "branch": "proof/physical-worktree-safety",
+      "base_head_before_campaign_commit": "5a4c45ff3e77c6b797623424c4284a54d01e0474",
+      "bun": "1.4.0",
+      "node": "v26.7.0",
+      "source_hashes": {
+        "packages/coding-agent/src/async/job-manager.ts": "7b3247d141e18f90322e71ee82968e858656ef585354b44b572b5605d5c0304b",
+        "packages/coding-agent/src/extensibility/extensions/runner.ts": "46d3011bd9667a257f4a839e9944dfe7f3dee11f0571ad5fcd8ad1ca12814dd9",
+        "packages/coding-agent/src/registry/agent-lifecycle.ts": "0e74cc6197b34df948dbf9147e81ac3e00b50e13a2ca37b842e6024017800050",
+        "packages/coding-agent/src/sdk.ts": "ec4b6ae985dd0e4a78eea417d129be907f25dd6a82963ce28470a0245adbd8d8",
+        "packages/coding-agent/src/session/agent-session.ts": "db8d986fdecb4e3a8c7958d27f8f127f252ac03e2a8b0bb5c4cb327e7a2256b7",
+        "packages/coding-agent/src/task/executor.ts": "797cca8a7c59ed6eea819365b2ba97976d40fe9f82dc6f462c48de3dd5fe77fa",
+        "packages/coding-agent/src/task/index.ts": "7cc24e221de38e54bdfb617a990abe2ce263d1d1c7b9280b5a30ed9655316540",
+        "packages/coding-agent/src/task/isolation-runner.ts": "a133b73f63ebdd0ad60c762f7a3258ca0ccb3bc8afdb7466a82f6a179e4d9287",
+        "packages/coding-agent/src/task/structured-subagent.ts": "bb102c0e5b83490cc5d994a8900254c3fa5c74306cc7b571ec6461394c6d1164",
+        "packages/coding-agent/src/utils/late-cleanup.ts": "5fd4b9821e43af90efb7187d773b6dc433fe58b815dbbe29dba45a449ac14f3e",
+        "packages/coding-agent/test/async-job-manager.test.ts": "bfc984470333df4bd0676560a780738a9d6d9f10007263892f7c4abb5b2f49e0",
+        "packages/coding-agent/test/extensions-runner.test.ts": "e7c58a9807d876072091698b6cc4792634845f3553f34a50cce95c391354df29",
+        "packages/coding-agent/test/sdk-restricted-extension-provider.test.ts": "1136047c449b0d4f1862dd557f3f493f5729b97e51998202d5ab9526bcbe5f26",
+        "packages/coding-agent/test/task/physical-worktree-safety.test.ts": "4e6087396ec305daf3c69f7ef15bd2a6b1ba07423aa0fc53e6c6e50499285be9",
+        "scripts/eight-gate-host.probe.ts": "e9ab569ce825fd648f15ab87f18f8b5fa8ff088c2cab1c11c5009c9bed04dde9",
+        "scripts/eight-gate-native-fixture.probe.ts": "5ed5b0f6d6e1daf7885f49e9a22f3b031867c6858b670bec26ac4b61a5f0474b",
+        "scripts/eight-gate-review-guard.probe.ts": "379515bb679a756e9f2b467b0b78172d1963e66a3d84e0bd9011cd32fc0fd670",
+        "scripts/eight-gate-stale-receipt.probe.ts": "5bb987da807f5816e534e6eb9bb985ed4755e85d7317f3c075312ca99a3470d9"
+      }
+    }
+  },
+  "dependency_lock_hashes": {
+    "host/bun.lock": "ae8427eab79aef89070954bdc9f998628091e81e2863d63e5aa5b6487be97937",
+    "host/Cargo.lock": "c3a19dfe48cd2cd620863232fb1ac9c2106e34f70b641d53cb902b50ee5c1606",
+    "host/MODULE.bazel.lock": "9193751378aeea29e9cfa9c7949eb747da010132c5e49031b5bc58d5ce7986c8",
+    "host/flake.lock": "ff08e1374baa0e6c68b6de36e82fe7b932f8d2c29e08c7caa7060f550e9dca3b"
+  },
+  "runtime_checks": {
+    "brain_pyright": "0 errors, 0 warnings, 0 informations",
+    "brain_writer_format": "pass after ruff format",
+    "brain_writer_ruff": "pass",
+    "brain_writer_pytest": "27 passed",
+    "extension_eslint": "pass on injection-placement.test.ts",
+    "extension_vitest": "17 passed across 3 files",
+    "extension_tsc": "pass",
+    "host_oxfmt": "pass on changed host source/probe files",
+    "host_oxlint": "pass on changed host source/probe files",
+    "host_typecheck": "pass via tsgo -p tsconfig.json --noEmit",
+    "host_focused_tests": "135 passed across 4 files",
+    "whole_brain_ruff": "373 baseline errors unchanged; inherited classification, not attributed to campaign"
+  },
+  "boundary_evidence": {
+    "V01": {
+      "result": "PASS_BOUNDED",
+      "summary": "C:/Users/assas/AppData/Local/Temp/sb-v01-final-20260906-r13/summary.json",
+      "exit_code": 0,
+      "fixture_deleted": true,
+      "selected_files": 4,
+      "test_counts": {"async_job_manager": 33, "extension_context_async_jobs": 3, "structured_subagent": 30, "task_spawn": 12},
+      "review_evidence": [
+        "C:/Users/assas/AppData/Local/Temp/sb-v01-final-20260906-r13/review-boundary-0.json",
+        "C:/Users/assas/AppData/Local/Temp/sb-v01-final-20260906-r13/review-boundary-module.json"
+      ],
+      "native_denial_before_execution": true,
+      "outside_source_denial_before_execution": true,
+      "protected_write_denial": true,
+      "scratch_write_and_assertion": true,
+      "approved_native_visible_width_output": 8,
+      "limitations": [
+        "Trusted Bun preload, not an OS sandbox for hostile arbitrary JavaScript, workers, subprocesses, or alternate FFI/syscall routes",
+        "OS transitive DLL closure is not proven",
+        "No ACL changes or global controls"
+      ]
+    },
+    "A09": {
+      "result": "PARTIAL_CONTRACT_CONFLICT",
+      "events": "C:/Users/assas/AppData/Local/Temp/sb-a09-final-20260906-r2/events.json",
+      "protecting_upgrade": "Held and quarantined historical holders refuse before migration 24 DDL with MigrationError and zero migration-24 statements",
+      "production_startup": "Current-schema held and quarantined ownership excludes competing writers",
+      "clean_post_ddl_crash_recovery": "PASS",
+      "unexercised": "Populated post-DDL crash case where migration 24 refuses holders after DDL; current policy refuses before DDL"
+    },
+    "R04": {
+      "result": "BLOCKED_WRONG_CAPABILITY",
+      "summary": "C:/Users/assas/AppData/Local/Temp/sb-host-final-20260906-r6/summary.json",
+      "pre_execution_refusal": "Real AgentSession -> TaskTool returned before child execution; childCallsBeforeResult=0",
+      "refusal": "Unknown eval tool capability, not the required missing native restriction capability",
+      "positive_control": "Permitted read executed and write rejected",
+      "required_provider_api": "No removable native restriction-provider/selection API exists in the inspected host route"
+    },
+    "D04": {
+      "result": "PASS_SCOPED_FINAL",
+      "summary": "C:/Users/assas/AppData/Local/Temp/sb-host-final-20260906-r6/summary.json",
+      "stale_receipt": "C:/Users/assas/AppData/Local/Temp/sb-host-final-20260906-r6/stale-receipt.json",
+      "observed": "Real production AgentSession/TaskTool path, fresh retry identity, stale lifecycle duplicate containment, STALE_ATTEMPT result rejection, third-writer denial, permitted nested control"
+    }
+  },
+  "protected_scope": {
+    "controller": "C:/Users/assas/Documents/The-Second-Brain",
+    "mutations_authorized": "false except one final brainctl stop decide operation",
+    "not_staged": ["private payloads", "callback-token values", "live databases", "raw proof directories", "unrelated files", "remote state"]
+  }
+}

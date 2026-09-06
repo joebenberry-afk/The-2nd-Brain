@@ -34,7 +34,7 @@ from .contracts import (
     estimate_tokens,
     stable_content_hash,
 )
-from .errors import BrainError
+from .errors import BrainError, MigrationError
 
 DEFAULT_LEASE_SECONDS = 300
 MAX_DISPATCH_PAYLOAD_BYTES = 16 * 1024
@@ -529,7 +529,12 @@ def _worker_db(home: Path | str) -> Path:
     home_path = Path(home)
     dbfile = db_path = home_path / "db" / "brain.sqlite"
     if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+        try:
+            db.migrate(dbfile)
+        except MigrationError as exc:
+            raise WorkerPacketError(
+                "WORKTREE_SAFETY_MIGRATION_REQUIRED", str(exc)
+            ) from exc
     return db_path
 
 
@@ -848,9 +853,9 @@ def admit_worker_attempt(
         if identity is not None:
             owner = conn.execute(
                 "SELECT task_id,attempt_id FROM worker_tasks "
-                "WHERE project_id=? AND worktree_id=? AND access_intent='mutating' "
+                "WHERE (worktree_id=? OR worktree_root=?) AND access_intent='mutating' "
                 "AND writer_ownership IN ('held','quarantined')",
-                (identity.project_id, identity.worktree_id),
+                (identity.worktree_id, identity.root),
             ).fetchone()
             if owner is not None:
                 raise WorkerPacketError(
@@ -956,12 +961,14 @@ def _native_binding(
     native_attempt_id: Any,
     native_job_id: Any,
     agent_id: Any,
-) -> tuple[int, str, str, str]:
+) -> tuple[int, str, str | None, str]:
     if type(host_generation) is not int or host_generation < 0:
         raise WorkerPacketError(
             "PROTOCOL_ERROR", "host_generation must be a non-negative integer"
         )
-    values = (native_attempt_id, native_job_id, agent_id)
+    values = (native_attempt_id, agent_id)
+    if native_job_id is not None:
+        values += (native_job_id,)
     if any(
         not isinstance(value, str)
         or not value
@@ -1008,7 +1015,7 @@ def _binding_matches(
     row: dict[str, Any],
     host_generation: int,
     native_attempt_id: str,
-    native_job_id: str,
+    native_job_id: str | None,
     agent_id: str,
 ) -> bool:
     return (
