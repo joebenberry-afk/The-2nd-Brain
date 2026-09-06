@@ -793,6 +793,8 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
   const junction = join(caseRoot, "junction");
   const unresolved = join(caseRoot, "unresolved");
   let firstResult: DriverResult | undefined;
+  let branchHolder: RunningDriver | undefined;
+  let branchHolderResult: DriverResult | undefined;
   let retryResult: DriverResult | undefined;
   let distinctResult: DriverResult | undefined;
   try {
@@ -809,14 +811,20 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
       await waitForDriverDecision(contender, [spec.resultPath], `A03 ${label} decision`);
       contenderResults[label] = await finishDriver(contender);
     }
+    await writeFile(gate, "release", "utf8");
+    firstResult = await finishDriver(first);
     await git(fixture.repo, "switch", "-c", "a03-branch");
-    const branchSpec = writerSpec(caseRoot, "a03-branch", "background", gate);
-    const branch = startDriver(fixture.brainHome, fixture.repo, "beta", branchSpec);
-    contenders.push(branch);
-    await waitForDriverDecision(branch, [branchSpec.resultPath], "A03 branch decision");
-    contenderResults.branch = await finishDriver(branch);
+    const branchGate = join(caseRoot, "branch-release");
+    const branchHolderSpec = writerSpec(caseRoot, "a03-branch-holder", "background", branchGate);
+    branchHolder = startDriver(fixture.brainHome, fixture.repo, "beta", branchHolderSpec);
+    await waitForDriverDecision(branchHolder, [branchHolderSpec.marker!], "A03 branch holder barrier");
+    const branchContenderSpec = writerSpec(caseRoot, "a03-branch-contender", "background", branchGate);
+    const branchContender = startDriver(fixture.brainHome, fixture.repo, "beta", branchContenderSpec);
+    contenders.push(branchContender);
+    await waitForDriverDecision(branchContender, [branchContenderSpec.resultPath], "A03 branch decision");
+    contenderResults.branch = await finishDriver(branchContender);
     await mkdir(unresolved, { recursive: true });
-    const unresolvedSpec = writerSpec(caseRoot, "a03-unresolved", "background", gate);
+    const unresolvedSpec = writerSpec(caseRoot, "a03-unresolved", "background", branchGate);
     const unresolvedDriver = startDriver(fixture.brainHome, unresolved, "beta", unresolvedSpec);
     contenders.push(unresolvedDriver);
     await waitForDriverDecision(unresolvedDriver, [unresolvedSpec.resultPath], "A03 unresolved decision");
@@ -826,8 +834,8 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
     const distinctDriver = startDriver(distinct.brainHome, distinct.repo, "distinct", distinctSpec);
     contenders.push(distinctDriver);
     distinctResult = await finishDriver(distinctDriver);
-    await writeFile(gate, "release", "utf8");
-    firstResult = await finishDriver(first);
+    await writeFile(branchGate, "release", "utf8");
+    branchHolderResult = await finishDriver(branchHolder);
     const retrySpec = writerSpec(caseRoot, "a03-after-release", "background", undefined);
     const retry = startDriver(fixture.brainHome, fixture.repo, "beta", retrySpec);
     contenders.push(retry);
@@ -845,6 +853,7 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
         firstParticipation.admissionBeforeWriter &&
         firstParticipation.bindingBeforeWriter &&
         firstResult.targetWritten &&
+        branchHolderResult.targetWritten &&
         denied.case.taskBlocked &&
         denied.junction.taskBlocked &&
         denied.branch.taskBlocked &&
@@ -859,15 +868,20 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
         firstParticipation,
         denied,
         firstResult,
+        branchHolderResult,
         distinctResult,
         retryResult,
         branch: { command: ["git", "-C", fixture.repo, "switch", "-c", "a03-branch"] },
-        barrier: "First writer held before alias/branch decisions; release and retry were observed through real driver results.",
+        barrier: "First writer and post-transition branch holder were held before contenders; release and retry were observed through real driver results.",
       },
     };
   } finally {
     if (!existsSync(gate)) await writeFile(gate, "release", "utf8");
     await stopDriver(first);
+    if (branchHolder) {
+      if (!existsSync(join(caseRoot, "branch-release"))) await writeFile(join(caseRoot, "branch-release"), "release", "utf8");
+      await stopDriver(branchHolder);
+    }
     await Promise.all(contenders.map(driver => stopDriver(driver)));
     if (existsSync(junction)) await run("cmd.exe", ["/d", "/c", "rmdir", junction]);
   }
