@@ -801,16 +801,20 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
     await waitForDriverDecision(first, [firstSpec.marker!], "A03 first writer barrier");
     const firstParticipation = participationSummary(await readWriterEvidence(firstSpec));
     await run("cmd.exe", ["/d", "/c", "mklink", "/J", junction, fixture.repo]);
-    for (const [label, cwd] of [
+    const aliases = [
       ["case", resolve(fixture.repo).toUpperCase()],
       ["junction", junction],
-    ] as const) {
+    ] as const;
+    const aliasDrivers = aliases.map(([label, cwd]) => {
       const spec = writerSpec(caseRoot, `a03-${label}`, "background", gate);
-      const contender = startDriver(fixture.brainHome, cwd, "beta", spec);
-      contenders.push(contender);
-      await waitForDriverDecision(contender, [spec.resultPath], `A03 ${label} decision`);
-      contenderResults[label] = await finishDriver(contender);
-    }
+      const driver = startDriver(fixture.brainHome, cwd, "beta", spec);
+      contenders.push(driver);
+      return { label, spec, driver };
+    });
+    await Promise.all(aliasDrivers.map(async ({ label, spec, driver }) => {
+      await waitForDriverDecision(driver, [spec.resultPath], `A03 ${label} decision`);
+      contenderResults[label] = await finishDriver(driver);
+    }));
     await writeFile(gate, "release", "utf8");
     firstResult = await finishDriver(first);
     await git(fixture.repo, "switch", "-c", "a03-branch");
@@ -821,19 +825,27 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
     const branchContenderSpec = writerSpec(caseRoot, "a03-branch-contender", "background", branchGate);
     const branchContender = startDriver(fixture.brainHome, fixture.repo, "beta", branchContenderSpec);
     contenders.push(branchContender);
-    await waitForDriverDecision(branchContender, [branchContenderSpec.resultPath], "A03 branch decision");
-    contenderResults.branch = await finishDriver(branchContender);
-    await mkdir(unresolved, { recursive: true });
     const unresolvedSpec = writerSpec(caseRoot, "a03-unresolved", "background", branchGate);
+    await mkdir(unresolved, { recursive: true });
     const unresolvedDriver = startDriver(fixture.brainHome, unresolved, "beta", unresolvedSpec);
     contenders.push(unresolvedDriver);
-    await waitForDriverDecision(unresolvedDriver, [unresolvedSpec.resultPath], "A03 unresolved decision");
-    contenderResults.unresolved = await finishDriver(unresolvedDriver);
     const distinct = await createFixture(join(caseRoot, "distinct"), ["distinct"]);
     const distinctSpec = writerSpec(caseRoot, "a03-distinct", "background", undefined);
     const distinctDriver = startDriver(distinct.brainHome, distinct.repo, "distinct", distinctSpec);
     contenders.push(distinctDriver);
-    distinctResult = await finishDriver(distinctDriver);
+    await Promise.all([
+      (async () => {
+        await waitForDriverDecision(branchContender, [branchContenderSpec.resultPath], "A03 branch decision");
+        contenderResults.branch = await finishDriver(branchContender);
+      })(),
+      (async () => {
+        await waitForDriverDecision(unresolvedDriver, [unresolvedSpec.resultPath], "A03 unresolved decision");
+        contenderResults.unresolved = await finishDriver(unresolvedDriver);
+      })(),
+      (async () => {
+        distinctResult = await finishDriver(distinctDriver);
+      })(),
+    ]);
     await writeFile(branchGate, "release", "utf8");
     branchHolderResult = await finishDriver(branchHolder);
     const retrySpec = writerSpec(caseRoot, "a03-after-release", "background", undefined);
@@ -862,7 +874,7 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
         !denied.junction.writerEntered &&
         !denied.branch.writerEntered &&
         !denied.unresolved.writerEntered &&
-        distinctResult.targetWritten &&
+        distinctResult?.targetWritten === true &&
         retryResult.targetWritten,
       facts: {
         firstParticipation,
