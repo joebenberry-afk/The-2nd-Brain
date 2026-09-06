@@ -46,6 +46,55 @@ export function rewriteStopControlCommand(
   return rewriteSessionPlaceholders(command, session, parentSession);
 }
 
+export interface StopControlIdentity {
+  session: string;
+  task: string;
+  parent?: string;
+  worker?: string;
+  stop?: string;
+}
+
+/** Literal identity options only; this is not a shell parser. Ambiguous shell
+ * expressions have no STOP authority, even if the tool itself executes them. */
+export function stopControlIdentity(command: string): StopControlIdentity | undefined {
+  if (command.length > STOP_OUTPUT_MAX_CHARS || /[;&|`$<>\r\n]/.test(command) ||
+      !/^\s*(?:brainctl(?:\.cmd)?|(?:python(?:\.exe)?\s+-m\s+)?second_brain)\s+stop\s+decide\b/i.test(command)) return undefined;
+  const option = (name: string): string | undefined => {
+    if ([...command.matchAll(new RegExp(`(?:^|\\s)--${name}(?==|\\s|$)`, "g"))].length !== 1) return undefined;
+    const matches = [...command.matchAll(new RegExp(`(?:^|\\s)--${name}(?:=|\\s+)(\"[^\"]*\"|'[^']*'|[^\\s]+)`, "g"))];
+    if (matches.length !== 1) return undefined;
+    const raw = matches[0][1];
+    const value = raw.replace(/^(['"])(.*)\1$/, "$2");
+    return TASK_ID_PATTERN.test(value) && !/^(?:current|unknown|anonymous)$/i.test(value) ? value : undefined;
+  };
+  const session = option("session");
+  const task = option("task-id");
+  if (!session || !task) return undefined;
+  const parent = option("parent-session-id");
+  const worker = option("worker-session-id");
+  const stop = option("stop-id");
+  if ((!parent && /--parent-session-id\b/.test(command)) ||
+      (!worker && /--worker-session-id\b/.test(command)) ||
+      (!stop && /--stop-id\b/.test(command))) return undefined;
+  return { session, task, parent, worker, stop };
+}
+
+/** Parsing establishes shape; applicability binds that shape to a specific call. */
+export function stopEvidenceMatches(
+  evidence: StopEvidence,
+  expected: StopControlIdentity,
+  parentSession: string,
+): boolean {
+  return evidence.session_id === expected.session &&
+    evidence.task_id === expected.task &&
+    (expected.stop === undefined || evidence.stop_id === expected.stop) &&
+    (evidence.worker_session_id === (expected.worker ?? "") ||
+      (expected.worker === undefined && evidence.worker_session_id === expected.session)) &&
+    (evidence.parent_session_id === (expected.parent ?? "") ||
+      (expected.parent === undefined && evidence.parent_session_id === parentSession)) &&
+    evidence.continuation_forbidden === (evidence.decision === "stop");
+}
+
 const FINALIZATION_TOOLS: Record<string, true> = {
   session_shutdown: true,
   telemetry: true,

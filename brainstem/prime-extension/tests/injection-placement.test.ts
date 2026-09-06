@@ -4,15 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import factory from "../src/index";
 import {
   assemblePrefix,
   assembleTail,
   checkPrefixDrift,
   appendTailAfterUserMessage,
-  MEMORY_COMMANDS_TEXT,
 } from "../src/injection-slots";
-import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
 describe("T2.4 Injection placement", () => {
   let homeDir: string;

@@ -24,7 +24,7 @@ interface WorkerAttemptBase {
 export interface OmpWorkerBindOptions extends WorkerAttemptBase {
   hostGeneration: number;
   nativeAttemptId: string;
-  nativeJobId: string;
+  nativeJobId: string | null;
   agentId: string;
 }
 
@@ -153,7 +153,7 @@ export function runOmpWorkerBind(options: OmpWorkerBindOptions): Promise<OmpWork
     operation: "worker_bind",
     host_generation: options.hostGeneration,
     native_attempt_id: bounded(options.nativeAttemptId, 128),
-    native_job_id: bounded(options.nativeJobId, 512),
+    native_job_id: options.nativeJobId === null ? null : bounded(options.nativeJobId, 512),
     agent_id: bounded(options.agentId, 512),
   });
 }
@@ -164,7 +164,7 @@ export function runOmpWorkerLifecycle(options: OmpWorkerLifecycleOptions): Promi
     operation: "worker_lifecycle",
     host_generation: options.hostGeneration,
     native_attempt_id: bounded(options.nativeAttemptId, 128),
-    native_job_id: bounded(options.nativeJobId, 512),
+    native_job_id: options.nativeJobId === null ? null : bounded(options.nativeJobId, 512),
     agent_id: bounded(options.agentId, 512),
     sequence: options.sequence,
     outcome: options.outcome,

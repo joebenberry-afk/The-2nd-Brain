@@ -113,6 +113,8 @@ describe("OMP STOP boundary", () => {
 
 it("blocks later OMP tool calls after a real STOP control result", async () => {
   const home = mkdtempSync(join(tmpdir(), "second-brain-stop-"));
+  vi.stubEnv("SECOND_BRAIN_HOME", home);
+  vi.stubEnv("SECOND_BRAIN_OBSERVABILITY", "on");
   const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
   const pi = {
     on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => {
@@ -131,7 +133,7 @@ it("blocks later OMP tool calls after a real STOP control result", async () => {
   };
   factory(pi);
 
-  const command = "brainctl stop decide --session worker-1 --task-id task-1 --json";
+  const command = "brainctl stop decide --session session --task-id task-1 --json";
   await handlers.get("tool_call")!(
     { toolName: "bash", toolCallId: "stop-call", input: { command } },
     context,
@@ -146,9 +148,9 @@ it("blocks later OMP tool calls after a real STOP control result", async () => {
           decision: "stop",
           stop_id: "stop-1",
           task_id: "task-1",
-          session_id: "worker-1",
-          parent_session_id: "parent-1",
-          worker_session_id: "worker-1",
+          session_id: "session",
+          parent_session_id: "",
+          worker_session_id: "",
           reason_code: "completion_proven",
           triggering_condition: "completion_condition_satisfied",
           verification_state: "passed",

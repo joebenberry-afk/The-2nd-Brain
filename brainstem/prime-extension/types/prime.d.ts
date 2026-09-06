@@ -33,7 +33,7 @@ export interface SessionManagerSurface {
 
 
 export interface AsyncJobLifecycleObservation {
-  jobId: string;
+  jobId: string | null;
   generation: number;
   nativeAttemptId: string;
   type: "bash" | "task" | "eval";
@@ -44,6 +44,7 @@ export interface AsyncJobLifecycleObservation {
   status: "running" | "completed" | "failed" | "cancelled";
   executorSettled: boolean;
   cleanupComplete: boolean;
+  /** Monotonic per-native-attempt revision; replay preserves the exact snapshot. */
   revision: number;
 }
 /** Context passed to every event handler. */
