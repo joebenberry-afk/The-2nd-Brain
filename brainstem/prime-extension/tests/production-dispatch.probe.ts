@@ -782,6 +782,97 @@ async function f1AliasOverlap(root: string): Promise<CaseResult> {
   }
 }
 
+async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
+  const caseRoot = join(root, "a03");
+  const fixture = await createFixture(caseRoot, ["alpha", "beta"]);
+  const gate = join(caseRoot, "release");
+  const firstSpec = writerSpec(caseRoot, "a03-holder", "background", gate);
+  const first = startDriver(fixture.brainHome, fixture.repo, "alpha", firstSpec);
+  const contenders: RunningDriver[] = [];
+  const contenderResults: Record<string, DriverResult> = {};
+  const junction = join(caseRoot, "junction");
+  const unresolved = join(caseRoot, "unresolved");
+  let firstResult: DriverResult | undefined;
+  let retryResult: DriverResult | undefined;
+  let distinctResult: DriverResult | undefined;
+  try {
+    await waitForDriverDecision(first, [firstSpec.marker!], "A03 first writer barrier");
+    const firstParticipation = participationSummary(await readWriterEvidence(firstSpec));
+    await run("cmd.exe", ["/d", "/c", "mklink", "/J", junction, fixture.repo]);
+    for (const [label, cwd] of [
+      ["case", resolve(fixture.repo).toUpperCase()],
+      ["junction", junction],
+    ] as const) {
+      const spec = writerSpec(caseRoot, `a03-${label}`, "background", gate);
+      const contender = startDriver(fixture.brainHome, cwd, "beta", spec);
+      contenders.push(contender);
+      await waitForDriverDecision(contender, [spec.resultPath], `A03 ${label} decision`);
+      contenderResults[label] = await finishDriver(contender);
+    }
+    await git(fixture.repo, "switch", "-c", "a03-branch");
+    const branchSpec = writerSpec(caseRoot, "a03-branch", "background", gate);
+    const branch = startDriver(fixture.brainHome, fixture.repo, "beta", branchSpec);
+    contenders.push(branch);
+    await waitForDriverDecision(branch, [branchSpec.resultPath], "A03 branch decision");
+    contenderResults.branch = await finishDriver(branch);
+    await mkdir(unresolved, { recursive: true });
+    const unresolvedSpec = writerSpec(caseRoot, "a03-unresolved", "background", gate);
+    const unresolvedDriver = startDriver(fixture.brainHome, unresolved, "beta", unresolvedSpec);
+    contenders.push(unresolvedDriver);
+    await waitForDriverDecision(unresolvedDriver, [unresolvedSpec.resultPath], "A03 unresolved decision");
+    contenderResults.unresolved = await finishDriver(unresolvedDriver);
+    const distinct = await createFixture(join(caseRoot, "distinct"), ["distinct"]);
+    const distinctSpec = writerSpec(caseRoot, "a03-distinct", "background", undefined);
+    const distinctDriver = startDriver(distinct.brainHome, distinct.repo, "distinct", distinctSpec);
+    contenders.push(distinctDriver);
+    distinctResult = await finishDriver(distinctDriver);
+    await writeFile(gate, "release", "utf8");
+    firstResult = await finishDriver(first);
+    const retrySpec = writerSpec(caseRoot, "a03-after-release", "background", undefined);
+    const retry = startDriver(fixture.brainHome, fixture.repo, "beta", retrySpec);
+    contenders.push(retry);
+    retryResult = await finishDriver(retry);
+    const denied = Object.fromEntries(
+      Object.entries(contenderResults).map(([label, result]) => [label, {
+        taskBlocked: result.taskBlocked,
+        identityRefused: result.taskText.includes("WORKTREE_IDENTITY_INVALID"),
+        writerEntered: result.targetWritten,
+      }]),
+    );
+    return {
+      case: "A03 production physical aliases and branch transition",
+      passed:
+        firstParticipation.admissionBeforeWriter &&
+        firstParticipation.bindingBeforeWriter &&
+        firstResult.targetWritten &&
+        denied.case.taskBlocked &&
+        denied.junction.taskBlocked &&
+        denied.branch.taskBlocked &&
+        denied.unresolved.identityRefused &&
+        !denied.case.writerEntered &&
+        !denied.junction.writerEntered &&
+        !denied.branch.writerEntered &&
+        !denied.unresolved.writerEntered &&
+        distinctResult.targetWritten &&
+        retryResult.targetWritten,
+      facts: {
+        firstParticipation,
+        denied,
+        firstResult,
+        distinctResult,
+        retryResult,
+        branch: { command: ["git", "-C", fixture.repo, "switch", "-c", "a03-branch"] },
+        barrier: "First writer held before alias/branch decisions; release and retry were observed through real driver results.",
+      },
+    };
+  } finally {
+    if (!existsSync(gate)) await writeFile(gate, "release", "utf8");
+    await stopDriver(first);
+    await Promise.all(contenders.map(driver => stopDriver(driver)));
+    if (existsSync(junction)) await run("cmd.exe", ["/d", "/c", "rmdir", junction]);
+  }
+}
+
 async function f2ReadOnly(root: string): Promise<CaseResult> {
   const fixture = await createFixture(join(root, "f2"), ["alpha"]);
   const spec: DriverSpec = {
@@ -1074,6 +1165,7 @@ async function orchestrate(): Promise<void> {
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean),
   );
+  if (selected.has("A03")) await capture("A03 production physical aliases and branch transition", () => a03PhysicalAliasOverlap(root));
   if (selected.has("F1")) await capture("F1 alias exclusion", () => f1AliasOverlap(root));
   if (selected.has("F1D")) await capture("Distinct physical worktrees overlap", () => distinctWorktreeOverlap(root));
   if (selected.has("F2")) await capture("F2 native read-only restriction", () => f2ReadOnly(root));
