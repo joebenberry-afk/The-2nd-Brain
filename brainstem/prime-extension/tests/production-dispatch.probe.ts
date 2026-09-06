@@ -817,17 +817,18 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
     }));
     await writeFile(gate, "release", "utf8");
     firstResult = await finishDriver(first);
-    await git(fixture.repo, "switch", "-c", "a03-branch");
+    const branchFixture = await createFixture(join(caseRoot, "branch"), ["beta"]);
+    await git(branchFixture.repo, "switch", "-c", "a03-branch");
     const branchGate = join(caseRoot, "branch-release");
     const branchHolderSpec = writerSpec(caseRoot, "a03-branch-holder", "background", branchGate);
-    branchHolder = startDriver(fixture.brainHome, fixture.repo, "beta", branchHolderSpec);
+    branchHolder = startDriver(branchFixture.brainHome, branchFixture.repo, "beta", branchHolderSpec);
     await waitForDriverDecision(branchHolder, [branchHolderSpec.marker!], "A03 branch holder barrier");
     const branchContenderSpec = writerSpec(caseRoot, "a03-branch-contender", "background", branchGate);
-    const branchContender = startDriver(fixture.brainHome, fixture.repo, "beta", branchContenderSpec);
+    const branchContender = startDriver(branchFixture.brainHome, branchFixture.repo, "beta", branchContenderSpec);
     contenders.push(branchContender);
     const unresolvedSpec = writerSpec(caseRoot, "a03-unresolved", "background", branchGate);
     await mkdir(unresolved, { recursive: true });
-    const unresolvedDriver = startDriver(fixture.brainHome, unresolved, "beta", unresolvedSpec);
+    const unresolvedDriver = startDriver(branchFixture.brainHome, unresolved, "beta", unresolvedSpec);
     contenders.push(unresolvedDriver);
     const distinct = await createFixture(join(caseRoot, "distinct"), ["distinct"]);
     const distinctSpec = writerSpec(caseRoot, "a03-distinct", "background", undefined);
@@ -849,7 +850,7 @@ async function a03PhysicalAliasOverlap(root: string): Promise<CaseResult> {
     await writeFile(branchGate, "release", "utf8");
     branchHolderResult = await finishDriver(branchHolder);
     const retrySpec = writerSpec(caseRoot, "a03-after-release", "background", undefined);
-    const retry = startDriver(fixture.brainHome, fixture.repo, "beta", retrySpec);
+    const retry = startDriver(branchFixture.brainHome, branchFixture.repo, "beta", retrySpec);
     contenders.push(retry);
     retryResult = await finishDriver(retry);
     const denied = Object.fromEntries(
