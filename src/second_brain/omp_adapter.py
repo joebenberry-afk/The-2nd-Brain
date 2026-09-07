@@ -101,7 +101,7 @@ def _prepare_worker_context(home: Path, payload: Mapping[str, Any]) -> dict[str,
         fanout=1,
         depth=int(payload.get("depth", 0)),
         project_id=_text(payload.get("project_id")),
-        repo_root=_text(payload.get("cwd")),
+        repo_root=_text(payload.get("cwd"), contracts.WORKER_REF_MAX_CHARS),
         access_intent=_text(payload.get("access_intent")),
     ).validate()
     context_handoff = worker_protocol.prepare_context_handoff(home, packet, host="omp")
