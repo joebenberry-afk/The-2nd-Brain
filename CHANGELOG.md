@@ -38,6 +38,9 @@
 - Add read-only candidate qualification and atomic, independently verified
   ledger recording. Candidate reports cannot authorize ACTIVE; conflicting,
   partial, stale, tampered, or simulated evidence remains ineligible.
+- Read RepoWise freshness from its machine-readable commit state rather than
+  hashing rendered table borders; unchanged Windows environments no longer
+  fail qualification solely because UTF-8 and legacy decoding differ.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 
