@@ -927,6 +927,7 @@ def test_windows_claude_launcher_captures_unicode_without_persisting_content(
             "SECOND_BRAIN_HOME": str(home),
             "SECOND_BRAIN_PYTHON": sys.executable,
             "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
+            "PYTHONIOENCODING": "cp1252",
         },
         timeout=30,
     )

@@ -113,6 +113,7 @@ def test_windows_hook_preserves_unicode_project_scope_and_unknown_counts(tmp_pat
         "SECOND_BRAIN_HOME": str(home),
         "SECOND_BRAIN_PYTHON": sys.executable,
         "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
+        "PYTHONIOENCODING": "cp1252",
     }
     payload = {
         "session_id": "unicode-hook",

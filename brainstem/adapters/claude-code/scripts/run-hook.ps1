@@ -40,6 +40,7 @@ if (-not $payload -or -not $payload.Trim()) {
 # Clear corrupted environment variables (repo gotcha: PYTHONHOME pollution)
 $env:PYTHONHOME = $null
 $env:PYTHONPATH = $null
+$env:PYTHONIOENCODING = "utf-8"
 
 try {
     $response = $payload | & $python -m second_brain --home $repoHome autoinject claude-code-hook 2>$null
