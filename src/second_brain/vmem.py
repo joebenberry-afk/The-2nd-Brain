@@ -1,5 +1,4 @@
-"""
-Context Virtual Memory (VMem) & Transient Indexed Session Memory.
+"""Context Virtual Memory (VMem) & Transient Indexed Session Memory.
 
 Plan §6: Phase 3 — Transient Indexed Session Memory -> Context Virtual Memory.
 Upgrades session memory into a paged virtual context with explicit residency states,
@@ -56,6 +55,7 @@ class SessionObjectKind(StrEnum):
     BLOCKER = "BLOCKER"
     RESEARCH_RESULT = "RESEARCH_RESULT"
     GENERIC = "GENERIC"
+
 
 class RecoveryClass(StrEnum):
     EXACT_ARTIFACT = "EXACT_ARTIFACT"
@@ -118,6 +118,7 @@ _VMEM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
 @dataclass
 class SessionObject:
     """A transient session object stored in Context Virtual Memory."""
+
     obj_id: str
     session_id: str
     kind: SessionObjectKind
@@ -161,6 +162,7 @@ class SessionObject:
             "pinned_until_turn": self.pinned_until_turn,
         }
 
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -187,15 +189,16 @@ def _compute_base_priority(kind: SessionObjectKind, pinned: bool) -> float:
 def _load_economics_parameters(
     home: Path | str, provider_id: str | None = None
 ) -> dict[str, float | int]:
-    """Read cache pricing multipliers and cost model parameters from
-    `config/v2.toml [economics]` or provider table if present; fallback to standard defaults.
+    """Read cache pricing multipliers and cost model parameters from `config/v2.toml
+    [economics]` or provider table if present; fallback to standard defaults.
 
     When `provider_id` is given and its T2.6 capability row reports
     `cache_support == "none"`, `cache_write` is forced equal to `cache_read`
     in the returned dict -- a provider that does not support prompt caching
     must not be charged the cache-write cost penalty. In every other case
     (no `provider_id`, no capability row, or `cache_support` is `implicit`/
-    `explicit`) the existing pricing above is returned unchanged."""
+    `explicit`) the existing pricing above is returned unchanged.
+    """
     path = Path(home) / "config" / "v2.toml"
     cache_read = 0.10
     cache_write = 1.25
@@ -256,8 +259,8 @@ def remaining_turns_estimate(
     session_id: str,
     default_turns: int = 8,
 ) -> int:
-    """Resolve remaining turns estimate from session telemetry or task class,
-    falling back to default_remaining_turns."""
+    """Resolve remaining turns estimate from session telemetry or task class, falling
+    back to default_remaining_turns."""
     internal_id = ledger.internal_session_id(session_id)
     sdir = Path(home) / "state" / "sessions" / internal_id
     for fname in ("routing.json", "active-state.json", "manifest.json"):
@@ -281,6 +284,7 @@ def remaining_turns_estimate(
             except Exception:
                 pass
     return default_turns
+
 
 class VMemStore:
     """Context Virtual Memory manager for a session."""
@@ -430,7 +434,11 @@ class VMemStore:
             durability=r["durability"] if "durability" in keys else DURABILITY_DIRTY,
             recovery_class=r["recovery_class"] if "recovery_class" in keys else None,
             covered_at=r["covered_at"] if "covered_at" in keys else None,
-            pinned_until_turn=int(r["pinned_until_turn"]) if "pinned_until_turn" in keys and r["pinned_until_turn"] is not None else 0,
+            pinned_until_turn=(
+                int(r["pinned_until_turn"])
+                if "pinned_until_turn" in keys and r["pinned_until_turn"] is not None
+                else 0
+            ),
         )
 
     def list_objects(
@@ -479,10 +487,10 @@ class VMemStore:
         return self._row_to_session_object(r)
 
     def _verify_and_load(self, obj_id: str) -> tuple[SessionObject, str]:
-        """Read-only verify+load step (RC4 Part D safety pass): confirm the
-        object exists and its OWN stored VMem backing artifact is present and
-        intact. Raises `BrainError` on any failure. Performs NO DB write —
-        callers must not assume any mutation has happened after this returns.
+        """Read-only verify+load step (RC4 Part D safety pass): confirm the object
+        exists and its OWN stored VMem backing artifact is present and intact. Raises
+        `BrainError` on any failure. Performs NO DB write — callers must not assume any
+        mutation has happened after this returns.
 
         Hash-verifies the loaded bytes against `obj.content_sha256` (belt and
         braces on top of `artifacts.expand`'s own path-by-hash lookup) so
@@ -501,18 +509,21 @@ class VMemStore:
                 f"VMem backing artifact corrupt for {obj_id}: expected sha256 "
                 f"{obj.content_sha256}, got {actual_sha}"
             )
-        content = raw_bytes.decode("utf-8", errors="replace")
+        try:
+            content = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BrainError(f"VMem backing artifact is not valid UTF-8: {obj_id}") from exc
         return obj, content
 
-    def _mutate_fault_in(
-        self, obj: SessionObject, pin_turns: int | None = None
-    ) -> SessionObject:
-        """The ONE DB write of the fault-in path (RC4 Part D safety pass):
-        residency EVICTED->FAULTED_IN (unchanged otherwise), access_count++,
-        priority_score boosted, pinned_until_turn set to current_turn + faulted_in_pin_turns.
-        Callers must only invoke this AFTER every read-only verification/resolution
-        step for the requested recovery has already succeeded — this method itself
-        does not verify anything."""
+    def _mutate_fault_in(self, obj: SessionObject, pin_turns: int | None = None) -> SessionObject:
+        """The ONE DB write of the fault-in path (RC4 Part D safety pass): residency
+        EVICTED->FAULTED_IN (unchanged otherwise), access_count++, priority_score
+        boosted, pinned_until_turn set to current_turn + faulted_in_pin_turns.
+
+        Callers must only invoke this AFTER every read-only verification/resolution step
+        for the requested recovery has already succeeded — this method itself does not
+        verify anything.
+        """
         now = _now()
         new_state = (
             ResidencyState.FAULTED_IN
@@ -530,12 +541,22 @@ class VMemStore:
 
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.execute(
-                """
-                UPDATE session_vmem
-                SET residency_state = ?, access_count = ?, last_accessed_at = ?, priority_score = ?, pinned_until_turn = ?
-                WHERE internal_session_id = ? AND obj_id = ?
-                """,
-                (new_state.value, new_count, now, new_priority, pinned_until, self.internal_id, obj.obj_id),
+                (
+                    '\n                UPDATE session_vmem\n             '
+                    '   SET residency_state = ?, access_count = ?, last'
+                    '_accessed_at = ?, priority_score = ?, pinned_until'
+                    '_turn = ?\n                WHERE internal_session_i'
+                    'd = ? AND obj_id = ?\n                '
+                ),
+                (
+                    new_state.value,
+                    new_count,
+                    now,
+                    new_priority,
+                    pinned_until,
+                    self.internal_id,
+                    obj.obj_id,
+                ),
             )
             conn.commit()
 
@@ -547,8 +568,8 @@ class VMemStore:
         return obj
 
     def fault_in(self, obj_id: str) -> tuple[SessionObject, str]:
-        """
-        Page an evicted or stored object back into active context (§6.5).
+        """Page an evicted or stored object back into active context (§6.5).
+
         Transitions state to FAULTED_IN, updates access counters, and returns
         raw content. EXISTING external contract preserved unchanged for the
         `page` CLI: verify+load (read-only), then mutate, then return. This
@@ -561,17 +582,14 @@ class VMemStore:
         return obj, content
 
     def claim_pages(self, requests: list[dict[str, Any]]) -> list[str]:
-        """
-        Proactive (pre-compaction) paging claim (RC4 proactive-paging-repair
-        pass, Defect B). Prime's own context-paging pass
-        (`context-paging.ts` `pageContext`, TS side) needs to be able to
-        cause the RESIDENT/FAULTED_IN -> EVICTED transition ITSELF, before a
-        real compaction event ever runs `prepare_compaction()` — Pilot 3
-        (outputs/reports/rc4/13-real-prime-pilot-3.md) found that objects
-        only ever became EVICTED at the SAME moment Prime's own compaction
-        removed the corresponding live message from context entirely, so a
-        pager that only ever looked for already-EVICTED objects could never
-        find a real match.
+        """Proactive (pre-compaction) paging claim (RC4 proactive-paging-repair pass,
+        Defect B). Prime's own context-paging pass (`context-paging.ts` `pageContext`,
+        TS side) needs to be able to cause the RESIDENT/FAULTED_IN -> EVICTED transition
+        ITSELF, before a real compaction event ever runs `prepare_compaction()` — Pilot
+        3 (outputs/reports/rc4/13-real-prime-pilot-3.md) found that objects only ever
+        became EVICTED at the SAME moment Prime's own compaction removed the
+        corresponding live message from context entirely, so a pager that only ever
+        looked for already-EVICTED objects could never find a real match.
 
         For EACH requested `{"obj_id": ..., "kind": ...}` dict (malformed
         entries -- missing/non-string obj_id or kind -- are silently
@@ -642,12 +660,12 @@ class VMemStore:
         return claimed
 
     def _resolve_recovery_class(self, obj: SessionObject) -> str:
-        """The recovery_class governing coverage for `obj` (plan U4 §5.3):
-        an explicit `metadata["recovery_class"]` hint set at store time,
-        else EXACT_ARTIFACT -- every session object is already
-        content-addressed and artifact-backed at `store_object()` time, so
-        EXACT_ARTIFACT is the default, trivially-satisfiable coverage path
-        as long as its own backing artifact stays intact."""
+        """The recovery_class governing coverage for `obj` (plan U4 §5.3): an explicit
+        `metadata["recovery_class"]` hint set at store time, else EXACT_ARTIFACT.
+
+        Coverage must verify both the stored descriptor and its public recovery path,
+        not merely the descriptor's own blob.
+        """
         explicit = obj.metadata.get("recovery_class") if isinstance(obj.metadata, dict) else None
         if explicit in (
             RecoveryClass.EXACT_ARTIFACT.value,
@@ -658,10 +676,9 @@ class VMemStore:
         return RecoveryClass.EXACT_ARTIFACT.value
 
     def _canonical_state_exists(self, obj: SessionObject) -> bool:
-        """CANONICAL_STATE coverage (plan U4 §5.3): true iff
-        `metadata["canonical_ref"]` (`{"type": "capsule"|"requirement"|
-        "memory", "id": ...}`) still resolves to a live capsule,
-        requirement, or memory row -- the durable source this object's
+        """CANONICAL_STATE coverage (plan U4 §5.3): true iff `metadata["canonical_ref"]`
+        (`{"type": "capsule"|"requirement"| "memory", "id": ...}`) still resolves to a
+        live capsule, requirement, or memory row -- the durable source this object's
         content is a transient reflection of."""
         ref = obj.metadata.get("canonical_ref") if isinstance(obj.metadata, dict) else None
         if not isinstance(ref, dict):
@@ -696,10 +713,10 @@ class VMemStore:
     def _check_coverage(self, obj: SessionObject, recovery_class: str) -> bool:
         if recovery_class == RecoveryClass.EXACT_ARTIFACT.value:
             try:
-                raw = artifacts.expand(self.home, obj.content_sha256)
-            except BrainError:
+                _, content = self._verify_and_load(obj.obj_id)
+                return bool(_resolve_stored_content(self.home, obj, content).get("ok"))
+            except (BrainError, OSError, sqlite3.Error):
                 return False
-            return hashlib.sha256(raw).hexdigest() == obj.content_sha256
         if recovery_class == RecoveryClass.CANONICAL_STATE.value:
             return self._canonical_state_exists(obj)
         if recovery_class == RecoveryClass.DISPOSABLE_DERIVED.value:
@@ -715,11 +732,13 @@ class VMemStore:
         return False
 
     def cover(self, obj: SessionObject) -> bool:
-        """Coverage check (plan U4 §5.3): verify `obj`'s recovery_class
-        contract. Success marks `durability=CLEAN` (mutating both the DB
+        """Coverage check (plan U4 §5.3): verify `obj`'s recovery_class contract.
+
+        Success marks `durability=CLEAN` (mutating both the DB
         row and `obj` in place) and returns True. Failure leaves the
         object completely untouched -- still resident, still DIRTY, never
-        destroyed."""
+        destroyed.
+        """
         recovery_class = self._resolve_recovery_class(obj)
         if not self._check_coverage(obj, recovery_class):
             return False
@@ -740,12 +759,14 @@ class VMemStore:
         return True
 
     def _advance_watermark(self, conn: sqlite3.Connection) -> int:
-        """Advance `ledger_meta.durable_through_seq` (plan U4 §5.5) to the
-        largest `session_vmem.rowid` such that EVERY row up to and
-        including it is durability=CLEAN -- a cumulative-ack watermark
-        over this session's own object insertion order. A single DIRTY
-        row halts the advance right before it; the watermark itself never
-        moves backward."""
+        """Advance `ledger_meta.durable_through_seq` (plan U4 §5.5) to the largest
+        `session_vmem.rowid` such that EVERY row up to and including it is
+        durability=CLEAN -- a cumulative-ack watermark over this session's own object
+        insertion order.
+
+        A single DIRTY row halts the advance right before it; the watermark itself never
+        moves backward.
+        """
         row = conn.execute(
             "SELECT value FROM ledger_meta WHERE key = 'durable_through_seq'"
         ).fetchone()
@@ -774,9 +795,8 @@ class VMemStore:
         return watermark
 
     def get_durable_through_seq(self) -> int:
-        """The current `durable_through_seq` watermark (plan U4 §5.5):
-        every `session_vmem` row with rowid <= this value is
-        durability=CLEAN."""
+        """The current `durable_through_seq` watermark (plan U4 §5.5): every
+        `session_vmem` row with rowid <= this value is durability=CLEAN."""
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             row = conn.execute(
                 "SELECT value FROM ledger_meta WHERE key = 'durable_through_seq'"
@@ -784,19 +804,20 @@ class VMemStore:
         return int(row[0]) if row and row[0] is not None else 0
 
     def _append_reclaim_manifest(self, rows: list[dict[str, Any]]) -> None:
-        """Append one line per committed reclaim to `reclaim_manifest.jsonl`
-        under this session's own directory (plan U4 §5.5) -- same
-        per-session jsonl-append convention used elsewhere (e.g.
-        autoinject.py's per-session telemetry mirror)."""
+        """Append one line per committed reclaim to `reclaim_manifest.jsonl` under this
+        session's own directory (plan U4 §5.5) -- same per-session jsonl-append
+        convention used elsewhere (e.g. autoinject.py's per-session telemetry
+        mirror)."""
         path = self._sdir / "reclaim_manifest.jsonl"
         with open(path, "a", encoding="utf-8") as f:
             for row in rows:
                 f.write(contracts.canonical_json(row) + "\n")
 
     def _reclaim(self, candidates: list[SessionObject], reason: str) -> list[SessionObject]:
-        """The COVERAGE -> COMMIT -> VERIFY tail of the four-phase reclaim
-        flow (plan U4 §5.5); PREPARE (victim selection) is the caller's
-        own responsibility. COVERAGE: `cover()` each candidate --
+        """The COVERAGE -> COMMIT -> VERIFY tail of the four-phase reclaim flow (plan U4
+        §5.5); PREPARE (victim selection) is the caller's own responsibility.
+
+        COVERAGE: `cover()` each candidate --
         uncovered candidates are left completely alone (still resident,
         still DIRTY). COMMIT: one atomic CAS UPDATE per covered candidate,
         scoped to `durability='CLEAN'` on top of `claim_pages`'s existing
@@ -805,7 +826,8 @@ class VMemStore:
         error. VERIFY: re-read each committed row, append one
         `reclaim_manifest.jsonl` row, then advance `durable_through_seq`
         over the resulting contiguous CLEAN prefix. Returns the objects
-        THIS call actually evicted."""
+        THIS call actually evicted.
+        """
         covered = [obj for obj in candidates if self.cover(obj)]
 
         evicted: list[SessionObject] = []
@@ -879,7 +901,8 @@ class VMemStore:
                 ).fetchone()
                 if table_check:
                     row = conn.execute(
-                        "SELECT COUNT(*) AS cnt FROM events WHERE internal_session_id = ? AND event_type = 'turn_start'",
+                        "SELECT COUNT(*) AS cnt FROM events WHERE internal_session_id = ? AND"
+                        " event_type = 'turn_start'",
                         (self.internal_id,),
                     ).fetchone()
                     if row and row["cnt"] is not None and int(row["cnt"]) > 0:
@@ -896,10 +919,7 @@ class VMemStore:
                     rec.get("session") in (self.session_id, self.internal_id)
                     or rec.get("session_id") in (self.session_id, self.internal_id)
                 )
-                and (
-                    rec.get("kind") == "turn_start"
-                    or rec.get("event") == "turn_start"
-                )
+                and (rec.get("kind") == "turn_start" or rec.get("event") == "turn_start")
             )
             if t_cnt > 0:
                 return t_cnt
@@ -907,7 +927,6 @@ class VMemStore:
             pass
 
         return 0
-
 
     def evict_to_budget(
         self,
@@ -935,7 +954,8 @@ class VMemStore:
         """
         resident_objects = self.list_objects()
         resident_active = [
-            o for o in resident_objects
+            o
+            for o in resident_objects
             if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
         ]
 
@@ -984,13 +1004,10 @@ class VMemStore:
         # and not temporarily pinned via fault-in hysteresis (pinned_until_turn > current_turn).
         curr_turn = self.current_turn()
         all_unpinned = [
-            o for o in resident_active
-            if not o.pinned and not (o.pinned_until_turn > curr_turn)
+            o for o in resident_active if not o.pinned and not (o.pinned_until_turn > curr_turn)
         ]
         if pin_recent_messages > 0:
-            pinned_recent_ids = {
-                o.obj_id for o in resident_by_creation[-pin_recent_messages:]
-            }
+            pinned_recent_ids = {o.obj_id for o in resident_by_creation[-pin_recent_messages:]}
             candidates = [o for o in all_unpinned if o.obj_id not in pinned_recent_ids]
         else:
             candidates = all_unpinned
@@ -1091,9 +1108,7 @@ class VMemStore:
         # Resolve rollout stage from config/v2.toml [rollout] brainstem or default SHADOW
         rollout_stage = "SHADOW"
         try:
-            v2_raw = tomllib.loads(
-                (self.home / "config" / "v2.toml").read_text(encoding="utf-8")
-            )
+            v2_raw = tomllib.loads((self.home / "config" / "v2.toml").read_text(encoding="utf-8"))
             stage_val = (
                 (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
                 if isinstance(v2_raw, dict)
@@ -1135,30 +1150,27 @@ class VMemStore:
             "max_tokens": max_tokens,
         }
 
-        reclaim_reason = (
-            "evict_to_budget:forced_eviction" if forced_eviction else "evict_to_budget"
-        )
+        reclaim_reason = "evict_to_budget:forced_eviction" if forced_eviction else "evict_to_budget"
         return self._reclaim(victims, reason=reclaim_reason)
 
     def render_hot_context(
         self,
         max_tokens: int = DEFAULT_HOT_CONTEXT_BUDGET_TOKENS,
     ) -> dict[str, Any]:
-        """
-        Render the minimal hot context working set (§6.4).
-        Enforces token budget, includes hot items, and indexes cold items by compact ref.
+        """Render the minimal hot context working set (§6.4).
+
+        Enforces token budget, includes hot items, and indexes cold items by compact
+        ref.
         """
         self.evict_to_budget(max_tokens=max_tokens)
         all_objs = self.list_objects()
 
         resident_objs = [
-            o for o in all_objs
+            o
+            for o in all_objs
             if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
         ]
-        evicted_objs = [
-            o for o in all_objs
-            if o.residency_state == ResidencyState.EVICTED
-        ]
+        evicted_objs = [o for o in all_objs if o.residency_state == ResidencyState.EVICTED]
 
         # Load active state capsule if present
         capsule_data = {}
@@ -1212,21 +1224,21 @@ class VMemStore:
         }
 
     def prepare_compaction(self) -> dict[str, Any]:
-        """
-        Compaction barrier interaction (§6.7), now coverage-gated (plan U4
-        §5.5-5.7): unpinned resident items go through the same PREPARE ->
-        COVERAGE -> COMMIT -> VERIFY reclaim as `evict_to_budget`. Pinned
+        """Compaction barrier interaction (§6.7), now coverage-gated (plan U4 §5.5-5.7):
+        unpinned resident items go through the same PREPARE -> COVERAGE -> COMMIT ->
+        VERIFY reclaim as `evict_to_budget`. Pinned.
+
         items are NEVER evicted, but a coverage sweep still runs over them
         -- a real host-level compaction can discard live context this
         method never touches, so `cancel` reports True (Python-side
-        contract only; Prime TS wiring is a later task) whenever ANY
-        pinned or material (DECISION/BLOCKER/WORKER_FINDING) object is
-        still resident and DIRTY after VERIFY -- i.e. still at risk of
-        unrecoverable loss.
+        contract only; Prime TS wiring is a later task) whenever a remaining
+        object lacks its declared recovery coverage. A previous CLEAN marker
+        cannot authorize compaction after its backing evidence disappears.
         """
         all_objs = self.list_objects()
         resident_all = [
-            o for o in all_objs
+            o
+            for o in all_objs
             if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
         ]
         pinned_resident = [o for o in resident_all if o.pinned]
@@ -1239,21 +1251,23 @@ class VMemStore:
 
         evicted = self._reclaim(unpinned_victims, reason="prepare_compaction")
 
-        # VERIFY: re-read every still-resident pinned/material object.
+        # Recheck current backing evidence, including previously CLEAN objects.
         still_resident = [
-            o for o in self.list_objects()
+            o
+            for o in self.list_objects()
             if o.residency_state in (ResidencyState.RESIDENT, ResidencyState.FAULTED_IN)
         ]
-        dirty_material_or_pinned = [
-            o for o in still_resident
-            if (o.pinned or o.kind in _MATERIAL_KINDS) and o.durability != DURABILITY_CLEAN
+        uncovered = [
+            o
+            for o in still_resident
+            if not self._check_coverage(o, self._resolve_recovery_class(o))
         ]
 
         return {
             "session_id": self.session_id,
             "evicted_at_compaction": len(evicted),
             "pinned_preserved": len([o for o in all_objs if o.pinned]),
-            "cancel": bool(dirty_material_or_pinned),
+            "cancel": bool(uncovered),
             "timestamp": _now(),
         }
 
@@ -1261,9 +1275,8 @@ class VMemStore:
         self,
         max_tokens: int = DEFAULT_HOT_CONTEXT_BUDGET_TOKENS,
     ) -> str:
-        """
-        Resume post-compaction using compact hot state + on-demand cold refs (§6.7).
-        """
+        """Resume post-compaction using compact hot state + on-demand cold refs
+        (§6.7)."""
         hot_context = self.render_hot_context(max_tokens=max_tokens)
         return hot_context["rendered_text"]
 
@@ -1273,11 +1286,14 @@ _ARTIFACT_HANDLE_RE = re.compile(r"\[brain-artifact:sha256:([0-9a-f]{64})\]")
 
 def _delivery_row(home: Path, delivery_id: str) -> dict[str, Any] | None:
     """Read one row from the existing, durable `deliveries` table (control DB
-    `db/brain.sqlite`) — the same table/DB `autoinject.py`'s own
-    `_delivered_keys` already reads. Read-only; never mutates deliveries.
+    `db/brain.sqlite`) — the same table/DB `autoinject.py`'s own `_delivered_keys`
+    already reads.
+
+    Read-only; never mutates deliveries.
     Includes `packet_id`/`root_session_id`/`branch_id` so callers can find
     every OTHER delivery row belonging to the same originally-selected
-    AutoInject packet (see `_delivery_rows_for_packet`)."""
+    AutoInject packet (see `_delivery_rows_for_packet`).
+    """
     conn = db.connect(_control_db_path(home), readonly=True)
     try:
         row = conn.execute(
@@ -1293,18 +1309,19 @@ def _delivery_row(home: Path, delivery_id: str) -> dict[str, Any] | None:
 def _delivery_rows_for_packet(
     home: Path, packet_id: str, root_session_id: str, branch_id: str
 ) -> list[dict[str, Any]]:
-    """The COMPLETE membership set of one originally-selected AutoInject
-    packet (Part 2 of the RC4 safety pass): every `deliveries` row sharing
-    the same `packet_id`, scoped defensively by `root_session_id`+
-    `branch_id` (cheap extra safety — all three columns already live on the
-    single delivery row `_resolve_research_result` starts from). Read-only.
+    """The COMPLETE membership set of one originally-selected AutoInject packet (Part 2
+    of the RC4 safety pass): every `deliveries` row sharing the same `packet_id`, scoped
+    defensively by `root_session_id`+ `branch_id` (cheap extra safety — all three
+    columns already live on the single delivery row `_resolve_research_result` starts
+    from). Read-only.
 
     Ordered by `rowid` ascending: `deliveries` is an ordinary rowid table
     (its TEXT `delivery_id` PRIMARY KEY does not alias `rowid`, unlike an
     INTEGER PRIMARY KEY would), rows for one packet are inserted together in
     a single transaction by `autoinject.insert_deliveries` and are never
     deleted, so ascending `rowid` reliably reconstructs the original
-    insertion/selection order of the packet without adding a new column."""
+    insertion/selection order of the packet without adding a new column.
+    """
     conn = db.connect(_control_db_path(home), readonly=True)
     try:
         rows = conn.execute(
@@ -1320,9 +1337,9 @@ def _delivery_rows_for_packet(
 
 
 def _show_memory_at_version(home: Path, memory_id: str, version: int) -> dict[str, Any]:
-    """Delivered-version-aware counterpart to `semantic.show_memory` (RC4
-    byte-exact recovery pass, Part A fallback path): resolves memory title/
-    body AS THEY WERE AT `version`, not whatever the CURRENT row says. Reuses
+    """Read the delivered memory version for legacy reconstruction, not byte recovery.
+
+    Reuses
     the existing `memory_versions` table exactly as `semantic.history()`
     already reads it -- no new memory-versioning subsystem. Returns the
     CURRENT row's data (unchanged) when `version == current_version`;
@@ -1333,7 +1350,8 @@ def _show_memory_at_version(home: Path, memory_id: str, version: int) -> dict[st
     `title`/`body` reflect the delivered version, same as `current_version`
     in the caller's item dict is deliberately kept distinct from
     `delivered_version`. Raises the same `BrainError` semantics
-    `semantic.show_memory` already uses on a missing/corrupt file."""
+    `semantic.show_memory` already uses on a missing/corrupt file.
+    """
     conn = db.connect(_control_db_path(home), readonly=True)
     try:
         row = conn.execute("SELECT * FROM memories WHERE memory_id = ?", (memory_id,)).fetchone()
@@ -1370,17 +1388,19 @@ def _show_memory_at_version(home: Path, memory_id: str, version: int) -> dict[st
 def _resolve_research_result_from_artifact(
     packet_artifact_ref: str, packet_sha256: str, obj: SessionObject, home: Path
 ) -> dict[str, Any]:
-    """PRIMARY path (RC4 byte-exact AutoInject recovery pass, Part A): the
-    exact packet bytes the model actually saw were preserved AT ADMISSION
-    TIME (TS `cliArtifactPreserver`, kind="autoinject_packet" -- the same
-    preserve-then-verify machinery RTD already uses for raw tool output).
+    """PRIMARY path (RC4 byte-exact AutoInject recovery pass, Part A): the exact packet
+    bytes the model actually saw were preserved AT ADMISSION TIME (TS
+    `cliArtifactPreserver`, kind="autoinject_packet" -- the same preserve-then-verify
+    machinery RTD already uses for raw tool output).
+
     Resolve via the SAME content-addressed artifact store
     `_resolve_tool_observation` already reads (`artifacts.expand`),
     sha256-verify the loaded bytes match `packetSha256` EXACTLY (same
     discipline as `VMemStore._verify_and_load`'s own hash check), and return
     that byte-exact text. No `semantic.show_memory`/DB lookup on this path at
     all -- current/superseded memory state is irrelevant once the packet
-    itself is preserved."""
+    itself is preserved.
+    """
     match = _ARTIFACT_HANDLE_RE.search(packet_artifact_ref)
     sha_or_prefix = match.group(1) if match else packet_artifact_ref.strip()
     try:
@@ -1392,7 +1412,7 @@ def _resolve_research_result_from_artifact(
         return {
             "ok": False,
             "error": (
-                f"AutoInject packet artifact corrupt: expected sha256 "
+                "AutoInject packet artifact corrupt: expected sha256 "
                 f"{packet_sha256}, got {actual_sha}"
             ),
         }
@@ -1413,8 +1433,7 @@ def _resolve_research_result_from_artifact(
 
 
 def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str) -> dict[str, Any]:
-    """RESEARCH_RESULT (Part D Â§2, extended by the RC4 safety pass Part 2,
-    then made byte-exact by the RC4 byte-exact recovery pass Part A).
+    """Resolve direct research text, a preserved packet, or legacy memory references.
 
     PRIMARY path: when admission preserved the EXACT packet bytes the model
     saw (`obj.metadata["packetArtifactRef"]`/`["packetSha256"]`), resolve
@@ -1429,12 +1448,15 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
     DELIVERED version specifically (`_show_memory_at_version`, not whatever
     `semantic.show_memory` currently returns) -> a compact, deterministic
     reconstruction of the COMPLETE packet.
+    Legacy reconstruction preserves the selected memory versions, not the original
+    packet formatting, so it deliberately does not advertise ``byte_exact=True``.
 
     Partial-failure semantics (fallback path): if ANY member of the packet
     fails to resolve (missing memory row, missing archived version, etc.)
     the WHOLE resolution fails clearly (`ok: False`) rather than silently
     returning an incomplete set -- consistent with Part 1's
-    no-lossy-partial-success requirement."""
+    no-lossy-partial-success requirement.
+    """
     packet_artifact_ref = obj.metadata.get("packetArtifactRef") or obj.metadata.get(
         "packet_artifact_ref"
     )
@@ -1446,8 +1468,14 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
         and packet_sha256
     ):
         return _resolve_research_result_from_artifact(packet_artifact_ref, packet_sha256, obj, home)
+    if any(
+        key in obj.metadata
+        for key in ("packetArtifactRef", "packet_artifact_ref", "packetSha256", "packet_sha256")
+    ):
+        return {"ok": False, "error": "incomplete packet artifact recovery metadata"}
 
     delivery_id = obj.metadata.get("deliveryId") or obj.metadata.get("delivery_id")
+    parsed = None
     if not isinstance(delivery_id, str) or not delivery_id:
         try:
             parsed = json.loads(stored_content)
@@ -1456,7 +1484,13 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
         if isinstance(parsed, dict):
             delivery_id = parsed.get("delivery_id")
     if not isinstance(delivery_id, str) or not delivery_id:
-        return {"ok": False, "error": "no resolvable delivery_id for this RESEARCH_RESULT object"}
+        if any(key in obj.metadata for key in ("deliveryId", "delivery_id")) or (
+            isinstance(parsed, dict) and "delivery_id" in parsed
+        ):
+            return {"ok": False, "error": "invalid delivery_id for this RESEARCH_RESULT object"}
+        # No external recovery descriptor: the hash-verified object is the
+        # original research text itself, not an AutoInject delivery pointer.
+        return {"ok": True, "resolution": "raw", "content": stored_content, "byte_exact": True}
 
     delivery = _delivery_row(home, delivery_id)
     if delivery is None:
@@ -1525,13 +1559,16 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
 def _resolve_tool_observation(
     home: Path, obj: SessionObject, stored_content: str
 ) -> dict[str, Any]:
-    """TOOL_OBSERVATION (Part D §2): artifact_ref -> the existing content-
-    addressed artifact store (`artifacts.expand`, the same read RTD's own
-    `/brain-expand` recovery path already uses) -> the BYTE-EXACT original
-    content. Decoded as UTF-8 here for the JSON/text CLI surface; RTD only
+    """TOOL_OBSERVATION (Part D §2): artifact_ref -> the existing content- addressed
+    artifact store (`artifacts.expand`, the same read RTD's own `/brain-expand` recovery
+    path already uses) -> the BYTE-EXACT original content.
+
+    Decoded as UTF-8 here for the JSON/text CLI surface; RTD only
     ever preserves text-only tool output (`textFromContent` in rtd.ts never
-    distills binary/image blocks), so real artifacts are always valid text."""
+    distills binary/image blocks), so real artifacts are always valid text.
+    """
     artifact_ref = obj.metadata.get("artifactRef") or obj.metadata.get("artifact_ref")
+    parsed = None
     if not isinstance(artifact_ref, str) or not artifact_ref:
         try:
             parsed = json.loads(stored_content)
@@ -1540,7 +1577,11 @@ def _resolve_tool_observation(
         if isinstance(parsed, dict):
             artifact_ref = parsed.get("artifact_ref")
     if not isinstance(artifact_ref, str) or not artifact_ref:
-        return {"ok": False, "error": "no resolvable artifact_ref for this TOOL_OBSERVATION object"}
+        if any(key in obj.metadata for key in ("artifactRef", "artifact_ref")) or (
+            isinstance(parsed, dict) and "artifact_ref" in parsed
+        ):
+            return {"ok": False, "error": "invalid artifact_ref for this TOOL_OBSERVATION object"}
+        return {"ok": True, "resolution": "raw", "content": stored_content, "byte_exact": True}
 
     match = _ARTIFACT_HANDLE_RE.search(artifact_ref)
     sha_or_prefix = match.group(1) if match else artifact_ref.strip()
@@ -1561,9 +1602,18 @@ def _resolve_tool_observation(
     }
 
 
+def _resolve_stored_content(home: Path, obj: SessionObject, content: str) -> dict[str, Any]:
+    """One read-only resolution path shared by reclaim coverage and fault-in."""
+    if obj.kind == SessionObjectKind.RESEARCH_RESULT:
+        return _resolve_research_result(home, obj, content)
+    if obj.kind == SessionObjectKind.TOOL_OBSERVATION:
+        return _resolve_tool_observation(home, obj, content)
+    return {"ok": True, "resolution": "raw", "content": content, "byte_exact": True}
+
+
 def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, Any]:
-    """Explicit fault-in + durable backing resolution (Part D, extended by
-    the RC4 safety pass to be TRANSACTIONAL w.r.t. recovery).
+    """Explicit fault-in + durable backing resolution (Part D, extended by the RC4
+    safety pass to be TRANSACTIONAL w.r.t. recovery).
 
     Ordering is deliberate and load-bearing — the residency/access/priority
     DB write must be the LAST thing that happens, and only if EVERYTHING
@@ -1601,15 +1651,10 @@ def resolve_object(home: Path | str, session_id: str, obj_id: str) -> dict[str, 
     except BrainError as exc:
         return {"ok": False, "error": str(exc)}
 
-    if obj.kind == SessionObjectKind.RESEARCH_RESULT:
-        result = _resolve_research_result(home, obj, stored_content)
-    elif obj.kind == SessionObjectKind.TOOL_OBSERVATION:
-        result = _resolve_tool_observation(home, obj, stored_content)
-    else:
-        # Not in scope for paging (Part B only pages RESEARCH_RESULT /
-        # TOOL_OBSERVATION) — no special resolution attempted, but the CLI
-        # must not crash on it: pass the raw stored content through.
-        result = {"ok": True, "resolution": "raw", "content": stored_content}
+    try:
+        result = _resolve_stored_content(home, obj, stored_content)
+    except (BrainError, OSError, sqlite3.Error) as exc:
+        return {"ok": False, "error": str(exc)}
 
     if not result.get("ok"):
         # Zero mutation: the deeper resolution failed, so the residency/

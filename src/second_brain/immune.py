@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,13 @@ from . import frontier
 from .errors import BrainError
 from .security.identifiers import validate_policy_id, validate_trigger_id
 from .security.paths import resolve_under
+from .skillforge import (
+    _DANGEROUS_TOKENS,
+    _DISK_FORMAT_RE,
+    _EXFIL_URL_RE,
+    _INJECTION_PHRASES,
+    _SECRET_RE,
+)
 
 DETECTORS: tuple[str, ...] = (
     "tests_failed",
@@ -352,9 +360,7 @@ def rollback(home: Path, policy_id: str, trigger_id: str, reason: str) -> dict:
     try:
         target = resolve_under(home, guard["rollback_target"], allow_missing=False)
     except (ValueError, TypeError, OSError) as exc:
-        raise BrainError(
-            f"Unsafe rollback target refused for policy {policy_id!r}: {exc}"
-        ) from exc
+        raise BrainError(f"Unsafe rollback target refused for policy {policy_id!r}: {exc}") from exc
     if not target.is_file():
         return {"rolled_back": False, "reason": "target_missing"}
     current_sha = sha256_file(target)
@@ -384,3 +390,240 @@ def rollback_log(home: Path) -> list[dict]:
     records = [_read_json(p) for p in sorted(rollbacks_dir.glob("*.json"))]
     records.sort(key=lambda r: (r.get("ts", ""), r.get("policy_id", "")))
     return records
+
+
+# ---------------------------------------------------------------------------
+# Foreign material inspection (local evidence only; never installation)
+# ---------------------------------------------------------------------------
+
+_FOREIGN_KINDS = ("skill", "tool", "policy")
+_FOREIGN_MAX_ENTRIES = 256
+_FOREIGN_MAX_FILE_BYTES = 1 << 20
+_FOREIGN_MAX_TOTAL_BYTES = 8 << 20
+_FOREIGN_SECRET_RE = re.compile(
+    r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----|"
+    r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|"
+    r"\b(?:api[_-]?key|access[_-]?token|password|secret)"
+    r"""["']?\s*[:=]\s*["']?[A-Za-z0-9_+/=-]{8,}""",
+    re.IGNORECASE,
+)
+_FOREIGN_SHELL_RE = re.compile(
+    r"\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)\b|"
+    r"\b(?:remove-item|del)\b[^\n]*(?:-recurse|/s)\b|"
+    r"\b(?:mkfs(?:\.\w+)?|shutdown)\b|"
+    r"\b(?:bash|sh)\s+-c\b|\b(?:iex|invoke-expression)\b",
+    re.IGNORECASE,
+)
+_FOREIGN_INJECTION_RE = re.compile(
+    r"\b(?:ignore|disregard|override)\s+(?:all\s+)?"
+    r"(?:previous|prior|system|developer|safety)\b|"
+    r"\b(?:reveal|print|exfiltrate)\s+(?:the\s+)?(?:secrets?|credentials?|system prompt)\b",
+    re.IGNORECASE,
+)
+
+
+def _foreign_path(home: Path, source: str | Path) -> Path:
+    """Preserve lexical components so absolute paths cannot hide symlinks."""
+    try:
+        root = Path(home).resolve()
+        raw = Path(source)
+        if raw.is_absolute():
+            relative = raw.relative_to(root).as_posix()
+        elif isinstance(source, Path):
+            relative = source.as_posix()
+        else:
+            relative = os.fspath(source)
+        if len(relative) > 512:
+            raise ValueError("source path is too long")
+        return resolve_under(root, relative)
+    except (OSError, TypeError, ValueError) as exc:
+        raise BrainError(f"Unsafe foreign source: {exc}") from exc
+
+
+def _foreign_security(text: str) -> list[dict]:
+    """Bounded, redacted heuristics; a clean result is not an execution approval."""
+    lowered = text.lower()
+    findings = []
+    if _SECRET_RE.search(text) or _FOREIGN_SECRET_RE.search(text):
+        findings.append({"category": "secret", "detail": "secret-like value"})
+    if (
+        any(token in lowered for token in _DANGEROUS_TOKENS)
+        or _DISK_FORMAT_RE.search(lowered)
+        or _FOREIGN_SHELL_RE.search(text)
+    ):
+        findings.append({"category": "destructive", "detail": "dangerous shell pattern"})
+    if _EXFIL_URL_RE.search(text) and re.search(
+        r"\b(?:curl|wget|invoke-webrequest|invoke-restmethod)\b", text, re.IGNORECASE
+    ):
+        findings.append({"category": "exfiltration", "detail": "external network command"})
+    if any(phrase in lowered for phrase in _INJECTION_PHRASES) or _FOREIGN_INJECTION_RE.search(
+        text
+    ):
+        findings.append(
+            {"category": "instruction-injection", "detail": "instruction override pattern"}
+        )
+    return findings
+
+
+def inspect_foreign(home: Path, source: str | Path, *, origin_ref: str, kind: str) -> dict:
+    """Inspect a home-contained file/tree without execution or writes.
+
+    Invalid input and incomplete scans raise BrainError. Security findings return
+    ``passed=False`` without including matched secret values. Limits are 256
+    filesystem entries, 1 MiB per file, 8 MiB total, and 512-character paths.
+    Permissions are POSIX mode evidence, not a Windows ACL audit.
+    """
+    if (
+        not isinstance(origin_ref, str)
+        or not origin_ref
+        or origin_ref != origin_ref.strip()
+        or len(origin_ref) > 512
+        or any(ord(char) < 32 or ord(char) == 127 for char in origin_ref)
+    ):
+        raise BrainError("origin_ref must be a nonempty, bounded, single-line provenance reference")
+    if kind not in _FOREIGN_KINDS:
+        raise BrainError(f"Unsupported foreign kind; expected one of {_FOREIGN_KINDS}")
+    root = Path(home).resolve()
+    source_path = _foreign_path(root, source)
+    source_relative = source_path.relative_to(root).as_posix()
+    files: list[dict] = []
+    directories: list[dict] = []
+    findings: list[dict] = []
+    pending = [source_path]
+    entries = 0
+    total_bytes = 0
+    try:
+        source_is_file = stat.S_ISREG(source_path.lstat().st_mode)
+        while pending:
+            current = pending.pop()
+            relative = current.relative_to(root).as_posix()
+            current = _foreign_path(root, relative)
+            info = current.lstat()
+            entries += 1
+            if entries > _FOREIGN_MAX_ENTRIES:
+                raise BrainError("Foreign inspection entry limit exceeded")
+            mode = stat.S_IMODE(info.st_mode)
+            local = current.name if source_is_file else current.relative_to(source_path).as_posix()
+            evidence = {"path": local, "mode": f"{mode:04o}", "executable": bool(mode & 0o111)}
+            if mode & (stat.S_ISUID | stat.S_ISGID) or (os.name != "nt" and mode & 0o022):
+                findings.append(
+                    {"path": local, "category": "permissions", "detail": "unsafe permission mode"}
+                )
+            if stat.S_ISDIR(info.st_mode):
+                directories.append(evidence)
+                children = []
+                with os.scandir(current) as scan:
+                    for entry in scan:
+                        children.append(current / entry.name)
+                        if entries + len(pending) + len(children) > _FOREIGN_MAX_ENTRIES:
+                            raise BrainError("Foreign inspection entry limit exceeded")
+                pending.extend(sorted(children, reverse=True))
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise BrainError("Foreign source contains a non-regular file")
+            total_bytes += info.st_size
+            if info.st_size > _FOREIGN_MAX_FILE_BYTES or total_bytes > _FOREIGN_MAX_TOTAL_BYTES:
+                raise BrainError("Foreign inspection byte limit exceeded")
+            with current.open("rb") as stream:
+                content = stream.read(_FOREIGN_MAX_FILE_BYTES + 1)
+            if len(content) != info.st_size:
+                raise BrainError("Foreign source changed during inspection")
+            digest = sha256_file(current)
+            after = current.lstat()
+            unchanged = all(
+                getattr(after, field) == getattr(info, field)
+                for field in ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
+            )
+            if hashlib.sha256(content).hexdigest() != digest or not unchanged:
+                raise BrainError("Foreign source changed during inspection")
+            try:
+                text = content.decode("utf-8-sig")
+                if "\x00" in text:
+                    raise UnicodeError("NUL bytes")
+            except UnicodeError:
+                security = [{"category": "unscannable", "detail": "not inspectable UTF-8 text"}]
+            else:
+                security = _foreign_security(text)
+            findings.extend({"path": local, **finding} for finding in security)
+            files.append({**evidence, "sha256": digest, "size_bytes": info.st_size})
+    except (OSError, ValueError) as exc:
+        raise BrainError(f"Foreign inspection failed: {exc}") from exc
+    if not files:
+        raise BrainError("Foreign source contains no regular files")
+    return {
+        "schema_version": 1,
+        "origin_ref": origin_ref,
+        "kind": kind,
+        "source": source_relative,
+        "source_type": "file" if source_is_file else "directory",
+        "containment": {"within_home": True, "symlinks": "rejected"},
+        "permission_scope": "posix-mode" if os.name != "nt" else "mode-only-not-windows-acl",
+        "files": sorted(files, key=lambda item: item["path"]),
+        "directories": sorted(directories, key=lambda item: item["path"]),
+        "total_bytes": total_bytes,
+        "findings": sorted(findings, key=lambda item: (item["path"], item["category"])),
+        "passed": not findings,
+    }
+
+
+def quarantine_foreign(home: Path, source: str | Path, *, origin_ref: str, kind: str) -> dict:
+    """Copy a clean inspection to a collision-refusing evidence capsule.
+
+    The capsule contains ``payload/`` and ``manifest.json``. It does not install,
+    activate, trust, or execute the material. Incomplete copies have no manifest.
+    """
+    inspection = inspect_foreign(home, source, origin_ref=origin_ref, kind=kind)
+    if not inspection["passed"]:
+        categories = sorted({finding["category"] for finding in inspection["findings"]})
+        raise BrainError(f"Foreign inspection refused quarantine: {', '.join(categories)}")
+    stable_id = hashlib.sha256(
+        json.dumps(inspection, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    root = Path(home).resolve()
+    destination_relative = (
+        (_immune_dir(root) / "quarantine" / f"foreign-{stable_id}").relative_to(root).as_posix()
+    )
+    try:
+        destination = resolve_under(root, destination_relative, allow_missing=True)
+        source_path = _foreign_path(root, inspection["source"])
+        if destination.is_relative_to(source_path):
+            raise BrainError("Foreign source must not contain its quarantine destination")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination = resolve_under(root, destination_relative, allow_missing=True)
+        destination.mkdir(exist_ok=False)
+        payload = resolve_under(root, f"{destination_relative}/payload", allow_missing=True)
+        payload.mkdir()
+        for directory in inspection["directories"]:
+            if directory["path"] != ".":
+                resolve_under(payload, directory["path"], allow_missing=True).mkdir(
+                    parents=True, exist_ok=True
+                )
+        for entry in inspection["files"]:
+            source_relative = inspection["source"]
+            if inspection["source_type"] == "directory":
+                source_relative += "/" + entry["path"]
+            original = _foreign_path(root, source_relative)
+            target = resolve_under(payload, entry["path"], allow_missing=True)
+            with original.open("rb") as incoming, target.open("xb") as outgoing:
+                content = incoming.read(_FOREIGN_MAX_FILE_BYTES + 1)
+                if len(content) != entry["size_bytes"]:
+                    raise BrainError("Foreign source changed while copying; quarantine incomplete")
+                outgoing.write(content)
+            if sha256_file(target) != entry["sha256"]:
+                raise BrainError("Foreign source changed while copying; quarantine incomplete")
+        if inspect_foreign(home, source, origin_ref=origin_ref, kind=kind) != inspection:
+            raise BrainError("Foreign source changed while copying; quarantine incomplete")
+        manifest = {
+            "schema_version": 1,
+            "id": f"foreign-{stable_id}",
+            "destination": destination_relative,
+            "inspection": inspection,
+        }
+        _write_json(resolve_under(destination, "manifest.json", allow_missing=True), manifest)
+    except FileExistsError as exc:
+        raise BrainError(
+            "Foreign quarantine destination already exists; refusing collision"
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise BrainError(f"Foreign quarantine failed: {exc}") from exc
+    return manifest

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -37,7 +36,9 @@ def _candidate(
 
 
 def _init_repo(repo: Path) -> None:
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t"], cwd=repo, check=True, capture_output=True
+    )
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
     (repo / "README.md").write_text("# repo\n", encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
@@ -47,7 +48,7 @@ def _init_repo(repo: Path) -> None:
 def test_route_prefers_cheaper_model_only_if_expected_cost_lower(brain_home: Path) -> None:
     # Model A: low cost (rank 1), low success rate (1/10 successes -> (1+1)/(10+2) = 2/12 = 0.1667)
     # Expected cost A = 1 / 0.1667 = 6.0
-    # Model B: medium cost (rank 2), high success rate (9/10 successes -> (9+1)/(10+2) = 10/12 = 0.8333)
+    # Model B: price rank 2, smoothed success rate 10/12.
     # Expected cost B = 2 / 0.8333 = 2.4
     # Despite Model B being more expensive per call, expected cost is lower, so B is preferred.
     crossmodel.record_model(brain_home, "cheap-low-success", family="cheap")
@@ -79,7 +80,9 @@ def test_route_prefers_cheaper_model_only_if_expected_cost_lower(brain_home: Pat
 
     candidates = [
         _candidate("p", "cheap-low-success", tier="balanced", cost="low", capabilities=("coding",)),
-        _candidate("p", "medium-high-success", tier="balanced", cost="medium", capabilities=("coding",)),
+        _candidate(
+            "p", "medium-high-success", tier="balanced", cost="medium", capabilities=("coding",)
+        ),
     ]
 
     decision = model_routing.route_model(
@@ -91,7 +94,7 @@ def test_route_prefers_cheaper_model_only_if_expected_cost_lower(brain_home: Pat
     assert decision.selected_model == "medium-high-success"
 
     # Now test scenario where cheaper model has higher/equal success rate:
-    # Model C: low cost (rank 1), 9/10 successes -> (9+1)/(10+2) = 0.8333 -> expected cost = 1 / 0.8333 = 1.2
+    # Model C: price rank 1, smoothed success rate 10/12, expected cost 1.2.
     # Model C expected cost 1.2 < Model B expected cost 2.4 -> C is preferred.
     crossmodel.record_model(brain_home, "cheap-high-success", family="cheap")
     for _ in range(9):
@@ -106,8 +109,12 @@ def test_route_prefers_cheaper_model_only_if_expected_cost_lower(brain_home: Pat
     decision2 = model_routing.route_model(
         "implement feature",
         [
-            _candidate("p", "cheap-high-success", tier="balanced", cost="low", capabilities=("coding",)),
-            _candidate("p", "medium-high-success", tier="balanced", cost="medium", capabilities=("coding",)),
+            _candidate(
+                "p", "cheap-high-success", tier="balanced", cost="low", capabilities=("coding",)
+            ),
+            _candidate(
+                "p", "medium-high-success", tier="balanced", cost="medium", capabilities=("coding",)
+            ),
         ],
         home=brain_home,
         role="dev",
@@ -122,12 +129,17 @@ def test_outcome_recorded_from_verification(brain_home: Path, repo: Path) -> Non
     db.migrate(db_path)
 
     conn = db.connect(db_path)
-    indexes = [row[1] for row in conn.execute("PRAGMA index_list('model_skill_outcomes')").fetchall()]
+    indexes = [
+        row[1] for row in conn.execute("PRAGMA index_list('model_skill_outcomes')").fetchall()
+    ]
     conn.close()
     assert "idx_outcomes_model_skill" in indexes
 
     # Call evaluate_accuracy_gate with model_id
-    actions = {token: "passed" for token in verify.expand_ladder_actions(verify.DEFAULT_VERIFICATION_LADDER, "LOW")}
+    actions = {
+        token: "passed"
+        for token in verify.expand_ladder_actions(verify.DEFAULT_VERIFICATION_LADDER, "LOW")
+    }
     result = verify.evaluate_accuracy_gate(
         brain_home,
         "gate-sess-001",
@@ -143,7 +155,8 @@ def test_outcome_recorded_from_verification(brain_home: Path, repo: Path) -> Non
     # Verify model_skill_outcomes has the auto-recorded row
     conn = db.connect(db_path)
     rows = conn.execute(
-        "SELECT model_id, skill_name, success, session_id FROM model_skill_outcomes WHERE model_id = ?",
+        "SELECT model_id, skill_name, success, session_id FROM model_skill_outcomes WHERE"
+        " model_id = ?",
         ("test-model-alpha",),
     ).fetchall()
     conn.close()
@@ -159,7 +172,13 @@ def test_escalates_after_verifier_failure(brain_home: Path) -> None:
     candidates = [
         _candidate("p", "model-efficient", tier="efficient", cost="low", capabilities=("coding",)),
         _candidate("p", "model-balanced", tier="balanced", cost="medium", capabilities=("coding",)),
-        _candidate("p", "model-premium", tier="premium", cost="high", capabilities=("coding", "architecture")),
+        _candidate(
+            "p",
+            "model-premium",
+            tier="premium",
+            cost="high",
+            capabilities=("coding", "architecture"),
+        ),
     ]
 
     initial_decision = model_routing.route_model(
@@ -211,16 +230,34 @@ def test_escalates_after_verifier_failure(brain_home: Path) -> None:
     )
     assert floor_decision.selected_tier == "balanced"
 
+
 def test_task_class_mapping() -> None:
     assert model_routing.classify_task("trivial") == model_routing.TaskClass.TRIVIAL
     assert model_routing.classify_task("summarize the README") == model_routing.TaskClass.TRIVIAL
-    assert model_routing.classify_task("find where config is loaded") == model_routing.TaskClass.NAVIGATION
-    assert model_routing.classify_task("implement new feature") == model_routing.TaskClass.IMPLEMENTATION
+    assert (
+        model_routing.classify_task("find where config is loaded")
+        == model_routing.TaskClass.NAVIGATION
+    )
+    assert (
+        model_routing.classify_task("implement new feature")
+        == model_routing.TaskClass.IMPLEMENTATION
+    )
     assert model_routing.classify_task("debug error in query") == model_routing.TaskClass.DEBUGGING
-    assert model_routing.classify_task("verify test assertions") == model_routing.TaskClass.VERIFICATION
-    assert model_routing.classify_task("explore alternative designs") == model_routing.TaskClass.EXPLORATION
-    assert model_routing.classify_task("modify critical production security") == model_routing.TaskClass.HIGH_RISK
-    assert model_routing.classify_task("continue session work") == model_routing.TaskClass.CONTINUATION
+    assert (
+        model_routing.classify_task("verify test assertions")
+        == model_routing.TaskClass.VERIFICATION
+    )
+    assert (
+        model_routing.classify_task("explore alternative designs")
+        == model_routing.TaskClass.EXPLORATION
+    )
+    assert (
+        model_routing.classify_task("modify critical production security")
+        == model_routing.TaskClass.HIGH_RISK
+    )
+    assert (
+        model_routing.classify_task("continue session work") == model_routing.TaskClass.CONTINUATION
+    )
     # 16-hex hash maps deterministically to a TaskClass
     hex_hash = "a1b2c3d4e5f60718"
     mapped = model_routing.classify_task(hex_hash)
@@ -243,7 +280,7 @@ def test_p_success_fallback_hierarchy(brain_home: Path) -> None:
     # claude-3-haiku for 'trivial' has exact outcomes: (8+1)/(10+2) = 9/12 = 0.75
     assert abs(model_routing.p_success("claude-3-haiku", "trivial", home=brain_home) - 0.75) < 1e-4
 
-    # claude-3-5-sonnet has NO exact outcomes for 'implementation', but family 'claude' has outcomes!
+    # No exact Sonnet outcome: use the observed Claude family outcomes.
     # Fallback to (model_family, *): family outcomes = 8 successes, 10 total -> (8+1)/(10+2) = 0.75
     p_fam = model_routing.p_success("claude-3-5-sonnet", "implementation", home=brain_home)
     assert abs(p_fam - 0.75) < 1e-4
@@ -258,7 +295,6 @@ def test_exploration_randomize_only_trivial_navigation_and_canary(
     ]
 
     randomize_called = False
-    original_randomize = model_routing.decisions.randomize
 
     def mock_randomize(choice, alts, epsilon, rng_seed=None):
         nonlocal randomize_called

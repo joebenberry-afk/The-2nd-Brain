@@ -116,10 +116,8 @@ def _claude_usage_records(
                 fields[target] = record[source]
         if autoinject._append_telemetry(home, session_id, "assistant_usage", fields) is not True:
             continue
-        try:
+        with contextlib.suppress(Exception):
             _write_claude_usage_cursor(cursor_path, uuid)
-        except Exception:
-            pass
 
 
 def _claude_cache_state(payload: dict) -> dict | None:
@@ -180,9 +178,7 @@ def run(home: Path) -> int:
     cwd = payload_dict.get("cwd")
 
     try:
-        resolved_project = autoinject._resolve_project_id(
-            home, str(cwd) if cwd else None, None
-        )
+        resolved_project = autoinject._resolve_project_id(home, str(cwd) if cwd else None, None)
     except Exception:
         resolved_project = "default"
 
@@ -262,9 +258,7 @@ def run(home: Path) -> int:
                 # INSERT OR REPLACE is idempotent; ignore best-effort
                 with contextlib.suppress(Exception):
                     store.create_session(session)
-                existing = store.search(
-                    content_hash[:16], event_type="compaction_started", limit=1
-                )
+                existing = store.search(content_hash[:16], event_type="compaction_started", limit=1)
                 if not existing:
                     event_obj = contracts.BrainLifecycleEvent(
                         seq=0,

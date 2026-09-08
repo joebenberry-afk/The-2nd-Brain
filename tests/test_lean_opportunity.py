@@ -47,7 +47,8 @@ def _seed_lean_skill(home: Path) -> None:
     target_cfg = home / "config" / "skills.toml"
     target_cfg.parent.mkdir(parents=True, exist_ok=True)
     target_cfg.write_text(
-        'schema_version = 1\n\n[lean]\neval = "advisory"\nopportunity = true\n\n[router]\nmax_active = 3\n',
+        'schema_version = 1\n\n[lean]\neval = "advisory"\nopportunity ='
+        " true\n\n[router]\nmax_active = 3\n",
         encoding="utf-8",
     )
 
@@ -65,7 +66,8 @@ def test_noop_when_no_reason(brain_home: Path) -> None:
 
 
 def test_nudge_is_byte_stable_and_in_tail(brain_home: Path) -> None:
-    """Single reason -> NUDGE (frozen byte-stable line) in TAIL slot, never in PREFIX."""
+    """Single reason -> NUDGE (frozen byte-stable line) in TAIL slot, never in
+    PREFIX."""
     _seed_lean_skill(brain_home)
 
     # Trigger REPEAT_READ: same blob read >= 3 times
@@ -231,7 +233,7 @@ def test_full_on_two_or_more_reasons(brain_home: Path) -> None:
 
 
 def test_scope_expansion_rule(brain_home: Path) -> None:
-    """Files modified outside capsule.files_touched ∪ requirement refs >= 2 triggers SCOPE_EXPANSION."""
+    """Two modified files outside capsule and requirement references trigger scope expansion."""
     _seed_lean_skill(brain_home)
 
     capsule = {"files_touched": ["src/allowed.py"]}
@@ -260,7 +262,8 @@ diff --git a/src/outside2.py b/src/outside2.py
 
 
 def test_new_abstraction_rule(brain_home: Path) -> None:
-    """New module or file >= 80 lines not named in requirements triggers NEW_ABSTRACTION."""
+    """New module or file >= 80 lines not named in requirements triggers
+    NEW_ABSTRACTION."""
     _seed_lean_skill(brain_home)
 
     new_file_lines = "\n".join(f"+line_{i} = {i}" for i in range(85))
@@ -284,7 +287,8 @@ new file mode 100644
 
 
 def test_stop_stays_independent() -> None:
-    """Lean never emits completion; verify.evaluate_accuracy_gate remains the sole authorizer."""
+    """Lean never emits completion; verify.evaluate_accuracy_gate remains the sole
+    authorizer."""
     # Lean runtime exposes no completion emission or authorization primitives
     assert not hasattr(lean_runtime, "emit_completion")
     assert not hasattr(lean_runtime, "authorize_completion")

@@ -5,7 +5,10 @@ import os
 import subprocess
 import sys
 
-from second_brain import firewall
+import pytest
+
+from second_brain import artifacts, firewall
+from second_brain.errors import BrainError
 
 
 class TestIndividualReducers:
@@ -298,3 +301,45 @@ class TestFirewallCLI:
         )
         assert result.returncode == 0
         assert result.stdout == raw_text
+
+
+@pytest.mark.parametrize("from_stdin", [False, True])
+def test_firewall_cli_preserves_original_bytes(brain_home, tmp_path, from_stdin):
+    original = b"first\r\ncaf\xc3\xa9\rthird\n"
+    args = ["reduce", "--kind", "generic", "--json"]
+    if not from_stdin:
+        source = tmp_path / "output.txt"
+        source.write_bytes(original)
+        args.append(str(source))
+    env = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
+    reduced = subprocess.run(
+        [sys.executable, "-m", "second_brain", "firewall", *args, "--home", str(brain_home)],
+        input=original if from_stdin else None,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+    ref = json.loads(reduced.stdout)["raw_object_ref"]
+    assert artifacts.expand(brain_home, ref) == original
+    expanded = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "second_brain",
+            "firewall",
+            "expand",
+            ref,
+            "--home",
+            str(brain_home),
+        ],
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+    assert expanded.stdout == original
+
+
+def test_firewall_text_expansion_rejects_invalid_utf8(brain_home):
+    stored = artifacts.store_bytes(brain_home, b"invalid \xff text", kind="raw")
+    with pytest.raises(BrainError):
+        firewall.expand_observation(brain_home, stored["hash"])

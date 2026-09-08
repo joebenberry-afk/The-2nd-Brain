@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import autoinject, db, ledger as ledger_mod, semantic
+from second_brain import autoinject, db, semantic
+from second_brain import ledger as ledger_mod
 from second_brain.contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
@@ -39,10 +40,20 @@ def test_summary_of_web_source_stays_advisory(brain_home: Path) -> None:
 def test_two_summaries_same_root_count_as_one_corroboration(brain_home: Path) -> None:
     root = _root("https://example.test/source")
     first = semantic.add_memory(
-        brain_home, "One", "summary one", scope="global", origin_class="EXTERNAL_WEB", origin_root_sha=root
+        brain_home,
+        "One",
+        "summary one",
+        scope="global",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha=root,
     )
     second = semantic.add_memory(
-        brain_home, "Two", "summary two", scope="global", origin_class="EXTERNAL_WEB", origin_root_sha=root
+        brain_home,
+        "Two",
+        "summary two",
+        scope="global",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha=root,
     )
     rows = [semantic._row(brain_home, first), semantic._row(brain_home, second)]
     assert semantic.corroboration_count(rows) == 1
@@ -77,13 +88,17 @@ def test_policy_lane_rejects_advisory_items(brain_home: Path) -> None:
 def test_invalid_origin_class_and_ceiling_rejected(brain_home: Path) -> None:
     with pytest.raises(BrainError):
         semantic.add_memory(brain_home, "Bad", "body", origin_class="NOT_REAL")
-    mid = semantic.add_memory(brain_home, "Good", "body", scope="global", origin_class="USER_AUTHORED")
+    mid = semantic.add_memory(
+        brain_home, "Good", "body", scope="global", origin_class="USER_AUTHORED"
+    )
     with pytest.raises(BrainError):
         semantic.curate(brain_home, mid, authority_ceiling="NOT_REAL")
 
 
 def test_curate_can_only_lower_authority_ceiling(brain_home: Path) -> None:
-    mid = semantic.add_memory(brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED")
+    mid = semantic.add_memory(
+        brain_home, "Fact", "body", scope="global", origin_class="USER_AUTHORED"
+    )
     before = semantic._row(brain_home, mid)
     assert before is not None
     assert before["authority_ceiling"] == "project_rule"
@@ -228,12 +243,19 @@ def test_policy_lane_renders_lower_authority_contradiction_without_withholding(
     # dedupe collapses same-title rows to a single representative regardless
     # of authority, so this ordering is required for the scenario to occur.
     low = semantic.add_memory(
-        brain_home, "Timeout policy", "retry forever", scope="global",
-        origin_class="EXTERNAL_WEB", origin_root_sha=_root("web-timeout"),
+        brain_home,
+        "Timeout policy",
+        "retry forever",
+        scope="global",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha=_root("web-timeout"),
     )
     semantic.curate(brain_home, low, status="current")
     high = semantic.add_memory(
-        brain_home, "Timeout policy", "retry once then fail", scope="global",
+        brain_home,
+        "Timeout policy",
+        "retry once then fail",
+        scope="global",
         origin_class="USER_AUTHORED",
     )
     semantic.curate(brain_home, high, grade="TESTED", status="current")

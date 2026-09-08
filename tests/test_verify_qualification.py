@@ -813,7 +813,15 @@ def test_complete_fixture_and_real_verifier_cannot_authorize_active(
         brain_home,
         "routing_policy",
         f"policy:{feature}",
-        {"metric": "tokens_delta", "expected_delta": -10.0},
+        {
+            "metric": "tokens_delta",
+            "expected_delta": -10.0,
+            "direction": "decrease",
+            "expected_range": [-11.0, -9.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         "qualification/evidence/00-baseline_identity_and_schema-integration.json",
     )
     observation = credit.record_observation(

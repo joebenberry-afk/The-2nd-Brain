@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from second_brain import reconsolidation, semantic
-from second_brain.hybrid_retrieval import HybridCascadeRetriever, RetrievalTier, apply_mmr
+from second_brain.hybrid_retrieval import HybridCascadeRetriever, RetrievalTier
 
 
 def test_retrieval_exposes_score_components(brain_home: Path) -> None:
-    """Every retrieval match exposes inspectable score components in structured and dict form."""
+    """Every retrieval match exposes inspectable score components in structured and dict
+    form."""
     mid = semantic.add_memory(
         brain_home,
         title="Cache Coherency Policy",
@@ -48,7 +49,8 @@ def test_retrieval_exposes_score_components(brain_home: Path) -> None:
 
 
 def test_contradiction_is_surfaced(brain_home: Path) -> None:
-    """Contradictions are explicitly surfaced in CascadeResult and RetrievalMatch, not averaged away."""
+    """Contradictions are explicitly surfaced in CascadeResult and RetrievalMatch, not
+    averaged away."""
     mid = semantic.add_memory(
         brain_home,
         title="Memory Eviction Watermark",
@@ -78,7 +80,8 @@ def test_contradiction_is_surfaced(brain_home: Path) -> None:
 
 
 def test_exact_ref_bypasses_relevance_not_authority(brain_home: Path) -> None:
-    """Exact ID/reference lookup bypasses semantic scoring but strictly enforces authority safety."""
+    """Exact ID/reference lookup bypasses semantic scoring but strictly enforces
+    authority safety."""
     # 1. Normal project-rule memory
     mid_rule = semantic.add_memory(
         brain_home,
@@ -131,7 +134,8 @@ def test_exact_ref_bypasses_relevance_not_authority(brain_home: Path) -> None:
 
 
 def test_mmr_reduces_duplicate_topk(brain_home: Path) -> None:
-    """MMR with lambda=0.7 reduces near-duplicate matches in favor of diverse relevant results."""
+    """MMR with lambda=0.7 reduces near-duplicate matches in favor of diverse relevant
+    results."""
     # Memory A: PostgreSQL Connection Pooling
     mid_a = semantic.add_memory(
         brain_home,
@@ -184,7 +188,8 @@ def test_mmr_reduces_duplicate_topk(brain_home: Path) -> None:
 
 
 def test_multiview_off_by_default(brain_home: Path) -> None:
-    """Multi-view retrieval is disabled by default and only runs when explicitly requested."""
+    """Multi-view retrieval is disabled by default and only runs when explicitly
+    requested."""
     retriever = HybridCascadeRetriever()
     assert retriever.multiview_enabled is False
 

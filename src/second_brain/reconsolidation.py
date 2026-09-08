@@ -6,8 +6,8 @@ runs a decay pass that only moves stale memories OUT of the hot set — it never
 destroys canonical evidence and never auto-archives (plan §52).
 
 Protected memories (current+VERIFIED, or constitution/security-titled) never
-decay. Heat/status changes are pure metadata: memory files and memory_versions
-are never touched, so history stays recoverable.
+decay. Heat is pure meta-state; status curation synchronizes canonical frontmatter.
+Content plans retain version history, evidence, and write-time origin authority.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ import math
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from . import contracts, db, decisions, semantic
+from . import db, decisions, semantic
 from .errors import BrainError
 
 HEAT_STATES: tuple[str, ...] = ("HOT", "WARM", "COLD", "ARCHIVED")
@@ -60,6 +60,7 @@ def _parse_dt(val: datetime | str | None) -> datetime:
         except ValueError:
             return datetime.now(UTC)
     return datetime.now(UTC)
+
 
 def _dbfile(home: Path) -> Path:
     return db.db_path(home)
@@ -188,8 +189,7 @@ def record_activation(
             )
         if kind in ("used", "success", "verified"):
             conn.execute(
-                "UPDATE memories SET storage_strength = storage_strength + 0.1 "
-                "WHERE memory_id = ?",
+                "UPDATE memories SET storage_strength = storage_strength + 0.1 WHERE memory_id = ?",
                 (memory_id,),
             )
         conn.commit()
@@ -262,6 +262,7 @@ def compute_p_need(
     z = (b - float(tau)) / s_val
     z_clamped = max(-40.0, min(40.0, z))
     return 1.0 / (1.0 + math.exp(-z_clamped))
+
 
 def apply_heat(home: Path, memory_id: str, heat: str) -> dict:
     """Set a memory's heat state with plan §52 guardrails:
@@ -341,9 +342,7 @@ def decay_pass(
 
     conn = db.connect(_dbfile(home_p))
     try:
-        act_rows = conn.execute(
-            "SELECT DISTINCT memory_id FROM memory_activations"
-        ).fetchall()
+        act_rows = conn.execute("SELECT DISTINCT memory_id FROM memory_activations").fetchall()
         memories_with_activations = {str(r["memory_id"]) for r in act_rows}
     except sqlite3.Error:
         memories_with_activations = set()
@@ -382,7 +381,9 @@ def decay_pass(
             if candidate_heat != heat:
                 new_heat = candidate_heat
                 if contradiction_count > 0:
-                    reason = f"Contradiction count={contradiction_count} prevents HOT; ACT-R B={b:.2f}"
+                    reason = (
+                        f"Contradiction count={contradiction_count} prevents HOT; ACT-R B={b:.2f}"
+                    )
                 else:
                     reason = f"ACT-R base activation B={b:.2f}"
         else:
@@ -391,7 +392,11 @@ def decay_pass(
             if heat == "HOT" and age_days > hot_ttl_days:
                 new_heat = "WARM"
                 reason = f"not retrieved in {age_days:.0f} day(s) (TTL {hot_ttl_days})"
-            elif heat == "WARM" and (row.get("retrieval_count") or 0) == 0 and age_days > warm_ttl_days:
+            elif (
+                heat == "WARM"
+                and (row.get("retrieval_count") or 0) == 0
+                and age_days > warm_ttl_days
+            ):
                 new_heat = "COLD"
                 reason = f"never retrieved and older than {warm_ttl_days} day(s)"
 
@@ -448,6 +453,7 @@ def decay_pass(
         )
 
     return changes
+
 
 def evaluate_memory(
     home: Path | str,
@@ -556,13 +562,10 @@ def demote_memory(
     current_heat = row.get("heat") or "WARM"
 
     if target_heat is None:
-        if current_heat == "HOT":
-            target_heat = "WARM"
-        else:
-            target_heat = "COLD"
+        target_heat = "WARM" if current_heat == "HOT" else "COLD"
 
     updated = apply_heat(home_p, memory_id, target_heat)
-    dec_id = decisions.record(
+    decisions.record(
         home_p,
         kind="reconsolidation",
         session_id=session_id or f"demote-{memory_id}",
@@ -587,6 +590,141 @@ def demote_memory(
     return updated
 
 
+def _plan_state(home: Path, memory_id: str) -> dict[str, Any]:
+    shown = semantic.show_memory(home, memory_id)
+    history = semantic.history(home, memory_id)
+    return {
+        **shown["row"],
+        "body": shown["body"],
+        "sources": semantic._sources(home, memory_id),
+        "history": history,
+        "version_hashes": {
+            str(version["version"]): semantic._file_hash(home, version) for version in history
+        },
+    }
+
+
+def _guard_states(home: Path, states: dict[str, dict]) -> None:
+    if not states:
+        raise BrainError("Plan is missing memory before/after images")
+    for memory_id, expected in states.items():
+        if _plan_state(home, memory_id) != expected:
+            raise BrainError(f"Stale reconsolidation plan for {memory_id}; memory changed")
+
+
+def _validate_plan_parameters(action: str, params: dict, states: dict[str, dict]) -> None:
+    if action not in RECONSOLIDATION_ACTIONS:
+        raise BrainError(f"Unsupported reconsolidation action: {action}")
+    if not isinstance(params, dict) or not states:
+        raise BrainError("Malformed reconsolidation plan parameters")
+    allowed = {"change_note"}
+    if action in {"narrow", "update", "supersede", "merge"}:
+        allowed.update({"new_title", "new_body", "new_sources"})
+    if action in {"strengthen", "split"}:
+        allowed.add("new_sources")
+    if action == "split":
+        allowed.add("parts")
+    if action == "merge":
+        allowed.add("merge_memory_ids")
+    if action == "demote":
+        allowed.add("target_heat")
+    if any(value is not None and key not in allowed for key, value in params.items()):
+        raise BrainError(f"Unsupported parameters for {action} plan")
+    if action != "merge" and len(states) != 1:
+        raise BrainError(f"{action} requires exactly one input memory")
+    sources = semantic._validate_sources(params.get("new_sources"))
+    for key in ("new_title", "change_note"):
+        value = params.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise BrainError(f"{key} must be a non-empty string or None")
+    if action in {"narrow", "update", "supersede", "merge"}:
+        body = params.get("new_body")
+        if not isinstance(body, str) or not body.strip():
+            raise BrainError(f"new_body must be a non-empty string for {action} plan")
+    if action == "strengthen":
+        if any(state["contradiction_count"] for state in states.values()):
+            raise BrainError("Contradictions block strengthening")
+        # Rehearsal already updates storage strength in record_activation.
+        # A separate strengthen plan must bring new supporting evidence.
+        existing = {source["ref"] for state in states.values() for source in state["sources"]}
+        if not sources or not any(source["ref"] not in existing for source in sources):
+            raise BrainError("strengthen requires new supporting evidence")
+        strength = next(iter(states.values()))["storage_strength"]
+        if not math.isfinite(strength) or strength + 0.1 <= strength:
+            raise BrainError("storage_strength cannot be increased safely")
+    if action == "split":
+        parts = params.get("parts")
+        if not isinstance(parts, list) or len(parts) < 2:
+            raise BrainError("split requires at least two parts with title and body")
+        normalized_parts: list[tuple[str, str]] = []
+        for part in parts:
+            if not isinstance(part, dict) or set(part) - {"title", "body", "sources"}:
+                raise BrainError("split parts support only title, body, and sources")
+            title = part.get("title")
+            body = part.get("body")
+            if not isinstance(title, str) or not isinstance(body, str):
+                raise BrainError("split parts require string title and body")
+            semantic._validate_new(title, body, "project", "OBSERVED")
+            semantic._validate_sources(part.get("sources"))
+            normalized_parts.append((title, body))
+        if len(set(normalized_parts)) != len(normalized_parts):
+            raise BrainError("split parts must be distinct")
+    if action == "merge":
+        ids = params.get("merge_memory_ids")
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or any(not isinstance(mid, str) for mid in ids)
+            or len(set(ids)) != len(ids)
+            or len(states) != len(ids) + 1
+            or any(mid not in states for mid in ids)
+        ):
+            raise BrainError("merge requires distinct additional merge_memory_ids")
+        if len({(state["scope"], state["project_id"]) for state in states.values()}) != 1:
+            raise BrainError("merge memories must share scope and project")
+    if action in {"split", "merge"} and any(
+        state["status"] in {"archived", "superseded"} for state in states.values()
+    ):
+        raise BrainError(f"{action} requires active input memories")
+    if action == "archive" and any(state["status"] == "archived" for state in states.values()):
+        raise BrainError("archive would not change memory status")
+    if action == "demote":
+        state = next(iter(states.values()))
+        heat = params.get("target_heat") or ("WARM" if state["heat"] == "HOT" else "COLD")
+        if heat not in HEAT_STATES or HEAT_STATES.index(heat) <= HEAT_STATES.index(state["heat"]):
+            raise BrainError("demote requires a colder target heat")
+
+
+def _derived_memory(
+    home: Path, title: str, body: str, states: dict[str, dict], sources: list[dict]
+) -> str:
+    # Mixed-origin merges inherit the weakest input, never the most trusted.
+    origin = min(
+        states.values(), key=lambda state: semantic._AUTHORITY_RANK[state["authority_ceiling"]]
+    )
+    grade = min(
+        (state["evidence_grade"] for state in states.values()), key=semantic._GRADE_RANK.__getitem__
+    )
+    inherited = [source for state in states.values() for source in state["sources"]]
+    lineage = [
+        {"ref": f"memory:{mid}@v{state['current_version']}", "kind": "import"}
+        for mid, state in states.items()
+    ]
+    memory_id = semantic.add_memory(
+        home,
+        title,
+        body,
+        scope=origin["scope"],
+        project_id=origin["project_id"],
+        grade=grade,
+        sources=inherited + lineage + sources,
+        origin_class=origin["origin_class"],
+        origin_root_sha=origin["origin_root_sha"],
+    )
+    semantic.curate(home, memory_id, authority_ceiling=origin["authority_ceiling"], verify=False)
+    return memory_id
+
+
 def propose_plan(
     home: Path | str,
     action: str,
@@ -597,33 +735,35 @@ def propose_plan(
     change_note: str | None = None,
     new_sources: list[dict] | None = None,
     target_heat: str | None = None,
+    parts: list[dict] | None = None,
+    merge_memory_ids: list[str] | None = None,
     session_id: str | None = None,
     task_id: str | None = None,
 ) -> dict[str, Any]:
+    """Plan explicit evidence-backed mutations without changing memories.
+
+    narrow/update/supersede require new_body; strengthen requires new evidence.
+    split takes parts=[{title, body, sources?}]; merge takes additional
+    merge_memory_ids plus new_body. Derived outputs start as candidates, retain
+    input evidence and version-qualified lineage, and never raise authority.
+    Rollback restores inputs and archives derived outputs; evidence is append-only.
+    """
     home_p = Path(home)
     _ensure_migrated(home_p)
     if action not in RECONSOLIDATION_ACTIONS:
         raise BrainError(f"action must be one of {', '.join(RECONSOLIDATION_ACTIONS)}")
     row = _memory_row(home_p, memory_id)
-    if action == "supersede" and (not isinstance(new_body, str) or not new_body.strip()):
-        raise BrainError("new_body must be a non-empty string for supersede plan")
+    if merge_memory_ids is not None and (
+        not isinstance(merge_memory_ids, list)
+        or any(not isinstance(mid, str) or not mid.strip() for mid in merge_memory_ids)
+    ):
+        raise BrainError("merge_memory_ids must be a list of memory IDs")
 
-    show = semantic.show_memory(home_p, memory_id)
-    current_body = show["body"]
-
-    before_state = {
-        "memory_id": memory_id,
-        "current_version": row["current_version"],
-        "title": row["title"],
-        "body_path": row["body_path"],
-        "status": row["status"],
-        "evidence_grade": row["evidence_grade"],
-        "heat": row.get("heat") or "WARM",
-        "body": current_body,
-    }
-
-    identity_str = f"{memory_id}:{action}:{row['current_version']}:{new_title}:{new_body}:{target_heat}"
-    plan_id = "plan-" + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
+    before_states = {memory_id: _plan_state(home_p, memory_id)}
+    if action == "merge":
+        for mid in merge_memory_ids or []:
+            before_states[mid] = _plan_state(home_p, mid)
+    before_state = before_states[memory_id]
 
     parameters = {
         "new_title": new_title,
@@ -631,7 +771,14 @@ def propose_plan(
         "change_note": change_note or f"Automatic {action} proposal",
         "new_sources": new_sources,
         "target_heat": target_heat,
+        "parts": parts,
+        "merge_memory_ids": merge_memory_ids,
     }
+    _validate_plan_parameters(action, parameters, before_states)
+    identity_str = json.dumps(
+        [memory_id, action, before_states, parameters], sort_keys=True, allow_nan=False
+    )
+    plan_id = "plan-" + hashlib.sha256(identity_str.encode("utf-8")).hexdigest()[:24]
 
     plan = {
         "plan_id": plan_id,
@@ -641,6 +788,7 @@ def propose_plan(
         "status": "planned",
         "parameters": parameters,
         "before_state": before_state,
+        "before_states": before_states,
         "created_at": _utcnow(),
     }
 
@@ -674,13 +822,32 @@ def apply_plan(
     task_id: str | None = None,
 ) -> dict[str, Any]:
     home_p = Path(home)
+    if not isinstance(plan, dict) or not isinstance(plan.get("plan_id"), str):
+        raise BrainError("Malformed reconsolidation plan")
     if plan.get("status") != "planned":
         raise BrainError(f"Cannot apply plan with status {plan.get('status')!r}")
-    action = plan["action"]
-    memory_id = plan["memory_id"]
-    params = plan["parameters"]
+    action = plan.get("action")
+    memory_id = plan.get("memory_id")
+    params = plan.get("parameters")
+    if not isinstance(action, str) or not isinstance(params, dict):
+        raise BrainError("Malformed reconsolidation plan")
+    params = cast(dict[str, Any], params)
 
-    if action == "supersede":
+    before_states = plan.get("before_states")
+    if (
+        not isinstance(memory_id, str)
+        or not isinstance(before_states, dict)
+        or memory_id not in before_states
+        or not all(
+            isinstance(mid, str) and isinstance(state, dict) for mid, state in before_states.items()
+        )
+    ):
+        raise BrainError("Plan is missing memory before images")
+    before_states = cast(dict[str, dict], before_states)
+    _guard_states(home_p, before_states)
+    _validate_plan_parameters(action, params, before_states)
+
+    if action in {"supersede", "narrow", "update"}:
         new_version = semantic.supersede(
             home_p,
             memory_id,
@@ -691,26 +858,83 @@ def apply_plan(
         )
         applied_result = {"new_version": new_version}
     elif action == "demote":
-        res = demote_memory(home_p, memory_id, target_heat=params.get("target_heat"), session_id=session_id)
+        res = demote_memory(
+            home_p, memory_id, target_heat=params.get("target_heat"), session_id=session_id
+        )
         applied_result = {"heat": res.get("heat")}
     elif action == "strengthen":
+        clean_sources = semantic._validate_sources(params["new_sources"])
         conn = db.connect(_dbfile(home_p))
         try:
+            semantic._insert_sources(conn, memory_id, clean_sources, _utcnow())
             conn.execute(
                 "UPDATE memories SET storage_strength = storage_strength + 0.1 WHERE memory_id = ?",
                 (memory_id,),
             )
+            db.bump_memory_epoch(conn)
             conn.commit()
         finally:
             conn.close()
-        applied_result = {"storage_strength_incremented": True}
+        applied_result = {"storage_strength": _memory_row(home_p, memory_id)["storage_strength"]}
+    elif action in {"split", "merge"}:
+        created = []
+        try:
+            if action == "split":
+                for part in params["parts"]:
+                    created.append(
+                        _derived_memory(
+                            home_p,
+                            part["title"],
+                            part["body"],
+                            before_states,
+                            (params.get("new_sources") or []) + (part.get("sources") or []),
+                        )
+                    )
+            else:
+                created.append(
+                    _derived_memory(
+                        home_p,
+                        params.get("new_title") or before_states[memory_id]["title"],
+                        params["new_body"],
+                        before_states,
+                        params.get("new_sources") or [],
+                    )
+                )
+            for mid in before_states:
+                semantic.curate(home_p, mid, status="superseded", verify=False)
+        except Exception:
+            # Semantic owners commit independently. Compensate partial batches,
+            # retaining any created files/evidence as archived history.
+            for mid in created:
+                semantic.curate(home_p, mid, status="archived", verify=False)
+            for mid, state in before_states.items():
+                if _memory_row(home_p, mid)["status"] != state["status"]:
+                    semantic.curate(home_p, mid, status=state["status"], verify=False)
+            raise
+        applied_result = {
+            "created_memory_ids": created,
+            "superseded_memory_ids": list(before_states),
+        }
+    elif action == "archive":
+        row = _memory_row(home_p, memory_id)
+        if _protected(row):
+            raise BrainError(f"Memory {memory_id} is protected and cannot be archived")
+        archived = semantic.curate(home_p, memory_id, status="archived", verify=False)
+        applied_result = {"status": archived["status"]}
     else:
-        applied_result = {"action": action, "applied": True}
+        raise BrainError(f"Unsupported reconsolidation action: {action}")
 
     updated = dict(plan)
     updated["status"] = "applied"
     updated["applied_at"] = _utcnow()
     updated["applied_result"] = applied_result
+    created_memory_ids = applied_result.get("created_memory_ids", [])
+    if not isinstance(created_memory_ids, list) or any(
+        not isinstance(mid, str) for mid in created_memory_ids
+    ):
+        raise BrainError("Applied reconsolidation result has invalid created memory IDs")
+    affected = list(before_states) + cast(list[str], created_memory_ids)
+    updated["after_states"] = {mid: _plan_state(home_p, mid) for mid in affected}
 
     decisions.record(
         home_p,
@@ -727,6 +951,7 @@ def apply_plan(
     )
     return updated
 
+
 def revert_plan(
     home: Path | str,
     plan: dict[str, Any],
@@ -735,13 +960,57 @@ def revert_plan(
     task_id: str | None = None,
 ) -> dict[str, Any]:
     home_p = Path(home)
+    if not isinstance(plan, dict) or not isinstance(plan.get("plan_id"), str):
+        raise BrainError("Malformed reconsolidation plan")
     if plan.get("status") != "applied":
         raise BrainError(f"Cannot revert plan with status {plan.get('status')!r}")
-    action = plan["action"]
-    memory_id = plan["memory_id"]
-    before = plan["before_state"]
+    action = plan.get("action")
+    memory_id = plan.get("memory_id")
+    params = plan.get("parameters")
+    before_states = plan.get("before_states")
+    if (
+        not isinstance(action, str)
+        or not isinstance(memory_id, str)
+        or not isinstance(params, dict)
+        or not isinstance(before_states, dict)
+        or memory_id not in before_states
+        or not all(
+            isinstance(mid, str) and isinstance(state, dict) for mid, state in before_states.items()
+        )
+    ):
+        raise BrainError("Plan is missing memory before images")
+    params = cast(dict[str, Any], params)
+    before_states = cast(dict[str, dict], before_states)
+    before = before_states[memory_id]
+    _validate_plan_parameters(action, params, before_states)
 
-    if action == "supersede":
+    after_states = plan.get("after_states")
+    if (
+        not isinstance(after_states, dict)
+        or memory_id not in after_states
+        or not all(
+            isinstance(mid, str) and isinstance(state, dict) for mid, state in after_states.items()
+        )
+    ):
+        raise BrainError("Plan is missing applied memory images")
+    after_states = cast(dict[str, dict], after_states)
+    result = plan.get("applied_result")
+    if not isinstance(result, dict):
+        raise BrainError("Plan is missing applied mutation results")
+    result = cast(dict[str, Any], result)
+    created = result.get("created_memory_ids", [])
+    if (
+        not isinstance(created, list)
+        or any(not isinstance(mid, str) for mid in created)
+        or len(set(created)) != len(created)
+        or set(after_states) != set(before_states) | set(created)
+        or set(created) & set(before_states)
+        or (action in {"split", "merge"} and not created)
+    ):
+        raise BrainError("Plan has inconsistent applied memory images")
+    created = cast(list[str], created)
+    _guard_states(home_p, after_states)
+    if action in {"supersede", "narrow", "update"}:
         revert_supersede(
             home_p,
             memory_id,
@@ -750,10 +1019,36 @@ def revert_plan(
         )
     elif action == "demote":
         apply_heat(home_p, memory_id, before.get("heat") or "WARM")
+    elif action == "archive":
+        semantic.curate(home_p, memory_id, status=before["status"], verify=False)
+    elif action == "strengthen":
+        conn = db.connect(_dbfile(home_p))
+        try:
+            conn.execute(
+                "UPDATE memories SET storage_strength = ? WHERE memory_id = ?",
+                (before["storage_strength"], memory_id),
+            )
+            db.bump_memory_epoch(conn)
+            conn.commit()
+        finally:
+            conn.close()
+    elif action in {"split", "merge"}:
+        for mid in created:
+            semantic.curate(home_p, mid, status="archived", verify=False)
+        for mid, state in before_states.items():
+            semantic.curate(home_p, mid, status=state["status"], verify=False)
+    else:
+        raise BrainError(f"Unsupported reconsolidation action: {action}")
 
     updated = dict(plan)
     updated["status"] = "reverted"
     updated["reverted_at"] = _utcnow()
+    updated["reverted_result"] = {
+        "restored_memory_ids": list(before_states),
+        "archived_memory_ids": created,
+        # Evidence is append-only, including evidence introduced by this plan.
+        "states": {mid: _plan_state(home_p, mid) for mid in after_states},
+    }
 
     decisions.record(
         home_p,
@@ -772,6 +1067,7 @@ def revert_plan(
         },
     )
     return updated
+
 
 def revert_supersede(
     home: Path | str,

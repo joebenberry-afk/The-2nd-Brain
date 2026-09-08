@@ -399,9 +399,7 @@ def remove_refs_by_owner_suffix(home: Path | str, suffix: str) -> int:
     registered it."""
     conn = _refs_conn(home)
     try:
-        cur = conn.execute(
-            "DELETE FROM artifact_refs WHERE owner LIKE ?", (f"%{suffix}",)
-        )
+        cur = conn.execute("DELETE FROM artifact_refs WHERE owner LIKE ?", (f"%{suffix}",))
         conn.commit()
         return cur.rowcount
     finally:

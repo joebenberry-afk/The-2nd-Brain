@@ -68,7 +68,15 @@ def _record_bound_observation(
         brain_home,
         "routing_policy",
         f"policy:{feature}",
-        {"metric": "tokens_delta", "expected_delta": -10.0},
+        {
+            "metric": "tokens_delta",
+            "expected_delta": -10.0,
+            "direction": "decrease",
+            "expected_range": [-11.0, -9.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         "baseline:control",
     )
     repo = Path(__file__).resolve().parents[1]
@@ -107,7 +115,15 @@ def test_caller_cannot_relabel_arbitrary_file_observed(brain_home: Path) -> None
         brain_home,
         "routing_policy",
         "policy:arbitrary-file",
-        {"metric": "tokens_delta", "expected_delta": -10.0},
+        {
+            "metric": "tokens_delta",
+            "expected_delta": -10.0,
+            "direction": "decrease",
+            "expected_range": [-11.0, -9.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         "baseline:control",
     )
     arbitrary_path = brain_home / "qualification" / "arbitrary.json"
@@ -332,7 +348,15 @@ def test_negative_candidate_is_held_or_demoted(
         brain_home,
         "speculative_prefetch",
         f"policy:{feature}",
-        {"metric": "tokens_delta", "expected_delta": -100.0},
+        {
+            "metric": "tokens_delta",
+            "expected_delta": -100.0,
+            "direction": "decrease",
+            "expected_range": [-101.0, -99.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         "simulation:baseline",
     )
     observation = credit.record_observation(

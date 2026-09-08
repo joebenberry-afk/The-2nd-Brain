@@ -110,12 +110,8 @@ def resolve_registered_worktree(
 
     registered_root = _git_path(row["repo_path"], "rev-parse", "--show-toplevel")
     candidate_root = _git_path(repo_path, "rev-parse", "--show-toplevel")
-    registered_common = _git_path(
-        registered_root, "rev-parse", "--git-common-dir"
-    )
-    candidate_common = _git_path(
-        candidate_root, "rev-parse", "--git-common-dir"
-    )
+    registered_common = _git_path(registered_root, "rev-parse", "--git-common-dir")
+    candidate_common = _git_path(candidate_root, "rev-parse", "--git-common-dir")
     if _canonical_path_key(registered_common) != _canonical_path_key(candidate_common):
         raise BrainError("Worktree is outside the registered project")
     try:

@@ -1,12 +1,11 @@
-"""
-Tests for T6.1 Dead Code and State Cleanup.
+"""Tests for T6.1 Dead Code and State Cleanup.
 
 Verifies:
 1. ResidencyState contains only RESIDENT, EVICTED, FAULTED_IN (STORED, SUPERSEDED, PURGED removed).
 2. contracts.ToolOutcomeState and contracts.UPGRADERS / ledger.UPGRADERS are removed.
 3. read_ledger_header and LedgerStore._check_version raise BrainError on schema version mismatch.
-4. tool_working_set module and CLI tool-set commands are removed; prime_tool_surface telemetry is kept.
-5. Config files cleaned up: [governor] bands from context.toml, [lateral_inhibition]/[decay] from retrieval.toml, tool_working_set from governor.toml — in both the repo-root copies and the src/second_brain/defaults/config/ seed template copied by cli.py init/_seed_defaults into every new Brain home.
+4. Tool-set commands are removed while native tool-surface telemetry is retained.
+5. Obsolete configuration is absent from both canonical config and seeded homes.
 6. action_cache enforces max_entries with LRU eviction in store_action / put.
 """
 
@@ -15,11 +14,12 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import time
-from pathlib import Path
 import tomllib
+from pathlib import Path
+
 import pytest
 
-from second_brain import action_cache, contracts, ledger, telemetry, vmem
+from second_brain import contracts, ledger, telemetry
 from second_brain.action_cache import (
     ActionCache,
     ActionCacheStore,

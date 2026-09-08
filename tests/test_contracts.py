@@ -28,8 +28,6 @@ from second_brain.contracts import (
     RequestFingerprint,
     SimplificationReviewOutcome,
     SurfaceVisibility,
-    ToolOutcome,
-    ToolSignal,
     canonical_json,
     is_already_delivered,
     read_ledger_header,
@@ -63,7 +61,6 @@ def test_estimate_tokens_uses_calibrated_ratio(tmp_path, monkeypatch) -> None:
     assert contracts.estimate_tokens("x" * 10, model="missing-model") == 2
 
 
-
 def test_calibrate_tokens_reports_insufficient_data(tmp_path) -> None:
     state = contracts.calibrate_tokens(tmp_path)
     assert state["source"] == "default"
@@ -91,6 +88,7 @@ def test_calibrate_tokens_fits_measured_pairs_without_raw_content(tmp_path) -> N
         encoding="utf-8"
     )
 
+
 def test_estimate_tokens_missing_or_invalid_calibration_uses_explicit_default(
     tmp_path, monkeypatch
 ) -> None:
@@ -117,6 +115,7 @@ def test_estimate_tokens_missing_or_invalid_calibration_uses_explicit_default(
     info = contracts.token_estimator_info("m")
     assert info == {"chars_per_token": 4.0, "source": "default", "pair_count": 0}
     assert contracts.estimate_tokens("x" * 9, model="m") == 2
+
 
 def test_estimator_accepts_json_integral_pair_count_like_typescript(tmp_path) -> None:
     state = tmp_path / "state" / "calibration"
@@ -174,6 +173,7 @@ def test_estimator_rejects_malformed_or_overflowing_calibration(tmp_path, monkey
     )
     assert contracts.estimate_tokens("x" * 8, model="m") == 2
 
+
 def test_estimator_rejects_huge_pair_count_without_crashing(tmp_path) -> None:
     state = tmp_path / "state" / "calibration"
     state.mkdir(parents=True)
@@ -226,6 +226,7 @@ def test_calibration_skips_malformed_telemetry_numbers(tmp_path) -> None:
     assert state["source"] == "default"
     assert state["pair_count"] == 0
 
+
 def test_calibration_ignores_records_without_session_or_valid_model(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
@@ -240,6 +241,7 @@ def test_calibration_ignores_records_without_session_or_valid_model(tmp_path) ->
     state = contracts.calibrate_tokens(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0
+
 
 def test_calibration_invalid_usage_invalidates_pending_measurement(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
@@ -273,6 +275,7 @@ def test_new_provider_prompt_supersedes_all_pending_tool_fallbacks(tmp_path) -> 
     state = contracts.calibrate_tokens(tmp_path)
     assert state["models"]["m"]["chars_per_token"] == 8.0  # type: ignore[index]
 
+
 def test_malformed_provider_or_assistant_model_invalidates_pending(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
@@ -300,6 +303,7 @@ def test_calibration_skips_invalid_utf8_telemetry_file(tmp_path) -> None:
     assert state["source"] == "default"
     assert state["pair_count"] == 0
 
+
 def test_invalid_provider_measurement_supersedes_pending_tool_fallback(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
@@ -315,6 +319,7 @@ def test_invalid_provider_measurement_supersedes_pending_tool_fallback(tmp_path)
     assert state["source"] == "default"
     assert state["pair_count"] == 0
 
+
 def test_calibration_ignores_unhashable_telemetry_kind(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
     telemetry_dir.mkdir(parents=True)
@@ -329,6 +334,7 @@ def test_calibration_ignores_unhashable_telemetry_kind(tmp_path) -> None:
     state = contracts.calibrate_tokens(tmp_path)
     assert state["models"]["m"]["chars_per_token"] == 4.0  # type: ignore[index]
     assert state["pair_count"] == 1
+
 
 def test_provider_record_without_prompt_preserves_tool_fallback(tmp_path) -> None:
     telemetry_dir = tmp_path / "telemetry" / "agent-performance"
@@ -464,9 +470,7 @@ def test_new_version_renders_supersedes_delta() -> None:
 
 
 def test_contradicts_renders_and_parses_without_leading_space() -> None:
-    pkt = _packet(
-        items=[_item(contradicts=("mem-xyz", "mem-def"))]
-    )
+    pkt = _packet(items=[_item(contradicts=("mem-xyz", "mem-def"))])
     text = pkt.render()
     assert "contradicts: mem-xyz, mem-def" in text
     parsed = BrainPacket.parse(text)
@@ -499,9 +503,7 @@ def test_delivery_dedupe_skips_already_delivered() -> None:
         superseded_by_delivery_id=None,
     )
     assert is_already_delivered(h, [rec])
-    assert not is_already_delivered(
-        stable_content_hash(_packet(packet_id="pkt-2").render()), [rec]
-    )
+    assert not is_already_delivered(stable_content_hash(_packet(packet_id="pkt-2").render()), [rec])
 
 
 def test_canonical_json_sorted_keys_and_list_order() -> None:
@@ -518,12 +520,15 @@ def test_simplification_review_outcomes_are_canonical() -> None:
         "no_action",
     ]
 
+
 def test_stop_lifecycle_events_are_canonical() -> None:
     assert LifecycleEventType.STOP_DECIDED.value == "stop_decided"
     assert LifecycleEventType.STOP_FINALIZED.value == "stop_finalized"
 
+
 def test_accuracy_gate_lifecycle_event_is_canonical() -> None:
     assert LifecycleEventType.ACCURACY_GATE.value == "accuracy_gate"
+
 
 def test_independent_verification_lifecycle_event_is_canonical() -> None:
     assert LifecycleEventType.INDEPENDENT_VERIFICATION.value == "independent_verification"
@@ -583,7 +588,6 @@ def test_fingerprint_divergence_roundtrip_and_null_cache_fields() -> None:
     assert rt.cache_read_tokens is None
     assert rt.cache_write_tokens is None
     assert rt.cache_miss_tokens is None
-
 
 
 def test_unknown_required_event_rejected_unknown_ignorable_skipped() -> None:

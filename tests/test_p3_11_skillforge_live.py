@@ -29,9 +29,7 @@ def _radar_candidate(brain_home):
             }
         ],
     }
-    (radar_dir / "candidates.json").write_text(
-        json.dumps([candidate]), encoding="utf-8"
-    )
+    (radar_dir / "candidates.json").write_text(json.dumps([candidate]), encoding="utf-8")
     return candidate
 
 
@@ -71,9 +69,7 @@ def test_forge_radar_candidate_persists_stable_bounded_binding(brain_home):
 
     assert first == second
     assert first == brain_home / "skills" / "candidates" / "read-reuse" / "SKILL.md"
-    binding = json.loads(
-        (first.parent / "candidate-binding.json").read_text(encoding="utf-8")
-    )
+    binding = json.loads((first.parent / "candidate-binding.json").read_text(encoding="utf-8"))
     assert binding["candidate_id"].startswith("skill-candidate-")
     assert binding["source_radar_candidate_id"] == source["candidate_id"]
     assert binding["owner"] == "second-brain-radar-steward"
@@ -128,9 +124,7 @@ def test_record_evaluation_persists_quality_before_roi(brain_home):
     stored = json.loads((path.parent / "evaluation.json").read_text(encoding="utf-8"))
     assert stored["candidate_content_sha256"]
     assert stored["status"] == "passed"
-    binding = json.loads(
-        (path.parent / "candidate-binding.json").read_text(encoding="utf-8")
-    )
+    binding = json.loads((path.parent / "candidate-binding.json").read_text(encoding="utf-8"))
     assert binding["evaluation_state"] == "passed"
     assert binding["promotion_state"] == "authority_review"
 
@@ -157,6 +151,8 @@ def test_changed_candidate_content_invalidates_evaluation(brain_home):
         assert "content" in str(exc).lower()
     else:
         raise AssertionError("changed candidate content must reject old evaluation")
+
+
 def test_changed_candidate_cannot_use_old_evaluation_for_promotion(brain_home):
     path = _forge(brain_home)
     skillforge.record_evaluation(
@@ -191,6 +187,8 @@ def test_changed_candidate_cannot_use_old_evaluation_for_promotion(brain_home):
     assert result["promoted"] is False
     assert result["reason"] == "evaluation_stale"
     assert not (brain_home / "skills" / "active" / "read-reuse").exists()
+
+
 def test_promotion_authority_holds_without_evaluation(brain_home):
     _forge(brain_home)
 
@@ -199,6 +197,7 @@ def test_promotion_authority_holds_without_evaluation(brain_home):
     assert result["promoted"] is False
     assert result["reason"] == "evaluation_not_proven"
     assert (brain_home / "skills" / "candidates" / "read-reuse").is_dir()
+
 
 def test_successful_evaluation_still_requires_external_authority(brain_home):
     _forge(brain_home)
@@ -233,6 +232,8 @@ def test_successful_evaluation_still_requires_external_authority(brain_home):
     assert result["promoted"] is False
     assert result["reason"] == "no_evidence"
     assert not (brain_home / "skills" / "active" / "read-reuse").exists()
+
+
 def test_failed_gate_blocks_positive_roi_evaluation(brain_home):
     _forge(brain_home)
 

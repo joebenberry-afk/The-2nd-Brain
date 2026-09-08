@@ -30,6 +30,7 @@ import contextlib
 import enum
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -617,6 +618,55 @@ def arm_from_telemetry(
     }
 
 
+def _validate_prior_expectation(
+    expected_outcome: Mapping[str, Any],
+    baseline_ref: str,
+) -> dict[str, Any]:
+    if not isinstance(baseline_ref, str) or not baseline_ref.strip():
+        raise BrainError("Intervention requires a non-empty baseline_ref")
+
+    expected = dict(expected_outcome)
+    required = ("metric", "direction", "expected_range", "horizon", "confidence", "evaluator")
+    missing = [key for key in required if key not in expected]
+    if missing:
+        raise BrainError("Intervention requires prior causal fields: " + ", ".join(missing))
+    if not isinstance(expected["metric"], str) or not expected["metric"].strip():
+        raise BrainError("Intervention requires a non-empty metric")
+    if expected["direction"] not in {"increase", "decrease", "unchanged", "pass"}:
+        raise BrainError("Intervention direction must be increase, decrease, unchanged, or pass")
+    expected_range = expected["expected_range"]
+    if (
+        not isinstance(expected_range, (list, tuple))
+        or len(expected_range) != 2
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in expected_range
+        )
+        or float(expected_range[0]) > float(expected_range[1])
+    ):
+        raise BrainError("Intervention expected_range must contain two ordered finite numbers")
+    horizon = expected["horizon"]
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0:
+        raise BrainError("Intervention horizon must be a positive integer")
+    confidence = expected["confidence"]
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not math.isfinite(float(confidence))
+        or not 0 < float(confidence) <= 1
+    ):
+        raise BrainError("Intervention confidence must be a finite number in (0, 1]")
+    if not isinstance(expected["evaluator"], str) or not expected["evaluator"].strip():
+        raise BrainError("Intervention evaluator must be non-empty text")
+
+    measurable = ("expected_delta", "expected_value", "expected_pass")
+    if not any(key in expected for key in measurable):
+        raise BrainError("Intervention requires prior measurable expected_outcome")
+    return expected
+
+
 def record_intervention(
     home: Path | str,
     intervention_type: str,
@@ -642,23 +692,13 @@ def record_intervention(
         raise BrainError(
             "Intervention requires non-empty prior measurable expected_outcome mapping"
         )
-
-    has_measurable = any(
-        k in expected_outcome
-        for k in (
-            "metric",
-            "expected_delta",
-            "direction",
-            "expected_pass",
-            "expected_value",
-            "delta",
-        )
-    )
-    if not has_measurable:
+    if not any(
+        key in expected_outcome
+        for key in ("metric", "expected_delta", "expected_value", "expected_pass")
+    ):
         raise BrainError("Intervention requires prior measurable expected_outcome")
-
+    expected_dict = _validate_prior_expectation(expected_outcome, baseline_ref)
     now = datetime.now(UTC).isoformat()
-    expected_dict = dict(expected_outcome)
     intervention_dict = {
         "intervention_type": str(intervention_type),
         "target_ref": str(target_ref),

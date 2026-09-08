@@ -24,8 +24,7 @@ def test_shadow_is_read_only_and_active_prunes(brain_home: Path, tmp_path: Path)
 
     _config(
         brain_home,
-        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
-        "min_interval_seconds = 0\n",
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\nmin_interval_seconds = 0\n",
     )
     active = HeartbeatCoordinator(brain_home).run_if_due(
         "session_shutdown", "s1", tmp_path, force=True
@@ -41,10 +40,18 @@ def test_off_does_not_probe_or_mutate(brain_home: Path, tmp_path: Path):
         "session_start", "s1", tmp_path, force=True
     )
     assert result == {
-        "mode": "off", "event": "session_start", "due": False, "ran": False,
-        "healthy": True, "db_ok": True, "cache_pruned_count": 0,
-        "git_dirty": False, "issue_codes": [], "latency_ms": 0,
-        "model_tokens_used": 0, "maintenance_mutated": False,
+        "mode": "off",
+        "event": "session_start",
+        "due": False,
+        "ran": False,
+        "healthy": True,
+        "db_ok": True,
+        "cache_pruned_count": 0,
+        "git_dirty": False,
+        "issue_codes": [],
+        "latency_ms": 0,
+        "model_tokens_used": 0,
+        "maintenance_mutated": False,
         "artifacts_gc_count": 0,
     }
 
@@ -62,8 +69,7 @@ def test_active_runs_artifact_gc(brain_home: Path, tmp_path: Path):
 
     _config(
         brain_home,
-        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
-        "min_interval_seconds = 0\n",
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\nmin_interval_seconds = 0\n",
     )
     result = HeartbeatCoordinator(brain_home).run_if_due(
         "session_shutdown", "s1", tmp_path, force=True
@@ -95,8 +101,7 @@ def test_shadow_counts_without_deleting_expired_cache(brain_home: Path):
 def test_interval_skip_and_force(brain_home: Path, tmp_path: Path):
     _config(
         brain_home,
-        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\n"
-        "min_interval_seconds = 60\n",
+        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\nmin_interval_seconds = 60\n",
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     first = HeartbeatCoordinator(brain_home).run_if_due(
@@ -120,8 +125,7 @@ def test_interval_skip_and_force(brain_home: Path, tmp_path: Path):
 def test_concurrent_callers_reserve_one_run(brain_home: Path, tmp_path: Path):
     _config(
         brain_home,
-        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\n"
-        "min_interval_seconds = 60\n",
+        "schema_version = 1\n[heartbeat]\nmode = 'shadow'\nmin_interval_seconds = 60\n",
     )
     results: list[dict] = []
     barrier = threading.Barrier(2)
@@ -160,8 +164,7 @@ def test_probe_failures_are_visible_and_nonthrowing(brain_home: Path, tmp_path: 
 def test_cache_prune_failure_is_visible(brain_home: Path, monkeypatch, tmp_path: Path):
     _config(
         brain_home,
-        "schema_version = 1\n[heartbeat]\nmode = 'active'\n"
-        "min_interval_seconds = 0\n",
+        "schema_version = 1\n[heartbeat]\nmode = 'active'\nmin_interval_seconds = 0\n",
     )
     from second_brain import heartbeat
 
@@ -206,11 +209,23 @@ def test_retains_only_configured_runs(brain_home: Path, tmp_path: Path):
 
 def test_append_record_is_privacy_safe(brain_home: Path):
     record = telemetry.append_record(
-        brain_home, "s1", "heartbeat_pulse",
-        {"mode": "shadow", "event": "session_start", "due": True, "ran": True,
-         "healthy": True, "db_ok": True, "cache_pruned_count": 0, "git_dirty": False,
-         "issue_codes": [], "latency_ms": 1, "model_tokens_used": 0,
-         "prompt": "secret"},
+        brain_home,
+        "s1",
+        "heartbeat_pulse",
+        {
+            "mode": "shadow",
+            "event": "session_start",
+            "due": True,
+            "ran": True,
+            "healthy": True,
+            "db_ok": True,
+            "cache_pruned_count": 0,
+            "git_dirty": False,
+            "issue_codes": [],
+            "latency_ms": 1,
+            "model_tokens_used": 0,
+            "prompt": "secret",
+        },
     )
     assert record["kind"] == "heartbeat_pulse"
     assert "prompt" not in record
@@ -222,12 +237,23 @@ def test_append_record_is_privacy_safe(brain_home: Path):
 def test_heartbeat_cli_prints_result_and_appends(brain_home: Path, capsys):
     from second_brain import cli
 
-    assert cli.main(
-        [
-            "--home", str(brain_home), "heartbeat", "run",
-            "--event", "session_start", "--session", "cli-session", "--force", "--json",
-        ]
-    ) == 0
+    assert (
+        cli.main(
+            [
+                "--home",
+                str(brain_home),
+                "heartbeat",
+                "run",
+                "--event",
+                "session_start",
+                "--session",
+                "cli-session",
+                "--force",
+                "--json",
+            ]
+        )
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["mode"] == "shadow"
     records = telemetry.iter_records(brain_home)

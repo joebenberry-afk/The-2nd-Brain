@@ -38,6 +38,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from second_brain import cli, lean_runtime, semantic, working_set
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -382,10 +383,13 @@ def test_stop_records_activation_before_unresolved_continue(
     import sqlite3
 
     with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
-            (mid, conversation),
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+                (mid, conversation),
+            ).fetchone()[0]
+            == 1
+        )
     return
 
 
@@ -440,10 +444,13 @@ def test_stop_records_activation_from_nested_transcript_tool_use(
     import sqlite3
 
     with sqlite3.connect(brain / "db" / "brain.sqlite") as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
-            (mid, conversation),
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+                (mid, conversation),
+            ).fetchone()[0]
+            == 1
+        )
 
 
 # ---------------------------------------------------------------- Fail open

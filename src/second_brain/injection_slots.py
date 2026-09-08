@@ -197,10 +197,12 @@ def assemble_tail(
     if hot_context_refs and hot_context_refs.strip():
         parts.append(hot_context_refs.strip())
 
-    if freshness_lines and freshness_lines.strip():
-        # Avoid duplicating freshness lines if already in delta_context
-        if not delta_context or freshness_lines.strip() not in delta_context:
-            parts.append(freshness_lines.strip())
+    if (
+        freshness_lines
+        and freshness_lines.strip()
+        and (not delta_context or freshness_lines.strip() not in delta_context)
+    ):
+        parts.append(freshness_lines.strip())
 
     skills_text = format_hydrated_skills(hydrated_skills)
     if skills_text:

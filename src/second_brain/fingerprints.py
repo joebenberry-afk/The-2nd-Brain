@@ -101,8 +101,7 @@ def _legacy_sidecar_has_rows(path: Path) -> bool:
         conn = sqlite3.connect(path, timeout=5.0)
         try:
             tables = conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
             return any(
                 conn.execute(f"SELECT 1 FROM [{table[0]}] LIMIT 1").fetchone() is not None
@@ -111,9 +110,7 @@ def _legacy_sidecar_has_rows(path: Path) -> bool:
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        raise MigrationError(
-            f"Cannot inspect legacy fingerprints sidecar {path}: {exc}"
-        ) from exc
+        raise MigrationError(f"Cannot inspect legacy fingerprints sidecar {path}: {exc}") from exc
 
 
 def _retire_legacy_sidecars(home: Path) -> None:
@@ -140,6 +137,7 @@ class BottleneckCategory(StrEnum):
 @dataclass
 class BottleneckFingerprint:
     """A structural bottleneck pattern fingerprint (§3 P4.4)."""
+
     fingerprint_id: str
     category: BottleneckCategory
     impact_score: float  # 0.0 - 10.0 scale of token/latency severity

@@ -748,14 +748,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     admission: WorkerAdmission,
     failureCode: string,
   ): Promise<boolean> => {
-    if (
-      admission.accessIntent !== "mutating" ||
-      admission.worktreeId === null ||
-      admission.callbackToken === undefined ||
-      admission.nativeAttemptId !== undefined
-    ) {
-      return admission.accessIntent === "read_only";
+    if (admission.nativeAttemptId !== undefined) return false;
+    for (const pending of pendingWorkerJobs.values()) {
+      if (pending.taskId === admission.taskId) return false;
     }
+    if (
+      admission.accessIntent === "mutating" &&
+      (admission.worktreeId === null || admission.callbackToken === undefined)
+    ) return false;
     try {
       const receipt = await workerDispatchFailedRunner({
         home: config.home ?? "",
@@ -768,7 +768,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         callbackToken: admission.callbackToken,
         failureCode,
       });
-      if (!receipt.ok) return false;
+      if (!receipt.ok) {
+        getStore(admission.parentSessionId)?.append(sensors.extensionError(
+          admission.parentSessionId,
+          receipt.error ?? receipt.failureCode ?? "BRAIN_DISPATCH_FAILURE_NOT_ACKNOWLEDGED",
+        ));
+        return false;
+      }
       admission.cleanupAccepted = true;
       pendingWorkerTaskIds.delete(admission.taskId);
       workerAdmissionsByTask.delete(admission.taskId);
@@ -783,6 +789,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
       return true;
     } catch {
+      getStore(admission.parentSessionId)?.append(sensors.extensionError(
+        admission.parentSessionId, "BRAIN_DISPATCH_FAILURE_UNAVAILABLE",
+      ));
       return false;
     }
   };
@@ -1368,17 +1377,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   ): Promise<void> => {
     if (event.toolName !== "task") return;
     if (event.isError) {
+      const preflightRejected = event.details != null &&
+        typeof event.details === "object" &&
+        (event.details as Record<string, unknown>).preflightRejected === true;
       const count = Array.isArray(event.input.tasks) ? event.input.tasks.length : 1;
       for (let index = 0; index < count; index += 1) {
         const sourceKey = JSON.stringify([session, event.toolCallId, index]);
         const admission = workerAdmissionsBySource.get(sourceKey);
         if (!admission) continue;
-        if (admission.accessIntent === "mutating") {
-          await releaseUndispatchedAdmission(admission, "OMP_TASK_DISPATCH_FAILED");
-        } else {
-          pendingWorkerTaskIds.delete(admission.taskId);
-          workerAdmissionsByTask.delete(admission.taskId);
-          workerAdmissionsBySource.delete(sourceKey);
+        if (admission.accessIntent === "mutating" || preflightRejected) {
+          await releaseUndispatchedAdmission(
+            admission,
+            preflightRejected ? "OMP_TASK_PREFLIGHT_REJECTED" : "OMP_TASK_DISPATCH_FAILED",
+          );
         }
       }
       const observerKey = JSON.stringify([session, event.toolCallId]);

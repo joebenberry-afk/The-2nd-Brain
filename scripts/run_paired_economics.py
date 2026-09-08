@@ -8,10 +8,12 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from second_brain import economics, governor
 
@@ -22,7 +24,13 @@ QUALIFICATION = ROOT / "outputs" / "reports" / "v2" / "v2-0" / "qualification.js
 HARNESS_EXECUTABLES = {"prime": "prime", "claude-code": "claude", "hermes": "hermes"}
 PROFILE_TO_ABLATION = {"OFF": "A_BRAIN_OFF", "ON": "I_FULL_V1"}
 MAX_PAIRS = 100
-_REQUIRED_USAGE = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
+_REQUIRED_USAGE = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "total_tokens",
+)
 
 
 def _utc() -> str:
@@ -35,7 +43,10 @@ def profile_env(profile: str) -> dict[str, str]:
         ablation = PROFILE_TO_ABLATION[profile]
     except KeyError as exc:
         raise ValueError(f"unknown economics profile: {profile}") from exc
-    return governor.get_profile_env(ablation)
+    return {
+        **governor.get_profile_env(ablation),
+        "SECOND_BRAIN_AUTOINJECT_MODE": "off" if profile == "OFF" else "advisory",
+    }
 
 
 def load_tasks() -> list[dict[str, Any]]:
@@ -124,15 +135,18 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
                     nulls[field] = True
     for field in _REQUIRED_USAGE:
         totals[field] = None if nulls[field] or not seen[field] else totals[field]
-    totals.update({
-        "model": model,
-        "models": sorted(models),
-        "mixed_model": unknown_model or len(models) > 1,
-        "model_turns": model_turns if saw_event else None,
-        "tool_calls": tool_calls if saw_event else None,
-        "wall_ms": round(max(stamps) - min(stamps)) if len(stamps) >= 2 else None,
-    })
+    totals.update(
+        {
+            "model": model,
+            "models": sorted(models),
+            "mixed_model": unknown_model or len(models) > 1,
+            "model_turns": model_turns if saw_event else None,
+            "tool_calls": tool_calls if saw_event else None,
+            "wall_ms": round(max(stamps) - min(stamps)) if len(stamps) >= 2 else None,
+        }
+    )
     return totals
+
 
 def _host_command(harness: str) -> list[str] | None:
     override = os.environ.get(f"SECOND_BRAIN_{harness.upper().replace('-', '_')}_COMMAND")
@@ -155,7 +169,7 @@ def _run_host(command: list[str], prompt: str, worktree: Path, env: dict[str, st
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=30,
+            timeout=300,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -164,10 +178,15 @@ def _run_host(command: list[str], prompt: str, worktree: Path, env: dict[str, st
 
 
 def _acceptance(command: str, worktree: Path) -> bool | None:
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     try:
         completed = subprocess.run(
             command,
             cwd=worktree,
+            env=env,
             shell=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -179,11 +198,14 @@ def _acceptance(command: str, worktree: Path) -> bool | None:
     return completed.returncode == 0
 
 
-def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str]) -> dict[str, Any] | None:
+def _run_one(
+    harness: str, task: dict[str, Any], profile: str, command: list[str]
+) -> dict[str, Any] | None:
     run_id = f"{harness}-{task['task_id']}-{profile}-{_utc()}"
     with tempfile.TemporaryDirectory(prefix="second-brain-econ-") as temp:
         worktree = Path(temp) / "repo"
-        telemetry_home = Path(temp) / "brain"
+        run_dir = RAW_DIR / run_id
+        telemetry_home = run_dir / "brain"
         added = subprocess.run(
             ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
             cwd=ROOT,
@@ -196,8 +218,22 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
             return None
         try:
             env = os.environ.copy()
+            env.pop("PYTHONHOME", None)
+            env.pop("PYTHONPATH", None)
             env.update(profile_env(profile))
             env["SECOND_BRAIN_HOME"] = str(telemetry_home)
+            env["SECOND_BRAIN_PYTHON"] = sys.executable
+            env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+            initialized = subprocess.run(
+                [sys.executable, "-m", "second_brain", "--home", str(telemetry_home), "init"],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            if initialized.returncode != 0:
+                raise RuntimeError(f"Economics Brain initialization failed: {telemetry_home}")
             before = _telemetry_files(telemetry_home)
             host_exit = _run_host(command, task["prompt"], worktree, env)
             after = _telemetry_files(telemetry_home) - before
@@ -227,8 +263,12 @@ def _run_one(harness: str, task: dict[str, Any], profile: str, command: list[str
                     dollars_reason = "missing_or_null_price"
             elif not telemetry["model"]:
                 dollars_reason = "unknown_model"
-            acceptance_pass = _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
+            acceptance_pass = (
+                _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
+            )
             return {
+                "classification": "observed",
+                "raw_directory": str(run_dir),
                 "run_id": run_id,
                 "harness": harness,
                 "task_id": task["task_id"],
@@ -260,6 +300,7 @@ def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for arms in grouped.values():
         if "OFF" not in arms or "ON" not in arms:
             continue
+
         def metrics(record: dict[str, Any]) -> dict[str, Any]:
             tel = record.get("telemetry") or {}
             return {
@@ -269,12 +310,15 @@ def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "wall_ms": tel.get("wall_ms"),
                 "pass": record.get("acceptance_pass"),
             }
-        pairs.append({
-            "off": metrics(arms["OFF"]),
-            "on": metrics(arms["ON"]),
-            "off_usage_capture": bool(arms["OFF"].get("usage_capture")),
-            "on_usage_capture": bool(arms["ON"].get("usage_capture")),
-        })
+
+        pairs.append(
+            {
+                "off": metrics(arms["OFF"]),
+                "on": metrics(arms["ON"]),
+                "off_usage_capture": bool(arms["OFF"].get("usage_capture")),
+                "on_usage_capture": bool(arms["ON"].get("usage_capture")),
+            }
+        )
     return pairs
 
 
@@ -292,7 +336,11 @@ def _write_qualification(summary: dict[str, Any]) -> None:
     existing["economics"] = economics_section
     results = existing.get("results")
     if isinstance(results, list):
-        results = [item for item in results if not isinstance(item, dict) or item.get("harness") != summary["harness"]]
+        results = [
+            item
+            for item in results
+            if not isinstance(item, dict) or item.get("harness") != summary["harness"]
+        ]
         results.append(summary)
         existing["results"] = results
     existing["generated_at"] = datetime.now(UTC).isoformat()
@@ -321,9 +369,8 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
         "profile_mapping": PROFILE_TO_ABLATION,
         "requested_pairs": pair_count,
         "host_available": command is not None,
-        "usage_capture": bool(pairs) and all(
-            pair["off_usage_capture"] and pair["on_usage_capture"] for pair in pairs
-        ),
+        "usage_capture": bool(pairs)
+        and all(pair["off_usage_capture"] and pair["on_usage_capture"] for pair in pairs),
         "pairs_recorded": len(pairs),
         "verdict": economics.verdict(pairs, config=economics.load_config(ROOT)),
     }
@@ -332,13 +379,20 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run bounded paired economics from host telemetry.")
+    parser = argparse.ArgumentParser(
+        description="Run bounded paired economics from host telemetry."
+    )
     parser.add_argument("--harness", choices=sorted(HARNESS_EXECUTABLES), required=True)
     parser.add_argument("--profile", choices=("OFF", "ON"), required=True)
     parser.add_argument("--pairs", type=int, required=True)
+    parser.add_argument("--out", type=Path, help="Preserve this campaign in a separate directory")
     args = parser.parse_args()
+    global RAW_DIR, QUALIFICATION
     if not 1 <= args.pairs <= MAX_PAIRS:
         parser.error(f"--pairs must be between 1 and {MAX_PAIRS}")
+    if args.out is not None:
+        RAW_DIR = args.out.resolve() / "raw"
+        QUALIFICATION = args.out.resolve() / "qualification.json"
     print(json.dumps(run(args.harness, args.profile, args.pairs), sort_keys=True))
     return 0
 

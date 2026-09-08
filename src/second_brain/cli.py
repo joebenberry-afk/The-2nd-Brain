@@ -62,6 +62,9 @@ from . import backup as backup_mod
 from . import build_identity as build_identity_mod
 from . import doctor as doctor_mod
 from . import jit as jit_mod
+from .adapters import antigravity as _antigravity_adapter
+from .adapters import claude_code as _claude_code_adapter
+from .adapters import codex as _codex_adapter
 from .errors import BrainError
 
 
@@ -266,7 +269,9 @@ def _parser() -> argparse.ArgumentParser:
 
     wset = sub.add_parser("working-set", parents=[home_parent], help="Working-set read hints")
     wsets = wset.add_subparsers(dest="working_set_command", required=True)
-    rhint = wsets.add_parser("reread-hint", parents=[home_parent], help="check whether a file is unchanged")
+    rhint = wsets.add_parser(
+        "reread-hint", parents=[home_parent], help="check whether a file is unchanged"
+    )
     rhint.add_argument("session_id")
     rhint.add_argument("path")
     rhint.add_argument("--mode", choices=("OFF", "SHADOW", "ACTIVE"), default="SHADOW")
@@ -296,9 +301,7 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="project id (default: registry root containing --cwd > env > 'default')",
     )
-    ashadow.add_argument(
-        "--cwd", default=None, help="working directory for project resolution"
-    )
+    ashadow.add_argument("--cwd", default=None, help="working directory for project resolution")
     ashadow.add_argument("--session", dest="session_id", required=True, help="host session id")
     ashadow.add_argument("--agent", dest="agent_id", required=True, help="host agent id")
     ashadow.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
@@ -482,7 +485,6 @@ def _parser() -> argparse.ArgumentParser:
     srec = sess.add_parser("recover", parents=[home_parent], help="crash recovery report")
     srec.add_argument("host_session_id")
 
-
     art = sub.add_parser(
         "artifact", parents=[home_parent], help="Reversible Tool Distillation store (Phase 5)"
     )
@@ -528,9 +530,7 @@ def _parser() -> argparse.ArgumentParser:
         "resulting risk level (plan §10; config/verification.toml [ladder])",
     )
 
-    radar_parser = sub.add_parser(
-        "radar", parents=[home_parent], help="improvement radar (P3.10)"
-    )
+    radar_parser = sub.add_parser("radar", parents=[home_parent], help="improvement radar (P3.10)")
     radar_sub = radar_parser.add_subparsers(dest="radar_command", required=True)
     robs = radar_sub.add_parser(
         "observe", parents=[home_parent], help="observe one telemetry session"
@@ -601,7 +601,6 @@ def _parser() -> argparse.ArgumentParser:
     vind.add_argument("--unresolved-requirement-id", action="append", default=[])
     vind.add_argument("--out", type=Path, required=True)
     vind.add_argument("--json", action="store_true")
-
 
     envp = sub.add_parser("env", parents=[home_parent], help="environment steward (Phase 8)")
     eps = envp.add_subparsers(dest="env_command", required=True)
@@ -718,7 +717,9 @@ def _parser() -> argparse.ArgumentParser:
     mcur.add_argument("--grade", default=None, choices=semantic.GRADES)
     mcur.add_argument("--status", default=None, choices=semantic.STATUSES)
     mcur.add_argument(
-        "--authority-ceiling", dest="authority_ceiling", default=None,
+        "--authority-ceiling",
+        dest="authority_ceiling",
+        default=None,
         choices=semantic.AUTHORITY_CEILINGS,
     )
     mcur.add_argument("--source", dest="sources", action="append", default=None)
@@ -910,9 +911,7 @@ def _parser() -> argparse.ArgumentParser:
     cf.add_argument("skill_name")
     cf.add_argument("tasks_file")
 
-    opt = sub.add_parser(
-        "optimize", parents=[home_parent], help="governed optimization lifecycle"
-    )
+    opt = sub.add_parser("optimize", parents=[home_parent], help="governed optimization lifecycle")
     opts = opt.add_subparsers(dest="optimization_command", required=True)
     opp = opts.add_parser("propose", parents=[home_parent], help="create an immutable proposal")
     opp.add_argument("fingerprint_id")
@@ -1058,7 +1057,9 @@ def _parser() -> argparse.ArgumentParser:
     trep.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     ts.add_parser("validate", help="validate telemetry records")
 
-    calibrate = sub.add_parser("calibrate", parents=[home_parent], help="calibrate measured token ratios")
+    calibrate = sub.add_parser(
+        "calibrate", parents=[home_parent], help="calibrate measured token ratios"
+    )
     calibrate_sub = calibrate.add_subparsers(dest="calibrate_command", required=True)
     calibrate_tokens = calibrate_sub.add_parser(
         "tokens", parents=[home_parent], help="fit chars-per-token from telemetry"
@@ -1092,8 +1093,6 @@ def _parser() -> argparse.ArgumentParser:
     p4_pulse.add_argument("--force", action="store_true")
     p4_pulse.add_argument("--no-telemetry", dest="emit_telemetry", action="store_false")
     p4_pulse.add_argument("--json", action="store_true")
-
-
 
     gov = sub.add_parser(
         "governor",
@@ -1156,9 +1155,7 @@ def _parser() -> argparse.ArgumentParser:
         parents=[home_parent],
         help="reduce bulky tool output deterministically",
     )
-    fw_red.add_argument(
-        "input_path", nargs="?", default=None, help="file path or stdin if omitted"
-    )
+    fw_red.add_argument("input_path", nargs="?", default=None, help="file path or stdin if omitted")
     fw_red.add_argument(
         "--kind",
         default=None,
@@ -1179,9 +1176,7 @@ def _parser() -> argparse.ArgumentParser:
         parents=[home_parent],
         help="losslessly expand a reduced artifact",
     )
-    fw_exp.add_argument(
-        "ref", help="artifact hash, prefix, or [brain-artifact:sha256:hash] handle"
-    )
+    fw_exp.add_argument("ref", help="artifact hash, prefix, or [brain-artifact:sha256:hash] handle")
 
     fw_kinds = fws.add_parser(
         "kinds",
@@ -1197,9 +1192,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     vms = vm.add_subparsers(dest="vmem_command", required=True)
 
-    vm_st = vms.add_parser(
-        "store", parents=[home_parent], help="store a transient session object"
-    )
+    vm_st = vms.add_parser("store", parents=[home_parent], help="store a transient session object")
     vm_st.add_argument("session_id", help="host session ID")
     vm_st.add_argument(
         "kind",
@@ -1290,9 +1283,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     acs = ac.add_subparsers(dest="action_cache_command", required=True)
 
-    ac_stats = acs.add_parser(
-        "stats", parents=[home_parent], help="show action cache statistics"
-    )
+    ac_stats = acs.add_parser("stats", parents=[home_parent], help="show action cache statistics")
     ac_stats.add_argument("--json", action="store_true", help="output JSON")
 
     ac_get = acs.add_parser(
@@ -1328,12 +1319,8 @@ def _parser() -> argparse.ArgumentParser:
         "itself skip execution)",
     )
     ac_search.add_argument("pattern", help="regular expression to search for")
-    ac_search.add_argument(
-        "--path", default=None, help="directory to search (default: brain home)"
-    )
-    ac_search.add_argument(
-        "--max-matches", type=int, default=200, help="cap on returned matches"
-    )
+    ac_search.add_argument("--path", default=None, help="directory to search (default: brain home)")
+    ac_search.add_argument("--max-matches", type=int, default=200, help="cap on returned matches")
     ac_search.add_argument("--json", action="store_true", help="output JSON")
 
     wp = sub.add_parser(
@@ -1467,11 +1454,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     cas_q.add_argument("query_text", help="query string or memory ref")
     cas_q.add_argument("--project", default=None, help="project scope ID")
-    cas_q.add_argument("--threshold", type=float, default=None, help="confidence threshold override")
+    cas_q.add_argument(
+        "--threshold", type=float, default=None, help="confidence threshold override"
+    )
     cas_q.add_argument("--json", action="store_true", help="output JSON")
 
     cass.add_parser("clear-cache", parents=[home_parent], help="clear negative result cache")
-
 
     v2 = sub.add_parser("v2", parents=[home_parent], help="v2 corrected-plan surfaces")
     v2s = v2.add_subparsers(dest="v2_command", required=True)
@@ -1484,7 +1472,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     v2_cap.add_argument("harness_id")
     v2_cap.add_argument("--json", action="store_true", help="output JSON")
-
 
     v2_learn = v2s.add_parser("learn", parents=[home_parent], help="policy learning and evaluation")
     v2_learn_sub = v2_learn.add_subparsers(dest="v2_learn_command", required=True)
@@ -1939,14 +1926,9 @@ def cmd_verify(args) -> int:
         action_states: dict[str, str] = {}
         for item in args.action:
             action, separator, state = item.partition("=")
-            if (
-                not separator
-                or not action
-                or state not in {"passed", "failed", "unresolved"}
-            ):
+            if not separator or not action or state not in {"passed", "failed", "unresolved"}:
                 raise BrainError(
-                    f"invalid --action {item!r}; "
-                    "expected ACTION=passed|failed|unresolved"
+                    f"invalid --action {item!r}; expected ACTION=passed|failed|unresolved"
                 )
             action_states[action] = state
         independent_verification = None
@@ -1958,9 +1940,7 @@ def cmd_verify(args) -> int:
                     f"invalid independent verification file: {args.verification_file}"
                 ) from exc
             if not isinstance(loaded, dict):
-                raise BrainError(
-                    f"invalid independent verification file: {args.verification_file}"
-                )
+                raise BrainError(f"invalid independent verification file: {args.verification_file}")
             independent_verification = loaded
         environment_evidence = None
         if args.environment_file is not None:
@@ -2193,23 +2173,11 @@ def _parse_sources(raw: list[str] | None) -> list[dict] | None:
 
 
 def _project_from_cwd(home: Path) -> str | None:
-    """Authoritative project resolution for CLI writes: the registered
-    project whose root contains the current working directory (plan §10).
-    None when no registered project contains cwd — caller must fail clearly."""
-    try:
-        cwd_abs = os.path.abspath(os.getcwd())
-        for proj in registry.list_projects(home):
-            root = proj.repo_path
-            if root:
-                root_abs = os.path.abspath(root)
-                try:
-                    if os.path.commonpath([cwd_abs, root_abs]) == root_abs:
-                        return proj.id
-                except ValueError:
-                    continue
-    except Exception:  # fail open: registry errors -> unresolved -> caller errors
-        return None
-    return None
+    """Use the shared project owner for CLI writes; refuse unresolved identities."""
+    from . import autoinject
+
+    resolved = autoinject.resolve_project(home, str(Path.cwd()))
+    return None if resolved["resolution"] == "default" else resolved["project_id"]
 
 
 def _remember_project(home: Path) -> str:
@@ -2275,7 +2243,9 @@ def cmd_recall(args) -> int:
         row = semantic._row(home, memory_id)
         if row is None:
             continue
-        source = next((item for item in semantic._sources(home, memory_id) if item.get("path")), None)
+        source = next(
+            (item for item in semantic._sources(home, memory_id) if item.get("path")), None
+        )
         repo_root = (source or {}).get("repo_id") or str(Path.cwd()) or str(home)
         state = freshness.resolve(home, memory_id, repo_root).get("state", freshness.UNKNOWN)
         body = " ".join(semantic._body_text(home, row).split())[:200]
@@ -2285,8 +2255,6 @@ def cmd_recall(args) -> int:
     if rendered == 0:
         print("NO_INJECTION NO_RELEVANT_MEMORY")
     return 0
-
-
 
 
 def cmd_memory(args) -> int:
@@ -2726,6 +2694,7 @@ def cmd_credit(args) -> int:
         return 0
     return 2
 
+
 def cmd_optimize(args) -> int:
     import json
 
@@ -2993,8 +2962,7 @@ def cmd_capsule(args) -> int:
             print(json.dumps(result, indent=2))
         else:
             print(
-                f"Capsule {'created' if result['changed'] else 'bound'}: "
-                f"{result['capsule_path']}"
+                f"Capsule {'created' if result['changed'] else 'bound'}: {result['capsule_path']}"
             )
         return 0
     if args.capsule_command == "init":
@@ -3049,7 +3017,6 @@ def cmd_capsule(args) -> int:
                 "decisions_this_session",
                 "files_touched",
                 "open_questions",
-
                 "brain_refs",
                 "artifact_refs",
                 "verification_json",
@@ -3066,6 +3033,8 @@ def cmd_capsule(args) -> int:
         print(json.dumps(working_set.show_capsule(home, args.session_id), indent=2))
         return 0
     return 2
+
+
 def cmd_simplification(args) -> int:
     import json
 
@@ -3100,7 +3069,6 @@ def cmd_simplification(args) -> int:
     else:
         print(f"{result['outcome']} review {result['review_id']} recorded")
     return 0
-
 
 
 def cmd_requirements(args) -> int:
@@ -3169,11 +3137,17 @@ def cmd_handoff(args) -> int:
             unavailable_evidence=args.unavailable_evidence,
         )
         if args.json:
-            print(json.dumps({
-                "envelope": envelope.to_dict(),
-                "markdown_path": artifact.artifact_path,
-                "envelope_bytes": envelope.envelope_bytes(),
-            }, indent=2, default=str))
+            print(
+                json.dumps(
+                    {
+                        "envelope": envelope.to_dict(),
+                        "markdown_path": artifact.artifact_path,
+                        "envelope_bytes": envelope.envelope_bytes(),
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
         else:
             print(f"Handoff created: {envelope.handoff_id}")
             print(f"  envelope ref: {artifact.envelope_ref}")
@@ -3216,8 +3190,10 @@ def cmd_read_ledger(args) -> int:
         return 0
     return 2
 
+
 def cmd_working_set(args) -> int:
     import json
+
     from . import autoinject, decisions
 
     if args.working_set_command != "reread-hint":
@@ -3272,9 +3248,6 @@ def cmd_context(args) -> int:
 # entry points and helpers as `cli._name(...)` directly. The real
 # implementations now live in `second_brain.adapters.*`; do not add new
 # call sites against these aliases.
-from .adapters import antigravity as _antigravity_adapter
-from .adapters import claude_code as _claude_code_adapter
-from .adapters import codex as _codex_adapter
 
 _cmd_codex_shadow = _codex_adapter.run
 _cmd_antigravity_hook = _antigravity_adapter.run
@@ -3303,6 +3276,7 @@ def _cmd_hermes_hook(home: Path) -> int:
     response = hermes_adapter.handle_request(home, payload)
     print(contracts.canonical_json(response))
     return 0
+
 
 def _cmd_omp_routing(home: Path) -> int:
     """OMP transport bridge; Brain owns all routing policy and selection."""
@@ -3429,9 +3403,11 @@ def cmd_orchestration(args) -> int:
         counters[key] = value
     total = counters["driver_actions_total"]
     if total > 0:
-        purity = 1.0 - (
-            counters["driver_execution_attempts"] + counters["emergency_execution_actions"]
-        ) / total
+        purity = (
+            1.0
+            - (counters["driver_execution_attempts"] + counters["emergency_execution_actions"])
+            / total
+        )
         purity = round(purity, 6)
     else:
         purity = None  # no actions recorded -> not inferred, never fabricate
@@ -3474,9 +3450,7 @@ def cmd_ledger(args) -> int:
             kind, _, path = spec.partition("=")
             if not kind or not path:
                 print(
-                    contracts.canonical_json(
-                        {"error": f"bad --host-artifact {spec!r} (KIND=PATH)"}
-                    )
+                    contracts.canonical_json({"error": f"bad --host-artifact {spec!r} (KIND=PATH)"})
                 )
                 return 2
             artifacts.append({"kind": kind, "path": path})
@@ -3500,9 +3474,7 @@ def cmd_ledger(args) -> int:
                 home, args.parent_session_id
             )
             if root_parent_session_id == internal:
-                raise BrainError(
-                    "parent ancestry cannot resolve to the child session itself"
-                )
+                raise BrainError("parent ancestry cannot resolve to the child session itself")
         store = ledger.LedgerStore(home, args.host_session_id, host=args.host)
         store._init_host_artifacts = artifacts  # carried into the manifest at open
         with store.open(create=True):
@@ -3555,9 +3527,7 @@ def cmd_ledger(args) -> int:
                     item["seq"] = 0  # ledger assigns; durable ledger is sequence authority
                 # host mirrors are stateless: the ledger derives its own ids
                 if not item.get("internal_session_id"):
-                    item["internal_session_id"] = ledger.internal_session_id(
-                        args.host_session_id
-                    )
+                    item["internal_session_id"] = ledger.internal_session_id(args.host_session_id)
                 if not item.get("agent_id"):
                     item["agent_id"] = "unknown"
                 parsed = contracts.BrainLifecycleEvent.from_dict(item)
@@ -3572,8 +3542,8 @@ def cmd_ledger(args) -> int:
                                 "agent_id": str(payload["agent_id"]),
                                 "internal_session_id": parsed.internal_session_id,
                                 "host_agent_id": str(
-                                payload.get("host_agent_id") or payload["agent_id"]
-                            ),
+                                    payload.get("host_agent_id") or payload["agent_id"]
+                                ),
                                 "parent_agent_id": payload.get("parent_agent_id"),
                                 "role_profile": str(payload.get("role_profile") or "worker"),
                                 "model": str(payload.get("model") or "unknown"),
@@ -3647,6 +3617,8 @@ def cmd_ledger(args) -> int:
         print(contracts.canonical_json(out))
         return 0
     return 2
+
+
 def cmd_stop(args) -> int:
     """P3.6 STOP decision using the existing requirement ledger and ledger store."""
     from . import contracts, ledger
@@ -3743,8 +3715,6 @@ def cmd_stop(args) -> int:
     else:
         print(f"{decision}: {reason_code}")
     return 0
-
-
 
 
 def cmd_session(args) -> int:
@@ -3860,6 +3830,8 @@ def cmd_autoinject(args) -> int:
         print(f"selected: {', '.join(decision.selected_ids) or 'none'}")
         print(f"delivery: {delivery_id or 'none'}")
     return 0
+
+
 def cmd_heartbeat(args) -> int:
     import json
 
@@ -3898,6 +3870,7 @@ def cmd_heartbeat(args) -> int:
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 0
 
+
 def cmd_p4(args) -> int:
     import json
 
@@ -3924,8 +3897,6 @@ def cmd_p4(args) -> int:
     return 0
 
 
-
-
 def cmd_telemetry(args) -> int:
     import json
 
@@ -3950,9 +3921,6 @@ def cmd_telemetry(args) -> int:
     return 2
 
 
-
-
-
 def cmd_calibrate(args) -> int:
     home = _home(args)
     if args.calibrate_command != "tokens":
@@ -3969,6 +3937,7 @@ def cmd_calibrate(args) -> int:
             f"state={home / 'state' / 'calibration' / 'tokens.json'}"
         )
     return 0
+
 
 def cmd_governor(args) -> int:
     """Token Governor CLI: report, flags, compare."""
@@ -3990,31 +3959,31 @@ def cmd_governor(args) -> int:
             output = []
             for session in sessions:
                 d = {
-                    'session_id': session.session_id,
-                    'provider': session.provider,
-                    'model': session.model,
-                    'input_tokens': session.input_tokens,
-                    'output_tokens': session.output_tokens,
-                    'cache_read_tokens': session.cache_read_tokens,
-                    'cache_write_tokens': session.cache_write_tokens,
-                    'total_tokens': session.total_tokens,
-                    'cost_total': session.cost_total,
-                    'cost_total_seen': session.cost_total_seen,
-                    'context_peak': session.context_peak,
-                    'model_turns': session.model_turns,
-                    'tool_calls': session.tool_calls,
-                    'tool_input_bytes': session.tool_input_bytes,
-                    'tool_output_bytes': session.tool_output_bytes,
-                    'brain_injected_tokens': session.brain_injected_tokens,
-                    'brain_packets_delivered': session.brain_packets_delivered,
-                    'brain_packets_shadow': session.brain_packets_shadow,
-                    'autoinject_cache_hits': session.autoinject_cache_hits,
-                    'autoinject_cache_misses': session.autoinject_cache_misses,
-                    'autoinject_cache_hit_rate': session.autoinject_cache_hit_rate,
-                    'lean_kernel_dedup_hits': session.lean_kernel_dedup_hits,
-                    'compactions': session.compactions,
-                    'role': session.role,
-                    'cache_epochs': session.cache_epochs,
+                    "session_id": session.session_id,
+                    "provider": session.provider,
+                    "model": session.model,
+                    "input_tokens": session.input_tokens,
+                    "output_tokens": session.output_tokens,
+                    "cache_read_tokens": session.cache_read_tokens,
+                    "cache_write_tokens": session.cache_write_tokens,
+                    "total_tokens": session.total_tokens,
+                    "cost_total": session.cost_total,
+                    "cost_total_seen": session.cost_total_seen,
+                    "context_peak": session.context_peak,
+                    "model_turns": session.model_turns,
+                    "tool_calls": session.tool_calls,
+                    "tool_input_bytes": session.tool_input_bytes,
+                    "tool_output_bytes": session.tool_output_bytes,
+                    "brain_injected_tokens": session.brain_injected_tokens,
+                    "brain_packets_delivered": session.brain_packets_delivered,
+                    "brain_packets_shadow": session.brain_packets_shadow,
+                    "autoinject_cache_hits": session.autoinject_cache_hits,
+                    "autoinject_cache_misses": session.autoinject_cache_misses,
+                    "autoinject_cache_hit_rate": session.autoinject_cache_hit_rate,
+                    "lean_kernel_dedup_hits": session.lean_kernel_dedup_hits,
+                    "compactions": session.compactions,
+                    "role": session.role,
+                    "cache_epochs": session.cache_epochs,
                 }
                 output.append(d)
             print(json.dumps(output, indent=2, default=str))
@@ -4027,9 +3996,9 @@ def cmd_governor(args) -> int:
             print("-" * 110)
             for session in sessions:
                 s_id = session.session_id
-                prov = session.provider or '?'
-                mod = session.model or '?'
-                ctx = str(session.context_peak) if session.context_peak else '-'
+                prov = session.provider or "?"
+                mod = session.model or "?"
+                ctx = str(session.context_peak) if session.context_peak else "-"
                 print(
                     f"{s_id:<16} {prov:<10} {mod:<20} {session.model_turns:<6} "
                     f"{session.input_tokens:<8} {session.output_tokens:<8} "
@@ -4050,7 +4019,7 @@ def cmd_governor(args) -> int:
             output = {}
             for key, value in flags.items():
                 source = governor.feature_source(key, home)
-                output[key] = {'value': value, 'source': source}
+                output[key] = {"value": value, "source": source}
             print(json.dumps(output, indent=2))
         else:
             # Table output
@@ -4081,14 +4050,14 @@ def cmd_governor(args) -> int:
 
         if args.json:
             output = {
-                'status': verdict.status,
-                'reason': verdict.reason,
-                'on_sessions': verdict.on_sessions,
-                'off_sessions': verdict.off_sessions,
-                'on_tokens': verdict.on_tokens,
-                'off_tokens': verdict.off_tokens,
-                'savings': verdict.savings,
-                'neutral_band': verdict.neutral_band,
+                "status": verdict.status,
+                "reason": verdict.reason,
+                "on_sessions": verdict.on_sessions,
+                "off_sessions": verdict.off_sessions,
+                "on_tokens": verdict.on_tokens,
+                "off_tokens": verdict.off_tokens,
+                "savings": verdict.savings,
+                "neutral_band": verdict.neutral_band,
             }
             print(json.dumps(output, indent=2))
         else:
@@ -4160,7 +4129,7 @@ def cmd_governor(args) -> int:
                         stage = candidate
             except Exception:
                 pass
-            try:
+            with contextlib.suppress(Exception):
                 decisions.record(
                     home,
                     kind="budget",
@@ -4174,11 +4143,18 @@ def cmd_governor(args) -> int:
                     stage=stage,
                     inputs={"used": result["used"], "cap": result["cap"]},
                 )
-            except Exception:
-                pass
         return 0
 
     return 2
+
+
+def _read_lossless_text_input(path: str | None) -> str:
+    """Read UTF-8 without newline translation or replacement of invalid bytes."""
+    try:
+        raw = Path(path).read_bytes() if path else sys.stdin.buffer.read()
+        return raw.decode("utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise BrainError(f"Cannot read exact UTF-8 input: {exc}") from exc
 
 
 def cmd_firewall(args) -> int:
@@ -4189,10 +4165,7 @@ def cmd_firewall(args) -> int:
     home = _home(args)
 
     if args.firewall_command == "reduce":
-        if args.input_path:
-            text = Path(args.input_path).read_text(encoding="utf-8", errors="replace")
-        else:
-            text = sys.stdin.read()
+        text = _read_lossless_text_input(args.input_path)
 
         res = firewall.reduce_observation(
             text,
@@ -4212,7 +4185,7 @@ def cmd_firewall(args) -> int:
     if args.firewall_command == "expand":
         try:
             expanded = firewall.expand_observation(home, args.ref)
-            sys.stdout.write(expanded)
+            sys.stdout.buffer.write(expanded.encode("utf-8"))
             return 0
         except BrainError as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -4240,10 +4213,7 @@ def cmd_vmem(args) -> int:
     store = vmem.VMemStore(home, args.session_id)
 
     if args.vmem_command == "store":
-        if args.content_path:
-            content = Path(args.content_path).read_text(encoding="utf-8", errors="replace")
-        else:
-            content = sys.stdin.read()
+        content = _read_lossless_text_input(args.content_path)
 
         metadata = None
         if args.metadata:
@@ -4295,7 +4265,7 @@ def cmd_vmem(args) -> int:
                 res["content"] = content
                 print(json.dumps(res, indent=2))
             else:
-                sys.stdout.write(content)
+                sys.stdout.buffer.write(content.encode("utf-8"))
             return 0
         except BrainError as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -4313,7 +4283,7 @@ def cmd_vmem(args) -> int:
         if not result.get("ok"):
             print(f"Error: {result.get('error', 'resolve failed')}", file=sys.stderr)
             return 2
-        sys.stdout.write(str(result.get("content", "")))
+        sys.stdout.buffer.write(str(result.get("content", "")).encode("utf-8"))
         return 0
 
     if args.vmem_command == "claim-pages":
@@ -4396,9 +4366,7 @@ def cmd_action_cache(args) -> int:
             print(f"  Hits: {stats['total_hits']}")
             print(f"  Tokens Saved Estimate: {stats['tokens_saved_estimate']}")
             print("  Economics by dependency class:")
-            for dependency_class, economics_row in stats[
-                "economics_by_dependency_class"
-            ].items():
+            for dependency_class, economics_row in stats["economics_by_dependency_class"].items():
                 print(
                     f"    {dependency_class}: {economics_row['lookups']} lookups, "
                     f"{economics_row['hits']} hits, {economics_row['status']}"
@@ -4506,11 +4474,14 @@ def _action_cache_search(home: Path, args) -> int:
 
     target_dir = (Path(args.path) if args.path else home).resolve()
     snapshot = action_cache.worktree_fingerprint_for(target_dir)
-    compute = lambda: _code_search_git_tracked(
-        target_dir,
-        args.pattern,
-        args.max_matches,
-    )
+
+    def compute():
+        return _code_search_git_tracked(
+            target_dir,
+            args.pattern,
+            args.max_matches,
+        )
+
     if snapshot is None:
         started = time.perf_counter()
         content = compute()
@@ -4735,6 +4706,7 @@ def cmd_delta_sync(args) -> int:
     import json
 
     from . import delta_sync
+
     home = _home(args)
 
     if args.delta_sync_command == "diff":
@@ -4810,7 +4782,6 @@ def cmd_cascade(args) -> int:
         return 0
 
     return 2
-
 
 
 def cmd_backup(args) -> int:

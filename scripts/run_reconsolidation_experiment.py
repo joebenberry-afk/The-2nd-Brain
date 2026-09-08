@@ -1,8 +1,9 @@
-"""Replay and evaluate reconsolidation on 20 memories comparing deterministic outcomes to manual classification.
+"""Replay and evaluate reconsolidation on 20 memories comparing deterministic outcomes
+to manual classification.
 
-Cheapest real experiment for T7.2:
-Select 20 real memories with repeated retrieval, stale evidence, and contradictions;
-compare deterministic outcomes to manual classification.
+Cheapest real experiment for T7.2: Select 20 real memories with repeated retrieval,
+stale evidence, and contradictions; compare deterministic outcomes to manual
+classification.
 """
 
 from __future__ import annotations
@@ -16,12 +17,14 @@ from typing import Any
 from second_brain import db, decisions, reconsolidation, semantic
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = ROOT / "outputs" / "reports" / "v2" / "reconsolidation" / "reconsolidation-experiment.json"
+OUTPUT_PATH = (
+    ROOT / "outputs" / "reports" / "v2" / "reconsolidation" / "reconsolidation-experiment.json"
+)
 
 
 def _seed_memories(home: Path) -> list[dict[str, Any]]:
     test_cases: list[dict[str, Any]] = [
-        # --- Category 1: Repeated healthy retrieval (High ACT-R B, no contradictions) -> manual: strengthen ---
+        # High activation without contradictions: manual classification is strengthen.
         {
             "id_tag": "mem-01",
             "title": "Clean Git Branch Hygiene",
@@ -62,8 +65,7 @@ def _seed_memories(home: Path) -> list[dict[str, Any]]:
             "manual_classification": "strengthen",
             "category": "repeated_retrieval",
         },
-
-        # --- Category 2: Stale / Inactive memories (Low ACT-R B <= -3 or never retrieved) -> manual: demote ---
+        # Stale or inactive (ACT-R B <= -3 or never retrieved): manual classification is demote.
         {
             "id_tag": "mem-05",
             "title": "Legacy Python 3.9 Syntax Quirk",
@@ -104,7 +106,6 @@ def _seed_memories(home: Path) -> list[dict[str, Any]]:
             "manual_classification": "demote",
             "category": "stale_evidence",
         },
-
         # --- Category 3: Contradicted memories (Contradictions present) -> manual: narrow ---
         {
             "id_tag": "mem-09",
@@ -146,7 +147,6 @@ def _seed_memories(home: Path) -> list[dict[str, Any]]:
             "manual_classification": "narrow",
             "category": "contradictions",
         },
-
         # --- Category 4: Labile / Needs narrow scope -> manual: narrow ---
         {
             "id_tag": "mem-13",
@@ -188,7 +188,6 @@ def _seed_memories(home: Path) -> list[dict[str, Any]]:
             "manual_classification": "narrow",
             "category": "labile_scope",
         },
-
         # --- Category 5: Superseded / Archived memories -> manual: archive ---
         {
             "id_tag": "mem-17",
@@ -280,18 +279,20 @@ def run_experiment() -> dict[str, Any]:
             if match:
                 matches += 1
 
-            results.append({
-                "memory_id": mid,
-                "title": c["title"],
-                "category": c["category"],
-                "deterministic_action": det_action,
-                "manual_classification": manual_action,
-                "concordance": match,
-                "b": round(eval_res["b"], 3),
-                "p_need": round(eval_res["p_need"], 3),
-                "contradiction_count": eval_res["contradiction_count"],
-                "reason": eval_res["reason"],
-            })
+            results.append(
+                {
+                    "memory_id": mid,
+                    "title": c["title"],
+                    "category": c["category"],
+                    "deterministic_action": det_action,
+                    "manual_classification": manual_action,
+                    "concordance": match,
+                    "b": round(eval_res["b"], 3),
+                    "p_need": round(eval_res["p_need"], 3),
+                    "contradiction_count": eval_res["contradiction_count"],
+                    "reason": eval_res["reason"],
+                }
+            )
 
         # Test Reversibility and Evidence Preservation on Case 1 (mem-01)
         target_mid = cases[0]["memory_id"]
@@ -312,7 +313,7 @@ def run_experiment() -> dict[str, Any]:
         v2_show = semantic.show_memory(temp_dir, target_mid)
 
         # 3. Revert plan
-        reverted = reconsolidation.revert_plan(temp_dir, applied)
+        reconsolidation.revert_plan(temp_dir, applied)
         reverted_show = semantic.show_memory(temp_dir, target_mid)
 
         reversibility_ok = (
@@ -329,15 +330,16 @@ def run_experiment() -> dict[str, Any]:
         finally:
             conn.close()
 
-        evidence_preserved = (total_sources == 20 and total_memories == 20)
+        evidence_preserved = total_sources == 20 and total_memories == 20
         recons_decisions = decisions.list_decisions(temp_dir, kind="reconsolidation")
 
         manifest = {
             "experiment": "T7.2 Governed Reconsolidation and Strategic Forgetting Replay",
             "hypothesis": (
-                "Deterministic reconsolidation matches expert manual classification across repeated retrieval, "
-                "stale evidence, contradictions, labile scopes, and superseded memories. Contradictions strictly "
-                "block strengthening. No evidence is ever destroyed and all automatic changes are reversible."
+                "Deterministic reconsolidation matches expert manual classification across repeated"
+                " retrieval, stale evidence, contradictions, labile scopes, and superseded"
+                " memories. Contradictions strictly block strengthening. No evidence is ever"
+                " destroyed and all automatic changes are reversible."
             ),
             "metrics": {
                 "total_memories_evaluated": len(cases),
@@ -353,27 +355,37 @@ def run_experiment() -> dict[str, Any]:
                 "repeated_retrieval": {
                     "count": 4,
                     "expected": "strengthen",
-                    "concordance": all(r["concordance"] for r in results if r["category"] == "repeated_retrieval"),
+                    "concordance": all(
+                        r["concordance"] for r in results if r["category"] == "repeated_retrieval"
+                    ),
                 },
                 "stale_evidence": {
                     "count": 4,
                     "expected": "demote",
-                    "concordance": all(r["concordance"] for r in results if r["category"] == "stale_evidence"),
+                    "concordance": all(
+                        r["concordance"] for r in results if r["category"] == "stale_evidence"
+                    ),
                 },
                 "contradictions": {
                     "count": 4,
                     "expected": "narrow",
-                    "concordance": all(r["concordance"] for r in results if r["category"] == "contradictions"),
+                    "concordance": all(
+                        r["concordance"] for r in results if r["category"] == "contradictions"
+                    ),
                 },
                 "labile_scope": {
                     "count": 4,
                     "expected": "narrow",
-                    "concordance": all(r["concordance"] for r in results if r["category"] == "labile_scope"),
+                    "concordance": all(
+                        r["concordance"] for r in results if r["category"] == "labile_scope"
+                    ),
                 },
                 "superseded_archive": {
                     "count": 4,
                     "expected": "archive",
-                    "concordance": all(r["concordance"] for r in results if r["category"] == "superseded_archive"),
+                    "concordance": all(
+                        r["concordance"] for r in results if r["category"] == "superseded_archive"
+                    ),
                 },
             },
             "evaluations": results,
@@ -385,9 +397,10 @@ def run_experiment() -> dict[str, Any]:
                 "reverted_body_matches_initial": reversibility_ok,
             },
             "conclusion": (
-                f"PASS: 20/20 memories ({matches / len(cases):.1%}) attained exact concordance with manual classification. "
-                "Contradictions prevented silent strengthening in 100% of cases. Zero evidence records or files were destroyed. "
-                "Automatic supersede and revert cycle proved 100% reversible."
+                f"PASS: 20/20 memories ({matches / len(cases):.1%}) attained exact concordance with"
+                " manual classification. Contradictions prevented silent strengthening in 100% of"
+                " cases. Zero evidence records or files were destroyed. Automatic supersede and"
+                " revert cycle proved 100% reversible."
             ),
         }
 

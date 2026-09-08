@@ -66,6 +66,27 @@ def _worker_context_payload(session: str, task_id: str, **extra: object) -> dict
     }
 
 
+def test_worker_without_optional_capsule_can_dispatch_but_corruption_fails_closed(tmp_path) -> None:
+    from second_brain import db, working_set
+
+    db.migrate(db.db_path(tmp_path))
+    session = "omp-shadow-session"
+    response = omp_adapter.handle_request(
+        tmp_path, _worker_context_payload(session, "without-capsule")
+    )
+    assert response["status"] == "prepared"
+    assert response["context_handoff"]["resolved_context"] == []
+    capsule = working_set.session_dir(tmp_path, session) / "active-state.json"
+    assert not capsule.exists()
+
+    capsule.parent.mkdir(parents=True, exist_ok=True)
+    capsule.write_text("{broken", encoding="utf-8")
+    rejected = omp_adapter.handle_request(
+        tmp_path, _worker_context_payload(session, "corrupt-capsule")
+    )
+    assert rejected == {"status": "failed", "failure_code": "CONTEXT_UNAVAILABLE"}
+
+
 def test_omp_adapter_reuses_and_deltas_worker_context(tmp_path) -> None:
     from second_brain import semantic, working_set
 
@@ -366,9 +387,7 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
         tmp_path, _worker_context_payload(session, task, context_refs=[])
     )
     digest = context["packet_sha256"]
-    payload = _worker_result_payload(
-        session, task, digest, attempt_id=context["attempt_id"]
-    )
+    payload = _worker_result_payload(session, task, digest, attempt_id=context["attempt_id"])
 
     def unavailable(*args, **kwargs):
         raise OSError("injected host ledger failure")
@@ -386,9 +405,7 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
     )
     wrong_parent = omp_adapter.handle_request(
         tmp_path,
-        _worker_result_payload(
-            "other-parent", task, digest, attempt_id=context["attempt_id"]
-        ),
+        _worker_result_payload("other-parent", task, digest, attempt_id=context["attempt_id"]),
     )
     assert wrong_parent["status"] == "failed"
     assert "result_sha256" not in wrong_parent
@@ -399,8 +416,7 @@ def test_omp_result_receipt_survives_lost_ack_and_ledger_failure(tmp_path, monke
     ):
         source.backup(restored)
         receipt = restored.execute(
-            "SELECT result_sha256,payload_json FROM worker_attempt_results "
-            "WHERE attempt_id=?",
+            "SELECT result_sha256,payload_json FROM worker_attempt_results WHERE attempt_id=?",
             (context["attempt_id"],),
         ).fetchone()
         assert receipt[0] == accepted["result_sha256"]
@@ -452,9 +468,7 @@ def test_omp_result_cannot_adopt_an_ownerless_task(tmp_path) -> None:
     worker_protocol.record_worker_event(tmp_path, task, digest, "accepted")
     result = omp_adapter.handle_request(
         tmp_path,
-        _worker_result_payload(
-            "unrelated-parent", task, digest, attempt_id="attempt-unowned"
-        ),
+        _worker_result_payload("unrelated-parent", task, digest, attempt_id="attempt-unowned"),
     )
     assert result["failure_code"] == "STALE_ATTEMPT"
     task_state = worker_protocol.lookup_task(tmp_path, task, digest)

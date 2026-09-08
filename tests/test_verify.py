@@ -10,9 +10,12 @@ from second_brain import risk, verify
 from second_brain import working_set as ws
 from second_brain.errors import BrainError
 
-REAL_LADDER_TOML = Path(__file__).resolve().parent.parent.joinpath(
-    "config", "verification.toml"
-).read_text(encoding="utf-8")
+REAL_LADDER_TOML = (
+    Path(__file__)
+    .resolve()
+    .parent.parent.joinpath("config", "verification.toml")
+    .read_text(encoding="utf-8")
+)
 
 
 def _commit_repo(repo):
@@ -166,6 +169,7 @@ def test_truncated_diff(brain_home, repo):
     diff_block = text.split("# Diff", 1)[1].split("# Requirements", 1)[0]
     diff_lines = [line for line in diff_block.splitlines() if line.strip()]
     assert len(diff_lines) <= verify.MAX_DIFF_LINES
+
 
 # ---------------------------------------------------------------------------
 # P3-G: risk-adaptive verification ladder (plan §10)
@@ -430,6 +434,8 @@ def test_accuracy_gate_blocks_critical_without_approval(brain_home, repo):
     assert result["risk_level"] == "CRITICAL"
     assert result["completion_allowed"] is False
     assert result["approval_state"] == "required"
+
+
 def test_accuracy_gate_rejects_self_certified_independent_action(brain_home, repo):
     result = verify.evaluate_accuracy_gate(
         brain_home,

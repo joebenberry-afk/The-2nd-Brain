@@ -63,9 +63,10 @@ def test_terminal_receipt_rejects_payload_that_does_not_match_its_hash(brain_hom
     assert task_state is not None
     assert task_state["state"] == "WORKING"
     worker_protocol.record_worker_event(brain_home, task, digest, "completed", payload=payload)
-    assert worker_protocol.verify_result_binding(
-        brain_home, task, digest, result.canonical_hash()
-    ) is None
+    assert (
+        worker_protocol.verify_result_binding(brain_home, task, digest, result.canonical_hash())
+        is None
+    )
 
 
 def test_context_refs_resolve_memory_and_artifact_with_bounded_metadata(brain_home: Path) -> None:
@@ -209,9 +210,7 @@ def test_context_handoff_reuses_unchanged_and_emits_changed_delta(brain_home: Pa
     assert changed_response["terminal_noop"] is True
     assert "context_handoff" not in changed_response
 
-    ledger_path = hermes_adapter.ledger.LedgerStore(
-        brain_home, binding.host_session_id
-    ).dbfile
+    ledger_path = hermes_adapter.ledger.LedgerStore(brain_home, binding.host_session_id).dbfile
     with sqlite3.connect(ledger_path) as conn:
         payloads = [
             json.loads(row[0])
@@ -275,9 +274,7 @@ def test_result_hash_and_correction_lifecycle_are_canonical(
     assert bad_response["failure_code"] == "UNAUTHORIZED_WORKER"
     initial = contracts.WorkerResultPacket(
         task_id=packet.task_id,
-        worker_identity=_identity(
-            "dev", session="worker-brain", bot="Brain-Dev"
-        ),
+        worker_identity=_identity("dev", session="worker-brain", bot="Brain-Dev"),
         status="completed",
         summary="Initial bounded evidence.",
         evidence_refs=["memory:" + memory_id],
@@ -285,7 +282,9 @@ def test_result_hash_and_correction_lifecycle_are_canonical(
     initial_hash = initial.canonical_hash()
     assert initial_hash == contracts.stable_content_hash(initial)
     assert (
-        contracts.WorkerResultPacket.from_dict(json.loads(initial.canonical_json())).canonical_hash()
+        contracts.WorkerResultPacket.from_dict(
+            json.loads(initial.canonical_json())
+        ).canonical_hash()
         == initial_hash
     )
 
@@ -303,9 +302,7 @@ def test_result_hash_and_correction_lifecycle_are_canonical(
         del args, kwargs
         raise AssertionError("terminal duplicate resolved context")
 
-    monkeypatch.setattr(
-        hermes_adapter.worker_protocol, "validate_context_handoff", unexpected
-    )
+    monkeypatch.setattr(hermes_adapter.worker_protocol, "validate_context_handoff", unexpected)
     duplicate = hermes_adapter.request_worker_task(
         brain_home,
         binding,
@@ -439,9 +436,7 @@ def test_result_hash_and_correction_lifecycle_are_canonical(
     assert approved["status"] == "reviewed"
     assert approved["result_sha256"] == corrected.canonical_hash()
 
-    ledger_path = hermes_adapter.ledger.LedgerStore(
-        brain_home, binding.host_session_id
-    ).dbfile
+    ledger_path = hermes_adapter.ledger.LedgerStore(brain_home, binding.host_session_id).dbfile
     with sqlite3.connect(ledger_path) as conn:
         rows = [
             (row[0], json.loads(row[1]))
@@ -486,9 +481,7 @@ def test_worker_numeric_fields_reject_bool_and_float(brain_home: Path) -> None:
     packet = _packet(brain_home, "memory:none")
     for field, value in (("fanout", 4.0), ("fanout_index", True), ("depth", 1.0)):
         with pytest.raises(contracts.WorkerPacketError):
-            contracts.WorkerTaskPacket(
-                **{**packet.__dict__, field: value}
-            ).validate()
+            contracts.WorkerTaskPacket(**{**packet.__dict__, field: value}).validate()
 
     result = contracts.WorkerResultPacket(
         task_id="numeric-result",

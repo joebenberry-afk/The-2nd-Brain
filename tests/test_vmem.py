@@ -22,6 +22,7 @@ from second_brain.vmem import (
 
 _CLEAN_ENV = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
 
+
 def test_vmem_store_uses_its_custom_home_calibration(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path / "default"))
     calibration = tmp_path / "custom" / "state" / "calibration"
@@ -53,6 +54,59 @@ def _run_vmem_cli(
         env=_CLEAN_ENV,
         input=stdin,
     )
+
+
+@pytest.mark.parametrize("from_stdin", [False, True])
+def test_cli_store_preserves_utf8_bytes_and_mixed_newlines(brain_home, tmp_path, from_stdin):
+    payload = b"first\r\ncaf\xc3\xa9\rthird\n"
+    args = ["store", "byte-preservation", "RESEARCH_RESULT", "Exact text"]
+    if not from_stdin:
+        source = tmp_path / "source.txt"
+        source.write_bytes(payload)
+        args.append(str(source))
+    saved = subprocess.run(
+        [sys.executable, "-m", "second_brain", "vmem", *args, "--home", str(brain_home), "--json"],
+        input=payload if from_stdin else None,
+        capture_output=True,
+        env=_CLEAN_ENV,
+        check=True,
+    )
+    obj_id = json.loads(saved.stdout)["obj_id"]
+    assert (
+        _run_vmem_cli(["compact-prep", "byte-preservation", "--json"], brain_home).returncode == 0
+    )
+    resolved = _run_vmem_cli(["resolve", "byte-preservation", obj_id, "--json"], brain_home)
+    assert resolved.returncode == 0, resolved.stderr
+    assert json.loads(resolved.stdout)["content"].encode("utf-8") == payload
+    for command in ("page", "resolve"):
+        plain = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "second_brain",
+                "vmem",
+                command,
+                "byte-preservation",
+                obj_id,
+                "--home",
+                str(brain_home),
+            ],
+            capture_output=True,
+            env=_CLEAN_ENV,
+            check=True,
+        )
+        assert plain.stdout == payload
+
+
+def test_cli_store_refuses_invalid_utf8_without_replacement(brain_home, tmp_path):
+    source = tmp_path / "not-text.bin"
+    source.write_bytes(b"invalid \xff content")
+    result = _run_vmem_cli(
+        ["store", "bad-encoding", "RESEARCH_RESULT", "Invalid text", str(source), "--json"],
+        brain_home,
+    )
+    assert result.returncode == 2
+    assert VMemStore(brain_home, "bad-encoding").list_objects() == []
 
 
 def _insert_delivery_row(
@@ -609,9 +663,7 @@ class TestVMemCLI:
         )
         assert obj.residency_state == ResidencyState.RESIDENT
 
-        payload = json.dumps(
-            {"candidates": [{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}]}
-        )
+        payload = json.dumps({"candidates": [{"obj_id": obj.obj_id, "kind": "RESEARCH_RESULT"}]})
         claim_res = _run_vmem_cli(
             ["claim-pages", "sess-cli-claim-1", "--json"], brain_home, stdin=payload
         )
@@ -853,6 +905,7 @@ class TestVMemResolve:
             kind=SessionObjectKind.RESEARCH_RESULT,
             title="autoinject_delivery",
             content="not json at all",
+            metadata={"deliveryId": None},
         )
         result = resolve_object(brain_home, "sess-resolve-5", obj.obj_id)
         assert result["ok"] is False
@@ -944,7 +997,6 @@ class TestVMemResolve:
         assert "Traceback" not in res.stderr  # never an unhandled exception
 
 
-
 def _snapshot(store: VMemStore, obj_id: str):
     """(residency_state, access_count, priority_score) for byte-for-byte
     unchanged-on-failure assertions. `None` if the object does not exist."""
@@ -986,9 +1038,7 @@ class TestVMemFaultInTransactional:
 
         # Remove the object's OWN tiny stored VMem backing artifact out from
         # under it (both meta and blob, matching "deleted... artifact file").
-        meta_path = (
-            brain_home / "state" / "artifacts" / "meta" / f"{obj.content_sha256}.json"
-        )
+        meta_path = brain_home / "state" / "artifacts" / "meta" / f"{obj.content_sha256}.json"
         assert meta_path.exists()
         meta_path.unlink()
 
@@ -1014,9 +1064,7 @@ class TestVMemFaultInTransactional:
         # Corrupt the bytes in place: the blob file at the hash-named path
         # keeps existing, but its content no longer matches the sha256 the
         # stored VMem row records — a bit-rot / out-from-under-it scenario.
-        blob_path = (
-            brain_home / "state" / "artifacts" / "blobs" / f"{obj.content_sha256}.bin"
-        )
+        blob_path = brain_home / "state" / "artifacts" / "blobs" / f"{obj.content_sha256}.bin"
         assert blob_path.exists()
         blob_path.write_bytes(b"corrupted bytes that do not match the recorded hash")
 
@@ -1067,9 +1115,7 @@ class TestVMemFaultInTransactional:
         obj = store.store_object(
             kind=SessionObjectKind.TOOL_OBSERVATION,
             title="rtd_artifact",
-            content=json.dumps(
-                {"artifact_ref": "[brain-artifact:sha256:" + "b" * 64 + "]"}
-            ),
+            content=json.dumps({"artifact_ref": "[brain-artifact:sha256:" + "b" * 64 + "]"}),
             metadata={"toolCallId": "call-tx-missing-rtd"},
         )
         before = _snapshot(store, obj.obj_id)
@@ -1109,9 +1155,7 @@ class TestVMemFaultInTransactional:
         assert after[1] == before[1] + 1  # access_count incremented exactly once
         assert after[2] == before[2] + 5.0  # priority boosted exactly once
 
-    def test_successful_tool_observation_fault_in_mutates_exactly_once_byte_exact(
-        self, brain_home
-    ):
+    def test_successful_tool_observation_fault_in_mutates_exactly_once_byte_exact(self, brain_home):
         from second_brain import artifacts
 
         raw_text = "TX success tool observation byte-exact content\n"
@@ -1139,9 +1183,7 @@ class TestVMemFaultInTransactional:
         assert after[1] == before[1] + 1
         assert after[2] == before[2] + 5.0
 
-    def test_repeated_successful_fault_in_keeps_working_and_keeps_incrementing(
-        self, brain_home
-    ):
+    def test_repeated_successful_fault_in_keeps_working_and_keeps_incrementing(self, brain_home):
         memory_id = semantic.add_memory(
             brain_home, "TX Repeat Memory", "TX repeat body text.", scope="global"
         )
@@ -1559,16 +1601,17 @@ class TestCostModelEvictionT21:
         """When all candidates have net <= 0 but session is over budget,
         fallback eviction occurs and logs forced_eviction=1."""
         import logging
+
         store = VMemStore(brain_home, "sess-forced-evict")
         # Store objects where net <= 0 for all
         # (e.g. decision/blocker with high p_fault and very low tokens or R=0)
-        obj_1 = store.store_object(
+        store.store_object(
             kind=SessionObjectKind.DECISION,
             title="Decision 1",
             content="small 1",
             pinned=False,
         )
-        obj_2 = store.store_object(
+        store.store_object(
             kind=SessionObjectKind.DECISION,
             title="Decision 2",
             content="small 2",
@@ -1643,7 +1686,7 @@ class TestFaultInHysteresisT22:
             content="content 1 " * 50,
             pinned=False,
         )
-        obj2 = store.store_object(
+        store.store_object(
             kind=SessionObjectKind.RESEARCH_RESULT,
             title="Obj 2",
             content="content 2 " * 50,
@@ -1744,7 +1787,9 @@ class TestFaultInHysteresisT22:
         # 1. Fresh DB
         store = VMemStore(brain_home, "sess-fresh-hysteresis")
         with sqlite3.connect(store._dbfile) as conn:
-            cols = {row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()}
+            cols = {
+                row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
+            }
             assert "pinned_until_turn" in cols
             assert "INTEGER" in str(cols["pinned_until_turn"][2]).upper()
             assert str(cols["pinned_until_turn"][4]) == "0"
@@ -1752,7 +1797,9 @@ class TestFaultInHysteresisT22:
         # 2. Re-running _init_db is idempotent
         store._init_db()
         with sqlite3.connect(store._dbfile) as conn:
-            cols = {row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()}
+            cols = {
+                row[1]: row for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
+            }
             assert "pinned_until_turn" in cols
 
         # 3. Existing DB without pinned_until_turn column gets upgraded via guarded ALTER
@@ -1830,11 +1877,22 @@ class TestFaultInHysteresisT22:
         assert store.current_turn() == 0
 
         from second_brain import telemetry
+
         tdir = telemetry.telemetry_dir(brain_home)
         tdir.mkdir(parents=True, exist_ok=True)
         records = [
-            {"v": 2, "session": "sess-turn-fallback", "kind": "turn_start", "ts": "2026-09-03T00:00:00Z"},
-            {"v": 2, "session": "sess-turn-fallback", "kind": "turn_start", "ts": "2026-09-03T00:01:00Z"},
+            {
+                "v": 2,
+                "session": "sess-turn-fallback",
+                "kind": "turn_start",
+                "ts": "2026-09-03T00:00:00Z",
+            },
+            {
+                "v": 2,
+                "session": "sess-turn-fallback",
+                "kind": "turn_start",
+                "ts": "2026-09-03T00:01:00Z",
+            },
         ]
         (tdir / "sess-turn-fallback.jsonl").write_text(
             "\n".join(json.dumps(r) for r in records) + "\n",

@@ -307,7 +307,6 @@ def test_unresolved_project_default_memory_suppressed_and_global_policy_allowed(
     assert dec_only_default.selected_ids == []
 
 
-
 def test_delta_stricter_than_startup_budget_and_confidence(brain_home: Path) -> None:
     """Delta injection applies stricter token budgets and confidence thresholds than startup."""
     # OBSERVED grade memory (medium confidence)
@@ -514,3 +513,49 @@ def test_cwd_worktree_detection_matches_git_remote(brain_home: Path, tmp_path: P
 
     resolved = autoinject._resolve_project_id(brain_home, cwd=str(worktree_dir), explicit=None)
     assert resolved == "my-proj"
+
+
+def test_nested_repository_uses_its_registry_instead_of_parent_manifest(brain_home, tmp_path):
+    parent = tmp_path / "parent"
+    child = parent / "workspaces" / "child"
+    nested = child / "src"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(parent)], check=True)
+    subprocess.run(["git", "init", "-q", str(child)], check=True)
+    (parent / ".brain").mkdir()
+    (parent / ".brain" / "project.toml").write_text('id = "parent"\n', encoding="utf-8")
+    registry.add_project(brain_home, parent, name="A Parent", project_id="parent")
+    registry.add_project(brain_home, child, name="Z Child", project_id="child")
+
+    resolved = autoinject.resolve_project(brain_home, str(nested))
+
+    assert resolved["project_id"] == "child"
+    assert Path(resolved["repo_root"]) == child.resolve()
+    assert autoinject.resolve_project(brain_home, str(parent))["project_id"] == "parent"
+
+
+def test_unregistered_nested_git_file_never_inherits_parent_identity(
+    brain_home,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("SECOND_BRAIN_PROJECT", raising=False)
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(parent)], check=True)
+    subprocess.run(
+        ["git", "init", "-q", "--separate-git-dir", str(tmp_path / "child-git"), str(child)],
+        check=True,
+    )
+    (parent / ".brain").mkdir()
+    (parent / ".brain" / "project.toml").write_text('id = "parent"\n', encoding="utf-8")
+    registry.add_project(brain_home, parent, project_id="parent")
+
+    resolved = autoinject.resolve_project(brain_home, str(child))
+
+    assert resolved["project_id"] == "default"
+    assert (
+        autoinject.resolve_project(brain_home, str(child), explicit="chosen")["project_id"]
+        == "chosen"
+    )

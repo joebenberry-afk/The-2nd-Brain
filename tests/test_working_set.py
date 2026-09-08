@@ -128,6 +128,7 @@ def test_session_id_valid_ids_roundtrip(brain_home):
         ws.init_capsule(brain_home, sid, "Objective")
         assert ws.show_capsule(brain_home, sid)["objective"] == "Objective"
 
+
 def test_session_dir_reuses_ledger_internal_identity_when_present(brain_home):
     from second_brain.ledger import internal_session_id
 
@@ -292,6 +293,7 @@ def test_reread_hint_changed_missing_and_traversal(brain_home, tmp_path):
     assert ws.reread_hint(brain_home, "s1", str(target)) is None
     with pytest.raises(BrainError, match="Invalid session id"):
         ws.reread_hint(brain_home, "../escape", str(target))
+
 
 def test_reread_hint_rejects_prior_selected_read(brain_home, tmp_path):
     target = tmp_path / "selected.txt"
@@ -492,6 +494,7 @@ def test_material_gate_config_wiring(brain_home):
     result = ws.check_requirements(brain_home, "s1")
     assert result["gate"] is True  # fail-safe default
 
+
 # ---------------------------------------------------------------------------
 # P3-H: STOP / Requirement-Ledger dogfood (plan §15 + §24.7)
 # ---------------------------------------------------------------------------
@@ -540,9 +543,21 @@ def test_cli_requirements_check_blocks_and_permits(brain_home):
 
     def check():
         return subprocess.run(
-            [sys.executable, "-m", "second_brain", "--home", str(brain_home),
-             "requirements", "check", "dogfood-s1"],
-            capture_output=True, text=True, env=env, cwd=brain_home, timeout=120,
+            [
+                sys.executable,
+                "-m",
+                "second_brain",
+                "--home",
+                str(brain_home),
+                "requirements",
+                "check",
+                "dogfood-s1",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=brain_home,
+            timeout=120,
         )
 
     blocked = check()

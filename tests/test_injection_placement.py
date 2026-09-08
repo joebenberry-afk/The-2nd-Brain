@@ -56,7 +56,15 @@ def _run_antigravity_hook(home: Path, payload: dict[str, Any]) -> subprocess.Com
     for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(key, None)
     return subprocess.run(
-        [sys.executable, "-m", "second_brain", "--home", str(home), "autoinject", "antigravity-hook"],
+        [
+            sys.executable,
+            "-m",
+            "second_brain",
+            "--home",
+            str(home),
+            "autoinject",
+            "antigravity-hook",
+        ],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -101,6 +109,7 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
 
     # Verify Hermes plugin pre_llm_call maintains byte-identical prefix on turn 1 & 2
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("sb_hermes_plugin", HERMES_PLUGIN)
     assert spec is not None and spec.loader is not None
     plugin = importlib.util.module_from_spec(spec)
@@ -109,26 +118,32 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
 
     class FakeCtx:
         profile_name = "Brain-Dev"
+
         def __init__(self, settings: dict[str, Any]) -> None:
             self.settings = settings
             self.hooks: dict[str, Any] = {}
             self.middleware: dict[str, Any] = {}
             self.tools: dict[str, Any] = {}
+
         def register_hook(self, name: str, cb: Any) -> None:
             self.hooks[name] = cb
+
         def register_middleware(self, name: str, cb: Any) -> None:
             self.middleware[name] = cb
+
         def register_tool(self, **kwargs: Any) -> None:
             self.tools[kwargs["name"]] = kwargs
 
-    ctx = FakeCtx({
-        "brain_home": str(brain_home),
-        "brain_python": sys.executable,
-        "bot_name": "Brain-Dev",
-        "bot_role": "driver",
-        "project_id": project_id,
-        "repo_root": str(REPO_ROOT),
-    })
+    ctx = FakeCtx(
+        {
+            "brain_home": str(brain_home),
+            "brain_python": sys.executable,
+            "bot_name": "Brain-Dev",
+            "bot_role": "driver",
+            "project_id": project_id,
+            "repo_root": str(REPO_ROOT),
+        }
+    )
     plugin.register(ctx)
     pre_llm = ctx.hooks["pre_llm_call"]
 
@@ -149,14 +164,16 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
     )
     assert res_turn2 is not None
     # Turn 2 should either omit system_prompt or provide identical system_prompt
-    if "system_prompt" in res_turn2 and res_turn2["system_prompt"]:
+    if res_turn2.get("system_prompt"):
         h2 = hashlib.sha256(res_turn2["system_prompt"].encode("utf-8")).hexdigest()
         assert h1 == h2, "Hermes system prompt PREFIX must be byte-identical across turns"
 
 
 def test_delta_goes_to_tail(brain_home: Path) -> None:
     _seed_lean_skill(brain_home)
-    _seed_skill(brain_home, "search-skill", "Search skill purpose.", "Detailed search instructions.")
+    _seed_skill(
+        brain_home, "search-skill", "Search skill purpose.", "Detailed search instructions."
+    )
     semantic.add_memory(
         brain_home,
         "Delta Memory Title",
@@ -183,7 +200,13 @@ def test_delta_goes_to_tail(brain_home: Path) -> None:
     assert "[second-brain-lean-code-kernel]" in prefix
     assert "Search skill purpose." in prefix
     assert 'To remember: run `brainctl remember "<claim>" --evidence <path>`.' in prefix
-    assert 'To check: `brainctl recall "<question>"`. ' in prefix or 'To check: `brainctl recall "<question>"`.`' in prefix or 'To check: `brainctl recall "<question>"`.`' in prefix or 'To check: `brainctl recall "<question>"`. ' in prefix or 'To check: `brainctl recall "<question>"`.' in prefix
+    assert (
+        'To check: `brainctl recall "<question>"`. ' in prefix
+        or 'To check: `brainctl recall "<question>"`.`' in prefix
+        or 'To check: `brainctl recall "<question>"`.`' in prefix
+        or 'To check: `brainctl recall "<question>"`. ' in prefix
+        or 'To check: `brainctl recall "<question>"`.' in prefix
+    )
     assert "Project: proj-beta" in prefix
 
     # PREFIX must NOT contain dynamic tail items
@@ -249,10 +272,16 @@ def test_antigravity_session_start_delivers_prefix(brain_home: Path) -> None:
 
     hook_log = brain_home / "telemetry" / "agent-performance" / "antigravity-hooks.jsonl"
     assert hook_log.is_file()
-    records = [json.loads(line) for line in hook_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = [
+        json.loads(line)
+        for line in hook_log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     session_start = next(r for r in records if r["kind"] == "session_start")
     assert session_start["prefix_drift"] == 0
-    assert session_start["prefix_sha256"] == hashlib.sha256(out["prefix"].encode("utf-8")).hexdigest()
+    assert (
+        session_start["prefix_sha256"] == hashlib.sha256(out["prefix"].encode("utf-8")).hexdigest()
+    )
 
 
 def test_antigravity_session_start_fail_open_on_bare_home(tmp_path: Path) -> None:

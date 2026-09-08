@@ -247,8 +247,7 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
             )
 
             (arm_dir / "prompt.txt").write_text(
-                f"Task {p_id}: {task['name']}\n"
-                f"Description: {task['desc']}\n",
+                f"Task {p_id}: {task['name']}\nDescription: {task['desc']}\n",
                 encoding="utf-8",
             )
             (arm_dir / "environment.json").write_text(
@@ -323,8 +322,7 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
                 encoding="utf-8",
             )
             (arm_dir / "brain-telemetry.jsonl").write_text(
-                json.dumps({"event": "telemetry_recorded", "tokens": tokens})
-                + "\n",
+                json.dumps({"event": "telemetry_recorded", "tokens": tokens}) + "\n",
                 encoding="utf-8",
             )
 
@@ -342,27 +340,25 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
                 "success": True,
                 "raw_dir": str(arm_dir.relative_to(brain_home)),
                 "usage_path": str((arm_dir / "usage.json").relative_to(brain_home)),
-                "verification_path": str(
-                    (arm_dir / "verification.json").relative_to(brain_home)
-                ),
-                "git_sha": "19ce383"
+                "verification_path": str((arm_dir / "verification.json").relative_to(brain_home)),
+                "git_sha": "19ce383",
             }
             with manifest_path.open("a", encoding="utf-8") as mf:
                 mf.write(json.dumps(manifest_entry) + "\n")
 
-        results.append({
-            "id": task["id"],
-            "class": task["class"],
-            "name": task["name"],
-            "tokens_off": task["tokens_off"],
-            "tokens_on": task["tokens_on"],
-            "reduction_pct": round(
-                (task["tokens_off"] - task["tokens_on"])
-                / task["tokens_off"]
-                * 100,
-                1,
-            ),
-        })
+        results.append(
+            {
+                "id": task["id"],
+                "class": task["class"],
+                "name": task["name"],
+                "tokens_off": task["tokens_off"],
+                "tokens_on": task["tokens_on"],
+                "reduction_pct": round(
+                    (task["tokens_off"] - task["tokens_on"]) / task["tokens_off"] * 100,
+                    1,
+                ),
+            }
+        )
 
     # 2. Execute Feature Ablations
     for abl in ABLATION_CONFIGS:
@@ -405,7 +401,7 @@ def run_campaign(brain_home: Path) -> dict[str, Any]:
             "raw_dir": str(a_dir.relative_to(brain_home)),
             "usage_path": str((a_dir / "usage.json").relative_to(brain_home)),
             "verification_path": str((a_dir / "verification.txt").relative_to(brain_home)),
-            "git_sha": "19ce383"
+            "git_sha": "19ce383",
         }
         with manifest_path.open("a", encoding="utf-8") as mf:
             mf.write(json.dumps(manifest_entry) + "\n")
@@ -418,7 +414,7 @@ def generate_reports(brain_home: Path, data: dict[str, Any]) -> None:
 
     # Report 11: Method
     (reports_dir / "11-token-campaign-method.md").write_text(
-"""# RC3 Token Economics Campaign Methodology
+        """# RC3 Token Economics Campaign Methodology
 
 **Document ID**: `outputs/reports/rc3/11-token-campaign-method.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -450,7 +446,9 @@ Memory, Proof-Carrying Action Cache, Delta Sync, Hybrid Retrieval, and Dynamic T
 
 All raw files are preserved in `outputs/reports/rc3/raw/token/P-xx/{off,on}/` \
 with exact token usage in `usage.json` and manifest indexing.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Report 12: Results
     paired = data["paired_results"]
@@ -465,7 +463,7 @@ with exact token usage in `usage.json` and manifest indexing.
     )
 
     (reports_dir / "12-token-campaign-results.md").write_text(
-f"""# RC3 Token Economics Campaign Results
+        f"""# RC3 Token Economics Campaign Results
 
 **Document ID**: `outputs/reports/rc3/12-token-campaign-results.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -500,7 +498,9 @@ whole codebase ingestion).
 - **REVIEW (P-10)**: 75.6% reduction (action cache hits on unchanged review base).
 - **HANDOFF (P-11 to P-13)**: 77.3% reduction (compact state capsule handoff \
 avoids whole transcript replay).
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Report 13: Ablations
     ablations = data["ablations"]
@@ -519,7 +519,7 @@ avoids whole transcript replay).
     abl_rows = "\n".join(formatted_rows)
 
     (reports_dir / "13-feature-ablations.md").write_text(
-f"""# RC3 Token Primitive Feature Ablation Report
+        f"""# RC3 Token Primitive Feature Ablation Report
 
 **Document ID**: `outputs/reports/rc3/13-feature-ablations.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -552,7 +552,9 @@ data to refs (+64.8% tokens if disabled).
 tokens if disabled).
 6. **Delta Sync**: Delivers structured field patches rather than full re-transmissions \
 (+39.4% tokens if disabled).
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

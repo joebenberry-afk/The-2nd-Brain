@@ -25,6 +25,7 @@ the canonical skill file at runtime. In-process cache keyed by resolved path
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from collections.abc import Sequence
@@ -33,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
+
 LEAN_KERNEL_MARKER = "second-brain-lean-code-kernel"
 LEAN_ENV = "SECOND_BRAIN_LEAN"
 LEAN_KERNEL_HEADING = "# Runtime Kernel"
@@ -128,6 +130,7 @@ def extract_runtime_kernel(skill_text: str) -> str | None:
     kernel = "\n".join(body).strip()
     return kernel if kernel else None
 
+
 def extract_runtime_nudge(skill_text: str) -> str | None:
     """Extract the '# Nudge' section from skill text."""
     lines = skill_text.split("\r\n") if "\r\n" in skill_text else skill_text.splitlines()
@@ -203,7 +206,13 @@ def load_lean_kernel(home: Path) -> dict:
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as exc:
-        entry = (stat.st_mtime_ns, stat.st_size, None, None, f"cannot read lean-code skill file: {exc}")
+        entry = (
+            stat.st_mtime_ns,
+            stat.st_size,
+            None,
+            None,
+            f"cannot read lean-code skill file: {exc}",
+        )
         _CACHE.set(path, entry)
         return {"path": path, "status": status, "kernel": None, "nudge": None, "error": entry[4]}
     kernel = extract_runtime_kernel(text)
@@ -243,6 +252,7 @@ def lean_eval_from_skills_toml(text: str) -> str | None:
             return "off"
         return None
     return None
+
 
 def lean_opportunity_from_skills_toml(text: str) -> bool:
     """Parse `[lean] opportunity` from config/skills.toml text."""
@@ -305,17 +315,17 @@ def parse_git_diff(diff_text: str) -> dict[str, Any]:
         if line.startswith("--- ") or line.startswith("+++ "):
             continue
 
-        if line.startswith("+"):
-            if is_new_file:
-                new_file_lines += 1
+        if line.startswith("+") and is_new_file:
+            new_file_lines += 1
 
         if line.startswith("-"):
             removed_content = line[1:].strip()
-            if "assert" in removed_content:
-                removed_assert_or_test_lines = True
-            elif is_test_file and any(
-                removed_content.startswith(kw) or kw in removed_content
-                for kw in ("def test_", "test(", "it(", "expect(", "self.assert")
+            if "assert" in removed_content or (
+                is_test_file
+                and any(
+                    removed_content.startswith(kw) or kw in removed_content
+                    for kw in ("def test_", "test(", "it(", "expect(", "self.assert")
+                )
             ):
                 removed_assert_or_test_lines = True
 
@@ -340,9 +350,7 @@ def _path_matches_ref(path: str, ref: str) -> bool:
         return True
     if r_norm.startswith(p_norm.rstrip("/") + "/"):
         return True
-    if Path(p_norm).name == Path(r_norm).name:
-        return True
-    return False
+    return Path(p_norm).name == Path(r_norm).name
 
 
 def extract_requirement_refs(
@@ -362,7 +370,10 @@ def extract_requirement_refs(
         text = str(req.get("requirement") or "")
         for word in text.split():
             clean_word = word.strip("`'\",:;()")
-            if ("/" in clean_word or clean_word.endswith((".py", ".ts", ".js", ".json", ".toml", ".md"))) and len(clean_word) > 2:
+            if (
+                "/" in clean_word
+                or clean_word.endswith((".py", ".ts", ".js", ".json", ".toml", ".md"))
+            ) and len(clean_word) > 2:
                 refs.add(clean_word)
     return refs
 
@@ -395,11 +406,15 @@ def evaluate_lean_rules(
         if any(cnt >= 3 for cnt in counts.values()):
             triggered.append("REPEAT_READ")
 
-    parsed_diff = parse_git_diff(diff) if diff else {
-        "modified_files": list(modified_files or []),
-        "new_files": {},
-        "removed_assert_or_test_lines": False,
-    }
+    parsed_diff = (
+        parse_git_diff(diff)
+        if diff
+        else {
+            "modified_files": list(modified_files or []),
+            "new_files": {},
+            "removed_assert_or_test_lines": False,
+        }
+    )
     all_modified = list(parsed_diff["modified_files"])
     if modified_files:
         for mf in modified_files:
@@ -407,9 +422,8 @@ def evaluate_lean_rules(
                 all_modified.append(mf)
 
     # 2. TEST_WEAKENING_RISK: assert or test lines removed in git diff
-    if "TEST_WEAKENING_RISK" not in triggered:
-        if parsed_diff.get("removed_assert_or_test_lines"):
-            triggered.append("TEST_WEAKENING_RISK")
+    if "TEST_WEAKENING_RISK" not in triggered and parsed_diff.get("removed_assert_or_test_lines"):
+        triggered.append("TEST_WEAKENING_RISK")
 
     # 3. NEW_DEPENDENCY: lockfile / pyproject.toml / package.json diff detected
     if "NEW_DEPENDENCY" not in triggered:
@@ -438,13 +452,12 @@ def evaluate_lean_rules(
     req_list = list(requirements or [])
     all_req_refs = extract_requirement_refs(req_list, requirement_refs)
 
-    # 4. SCOPE_EXPANSION: files modified outside capsule.files_touched ∪ requirement refs >= 2
+    # SCOPE_EXPANSION: at least two files outside capsule or requirement references.
     if "SCOPE_EXPANSION" not in triggered:
         capsule_dict = capsule or {}
         allowed_files = set(capsule_dict.get("files_touched") or []) | all_req_refs
         outside_files = [
-            f for f in all_modified
-            if not any(_path_matches_ref(f, a) for a in allowed_files)
+            f for f in all_modified if not any(_path_matches_ref(f, a) for a in allowed_files)
         ]
         if len(outside_files) >= 2:
             triggered.append("SCOPE_EXPANSION")
@@ -453,10 +466,9 @@ def evaluate_lean_rules(
     if "NEW_ABSTRACTION" not in triggered:
         new_files = parsed_diff.get("new_files") or {}
         for nf, lines in new_files.items():
-            if lines >= 80:
-                if not any(_path_matches_ref(nf, r) for r in all_req_refs):
-                    triggered.append("NEW_ABSTRACTION")
-                    break
+            if lines >= 80 and not any(_path_matches_ref(nf, r) for r in all_req_refs):
+                triggered.append("NEW_ABSTRACTION")
+                break
 
     # 6. POST_ACCEPTANCE_WORK: tool calls occurred after all material requirements verified
     if "POST_ACCEPTANCE_WORK" not in triggered:
@@ -464,18 +476,25 @@ def evaluate_lean_rules(
             triggered.append("POST_ACCEPTANCE_WORK")
         elif req_list and tool_calls:
             material_reqs = [
-                r for r in req_list
+                r
+                for r in req_list
                 if r.get("importance") in ("critical", "high", "normal", "material")
             ]
-            if material_reqs and all(r.get("status") in ("verified", "not_applicable") for r in material_reqs):
-                if len(tool_calls) > 0:
-                    triggered.append("POST_ACCEPTANCE_WORK")
+            if (
+                material_reqs
+                and all(r.get("status") in ("verified", "not_applicable") for r in material_reqs)
+                and len(tool_calls) > 0
+            ):
+                triggered.append("POST_ACCEPTANCE_WORK")
 
     # 7. UNRELATED_DIFF: diff paths not under any requirement ref
-    if "UNRELATED_DIFF" not in triggered:
-        if all_req_refs and all_modified:
-            if any(not any(_path_matches_ref(f, r) for r in all_req_refs) for f in all_modified):
-                triggered.append("UNRELATED_DIFF")
+    if (
+        "UNRELATED_DIFF" not in triggered
+        and all_req_refs
+        and all_modified
+        and any(not any(_path_matches_ref(f, r) for r in all_req_refs) for f in all_modified)
+    ):
+        triggered.append("UNRELATED_DIFF")
 
     return triggered
 
@@ -730,8 +749,10 @@ def decide_lean_runtime(
     )
     if not is_opportunity and opportunity is not False:
         raw_env_opp = (
-            (env if env is not None else os.environ).get(LEAN_OPPORTUNITY_ENV, "") or ""
-        ).strip().lower()
+            ((env if env is not None else os.environ).get(LEAN_OPPORTUNITY_ENV, "") or "")
+            .strip()
+            .lower()
+        )
         if raw_env_opp in ("1", "true", "yes", "on"):
             is_opportunity = True
         elif raw_env_opp in ("0", "false", "no", "off"):
@@ -739,12 +760,10 @@ def decide_lean_runtime(
         elif home is not None:
             cfg_path = Path(home) / "config" / "skills.toml"
             if cfg_path.is_file():
-                try:
+                with contextlib.suppress(OSError):
                     is_opportunity = lean_opportunity_from_skills_toml(
                         cfg_path.read_text(encoding="utf-8")
                     )
-                except OSError:
-                    pass
 
     nudge_text = loaded.get("nudge") or LEAN_NUDGE_TEXT
 
@@ -787,7 +806,9 @@ def decide_lean_runtime(
         if final_level == "NUDGE":
             return LeanRuntimeOutcome(
                 decision="inject",
-                reason=active_reasons[0] if active_reasons else ("active" if lifecycle_active else "advisory"),
+                reason=active_reasons[0]
+                if active_reasons
+                else ("active" if lifecycle_active else "advisory"),
                 mode=mode,
                 eval_source=source,
                 skill_status=loaded["status"],
@@ -805,7 +826,9 @@ def decide_lean_runtime(
         full_kernel = loaded["kernel"]
         return LeanRuntimeOutcome(
             decision="inject",
-            reason=active_reasons[0] if active_reasons else ("active" if lifecycle_active else "advisory"),
+            reason=active_reasons[0]
+            if active_reasons
+            else ("active" if lifecycle_active else "advisory"),
             mode=mode,
             eval_source=source,
             skill_status=loaded["status"],

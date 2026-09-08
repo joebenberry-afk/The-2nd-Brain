@@ -102,6 +102,7 @@ def test_review_record_never_contains_raw_reasoning(brain_home: Path, tmp_path: 
     assert "reasoning" not in encoded
     assert "raw" not in encoded
 
+
 def test_failed_verification_blocks_cleanup_outcomes(brain_home: Path, tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -131,6 +132,7 @@ def test_review_mirrors_bounded_ledger_and_telemetry(brain_home: Path, tmp_path:
     assert rows
     assert result["ledger_event_id"] == rows[0][0]
 
+
 def test_debt_is_project_scoped(brain_home: Path, tmp_path: Path) -> None:
     project_a = tmp_path / "project-a"
     project_b = tmp_path / "project-b"
@@ -143,9 +145,5 @@ def test_debt_is_project_scoped(brain_home: Path, tmp_path: Path) -> None:
         dataclasses.replace(_review(SimplificationOutcome.DEFER), review_id="review-b"),
     )
     assert a["debt_ref"] == b["debt_ref"]
-    assert a["debt_ref"] in (
-        project_a / "simplification-debt.md"
-    ).read_text(encoding="utf-8")
-    assert a["debt_ref"] in (
-        project_b / "simplification-debt.md"
-    ).read_text(encoding="utf-8")
+    assert a["debt_ref"] in (project_a / "simplification-debt.md").read_text(encoding="utf-8")
+    assert a["debt_ref"] in (project_b / "simplification-debt.md").read_text(encoding="utf-8")

@@ -14,13 +14,14 @@ Key Capabilities (§8.1 - §8.5):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import tempfile
-from pathlib import Path
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from .contracts import (
@@ -43,6 +44,7 @@ class DeltaType(StrEnum):
 @dataclass
 class MemoryDeltaPacket:
     """A minimal structured memory delta packet (§8.3)."""
+
     target_memory_id: str
     base_version: int
     target_version: int
@@ -330,10 +332,8 @@ def _save_delta_state(
             os.fsync(fh.fileno())
         os.replace(tmp, path)
     except OSError:
-        try:
+        with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 class DeltaSyncEngine:
@@ -394,11 +394,11 @@ class DeltaSyncEngine:
 
 
 class DisclosureLevel(StrEnum):
-    REPO = "REPO"          # Level 0: Project name, module listing (~50 tokens)
-    MODULE = "MODULE"      # Level 1: Module overview, symbol signatures (~150 tokens)
-    SYMBOL = "SYMBOL"      # Level 2: Specific function/class signature + docstring (~300 tokens)
-    EXCERPT = "EXCERPT"    # Level 3: Targeted slice of relevant code (~600 tokens)
-    FULL = "FULL"          # Level 4: Full source file
+    REPO = "REPO"  # Level 0: Project name, module listing (~50 tokens)
+    MODULE = "MODULE"  # Level 1: Module overview, symbol signatures (~150 tokens)
+    SYMBOL = "SYMBOL"  # Level 2: Specific function/class signature + docstring (~300 tokens)
+    EXCERPT = "EXCERPT"  # Level 3: Targeted slice of relevant code (~600 tokens)
+    FULL = "FULL"  # Level 4: Full source file
 
 
 def progressive_disclose(
@@ -423,9 +423,7 @@ def progressive_disclose(
     if lvl == DisclosureLevel.MODULE:
         # Extract import and def/class lines
         symbols = [
-            ln.strip()
-            for ln in lines
-            if ln.strip().startswith(("def ", "class ", "export "))
+            ln.strip() for ln in lines if ln.strip().startswith(("def ", "class ", "export "))
         ]
         return f"Module Symbols ({len(symbols)} total):\n" + "\n".join(
             f"  - {s[:80]}" for s in symbols[:20]
@@ -449,19 +447,11 @@ def progressive_disclose(
             if matched:
                 return "\n".join(matched)
         # Fallback to first max_lines
-        suffix = (
-            f"\n... ({len(lines) - max_lines} lines omitted)"
-            if len(lines) > max_lines
-            else ""
-        )
+        suffix = f"\n... ({len(lines) - max_lines} lines omitted)" if len(lines) > max_lines else ""
         return "\n".join(lines[:max_lines]) + suffix
 
     if lvl == DisclosureLevel.EXCERPT:
-        suffix = (
-            f"\n... ({len(lines) - max_lines} lines omitted)"
-            if len(lines) > max_lines
-            else ""
-        )
+        suffix = f"\n... ({len(lines) - max_lines} lines omitted)" if len(lines) > max_lines else ""
         return "\n".join(lines[:max_lines]) + suffix
 
     return content

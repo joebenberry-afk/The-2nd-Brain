@@ -1,7 +1,7 @@
 """Focused tests for deterministic policy decisions and outcomes."""
 
-from collections import Counter
 import hashlib
+from collections import Counter
 
 import pytest
 
@@ -35,7 +35,9 @@ def test_record_and_outcome_roundtrip(brain_home):
 
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
-        row = conn.execute("SELECT * FROM decisions WHERE decision_id = ?", (decision_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM decisions WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
     finally:
         conn.close()
     assert row is not None
@@ -49,12 +51,13 @@ def test_record_and_outcome_roundtrip(brain_home):
     decisions.set_outcome(brain_home, decision_id, {"success": True, "latency_ms": 12}, -0.5)
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
-        row = conn.execute("SELECT outcome_json, reward FROM decisions WHERE decision_id = ?", (decision_id,)).fetchone()
+        row = conn.execute(
+            "SELECT outcome_json, reward FROM decisions WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
     finally:
         conn.close()
     assert row["outcome_json"] == contracts.canonical_json({"success": True, "latency_ms": 12})
     assert row["reward"] == pytest.approx(-0.5)
-
 
     # Verify list_decisions
     listed = decisions.list_decisions(brain_home, kind="retrieval")
@@ -66,6 +69,7 @@ def test_record_and_outcome_roundtrip(brain_home):
     assert listed[0]["outcome"] == {"success": True, "latency_ms": 12}
     assert listed[0]["reward"] == pytest.approx(-0.5)
     assert decisions.list_decisions(brain_home, kind="routing") == []
+
 
 def test_randomize_propensities_sum_to_one_and_matches_observations():
     epsilon = 0.2
@@ -107,7 +111,12 @@ def test_randomize_rejects_duplicate_alternatives():
 
 
 def test_record_rejects_invalid_identity_and_kind(brain_home):
-    for field, value in (("kind", ""), ("policy_version", ""), ("session_id", None), ("session_id", "")):
+    for field, value in (
+        ("kind", ""),
+        ("policy_version", ""),
+        ("session_id", None),
+        ("session_id", ""),
+    ):
         values = _record_kwargs()
         values[field] = value
         with pytest.raises(BrainError):
@@ -132,7 +141,9 @@ def test_record_rejects_content_like_or_oversized_metadata(brain_home):
     decision_id = decisions.record(brain_home, **values)
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
-        assert conn.execute("SELECT chosen_json FROM decisions WHERE decision_id = ?", (decision_id,)).fetchone()[0] == contracts.canonical_json(values["chosen"])
+        assert conn.execute(
+            "SELECT chosen_json FROM decisions WHERE decision_id = ?", (decision_id,)
+        ).fetchone()[0] == contracts.canonical_json(values["chosen"])
     finally:
         conn.close()
 
@@ -152,7 +163,9 @@ def test_fresh_migration_is_idempotent_and_preserves_decision(tmp_path):
     assert db.migrate(dbfile) == []
     conn = db.connect(dbfile, readonly=True)
     try:
-        row = conn.execute("SELECT decision_id FROM decisions WHERE decision_id = ?", (decision_id,)).fetchone()
+        row = conn.execute(
+            "SELECT decision_id FROM decisions WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
     finally:
         conn.close()
     assert row["decision_id"] == decision_id

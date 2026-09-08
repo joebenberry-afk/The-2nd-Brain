@@ -386,5 +386,3 @@ def test_promotion_record_names_contained(brain_home):
     assert result["promoted"] is True
     record_path = Path(result["record_path"])
     assert record_path.parent == brain_home / "state" / "promotions"
-
-

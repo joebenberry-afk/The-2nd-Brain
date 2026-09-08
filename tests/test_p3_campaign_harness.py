@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "scripts" / "run_p3_promotion_campaign.py"
 COMPILER = REPO_ROOT / "scripts" / "compile_p3_promotion_report.py"
 
+
 def _load_script(name: str):
     path = REPO_ROOT / "scripts" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)

@@ -33,7 +33,15 @@ def run_scenario_a(home: Path) -> dict[str, Any]:
         home,
         intervention_type="tool_working_set_optimization",
         target_ref=f"policy:{feature}",
-        expected_outcome={"metric": "tokens_delta", "expected_delta": -200.0},
+        expected_outcome={
+            "metric": "tokens_delta",
+            "expected_delta": -200.0,
+            "direction": "decrease",
+            "expected_range": [-201.0, -199.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "simulation-runner",
+        },
         baseline_ref="simulation:baseline-arm-off",
         session_id="simulation-scenario-a",
     )
@@ -114,7 +122,15 @@ def run_scenario_b(home: Path) -> dict[str, Any]:
         home,
         intervention_type="speculative_prefetch",
         target_ref=f"policy:{feature}",
-        expected_outcome={"metric": "latency_ms", "expected_delta": -50.0},
+        expected_outcome={
+            "metric": "latency_ms",
+            "expected_delta": -50.0,
+            "direction": "decrease",
+            "expected_range": [-51.0, -49.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "simulation-runner",
+        },
         baseline_ref="simulation:prefetch-arm-off",
         session_id="simulation-scenario-b",
     )

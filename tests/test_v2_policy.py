@@ -7,7 +7,6 @@ import pytest
 from second_brain import v2_policy
 from second_brain.errors import BrainError
 
-
 _POLICY = """schema_version = 1
 [rollout]
 admission = "SHADOW"
@@ -64,7 +63,10 @@ def test_policy_rollout_is_immutable_and_stage_gate_is_strict(tmp_path):
         policy.rollout["admission"] = v2_policy.RolloutStage.ACTIVE
     with pytest.raises(FrozenInstanceError):
         policy.__setattr__("worker_slots", 2)
-    assert v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.SHADOW) is v2_policy.RolloutStage.SHADOW
+    assert (
+        v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.SHADOW)
+        is v2_policy.RolloutStage.SHADOW
+    )
     with pytest.raises(BrainError, match="requires"):
         v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.CANARY)
 
@@ -76,3 +78,13 @@ def test_policy_rejects_invalid_utf8(tmp_path):
     with pytest.raises(BrainError, match="cannot read"):
         v2_policy.load_policy(tmp_path)
 
+
+def test_policy_accepts_current_model_and_provider_defaults(tmp_path):
+    _write_policy(
+        tmp_path,
+        _POLICY
+        + "\n[models.default]\ncontext_tokens = 128000\n"
+        + '\n[providers.default]\ncache_scope = "model"\n',
+    )
+    policy = v2_policy.load_policy(tmp_path)
+    assert policy.rollout["admission"] is v2_policy.RolloutStage.SHADOW

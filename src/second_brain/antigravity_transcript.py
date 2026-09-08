@@ -167,6 +167,7 @@ def extract_latest_task(
             latest = text
     return latest
 
+
 # Backward-compatible public alias for existing Antigravity callers.
 extract_latest_user_task = extract_latest_task
 

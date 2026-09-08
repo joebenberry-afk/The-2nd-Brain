@@ -10,11 +10,11 @@ subsequence at least once.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import contextlib
 import hashlib
 import json
 import os
-import re
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,7 @@ from typing import Any
 from . import contracts
 from .errors import BrainError
 from .security.identifiers import validate_engram_name
+from .security.paths import resolve_under
 
 NON_RESPONSIBILITIES = "This engram duplicates NO skill logic; execute referenced skills instead."
 FORBIDDEN_SECTIONS = ("Procedure", "Steps")
@@ -241,116 +242,494 @@ def _deterministic_dir(home: Path) -> Path:
     return Path(home) / "engrams" / "deterministic"
 
 
+_CACHE_POLICIES = frozenset({"none", "read_only"})
+_STEP_EFFECTS = frozenset({"read", "write", "unknown"})
+_CONDITION_KEYS = frozenset({"predicate", "args_template", "expect_exit"})
+
+
+class _WorkflowFailure(Exception):
+    def __init__(
+        self,
+        *,
+        step: int,
+        phase: str,
+        reason: str,
+        steps: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(reason)
+        self.step = step
+        self.phase = phase
+        self.reason = reason
+        self.steps = steps
+
+
+def _workflow_path(home: Path, engram_id: str, version: int, *, allow_missing: bool) -> Path:
+    validate_engram_name(engram_id)
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        raise BrainError("workflow version must be a positive integer")
+    relative = f"engrams/deterministic/{engram_id}_v{version}.json"
+    try:
+        return resolve_under(home, relative, allow_missing=allow_missing)
+    except (OSError, ValueError) as exc:
+        raise BrainError(f"Unsafe workflow engram path: {exc}") from exc
+
+
+def _resolve_template(value: Any, params: Mapping[str, Any]) -> Any:
+    if isinstance(value, str) and value.startswith("$"):
+        key = value[1:]
+        if not key or key not in params:
+            raise BrainError(f"Missing workflow parameter {key!r}")
+        return params[key]
+    if isinstance(value, Mapping):
+        return {str(key): _resolve_template(item, params) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_template(item, params) for item in value]
+    return value
+
+
+def _runner_result(
+    result: Any,
+    *,
+    expected_tool: str,
+    phase: str,
+    require_read_only: bool,
+) -> dict[str, Any]:
+    if not isinstance(result, Mapping):
+        raise BrainError(f"{phase} executor returned a non-object result")
+    if result.get("tool") != expected_tool:
+        raise BrainError(f"{phase} executor returned the wrong tool identity")
+    exit_code = result.get("exit_code")
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        raise BrainError(f"{phase} executor must return an integer exit_code")
+    side_effect = result.get("side_effect")
+    if not isinstance(side_effect, bool):
+        raise BrainError(f"{phase} executor must declare side_effect")
+    if require_read_only and side_effect:
+        raise BrainError("read_only workflow executor reported a side effect")
+    return dict(result)
+
+
+def _validate_condition(value: Any, label: str) -> None:
+    if not isinstance(value, Mapping) or set(value) != _CONDITION_KEYS:
+        raise BrainError(f"{label} must contain exactly predicate, args_template, and expect_exit")
+    if not isinstance(value["predicate"], str) or not value["predicate"].strip():
+        raise BrainError(f"{label}.predicate must be a non-empty string")
+    if not isinstance(value["args_template"], Mapping):
+        raise BrainError(f"{label}.args_template must be an object")
+    expected = value["expect_exit"]
+    if isinstance(expected, bool) or not isinstance(expected, int):
+        raise BrainError(f"{label}.expect_exit must be an integer")
+
+
+def _validate_procedure(
+    procedure: Any, cache_policy: str, cache_inputs: Any
+) -> list[dict[str, Any]]:
+    if not isinstance(procedure, list) or not procedure:
+        raise BrainError("workflow procedure must be a non-empty list")
+    normalized: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(procedure):
+        if not isinstance(raw_step, Mapping):
+            raise BrainError(f"workflow step {index} must be an object")
+        allowed = {
+            "tool",
+            "args_template",
+            "effect",
+            "expected_exit",
+            "precondition",
+            "postcondition",
+        }
+        if set(raw_step) - allowed:
+            raise BrainError(f"workflow step {index} has unsupported fields")
+        tool = raw_step.get("tool")
+        args_template = raw_step.get("args_template", {})
+        if not isinstance(tool, str) or not tool.strip():
+            raise BrainError(f"workflow step {index}.tool must be a non-empty string")
+        if not isinstance(args_template, Mapping):
+            raise BrainError(f"workflow step {index}.args_template must be an object")
+        expected_exit = raw_step.get("expected_exit", 0)
+        if isinstance(expected_exit, bool) or not isinstance(expected_exit, int):
+            raise BrainError(f"workflow step {index}.expected_exit must be an integer")
+        for phase in ("precondition", "postcondition"):
+            condition = raw_step.get(phase)
+            if condition is not None:
+                _validate_condition(condition, f"workflow step {index}.{phase}")
+        effect = raw_step.get("effect")
+        if effect is not None and effect not in _STEP_EFFECTS:
+            raise BrainError(f"workflow step {index}.effect is invalid")
+        if cache_policy == "read_only" and effect != "read":
+            raise BrainError("read_only workflow steps must declare effect='read'")
+        normalized.append({str(key): value for key, value in raw_step.items()})
+    if cache_policy == "read_only" and (
+        not isinstance(cache_inputs, list)
+        or not cache_inputs
+        or any(not isinstance(key, str) or not key for key in cache_inputs)
+        or len(set(cache_inputs)) != len(cache_inputs)
+    ):
+        raise BrainError("read_only workflows require distinct cache_inputs")
+    return normalized
+
+
+def _load_workflow(home: Path, engram_id: str, version: int) -> dict[str, Any]:
+    target = _workflow_path(home, engram_id, version, allow_missing=False)
+    try:
+        record = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BrainError(f"Invalid workflow engram {engram_id} v{version}") from exc
+    if not isinstance(record, dict):
+        raise BrainError("Workflow engram must be a JSON object")
+    if record.get("engram_id") != engram_id or record.get("version") != version:
+        raise BrainError("Workflow engram identity does not match requested version")
+    digest = record.pop("content_sha256", None)
+    expected = hashlib.sha256(contracts.canonical_json(record).encode("utf-8")).hexdigest()
+    record["content_sha256"] = digest
+    if digest != expected:
+        raise BrainError("Workflow engram content digest mismatch")
+    record["procedure"] = _validate_procedure(
+        record.get("procedure"), record.get("cache_policy", "none"), record.get("cache_inputs")
+    )
+    return record
+
+
 def detect_workflow_engrams(
     session_events: Sequence[Sequence[Mapping[str, Any]]],
     min_support: int = 2,
     min_len: int = 3,
     max_len: int = 5,
 ) -> list[dict[str, Any]]:
-    """Detect repeated tool-call sequences from session ledger events.
+    """Detect repeated successful tool-call sequences with source provenance.
 
-    Input: tool-call sequences from events where kind=tool_call.
-    Minimum support: 2 (default).
-    Sequence length: 3-5 (default).
+    A tool call is eligible only when its event includes an observed
+    ``result.exit_code == 0``. Detection never invents predicates, versions,
+    harnesses, or model compatibility.
     """
     if not isinstance(session_events, Sequence):
         raise BrainError("session_events must be a sequence of session event lists")
+    if (
+        isinstance(min_support, bool)
+        or not isinstance(min_support, int)
+        or min_support < 1
+        or isinstance(min_len, bool)
+        or not isinstance(min_len, int)
+        or min_len < 1
+        or isinstance(max_len, bool)
+        or not isinstance(max_len, int)
+        or max_len < min_len
+    ):
+        raise BrainError("invalid workflow detection bounds")
 
-    tool_sequences: list[list[dict[str, Any]]] = []
-    for sess in session_events:
+    tool_sequences: list[dict[str, Any]] = []
+    for session_index, sess in enumerate(session_events):
+        if not isinstance(sess, Sequence):
+            raise BrainError(f"session {session_index} must be a sequence")
         curr: list[dict[str, Any]] = []
-        for ev in sess:
+        session_id = f"session-{session_index}"
+        for event_index, ev in enumerate(sess):
+            if not isinstance(ev, Mapping):
+                raise BrainError(f"session {session_index} event {event_index} must be an object")
+            if ev.get("session") or ev.get("session_id"):
+                session_id = str(ev.get("session") or ev.get("session_id"))
             kind = ev.get("kind") or ev.get("event_type")
-            if str(kind).lower() in ("tool_call", "tool_use"):
-                tool = ev.get("tool") or ev.get("tool_name") or ev.get("name")
-                if tool:
-                    curr.append({
-                        "tool": str(tool),
-                        "args_template": dict(
-                            ev.get("input") or ev.get("args") or ev.get("args_template") or {}
-                        ),
-                    })
+            if str(kind).lower() not in ("tool_call", "tool_use"):
+                continue
+            tool = ev.get("tool") or ev.get("tool_name") or ev.get("name")
+            result = ev.get("result") or ev.get("tool_result") or ev.get("output")
+            if (
+                not isinstance(tool, str)
+                or not tool.strip()
+                or not isinstance(result, Mapping)
+                or result.get("exit_code") != 0
+            ):
+                continue
+            args = ev.get("input") or ev.get("args") or ev.get("args_template") or {}
+            if not isinstance(args, Mapping):
+                continue
+            curr.append(
+                {
+                    "tool": tool,
+                    "args_template": dict(args),
+                    "source_ref": {"session_id": session_id, "event_index": event_index},
+                }
+            )
         if curr:
-            tool_sequences.append(curr)
+            tool_sequences.append({"items": curr, "session_id": session_id})
 
     support: dict[tuple[str, ...], int] = {}
     templates_by_subseq: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-
-    for seq in tool_sequences:
+    sources_by_subseq: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for sequence in tool_sequences:
+        seq = sequence["items"]
         seen: set[tuple[str, ...]] = set()
         tools_only = [item["tool"] for item in seq]
         for start in range(len(tools_only)):
             for length in range(min_len, min(max_len, len(tools_only) - start) + 1):
                 window = tuple(tools_only[start : start + length])
-                if window not in seen:
-                    seen.add(window)
-                    support[window] = support.get(window, 0) + 1
-                    if window not in templates_by_subseq:
-                        templates_by_subseq[window] = seq[start : start + length]
+                if window in seen:
+                    continue
+                seen.add(window)
+                support[window] = support.get(window, 0) + 1
+                templates_by_subseq.setdefault(window, seq[start : start + length])
+                sources_by_subseq.setdefault(window, []).append(
+                    {
+                        "session_id": sequence["session_id"],
+                        "steps": [item["source_ref"] for item in seq[start : start + length]],
+                    }
+                )
 
-    results = []
+    results: list[dict[str, Any]] = []
     for window, count in support.items():
-        if count >= min_support:
-            procedure = [
-                {
-                    "tool": item["tool"],
-                    "args_template": item["args_template"],
-                    "precondition": {"cmd": "test -n \"$param\"", "expect_exit": 0},
-                    "postcondition": {"cmd": "test $? -eq 0", "expect_exit": 0},
-                }
-                for item in templates_by_subseq[window]
-            ]
-            results.append({
-                "engram_id": "engram-" + hashlib.sha256("->".join(window).encode("utf-8")).hexdigest()[:16],
+        if count < min_support:
+            continue
+        procedure = [
+            {"tool": item["tool"], "args_template": item["args_template"]}
+            for item in templates_by_subseq[window]
+        ]
+        results.append(
+            {
+                "engram_id": "engram-"
+                + hashlib.sha256("->".join(window).encode("utf-8")).hexdigest()[:16],
                 "sequence": list(window),
                 "support": count,
                 "procedure": procedure,
-                "valid_for": {
-                    "harness": "universal",
-                    "tool_versions": {tool: "1.0" for tool in window},
-                    "model": "all",
-                },
-            })
-
+                "provenance": sources_by_subseq[window],
+            }
+        )
     results.sort(key=lambda r: (-r["support"], -len(r["sequence"]), r["sequence"]))
     return results
 
 
-def register_workflow_engram(
-    home: Path | str, engram_data: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Store a versioned deterministic engram procedure."""
+def register_workflow_engram(home: Path | str, engram_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Store one immutable, versioned deterministic workflow engram."""
+    if not isinstance(engram_data, Mapping):
+        raise BrainError("engram_data must be an object")
     home_p = Path(home)
-    directory = _deterministic_dir(home_p)
-    directory.mkdir(parents=True, exist_ok=True)
-
-    engram_id = str(
-        engram_data.get("engram_id")
-        or "engram-"
-        + hashlib.sha256(
-            contracts.canonical_json(dict(engram_data)).encode("utf-8")
-        ).hexdigest()[:16]
-    )
-    version = int(engram_data.get("version", 1))
-
-    procedure = list(engram_data.get("procedure") or [])
-    valid_for = dict(
-        engram_data.get("valid_for")
-        or {"harness": "universal", "tool_versions": {}, "model": "all"}
-    )
-
-    record = {
+    raw_id = engram_data.get("engram_id")
+    if raw_id is None:
+        raw_id = (
+            "engram-"
+            + hashlib.sha256(
+                contracts.canonical_json(dict(engram_data)).encode("utf-8")
+            ).hexdigest()[:16]
+        )
+    engram_id = validate_engram_name(raw_id)
+    raw_version = engram_data.get("version", 1)
+    if isinstance(raw_version, bool) or not isinstance(raw_version, int) or raw_version <= 0:
+        raise BrainError("workflow version must be a positive integer")
+    cache_policy = engram_data.get("cache_policy", "none")
+    if cache_policy not in _CACHE_POLICIES:
+        raise BrainError("cache_policy must be 'none' or 'read_only'")
+    cache_inputs = engram_data.get("cache_inputs")
+    procedure = _validate_procedure(engram_data.get("procedure"), cache_policy, cache_inputs)
+    status = engram_data.get("status", "candidate")
+    if not isinstance(status, str) or not status.strip():
+        raise BrainError("workflow status must be a non-empty string")
+    allowed = {
+        "engram_id",
+        "version",
+        "procedure",
+        "cache_policy",
+        "cache_inputs",
+        "provenance",
+        "valid_for",
+        "status",
+    }
+    if set(engram_data) - allowed:
+        raise BrainError("workflow engram contains unsupported fields")
+    record: dict[str, Any] = {
         "engram_id": engram_id,
-        "version": version,
+        "version": raw_version,
         "procedure": procedure,
-        "valid_for": valid_for,
-        "status": str(engram_data.get("status", "candidate")),
+        "cache_policy": cache_policy,
+        "status": status,
         "created_at": _utcnow(),
     }
-
-    target = directory / f"{engram_id}_v{version}.json"
-    target.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    if cache_policy == "read_only":
+        if not isinstance(cache_inputs, list):
+            raise BrainError("read_only workflows require distinct cache_inputs")
+        record["cache_inputs"] = list(cache_inputs)
+    for key in ("provenance", "valid_for"):
+        if key in engram_data:
+            if not isinstance(engram_data[key], (Mapping, list)):
+                raise BrainError(f"workflow {key} must be an object or list")
+            record[key] = engram_data[key]
+    try:
+        contracts.canonical_json(record)
+    except (TypeError, ValueError) as exc:
+        raise BrainError("workflow engram metadata must be JSON-safe") from exc
+    record["content_sha256"] = hashlib.sha256(
+        contracts.canonical_json(record).encode("utf-8")
+    ).hexdigest()
+    target = _workflow_path(home_p, engram_id, raw_version, allow_missing=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd: int | None = None
+    try:
+        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = None
+            handle.write(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
+    except FileExistsError as exc:
+        raise BrainError(
+            f"Workflow engram version already exists: {engram_id} v{raw_version}"
+        ) from exc
+    except OSError as exc:
+        raise BrainError(f"Could not write workflow engram {target}") from exc
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
     return record
+
+
+def _input_hashes(home: Path, params: Mapping[str, Any], keys: list[str]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for key in keys:
+        value = params.get(key)
+        if not isinstance(value, str) or not value:
+            raise BrainError(f"cache input parameter {key!r} must be a non-empty path")
+        try:
+            path = resolve_under(home, value, allow_missing=False)
+        except (OSError, ValueError) as exc:
+            raise BrainError(f"Unsafe cache input {value!r}: {exc}") from exc
+        if not path.is_file():
+            raise BrainError(f"cache input is not a regular file: {value!r}")
+        hashes[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashes
+
+
+def _failure_result(
+    engram_id: str,
+    version: int,
+    *,
+    step: int,
+    phase: str,
+    reason: str,
+    steps: list[dict[str, Any]],
+    cache_hit: bool = False,
+) -> dict[str, Any]:
+    return {
+        "engram_id": engram_id,
+        "version": version,
+        "success": False,
+        "failed_step": step,
+        "failed_phase": phase,
+        "reason": reason,
+        "model_calls": 0,
+        "cache_hit": cache_hit,
+        "steps_executed": 0 if cache_hit else len(steps),
+        "steps": steps,
+    }
+
+
+def _run_condition(
+    condition: Mapping[str, Any],
+    params: Mapping[str, Any],
+    predicate_runner: Callable[[str, Mapping[str, Any]], Any] | None,
+    *,
+    phase: str,
+) -> bool:
+    if predicate_runner is None:
+        raise BrainError(f"{phase} requires a predicate_runner")
+    predicate = condition["predicate"]
+    args = _resolve_template(condition["args_template"], params)
+    if not isinstance(args, Mapping):
+        raise BrainError(f"{phase} resolved arguments must be an object")
+    try:
+        raw = predicate_runner(predicate, args)
+    except Exception as exc:
+        raise BrainError(f"{phase} executor failed: {exc}") from exc
+    result = _runner_result(
+        raw,
+        expected_tool=predicate,
+        phase=phase,
+        require_read_only=True,
+    )
+    return result["exit_code"] == condition["expect_exit"]
+
+
+def _run_preconditions(
+    procedure: list[dict[str, Any]],
+    params: Mapping[str, Any],
+    predicate_runner: Callable[[str, Mapping[str, Any]], Any] | None,
+) -> int | None:
+    for step_index, step in enumerate(procedure):
+        condition = step.get("precondition")
+        if isinstance(condition, Mapping) and not _run_condition(
+            condition, params, predicate_runner, phase=f"step {step_index} precondition"
+        ):
+            return step_index
+    return None
+
+
+def _execute_steps(
+    procedure: list[dict[str, Any]],
+    params: Mapping[str, Any],
+    tool_runner: Callable[[str, Mapping[str, Any]], Any],
+    predicate_runner: Callable[[str, Mapping[str, Any]], Any] | None,
+    *,
+    read_only: bool,
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for step_index, step in enumerate(procedure):
+        condition = step.get("precondition")
+        if isinstance(condition, Mapping) and not _run_condition(
+            condition, params, predicate_runner, phase=f"step {step_index} precondition"
+        ):
+            raise _WorkflowFailure(
+                step=step_index,
+                phase="precondition",
+                reason="precondition_failed",
+                steps=steps,
+            )
+        tool = step["tool"]
+        args = _resolve_template(step.get("args_template", {}), params)
+        if not isinstance(args, Mapping):
+            raise BrainError(f"step {step_index} resolved arguments must be an object")
+        try:
+            raw = tool_runner(tool, args)
+        except Exception as exc:
+            raise _WorkflowFailure(
+                step=step_index, phase="tool", reason=f"tool_executor_failed: {exc}", steps=steps
+            ) from exc
+        output = _runner_result(
+            raw,
+            expected_tool=tool,
+            phase=f"step {step_index} tool",
+            require_read_only=read_only,
+        )
+        entry = {"step": step_index, "tool": tool, "args": dict(args), "output": output}
+        steps.append(entry)
+        expected_exit = step.get("expected_exit", 0)
+        if output["exit_code"] != expected_exit:
+            raise _WorkflowFailure(
+                step=step_index,
+                phase="tool",
+                reason="tool_failed",
+                steps=steps,
+            )
+        condition = step.get("postcondition")
+        if isinstance(condition, Mapping) and not _run_condition(
+            condition, params, predicate_runner, phase=f"step {step_index} postcondition"
+        ):
+            raise _WorkflowFailure(
+                step=step_index,
+                phase="postcondition",
+                reason="postcondition_failed",
+                steps=steps,
+            )
+    return steps
+
+
+def _run_cached_postconditions(
+    procedure: list[dict[str, Any]],
+    params: Mapping[str, Any],
+    predicate_runner: Callable[[str, Mapping[str, Any]], Any] | None,
+) -> int | None:
+    for step_index, step in enumerate(procedure):
+        condition = step.get("postcondition")
+        if isinstance(condition, Mapping) and not _run_condition(
+            condition, params, predicate_runner, phase=f"step {step_index} postcondition"
+        ):
+            return step_index
+    return None
 
 
 def run_deterministic(
@@ -360,16 +739,67 @@ def run_deterministic(
     *,
     version: int = 1,
     tool_runner: Callable[[str, Mapping[str, Any]], Any] | None = None,
+    predicate_runner: Callable[[str, Mapping[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute a workflow engram deterministically through action_cache with zero model calls."""
+    """Execute an immutable workflow through an explicit local executor boundary."""
+    if tool_runner is None:
+        raise BrainError("run_deterministic requires an approved tool_runner")
+    if not isinstance(params, Mapping):
+        raise BrainError("workflow params must be an object")
+    try:
+        contracts.canonical_json(dict(params))
+    except (TypeError, ValueError) as exc:
+        raise BrainError("workflow params must be JSON-safe") from exc
     home_p = Path(home)
-    directory = _deterministic_dir(home_p)
-    target = directory / f"{engram_id}_v{version}.json"
-    if not target.is_file():
-        raise BrainError(f"Workflow engram {engram_id} v{version} not found at {target}")
+    record = _load_workflow(home_p, engram_id, version)
+    procedure = record["procedure"]
+    cache_policy = record.get("cache_policy", "none")
+    if (
+        any(
+            isinstance(step.get("precondition"), Mapping)
+            or isinstance(step.get("postcondition"), Mapping)
+            for step in procedure
+        )
+        and predicate_runner is None
+    ):
+        raise BrainError("workflow predicates require an approved predicate_runner")
 
-    engram_record = json.loads(target.read_text(encoding="utf-8"))
-    procedure = engram_record.get("procedure", [])
+    def successful_result(steps: list[dict[str, Any]], cache_hit: bool) -> dict[str, Any]:
+        return {
+            "engram_id": engram_id,
+            "version": version,
+            "success": True,
+            "model_calls": 0,
+            "cache_hit": cache_hit,
+            "steps_executed": len(steps),
+            "steps": steps,
+        }
+
+    def execute_once() -> str:
+        try:
+            steps = _execute_steps(
+                procedure,
+                params,
+                tool_runner,
+                predicate_runner,
+                read_only=cache_policy == "read_only",
+            )
+        except _WorkflowFailure as failure:
+            raise failure
+        return json.dumps(successful_result(steps, False), ensure_ascii=False)
+
+    if cache_policy != "read_only":
+        try:
+            return json.loads(execute_once())
+        except _WorkflowFailure as failure:
+            return _failure_result(
+                engram_id,
+                version,
+                step=failure.step,
+                phase=failure.phase,
+                reason=failure.reason,
+                steps=failure.steps,
+            )
 
     from .action_cache import (
         ActionCacheStore,
@@ -379,115 +809,60 @@ def run_deterministic(
         compute_action_key,
     )
 
-    cache = ActionCacheStore(home_p)
-    proof_key = contracts.canonical_json({
-        "engram_id": engram_id,
-        "version": version,
-        "params": dict(params),
-    })
-    proof_hash = hashlib.sha256(proof_key.encode("utf-8")).hexdigest()
+    input_hashes = _input_hashes(home_p, params, record["cache_inputs"])
     proof = ActionProof(
-        constant_fingerprint={"procedure_proof": proof_hash},
-        dependency_class=DependencyClass.PURE_CONSTANT,
+        input_hashes=input_hashes,
+        verification_predicate="deterministic_read",
+        dependency_class=DependencyClass.FILE_SET,
     )
-
-    action_target = f"engram:{engram_id}:v{version}"
-    cache_params = {"proof_hash": proof_hash}
-    action_key = compute_action_key(
-        ActionType.GENERIC_PURE,
-        action_target,
-        params=cache_params,
-        constant_fingerprint=proof.constant_fingerprint,
+    target = f"engram:{engram_id}:v{version}"
+    cache_key = compute_action_key(
+        ActionType.FILE_READ,
+        target,
+        params=dict(params),
+        input_hashes=input_hashes,
+        verification_predicate=proof.verification_predicate,
         dependency_class=proof.dependency_class,
     )
-    # Check cache
-    cached = cache.query(action_key)
-    if cached.hit and cached.content:
-        cached_result = json.loads(cached.content)
-        cached_result["cache_hit"] = True
-        return cached_result
-
-    # Execute procedure steps deterministically with ZERO model calls
-    executed_steps: list[dict[str, Any]] = []
-    for step_idx, step in enumerate(procedure):
-        tool = step.get("tool", "")
-        args_template = step.get("args_template", {})
-
-        # 1. Precondition check
-        pre = step.get("precondition")
-        if pre and isinstance(pre, Mapping):
-            expect_exit = pre.get("expect_exit", 0)
-            actual_exit = pre.get("actual_exit", 0)
-            if actual_exit != expect_exit or pre.get("fail") is True:
-                return {
-                    "engram_id": engram_id,
-                    "version": version,
-                    "success": False,
-                    "failed_step": step_idx,
-                    "failed_phase": "precondition",
-                    "reason": "precondition_failed",
-                    "model_calls": 0,
-                    "cache_hit": False,
-                    "steps_executed": step_idx,
-                }
-
-        # 2. Tool execution (zero model calls!)
-        resolved_args = dict(args_template)
-        for k, v in args_template.items():
-            if isinstance(v, str) and v.startswith("$"):
-                param_key = v[1:]
-                if param_key in params:
-                    resolved_args[k] = params[param_key]
-
-        if tool_runner is not None:
-            step_out = tool_runner(tool, resolved_args)
-        else:
-            step_out = {"tool": tool, "args": resolved_args, "status": "ok"}
-
-        # 3. Postcondition check
-        post = step.get("postcondition")
-        if post and isinstance(post, Mapping):
-            expect_exit = post.get("expect_exit", 0)
-            actual_exit = post.get("actual_exit", 0)
-            if (
-                actual_exit != expect_exit
-                or post.get("fail") is True
-                or (
-                    isinstance(step_out, Mapping)
-                    and step_out.get("postcondition_fail") is True
-                )
-            ):
-                return {
-                    "engram_id": engram_id,
-                    "version": version,
-                    "success": False,
-                    "failed_step": step_idx,
-                    "failed_phase": "postcondition",
-                    "reason": "postcondition_failed",
-                    "model_calls": 0,
-                    "cache_hit": False,
-                    "steps_executed": step_idx,
-                }
-
-        executed_steps.append({"step": step_idx, "tool": tool, "output": step_out})
-
-    result_payload = {
-        "engram_id": engram_id,
-        "version": version,
-        "success": True,
-        "model_calls": 0,
-        "cache_hit": False,
-        "steps_executed": len(executed_steps),
-        "steps": executed_steps,
-    }
-
-    # Store into action cache
-    cache.store_action(
-        action_type=ActionType.GENERIC_PURE,
-        target=action_target,
-        content=json.dumps(result_payload),
-        proof=proof,
-        params=cache_params,
-    )
-
-    return result_payload
+    try:
+        with ActionCacheStore(home_p) as cache:
+            content, cache_hit, _ = cache.get_or_execute(
+                ActionType.FILE_READ,
+                target,
+                execute_once,
+                params=dict(params),
+                proof=proof,
+            )
+            result = json.loads(content)
+            if not isinstance(result, dict):
+                raise BrainError("cached workflow result must be an object")
+            if cache_hit:
+                phase = "precondition"
+                failed = _run_preconditions(procedure, params, predicate_runner)
+                if failed is None:
+                    phase = "postcondition"
+                    failed = _run_cached_postconditions(procedure, params, predicate_runner)
+                if failed is not None:
+                    cache.invalidate_by_key(cache_key)
+                    return _failure_result(
+                        engram_id,
+                        version,
+                        step=failed,
+                        phase=phase,
+                        reason=f"{phase}_failed",
+                        steps=result.get("steps", []),
+                        cache_hit=True,
+                    )
+            result["cache_hit"] = cache_hit
+            if cache_hit:
+                result["steps_executed"] = 0
+            return result
+    except _WorkflowFailure as failure:
+        return _failure_result(
+            engram_id,
+            version,
+            step=failure.step,
+            phase=failure.phase,
+            reason=failure.reason,
+            steps=failure.steps,
+        )

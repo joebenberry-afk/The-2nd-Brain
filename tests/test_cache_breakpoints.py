@@ -2,7 +2,7 @@
 
 Core rule:
 Paging/eviction runs ONLY when at least one of the 5 cache-break conditions holds:
-(a) previous tool_result bytes > [rtd].threshold_chars (default 8000 from config/context.toml [rtd]);
+(a) previous tool_result bytes exceed the configured RTD threshold;
 (b) session_before_compact event occurred;
 (c) model/provider changed since last request;
 (d) last assistant_usage.cache_read_tokens == 0;
@@ -13,13 +13,10 @@ If NONE hold, return the previous rendered context view unchanged (byte-identica
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
-from second_brain import contracts, hermes_adapter, ledger, vmem
+from second_brain import hermes_adapter, vmem
 
 
 def _start_payload(session: str = "cache-break-session", bot: str = "Brain-Dev") -> dict[str, Any]:
@@ -36,19 +33,20 @@ def _start_payload(session: str = "cache-break-session", bot: str = "Brain-Dev")
 
 
 def test_paging_skipped_when_no_break_point(brain_home: Path) -> None:
-    """When none of (a)-(e) hold, _vmem_context returns byte-identical output to previous call without running eviction."""
+    """When none of (a)-(e) hold, _vmem_context returns byte-identical output to
+    previous call without running eviction."""
     payload = _start_payload(session="session-skip-break")
     binding = hermes_adapter.resolve_binding(brain_home, payload)
     store = vmem.VMemStore(brain_home, binding.host_session_id)
 
     # Store resident objects within budget (e.g. 2 objects of 200 tokens each)
-    obj1 = store.store_object(
+    store.store_object(
         vmem.SessionObjectKind.TOOL_OBSERVATION,
         title="tool-1 result",
         content="Alpha observation content " + ("x" * 100),
         summary="Alpha summary",
     )
-    obj2 = store.store_object(
+    store.store_object(
         vmem.SessionObjectKind.TOOL_OBSERVATION,
         title="tool-2 result",
         content="Beta observation content " + ("y" * 100),
@@ -74,8 +72,7 @@ def test_paging_skipped_when_no_break_point(brain_home: Path) -> None:
     }
     hermes_adapter.handle_request(brain_home, post_payload)
 
-    # Call _vmem_context again with a task referencing an object that would otherwise trigger fault-in/eviction
-    # If break-point logic is active, because none of (a)-(e) hold, it MUST return previous rendered view byte-identical
+    # An object match alone must not bypass the cache-break gate.
     second_context = hermes_adapter._vmem_context(brain_home, binding, task="investigate alpha")
 
     assert second_context.get("rendered_text") == first_rendered_text
@@ -83,9 +80,11 @@ def test_paging_skipped_when_no_break_point(brain_home: Path) -> None:
 
 
 def test_model_switch_preflight_order(brain_home: Path) -> None:
-    """When model changes, steps 1-8 execute in order; if load > target * 0.85, reclaim runs;
+    """When model changes, steps 1-8 execute in order; if load > target * 0.85, reclaim
+    runs;
 
-    if overflow, returns INPUT_REQUIRED(CONTEXT_OVERFLOW); emits MODEL_ROUTE_TRANSITION + decision.
+    if overflow, returns INPUT_REQUIRED(CONTEXT_OVERFLOW); emits MODEL_ROUTE_TRANSITION
+    + decision.
     """
     session_id = "hermes:Brain-Dev:model-switch-session"
     store = vmem.VMemStore(brain_home, session_id)
@@ -171,7 +170,8 @@ cache_scope = "model"
 
 
 def test_hard_capacity_forces_eviction_ignoring_net(brain_home: Path) -> None:
-    """When resident tokens > capacity_hard, eviction runs immediately even if all candidates have net <= 0 and previous tool result was small."""
+    """When resident tokens > capacity_hard, eviction runs immediately even if all
+    candidates have net <= 0 and previous tool result was small."""
     payload = _start_payload(session="session-hard-capacity")
     binding = hermes_adapter.resolve_binding(brain_home, payload)
     store = vmem.VMemStore(brain_home, binding.host_session_id)
@@ -186,7 +186,8 @@ def test_hard_capacity_forces_eviction_ignoring_net(brain_home: Path) -> None:
         )
 
     resident_before = [
-        o for o in store.list_objects()
+        o
+        for o in store.list_objects()
         if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
     ]
     tokens_before = sum(o.token_estimate for o in resident_before)
@@ -206,7 +207,8 @@ def test_hard_capacity_forces_eviction_ignoring_net(brain_home: Path) -> None:
     assert ctx.get("evicted_count", 0) > 0
 
     resident_after = [
-        o for o in store.list_objects()
+        o
+        for o in store.list_objects()
         if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
     ]
     tokens_after = sum(o.token_estimate for o in resident_after)

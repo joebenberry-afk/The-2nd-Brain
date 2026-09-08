@@ -47,7 +47,14 @@ def run(home: Path) -> int:
     import contextlib
     import json
 
-    from .. import antigravity_transcript, autoinject, contracts, injection_slots, lean_runtime, working_set
+    from .. import (
+        antigravity_transcript,
+        autoinject,
+        contracts,
+        injection_slots,
+        lean_runtime,
+        working_set,
+    )
 
     # Read raw bytes and decode explicitly as UTF-8 (utf-8-sig tolerates a
     # stray leading BOM) when a binary stdin buffer is available.
@@ -126,9 +133,7 @@ def run(home: Path) -> int:
     is_subagent = bool(parent_conversation_id)
 
     cwd = workspace_paths[0] if workspace_paths else None
-    resolved_project = autoinject._resolve_project_id(
-        home, str(cwd) if cwd else None, None
-    )
+    resolved_project = autoinject._resolve_project_id(home, str(cwd) if cwd else None, None)
     role = "worker" if is_subagent else "driver"
 
     session = contracts.BrainSessionIdentity(
@@ -159,6 +164,7 @@ def run(home: Path) -> int:
             }
             with (tdir / "antigravity-hooks.jsonl").open("a", encoding="utf-8") as f:
                 f.write(contracts.canonical_json(rec) + "\n")
+
     # ---------- SessionStart: session-constant PREFIX ----------
     if event in ("SessionStart", "session_start"):
         try:
@@ -192,7 +198,6 @@ def run(home: Path) -> int:
             _log_telem("session_start_fail_open")
             print("{}")
         return 0
-
 
     # ---------- Stop: real P3-H Requirement Ledger decision ----------
     if event == "Stop":
@@ -321,9 +326,7 @@ def run(home: Path) -> int:
             lean_kernel=lean_block,
             task=task,
         )
-        prefix_drift = injection_slots.record_and_check_prefix_drift(
-            home, conversation_id, prefix
-        )
+        prefix_drift = injection_slots.record_and_check_prefix_drift(home, conversation_id, prefix)
         tail = injection_slots.assemble_tail(delta_context=packet)
 
         # Compose the model-visible ephemeral message. PREFIX (lean kernel +

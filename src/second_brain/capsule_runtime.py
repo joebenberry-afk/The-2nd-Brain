@@ -26,9 +26,7 @@ def _bounded_text(value: str, *, field: str) -> str:
     return value.strip()[:MAX_TEXT_CHARS]
 
 
-def _record_dropped_items(
-    home: Path, session_id: str, field: str, dropped: list[str]
-) -> None:
+def _record_dropped_items(home: Path, session_id: str, field: str, dropped: list[str]) -> None:
     """Best-effort append of capsule items bumped out of the bounded
     last-``MAX_ITEMS`` window to ``capsule-history.jsonl`` (observability
     only; a write failure never blocks the capsule update it accompanies)."""
@@ -192,7 +190,9 @@ def update_capsule(
     for name, incoming in list_fields:
         if incoming is None:
             continue
-        merged = _bounded_items(incoming, capsule[name], home=home, session_id=session_id, field=name)
+        merged = _bounded_items(
+            incoming, capsule[name], home=home, session_id=session_id, field=name
+        )
         if merged != capsule[name]:
             fields[name] = merged
     if verification is not None:

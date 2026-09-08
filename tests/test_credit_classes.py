@@ -1,8 +1,6 @@
 """Tests for design-derived credit classes and causal promotion gate (T5.4)."""
 
-import pytest
-
-from second_brain import credit, db, frontier, paths, plasticity, promotion, router, skillforge
+from second_brain import credit, db, frontier, paths, plasticity, promotion, skillforge
 from second_brain.credit import CreditClass, classify_credit
 
 
@@ -69,6 +67,7 @@ def _bind(home, name, owner="steward-scout"):
         },
     )
 
+
 def _record_outcome(home, skill_name, session_id="s0"):
     conn = db.connect(db.db_path(home))
     try:
@@ -77,8 +76,9 @@ def _record_outcome(home, skill_name, session_id="s0"):
             "VALUES ('m1', 'fam', 'cap', '2026-08-14T00:00:00+00:00')"
         )
         conn.execute(
-            "INSERT INTO model_skill_outcomes (model_id, skill_name, task_hash, success, noise, f1, session_id, created_at) "
-            "VALUES ('m1', ?, 'thash', 1, 0, 1.0, ?, '2026-08-14T00:00:00+00:00')",
+            "INSERT INTO model_skill_outcomes (model_id, skill_name, task_hash, success, noise, f1,"
+            " session_id, created_at) VALUES ('m1', ?, 'thash', 1, 0, 1.0, ?,"
+            " '2026-08-14T00:00:00+00:00')",
             (skill_name, session_id),
         )
         conn.commit()
@@ -87,7 +87,8 @@ def _record_outcome(home, skill_name, session_id="s0"):
 
 
 def test_observational_evidence_is_correlated():
-    """Observational evidence, missing evidence, or holdout/paired with INSUFFICIENT verdict -> CORRELATED."""
+    """Observational evidence, missing evidence, or holdout/paired with INSUFFICIENT
+    verdict -> CORRELATED."""
     # Non-mapping evidence
     assert classify_credit(None) == "CORRELATED"
     assert classify_credit("invalid") == "CORRELATED"
@@ -100,32 +101,52 @@ def test_observational_evidence_is_correlated():
     # Observational designs
     assert classify_credit({"design": "observational"}) == "CORRELATED"
     assert classify_credit({"design": "OBSERVATIONAL", "verdict": "APPROVE"}) == "CORRELATED"
-    assert classify_credit({"design": "observational", "economics": {"verdict": "PROVEN"}}) == "CORRELATED"
+    assert (
+        classify_credit({"design": "observational", "economics": {"verdict": "PROVEN"}})
+        == "CORRELATED"
+    )
     assert classify_credit({"design": "other", "verdict": "APPROVE"}) == "CORRELATED"
 
     # Holdout / paired with INSUFFICIENT verdict
     assert classify_credit({"design": "holdout", "verdict": "INSUFFICIENT"}) == "CORRELATED"
     assert classify_credit({"design": "HOLDOUT", "verdict": "insufficient"}) == "CORRELATED"
-    assert classify_credit({"design": "holdout", "economics": {"verdict": "INSUFFICIENT"}}) == "CORRELATED"
+    assert (
+        classify_credit({"design": "holdout", "economics": {"verdict": "INSUFFICIENT"}})
+        == "CORRELATED"
+    )
     assert classify_credit({"design": "paired", "verdict": "INSUFFICIENT"}) == "CORRELATED"
     assert classify_credit({"design": "PAIRED", "verdict": "insufficient"}) == "CORRELATED"
-    assert classify_credit({"design": "paired", "economics": {"verdict": "INSUFFICIENT"}}) == "CORRELATED"
+    assert (
+        classify_credit({"design": "paired", "economics": {"verdict": "INSUFFICIENT"}})
+        == "CORRELATED"
+    )
 
     # Paired with interaction but verdict is INSUFFICIENT -> CORRELATED
-    assert classify_credit({
-        "design": "paired",
-        "interaction_significant": True,
-        "verdict": "INSUFFICIENT",
-    }) == "CORRELATED"
-    assert classify_credit({
-        "design": "paired",
-        "has_interaction": True,
-        "economics": {"verdict": "INSUFFICIENT"},
-    }) == "CORRELATED"
+    assert (
+        classify_credit(
+            {
+                "design": "paired",
+                "interaction_significant": True,
+                "verdict": "INSUFFICIENT",
+            }
+        )
+        == "CORRELATED"
+    )
+    assert (
+        classify_credit(
+            {
+                "design": "paired",
+                "has_interaction": True,
+                "economics": {"verdict": "INSUFFICIENT"},
+            }
+        )
+        == "CORRELATED"
+    )
 
 
 def test_holdout_evidence_can_be_direct():
-    """Holdout or paired with non-insufficient verdict -> DIRECT, negative effect -> UNRELATED_NEGATIVE, interaction -> CONTRIBUTORY."""
+    """Holdout or paired with non-insufficient verdict -> DIRECT, negative effect ->
+    UNRELATED_NEGATIVE, interaction -> CONTRIBUTORY."""
     # Holdout designs with non-insufficient verdict -> DIRECT
     c1 = classify_credit({"design": "holdout", "verdict": "APPROVE"})
     assert c1 == "DIRECT"
@@ -156,23 +177,33 @@ def test_holdout_evidence_can_be_direct():
     assert c_neg3 == "UNRELATED_NEGATIVE"
 
     # Negative effect takes precedence over interaction in paired design
-    c_neg_int = classify_credit({
-        "design": "paired",
-        "interaction_significant": True,
-        "effect": -0.2,
-        "verdict": "PROVEN",
-    })
+    c_neg_int = classify_credit(
+        {
+            "design": "paired",
+            "interaction_significant": True,
+            "effect": -0.2,
+            "verdict": "PROVEN",
+        }
+    )
     assert c_neg_int == "UNRELATED_NEGATIVE"
 
     # Paired design with interaction and verdict != INSUFFICIENT -> CONTRIBUTORY
-    for key in ("interaction_significant", "interaction_term", "has_interaction", "significant_interaction"):
+    for key in (
+        "interaction_significant",
+        "interaction_term",
+        "has_interaction",
+        "significant_interaction",
+    ):
         c_int = classify_credit({"design": "paired", key: True, "verdict": "PROVEN"})
         assert c_int == "CONTRIBUTORY"
         assert c_int == "contributory"
         assert c_int == CreditClass.CONTRIBUTORY
         assert str(c_int) == "CONTRIBUTORY"
+
+
 def test_promotion_requires_causal_credit(brain_home):
     """Promotion G1 requires at least one DIRECT or CONTRIBUTORY credit event.
+
     Neither model_skill_outcomes nor correlated credit satisfies G1.
     """
     skill_name = "test-causal-skill"
@@ -236,8 +267,11 @@ def test_promotion_requires_causal_credit(brain_home):
 
 
 def test_routing_counterfactual_clean_rename_no_alias(brain_home):
-    """counterfactual_eval is renamed to routing_counterfactual with NO alias/deprecated path."""
-    assert not hasattr(credit, "counterfactual_eval"), "credit.counterfactual_eval must NOT exist (no deprecated alias)"
+    """counterfactual_eval is renamed to routing_counterfactual with NO alias/deprecated
+    path."""
+    assert not hasattr(
+        credit, "counterfactual_eval"
+    ), "credit.counterfactual_eval must NOT exist (no deprecated alias)"
     assert hasattr(credit, "routing_counterfactual"), "credit.routing_counterfactual must exist"
 
     # Test routing_counterfactual works as expected
@@ -245,7 +279,8 @@ def test_routing_counterfactual_clean_rename_no_alias(brain_home):
     directory = brain_home / "skills" / "shadow" / skill_name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "SKILL.md").write_text(
-        f"---\nname: {skill_name}\nstatus: shadow\nversion: 1\n---\n\n# Purpose\n\n- sqlite migration helper\n",
+        f"---\nname: {skill_name}\nstatus: shadow\nversion: 1\n---\n\n# Purpose\n\n- sqlite"
+        " migration helper\n",
         encoding="utf-8",
     )
 

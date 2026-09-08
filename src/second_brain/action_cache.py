@@ -346,9 +346,7 @@ class ActionProof:
         raw_dependency_class = d.get("dependency_class")
         try:
             dependency_class = (
-                DependencyClass(raw_dependency_class)
-                if raw_dependency_class is not None
-                else None
+                DependencyClass(raw_dependency_class) if raw_dependency_class is not None else None
             )
         except (TypeError, ValueError):
             dependency_class = None
@@ -371,10 +369,7 @@ def _declared_dependency_is_complete(proof: ActionProof) -> bool:
     dep = proof.dependency_class
     if dep is DependencyClass.FILE_SET:
         return bool(proof.input_hashes) and all(
-            isinstance(path, str)
-            and bool(path)
-            and isinstance(digest, str)
-            and bool(digest)
+            isinstance(path, str) and bool(path) and isinstance(digest, str) and bool(digest)
             for path, digest in proof.input_hashes.items()
         )
     if dep is DependencyClass.WORKTREE:
@@ -392,10 +387,7 @@ def _declared_dependency_is_complete(proof: ActionProof) -> bool:
         return proof.expires_at is not None or proof.ttl_seconds is not None
     if dep is DependencyClass.PURE_CONSTANT:
         return bool(proof.constant_fingerprint) and all(
-            isinstance(key, str)
-            and bool(key)
-            and isinstance(value, str)
-            and bool(value)
+            isinstance(key, str) and bool(key) and isinstance(value, str) and bool(value)
             for key, value in proof.constant_fingerprint.items()
         )
     return False
@@ -425,9 +417,8 @@ def proof_is_complete(action_type: ActionType | str, proof: ActionProof) -> bool
     if act is ActionType.PURE_VERIFICATION:
         if proof.env_fingerprint.get(RUNTIME_VERSION_ENV_KEY) != __version__:
             return False
-        return (
-            proof.dependency_class is not DependencyClass.ENV
-            or any(key != RUNTIME_VERSION_ENV_KEY for key in proof.env_fingerprint)
+        return proof.dependency_class is not DependencyClass.ENV or any(
+            key != RUNTIME_VERSION_ENV_KEY for key in proof.env_fingerprint
         )
     if act is ActionType.DISTILLATION:
         source_sha = proof.constant_fingerprint.get("source_artifact_sha", "")
@@ -441,6 +432,7 @@ def proof_is_complete(action_type: ActionType | str, proof: ActionProof) -> bool
         return proof.dependency_class is DependencyClass.PURE_CONSTANT
     return False
 
+
 def _prepared_proof(
     action_type: ActionType,
     proof: ActionProof | None,
@@ -453,9 +445,7 @@ def _prepared_proof(
         prepared.constant_fingerprint.setdefault("distiller_version", DISTILLER_VERSION)
     if ttl_seconds is not None:
         prepared.ttl_seconds = ttl_seconds
-        prepared.expires_at = (
-            datetime.now(UTC) + timedelta(seconds=ttl_seconds)
-        ).isoformat()
+        prepared.expires_at = (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat()
     return prepared
 
 
@@ -481,11 +471,10 @@ def _action_key_for(
     )
 
 
-
-
 @dataclass
 class ActionCacheEntry:
     """A proof-carrying action cache entry."""
+
     action_key: str
     action_type: ActionType
     target: str
@@ -540,14 +529,13 @@ class ActionCacheStore:
 
     def __init__(self, home: Path | str, max_entries: int | None = None) -> None:
         self.home = Path(home)
-        self.max_entries = (
-            max_entries if max_entries is not None else DEFAULT_CACHE_MAX_ENTRIES
-        )
+        self.max_entries = max_entries if max_entries is not None else DEFAULT_CACHE_MAX_ENTRIES
         self._db_dir = self.home / "state" / "cache"
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._dbfile = self._db_dir / "action_cache.sqlite"
         self._conn: sqlite3.Connection | None = None
         self._init_db()
+
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             conn = sqlite3.connect(self._dbfile, timeout=5.0)
@@ -821,16 +809,20 @@ class ActionCacheStore:
         conn.commit()
 
     def _last_compute_ms(self, action_key: str) -> float | None:
-        row = self._get_conn().execute(
-            """
+        row = (
+            self._get_conn()
+            .execute(
+                """
             SELECT compute_ms
             FROM action_cache_economics
             WHERE action_key = ? AND compute_ms IS NOT NULL
             ORDER BY id DESC
             LIMIT 1
             """,
-            (action_key,),
-        ).fetchone()
+                (action_key,),
+            )
+            .fetchone()
+        )
         return float(row["compute_ms"]) if row is not None else None
 
     def _emit_inputs_changed(self, action_type: ActionType, proof: ActionProof) -> None:
@@ -842,9 +834,7 @@ class ActionCacheStore:
                 {
                     "action_type": action_type.value,
                     "dependency_class": (
-                        proof.dependency_class.value
-                        if proof.dependency_class is not None
-                        else ""
+                        proof.dependency_class.value if proof.dependency_class is not None else ""
                     ),
                 },
             )
@@ -1202,14 +1192,10 @@ class ActionCacheStore:
         ).fetchall()
         by_class: dict[str, dict[str, Any]] = {}
         for dependency_class in DependencyClass:
-            class_rows = [
-                row for row in rows if row["dependency_class"] == dependency_class.value
-            ]
+            class_rows = [row for row in rows if row["dependency_class"] == dependency_class.value]
             hits = [row for row in class_rows if row["outcome"] == "hit"]
             compute_rows = [row for row in class_rows if row["compute_ms"] is not None]
-            comparable = [
-                row for row in hits if row["compute_ms_avoided"] is not None
-            ]
+            comparable = [row for row in hits if row["compute_ms_avoided"] is not None]
 
             def average(items: list[sqlite3.Row], field_name: str) -> float | None:
                 if not items:
@@ -1312,13 +1298,10 @@ class ActionCacheStore:
         if not proof_is_complete(act, prepared):
             return None
         validation = self._validate_proof(prepared, act)
-        worktree_changed = (
-            prepared.dependency_class is DependencyClass.WORKTREE
-            and (
-                fingerprint_before is None
-                or validation.worktree is None
-                or validation.worktree.fingerprint != fingerprint_before
-            )
+        worktree_changed = prepared.dependency_class is DependencyClass.WORKTREE and (
+            fingerprint_before is None
+            or validation.worktree is None
+            or validation.worktree.fingerprint != fingerprint_before
         )
         if not validation.valid or worktree_changed:
             self._emit_inputs_changed(act, prepared)

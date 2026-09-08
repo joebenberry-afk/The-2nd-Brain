@@ -165,6 +165,7 @@ def test_purge_rejects_symlink_escape(brain_home, repo):
     outside.mkdir(exist_ok=True)
     (outside / "keep.txt").write_text("keep", encoding="utf-8")
     import shutil as _shutil
+
     _shutil.rmtree(brain_home / "projects" / "tampered-link")  # drop the real dir first
     try:
         kwargs = {"target_is_directory": True} if _os.name == "nt" else {}

@@ -151,12 +151,23 @@ def test_no_telemetry_shutdown_skips_fingerprint_records_too(brain_home, tmp_pat
 def test_p4_pulse_cli_prints_result_and_appends(brain_home, capsys):
     from second_brain import cli
 
-    assert cli.main(
-        [
-            "--home", str(brain_home), "p4", "pulse",
-            "--event", "session_start", "--session", "cli-session", "--force", "--json",
-        ]
-    ) == 0
+    assert (
+        cli.main(
+            [
+                "--home",
+                str(brain_home),
+                "p4",
+                "pulse",
+                "--event",
+                "session_start",
+                "--session",
+                "cli-session",
+                "--force",
+                "--json",
+            ]
+        )
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["session_id"] == "cli-session"
     assert result["heartbeat"]["mode"] == "shadow"
@@ -166,13 +177,24 @@ def test_p4_pulse_cli_prints_result_and_appends(brain_home, capsys):
 def test_p4_pulse_cli_no_telemetry_flag(brain_home, capsys):
     from second_brain import cli
 
-    assert cli.main(
-        [
-            "--home", str(brain_home), "p4", "pulse",
-            "--event", "session_start", "--session", "cli-no-telemetry",
-            "--force", "--no-telemetry", "--json",
-        ]
-    ) == 0
+    assert (
+        cli.main(
+            [
+                "--home",
+                str(brain_home),
+                "p4",
+                "pulse",
+                "--event",
+                "session_start",
+                "--session",
+                "cli-no-telemetry",
+                "--force",
+                "--no-telemetry",
+                "--json",
+            ]
+        )
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["session_id"] == "cli-no-telemetry"
     assert _kinds(brain_home, "cli-no-telemetry") == []

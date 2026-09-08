@@ -383,7 +383,9 @@ def main() -> int:
     for p in deepseek_pairs:
         report.append(
             f"- `{p['id']}`: model `{p['baseline'].get('model', 'deepseek/deepseek-v4-flash')}`, "
-            "baseline " + str(p["baseline"].get("acceptance")) + ", candidate "
+            "baseline "
+            + str(p["baseline"].get("acceptance"))
+            + ", candidate "
             + str(p["candidate"].get("acceptance"))
         )
     report.append("")

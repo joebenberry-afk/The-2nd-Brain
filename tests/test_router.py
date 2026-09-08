@@ -162,6 +162,7 @@ def test_route_random_deterministic(brain_home, texts):
     for text in texts:
         assert router.route(home, text) == router.route(home, text)
 
+
 # ---------------------------------------------------------------------------
 # Phase 13: SKILL.md section cache + router.max_active config wiring
 # ---------------------------------------------------------------------------
@@ -240,8 +241,10 @@ def test_router_max_active_honors_skills_toml(brain_home):
     _forge_second_skill(brain_home)
     # Task that qualifies BOTH skills: skill1 via triggers/bigram (score 4.5),
     # second via trigger phrase "blocking the upgrade" (score 1.0).
-    task = ("sqlite migration failed with a schema version mismatch and "
-        "pending migration blocking the upgrade")
+    task = (
+        "sqlite migration failed with a schema version mismatch and "
+        "pending migration blocking the upgrade"
+    )
     assert len(router.route(brain_home, task)["selected"]) == 2  # default cap (absent config -> 3)
 
     cfg = brain_home / "config" / "skills.toml"
@@ -253,7 +256,7 @@ def test_router_max_active_honors_skills_toml(brain_home):
     # Invalid config values fall back to 3.
     cfg.write_text("schema_version = 1\n[router]\nmax_active = 0\n", encoding="utf-8")
     assert len(router.route(brain_home, task)["selected"]) == 2
-    cfg.write_text("schema_version = 1\n[router]\nmax_active = \"nope\"\n", encoding="utf-8")
+    cfg.write_text('schema_version = 1\n[router]\nmax_active = "nope"\n', encoding="utf-8")
     assert len(router.route(brain_home, task)["selected"]) == 2
     cfg.write_text("schema_version = 1\n", encoding="utf-8")  # absent [router]
     assert len(router.route(brain_home, task)["selected"]) == 2
@@ -262,8 +265,10 @@ def test_router_max_active_honors_skills_toml(brain_home):
 def test_router_max_active_explicit_override_beats_config(brain_home):
     _forge_and_shadow(brain_home)
     _forge_second_skill(brain_home)
-    task = ("sqlite migration failed with a schema version mismatch and "
-        "pending migration blocking the upgrade")
+    task = (
+        "sqlite migration failed with a schema version mismatch and "
+        "pending migration blocking the upgrade"
+    )
     (brain_home / "config" / "skills.toml").write_text(
         "schema_version = 1\n[router]\nmax_active = 1\n", encoding="utf-8"
     )

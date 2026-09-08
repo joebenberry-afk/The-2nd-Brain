@@ -96,9 +96,7 @@ def build_matrix(home: Path) -> dict[str, Any]:
             )
 
     # Generate full matrix through canonical capabilities module
-    matrix = capabilities.generate_capability_matrix(
-        home, harnesses=list(_KNOWN_PROFILES.keys())
-    )
+    matrix = capabilities.generate_capability_matrix(home, harnesses=list(_KNOWN_PROFILES.keys()))
     return matrix
 
 
@@ -121,13 +119,15 @@ def render_markdown(matrix: dict[str, Any]) -> str:
             f"{data['unsupported_count']} | {data['unknown_count']} | {data['behavior'][:60]}... |"
         )
 
-    lines.extend([
-        "",
-        "## Detailed Matrix",
-        "",
-        "| Capability | Prime | Claude Code | Codex | Antigravity | Hermes |",
-        "|---|---|---|---|---|---|",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Detailed Matrix",
+            "",
+            "| Capability | Prime | Claude Code | Codex | Antigravity | Hermes |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
 
     for cap in capabilities.KNOWN_CAPABILITIES:
         row = [f"`{cap}`"]

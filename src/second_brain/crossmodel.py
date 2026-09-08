@@ -7,12 +7,13 @@ models. Global policy aggregates exclude models whose success rate is below a
 threshold — model-specific failures must not contaminate global policy.
 """
 
-from collections.abc import Callable, Mapping
 import hashlib
 import sqlite3
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
 from . import db
 from .errors import BrainError
 
@@ -289,9 +290,10 @@ def propose_transfer(
     """Propose cross-model transfer of an engram. Stays candidate until verified."""
     home_p = Path(home)
     del home_p
-    transfer_id = "transfer-" + hashlib.sha256(
-        f"{engram_id}:{from_model}:{to_model}:{harness}".encode("utf-8")
-    ).hexdigest()[:16]
+    transfer_id = (
+        "transfer-"
+        + hashlib.sha256(f"{engram_id}:{from_model}:{to_model}:{harness}".encode()).hexdigest()[:16]
+    )
     return {
         "transfer_id": transfer_id,
         "engram_id": engram_id,

@@ -249,9 +249,7 @@ def test_radar_backed_candidate_still_promotes_through_universal_gate(brain_home
         "reason_codes": ["REPEATED_READ"],
         "promotion_eligible": False,
         "status": "candidate",
-        "telemetry_evidence_refs": [
-            {"telemetry_ref": "session.jsonl:1", "record_hash": "b" * 64}
-        ],
+        "telemetry_evidence_refs": [{"telemetry_ref": "session.jsonl:1", "record_hash": "b" * 64}],
         "observations": [],
     }
     (radar_dir / "candidates.json").write_text(json.dumps([candidate]), encoding="utf-8")

@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 # Ensure second_brain package can be imported
@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from second_brain import paths, risk  # noqa: E402
+from second_brain import paths  # noqa: E402
 from second_brain.risk import SIGNAL_NAMES, assess_risk  # noqa: E402
 
 
@@ -72,7 +72,7 @@ def fit_logistic_regression(
         grad_b = grad_b / n_samples
         bias -= lr * grad_b
 
-    result_weights = {name: round(w, 4) for name, w in zip(feature_names, weights)}
+    result_weights = {name: round(w, 4) for name, w in zip(feature_names, weights, strict=False)}
     return result_weights, round(bias, 4)
 
 
@@ -192,9 +192,11 @@ def collect_session_data(home: Path, repo: Path | None = None) -> list[dict]:
                         if isinstance(f, str) and f.strip():
                             entry["files_touched"].add(f.strip())
                     ver = cap.get("verification", {})
-                    if isinstance(ver, dict):
-                        if ver.get("completion_allowed") is False or ver.get("status") in ("failed", "blocked"):
-                            entry["failed"] = 1
+                    if isinstance(ver, dict) and (
+                        ver.get("completion_allowed") is False
+                        or ver.get("status") in ("failed", "blocked")
+                    ):
+                        entry["failed"] = 1
                 except Exception:
                     pass
 
@@ -228,20 +230,25 @@ def collect_session_data(home: Path, repo: Path | None = None) -> list[dict]:
 
                     # Check verification failure: accuracy gate or test failure
                     kind = rec.get("kind")
-                    if kind in ("stop_blocked", "stop_blocked_result"):
-                        entry["failed"] = 1
-                    elif rec.get("completion_allowed") is False:
-                        entry["failed"] = 1
-                    elif rec.get("status") in ("failed", "blocked") and kind in ("accuracy_gate", "verification", "stop_boundary"):
+                    if (
+                        kind in ("stop_blocked", "stop_blocked_result")
+                        or rec.get("completion_allowed") is False
+                        or (
+                            rec.get("status") in ("failed", "blocked")
+                            and kind in ("accuracy_gate", "verification", "stop_boundary")
+                        )
+                    ):
                         entry["failed"] = 1
                     elif kind == "tool_result" and rec.get("is_error"):
                         tool = str(rec.get("tool", "")).lower()
                         cmd = str(rec.get("command", "")).lower()
                         if tool in ("test", "pytest") or "test" in cmd or "pytest" in cmd:
                             entry["failed"] = 1
-                    elif rec.get("tests_passed") is False or rec.get("test_failed") is True:
-                        entry["failed"] = 1
-                    elif rec.get("failure_code") in ("TESTS_FAILED", "VERIFICATION_FAILED"):
+                    elif (
+                        rec.get("tests_passed") is False
+                        or rec.get("test_failed") is True
+                        or rec.get("failure_code") in ("TESTS_FAILED", "VERIFICATION_FAILED")
+                    ):
                         entry["failed"] = 1
             except Exception:
                 pass
@@ -253,14 +260,16 @@ def collect_session_data(home: Path, repo: Path | None = None) -> list[dict]:
             continue
         try:
             res = assess_risk(repo_path, files, home=home_path)
-            samples.append({
-                "session_id": s_id,
-                "files_touched": files,
-                "signals": res["signals"],
-                "risk_level": res["level"],
-                "risk_score": res["score"],
-                "failed": data["failed"],
-            })
+            samples.append(
+                {
+                    "session_id": s_id,
+                    "files_touched": files,
+                    "signals": res["signals"],
+                    "risk_level": res["level"],
+                    "risk_score": res["score"],
+                    "failed": data["failed"],
+                }
+            )
         except Exception:
             pass
 
@@ -288,7 +297,10 @@ def calibrate(
 
     if samples:
         X = [
-            [float(next((s["points"] for s in sample["signals"] if s["name"] == feat), 0)) for feat in feature_names]
+            [
+                float(next((s["points"] for s in sample["signals"] if s["name"] == feat), 0))
+                for feat in feature_names
+            ]
             for sample in samples
         ]
         y = [int(sample["failed"]) for sample in samples]
@@ -336,11 +348,11 @@ def print_summary(result: dict[str, Any]) -> None:
         print(f"Verification Outcomes: {failures} failed, {successes} passed")
     print()
     print("Performance Metrics (HIGH/CRITICAL vs Verification Failures):")
-    print(f"  Baseline (Unweighted):")
+    print("  Baseline (Unweighted):")
     print(f"    Precision: {base['precision'] * 100:.1f}% ({base['tp']}/{base['tp'] + base['fp']})")
     print(f"    Recall:    {base['recall'] * 100:.1f}% ({base['tp']}/{base['tp'] + base['fn']})")
     print(f"    Accuracy:  {base['accuracy'] * 100:.1f}%")
-    print(f"  Calibrated:")
+    print("  Calibrated:")
     print(f"    Precision: {cal['precision'] * 100:.1f}% ({cal['tp']}/{cal['tp'] + cal['fp']})")
     print(f"    Recall:    {cal['recall'] * 100:.1f}% ({cal['tp']}/{cal['tp'] + cal['fn']})")
     print(f"    Accuracy:  {cal['accuracy'] * 100:.1f}%")

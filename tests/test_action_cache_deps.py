@@ -137,6 +137,7 @@ def test_mutation_during_execution_prevents_store(brain_home, tmp_path):
     assert any(record["kind"] == "cache_store_skipped_inputs_changed" for record in records)
     assert telemetry.validate(brain_home)["issues"] == []
 
+
 def test_direct_put_mutation_after_compute_prevents_store(brain_home, tmp_path):
     repo = _repo(tmp_path)
     target = repo / "src"
@@ -266,9 +267,18 @@ def test_economics_grouped_and_schema_reopen_is_idempotent(brain_home, tmp_path)
     }
     assert "action_cache_economics" in objects
     assert "idx_action_cache_economics_class" in objects
-    assert reopened.query(next(iter(
-        row["action_key"] for row in reopened._get_conn().execute("SELECT action_key FROM action_cache")
-    ))).hit is True
+    assert (
+        reopened.query(
+            next(
+                iter(
+                    row["action_key"]
+                    for row in reopened._get_conn().execute("SELECT action_key FROM action_cache")
+                )
+            )
+        ).hit
+        is True
+    )
+
 
 def test_retire_candidate_requires_comparable_hit_sample(brain_home):
     store = ActionCacheStore(brain_home)
@@ -296,10 +306,12 @@ def test_retire_candidate_requires_comparable_hit_sample(brain_home):
 
 
 def test_old_proof_rows_parse_and_invalid_scope_is_rejected(tmp_path):
-    old = ActionProof.from_dict({
-        "input_hashes": {"legacy.py": "abc"},
-        "verification_predicate": "input_hashes_match",
-    })
+    old = ActionProof.from_dict(
+        {
+            "input_hashes": {"legacy.py": "abc"},
+            "verification_predicate": "input_hashes_match",
+        }
+    )
     assert old.input_hashes == {"legacy.py": "abc"}
     assert old.dependency_class is None
 

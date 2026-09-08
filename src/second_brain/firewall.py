@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import artifacts
+from .errors import BrainError
 
 MAX_DISTILL_CHARS = 4000
 MAX_SECTIONS = 15
@@ -46,6 +47,7 @@ class ReducerResult:
     """
     Standard return packet for all Observation Firewall reducers (§5.1).
     """
+
     summary: str
     high_value_sections: list[str] = field(default_factory=list)
     error_count: int = 0
@@ -214,7 +216,8 @@ def reduce_git(text: str) -> tuple[str, list[str], int, int]:
         or "untracked files" in lower_text
     ):
         status_items = [
-            line for line in lines
+            line
+            for line in lines
             if line.startswith("modified:")
             or line.startswith("new file:")
             or line.startswith("deleted:")
@@ -582,9 +585,12 @@ def expand_observation(home: Path, ref_or_handle: str) -> str:
     # Extract hash from handle if present
     target = ref_or_handle.strip()
     if target.startswith("[brain-artifact:sha256:") and target.endswith("]"):
-        target = target[len("[brain-artifact:sha256:"):-1]
+        target = target[len("[brain-artifact:sha256:") : -1]
     elif target.startswith("/brain-expand "):
-        target = target[len("/brain-expand "):].strip()
+        target = target[len("/brain-expand ") :].strip()
 
     raw_bytes = artifacts.expand(home, target)
-    return raw_bytes.decode("utf-8", errors="replace")
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BrainError("Observation artifact is not valid UTF-8 text") from exc

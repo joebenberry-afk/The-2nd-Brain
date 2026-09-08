@@ -13,16 +13,26 @@ import {
   type OmpRoutingDecision,
 } from "../src/routing-bridge";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "../types/prime";
+import { TelemetryStore } from "../src/storage";
 
 let home: string;
 const savedHome = process.env.SECOND_BRAIN_HOME;
+const stores = new Set<TelemetryStore>();
+const appendTelemetry = TelemetryStore.prototype.append;
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "sb-budget-test-"));
   process.env.SECOND_BRAIN_HOME = home;
+  vi.spyOn(TelemetryStore.prototype, "append").mockImplementation(function (this: TelemetryStore, record) {
+    stores.add(this);
+    appendTelemetry.call(this, record);
+  });
 });
 
 afterEach(async () => {
+  await Promise.all([...stores].map((store) => store.flush()));
+  stores.clear();
+  vi.restoreAllMocks();
   if (savedHome === undefined) {
     delete process.env.SECOND_BRAIN_HOME;
   } else {

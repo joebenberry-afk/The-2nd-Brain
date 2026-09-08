@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
-from second_brain import cli, contracts, db, decisions, economics
-from second_brain.errors import BrainError
+from second_brain import cli, decisions, economics
 
 
 def test_ips_recovers_logging_policy_value():
-    """Verify that when target_policy is the logging policy, IPS value equals the sample average reward."""
+    """Verify that when target_policy is the logging policy, IPS value equals the sample
+    average reward."""
     rewards = [0.2, 0.8, -0.1, 0.5, 1.0, 0.0, 0.4, 0.9, -0.5, 0.7]
     sample_average = sum(rewards) / len(rewards)
 
@@ -64,7 +63,7 @@ def test_ess_reported():
     # Weights: [10.0, 5.0, 2.0, 0.0]
     expected_sum_w = 10.0 + 5.0 + 2.0 + 0.0  # 17.0
     expected_sum_w2 = 100.0 + 25.0 + 4.0 + 0.0  # 129.0
-    expected_ess = (expected_sum_w ** 2) / expected_sum_w2  # 289.0 / 129.0 = 2.24031...
+    expected_ess = (expected_sum_w**2) / expected_sum_w2  # 289.0 / 129.0 = 2.24031...
 
     assert res["weights_sum"] == pytest.approx(expected_sum_w)
     assert res["ess"] == pytest.approx(expected_ess)
@@ -113,9 +112,21 @@ def test_builtin_policies_always_inject_and_holdout():
     """Verify built-in 'always_inject' and 'holdout' target policies."""
     records = [
         # Delivery (always_inject matches)
-        {"inputs": {"withheld_id": None}, "chosen": ["m1"], "alternatives": [], "propensity": 0.9, "reward": 1.0},
+        {
+            "inputs": {"withheld_id": None},
+            "chosen": ["m1"],
+            "alternatives": [],
+            "propensity": 0.9,
+            "reward": 1.0,
+        },
         # Holdout (holdout matches)
-        {"inputs": {"withheld_id": "m1"}, "chosen": [], "alternatives": ["m1"], "propensity": 0.1, "reward": 0.5},
+        {
+            "inputs": {"withheld_id": "m1"},
+            "chosen": [],
+            "alternatives": ["m1"],
+            "propensity": 0.1,
+            "reward": 0.5,
+        },
     ]
     res_inject = economics.ope_ips(records, "always_inject")
     assert res_inject["n"] == 2
@@ -184,14 +195,39 @@ def test_cli_ope_insufficient_logged_data_boundary(brain_home, capsys):
         decisions.set_outcome(brain_home, d_id, {"ok": True}, 0.5)
 
     # 1. Text output test
-    ret = cli.main(["--home", str(brain_home), "v2", "learn", "ope", "--kind", "retrieval", "--policy", "logging"])
-    out, err = capsys.readouterr()
+    ret = cli.main(
+        [
+            "--home",
+            str(brain_home),
+            "v2",
+            "learn",
+            "ope",
+            "--kind",
+            "retrieval",
+            "--policy",
+            "logging",
+        ]
+    )
+    out, _err = capsys.readouterr()
     assert ret == 1
     assert "INSUFFICIENT_LOGGED_DATA (ess=10.0 < 30, n=10)" in out
 
     # 2. JSON output test
-    ret_json = cli.main(["--home", str(brain_home), "v2", "learn", "ope", "--kind", "retrieval", "--policy", "logging", "--json"])
-    out_json, err_json = capsys.readouterr()
+    ret_json = cli.main(
+        [
+            "--home",
+            str(brain_home),
+            "v2",
+            "learn",
+            "ope",
+            "--kind",
+            "retrieval",
+            "--policy",
+            "logging",
+            "--json",
+        ]
+    )
+    out_json, _err_json = capsys.readouterr()
     assert ret_json == 1
     data = json.loads(out_json)
     assert data["status"] == "INSUFFICIENT_LOGGED_DATA"
@@ -220,16 +256,41 @@ def test_cli_ope_sufficient_logged_data_success(brain_home, capsys):
         decisions.set_outcome(brain_home, d_id, {"ok": True}, 0.8)
 
     # 1. Text output test
-    ret = cli.main(["--home", str(brain_home), "v2", "learn", "ope", "--kind", "retrieval", "--policy", "logging"])
-    out, err = capsys.readouterr()
+    ret = cli.main(
+        [
+            "--home",
+            str(brain_home),
+            "v2",
+            "learn",
+            "ope",
+            "--kind",
+            "retrieval",
+            "--policy",
+            "logging",
+        ]
+    )
+    out, _err = capsys.readouterr()
     assert ret == 0
     assert "OPE IPS:" in out
     assert "ess=35.0" in out
     assert "n=35" in out
 
     # 2. JSON output test
-    ret_json = cli.main(["--home", str(brain_home), "v2", "learn", "ope", "--kind", "retrieval", "--policy", "logging", "--json"])
-    out_json, err_json = capsys.readouterr()
+    ret_json = cli.main(
+        [
+            "--home",
+            str(brain_home),
+            "v2",
+            "learn",
+            "ope",
+            "--kind",
+            "retrieval",
+            "--policy",
+            "logging",
+            "--json",
+        ]
+    )
+    out_json, _err_json = capsys.readouterr()
     assert ret_json == 0
     data = json.loads(out_json)
     assert data["status"] == "OK"

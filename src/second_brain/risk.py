@@ -244,8 +244,7 @@ def assess_risk(
     risk_weights = cfg.get("risk_weights")
     if risk_weights and isinstance(risk_weights, dict):
         score = sum(
-            float(risk_weights.get(signal["name"], 1.0)) * signal["points"]
-            for signal in signals
+            float(risk_weights.get(signal["name"], 1.0)) * signal["points"] for signal in signals
         )
         if isinstance(score, float) and score.is_integer():
             score = int(score)

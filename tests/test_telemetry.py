@@ -213,17 +213,26 @@ def test_operational_report_preserves_missing_provider_counters(brain_home):
         [
             _rec("session_start", model="local", cwd="/repo"),
             _rec("tool_call", tool="read", input_bytes=10, target_sha256="a" * 64),
-            _rec("heartbeat_pulse", mode="shadow", event="turn_start", due=True, ran=True,
-                 healthy=True, db_ok=True, cache_pruned_count=0, git_dirty=False,
-                 issue_codes=[], latency_ms=0, model_tokens_used=0),
+            _rec(
+                "heartbeat_pulse",
+                mode="shadow",
+                event="turn_start",
+                due=True,
+                ran=True,
+                healthy=True,
+                db_ok=True,
+                cache_pruned_count=0,
+                git_dirty=False,
+                issue_codes=[],
+                latency_ms=0,
+                model_tokens_used=0,
+            ),
         ],
     )
     result = telemetry.report(brain_home)["operational"]
     assert result["provider_tokens"]["input"] is None
     assert result["tool_calls"] == 1
     assert result["heartbeat_runs"] == 1
-
-
 
 
 def test_known_kinds_cover_live_records(brain_home):
@@ -287,9 +296,10 @@ def test_telemetry_schema_has_no_reasoning_fields():
 
     schema_path = Path(__file__).parent.parent / "brainstem" / "telemetry" / "SCHEMA.md"
     if schema_path.exists():
-        schema_content = schema_path.read_text(encoding='utf-8', errors='ignore')
+        schema_content = schema_path.read_text(encoding="utf-8", errors="ignore")
 
         forbidden = ["thinking", "reasoning", "chain_of_thought", "cot", "internal_monologue"]
         for word in forbidden:
-            assert word.lower() not in schema_content.lower(), \
+            assert word.lower() not in schema_content.lower(), (
                 f"SCHEMA.md contains forbidden field: {word}"
+            )

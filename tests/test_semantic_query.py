@@ -29,7 +29,6 @@ def test_query_uses_top_idf_terms_not_all_tokens(brain_home):
     assert any(term in query for term in ('"hotel"', '"indigo"', '"juliett"'))
 
 
-
 def test_multi_token_query_keeps_single_eligible_term(brain_home):
     mid = _add(brain_home, "Quasar rule", "quasar retrieval guidance", scope="global")
 
@@ -37,11 +36,13 @@ def test_multi_token_query_keeps_single_eligible_term(brain_home):
 
     assert [row["memory_id"] for row in rows] == [mid]
 
+
 def test_literal_stoplist_removes_contraction_fragments():
     assert semantic._query_candidates("what's aren't couldn't alpha bravo") == [
         "alpha",
         "bravo",
     ]
+
 
 def test_long_prompt_no_longer_returns_empty(brain_home):
     mid = _add(

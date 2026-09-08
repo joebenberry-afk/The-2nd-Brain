@@ -681,8 +681,6 @@ def test_arm_from_telemetry_uses_real_session_usage(brain_home):
     assert arm["wall_time_ms"] == pytest.approx(10000.0, abs=1.0)
 
 
-
-
 def test_arm_from_telemetry_rejects_missing_required_usage(brain_home):
     session_id = "hermes-missing-total"
     _write_telemetry_records(
@@ -713,6 +711,7 @@ def test_arm_from_telemetry_rejects_missing_required_usage(brain_home):
             verification=_verification(),
             regressions=_regressions(0),
         )
+
 
 def test_arm_from_telemetry_rejects_absent_session(brain_home):
     """A session with no (or fewer than two timestamped) telemetry records

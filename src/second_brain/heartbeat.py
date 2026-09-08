@@ -123,8 +123,7 @@ class LocalHeartbeatEngine:
         uri = f"file:{cache_file.as_posix()}?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=1.0) as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM action_cache "
-                "WHERE expires_at IS NOT NULL AND expires_at < ?",
+                "SELECT COUNT(*) FROM action_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
                 (now,),
             ).fetchone()
         return int(row[0] if row else 0)
@@ -371,6 +370,3 @@ class HeartbeatCoordinator:
             if final_conn is not None:
                 final_conn.close()
         return result
-
-
-

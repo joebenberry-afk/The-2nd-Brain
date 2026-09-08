@@ -37,30 +37,63 @@ from second_brain import radar as radar_module  # noqa: E402
 from second_brain.errors import BrainError  # noqa: E402
 from second_brain.goals import GoalStore  # noqa: E402
 
-REQUIRED_SCENARIOS = frozenset({
-    "fresh_session", "resumed_session", "compacted_session",
-    "cross_session_continuity", "harness_isolation", "harness_switch",
-    "driver_worker", "failed_worker", "malformed_state", "stale_state",
-    "token_pressure", "cache_sensitive", "long_running_goal",
-    "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood",
-})
+REQUIRED_SCENARIOS = frozenset(
+    {
+        "fresh_session",
+        "resumed_session",
+        "compacted_session",
+        "cross_session_continuity",
+        "harness_isolation",
+        "harness_switch",
+        "driver_worker",
+        "failed_worker",
+        "malformed_state",
+        "stale_state",
+        "token_pressure",
+        "cache_sensitive",
+        "long_running_goal",
+        "brain_off",
+        "brain_on",
+        "recovery_rollback",
+        "security_boundary",
+        "genuine_project_dogfood",
+    }
+)
 
 _P4_TABLES = (
-    "goals", "goal_events", "bottleneck_fingerprints",
-    "heartbeat_state", "heartbeat_runs",
+    "goals",
+    "goal_events",
+    "bottleneck_fingerprints",
+    "heartbeat_state",
+    "heartbeat_runs",
 )
 
 _CLAIM_KEY_RE = re.compile(r"model|token|success", re.IGNORECASE)
 _FORBIDDEN_MARKERS = (
-    "chain_of_thought", "chain-of-thought", "internal_monologue",
-    "<thinking>", "tool_input", "tool_output",
+    "chain_of_thought",
+    "chain-of-thought",
+    "internal_monologue",
+    "<thinking>",
+    "tool_input",
+    "tool_output",
 )
-_FORBIDDEN_RECORD_FIELDS = frozenset({
-    "prompt", "payload", "secret", "content", "tool_input", "tool-output",
-    "tool-input", "tool_output", "chain_of_thought", "chain-of-thought",
-    "thinking", "internal_monologue", "cot",
-})
+_FORBIDDEN_RECORD_FIELDS = frozenset(
+    {
+        "prompt",
+        "payload",
+        "secret",
+        "content",
+        "tool_input",
+        "tool-output",
+        "tool-input",
+        "tool_output",
+        "chain_of_thought",
+        "chain-of-thought",
+        "thinking",
+        "internal_monologue",
+        "cot",
+    }
+)
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 _QUALIFICATION_EVIDENCE_PREFIX = "outputs/reports/v1-p4/"
 
@@ -76,7 +109,10 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _git_currency_detail(
-    recorded_sha: Any, fresh_sha: str | None, repo: Path, **extra: Any,
+    recorded_sha: Any,
+    fresh_sha: str | None,
+    repo: Path,
+    **extra: Any,
 ) -> dict[str, Any]:
     return {
         "recorded_sha": recorded_sha,
@@ -94,7 +130,6 @@ def _is_repository_root(repo: Path) -> tuple[bool, str | None]:
         return Path(root.stdout.strip()).resolve() == repo.resolve(), None
     except (OSError, RuntimeError):
         return False, "could not resolve repository root"
-
 
 
 def _artifact_path(out_dir: Path, ref: Any) -> Path | None:
@@ -128,7 +163,9 @@ def _raw_artifact_path(out_dir: Path, ref: Any) -> Path | None:
 
 
 def _forbidden_record_fields(
-    node: Any, *, allowed_fields: frozenset[str] = frozenset(),
+    node: Any,
+    *,
+    allowed_fields: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Find privacy-sensitive field names recursively in JSON-like data."""
     found: list[str] = []
@@ -142,8 +179,6 @@ def _forbidden_record_fields(
         for value in node:
             found.extend(_forbidden_record_fields(value, allowed_fields=allowed_fields))
     return found
-
-
 
 
 def check(name: str, ok: bool, detail: Any) -> dict[str, Any]:
@@ -166,10 +201,13 @@ def check_scenario_completeness(manifest: dict[str, Any]) -> dict[str, Any]:
     duplicated = sorted(n for n, c in counts.items() if c > 1)
     ok = not missing and not unexpected and not duplicated
     return check(
-        "scenario_completeness", ok,
+        "scenario_completeness",
+        ok,
         {
-            "missing": missing, "unexpected": unexpected,
-            "duplicated": duplicated, "total": len(names),
+            "missing": missing,
+            "unexpected": unexpected,
+            "duplicated": duplicated,
+            "total": len(names),
         },
     )
 
@@ -224,7 +262,8 @@ def check_artifact_hash_integrity(manifest: dict[str, Any], out_dir: Path) -> di
                 mismatches.append(ref)
     ok = not mismatches and not missing and not unhashed and checked > 0
     return check(
-        "artifact_hash_integrity", ok,
+        "artifact_hash_integrity",
+        ok,
         {"checked": checked, "mismatches": mismatches, "missing": missing, "unhashed": unhashed},
     )
 
@@ -238,15 +277,29 @@ def check_git_currency(manifest: dict[str, Any]) -> dict[str, Any]:
     repo = Path(manifest.get("repo", "."))
     recorded_sha = (manifest.get("git") or {}).get("sha")
     if not repo.is_dir() or not (repo / ".git").exists():
-        return check("git_currency", False, _git_currency_detail(
-            recorded_sha, None, repo, reason="repo is not a git checkout",
-        ))
+        return check(
+            "git_currency",
+            False,
+            _git_currency_detail(
+                recorded_sha,
+                None,
+                repo,
+                reason="repo is not a git checkout",
+            ),
+        )
 
     is_root, root_error = _is_repository_root(repo)
     if not is_root:
-        return check("git_currency", False, _git_currency_detail(
-            recorded_sha, None, repo, reason=root_error or "repo is not the repository root",
-        ))
+        return check(
+            "git_currency",
+            False,
+            _git_currency_detail(
+                recorded_sha,
+                None,
+                repo,
+                reason=root_error or "repo is not the repository root",
+            ),
+        )
 
     fresh = _run_git(repo, "rev-parse", "HEAD")
     fresh_sha = fresh.stdout.strip() if fresh.returncode == 0 else None
@@ -272,8 +325,9 @@ def check_git_currency(manifest: dict[str, Any]) -> dict[str, Any]:
         detail["reason"] = "recorded SHA is not an ancestor of HEAD"
         return check("git_currency", False, detail)
 
-    diff = _run_git(repo, "diff", "--no-renames", "--name-only", "-z",
-                    f"{recorded_sha}..{fresh_sha}", "--")
+    diff = _run_git(
+        repo, "diff", "--no-renames", "--name-only", "-z", f"{recorded_sha}..{fresh_sha}", "--"
+    )
     if diff.returncode != 0:
         detail["reason"] = "could not inspect changes after recorded SHA"
         return check("git_currency", False, detail)
@@ -297,7 +351,8 @@ def check_database_integrity(manifest: dict[str, Any]) -> dict[str, Any]:
     dbfile = paths_module.db_path(home)
     if not dbfile.is_file():
         return check(
-            "database_integrity", False,
+            "database_integrity",
+            False,
             {"reason": "brain.sqlite missing", "path": str(dbfile)},
         )
 
@@ -307,9 +362,7 @@ def check_database_integrity(manifest: dict[str, Any]) -> dict[str, Any]:
         integrity_ok = bool(integrity_row) and integrity_row[0] == "ok"
         tables = {
             r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
     finally:
         conn.close()
@@ -321,7 +374,8 @@ def check_database_integrity(manifest: dict[str, Any]) -> dict[str, Any]:
 
     ok = integrity_ok and not missing_tables and idempotent
     return check(
-        "database_integrity", ok,
+        "database_integrity",
+        ok,
         {
             "integrity_check": integrity_row[0] if integrity_row else None,
             "missing_p4_tables": missing_tables,
@@ -366,7 +420,8 @@ def check_backup_restore_preservation(manifest: dict[str, Any]) -> dict[str, Any
     home = Path(manifest["home"])
     store = GoalStore(home)
     goal = store.create_goal(
-        "independent-verifier backup/restore probe goal", "created by the independent verifier",
+        "independent-verifier backup/restore probe goal",
+        "created by the independent verifier",
     )
     fp_store = fingerprints_module.BottleneckFingerprintStore(home)
     fingerprint = fp_store.record_bottleneck(
@@ -408,13 +463,17 @@ def check_backup_restore_preservation(manifest: dict[str, Any]) -> dict[str, Any
             conn.close()
         restored_fp = row is not None
 
-    ok = restored_goal is not None and restored_goal.title == goal.title and (
-        fingerprint is None or restored_fp is True
+    ok = (
+        restored_goal is not None
+        and restored_goal.title == goal.title
+        and (fingerprint is None or restored_fp is True)
     )
     return check(
-        "backup_restore_preservation", ok,
+        "backup_restore_preservation",
+        ok,
         {
-            "goal_id": goal.goal_id, "goal_preserved": restored_goal is not None,
+            "goal_id": goal.goal_id,
+            "goal_preserved": restored_goal is not None,
             "fingerprint_id": fingerprint.fingerprint_id if fingerprint else None,
             "fingerprint_preserved": restored_fp,
             "backup_dir": str(backup_dir),
@@ -430,10 +489,9 @@ def check_backup_restore_preservation(manifest: dict[str, Any]) -> dict[str, Any
 def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     home = Path(manifest["home"])
     stale_row = next((r for r in manifest["scenarios"] if r["name"] == "stale_state"), None)
-    candidate_id = (
-        (stale_row or {}).get("candidate_id")
-        or (stale_row or {}).get("metrics", {}).get("candidate_id")
-    )
+    candidate_id = (stale_row or {}).get("candidate_id") or (stale_row or {}).get(
+        "metrics", {}
+    ).get("candidate_id")
     radar_ok = False
     radar_detail: dict[str, Any] = {}
     if candidate_id:
@@ -454,7 +512,8 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
     target.write_bytes(good)
     good_hash = hashlib.sha256(good).hexdigest()
     immune.register_policy(
-        scratch, "verifier-unsafe-policy",
+        scratch,
+        "verifier-unsafe-policy",
         {
             "rollback_trigger": "verifier-unsafe-trigger",
             "rollback_target": "state/verifier-guarded-target.txt",
@@ -462,7 +521,8 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
         },
     )
     immune.register_trigger(
-        scratch, "verifier-unsafe-trigger",
+        scratch,
+        "verifier-unsafe-trigger",
         {"metric": "tests_failed", "operator": ">", "value": 0, "window": 1},
     )
     immune.ingest_metric(scratch, "tests_failed", 1, "verifier-probe")
@@ -475,7 +535,9 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
     unsafe_detail = "no exception raised"
     try:
         immune.rollback(
-            scratch, "verifier-unsafe-policy", "verifier-unsafe-trigger",
+            scratch,
+            "verifier-unsafe-policy",
+            "verifier-unsafe-trigger",
             "verifier probe",
         )
     except BrainError as exc:
@@ -484,11 +546,13 @@ def check_stale_and_unsafe_refusals(manifest: dict[str, Any], out_dir: Path) -> 
 
     ok = radar_ok and unsafe_refused
     return check(
-        "stale_and_unsafe_refusals", ok,
+        "stale_and_unsafe_refusals",
+        ok,
         {
             "stale_radar_candidate_id": candidate_id,
             "stale_radar_status": radar_detail.get("status"),
-            "unsafe_rollback_refused": unsafe_refused, "unsafe_rollback_detail": unsafe_detail,
+            "unsafe_rollback_refused": unsafe_refused,
+            "unsafe_rollback_detail": unsafe_detail,
         },
     )
 
@@ -529,8 +593,7 @@ def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict
         (
             c["stdout_ref"]
             for c in fresh_row.get("commands", [])
-            if "p4-pulse" in c.get("argv", [""])[-1]
-            or any("p4" in a for a in c.get("argv", []))
+            if "p4-pulse" in c.get("argv", [""])[-1] or any("p4" in a for a in c.get("argv", []))
         ),
         None,
     )
@@ -559,13 +622,16 @@ def check_off_shadow_boundaries(manifest: dict[str, Any], out_dir: Path) -> dict
 
     ok = off_no_mutation and shadow_no_maintenance and on_has_real_records
     return check(
-        "off_shadow_boundaries", ok,
+        "off_shadow_boundaries",
+        ok,
         {
-            "off_heartbeat_runs": off_runs, "off_heartbeat_state": off_state,
+            "off_heartbeat_runs": off_runs,
+            "off_heartbeat_state": off_state,
             "off_no_mutation": off_no_mutation,
             "shadow_heartbeat": shadow_detail,
             "shadow_no_maintenance_mutation": shadow_no_maintenance,
-            "on_heartbeat_runs": on_runs, "on_has_real_records": on_has_real_records,
+            "on_heartbeat_runs": on_runs,
+            "on_has_real_records": on_has_real_records,
         },
     )
 
@@ -757,11 +823,20 @@ def verify(manifest_path: Path) -> dict[str, Any]:
         try:
             if fn in (check_scenario_completeness,):
                 results.append(fn(manifest))
-            elif fn in (check_artifact_hash_integrity, check_stale_and_unsafe_refusals,
-                        check_off_shadow_boundaries, check_claims_grounded, check_privacy_absence):
+            elif fn in (
+                check_artifact_hash_integrity,
+                check_stale_and_unsafe_refusals,
+                check_off_shadow_boundaries,
+                check_claims_grounded,
+                check_privacy_absence,
+            ):
                 results.append(fn(manifest, out_dir))
-            elif fn in (check_git_currency, check_database_integrity,
-                        check_telemetry_validation, check_backup_restore_preservation):
+            elif fn in (
+                check_git_currency,
+                check_database_integrity,
+                check_telemetry_validation,
+                check_backup_restore_preservation,
+            ):
                 results.append(fn(manifest))
             else:
                 results.append(fn(manifest))

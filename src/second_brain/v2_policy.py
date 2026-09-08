@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import math
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Mapping
 
 from . import db
 from .errors import BrainError
@@ -71,6 +71,8 @@ _TOP_KEYS = frozenset(
         "verification",
         "economics",
         "prices",
+        "models",
+        "providers",
     }
 )
 _SECTION_KEYS = {
@@ -87,8 +89,32 @@ _SECTION_KEYS = {
     "economics": frozenset({"uncached_in", "cache_read", "cache_write", "alpha", "tau"}),
     "prices": frozenset(),
 }
+_MODEL_KEYS = frozenset({"context_tokens"})
+_PROVIDER_KEYS = frozenset(
+    {
+        "cache_support",
+        "cache_scope",
+        "min_cacheable_tokens",
+        "ttl_seconds",
+        "breakpoints_supported",
+        "usage_fields",
+        "context_tokens",
+        "cache_read",
+        "cache_write",
+    }
+)
+
 _REQUIRED_SECTIONS = frozenset(
-    {"rollout", "admission", "retrieval", "brainstem", "learning", "culture", "frontier", "verification"}
+    {
+        "rollout",
+        "admission",
+        "retrieval",
+        "brainstem",
+        "learning",
+        "culture",
+        "frontier",
+        "verification",
+    }
 )
 _REQUIRED_KEYS = {
     "rollout": _SECTION_KEYS["rollout"],
@@ -116,6 +142,18 @@ def _check_unknown(table: Mapping[str, object], allowed: frozenset[str], name: s
     unknown = sorted(set(table) - allowed)
     if unknown:
         raise _fail(f"unknown key(s) in {name}: {', '.join(unknown)}")
+
+
+def _check_named_tables(
+    raw: object,
+    name: str,
+    allowed: frozenset[str],
+) -> None:
+    table = _table(raw, name)
+    for entry_name, entry in table.items():
+        if not isinstance(entry_name, str) or not entry_name.strip():
+            raise _fail(f"{name} entry name must be non-empty text")
+        _check_unknown(_table(entry, f"{name}.{entry_name}"), allowed, f"{name}.{entry_name}")
 
 
 def _positive_int(value: object, name: str) -> int:
@@ -149,7 +187,11 @@ class V2Policy:
     verification_floor: str
 
     def __post_init__(self) -> None:
-        if isinstance(self.schema_version, bool) or not isinstance(self.schema_version, int) or self.schema_version <= 0:
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or self.schema_version <= 0
+        ):
             raise _fail("schema_version must be a positive integer")
         if not isinstance(self.rollout, Mapping):
             raise _fail("rollout must be a mapping")
@@ -176,7 +218,10 @@ class V2Policy:
             raise _fail("retrieval.top_k cannot exceed retrieval.max_candidates")
         _bounded_float(self.surprise_threshold, "learning.surprise_threshold")
         _bounded_float(self.frontier_min_importance, "frontier.min_importance")
-        if not isinstance(self.verification_floor, str) or self.verification_floor not in {"targeted", "full"}:
+        if not isinstance(self.verification_floor, str) or self.verification_floor not in {
+            "targeted",
+            "full",
+        }:
             raise _fail("verification.floor must be 'targeted' or 'full'")
 
 
@@ -192,6 +237,8 @@ def load_policy(home: Path) -> V2Policy:
     if not isinstance(raw, dict):
         raise _fail("root must be a TOML table")
     _check_unknown(raw, _TOP_KEYS, "root")
+    _check_named_tables(raw.get("models", {}), "models", _MODEL_KEYS)
+    _check_named_tables(raw.get("providers", {}), "providers", _PROVIDER_KEYS)
     schema_version = raw.get("schema_version")
     if schema_version != 1 or isinstance(schema_version, bool):
         raise _fail("schema_version must be 1")
@@ -228,14 +275,24 @@ def load_policy(home: Path) -> V2Policy:
         schema_version=schema_version,
         rollout=rollout,
         admission_min_score=_bounded_float(admission["min_score"], "admission.min_score"),
-        retrieval_max_candidates=_positive_int(retrieval["max_candidates"], "retrieval.max_candidates"),
+        retrieval_max_candidates=_positive_int(
+            retrieval["max_candidates"], "retrieval.max_candidates"
+        ),
         retrieval_top_k=_positive_int(retrieval["top_k"], "retrieval.top_k"),
         retrieval_token_budget=_positive_int(retrieval["token_budget"], "retrieval.token_budget"),
-        context_char_budget=_positive_int(brainstem["context_char_budget"], "brainstem.context_char_budget"),
+        context_char_budget=_positive_int(
+            brainstem["context_char_budget"], "brainstem.context_char_budget"
+        ),
         worker_slots=_positive_int(brainstem["worker_slots"], "brainstem.worker_slots"),
-        premium_model_turns=_positive_int(brainstem["premium_model_turns"], "brainstem.premium_model_turns"),
-        surprise_threshold=_bounded_float(learning["surprise_threshold"], "learning.surprise_threshold"),
-        frontier_min_importance=_bounded_float(frontier["min_importance"], "frontier.min_importance"),
+        premium_model_turns=_positive_int(
+            brainstem["premium_model_turns"], "brainstem.premium_model_turns"
+        ),
+        surprise_threshold=_bounded_float(
+            learning["surprise_threshold"], "learning.surprise_threshold"
+        ),
+        frontier_min_importance=_bounded_float(
+            frontier["min_importance"], "frontier.min_importance"
+        ),
         verification_floor=verification_floor,
     )
 

@@ -121,8 +121,12 @@ def test_writeback_does_not_reinject_same_memory_lineage(tmp_path) -> None:
     home = tmp_path / "brain"
     _init(home)
     mid = semantic.add_memory(
-        home, "Migration ordering", "apply migrations in numeric order",
-        scope="project", project_id="proj-a", grade="TESTED",
+        home,
+        "Migration ordering",
+        "apply migrations in numeric order",
+        scope="project",
+        project_id="proj-a",
+        grade="TESTED",
     )
     semantic.curate(home, mid, status="current")
     first = _inject(home, "migration ordering", session_id="s1")
@@ -134,6 +138,7 @@ def test_writeback_does_not_reinject_same_memory_lineage(tmp_path) -> None:
     assert second.decision.value == "INJECT"
     assert mid not in second.selected_ids
     assert out["memory_id"] in second.selected_ids
+
 
 def test_writeback_evidence_dict_normalized(tmp_path) -> None:
     """T-G6-F4: --evidence accepts a plain dict {ref: kind} and normalizes to

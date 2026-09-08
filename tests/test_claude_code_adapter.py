@@ -610,9 +610,7 @@ def _events_rows(home: Path, session_id: str, event_type: str) -> list[dict]:
     conn = sqlite3.connect(f"file:{dbfile}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT * FROM events WHERE event_type = ?", (event_type,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM events WHERE event_type = ?", (event_type,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -654,9 +652,7 @@ def test_precompact_creates_no_phantom_prime_row(home: Path, named_project: Path
     assert not any(r["host"] == "prime" for r in rows)
 
 
-def test_precompact_event_references_canonical_session_row(
-    home: Path, named_project: Path
-) -> None:
+def test_precompact_event_references_canonical_session_row(home: Path, named_project: Path) -> None:
     from second_brain import ledger
 
     sid = "claude-sess-p3a2-3"
@@ -731,9 +727,7 @@ def test_precompact_fix_does_not_change_telemetry_identity_semantics(
     assert _telemetry_sessions(home, sid) == {sid}
 
 
-def test_ledger_rehydration_still_works_after_identity_fix(
-    home: Path, named_project: Path
-) -> None:
+def test_ledger_rehydration_still_works_after_identity_fix(home: Path, named_project: Path) -> None:
     sid = "claude-sess-p3a2-6"
     _run_cli(
         home,
@@ -759,6 +753,7 @@ def test_precompact_brain_unavailable_fails_open(tmp_path: Path, git_project: Pa
     )
     assert result.returncode == 0
     assert json.loads(result.stdout.strip() or "{}") == {}
+
 
 def test_claude_stop_hook_emits_assistant_usage_from_transcript(
     home: Path, git_project: Path, tmp_path: Path
@@ -878,7 +873,9 @@ def test_extract_usage_tail_is_bounded_and_preserves_only_usage(
     assert records == [{"uuid": "tail", "output_tokens": 7}]
 
 
-def test_claude_stop_maps_optional_cache_state(home: Path, git_project: Path, tmp_path: Path) -> None:
+def test_claude_stop_maps_optional_cache_state(
+    home: Path, git_project: Path, tmp_path: Path
+) -> None:
     transcript = tmp_path / "cache.jsonl"
     transcript.write_text(
         json.dumps(
@@ -923,9 +920,7 @@ def test_claude_hook_config_includes_prompt_and_tool_events() -> None:
     assert "PostToolUse" in config["hooks"]
 
 
-def test_claude_prompt_and_tool_hooks_persist_only_telemetry(
-    home: Path, git_project: Path
-) -> None:
+def test_claude_prompt_and_tool_hooks_persist_only_telemetry(home: Path, git_project: Path) -> None:
     prompt = "secret prompt that must not be persisted"
     output = "secret tool output that must not be persisted"
     prompt_result = _run_cli(
@@ -1042,10 +1037,7 @@ def test_claude_usage_cursor_waits_for_successful_writer(
     cli._claude_usage_records(home, "claude-sess-writer-failure", str(transcript), None)
     from second_brain import ledger
 
-    cursor = (
-        ledger.session_dir(home, "claude-sess-writer-failure")
-        / "claude-usage-cursor.json"
-    )
+    cursor = ledger.session_dir(home, "claude-sess-writer-failure") / "claude-usage-cursor.json"
     assert not cursor.exists()
 
 

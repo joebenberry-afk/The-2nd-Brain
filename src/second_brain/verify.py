@@ -21,8 +21,8 @@ absent config falls back to the documented defaults (safe default).
 from __future__ import annotations
 
 import contextlib
-import os
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -178,6 +178,7 @@ def build_verifier_brief(home: Path, session_id: str, repo: Path) -> Path:
         raise BrainError(f"Could not write verifier brief {target}: {exc}") from exc
     return target
 
+
 # ---------------------------------------------------------------------------
 # P3-G: risk-adaptive verification ladder (plan §10.2/§10.3/§10.4).
 # ---------------------------------------------------------------------------
@@ -232,10 +233,9 @@ LADDER_ACTION_LABELS: dict[str, str] = {
 def ladder_from_toml(text: str) -> dict[str, list[str]]:
     """Parse the ``[ladder]`` section of config/verification.toml.
 
-    Invalid TOML, a missing/empty section, or a non-string-list value for a
-    level falls back to the documented default for that level (safe default —
-    a broken config never silences verification). PURE, never throws, never
-    reads the filesystem.
+    Invalid TOML, a missing/empty section, or a non-string-list value for a level falls
+    back to the documented default for that level (safe default — a broken config never
+    silences verification). PURE, never throws, never reads the filesystem.
     """
     try:
         data = tomllib.loads(text)
@@ -247,8 +247,10 @@ def ladder_from_toml(text: str) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for level in RISK_LEVELS:
         value = section.get(level)
-        if isinstance(value, list) and len(value) > 0 and all(
-            isinstance(item, str) for item in value
+        if (
+            isinstance(value, list)
+            and len(value) > 0
+            and all(isinstance(item, str) for item in value)
         ):
             out[level] = [str(item) for item in value]
         else:
@@ -271,8 +273,8 @@ def load_verification_ladder(home: Path | str | None) -> dict[str, list[str]]:
 
 
 def expand_ladder_actions(ladder: dict[str, list[str]], level: str) -> list[str]:
-    """Resolve the verification ladder into a self-contained, order-stable
-    list of leaf action tokens for `level`.
+    """Resolve the verification ladder into a self-contained, order-stable list of leaf
+    action tokens for `level`.
 
     Cumulativity is STRUCTURAL (plan §10.2): every level includes all lower
     levels' actions (LOW subset MEDIUM subset HIGH subset CRITICAL), so the
@@ -317,6 +319,7 @@ def verification_ladder_payload(
         "approval_required": "human_approval_for_irreversible" in tokens,
     }
 
+
 def evaluate_accuracy_gate(
     home: Path | str,
     session_id: str,
@@ -356,9 +359,7 @@ def evaluate_accuracy_gate(
     ladder = load_verification_ladder(home)
     all_actions = expand_ladder_actions(ladder, level)
     required_actions = [
-        action
-        for action in all_actions
-        if action != "optional_second_independent_verification"
+        action for action in all_actions if action != "optional_second_independent_verification"
     ]
     environment_reason = ""
     if environment_required:
@@ -368,14 +369,13 @@ def evaluate_accuracy_gate(
             environment_reason = "environment_steward_missing"
         else:
             env_state = environment_evidence.get("environment_state")
-            repo_match = (
-                isinstance(env_state, dict)
-                and env_state.get("repo") == str(Path(repo).resolve())
+            repo_match = isinstance(env_state, dict) and env_state.get("repo") == str(
+                Path(repo).resolve()
             )
-            hash_match = (
-                isinstance(environment_evidence.get("environment_hash"), str)
-                and environment_evidence.get("environment_hash")
-                == environment_evidence.get("after_environment_hash")
+            hash_match = isinstance(
+                environment_evidence.get("environment_hash"), str
+            ) and environment_evidence.get("environment_hash") == environment_evidence.get(
+                "after_environment_hash"
             )
             valid_environment = (
                 repo_match
@@ -439,9 +439,7 @@ def evaluate_accuracy_gate(
     effective_approval = (
         "approved"
         if approval_required and approval_state == "approved"
-        else "required"
-        if approval_required
-        else "not_required"
+        else "required" if approval_required else "not_required"
     )
     if unresolved_requirements:
         completion_allowed = False
@@ -465,9 +463,7 @@ def evaluate_accuracy_gate(
         completion_allowed = True
         decision_reason = "all_required_evidence_satisfied"
     risk_reasons = [
-        str(signal["name"])
-        for signal in assessment["signals"]
-        if int(signal["points"]) > 0
+        str(signal["name"]) for signal in assessment["signals"] if int(signal["points"]) > 0
     ]
     ladder_id = stable_content_hash({"risk_level": level, "required_actions": required_actions})
     accuracy_gate_id = stable_content_hash(
@@ -480,9 +476,7 @@ def evaluate_accuracy_gate(
         }
     )
     raw_verification_reasons = (
-        independent_verification.get("reason_codes", [])
-        if independent_verification
-        else []
+        independent_verification.get("reason_codes", []) if independent_verification else []
     )
     verification_reason_codes = (
         [str(item) for item in raw_verification_reasons]
@@ -503,7 +497,8 @@ def evaluate_accuracy_gate(
                 conn_d = db.connect(db_path)
                 try:
                     row_d = conn_d.execute(
-                        "SELECT chosen_json FROM decisions WHERE session_id = ? AND kind = 'routing' ORDER BY created_at DESC LIMIT 1",
+                        "SELECT chosen_json FROM decisions WHERE session_id = ? AND kind ="
+                        " 'routing' ORDER BY created_at DESC LIMIT 1",
                         (session_id,),
                     ).fetchone()
                     if row_d and row_d[0]:
@@ -525,8 +520,11 @@ def evaluate_accuracy_gate(
                 try:
                     now_str = datetime.now(UTC).isoformat()
                     conn_o.execute(
-                        """INSERT OR IGNORE INTO model_profiles (model_id, family, capabilities, first_seen_at)
-                           VALUES (?, ?, '', ?)""",
+                        (
+                            'INSERT OR IGNORE INTO model_profiles (model_id, fa'
+                            'mily, capabilities, first_seen_at)\n               '
+                            "            VALUES (?, ?, '', ?)"
+                        ),
                         (
                             effective_model_id,
                             effective_model_id.split("-")[0] if "-" in effective_model_id else "",
@@ -542,9 +540,12 @@ def evaluate_accuracy_gate(
                     success_int = 1 if completion_allowed else 0
                     f1_float = 1.0 if completion_allowed else 0.0
                     conn_o.execute(
-                        """INSERT INTO model_skill_outcomes
-                           (model_id, skill_name, task_hash, success, noise, f1, session_id, created_at)
-                           VALUES (?, ?, ?, ?, 0, ?, ?, ?)""",
+                        (
+                            'INSERT INTO model_skill_outcomes\n                 '
+                            '          (model_id, skill_name, task_hash, succes'
+                            's, noise, f1, session_id, created_at)\n            '
+                            '               VALUES (?, ?, ?, ?, 0, ?, ?, ?)'
+                        ),
                         (
                             effective_model_id,
                             effective_skill,
@@ -578,9 +579,7 @@ def evaluate_accuracy_gate(
         "completion_allowed": completion_allowed,
         "decision_reason": decision_reason,
         "verification_id": (
-            independent_verification.get("verification_id")
-            if independent_verification
-            else None
+            independent_verification.get("verification_id") if independent_verification else None
         ),
         "verifier_session_id": (
             independent_verification.get("verifier_session_id")
@@ -588,41 +587,29 @@ def evaluate_accuracy_gate(
             else None
         ),
         "verification_verdict": (
-            independent_verification.get("verdict")
-            if independent_verification
-            else None
+            independent_verification.get("verdict") if independent_verification else None
         ),
         "verification_freshness": (
-            independent_verification.get("freshness")
-            if independent_verification
-            else None
+            independent_verification.get("freshness") if independent_verification else None
         ),
         "verification_reason_codes": verification_reason_codes,
         "environment_steward_id": (
-            environment_evidence.get("environment_steward_id")
-            if environment_evidence
-            else None
+            environment_evidence.get("environment_steward_id") if environment_evidence else None
         ),
         "environment_hash": (
             environment_evidence.get("environment_hash") if environment_evidence else None
         ),
         "environment_mutation_classification": (
-            environment_evidence.get("mutation_classification")
-            if environment_evidence
-            else None
+            environment_evidence.get("mutation_classification") if environment_evidence else None
         ),
         "environment_completion_eligible": (
-            environment_evidence.get("completion_eligible")
-            if environment_evidence
-            else None
+            environment_evidence.get("completion_eligible") if environment_evidence else None
         ),
         "economics": {
             "verification_model_calls": 0,
             "verification_tool_calls": 0,
             "verification_context_tokens": 0,
-            "gate_bookkeeping_overhead_ms": round(
-                (time.perf_counter() - started_at) * 1000, 3
-            ),
+            "gate_bookkeeping_overhead_ms": round((time.perf_counter() - started_at) * 1000, 3),
             "retries": 0,
             "corrections": 0,
             "completion_blocked": not completion_allowed,

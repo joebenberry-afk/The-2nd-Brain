@@ -35,12 +35,24 @@ from second_brain import paths as paths_module  # noqa: E402
 from second_brain import telemetry  # noqa: E402
 
 SCENARIO_NAMES = (
-    "fresh_session", "resumed_session", "compacted_session",
-    "cross_session_continuity", "harness_isolation", "harness_switch",
-    "driver_worker", "failed_worker", "malformed_state", "stale_state",
-    "token_pressure", "cache_sensitive", "long_running_goal",
-    "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood",
+    "fresh_session",
+    "resumed_session",
+    "compacted_session",
+    "cross_session_continuity",
+    "harness_isolation",
+    "harness_switch",
+    "driver_worker",
+    "failed_worker",
+    "malformed_state",
+    "stale_state",
+    "token_pressure",
+    "cache_sensitive",
+    "long_running_goal",
+    "brain_off",
+    "brain_on",
+    "recovery_rollback",
+    "security_boundary",
+    "genuine_project_dogfood",
 )
 
 _ENV_STRIP = ("PYTHONHOME", "PYTHONPATH")
@@ -77,8 +89,6 @@ def _rel(ctx: Ctx, path: Path) -> str:
     return path.resolve().relative_to(ctx.out_dir.resolve()).as_posix()
 
 
-
-
 def _confined_evidence_path(out_dir: Path, ref: Any) -> Path | None:
     """Resolve a relative evidence ref only when it stays under out_dir."""
     if not isinstance(ref, str) or not ref:
@@ -93,6 +103,8 @@ def _confined_evidence_path(out_dir: Path, ref: Any) -> Path | None:
     except (OSError, RuntimeError, ValueError):
         return None
     return path
+
+
 def run_argv(
     ctx: Ctx,
     scenario: str,
@@ -138,24 +150,46 @@ def run_argv(
 
 
 def run_cli(
-    ctx: Ctx, scenario: str, args: list[str], *, home: Path, cwd: Path | None = None,
-    timeout: int = 90, label: str = "",
+    ctx: Ctx,
+    scenario: str,
+    args: list[str],
+    *,
+    home: Path,
+    cwd: Path | None = None,
+    timeout: int = 90,
+    label: str = "",
 ) -> CommandResult:
     argv = [str(ctx.python_exe), "-m", "second_brain.cli", *args]
     return run_argv(
-        ctx, scenario, argv, cwd=cwd or ctx.repo, env=sanitized_env(home),
-        timeout=timeout, label=label or args[0],
+        ctx,
+        scenario,
+        argv,
+        cwd=cwd or ctx.repo,
+        env=sanitized_env(home),
+        timeout=timeout,
+        label=label or args[0],
     )
 
 
 def run_py(
-    ctx: Ctx, scenario: str, code: str, *, home: Path | None, cwd: Path | None = None,
-    timeout: int = 90, label: str = "py",
+    ctx: Ctx,
+    scenario: str,
+    code: str,
+    *,
+    home: Path | None,
+    cwd: Path | None = None,
+    timeout: int = 90,
+    label: str = "py",
 ) -> CommandResult:
     argv = [str(ctx.python_exe), "-c", code]
     return run_argv(
-        ctx, scenario, argv, cwd=cwd or ctx.repo, env=sanitized_env(home),
-        timeout=timeout, label=label,
+        ctx,
+        scenario,
+        argv,
+        cwd=cwd or ctx.repo,
+        env=sanitized_env(home),
+        timeout=timeout,
+        label=label,
     )
 
 
@@ -186,19 +220,25 @@ def _q(value: str) -> str:
 def git_info(ctx: Ctx) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     commands: list[dict[str, Any]] = []
     sha_result = run_argv(
-        ctx, "_setup", ["git", "rev-parse", "HEAD"], cwd=ctx.repo,
-        env=sanitized_env(None), label="git-sha",
+        ctx,
+        "_setup",
+        ["git", "rev-parse", "HEAD"],
+        cwd=ctx.repo,
+        env=sanitized_env(None),
+        label="git-sha",
     )
     commands.append(sha_result.record)
     sha = (
-        sha_result.stdout.decode("utf-8").strip()
-        if sha_result.record["returncode"] == 0
-        else None
+        sha_result.stdout.decode("utf-8").strip() if sha_result.record["returncode"] == 0 else None
     )
 
     status_result = run_argv(
-        ctx, "_setup", ["git", "status", "--porcelain"], cwd=ctx.repo,
-        env=sanitized_env(None), label="git-status",
+        ctx,
+        "_setup",
+        ["git", "status", "--porcelain"],
+        cwd=ctx.repo,
+        env=sanitized_env(None),
+        label="git-status",
     )
     commands.append(status_result.record)
     dirty = (
@@ -271,8 +311,13 @@ def common_metrics(home: Path, session_id: str) -> dict[str, Any]:
 
 
 def make_result(
-    name: str, *, evidence_refs: list[str], commands: list[dict[str, Any]],
-    metrics: dict[str, Any], status: str = "passed", **extra: Any,
+    name: str,
+    *,
+    evidence_refs: list[str],
+    commands: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    status: str = "passed",
+    **extra: Any,
 ) -> dict[str, Any]:
     result = {
         "name": name,
@@ -303,9 +348,11 @@ def scenario_fresh_session(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict
     assert doctor_payload["failed"] is False, f"doctor reported failure: {doctor_payload}"
 
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["p4", "pulse", "--event", "session_start", "--session", session_id, "--force", "--json"],
-        home=home, label="p4-pulse",
+        home=home,
+        label="p4-pulse",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -334,8 +381,12 @@ def scenario_fresh_session(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict
     metrics["doctor_failed"] = doctor_payload["failed"]
     metrics["heartbeat_ran"] = pulse_payload["heartbeat"]["ran"]
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
-        session_id=session_id, goal_id=goal_id,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
+        session_id=session_id,
+        goal_id=goal_id,
     )
 
 
@@ -383,8 +434,11 @@ def scenario_compacted_session(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     evidence_refs = []
 
     cr = run_cli(
-        ctx, name, ["ledger", "init", "--session", session_id, "--host", "qualification-runner"],
-        home=home, label="ledger-init",
+        ctx,
+        name,
+        ["ledger", "init", "--session", session_id, "--host", "qualification-runner"],
+        home=home,
+        label="ledger-init",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -406,7 +460,10 @@ def scenario_compacted_session(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     evidence_refs.append(write_evidence(ctx, name, "compact-telemetry-records", compact_records))
 
     cr = run_cli(
-        ctx, name, ["ledger", "segment", "checkpoint", session_id], home=home,
+        ctx,
+        name,
+        ["ledger", "segment", "checkpoint", session_id],
+        home=home,
         label="ledger-checkpoint",
     )
     commands.append(cr.record)
@@ -423,7 +480,10 @@ def scenario_compacted_session(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     metrics["compactions_after"] = after
     metrics["checkpoint_integrity"] = checkpoint_payload["integrity"]
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
         session_id=session_id,
     )
 
@@ -465,8 +525,13 @@ def scenario_cross_session_continuity(
         name,
         evidence_refs=[cr_a.record["stdout_ref"], cr_b.record["stdout_ref"]],
         commands=[cr_a.record, cr_b.record],
-        metrics={"tool_calls": 0, "wall_time_ms": None, "provider_tokens": None,
-                 "reasoning_tokens": None, "background_model_calls": 0},
+        metrics={
+            "tool_calls": 0,
+            "wall_time_ms": None,
+            "provider_tokens": None,
+            "reasoning_tokens": None,
+            "background_model_calls": 0,
+        },
         goal_id=goal_id,
     )
 
@@ -483,9 +548,11 @@ def scenario_harness_isolation(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     evidence_refs = []
     for sess in (sess_a, sess_b):
         cr = run_cli(
-            ctx, name,
+            ctx,
+            name,
             ["p4", "pulse", "--event", "session_start", "--session", sess, "--force", "--json"],
-            home=home, label=f"pulse-{sess}",
+            home=home,
+            label=f"pulse-{sess}",
         )
         commands.append(cr.record)
         evidence_refs.append(cr.record["stdout_ref"])
@@ -521,9 +588,11 @@ def scenario_harness_switch(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dic
     evidence_refs = []
 
     cr_cli = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["p4", "pulse", "--event", "session_start", "--session", sess_cli, "--force", "--json"],
-        home=home, label="python-cli-pulse",
+        home=home,
+        label="python-cli-pulse",
     )
     commands.append(cr_cli.record)
     evidence_refs.append(cr_cli.record["stdout_ref"])
@@ -603,10 +672,11 @@ def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     home = dedicated
 
     cr = run_cli(
-        ctx, name,
-        ["worker-plane", "spawn", sess,
-         "qualification_real_subtask_implement_helper", "--json"],
-        home=home, label="spawn",
+        ctx,
+        name,
+        ["worker-plane", "spawn", sess, "qualification_real_subtask_implement_helper", "--json"],
+        home=home,
+        label="spawn",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -615,8 +685,11 @@ def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     worker_id = spawn_payload["worker_id"]
 
     cr = run_cli(
-        ctx, name, ["worker-plane", "status", sess, "--json"],
-        home=home, label="status-active",
+        ctx,
+        name,
+        ["worker-plane", "status", sess, "--json"],
+        home=home,
+        label="status-active",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -624,10 +697,21 @@ def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     assert status_active["active_workers"] == 1, status_active
 
     cr = run_cli(
-        ctx, name,
-        ["worker-plane", "complete", sess, worker_id, "--status", "COMPLETED",
-         "--summary", "qualification_task_complete", "--json"],
-        home=home, label="complete",
+        ctx,
+        name,
+        [
+            "worker-plane",
+            "complete",
+            sess,
+            worker_id,
+            "--status",
+            "COMPLETED",
+            "--summary",
+            "qualification_task_complete",
+            "--json",
+        ],
+        home=home,
+        label="complete",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -635,8 +719,11 @@ def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     assert complete_payload["status"] == "COMPLETED", complete_payload
 
     cr = run_cli(
-        ctx, name, ["worker-plane", "status", sess, "--json"],
-        home=home, label="status-after",
+        ctx,
+        name,
+        ["worker-plane", "status", sess, "--json"],
+        home=home,
+        label="status-after",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -644,10 +731,14 @@ def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     assert status_after["active_workers"] == 0, status_after
 
     metrics = {
-        "worker_id": worker_id, "spawned": True, "completed_status": "COMPLETED",
+        "worker_id": worker_id,
+        "spawned": True,
+        "completed_status": "COMPLETED",
         "active_workers_during": status_active["active_workers"],
         "active_workers_after": status_after["active_workers"],
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -668,9 +759,11 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     home = dedicated
 
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["worker-plane", "spawn", sess, "qualification_real_subtask_reproduce_failure", "--json"],
-        home=home, label="spawn",
+        home=home,
+        label="spawn",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -678,10 +771,23 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     worker_id = spawn_payload["worker_id"]
 
     cr = run_cli(
-        ctx, name,
-        ["worker-plane", "complete", sess, worker_id, "--status", "FAILED",
-         "--summary", "qualification_real_failure", "--finding", "reproduced_real_error", "--json"],
-        home=home, label="complete-failed",
+        ctx,
+        name,
+        [
+            "worker-plane",
+            "complete",
+            sess,
+            worker_id,
+            "--status",
+            "FAILED",
+            "--summary",
+            "qualification_real_failure",
+            "--finding",
+            "reproduced_real_error",
+            "--json",
+        ],
+        home=home,
+        label="complete-failed",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -689,8 +795,11 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     assert complete_payload["status"] == "FAILED", complete_payload
 
     cr = run_cli(
-        ctx, name, ["worker-plane", "status", sess, "--json"],
-        home=home, label="status-after-fail",
+        ctx,
+        name,
+        ["worker-plane", "status", sess, "--json"],
+        home=home,
+        label="status-after-fail",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -698,9 +807,11 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     retryable = status_after["active_workers"] < status_after["max_concurrent_workers"]
 
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["worker-plane", "spawn", sess, "qualification_retry_after_real_failure", "--json"],
-        home=home, label="retry-spawn",
+        home=home,
+        label="retry-spawn",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -708,9 +819,13 @@ def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) ->
     assert retry_payload["spawned"] is retryable, retry_payload
 
     metrics = {
-        "worker_id": worker_id, "completed_status": "FAILED", "retryable": retryable,
+        "worker_id": worker_id,
+        "completed_status": "FAILED",
+        "retryable": retryable,
         "retry_spawned": retry_payload["spawned"],
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -764,9 +879,12 @@ def scenario_malformed_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> di
         evidence_refs=[cr.record["stdout_ref"]],
         commands=[cr.record],
         metrics={
-            "refused": True, "corrupted_field": "milestones_json",
+            "refused": True,
+            "corrupted_field": "milestones_json",
             "isolated_copy": str(isolated),
-            "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+            "provider_tokens": None,
+            "wall_time_ms": None,
+            "background_model_calls": 0,
         },
     )
 
@@ -781,8 +899,16 @@ def scenario_stale_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict[s
     directory = telemetry.telemetry_dir(home)
     directory.mkdir(parents=True, exist_ok=True)
     records = [
-        {"v": 2, "kind": "tool_call", "session": sess, "ts": f"2026-08-26T00:00:0{i}Z",
-         "tool": "read", "id": f"call-{i}", "target_sha256": target_hash, "input_bytes": 80}
+        {
+            "v": 2,
+            "kind": "tool_call",
+            "session": sess,
+            "ts": f"2026-08-26T00:00:0{i}Z",
+            "tool": "read",
+            "id": f"call-{i}",
+            "target_sha256": target_hash,
+            "input_bytes": 80,
+        }
         for i in range(3)
     ]
     tfile = directory / f"{sess}.jsonl"
@@ -790,12 +916,20 @@ def scenario_stale_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict[s
     evidence_refs.append(write_evidence(ctx, name, "seed-telemetry", records))
 
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         [
-            "radar", "observe", sess, "--project-id", "second-brain",
-            "--repo", str(ctx.repo), "--json",
+            "radar",
+            "observe",
+            sess,
+            "--project-id",
+            "second-brain",
+            "--repo",
+            str(ctx.repo),
+            "--json",
         ],
-        home=home, label="observe",
+        home=home,
+        label="observe",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -804,8 +938,11 @@ def scenario_stale_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict[s
     candidate_id = observe_payload["candidates"][0]["candidate_id"]
 
     cr = run_cli(
-        ctx, name, ["radar", "validate", candidate_id, "--json"],
-        home=home, label="validate-fresh",
+        ctx,
+        name,
+        ["radar", "validate", candidate_id, "--json"],
+        home=home,
+        label="validate-fresh",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -817,8 +954,11 @@ def scenario_stale_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict[s
     tfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     cr = run_cli(
-        ctx, name, ["radar", "validate", candidate_id, "--json"],
-        home=home, label="validate-stale",
+        ctx,
+        name,
+        ["radar", "validate", candidate_id, "--json"],
+        home=home,
+        label="validate-stale",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -827,12 +967,19 @@ def scenario_stale_state(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dict[s
     assert stale_payload["reason"] == "telemetry_evidence_changed", stale_payload
 
     metrics = {
-        "candidate_id": candidate_id, "fresh_status": fresh_payload["status"],
-        "stale_status": stale_payload["status"], "stale_reason": stale_payload["reason"],
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "candidate_id": candidate_id,
+        "fresh_status": fresh_payload["status"],
+        "stale_status": stale_payload["status"],
+        "stale_reason": stale_payload["reason"],
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
         candidate_id=candidate_id,
     )
 
@@ -857,10 +1004,22 @@ def scenario_token_pressure(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dic
     original_sha256 = hashlib.sha256(big_path.read_bytes()).hexdigest()
 
     cr = run_cli(
-        ctx, name,
-        ["firewall", "reduce", str(big_path), "--kind", "generic", "--tool", "bash",
-         "--session", sess, "--json"],
-        home=home, label="reduce",
+        ctx,
+        name,
+        [
+            "firewall",
+            "reduce",
+            str(big_path),
+            "--kind",
+            "generic",
+            "--tool",
+            "bash",
+            "--session",
+            sess,
+            "--json",
+        ],
+        home=home,
+        label="reduce",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -879,7 +1038,9 @@ def scenario_token_pressure(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dic
         "reduction_ratio": reduce_payload["reduction_ratio"],
         "lossless_roundtrip": True,
         "raw_object_ref": ref,
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -891,8 +1052,11 @@ def scenario_cache_sensitive(ctx: Ctx, home: Path, shared: dict[str, Any]) -> di
     evidence_refs = []
 
     cr = run_cli(
-        ctx, name, ["action-cache", "search", pattern, "--path", str(ctx.repo), "--json"],
-        home=home, label="search-miss",
+        ctx,
+        name,
+        ["action-cache", "search", pattern, "--path", str(ctx.repo), "--json"],
+        home=home,
+        label="search-miss",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -900,8 +1064,11 @@ def scenario_cache_sensitive(ctx: Ctx, home: Path, shared: dict[str, Any]) -> di
     assert miss_payload["hit"] is False, miss_payload
 
     cr = run_cli(
-        ctx, name, ["action-cache", "search", pattern, "--path", str(ctx.repo), "--json"],
-        home=home, label="search-hit",
+        ctx,
+        name,
+        ["action-cache", "search", pattern, "--path", str(ctx.repo), "--json"],
+        home=home,
+        label="search-hit",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -910,9 +1077,12 @@ def scenario_cache_sensitive(ctx: Ctx, home: Path, shared: dict[str, Any]) -> di
     assert hit_payload["content"] == miss_payload["content"]
 
     metrics = {
-        "miss_latency_ms": miss_payload["latency_ms"], "hit_latency_ms": hit_payload["latency_ms"],
+        "miss_latency_ms": miss_payload["latency_ms"],
+        "hit_latency_ms": hit_payload["latency_ms"],
         "hit_after_miss": True,
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -984,12 +1154,18 @@ def scenario_long_running_goal(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     assert final_payload["completed"] is True
 
     metrics = {
-        "goal_id": goal_id, "final_status": final_payload["status"],
+        "goal_id": goal_id,
+        "final_status": final_payload["status"],
         "transitions": ["ACTIVE", "BLOCKED", "ACTIVE", "COMPLETED"],
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
         goal_id=goal_id,
     )
 
@@ -1021,9 +1197,11 @@ def scenario_brain_off(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dic
 
     sess = "q8-brain-off"
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["p4", "pulse", "--event", "session_start", "--session", sess, "--force", "--json"],
-        home=dedicated, label="pulse-off",
+        home=dedicated,
+        label="pulse-off",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1042,12 +1220,19 @@ def scenario_brain_off(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dic
     assert after_state == before_state, "OFF mode must not update heartbeat_state"
 
     metrics = {
-        "mode": "off", "heartbeat_runs_before": before_runs, "heartbeat_runs_after": after_runs,
+        "mode": "off",
+        "heartbeat_runs_before": before_runs,
+        "heartbeat_runs_after": after_runs,
         "p4_mutation": False,
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
         home=str(dedicated),
     )
 
@@ -1073,9 +1258,11 @@ def scenario_brain_on(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dict
 
     sess = "q8-brain-on"
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         ["p4", "pulse", "--event", "session_start", "--session", sess, "--force", "--json"],
-        home=dedicated, label="pulse-active",
+        home=dedicated,
+        label="pulse-active",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1092,12 +1279,19 @@ def scenario_brain_on(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dict
     assert after_runs == before_runs + 1, "ACTIVE mode must record a real heartbeat_runs row"
 
     metrics = {
-        "mode": "active", "heartbeat_runs_before": before_runs, "heartbeat_runs_after": after_runs,
+        "mode": "active",
+        "heartbeat_runs_before": before_runs,
+        "heartbeat_runs_after": after_runs,
         "maintenance_mutated": True,
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(
-        name, evidence_refs=evidence_refs, commands=commands, metrics=metrics,
+        name,
+        evidence_refs=evidence_refs,
+        commands=commands,
+        metrics=metrics,
         home=str(dedicated),
     )
 
@@ -1122,28 +1316,55 @@ def scenario_recovery_rollback(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
 
     policy_id, trigger_id = "q8-guard-policy", "q8-guard-trigger"
     cr = run_cli(
-        ctx, name,
-        ["immune", "policy", policy_id, "--trigger", trigger_id, "--target", target_rel,
-         "--backup-of", good_hash],
-        home=home, label="register-policy",
+        ctx,
+        name,
+        [
+            "immune",
+            "policy",
+            policy_id,
+            "--trigger",
+            trigger_id,
+            "--target",
+            target_rel,
+            "--backup-of",
+            good_hash,
+        ],
+        home=home,
+        label="register-policy",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
     assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
 
     cr = run_cli(
-        ctx, name,
-        ["immune", "trigger", trigger_id, "--metric", "tests_failed", "--operator", ">",
-         "--value", "0", "--window", "1"],
-        home=home, label="register-trigger",
+        ctx,
+        name,
+        [
+            "immune",
+            "trigger",
+            trigger_id,
+            "--metric",
+            "tests_failed",
+            "--operator",
+            ">",
+            "--value",
+            "0",
+            "--window",
+            "1",
+        ],
+        home=home,
+        label="register-trigger",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
     assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
 
     cr = run_cli(
-        ctx, name, ["immune", "ingest", "tests_failed", "1", "--run", "qualification-run"],
-        home=home, label="ingest-real-failing-metric",
+        ctx,
+        name,
+        ["immune", "ingest", "tests_failed", "1", "--run", "qualification-run"],
+        home=home,
+        label="ingest-real-failing-metric",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1153,24 +1374,27 @@ def scenario_recovery_rollback(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     target_path.write_bytes(b"qualification guarded BAD mutated state\n")
 
     cr = run_cli(
-        ctx, name, ["immune", "check", "--policy", policy_id],
-        home=home, label="check-triggers",
+        ctx,
+        name,
+        ["immune", "check", "--policy", policy_id],
+        home=home,
+        label="check-triggers",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
     assert "matched=True" in cr.stdout.decode("utf-8"), cr.stdout.decode("utf-8")
 
     cr = run_cli(
-        ctx, name,
-        ["immune", "rollback", policy_id, trigger_id, "--reason",
-         "qualification_recovery_test"],
-        home=home, label="rollback",
+        ctx,
+        name,
+        ["immune", "rollback", policy_id, trigger_id, "--reason", "qualification_recovery_test"],
+        home=home,
+        label="rollback",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
-    assert cr.record["returncode"] == 0, (
-        cr.stdout.decode("utf-8")
-        + cr.stderr.decode("utf-8", "replace")
+    assert cr.record["returncode"] == 0, cr.stdout.decode("utf-8") + cr.stderr.decode(
+        "utf-8", "replace"
     )
     assert "rolled_back=True" in cr.stdout.decode("utf-8")
     assert not target_path.exists(), "rollback should have moved the mutated target aside"
@@ -1179,9 +1403,13 @@ def scenario_recovery_rollback(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     assert backups, "expected a real rollback backup file"
 
     metrics = {
-        "policy_id": policy_id, "trigger_id": trigger_id, "rolled_back": True,
+        "policy_id": policy_id,
+        "trigger_id": trigger_id,
+        "rolled_back": True,
         "backup_count": len(backups),
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -1203,12 +1431,19 @@ def scenario_security_boundary(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     )
 
     cr = run_cli(
-        ctx, name,
+        ctx,
+        name,
         [
-            "project", "add", str(fake_repo), "--id", "../../evil-escape",
-            "--no-marker", "--no-manifest",
+            "project",
+            "add",
+            str(fake_repo),
+            "--id",
+            "../../evil-escape",
+            "--no-marker",
+            "--no-manifest",
         ],
-        home=home, label="malicious-project-id",
+        home=home,
+        label="malicious-project-id",
     )
     assert cr.record["returncode"] != 0, "path-traversal project id must be refused"
     stderr_text = cr.stderr.decode("utf-8", "replace")
@@ -1224,13 +1459,18 @@ def scenario_security_boundary(ctx: Ctx, home: Path, shared: dict[str, Any]) -> 
     assert not escape_target.exists(), "path traversal must never escape the Brain home"
 
     metrics = {
-        "refused": True, "returncode": cr.record["returncode"],
+        "refused": True,
+        "returncode": cr.record["returncode"],
         "projects_unchanged": projects_after == projects_before,
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(
-        name, evidence_refs=[cr.record["stdout_ref"], cr.record["stderr_ref"]],
-        commands=[cr.record], metrics=metrics,
+        name,
+        evidence_refs=[cr.record["stdout_ref"], cr.record["stderr_ref"]],
+        commands=[cr.record],
+        metrics=metrics,
     )
 
 
@@ -1247,8 +1487,13 @@ def scenario_genuine_project_dogfood(
     evidence_refs = []
 
     cr = run_argv(
-        ctx, name, [str(ctx.python_exe), "-m", "pytest", "-q", "tests/test_p4.py"],
-        cwd=ctx.repo, env=sanitized_env(None), label="focused-p4-pytest", timeout=300,
+        ctx,
+        name,
+        [str(ctx.python_exe), "-m", "pytest", "-q", "tests/test_p4.py"],
+        cwd=ctx.repo,
+        env=sanitized_env(None),
+        label="focused-p4-pytest",
+        timeout=300,
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1256,13 +1501,15 @@ def scenario_genuine_project_dogfood(
         f"repository's real focused P4 test suite failed: {cr.stdout.decode('utf-8', 'replace')}"
     )
     pytest_summary = (
-        cr.stdout.decode("utf-8", "replace").strip().splitlines()[-1]
-        if cr.stdout else ""
+        cr.stdout.decode("utf-8", "replace").strip().splitlines()[-1] if cr.stdout else ""
     )
 
     cr = run_cli(
-        ctx, name, ["doctor", "--repo", str(ctx.repo), "--json"],
-        home=home, label="doctor-registered-project",
+        ctx,
+        name,
+        ["doctor", "--repo", str(ctx.repo), "--json"],
+        home=home,
+        label="doctor-registered-project",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1271,10 +1518,24 @@ def scenario_genuine_project_dogfood(
 
     sess = "q8-dogfood"
     cr = run_cli(
-        ctx, name,
-        ["p4", "pulse", "--event", "session_start", "--session", sess, "--force", "--json",
-         "--repo", str(ctx.repo), "--project-id", shared["registered_project_id"]],
-        home=home, label="p4-pulse-registered-project",
+        ctx,
+        name,
+        [
+            "p4",
+            "pulse",
+            "--event",
+            "session_start",
+            "--session",
+            sess,
+            "--force",
+            "--json",
+            "--repo",
+            str(ctx.repo),
+            "--project-id",
+            shared["registered_project_id"],
+        ],
+        home=home,
+        label="p4-pulse-registered-project",
     )
     commands.append(cr.record)
     evidence_refs.append(cr.record["stdout_ref"])
@@ -1282,10 +1543,13 @@ def scenario_genuine_project_dogfood(
     assert pulse_payload["heartbeat"]["ran"] is True, pulse_payload
 
     metrics = {
-        "pytest_summary": pytest_summary, "pytest_returncode": 0,
+        "pytest_summary": pytest_summary,
+        "pytest_returncode": 0,
         "registered_project_id": shared["registered_project_id"],
         "doctor_failed": doctor_payload["failed"],
-        "provider_tokens": None, "wall_time_ms": None, "background_model_calls": 0,
+        "provider_tokens": None,
+        "wall_time_ms": None,
+        "background_model_calls": 0,
     }
     return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
 
@@ -1335,8 +1599,29 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
     homes_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = Ctx(repo=repo, out_dir=out_dir, raw_dir=raw_dir, python_exe=Path(sys.executable))
+    source_probe = run_argv(
+        ctx,
+        "_setup",
+        [
+            str(ctx.python_exe),
+            "-c",
+            "from pathlib import Path; import second_brain; "
+            "print(Path(second_brain.__file__).resolve())",
+        ],
+        cwd=repo,
+        env=sanitized_env(None),
+        label="runtime-source",
+    )
+    expected_source = (repo / "src" / "second_brain" / "__init__.py").resolve()
+    actual_source = source_probe.stdout.decode("utf-8", "replace").strip()
+    if source_probe.record["returncode"] != 0 or Path(actual_source).resolve() != expected_source:
+        raise RuntimeError(
+            f"Qualification runtime source mismatch: expected {expected_source}, "
+            f"got {actual_source!r} using {ctx.python_exe}"
+        )
 
     git, setup_commands = git_info(ctx)
+    setup_commands.insert(0, source_probe.record)
     prime_ver, prime_source = prime_version(repo)
 
     shared_home = homes_dir / "shared"
@@ -1351,9 +1636,11 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
         )
 
     project_cr = run_cli(
-        ctx, "_setup",
+        ctx,
+        "_setup",
         ["project", "add", str(repo), "--id", "second-brain", "--no-marker", "--no-manifest"],
-        home=shared_home, label="register-second-brain-project",
+        home=shared_home,
+        label="register-second-brain-project",
     )
     setup_commands.append(project_cr.record)
     if project_cr.record["returncode"] != 0:
@@ -1434,8 +1721,7 @@ def main(argv: list[str] | None = None) -> int:
         for row in manifest["scenarios"]:
             if row["status"] != "passed":
                 print(
-                    f"FAILED scenario {row['name']}: "
-                    f"{row.get('error', 'unknown failure')}",
+                    f"FAILED scenario {row['name']}: {row.get('error', 'unknown failure')}",
                     file=sys.stderr,
                 )
         return 1

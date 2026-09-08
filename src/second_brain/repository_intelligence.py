@@ -32,8 +32,7 @@ def _append_telemetry(home: Path, session_id: str, kind: str, payload: dict[str,
         t_dir = telemetry.telemetry_dir(home)
         t_dir.mkdir(parents=True, exist_ok=True)
         safe_stem = (
-            "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in session_id)
-            or "anon"
+            "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in session_id) or "anon"
         )
         record = {
             "v": 2,
@@ -46,6 +45,7 @@ def _append_telemetry(home: Path, session_id: str, kind: str, payload: dict[str,
             f.write(json.dumps(record) + "\n")
     except Exception:
         pass
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repo_files (
@@ -96,6 +96,7 @@ class WorkerStatus(StrEnum):
 @dataclass
 class WorkerAssignmentPacket:
     """Minimal assignment packet for worker dispatch (§3 P1.2)."""
+
     worker_id: str
     session_id: str
     subtask: str
@@ -119,6 +120,7 @@ class WorkerAssignmentPacket:
 @dataclass
 class WorkerResultPacket:
     """Structured result packet returned by worker to driver (§3 P1.2)."""
+
     worker_id: str
     session_id: str
     status: WorkerStatus

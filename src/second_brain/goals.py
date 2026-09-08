@@ -44,8 +44,7 @@ def _legacy_sidecar_has_rows(path: Path) -> bool:
         conn = sqlite3.connect(path, timeout=5.0)
         try:
             tables = conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
             return any(
                 conn.execute(
@@ -73,7 +72,6 @@ def _retire_legacy_sidecars(home: Path) -> None:
                 candidate.unlink()
 
 
-
 class GoalStatus(StrEnum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
@@ -91,10 +89,10 @@ _ALLOWED = {
 }
 
 
-
 @dataclass
 class Milestone:
     """A milestone within a long-running goal."""
+
     milestone_id: str
     title: str
     completed: bool = False
@@ -121,10 +119,10 @@ class Milestone:
         )
 
 
-
 @dataclass
 class LongRunningGoal:
     """A multi-day or multi-session goal (§3 P4.1)."""
+
     goal_id: str
     title: str
     description: str
@@ -489,11 +487,7 @@ class GoalStore:
     def list_goals(
         self,
         statuses: (
-            GoalStatus
-            | str
-            | list[GoalStatus | str]
-            | tuple[GoalStatus | str, ...]
-            | None
+            GoalStatus | str | list[GoalStatus | str] | tuple[GoalStatus | str, ...] | None
         ) = None,
     ) -> list[LongRunningGoal]:
         """List goals in deterministic newest-updated order, optionally by status."""

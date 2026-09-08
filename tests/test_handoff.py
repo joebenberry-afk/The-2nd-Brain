@@ -74,7 +74,8 @@ class TestLosslessness:
         assert recovered["next_action"] == source_capsule["next_action"]
 
     def test_create_handoff_envelope_registers_artifact_ref(self, brain_home):
-        from second_brain import db, ledger as ledger_mod
+        from second_brain import db
+        from second_brain import ledger as ledger_mod
         from second_brain.paths import db_path
 
         session_id = _seed_capsule(brain_home, "sess-p317-artifact-ref")
@@ -137,7 +138,9 @@ class TestBoundedness:
         session_id = _seed_capsule(brain_home)
         with pytest.raises(HandoffError) as exc_info:
             create_handoff_envelope(
-                brain_home, session_id, source_harness="omp",
+                brain_home,
+                session_id,
+                source_harness="omp",
                 context_refs=[f"artifact:{'a' * 64}"] * (contracts.HANDOFF_LIST_MAX_ITEMS + 1),
             )
         assert exc_info.value.code == "HANDOFF_MALFORMED"
@@ -185,9 +188,7 @@ class TestNegativeControls:
     def test_stale_state_rejected_or_explicitly_classified(self, brain_home):
         session_id = _seed_capsule(brain_home)
         envelope, _ = create_handoff_envelope(brain_home, session_id, source_harness="omp")
-        old = (
-            datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=3)
-        ).isoformat()
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=3)).isoformat()
         stale = _resign({**envelope.to_dict(), "capsule_updated_at": old})
         with pytest.raises(HandoffError) as exc_info:
             read_handoff_envelope(brain_home, stale)
@@ -206,15 +207,15 @@ class TestNegativeControls:
     def test_unavailable_evidence_distinct_from_empty(self, brain_home):
         session_id = _seed_capsule(brain_home)
         envelope, _ = create_handoff_envelope(
-            brain_home, session_id, source_harness="omp",
+            brain_home,
+            session_id,
+            source_harness="omp",
             unavailable_evidence=["current_omp_primary_session_id"],
         )
         assert envelope.unavailable_evidence == ["current_omp_primary_session_id"]
         assert envelope.evidence_refs == []
 
-        envelope_empty, _ = create_handoff_envelope(
-            brain_home, session_id, source_harness="omp"
-        )
+        envelope_empty, _ = create_handoff_envelope(brain_home, session_id, source_harness="omp")
         assert envelope_empty.unavailable_evidence == []
         assert envelope_empty.evidence_refs == []
 
@@ -226,21 +227,27 @@ class TestCrossHarnessAdapters:
 
     def test_omp_creates_hermes_reads(self, brain_home):
         session_id = _seed_capsule(brain_home, "sess-p317-omp")
-        create_resp = omp_adapter.handle_request(brain_home, {
-            "operation": "handoff_create",
-            "host_session_id": session_id,
-            "source_harness": "omp",
-            "target_harness": "hermes",
-            "project_id": "second-brain",
-        })
+        create_resp = omp_adapter.handle_request(
+            brain_home,
+            {
+                "operation": "handoff_create",
+                "host_session_id": session_id,
+                "source_harness": "omp",
+                "target_harness": "hermes",
+                "project_id": "second-brain",
+            },
+        )
         assert "envelope" in create_resp
-        read_resp = hermes_adapter.handle_request(brain_home, {
-            "event": "handoff_read",
-            "bot_name": "claude",
-            "session_id": "consumer-session",
-            "project_id": "second-brain",
-            "envelope": create_resp["envelope"],
-        })
+        read_resp = hermes_adapter.handle_request(
+            brain_home,
+            {
+                "event": "handoff_read",
+                "bot_name": "claude",
+                "session_id": "consumer-session",
+                "project_id": "second-brain",
+                "envelope": create_resp["envelope"],
+            },
+        )
         assert read_resp["status"] == "recovered"
         assert read_resp["objective"] == "Close the P3.17 handoff seam"
         assert read_resp["next_action"] == "Prove cross-harness dogfood"
@@ -251,38 +258,58 @@ class TestCrossHarnessAdapters:
             {"bot_name": "codex", "session_id": "sess-p317-reverse", "project_id": "second-brain"},
         )
         _seed_capsule(brain_home, binding.brain_session_id)
-        create_resp = hermes_adapter.handle_request(brain_home, {
-            "event": "handoff_create",
-            "bot_name": "codex",
-            "session_id": "sess-p317-reverse",
-            "project_id": "second-brain",
-            "target_harness": "omp",
-        })
+        create_resp = hermes_adapter.handle_request(
+            brain_home,
+            {
+                "event": "handoff_create",
+                "bot_name": "codex",
+                "session_id": "sess-p317-reverse",
+                "project_id": "second-brain",
+                "target_harness": "omp",
+            },
+        )
         assert create_resp["status"] == "created"
-        read_resp = omp_adapter.handle_request(brain_home, {
-            "operation": "handoff_read",
-            "project_id": "second-brain",
-            "envelope": create_resp["envelope"],
-        })
+        read_resp = omp_adapter.handle_request(
+            brain_home,
+            {
+                "operation": "handoff_read",
+                "project_id": "second-brain",
+                "envelope": create_resp["envelope"],
+            },
+        )
         assert read_resp["objective"] == "Close the P3.17 handoff seam"
 
     def test_omp_and_hermes_reject_wrong_project_identically(self, brain_home):
         session_id = _seed_capsule(brain_home, "sess-p317-omp-2")
-        create_resp = omp_adapter.handle_request(brain_home, {
-            "operation": "handoff_create",
-            "host_session_id": session_id,
-            "source_harness": "omp",
-            "project_id": "second-brain",
-        })
+        create_resp = omp_adapter.handle_request(
+            brain_home,
+            {
+                "operation": "handoff_create",
+                "host_session_id": session_id,
+                "source_harness": "omp",
+                "project_id": "second-brain",
+            },
+        )
         envelope = create_resp["envelope"]
 
-        omp_bad = omp_adapter.handle_request(brain_home, {
-            "operation": "handoff_read", "project_id": "other-project", "envelope": envelope,
-        })
-        hermes_bad = hermes_adapter.handle_request(brain_home, {
-            "event": "handoff_read", "bot_name": "claude", "session_id": "x",
-            "project_id": "other-project", "envelope": envelope,
-        })
+        omp_bad = omp_adapter.handle_request(
+            brain_home,
+            {
+                "operation": "handoff_read",
+                "project_id": "other-project",
+                "envelope": envelope,
+            },
+        )
+        hermes_bad = hermes_adapter.handle_request(
+            brain_home,
+            {
+                "event": "handoff_read",
+                "bot_name": "claude",
+                "session_id": "x",
+                "project_id": "other-project",
+                "envelope": envelope,
+            },
+        )
         assert omp_bad["failure_code"] == "HANDOFF_PROJECT_MISMATCH"
         assert hermes_bad["failure_code"] == "HANDOFF_PROJECT_MISMATCH"
 

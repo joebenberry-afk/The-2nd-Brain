@@ -4,8 +4,10 @@ import hashlib
 import json
 import shutil
 
-from second_brain import contracts, db, decisions, semantic
+import pytest
 
+from second_brain import contracts, db, decisions, semantic
+from second_brain.errors import BrainError
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -59,6 +61,86 @@ def test_no_friction_signal_creates_no_candidate(brain_home) -> None:
     assert len(recorded) == 1
     assert recorded[0]["chosen"] == {"candidate_id": None, "outcome": "no_candidate"}
     assert recorded[0]["rollout_stage"] == "SHADOW"
+
+
+def test_off_admission_writes_no_candidate_or_decision(brain_home) -> None:
+    (brain_home / "config" / "v2.toml").write_text(
+        """schema_version = 1
+[rollout]
+admission = "OFF"
+retrieval = "SHADOW"
+brainstem = "SHADOW"
+learning = "SHADOW"
+culture = "SHADOW"
+frontier = "SHADOW"
+verification = "SHADOW"
+[admission]
+min_score = 0.75
+[retrieval]
+max_candidates = 20
+top_k = 5
+token_budget = 1200
+[brainstem]
+context_char_budget = 12000
+worker_slots = 1
+premium_model_turns = 1
+[learning]
+surprise_threshold = 0.8
+[culture]
+[frontier]
+min_importance = 0.7
+[verification]
+floor = "targeted"
+""",
+        encoding="utf-8",
+    )
+    result = semantic.evaluate_candidate(
+        brain_home,
+        "OFF admission",
+        "A valid friction signal must not persist while admission is OFF.",
+        session_id="session-off",
+        events=[
+            _ledger_event(
+                "off-failure-1",
+                "task_failed",
+                failure_code="ASSERTION_MISMATCH",
+                verified=True,
+            ),
+            _ledger_event(
+                "off-failure-2",
+                "task_failed",
+                failure_code="ASSERTION_MISMATCH",
+                verified=True,
+            ),
+        ],
+    )
+    assert result is None
+    assert _candidate_count(brain_home) == 0
+    assert decisions.list_decisions(brain_home, kind="admission") == []
+
+
+def test_invalid_existing_policy_cannot_enable_shadow_admission(brain_home) -> None:
+    (brain_home / "config" / "v2.toml").write_text(
+        'schema_version = 1\n[rollout]\nadmission = "OFF"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(BrainError):
+        semantic.evaluate_candidate(
+            brain_home,
+            "Invalid policy",
+            "Incomplete policy must not turn disabled admission into SHADOW.",
+            session_id="invalid-policy",
+            events=[
+                _ledger_event(
+                    "verified-correction",
+                    "result_corrected",
+                    correction_sha256=SHA_A,
+                    result_sha256=SHA_B,
+                )
+            ],
+        )
+    assert _candidate_count(brain_home) == 0
+    assert decisions.list_decisions(brain_home, kind="admission") == []
 
 
 def test_repeated_verified_failure_creates_candidate(brain_home) -> None:
@@ -169,9 +251,10 @@ def test_candidate_records_source_event_refs(brain_home) -> None:
         "session.jsonl:3",
         "session.jsonl:9",
     ]
-    assert decisions.list_decisions(brain_home, kind="admission")[0]["decision_id"] == row[
-        "decision_ref"
-    ]
+    assert (
+        decisions.list_decisions(brain_home, kind="admission")[0]["decision_id"]
+        == row["decision_ref"]
+    )
 
 
 def test_authority_ceiling_is_origin_bound(brain_home) -> None:
@@ -266,7 +349,8 @@ def test_fresh_reopen_and_repeat_migration_preserve_existing_rows(tmp_path) -> N
     conn = db.connect(dbfile)
     try:
         conn.execute(
-            "INSERT INTO projects(id, name, created_at) VALUES ('existing', 'Existing', '2026-01-01')"
+            "INSERT INTO projects(id, name, created_at) VALUES ('existing', 'Existing',"
+            " '2026-01-01')"
         )
         conn.commit()
     finally:

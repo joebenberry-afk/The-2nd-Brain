@@ -4,8 +4,8 @@
  * Implements the Driver Orchestration Contract (canonical policy:
  * `brainstem/policies/driver-orchestration.md`): the active model is
  * classified into one of four roles — `hard_orchestrator` (Sol, guarded by
- * `orchestrator-guard.ts`), `driver` (deepseek-v4-pro, gpt-5.6-luna by
- * default), `worker` (deepseek-v4-flash, qwen3.5 by default), or `normal`
+ * `orchestrator-guard.ts`), `driver` (deepseek-v4-pro, gpt-5.6-luna,
+ * gpt-6-astra by default), `worker` (deepseek-v4-flash, qwen3.5), or `normal`
  * (everything else). Only the DRIVER role receives the driver contract as a
  * systemPrompt addendum on `before_agent_start`; workers and normal models
  * never get it, and the hard orchestrator keeps its existing strict Sol
@@ -30,7 +30,7 @@
 export type AgentRole = "hard_orchestrator" | "driver" | "worker" | "normal";
 
 /** Default model-id substrings identifying the DRIVER role (campaign orchestrators). */
-export const DEFAULT_DRIVER_MODELS = ["deepseek-v4-pro", "gpt-5.6-luna"];
+export const DEFAULT_DRIVER_MODELS = ["deepseek-v4-pro", "gpt-5.6-luna", "gpt-6-astra"];
 
 /** Default model-id substrings identifying the WORKER role (never get the driver contract). */
 export const DEFAULT_WORKER_MODELS = ["deepseek-v4-flash", "qwen3.5"];

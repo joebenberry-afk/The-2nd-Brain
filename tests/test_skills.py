@@ -67,6 +67,7 @@ def test_build_plan_selects_and_caps_at_three(brain_home, monkeypatch):
     assert "d" in plan["rejected_skill_ids"]
     assert plan["rejected_skill_ids"]["d"] == "over_cap"
 
+
 def test_build_plan_uses_selected_home_for_token_estimates(brain_home, monkeypatch):
     _make_skill(brain_home, "a", "shadow")
     calibration = brain_home / "state" / "calibration"

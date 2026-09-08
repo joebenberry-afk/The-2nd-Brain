@@ -20,11 +20,12 @@ The selector is policy-bounded rather than self-learning:
 
 from __future__ import annotations
 
+import contextlib
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-import os
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ _COST_RANK = {value: index for index, value in enumerate(COST_CLASSES)}
 _RISK_RANK = {value: index for index, value in enumerate(RISK_CLASSES)}
 _PRICE_CLASS_RANK = {"low": 1, "medium": 2, "high": 3}
 
+
 class TaskClass(StrEnum):
     TRIVIAL = "trivial"
     NAVIGATION = "navigation"
@@ -54,6 +56,7 @@ class TaskClass(StrEnum):
     EXPLORATION = "exploration"
     HIGH_RISK = "high_risk"
     CONTINUATION = "continuation"
+
 
 TASK_CLASSES: tuple[str, ...] = tuple(item.value for item in TaskClass)
 
@@ -74,19 +77,68 @@ def classify_task(task_or_hash: str, *, risk_class: str | None = None) -> TaskCl
         return TaskClass(TASK_CLASSES[idx])
     if any(w in lower_val for w in ("continue", "continuation", "resume", "pick up")):
         return TaskClass.CONTINUATION
-    if any(w in lower_val for w in ("verify", "verification", "check", "assert", "audit", "lint", "gate")):
+    if any(
+        w in lower_val
+        for w in ("verify", "verification", "check", "assert", "audit", "lint", "gate")
+    ):
         return TaskClass.VERIFICATION
-    if any(w in lower_val for w in ("debug", "debugging", "fix", "bug", "error", "failure", "trace", "issue", "crash")):
+    if any(
+        w in lower_val
+        for w in ("debug", "debugging", "fix", "bug", "error", "failure", "trace", "issue", "crash")
+    ):
         return TaskClass.DEBUGGING
-    if any(w in lower_val for w in ("navigate", "navigation", "find", "search", "locate", "where", "list", "grep", "glob")):
+    if any(
+        w in lower_val
+        for w in (
+            "navigate",
+            "navigation",
+            "find",
+            "search",
+            "locate",
+            "where",
+            "list",
+            "grep",
+            "glob",
+        )
+    ):
         return TaskClass.NAVIGATION
-    if any(w in lower_val for w in ("explore", "exploration", "investigate", "research", "survey", "discover")):
+    if any(
+        w in lower_val
+        for w in ("explore", "exploration", "investigate", "research", "survey", "discover")
+    ):
         return TaskClass.EXPLORATION
-    if any(w in lower_val for w in ("critical", "high risk", "security", "permission", "drop table", "destroy", "root")):
+    if any(
+        w in lower_val
+        for w in (
+            "critical",
+            "high risk",
+            "security",
+            "permission",
+            "drop table",
+            "destroy",
+            "root",
+        )
+    ):
         return TaskClass.HIGH_RISK
-    if any(w in lower_val for w in ("trivial", "summarize", "summary", "readme", "ping", "hello", "echo", "typo")):
+    if any(
+        w in lower_val
+        for w in ("trivial", "summarize", "summary", "readme", "ping", "hello", "echo", "typo")
+    ):
         return TaskClass.TRIVIAL
-    if any(w in lower_val for w in ("implement", "implementation", "build", "create", "write", "add", "develop", "refactor", "code")):
+    if any(
+        w in lower_val
+        for w in (
+            "implement",
+            "implementation",
+            "build",
+            "create",
+            "write",
+            "add",
+            "develop",
+            "refactor",
+            "code",
+        )
+    ):
         return TaskClass.IMPLEMENTATION
     return TaskClass.IMPLEMENTATION
 
@@ -231,7 +283,6 @@ def _roles(values: Any, field_name: str = "roles") -> tuple[str, ...]:
             raise ModelRoutingError("MALFORMED_ROUTING_INPUT", f"invalid {field_name} entry")
         out.add(value.strip().lower())
     return tuple(sorted(out))
-
 
 
 def _strict_bool(value: Any, field_name: str) -> bool:
@@ -782,7 +833,9 @@ def p_success(
         return 0.5
 
     if resolved_sig is not None:
-        sig_str = str(resolved_sig.value if isinstance(resolved_sig, TaskClass) else resolved_sig).strip()
+        sig_str = str(
+            resolved_sig.value if isinstance(resolved_sig, TaskClass) else resolved_sig
+        ).strip()
     else:
         sig_str = "implementation"
 
@@ -820,7 +873,11 @@ def p_success(
                 "SELECT family FROM model_profiles WHERE model_id = ?",
                 (model_id,),
             ).fetchone()
-            family = fam_row[0] if (fam_row and fam_row[0]) else (model_id.split("-")[0] if "-" in model_id else "")
+            family = (
+                fam_row[0]
+                if (fam_row and fam_row[0])
+                else (model_id.split("-")[0] if "-" in model_id else "")
+            )
             if family:
                 row_fam = conn.execute(
                     """SELECT SUM(mso.success), COUNT(*)
@@ -868,7 +925,9 @@ def _quality_score(
         conn = db.connect(db_file)
         try:
             cutoff = (datetime.now(UTC) - timedelta(days=90)).isoformat()
-            sig_str = str(sig.value if isinstance(sig, TaskClass) else (sig or "implementation")).strip()
+            sig_str = str(
+                sig.value if isinstance(sig, TaskClass) else (sig or "implementation")
+            ).strip()
             row = conn.execute(
                 """SELECT COUNT(*) FROM model_skill_outcomes
                    WHERE model_id = ? AND (skill_name = ? OR task_hash = ?) AND created_at >= ?""",
@@ -880,7 +939,11 @@ def _quality_score(
                 "SELECT family FROM model_profiles WHERE model_id = ?",
                 (candidate.model,),
             ).fetchone()
-            family = fam_row[0] if (fam_row and fam_row[0]) else (candidate.model.split("-")[0] if "-" in candidate.model else "")
+            family = (
+                fam_row[0]
+                if (fam_row and fam_row[0])
+                else (candidate.model.split("-")[0] if "-" in candidate.model else "")
+            )
             if family:
                 fam_cnt = conn.execute(
                     """SELECT COUNT(*) FROM model_skill_outcomes mso
@@ -962,7 +1025,11 @@ def _assessment(
 
 
 def _sort_key(candidate: CandidateAssessment) -> tuple[float, int, str, str]:
-    p = candidate.quality_score if candidate.quality_score is not None and candidate.quality_score > 0 else 0.5
+    p = (
+        candidate.quality_score
+        if candidate.quality_score is not None and candidate.quality_score > 0
+        else 0.5
+    )
     price_rank = _PRICE_CLASS_RANK.get(candidate.cost_class, 1)
     expected_cost = price_rank / p
     return (
@@ -1045,9 +1112,7 @@ def route_model(
     model_counts: dict[str, int] = {}
     for candidate in normalized:
         model_counts[candidate.model] = model_counts.get(candidate.model, 0) + 1
-    ambiguous_models = frozenset(
-        model for model, count in model_counts.items() if count > 1
-    )
+    ambiguous_models = frozenset(model for model, count in model_counts.items() if count > 1)
 
     role_value = _text(bot_role or role, "bot_role").strip().lower()
     if role_value not in _ROLE_MINIMUM_TIER:
@@ -1063,8 +1128,10 @@ def route_model(
     repo_value = repo_root if repo_root is not None else repo
     repo_path = Path(repo_value) if repo_value is not None else None
     explicit_caps = (
-        required_capabilities if required_capabilities is not None else capability_requirements
-    ) if trusted_policy else ()
+        (required_capabilities if required_capabilities is not None else capability_requirements)
+        if trusted_policy
+        else ()
+    )
     capabilities = _derive_capabilities(task, explicit_caps)
     if len(capabilities) > MAX_CAPABILITIES:
         raise ModelRoutingError("ROUTING_INPUT_TOO_LARGE", "capability requirements exceed bound")
@@ -1079,9 +1146,7 @@ def route_model(
         user_criticality if trusted_policy else None,
     )
     selected_routes, routing_error = _route_skills(home_path, task)
-    justifications = (
-        _normalise_justifications(premium_justification) if trusted_policy else ()
-    )
+    justifications = _normalise_justifications(premium_justification) if trusted_policy else ()
     premium_reasons = _derive_premium_reasons(
         task,
         risk_value,
@@ -1205,18 +1270,20 @@ def route_model(
     ):
         eligible_candidates = [item for item in assessments if item.eligible]
         if len(eligible_candidates) > 1:
-            rand_choice, propensity, randomized = decisions.randomize(
+            rand_choice, _propensity, randomized = decisions.randomize(
                 chosen,
                 eligible_candidates,
                 epsilon=0.05,
-                rng_seed=contracts.stable_content_hash({"task": task, "candidates": candidate_hash}),
+                rng_seed=contracts.stable_content_hash(
+                    {"task": task, "candidates": candidate_hash}
+                ),
             )
             chosen = rand_choice
             if randomized:
                 reason_code = "EXPLORATION_RANDOMIZED"
 
     if escalation and home_path is not None and brain_session_id:
-        try:
+        with contextlib.suppress(Exception):
             decisions.record(
                 home_path,
                 kind="routing",
@@ -1238,8 +1305,6 @@ def route_model(
                 stage=effective_stage if effective_stage in decisions._ROLLOUT_STAGES else "OFF",
                 inputs={"task_hash": crossmodel.task_hash(task), "escalation": True},
             )
-        except Exception:
-            pass
 
     timestamp = created_at or datetime.now(UTC).isoformat()
     _text(timestamp, "created_at")
@@ -1310,6 +1375,7 @@ def route_model(
 select_model = route_model
 select_model_decision = route_model
 
+
 def route_cascade(
     task_or_decision: str | ModelDecision,
     candidates: Sequence[ModelCandidate | Mapping[str, Any]],
@@ -1352,13 +1418,13 @@ __all__ = [
     "MAX_CANDIDATES",
     "MODEL_ROUTING_SCHEMA_VERSION",
     "RISK_CLASSES",
-    "TIERS",
     "TASK_CLASSES",
-    "TaskClass",
+    "TIERS",
     "CandidateAssessment",
     "ModelCandidate",
     "ModelDecision",
     "ModelRoutingError",
+    "TaskClass",
     "classify_task",
     "map_task_class",
     "p_success",

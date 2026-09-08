@@ -37,9 +37,7 @@ def _add(
     scope: str = "project",
     grade: str = "TESTED",
 ) -> str:
-    return semantic.add_memory(
-        home, title, body, scope=scope, project_id=project_id, grade=grade
-    )
+    return semantic.add_memory(home, title, body, scope=scope, project_id=project_id, grade=grade)
 
 
 def _activate(home: Path, memory_id: str) -> None:
@@ -82,6 +80,7 @@ def _run_cli(home: Path, *args: str) -> subprocess.CompletedProcess:
         timeout=120,
     )
 
+
 def _make_brain(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Minimal migrated Brain home (mirrors tests/conftest.make_brain)."""
     import shutil
@@ -123,11 +122,12 @@ def test_no_relevant_memory_yields_no_injection(brain_home) -> None:
     assert d.selected_ids == []
     assert d.packet_ref is None
 
+
 def test_gate_uses_computed_score_not_fallback_constant(brain_home, monkeypatch):
     mid = _seed_current(brain_home, "Low score gate memory", "low score gate query")
     config = brain_home / "config" / "retrieval.toml"
     config.write_text(
-        "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+        'schema_version = 2\n[gate]\nrollout = "ACTIVE"\n',
         encoding="utf-8",
     )
 
@@ -619,9 +619,7 @@ def test_packet_delivered_prepared_not_model_visible(brain_home) -> None:
     _seed_current(brain_home, "Visibility truth", "python prepares, host inserts")
     d = _inject(brain_home, "visibility truth", session_id="s-vis1")
     assert d.decision is InjectionDecision.INJECT
-    recs = [
-        r for r in _packet_delivered_records(brain_home) if r.get("session") == "s-vis1"
-    ]
+    recs = [r for r in _packet_delivered_records(brain_home) if r.get("session") == "s-vis1"]
     assert len(recs) == 1
     rec = recs[0]
     assert rec["model_visible"] is False
@@ -646,9 +644,7 @@ def test_cwd_resolves_project_from_registry(brain_home, tmp_path) -> None:
     assert d.selected_ids  # matched the proj-x memory (wrong-project filter would block otherwise)
 
 
-def test_cwd_unregistered_falls_back_to_env_then_default(
-    brain_home, tmp_path, monkeypatch
-) -> None:
+def test_cwd_unregistered_falls_back_to_env_then_default(brain_home, tmp_path, monkeypatch) -> None:
     _seed_current(brain_home, "Env rule", "env project specific rule", project_id="env-proj")
     _seed_current(
         brain_home,
@@ -699,17 +695,13 @@ def test_idf_recall_and_query_mode(brain_home) -> None:
     assert mid in d.selected_ids
     assert decoy not in d.selected_ids
     modes = [
-        r.get("query_mode")
-        for r in _attempt_records(brain_home)
-        if r.get("session") == "s-or1"
+        r.get("query_mode") for r in _attempt_records(brain_home) if r.get("session") == "s-or1"
     ]
     assert modes and modes[-1] == "idf"
     d2 = _inject(brain_home, "adaptive fan-out", session_id="s-or2")
     assert d2.decision is InjectionDecision.INJECT
     modes2 = [
-        r.get("query_mode")
-        for r in _attempt_records(brain_home)
-        if r.get("session") == "s-or2"
+        r.get("query_mode") for r in _attempt_records(brain_home) if r.get("session") == "s-or2"
     ]
     assert modes2 and modes2[-1] == "idf"
 
@@ -719,20 +711,17 @@ def test_no_relevant_only_when_query_empty(brain_home) -> None:
     assert d.decision is InjectionDecision.NO_INJECTION
     assert d.reason is NoInjectionReason.NO_RELEVANT_MEMORY
     modes = [
-        r.get("query_mode")
-        for r in _attempt_records(brain_home)
-        if r.get("session") == "s-none1"
+        r.get("query_mode") for r in _attempt_records(brain_home) if r.get("session") == "s-none1"
     ]
     assert modes and modes[-1] == "idf"
+
 
 def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
     """Phase C3 FIX 2: no --cwd -> registry lookup uses the Brain home path
     itself before env/default."""
     from second_brain import registry
 
-    registry.add_project(
-        brain_home, brain_home, name="Self", project_id="self-proj"
-    )
+    registry.add_project(brain_home, brain_home, name="Self", project_id="self-proj")
     _seed_current(brain_home, "Self rule", "self project rule", project_id="self-proj")
     d = autoinject.BrainLifecycle(brain_home).prepare_injection(
         "self project rule", agent_id="a1", session_id="s-self1", cwd=""
@@ -742,6 +731,7 @@ def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
         "self project rule", agent_id="a1", session_id="s-self2", cwd=None
     )
     assert d2.decision is InjectionDecision.INJECT
+
 
 def test_observed_candidate_admitted_as_low_confidence(brain_home) -> None:
     mid = _add(
@@ -812,6 +802,8 @@ def test_mention_records_activation_once(brain_home) -> None:
         conn.close()
 
     assert count == 1
+
+
 @pytest.mark.parametrize(
     ("status", "grade"),
     [
@@ -851,10 +843,14 @@ def test_admission_rejects_missing_metadata() -> None:
         session_id="policy-missing",
         branch_id="main",
     )
-    assert autoinject._valid_candidates(
-        intent,
-        [{"memory_id": "mem-missing", "status": "current", "evidence_grade": "OBSERVED"}],
-    ) == []
+    assert (
+        autoinject._valid_candidates(
+            intent,
+            [{"memory_id": "mem-missing", "status": "current", "evidence_grade": "OBSERVED"}],
+        )
+        == []
+    )
+
 
 def test_fit_budget_uses_configured_estimator_target(monkeypatch) -> None:
     item_a = PacketItem(
@@ -884,9 +880,10 @@ def test_fit_budget_uses_configured_estimator_target(monkeypatch) -> None:
     )
     assert fit is not None
 
-
     assert [item.memory_id for item in fit[0]] == ["mem-budget-a"]
     assert estimates
+
+
 def test_domain_unknown_project_survives_known_project_prefilter(brain_home) -> None:
     mid = _seed_current(
         brain_home,
@@ -945,9 +942,7 @@ class TestSessionStartedMarkerOnlyOnSuccessfulTelemetry:
             schema_version=1,
         )
 
-    def test_marker_not_written_when_telemetry_append_fails(
-        self, brain_home, monkeypatch
-    ) -> None:
+    def test_marker_not_written_when_telemetry_append_fails(self, brain_home, monkeypatch) -> None:
         host_session_id = "claude-marker-telemetry-fail-1"
         monkeypatch.setattr(autoinject, "_append_telemetry", lambda *a, **kw: False)
 

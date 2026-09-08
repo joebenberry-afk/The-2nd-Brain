@@ -5,7 +5,7 @@ Verifies holdout eligibility rules:
 - Task class is strictly trivial, navigation, or implementation.
 - All selected candidate items have advisory authority (never policy or project_rule).
 - Lane is not policy.
-- Decision recording in decisions table with kind="retrieval", chosen, alternatives, propensity, inputs.
+- Retrieval decisions preserve choices, alternatives, propensity, and inputs.
 - Outcome finalization in finalize_session with reward 1.0/0.0 and tokens_total.
 """
 
@@ -16,14 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import autoinject, db, decisions, semantic
+from second_brain import autoinject, db, semantic
 from second_brain.contracts import (
-    BrainInjectionDecision,
-    Confidence,
     InjectionDecision,
-    MemoryItemStatus,
     NoInjectionReason,
-    PacketItem,
 )
 
 
@@ -122,7 +118,8 @@ def test_holdout_never_when_stage_below_canary(brain_home, monkeypatch) -> None:
 
 
 def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeypatch) -> None:
-    """Verify holdout only fires when authority is advisory and task class is trivial/navigation/implementation.
+    """Verify holdout only fires when authority is advisory and task class is
+    trivial/navigation/implementation.
 
     Verify non-advisory items or debugging/verification/high_risk tasks never hold out.
     """
@@ -146,11 +143,11 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
 
     # 1. Non-eligible task classes must NEVER hold out
     non_eligible_tasks = [
-        "debug the crash in coding conventions and fix bug",       # debugging
-        "verify coding conventions and check assertion gates",     # verification
-        "explore coding conventions and survey codebase",          # exploration
-        "continue coding conventions and resume previous context", # continuation
-        "critical high risk security coding conventions permission drop table", # high_risk
+        "debug the crash in coding conventions and fix bug",  # debugging
+        "verify coding conventions and check assertion gates",  # verification
+        "explore coding conventions and survey codebase",  # exploration
+        "continue coding conventions and resume previous context",  # continuation
+        "critical high risk security coding conventions permission drop table",  # high_risk
     ]
 
     for idx, task_text in enumerate(non_eligible_tasks):
@@ -178,9 +175,9 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
 
     # 2. Eligible task classes DO hold out
     eligible_tasks = [
-        "summarize coding conventions and trivial overview",   # trivial
-        "search coding conventions where located",            # navigation
-        "implement and build coding conventions",             # implementation
+        "summarize coding conventions and trivial overview",  # trivial
+        "search coding conventions where located",  # navigation
+        "implement and build coding conventions",  # implementation
     ]
     for idx, task_text in enumerate(eligible_tasks):
         sess_id = f"session-eligible-{idx}"
@@ -217,7 +214,9 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
     )
     conn = db.connect(db.db_path(brain_home))
     try:
-        conn.execute("UPDATE memories SET authority_ceiling = 'project_rule' WHERE memory_id = ?", (m_rule,))
+        conn.execute(
+            "UPDATE memories SET authority_ceiling = 'project_rule' WHERE memory_id = ?", (m_rule,)
+        )
         conn.commit()
     finally:
         conn.close()
@@ -245,7 +244,8 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
         conn = db.connect(db.db_path(brain_home), readonly=True)
         try:
             rows = conn.execute(
-                "SELECT * FROM decisions WHERE session_id = 'session-policy-lane' AND kind = 'retrieval' AND json_extract(inputs_hash, '$') IS NOT NULL",
+                "SELECT * FROM decisions WHERE session_id = 'session-policy-lane' AND kind ="
+                " 'retrieval' AND json_extract(inputs_hash, '$') IS NOT NULL",
             ).fetchall()
             for r in rows:
                 assert "withheld_id" not in json.loads(r["chosen_json"])
@@ -254,7 +254,8 @@ def test_holdout_only_on_advisory_items_and_low_risk_classes(brain_home, monkeyp
 
 
 def test_holdout_deterministic_seed_and_single_item(brain_home, monkeypatch) -> None:
-    """Verify single-item holdout returns HOLDOUT reason and deterministic seed works."""
+    """Verify single-item holdout returns HOLDOUT reason and deterministic seed
+    works."""
     monkeypatch.setenv("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE", "CANARY")
     monkeypatch.setenv("SECOND_BRAIN_HOLDOUT_EPSILON", "0.2")
 
@@ -276,7 +277,8 @@ def test_holdout_deterministic_seed_and_single_item(brain_home, monkeypatch) -> 
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         rows = conn.execute(
-            "SELECT * FROM decisions WHERE session_id = 'session-single-held' AND kind = 'retrieval'",
+            "SELECT * FROM decisions WHERE session_id = 'session-single-held' AND kind ="
+            " 'retrieval'",
         ).fetchall()
         assert len(rows) == 1
         assert json.loads(rows[0]["chosen_json"]) == []
@@ -300,7 +302,8 @@ def test_holdout_deterministic_seed_and_single_item(brain_home, monkeypatch) -> 
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         rows = conn.execute(
-            "SELECT * FROM decisions WHERE session_id = 'session-single-delivered' AND kind = 'retrieval'",
+            "SELECT * FROM decisions WHERE session_id = 'session-single-delivered' AND kind ="
+            " 'retrieval'",
         ).fetchall()
         assert len(rows) == 1
         assert json.loads(rows[0]["chosen_json"]) == [m_only]
@@ -312,10 +315,11 @@ def test_holdout_deterministic_seed_and_single_item(brain_home, monkeypatch) -> 
 
 
 def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -> None:
-    """Verify finalize_session sets outcome_json and reward on pending retrieval decisions."""
+    """Verify finalize_session sets outcome_json and reward on pending retrieval
+    decisions."""
     monkeypatch.setenv("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE", "CANARY")
-    m1 = _seed_current(brain_home, "Alpha rules", "alpha body content")
-    m2 = _seed_current(brain_home, "Beta rules", "beta body content")
+    _seed_current(brain_home, "Alpha rules", "alpha body content")
+    _seed_current(brain_home, "Beta rules", "beta body content")
 
     lifecycle = autoinject.BrainLifecycle(brain_home)
 
@@ -331,7 +335,8 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         row = conn.execute(
-            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-1' AND kind = 'retrieval'",
+            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-1' AND"
+            " kind = 'retrieval'",
         ).fetchone()
         assert row is not None
         assert row["outcome_json"] is None
@@ -349,7 +354,8 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         row = conn.execute(
-            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-1' AND kind = 'retrieval'",
+            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-1' AND"
+            " kind = 'retrieval'",
         ).fetchone()
         assert row is not None
         assert json.loads(row["outcome_json"]) == {
@@ -377,7 +383,8 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         row = conn.execute(
-            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-2' AND kind = 'retrieval'",
+            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-final-2' AND"
+            " kind = 'retrieval'",
         ).fetchone()
         assert row is not None
         assert json.loads(row["outcome_json"]) == {
@@ -417,7 +424,8 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
     conn = db.connect(db.db_path(brain_home), readonly=True)
     try:
         row = conn.execute(
-            "SELECT outcome_json, reward FROM decisions WHERE session_id = 'session-telemetry-fallback' AND kind = 'retrieval'",
+            "SELECT outcome_json, reward FROM decisions WHERE session_id ="
+            " 'session-telemetry-fallback' AND kind = 'retrieval'",
         ).fetchone()
         assert row is not None
         outcome = json.loads(row["outcome_json"])

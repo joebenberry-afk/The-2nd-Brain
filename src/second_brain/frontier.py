@@ -10,9 +10,9 @@ high-risk change without approval can never be activated (gate_check).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import contracts, db, decisions
+from . import artifacts, contracts, db, decisions
 from .errors import BrainError
 from .security.identifiers import validate_frontier_id
 
@@ -370,7 +370,8 @@ def create_frontier_item(
 
     if not decision_ref or not str(decision_ref).strip():
         raise BrainError(
-            "Frontier item requires a valid non-empty decision_ref linking to an operational decision"
+            "Frontier item requires a valid non-empty decision_ref "
+            "linking to an operational decision"
         )
 
     if not unknown or not str(unknown).strip():
@@ -380,7 +381,19 @@ def create_frontier_item(
     if status_upper not in ("OPEN", "INVESTIGATING", "CLOSED", "EXPIRED"):
         raise BrainError(f"Invalid frontier item status {status!r}")
 
-    # Validate numeric parameters
+    # Unknown measurements stay null; malformed measurements are not estimates.
+    for name, value in (
+        ("stake_tokens", stake_tokens),
+        ("p_flip", p_flip),
+        ("expected_cost", expected_cost),
+    ):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise BrainError(f"{name} must be a finite non-negative number or None")
     stake_val = float(stake_tokens) if stake_tokens is not None else None
     p_flip_val = float(p_flip) if p_flip is not None else None
     cost_val = float(expected_cost) if expected_cost is not None else None
@@ -388,12 +401,7 @@ def create_frontier_item(
     if p_flip_val is not None and not (0.0 <= p_flip_val <= 1.0):
         raise BrainError("p_flip must be between 0.0 and 1.0")
 
-    if (
-        stake_val is not None
-        and p_flip_val is not None
-        and cost_val is not None
-        and cost_val > 0
-    ):
+    if stake_val is not None and p_flip_val is not None and cost_val is not None and cost_val > 0:
         priority: float | None = round((stake_val * p_flip_val) / cost_val, 4)
     else:
         priority = None
@@ -406,11 +414,13 @@ def create_frontier_item(
     evidence_list = list(evidence_refs or [])
 
     prov_hash = hashlib.sha256(
-        contracts.canonical_json({
-            "decision_ref": decision_ref,
-            "unknown": unknown,
-            "priority": priority,
-        }).encode("utf-8")
+        contracts.canonical_json(
+            {
+                "decision_ref": decision_ref,
+                "unknown": unknown,
+                "priority": priority,
+            }
+        ).encode("utf-8")
     ).hexdigest()
 
     conn = db.connect(_dbfile(home_p))
@@ -513,9 +523,7 @@ def get_frontier_item(home: Path | str, frontier_id: str) -> dict[str, Any] | No
     return res
 
 
-def list_frontier_items(
-    home: Path | str, *, status: str | None = None
-) -> list[dict[str, Any]]:
+def list_frontier_items(home: Path | str, *, status: str | None = None) -> list[dict[str, Any]]:
     """List operational frontier items.
 
     Measured items with calculated priority always sort first in descending order.
@@ -543,32 +551,99 @@ def list_frontier_items(
         conn.close()
 
 
+def _require_replayable_decision(conn: sqlite3.Connection, ref: Any) -> None:
+    """Resolve decision:<id>[:<kind>[:<choice>]] against durable replay inputs."""
+    parts = ref.split(":") if isinstance(ref, str) else []
+    if (
+        len(parts) not in (2, 3, 4)
+        or parts[0] != "decision"
+        or any(not part.strip() for part in parts[1:])
+    ):
+        raise BrainError(f"Invalid decision evidence reference {ref!r}")
+    row = conn.execute("SELECT * FROM decisions WHERE decision_id = ?", (parts[1],)).fetchone()
+    if row is None:
+        raise BrainError(f"Unknown decision evidence reference {ref!r}")
+    if len(parts) >= 3 and parts[2] != row["kind"]:
+        raise BrainError(f"Decision evidence kind does not match ledger: {ref!r}")
+    try:
+        inputs = json.loads(row["inputs_json"])
+        json.loads(row["chosen_json"])
+        json.loads(row["alternatives_json"])
+    except (TypeError, ValueError) as exc:
+        raise BrainError(f"Decision evidence is not replayable: {ref!r}") from exc
+    expected_id = hashlib.sha256(
+        (contracts.canonical_json(inputs) + row["session_id"] + row["kind"]).encode("utf-8")
+    ).hexdigest()[:24]
+    if (
+        inputs is None
+        or contracts.stable_content_hash(inputs) != row["inputs_hash"]
+        or expected_id != row["decision_id"]
+    ):
+        raise BrainError(f"Decision evidence replay identity mismatch: {ref!r}")
+
+
 def choose_cheapest_experiment(home: Path | str, frontier_id: str) -> dict[str, Any]:
-    """Select the cheapest discriminating experiment for a frontier item."""
+    """Select the cheapest eligible, discriminating experiment."""
     item = get_frontier_item(home, frontier_id)
     if item is None:
         raise BrainError(f"Unknown frontier item {frontier_id!r}")
+    if item.get("status") not in {"OPEN", "INVESTIGATING"}:
+        raise BrainError("Frontier item is not eligible for experiment selection")
+
+    evidence_refs = item.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not evidence_refs:
+        raise BrainError("Frontier item requires current evidence before experiment selection")
+    home_p = Path(home)
+    conn = db.connect(_dbfile(home_p), readonly=True)
+    try:
+        _require_replayable_decision(conn, item.get("decision_ref"))
+        for ref in evidence_refs:
+            artifact_hash = artifacts.parse_ref(ref)
+            if artifact_hash is None:
+                _require_replayable_decision(conn, ref)
+            else:
+                payload = artifacts.expand(home_p, artifact_hash)
+                if hashlib.sha256(payload).hexdigest() != artifact_hash:
+                    raise BrainError(f"Artifact evidence identity mismatch: {ref!r}")
+    finally:
+        conn.close()
 
     experiments = item.get("experiments", [])
-    if not experiments:
-        return {
-            "experiment_id": f"exp-default-{frontier_id[:8]}",
-            "type": "local_inspection",
-            "cost": 0.0,
-            "discriminator": "deterministic_check",
-        }
 
-    # Prefer cheap/local experiments
-    def _cost_key(exp: dict[str, Any]) -> float:
-        cost = exp.get("cost") or exp.get("expected_cost")
-        if cost == "local" or cost == 0:
-            return 0.0
-        if cost is None:
-            return 1000.0
-        try:
-            return float(cost)
-        except (ValueError, TypeError):
-            return 1000.0
+    eligible: list[tuple[float, dict[str, Any]]] = []
+    for experiment in experiments:
+        if not isinstance(experiment, dict):
+            continue
+        risk = experiment.get("risk", "low")
+        if not isinstance(risk, str) or risk.strip().lower() not in {"low", "medium"}:
+            continue
+        condition = experiment.get("decision_flip_condition")
+        if not isinstance(condition, str) or not condition.strip():
+            continue
+        gain = experiment.get("expected_information_gain")
+        if (
+            isinstance(gain, bool)
+            or not isinstance(gain, (int, float))
+            or not math.isfinite(float(gain))
+            or float(gain) <= 0
+        ):
+            continue
+        cost = experiment.get("cost")
+        if cost == "local":
+            numeric_cost = 0.0
+        elif (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(cost)
+            or cost < 0
+        ):
+            continue
+        else:
+            numeric_cost = float(cost)
+        if experiment.get("executable_locally", cost == "local") is not True:
+            continue
+        eligible.append((numeric_cost, experiment))
 
-    cheapest = min(experiments, key=_cost_key)
-    return cheapest
+    if not eligible:
+        raise BrainError("Frontier item has no eligible discriminating experiment")
+    return min(eligible, key=lambda entry: entry[0])[1]
