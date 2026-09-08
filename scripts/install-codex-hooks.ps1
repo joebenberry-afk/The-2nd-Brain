@@ -21,21 +21,21 @@ New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
 
 $begin = "# BEGIN second-brain-codex-hooks (Phase 0C SHADOW; managed by install-codex-hooks.ps1)"
 $end = "# END second-brain-codex-hooks"
-$content = if (Test-Path $configPath) { Get-Content -Raw $configPath } else { "" }
+$content = if (Test-Path $configPath) { Get-Content -Raw -Encoding UTF8 $configPath } else { "" }
 
 if ($content -match [regex]::Escape($begin)) {
     Write-Host "already installed (marker present); no changes made."
     exit 0
 }
 
-$cmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '$runPs1'"
+$cmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runPs1`"" | ConvertTo-Json -Compress
 $block = @"
 $begin
-SessionStart = [{ hooks = [{ type = "command", command = "$cmd", async = false }] }]
-UserPromptSubmit = [{ hooks = [{ type = "command", command = "$cmd", async = false }] }]
-SubagentStart = [{ hooks = [{ type = "command", command = "$cmd", async = false }] }]
-Stop = [{ hooks = [{ type = "command", command = "$cmd", async = false }] }]
-SessionEnd = [{ hooks = [{ type = "command", command = "$cmd", async = false }] }]
+SessionStart = [{ hooks = [{ type = "command", command = $cmd, async = false }] }]
+UserPromptSubmit = [{ hooks = [{ type = "command", command = $cmd, async = false }] }]
+SubagentStart = [{ hooks = [{ type = "command", command = $cmd, async = false }] }]
+Stop = [{ hooks = [{ type = "command", command = $cmd, async = false }] }]
+SessionEnd = [{ hooks = [{ type = "command", command = $cmd, async = false }] }]
 $end
 "@
 
@@ -57,6 +57,7 @@ foreach ($line in $lines) {
 }
 if (-not $inserted) {
     if ($content.Trim()) { $out.Add("") }
+    $out.Add("[hooks]")
     foreach ($b in ($block -split "`r?`n")) { $out.Add($b) }
 }
 $newContent = ($out -join "`r`n") + "`r`n"
