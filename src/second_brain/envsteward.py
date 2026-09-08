@@ -146,12 +146,21 @@ def snapshot(home: Path, repo: Path, session_id: str | None = None) -> dict:
     )
 
     if shutil.which("repowise") is not None:
-        raw = _run(["repowise", "status"], cwd=root, timeout=20)
+        raw = _run(
+            ["repowise", "status", "--no-workspace", "--format", "json"], cwd=root, timeout=20
+        )
         if raw is not None:
-            for line in raw.splitlines():
-                if "Last sync" in line:
-                    out["repowise_freshness"] = line.strip()
-                    break
+            try:
+                status = json.loads(raw)
+            except json.JSONDecodeError:
+                status = None
+            state = status.get("state") if isinstance(status, dict) else None
+            if isinstance(state, dict) and "last_sync_commit" in state:
+                commit = state["last_sync_commit"]
+                if commit is None:
+                    out["repowise_freshness"] = "not_synced"
+                elif isinstance(commit, str) and commit:
+                    out["repowise_freshness"] = commit
 
     if session_id is not None:
         target = session_dir(home, session_id) / "environment.json"

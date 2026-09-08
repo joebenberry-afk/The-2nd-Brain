@@ -96,12 +96,51 @@ def test_snapshot_tools_dict(tmp_path):
     assert snap["tools"]["git"]  # git is on PATH
 
 
-def test_snapshot_repowise_freshness_never_raises(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    snap = envsteward.snapshot(tmp_path, repo)
-    assert isinstance(snap["repowise_freshness"], str)
-    assert snap["repowise_freshness"] in ("unknown",) or "Last sync" in snap["repowise_freshness"]
+def test_repowise_presentation_cannot_invent_environment_mutation(brain_home, repo, monkeypatch):
+    real_run = envsteward._run
+    real_which = envsteward.shutil.which
+    presentation = iter(
+        [
+            "│ Last sync commit │ —      │",
+            "│ Last sync commit │ —      │".encode().decode("cp1252"),
+        ]
+    )
+    state: dict[str, str | None] = {"last_sync_commit": None}
+
+    def probe(command, **kwargs):
+        if command[0] == "repowise":
+            if "--format" in command:
+                return json.dumps({"indexed": True, "state": state})
+            return next(presentation)
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(envsteward, "_run", probe)
+    monkeypatch.setattr(
+        envsteward.shutil,
+        "which",
+        lambda name, *args, **kwargs: (
+            "repowise.exe" if name == "repowise" else real_which(name, *args, **kwargs)
+        ),
+    )
+    envsteward.assess(brain_home, repo, session_id="encoding-boundary")
+    unchanged = envsteward.assess(
+        brain_home,
+        repo,
+        session_id="encoding-boundary",
+        phase="mutation",
+    )
+    assert unchanged["mutation_detected"] is False
+    assert unchanged["completion_eligible"] is True
+
+    state["last_sync_commit"] = "b" * 40
+    changed = envsteward.assess(
+        brain_home,
+        repo,
+        session_id="encoding-boundary",
+        phase="mutation",
+    )
+    assert changed["changed_fields"] == ["repowise_freshness"]
+    assert changed["completion_eligible"] is False
 
 
 def test_snapshot_persists_with_session(brain_home, repo):
