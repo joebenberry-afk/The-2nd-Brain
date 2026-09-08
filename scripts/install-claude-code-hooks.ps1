@@ -25,11 +25,11 @@ New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 $settingsPath = Join-Path $configDir "settings.json"
 
 $escapedPath = $runPs1 -replace '\\', '\\'
-$templateText = (Get-Content $templatePath -Raw) -replace [regex]::Escape("<RUN_PS1>"), $escapedPath
+$templateText = (Get-Content $templatePath -Raw -Encoding UTF8) -replace [regex]::Escape("<RUN_PS1>"), $escapedPath
 $template = $templateText | ConvertFrom-Json
 
 $existing = if (Test-Path $settingsPath) {
-    Get-Content $settingsPath -Raw | ConvertFrom-Json
+    Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } else {
     [pscustomobject]@{}
 }

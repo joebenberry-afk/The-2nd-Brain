@@ -31,7 +31,7 @@ if (-not (Test-Path (Join-Path $Src "plugin.json"))) {
     exit 2
 }
 try {
-    $manifest = Get-Content (Join-Path $Src "plugin.json") -Raw | ConvertFrom-Json
+    $manifest = Get-Content (Join-Path $Src "plugin.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $manifest.name -or -not $manifest.description) {
         Write-Warning "plugin.json must carry name and description."
         exit 2
@@ -46,7 +46,7 @@ if (-not (Test-Path $hooksPath)) {
     exit 2
 }
 try {
-    $null = Get-Content $hooksPath -Raw | ConvertFrom-Json
+    $null = Get-Content $hooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } catch {
     Write-Warning "hooks.json is not valid JSON: $($_.Exception.Message)"
     exit 2

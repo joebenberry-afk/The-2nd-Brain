@@ -17,6 +17,9 @@
   environments, and retain raw usage telemetry without retaining host output.
   Keep each executed checkout beside its telemetry instead of deleting it while
   the native host may still hold operating-system handles.
+- Decode harness configuration as UTF-8 on Windows PowerShell, preserving
+  unrelated Unicode settings. Emit Codex callbacks under the actual `[hooks]`
+  table with TOML-safe, Windows-callable command quoting.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 
