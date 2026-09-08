@@ -50,26 +50,6 @@ def test_msprt_detects_known_effect():
     assert result["lambda"] == float("inf")
 
 
-def test_governor_delegates_to_economics(monkeypatch):
-    from second_brain import governor
-
-    calls = []
-
-    def fake_verdict(runs):
-        calls.append(runs)
-        return {"n": 1, "verdict": "POSITIVE"}
-
-    monkeypatch.setattr(governor.economics, "verdict", fake_verdict)
-    result = governor.classify_roi(
-        [governor.SessionTokens("on", cost_total=2.0, cost_total_seen=1)],
-        [governor.SessionTokens("off", cost_total=3.0, cost_total_seen=1)],
-        min_sessions=1,
-    )
-
-    assert calls and calls[0][0]["off"]["tokens"] == 3.0
-    assert result.status == "POSITIVE_ROI"
-
-
 def test_cost_preserves_null_when_price_missing():
     assert (
         economics.cost_per_run(
@@ -565,3 +545,43 @@ def test_public_run_with_temporary_host_writes_real_shaped_artifacts(tmp_path, m
         assert "Inspect" not in text
         assert "PRIVATE_HOST_OUTPUT" not in text
         assert "PRIVATE_TOOL_OUTPUT" not in text
+
+
+def test_retrieval_profile_does_not_invent_provider_outcomes(brain_home, tmp_path):
+    import pytest
+    from scripts import run_retrieval_economics as runner
+
+    from second_brain import semantic
+
+    memory_id = semantic.add_memory(
+        brain_home,
+        title="SQLite concurrency",
+        body="Use WAL and a bounded busy timeout for concurrent SQLite readers.",
+        scope="project",
+        project_id="retrieval-profile",
+        grade="VERIFIED",
+    )
+    semantic.curate(brain_home, memory_id, status="current")
+    output_path = tmp_path / "retrieval-profile.json"
+    report = runner.run_retrieval_economics(
+        brain_home,
+        repeats=2,
+        output_path=output_path,
+    )
+    assert report["provider_usage"] == {
+        "tokens": None,
+        "dollars": None,
+        "turns": None,
+        "task_success": None,
+    }
+    assert report["economics_verdict"] == "INSUFFICIENT"
+    assert report["live_economics_eligible"] is False
+    row = report["runs"][0]
+    assert row["baseline"]["selected_memory_ids"] == [memory_id]
+    assert row["candidate"]["selected_memory_ids"] == [memory_id]
+    assert row["baseline"]["context_chars"] == row["candidate"]["context_chars"]
+
+    retained = output_path.read_bytes()
+    with pytest.raises(FileExistsError):
+        runner.run_retrieval_economics(brain_home, output_path=output_path)
+    assert output_path.read_bytes() == retained

@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import contracts, credit, db, decisions, frontier, immune, paths, skillforge
+from . import build_identity, contracts, credit, db, decisions, frontier, immune, paths, skillforge
 from .errors import BrainError
 from .security.identifiers import validate_skill_name
 
@@ -585,32 +585,28 @@ def _require_eligible_credit_evidence(
     return metadata
 
 
-def _run_independent_qualification(
-    home: Path,
-    manifest_ref: str | Path | None,
-    credit_evidence: dict[str, Any],
-) -> dict[str, Any]:
-    path = _contained_evidence_file(home, str(manifest_ref) if manifest_ref is not None else None)
-    if path is None or not path.is_file():
-        raise BrainError("Promotion to ACTIVE requires a contained qualification manifest")
+def _qualification_process(
+    home: Path, path: Path, records_path: Path | None = None
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     repo = Path(__file__).resolve().parents[2]
     verifier = repo / "scripts" / "verify_qualification.py"
-    verifier_hash = hashlib.sha256(verifier.read_bytes()).hexdigest()
-    manifest_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    command = [
+        sys.executable,
+        str(verifier),
+        "--home",
+        str(home),
+        "--manifest",
+        str(path),
+        "--json",
+    ]
+    if records_path is not None:
+        command.extend(["--records", str(records_path)])
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
     try:
         process = subprocess.run(
-            [
-                sys.executable,
-                str(verifier),
-                "--home",
-                str(home),
-                "--manifest",
-                str(path),
-                "--json",
-            ],
+            command,
             cwd=repo,
             env=env,
             capture_output=True,
@@ -625,6 +621,24 @@ def _run_independent_qualification(
         raise BrainError(
             "Independent qualification verifier produced no valid process artifact"
         ) from exc
+    if not isinstance(report, dict):
+        raise BrainError("Independent qualification verifier report must be an object")
+    return process, report
+
+
+def _run_independent_qualification(
+    home: Path,
+    manifest_ref: str | Path | None,
+    credit_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    path = _contained_evidence_file(home, str(manifest_ref) if manifest_ref is not None else None)
+    if path is None or not path.is_file():
+        raise BrainError("Promotion to ACTIVE requires a contained qualification manifest")
+    repo = Path(__file__).resolve().parents[2]
+    verifier = repo / "scripts" / "verify_qualification.py"
+    verifier_hash = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    manifest_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    process, report = _qualification_process(home, path)
 
     expected_manifest_path = str(path.resolve())
     expected_binding = {
@@ -642,6 +656,8 @@ def _run_independent_qualification(
     if (
         process.returncode != 0
         or report.get("ok") is not True
+        or report.get("qualification_status") != "QUALIFIED"
+        or report.get("records_path") is not None
         or report.get("verifier") != "scripts/verify_qualification.py"
         or report.get("verifier_sha256") != verifier_hash
         or report.get("manifest_path") != expected_manifest_path
@@ -669,6 +685,194 @@ def _run_independent_qualification(
         "validated_evidence_binding": expected_binding,
         "manifest_path": expected_manifest_path,
         "manifest_sha256": manifest_hash,
+    }
+
+
+def record_qualification(
+    home: Path | str, manifest_ref: str | Path, records_ref: str | Path
+) -> dict[str, Any]:
+    """Atomically record independently accepted complete rows; never authorize ACTIVE.
+
+    Both inputs must be existing files contained in home. Exact repeats are
+    idempotent; any different existing ledger refuses the entire operation.
+    """
+    home = Path(home).resolve()
+    manifest_path = _contained_evidence_file(home, str(manifest_ref))
+    records_path = _contained_evidence_file(home, str(records_ref))
+    if (
+        manifest_path is None
+        or not manifest_path.is_file()
+        or records_path is None
+        or not records_path.is_file()
+    ):
+        raise BrainError("Recording requires contained manifest and records files")
+    repo = Path(__file__).resolve().parents[2]
+    verifier = repo / "scripts" / "verify_qualification.py"
+    columns = (
+        "qualification_id",
+        "phase",
+        "requirement",
+        "status",
+        "evidence_json",
+        "source_commit",
+        "artifact_hash",
+        "created_at",
+    )
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        records_bytes = records_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+        records = json.loads(records_bytes)
+        if not isinstance(manifest, dict) or not isinstance(records, list) or not records:
+            raise ValueError("manifest object and complete records list required")
+        if any(
+            not isinstance(row, dict)
+            or set(row) != set(columns)
+            or any(not isinstance(value, str) or not value for value in row.values())
+            for row in records
+        ):
+            raise ValueError("complete string-valued qualification rows required")
+        if len({row["qualification_id"] for row in records}) != len(records):
+            raise ValueError("duplicate qualification_id")
+
+        # Snapshot all referenced files, including artifacts' raw provenance.
+        # Keep lexical paths so replacement of a symlink is detected as well.
+        files: dict[Path, tuple[Path, str]] = {}
+
+        def snapshot(path: Path) -> None:
+            resolved = path.resolve()
+            resolved.relative_to(home)
+            payload = path.read_bytes()
+            binding = (resolved, hashlib.sha256(payload).hexdigest())
+            if path in files:
+                if files[path] != binding:
+                    raise ValueError("evidence changed while collecting bindings")
+                return
+            files[path] = binding
+            try:
+                value = json.loads(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return
+            visit(value)
+
+        def visit(value: object) -> None:
+            if isinstance(value, dict):
+                if isinstance(value.get("path"), str) and "sha256" in value:
+                    ref = Path(value["path"])
+                    if ref.is_absolute() or ".." in ref.parts:
+                        raise ValueError("evidence references must be contained relative paths")
+                    snapshot(home / ref)
+                for key, item in value.items():
+                    if key == "evidence_json" and isinstance(item, str):
+                        visit(json.loads(item))
+                    else:
+                        visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+
+        source_commit = build_identity.git_sha(repo)
+        snapshot(manifest_path)
+        snapshot(records_path)
+        authority_ref = manifest.get("authority")
+        if not isinstance(authority_ref, str):
+            raise ValueError("manifest authority required")
+        authority_path = (repo / authority_ref).resolve()
+        authority_path.relative_to(repo.resolve())
+        authority_hash = hashlib.sha256(authority_path.read_bytes()).hexdigest()
+        verifier_hash = hashlib.sha256(verifier.read_bytes()).hexdigest()
+        source_hash = build_identity.source_tree_fingerprint(repo)
+        config_hash = build_identity.configuration_fingerprint(home)
+        if not source_commit or not source_hash or not config_hash:
+            raise ValueError("current source/config bindings unavailable")
+
+        def stable() -> bool:
+            return (
+                _contained_evidence_file(home, str(manifest_ref)) == manifest_path
+                and _contained_evidence_file(home, str(records_ref)) == records_path
+                and manifest_path.read_bytes() == manifest_bytes
+                and records_path.read_bytes() == records_bytes
+                and hashlib.sha256(verifier.read_bytes()).hexdigest() == verifier_hash
+                and (repo / authority_ref).resolve() == authority_path
+                and hashlib.sha256(authority_path.read_bytes()).hexdigest() == authority_hash
+                and build_identity.git_sha(repo) == source_commit
+                and build_identity.source_tree_fingerprint(repo) == source_hash
+                and build_identity.configuration_fingerprint(home) == config_hash
+                and all(
+                    path.resolve() == resolved
+                    and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+                    for path, (resolved, digest) in files.items()
+                )
+            )
+
+        def accept_candidate() -> dict[str, Any]:
+            process, report = _qualification_process(home, manifest_path, records_path)
+            if (
+                process.returncode != 0
+                or report.get("ok") is not True
+                or report.get("qualification_status") != "READY_TO_RECORD"
+                or report.get("verifier") != "scripts/verify_qualification.py"
+                or report.get("verifier_sha256") != verifier_hash
+                or report.get("manifest_path") != str(manifest_path)
+                or report.get("manifest_sha256") != hashlib.sha256(manifest_bytes).hexdigest()
+                or report.get("records_path") != str(records_path)
+                or report.get("records_sha256") != hashlib.sha256(records_bytes).hexdigest()
+                or report.get("records_content_sha256")
+                != hashlib.sha256(contracts.canonical_json(records).encode("utf-8")).hexdigest()
+                or report.get("manifest_content_sha256")
+                != hashlib.sha256(contracts.canonical_json(manifest).encode("utf-8")).hexdigest()
+                or report.get("source_commit") != manifest.get("source_commit")
+                or report.get("current_source_commit") != source_commit
+                or report.get("source_tree_sha256") != source_hash
+                or report.get("config_sha256") != config_hash
+                or report.get("validated_evidence_bindings") != []
+            ):
+                raise BrainError("Independent candidate qualification was not accepted")
+            return report
+
+        # Reject independently before opening any writable connection. Repeat
+        # under a write reservation so causal observations cannot change.
+        accept_candidate()
+        if not stable():
+            raise BrainError("Qualification files or bindings changed before recording")
+        if not db.db_path(home).is_file():
+            raise ValueError("existing migrated database required")
+        conn = db.connect(db.db_path(home))
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            report = accept_candidate()
+            existing = [
+                dict(row)
+                for row in conn.execute(
+                    f"SELECT {', '.join(columns)} FROM v2_qualification"
+                ).fetchall()
+            ]
+            by_id = {row["qualification_id"]: row for row in records}
+            if any(by_id.get(row["qualification_id"]) != row for row in existing):
+                raise BrainError("Conflicting existing qualification records; refusing overwrite")
+            existing_ids = {row["qualification_id"] for row in existing}
+            additions = [row for row in records if row["qualification_id"] not in existing_ids]
+            conn.executemany(
+                f"INSERT INTO v2_qualification ({', '.join(columns)}) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [tuple(row[column] for column in columns) for row in additions],
+            )
+            if not stable():
+                raise BrainError("Qualification files or bindings changed before commit")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise BrainError(f"Qualification recording refused: {exc}") from exc
+    return {
+        "status": "RECORDED",
+        "inserted": len(additions),
+        "record_count": len(records),
+        "manifest_sha256": report["manifest_sha256"],
+        "records_sha256": report["records_sha256"],
     }
 
 

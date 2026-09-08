@@ -31,6 +31,13 @@
   operator configuration.
 - Refuse empty transfer acceptance contracts before executing a student, and
   require an explicit successful acceptance result for transfer verification.
+- Preserve canonical memory bodies in lexical cascade results and MMR input.
+- Profile retrieval against the current corpus using measured latency and
+  explicitly estimated context sizes; never fabricate provider costs, turns,
+  task success, or a positive economics verdict. Preserve existing reports.
+- Add read-only candidate qualification and atomic, independently verified
+  ledger recording. Candidate reports cannot authorize ACTIVE; conflicting,
+  partial, stale, tampered, or simulated evidence remains ineligible.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 

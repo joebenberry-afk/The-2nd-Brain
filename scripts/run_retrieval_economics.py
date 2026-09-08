@@ -1,191 +1,149 @@
-"""Run paired economics benchmark for Retrieval Intelligence 2.0.
+"""Measure local retrieval overhead against the current Brain corpus.
 
-Economics requirement for T7.3: Use T0.5 paired runner with retrieval feature isolation.
-Do not promote on relevance-only benchmarks if token/turn economics regress materially.
+Context token estimates and measured retrieval latency are not provider usage,
+task acceptance, turns, or dollar savings. Those remain unmeasured here.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
-import shutil
-import tempfile
+import os
+from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
+from time import perf_counter_ns
 from typing import Any
 
-from second_brain import contracts, db, economics, hybrid_retrieval, semantic
+from second_brain import build_identity, contracts, db, hybrid_retrieval, semantic
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = ROOT / "outputs" / "reports" / "v2" / "retrieval" / "retrieval-economics.json"
+OUTPUT_DIR = ROOT / "outputs" / "reports" / "v2" / "retrieval"
 
 
-def _seed_benchmark_corpus(home: Path) -> list[dict[str, str]]:
-    topics = [
-        (
-            "PostgreSQL Pooling",
-            "Configure PgBouncer with 100 max connections and transaction pooling.",
-        ),
-        (
-            "PostgreSQL Pool Guide",
-            "Configure PgBouncer with 100 max connections and transaction pooling.",
-        ),
-        (
-            "PostgreSQL Pool Tunings",
-            "Configure PgBouncer with 100 max connections and transaction pooling.",
-        ),
-        (
-            "Redis Session Cache",
-            "Use Redis standalone cluster with LRU eviction for session cookies.",
-        ),
-        ("Redis Key Eviction", "Configure maxmemory-policy allkeys-lru in redis.conf."),
-        ("SQLite WAL Mode", "Set journal_mode=WAL and busy_timeout=5000 for concurrent reads."),
-        ("SQLite Concurrency", "Set journal_mode=WAL and busy_timeout=5000 for concurrent reads."),
-        (
-            "HTTP Timeout Limits",
-            "Enforce 5s connect timeout and 30s read timeout on outgoing requests.",
-        ),
-        ("HTTP Retry Strategy", "Use exponential backoff with full jitter on 5xx status codes."),
-        (
-            "Token Rate Limiting",
-            "Implement token bucket with 60 requests per minute burst capacity.",
-        ),
-    ]
-    created = []
-    for title, body in topics:
-        mid = semantic.add_memory(
-            home,
-            title=title,
-            body=body,
-            scope="project",
-            project_id="bench-proj",
-            grade="VERIFIED",
-        )
-        semantic.curate(home, mid, status="current")
-        created.append({"memory_id": mid, "title": title, "body": body})
-    return created
-
-
-def run_retrieval_economics() -> dict[str, Any]:
-    temp_dir = Path(tempfile.mkdtemp(prefix="second_brain_ret_econ_"))
+def run_retrieval_economics(
+    home: Path | None = None, *, repeats: int = 5, output_path: Path | None = None
+) -> dict[str, Any]:
+    """Profile at most sixteen real title queries without inventing downstream outcomes."""
+    if repeats < 1:
+        raise ValueError("repeats must be positive")
+    home = Path(home or os.environ.get("SECOND_BRAIN_HOME") or ROOT).resolve()
+    database = db.db_path(home)
+    conn = db.connect(database, readonly=True)
     try:
-        dbfile = db.db_path(temp_dir)
-        db.migrate(dbfile)
+        counts = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "COUNT(CASE WHEN status = 'current' THEN 1 END) AS current FROM memories"
+        ).fetchone()
+        queries = conn.execute(
+            "SELECT memory_id, title, project_id FROM memories "
+            "WHERE status = 'current' ORDER BY memory_id LIMIT 16"
+        ).fetchall()
+    finally:
+        conn.close()
+    if not queries:
+        raise ValueError("the Brain has no current memories to profile")
 
-        _seed_benchmark_corpus(temp_dir)
-        retriever = hybrid_retrieval.HybridCascadeRetriever()
-
-        queries = [
-            ("PostgreSQL pooling connection", "database"),
-            ("Redis cache eviction", "caching"),
-            ("SQLite WAL concurrency", "storage"),
-            ("HTTP timeout backoff retry", "networking"),
-            ("PostgreSQL Redis cache pooling", "architecture"),
-            ("database connection and cache eviction", "data_layer"),
-            ("concurrency timeout and rate limit", "resilience"),
-            ("PostgreSQL pool connection limits", "database_limits"),
-        ]
-
-        runs: list[dict[str, Any]] = []
-
-        for idx, (q, task_class) in enumerate(queries):
-            # Arm OFF: Base retrieval without MMR (duplicate items admitted to top-k context)
-            # Fetch raw lexical results without MMR diversity re-ranking
-            fts_rows = semantic.search_memories(
-                temp_dir, q, project_id="bench-proj", top_k=4, include_duplicates=True
-            )
-            off_matches = [
-                hybrid_retrieval.RetrievalMatch(
-                    memory_id=m["memory_id"],
-                    title=m["title"],
-                    score=float(m["_score"]),
-                    tier_resolved=2,
-                    body=m.get("body", ""),
-                )
-                for m in fts_rows[:4]
-            ]
-            off_context = "\n\n".join(f"[{m.title}]\n{m.body}" for m in off_matches)
-            off_tokens = int(contracts.estimate_tokens(off_context))
-
-            # Arm ON: Retrieval Intelligence 2.0 (with MMR lambda=0.7 diversity)
-            res_on = retriever.retrieve(
-                temp_dir, q, project_id="bench-proj", top_k=4, lambda_param=0.7
-            )
-            on_matches = res_on.matches
-            on_context = "\n\n".join(f"[{m.title}]\n{m.body}" for m in on_matches)
-            on_tokens = int(contracts.estimate_tokens(on_context))
-
-            # Simulate downstream execution:
-            # Baseline prompt tokens + retrieved context tokens
-            base_prompt_tokens = 500
-            total_off_tokens = base_prompt_tokens + off_tokens + 200  # 200 output tokens
-            total_on_tokens = base_prompt_tokens + on_tokens + 200
-
-            # Cost calculation at standard prices: $3/M input, $15/M output
-            off_cost = (base_prompt_tokens + off_tokens) * (3.0 / 1_000_000) + 200 * (
-                15.0 / 1_000_000
-            )
-            on_cost = (base_prompt_tokens + on_tokens) * (3.0 / 1_000_000) + 200 * (
-                15.0 / 1_000_000
-            )
-
-            run = {
-                "pair_id": f"ret-pair-{idx}",
-                "query": q,
-                "task_class": task_class,
-                "off": {
-                    "tokens": total_off_tokens,
-                    "dollars": off_cost,
-                    "turns": 1,
-                    "pass": True,
-                    "wall_ms": 15.0,
-                },
-                "on": {
-                    "tokens": total_on_tokens,
-                    "dollars": on_cost,
-                    "turns": 1,
-                    "pass": True,
-                    "wall_ms": res_on.latency_ms or 5.0,
+    now = datetime.now(UTC)
+    target = output_path or OUTPUT_DIR / f"retrieval-{now.strftime('%Y%m%dT%H%M%S%fZ')}.json"
+    if target.exists():
+        raise FileExistsError(f"refusing to overwrite retained evidence: {target}")
+    retriever = hybrid_retrieval.HybridCascadeRetriever()
+    runs = []
+    for row in queries:
+        timings: dict[str, list[float]] = {"baseline": [], "candidate": []}
+        contexts = {"baseline": "", "candidate": ""}
+        selected: dict[str, list[str]] = {"baseline": [], "candidate": []}
+        for repetition in range(repeats):
+            # Alternate order; each measurement includes its real retrieval call.
+            order = ("baseline", "candidate") if repetition % 2 == 0 else ("candidate", "baseline")
+            for arm in order:
+                started = perf_counter_ns()
+                if arm == "baseline":
+                    matches = semantic.search_memories(
+                        home,
+                        row["title"],
+                        project_id=row["project_id"],
+                        top_k=4,
+                        include_duplicates=True,
+                    )
+                    timings[arm].append((perf_counter_ns() - started) / 1_000_000)
+                    contexts[arm] = "\n\n".join(
+                        f"[{match['title']}]\n{match.get('_body', '')}" for match in matches
+                    )
+                    selected[arm] = [match["memory_id"] for match in matches]
+                else:
+                    result = retriever.retrieve(
+                        home,
+                        row["title"],
+                        project_id=row["project_id"],
+                        top_k=4,
+                        lambda_param=0.7,
+                    )
+                    timings[arm].append((perf_counter_ns() - started) / 1_000_000)
+                    contexts[arm] = "\n\n".join(
+                        f"[{match.title}]\n{match.body}" for match in result.matches
+                    )
+                    selected[arm] = [match.memory_id for match in result.matches]
+        runs.append(
+            {
+                "query_memory_id": row["memory_id"],
+                "query_sha256": hashlib.sha256(row["title"].encode("utf-8")).hexdigest(),
+                "project_id": row["project_id"],
+                **{
+                    arm: {
+                        "retrieval_ms": timings[arm],
+                        "median_ms": median(timings[arm]),
+                        "context_chars": len(contexts[arm]),
+                        "context_tokens_estimated": contracts.estimate_tokens(contexts[arm]),
+                        "selected_memory_ids": selected[arm],
+                    }
+                    for arm in timings
                 },
             }
-            runs.append(run)
-
-        # Compute paired verdict using economics.verdict
-        v = economics.verdict(runs)
-
-        manifest = {
-            "experiment": "T7.3 Retrieval Intelligence 2.0 Paired Economics",
-            "hypothesis": (
-                "MMR diversity with lambda=0.7 eliminates near-duplicate memory injection, reducing"
-                " token expenditure and context window bloat while preserving 100% acceptance."
-            ),
-            "verdict": v,
-            "summary": {
-                "pairs_evaluated": len(runs),
-                "token_savings_mean": round(v.get("tokens_delta") or 0.0, 2),
-                "dollars_delta_mean": round(v.get("dollars_delta") or 0.0, 6),
-                "turns_delta_mean": v.get("turns_delta"),
-                "success_delta_mean": v.get("success_delta"),
-                "economics_verdict": v.get("verdict"),
-            },
-            "runs": runs,
-            "conclusion": (
-                f"PASS: Paired economics evaluated across {len(runs)} queries. "
-                f"Token delta: {v.get('tokens_delta')} tokens/query. "
-                f"No turn or economic regression detected. Economics verdict: {v.get('verdict')}."
-            ),
-        }
-
-        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        print(f"Wrote retrieval economics results to {OUTPUT_PATH}")
-        print(
-            f"Verdict: {v.get('verdict')}, Pairs: {v.get('n')}, Dollars delta:"
-            f" {v.get('dollars_delta')}"
         )
-        return manifest
+    report = {
+        "schema_version": 1,
+        "classification": "observed",
+        "scope": "local_retrieval_scale_and_performance",
+        "generated_at": now.isoformat(),
+        "home": str(home),
+        "source_tree_sha256": build_identity.source_tree_fingerprint(ROOT),
+        "config_sha256": build_identity.configuration_fingerprint(home),
+        "corpus": {"total": counts["total"], "current": counts["current"]},
+        "database_bytes": database.stat().st_size,
+        "query_selection": "up to sixteen current titles in memory-id order",
+        "repeats": repeats,
+        "runs": runs,
+        "provider_usage": {"tokens": None, "dollars": None, "turns": None, "task_success": None},
+        "live_economics_eligible": False,
+        "economics_verdict": "INSUFFICIENT",
+        "conclusion": "Measured local retrieval only; no downstream success or savings claim.",
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("x", encoding="utf-8") as output:
+        json.dump(report, output, indent=2)
+    return report
 
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--home", type=Path)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--repeats", type=int, default=5)
+    args = parser.parse_args()
+    print(
+        json.dumps(
+            run_retrieval_economics(
+                args.home,
+                repeats=args.repeats,
+                output_path=args.out,
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
-    run_retrieval_economics()
+    main()
