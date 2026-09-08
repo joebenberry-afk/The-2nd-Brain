@@ -14,6 +14,12 @@
 #         failures (fail-open), so hooks never break the Codex session.
 $ErrorActionPreference = "Stop"
 
+# The host sends UTF-8 JSON. PowerShell 5 otherwise uses legacy console/pipe encodings.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
 $repoHome = $env:SECOND_BRAIN_HOME
 if (-not $repoHome) { $repoHome = Join-Path $env:USERPROFILE "Documents\The-Second-Brain" }
 $python = $env:SECOND_BRAIN_PYTHON
@@ -43,8 +49,8 @@ try {
     reason = $parsed.reason
     packet_tokens = $parsed.packet_tokens
     delivery_id = $parsed.delivery_id
-    candidate_count = @($parsed.candidate_ids).Count
-    selected_count = @($parsed.selected_ids).Count
+    candidate_count = if ($null -eq $parsed.candidate_ids) { $null } else { @($parsed.candidate_ids).Count }
+    selected_count = if ($null -eq $parsed.selected_ids) { $null } else { @($parsed.selected_ids).Count }
   } | ConvertTo-Json -Compress
   $tdir = Join-Path $repoHome "telemetry\agent-performance"
   New-Item -ItemType Directory -Force -Path $tdir | Out-Null

@@ -29,6 +29,7 @@ def run(home: Path) -> int:
     except Exception:  # fail-open: never raise into the hook
         payload = None
     payload_dict = payload if isinstance(payload, dict) else {}
+    source = str(payload_dict.get("hook_event_name") or payload_dict.get("source") or "")
     task = None
     if isinstance(payload, dict):
         task = payload.get("task") or payload.get("prompt")
@@ -37,7 +38,7 @@ def run(home: Path) -> int:
     if task is None:
         # Stop/SessionEnd carry no prompt: record the finalization trigger
         # only (plan §3.1 — no model-based extraction inside the short hook).
-        if str(payload_dict.get("source") or "") in ("Stop", "SessionEnd"):
+        if source in ("Stop", "SessionEnd"):
             try:
                 session = contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(
@@ -102,7 +103,6 @@ def run(home: Path) -> int:
     )
     packet = autoinject.render_packet(decision)
     delivery_id = lifecycle.last_delivery_ids[0] if lifecycle.last_delivery_ids else None
-    source = str(payload_dict.get("source") or "")
     is_start = source in ("SessionStart", "session_start") or not bool(
         payload_dict.get("is_delta") or payload_dict.get("turn_index", 0) > 0
     )

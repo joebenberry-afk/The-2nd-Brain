@@ -10,6 +10,12 @@
 
 $ErrorActionPreference = "Stop"
 
+# Preserve the host's UTF-8 payload across both native process boundaries.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
 $repoHome = $env:SECOND_BRAIN_HOME
 if (-not $repoHome) { $repoHome = Join-Path $env:USERPROFILE "Documents\The-Second-Brain" }
 $python = $env:SECOND_BRAIN_PYTHON

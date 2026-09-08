@@ -163,7 +163,6 @@ _HEARTBEAT_FIELDS = (
     "issue_codes",
     "latency_ms",
     "model_tokens_used",
-    "artifacts_gc_count",
 )
 _HEARTBEAT_MODES = frozenset({"off", "shadow", "active"})
 _P4_OPTIMIZATION_KINDS = frozenset(
@@ -231,7 +230,7 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             "model_tokens_used",
             "artifacts_gc_count",
         ):
-            value = values[field]
+            value = record.get(field)
             if field in record and (
                 isinstance(value, bool) or not isinstance(value, int) or value < 0
             ):
@@ -654,7 +653,7 @@ def format_report(rep: dict) -> str:
 
 
 _APPEND_FIELDS = {
-    "heartbeat_pulse": set(_HEARTBEAT_FIELDS),
+    "heartbeat_pulse": set(_HEARTBEAT_FIELDS) | {"artifacts_gc_count"},
     "bottleneck_fingerprint": {
         "fingerprint_id",
         "category",

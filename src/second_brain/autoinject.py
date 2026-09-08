@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import json
 import logging
 import os
 import random
@@ -1617,7 +1616,7 @@ class BrainLifecycle:
             # T5.2: Record outcomes for pending retrieval decisions
             try:
                 dbfile = db.db_path(Path(self._home))
-                if dbfile.is_file():
+                if acceptance_passed is not None and dbfile.is_file():
                     conn = db.connect(dbfile)
                     try:
                         rows = conn.execute(
@@ -1636,48 +1635,14 @@ class BrainLifecycle:
                                 actual_tokens = governor._session_total_tokens(
                                     Path(self._home), feedback_session
                                 )
-                            except Exception:
-                                actual_tokens = 0
-                            if not actual_tokens:
-                                direct_path = (
-                                    Path(self._home)
-                                    / "telemetry"
-                                    / "agent-performance"
-                                    / f"{feedback_session}.jsonl"
+                            except (OSError, ValueError):
+                                logger.debug(
+                                    "session usage unavailable for retrieval outcome", exc_info=True
                                 )
-                                if direct_path.is_file():
-                                    try:
-                                        tok = governor.parse_telemetry_session(direct_path)
-                                        actual_tokens = tok.total_tokens or 0
-                                    except Exception:
-                                        actual_tokens = 0
-                                    if not actual_tokens:
-                                        try:
-                                            tot = 0
-                                            with open(direct_path, encoding="utf-8") as tf:
-                                                for tline in tf:
-                                                    if not tline.strip():
-                                                        continue
-                                                    rec = json.loads(tline)
-                                                    if "total_tokens" in rec and isinstance(
-                                                        rec["total_tokens"], int
-                                                    ):
-                                                        tot += rec["total_tokens"]
-                                                    elif (
-                                                        "input_tokens" in rec
-                                                        or "output_tokens" in rec
-                                                    ):
-                                                        tot += int(
-                                                            rec.get("input_tokens") or 0
-                                                        ) + int(rec.get("output_tokens") or 0)
-                                            if tot > 0:
-                                                actual_tokens = tot
-                                        except Exception:
-                                            pass
                         reward = 1.0 if acceptance_passed else 0.0
                         outcome = {
                             "acceptance_passed": bool(acceptance_passed),
-                            "tokens_total": int(actual_tokens or 0),
+                            "tokens_total": actual_tokens,
                         }
                         for dec_id in decision_ids:
                             try:

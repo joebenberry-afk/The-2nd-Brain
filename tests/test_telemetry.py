@@ -199,11 +199,17 @@ def test_current_omp_v3_records_validate(brain_home):
                 "issue_codes": [],
                 "latency_ms": 0,
                 "model_tokens_used": 0,
-                "artifacts_gc_count": 0,
             },
         ],
     )
     assert telemetry.validate(brain_home)["issues"] == []
+
+
+def test_optional_heartbeat_gc_count_still_rejects_invalid_measurements(brain_home):
+    import pytest
+
+    with pytest.raises(ValueError, match="artifacts_gc_count"):
+        telemetry.append_record(brain_home, "gc-invalid", "heartbeat_pulse", artifacts_gc_count=-1)
 
 
 def test_operational_report_preserves_missing_provider_counters(brain_home):
