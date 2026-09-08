@@ -65,6 +65,10 @@ class TestCascadeShortCircuitAndTiers:
         assert res.vector_invoked is False
         assert len(res.matches) >= 1
         assert res.matches[0].memory_id == mem_id
+        assert (
+            "PostgreSQL requires connection pooling under multi-threaded workers."
+            in res.matches[0].body
+        )
 
     def test_negative_result_cache(self, brain_home):
         retriever = HybridCascadeRetriever()

@@ -556,7 +556,7 @@ class HybridCascadeRetriever:
                 components, has_c, c_details = _compute_score_components(
                     home_path, m, query_tokens, project_id
                 )
-                body_val = m.get("body", "")
+                body_val = m.get("_body", "")
                 match = RetrievalMatch(
                     memory_id=m["memory_id"],
                     title=m.get("title", ""),

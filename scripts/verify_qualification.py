@@ -829,6 +829,55 @@ def check_manifest(
 
 
 def check_qualification_ledger(home: Path, manifest: dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        conn = db.connect(db.db_path(home), readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT qualification_id, phase, requirement, status, evidence_json, "
+                "source_commit, artifact_hash, created_at FROM v2_qualification"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return check("qualification_ledger", False, {"errors": [str(exc)]})
+    return validate_qualification_rows(home, manifest, [dict(row) for row in rows])
+
+
+def load_candidate_records(home: Path, records_path: Path) -> list[dict[str, Any]]:
+    """Load complete rows from a contained JSON list, without touching the ledger."""
+    root = home.resolve()
+    raw = records_path
+    if ".." in raw.parts:
+        raise ValueError("records path must be contained in home")
+    path = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
+    path.relative_to(root)
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    columns = {
+        "qualification_id",
+        "phase",
+        "requirement",
+        "status",
+        "evidence_json",
+        "source_commit",
+        "artifact_hash",
+        "created_at",
+    }
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict)
+        or set(row) != columns
+        or any(not isinstance(value, str) or not value for value in row.values())
+        for row in rows
+    ):
+        raise ValueError("records must be a JSON list of complete qualification rows")
+    if len({row["qualification_id"] for row in rows}) != len(rows):
+        raise ValueError("duplicate qualification_id")
+    return rows
+
+
+def validate_qualification_rows(
+    home: Path, manifest: dict[str, Any] | None, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Validate supplied rows using the same release requirements as the ledger."""
     errors: list[str] = []
     if manifest is None:
         return check(
@@ -841,29 +890,6 @@ def check_qualification_ledger(home: Path, manifest: dict[str, Any] | None) -> d
                 "errors": ["valid manifest required"],
             },
         )
-
-    try:
-        conn = db.connect(db.db_path(home), readonly=True)
-        try:
-            rows = conn.execute(
-                "SELECT qualification_id, phase, requirement, status, evidence_json, "
-                "source_commit, artifact_hash, created_at FROM v2_qualification"
-            ).fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error as exc:
-        return check(
-            "qualification_ledger",
-            False,
-            {
-                "records": [],
-                "proven_count": 0,
-                "validated_evidence_bindings": [],
-                "errors": [str(exc)],
-            },
-        )
-
-    records = [dict(row) for row in rows]
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     malformed_identities: list[object] = []
     for row in records:
@@ -1065,7 +1091,9 @@ def _safe_check(name: str, operation: Callable[[], dict[str, Any]]) -> dict[str,
         return check(name, False, {"error": f"{type(exc).__name__}: {exc}"})
 
 
-def verify_all(home: Path, manifest_path: Path | None = None) -> dict[str, Any]:
+def verify_all(
+    home: Path, manifest_path: Path | None = None, records_path: Path | None = None
+) -> dict[str, Any]:
     try:
         manifest_check, manifest = check_manifest(home, manifest_path)
     except Exception as exc:
@@ -1076,7 +1104,14 @@ def verify_all(home: Path, manifest_path: Path | None = None) -> dict[str, Any]:
             {"errors": [f"{type(exc).__name__}: {exc}"]},
         )
     ledger_check = _safe_check(
-        "qualification_ledger", lambda: check_qualification_ledger(home, manifest)
+        "qualification_ledger",
+        lambda: (
+            check_qualification_ledger(home, manifest)
+            if records_path is None
+            else validate_qualification_rows(
+                home, manifest, load_candidate_records(home, records_path)
+            )
+        ),
     )
     results = [
         _safe_check("database_integrity", lambda: check_database_integrity(home)),
@@ -1104,7 +1139,9 @@ def verify_all(home: Path, manifest_path: Path | None = None) -> dict[str, Any]:
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "ok": ok,
-        "qualification_status": "QUALIFIED" if ok else "HOLD",
+        "qualification_status": (
+            ("QUALIFIED" if records_path is None else "READY_TO_RECORD") if ok else "HOLD"
+        ),
         "remaining_prerequisites": remaining,
         "verifier": "scripts/verify_qualification.py",
         "verifier_sha256": _sha256_file(Path(__file__)),
@@ -1112,7 +1149,25 @@ def verify_all(home: Path, manifest_path: Path | None = None) -> dict[str, Any]:
         "current_source_commit": current_source,
         "source_tree_sha256": _source_tree_fingerprint(),
         "config_sha256": _config_fingerprint(home),
-        "validated_evidence_bindings": bindings,
+        "validated_evidence_bindings": bindings if records_path is None else [],
+        "records_path": str(
+            (records_path if records_path.is_absolute() else home / records_path).resolve()
+        )
+        if records_path is not None
+        else None,
+        "records_sha256": (
+            _sha256_file(records_path if records_path.is_absolute() else home / records_path)
+            if records_path is not None and ok
+            else None
+        ),
+        "records_content_sha256": (
+            _canonical_hash(ledger_check["details"]["records"])
+            if records_path is not None and ok
+            else None
+        ),
+        "manifest_content_sha256": (
+            _canonical_hash(manifest) if records_path is not None and ok else None
+        ),
         "scope": [
             {"phase": phase, "requirement": requirement}
             for phase, requirement in EXPECTED_REQUIREMENTS
@@ -1133,11 +1188,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--manifest", type=Path, default=None, help="Qualification manifest to validate"
     )
+    parser.add_argument(
+        "--records",
+        type=Path,
+        default=None,
+        help="Read-only candidate rows; success is READY_TO_RECORD, never QUALIFIED",
+    )
     parser.add_argument("--out", type=Path, default=None, help="Output destination")
     parser.add_argument("--home", type=Path, default=REPO_ROOT, help="Brain home directory")
     args = parser.parse_args(argv)
 
-    result = verify_all(Path(args.home).resolve(), args.manifest)
+    result = verify_all(Path(args.home).resolve(), args.manifest, args.records)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")

@@ -906,3 +906,231 @@ def test_mechanism_producer_never_qualifies_or_activates(brain_home: Path) -> No
     finally:
         conn.close()
     assert count == 0
+
+
+def _candidate_fixture(home: Path) -> tuple[Path, Path, list[dict[str, Any]]]:
+    """Export the ineligible fixture verbatim; never relabel it as release evidence."""
+    manifest = _seed_complete_qualification(home)
+    conn = db.connect(db.db_path(home))
+    try:
+        rows = [dict(row) for row in conn.execute("SELECT * FROM v2_qualification")]
+        conn.execute("DELETE FROM v2_qualification")
+        conn.commit()
+    finally:
+        conn.close()
+    records = manifest.with_name("records.json")
+    records.write_text(json.dumps(rows), encoding="utf-8")
+    return manifest, records, rows
+
+
+def _qualification_rows(home: Path) -> list[dict[str, Any]]:
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        return [dict(row) for row in conn.execute("SELECT * FROM v2_qualification")]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("kind", ["fixture", "partial", "forged", "stale", "malformed"])
+def test_candidate_rejection_never_records(brain_home: Path, kind: str) -> None:
+    manifest, records, rows = _candidate_fixture(brain_home)
+    if kind == "partial":
+        rows.pop()
+    elif kind == "forged":
+        rows[0]["artifact_hash"] = "0" * 64
+    elif kind == "stale":
+        rows[0]["source_commit"] = "0" * 40
+    records.write_text("null" if kind == "malformed" else json.dumps(rows), encoding="utf-8")
+    report = verifier.verify_all(brain_home, manifest, records)
+    assert report["ok"] is False
+    assert report["qualification_status"] == "HOLD"
+    assert report["validated_evidence_bindings"] == []
+    with pytest.raises(BrainError):
+        promotion.record_qualification(brain_home, manifest, records)
+    assert _qualification_rows(brain_home) == []
+
+
+def test_candidate_records_must_be_contained(brain_home: Path, tmp_path: Path) -> None:
+    manifest, _, rows = _candidate_fixture(brain_home)
+    outside = tmp_path / "outside-records.json"
+    outside.write_text(json.dumps(rows), encoding="utf-8")
+    with pytest.raises(BrainError, match="contained"):
+        promotion.record_qualification(brain_home, manifest, outside)
+    with pytest.raises(ValueError):
+        verifier.load_candidate_records(brain_home, outside)
+    assert _qualification_rows(brain_home) == []
+
+
+def _mock_candidate_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    manifest: Path,
+    records: Path,
+    *,
+    after_report=None,
+) -> None:
+    """Isolate the transaction contract, NOT a valid observed evidence fixture."""
+    calls = 0
+
+    def run(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert command[-2:] == ["--records", str(records)]
+        assert "PYTHONHOME" not in kwargs["env"]
+        assert "PYTHONPATH" not in kwargs["env"]
+        report = {
+            "ok": True,
+            "qualification_status": "READY_TO_RECORD",
+            "verifier": "scripts/verify_qualification.py",
+            "verifier_sha256": verifier._sha256_file(
+                REPO_ROOT / "scripts" / "verify_qualification.py"
+            ),
+            "manifest_path": str(manifest),
+            "manifest_sha256": verifier._sha256_file(manifest),
+            "records_path": str(records),
+            "records_sha256": verifier._sha256_file(records),
+            "records_content_sha256": verifier._canonical_hash(json.loads(records.read_text())),
+            "manifest_content_sha256": verifier._canonical_hash(json.loads(manifest.read_text())),
+            "source_commit": json.loads(manifest.read_text())["source_commit"],
+            "current_source_commit": source_commit,
+            "source_tree_sha256": source_hash,
+            "config_sha256": config_hash,
+            "validated_evidence_bindings": [],
+        }
+        if after_report is not None and calls == 2:
+            after_report()
+        return SimpleNamespace(returncode=0, stdout=json.dumps(report), stderr="")
+
+    source_commit = verifier._git_head()
+    source_hash = verifier._source_tree_fingerprint()
+    config_hash = verifier._config_fingerprint(home)
+    # subprocess is shared with build_identity; preserve real Git invocations.
+    original_run = promotion.subprocess.run
+    monkeypatch.setattr(
+        promotion.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            run(command, **kwargs) if "--records" in command else original_run(command, **kwargs)
+        ),
+    )
+
+
+def test_recording_transaction_is_idempotent_and_refuses_conflict(
+    brain_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, records, rows = _candidate_fixture(brain_home)
+    _mock_candidate_acceptance(monkeypatch, brain_home, manifest, records)
+    assert promotion.record_qualification(brain_home, manifest, records)["inserted"] == len(rows)
+    assert promotion.record_qualification(brain_home, manifest, records)["inserted"] == 0
+    assert _qualification_rows(brain_home) == rows
+    conn = db.connect(db.db_path(brain_home))
+    try:
+        conn.execute(
+            "UPDATE v2_qualification SET status = 'HELD' WHERE qualification_id = ?",
+            (rows[0]["qualification_id"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    before = _qualification_rows(brain_home)
+    with pytest.raises(BrainError, match="Conflicting"):
+        promotion.record_qualification(brain_home, manifest, records)
+    assert _qualification_rows(brain_home) == before
+    # Even a transaction-only acceptance mock never makes this fixture qualify.
+    assert verifier.verify_all(brain_home, manifest)["qualification_status"] == "HOLD"
+
+
+@pytest.mark.parametrize("failure", ["records_changed", "raw_changed", "insert_failed"])
+def test_recording_rolls_back_whole_batch(
+    brain_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    manifest, records, rows = _candidate_fixture(brain_home)
+    mutate = None
+    if failure == "records_changed":
+
+        def change_records() -> None:
+            records.write_text(records.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+        mutate = change_records
+    elif failure == "raw_changed":
+        envelope = json.loads(rows[0]["evidence_json"])
+        artifact_path = brain_home / envelope["evidence_refs"][0]["path"]
+        artifact = json.loads(artifact_path.read_text())
+        raw = brain_home / artifact["provenance"]["raw_evidence_refs"][0]["path"]
+
+        def change_raw() -> None:
+            raw.write_text(raw.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+        mutate = change_raw
+    else:
+        conn = db.connect(db.db_path(brain_home))
+        try:
+            conn.execute(
+                "CREATE TRIGGER reject_second_qualification BEFORE INSERT ON v2_qualification "
+                "WHEN (SELECT COUNT(*) FROM v2_qualification) > 0 "
+                "BEGIN SELECT RAISE(ABORT, 'contract insert failure'); END"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    _mock_candidate_acceptance(
+        monkeypatch,
+        brain_home,
+        manifest,
+        records,
+        after_report=mutate,
+    )
+    with pytest.raises(BrainError):
+        promotion.record_qualification(brain_home, manifest, records)
+    assert _qualification_rows(brain_home) == []
+
+
+def test_candidate_success_label_cannot_authorize_active(
+    brain_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report-mode contract only; mocked checks do not create release evidence."""
+    manifest, records, _ = _candidate_fixture(brain_home)
+    binding = {
+        "path": "qualification/credit.json",
+        "sha256": "1" * 64,
+        "feature": "candidate-mode",
+        "source_commit": verifier._git_head(),
+        "source_tree_sha256": verifier._source_tree_fingerprint(),
+        "config_sha256": verifier._config_fingerprint(brain_home),
+    }
+    monkeypatch.setattr(
+        verifier,
+        "check_manifest",
+        lambda *args: (
+            verifier.check("qualification_manifest", True, {}),
+            json.loads(manifest.read_text()),
+        ),
+    )
+    monkeypatch.setattr(
+        verifier,
+        "validate_qualification_rows",
+        lambda *args: verifier.check(
+            "qualification_ledger",
+            True,
+            {"validated_evidence_bindings": [binding], "records": json.loads(records.read_text())},
+        ),
+    )
+    report = verifier.verify_all(brain_home, manifest, records)
+    assert report["ok"] is True
+    assert report["qualification_status"] == "READY_TO_RECORD"
+    assert report["validated_evidence_bindings"] == []
+    assert _qualification_rows(brain_home) == []
+    # Even supplying an exact credit binding cannot turn candidate acceptance
+    # into a normal-mode release authorization.
+    report["validated_evidence_bindings"] = [binding]
+    monkeypatch.setattr(
+        promotion,
+        "_qualification_process",
+        lambda *args: (SimpleNamespace(returncode=0), report),
+    )
+    with pytest.raises(BrainError, match="exact credit evidence binding"):
+        promotion._run_independent_qualification(brain_home, manifest, binding)
