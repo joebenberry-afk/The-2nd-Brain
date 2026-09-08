@@ -31,6 +31,7 @@ $payload = [Console]::In.ReadToEnd()
 # Strip the corrupted user-level Python env (repo AGENTS.md gotcha).
 $env:PYTHONHOME = $null
 $env:PYTHONPATH = $null
+$env:PYTHONIOENCODING = "utf-8"
 
 $decisionJson = $payload | & $python -m second_brain --home $repoHome autoinject codex-shadow 2>$null
 $exitCode = $LASTEXITCODE
