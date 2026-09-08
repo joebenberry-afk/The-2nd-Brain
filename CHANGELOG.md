@@ -20,6 +20,13 @@
 - Decode harness configuration as UTF-8 on Windows PowerShell, preserving
   unrelated Unicode settings. Emit Codex callbacks under the actual `[hooks]`
   table with TOML-safe, Windows-callable command quoting.
+- Preserve UTF-8 across native hook process boundaries, recognize Codex's
+  `hook_event_name`, and leave unavailable hook counters null.
+- Accept historical version-2 heartbeats without the additive GC counter while
+  still validating supplied measurements.
+- Keep retrieval outcomes pending when acceptance is unknown. Use the canonical
+  identity-checked usage reader; unavailable or unattributable token totals stay
+  null rather than becoming fabricated zero-cost failures.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 

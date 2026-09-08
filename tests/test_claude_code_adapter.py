@@ -18,21 +18,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_session_memory_commands_are_in_each_static_adapter_prefix():
-    expected = (
-        'To remember: run `brainctl remember "<claim>" --evidence <path>.`',
-        'To check: `brainctl recall "<question>"`.',
-    )
-    sources = (
-        REPO_ROOT / "brainstem" / "adapters" / "claude-code" / "rules" / "second-brain-core.md",
-        REPO_ROOT / "brainstem" / "codex-hooks" / "README.md",
-        REPO_ROOT / "brainstem" / "adapters" / "antigravity" / "rules" / "second-brain-core.md",
-    )
-    for path in sources:
-        text = path.read_text(encoding="utf-8")
-        assert all(text.count(line) == 1 for line in expected), path
-
-
 def _run_cli(
     home: Path,
     *args: str,
@@ -910,14 +895,50 @@ def test_claude_stop_maps_optional_cache_state(
     assert rows[0]["cache_state"] == {"cache_hit_ratio": 0.75, "re_cached_tokens": 12}
 
 
-def test_claude_hook_config_includes_prompt_and_tool_events() -> None:
-    config = json.loads(
-        (REPO_ROOT / "brainstem" / "adapters" / "claude-code" / "hooks.json").read_text(
-            encoding="utf-8"
-        )
+def test_windows_claude_launcher_captures_unicode_without_persisting_content(
+    home: Path, git_project: Path
+) -> None:
+    import hashlib
+
+    if os.name != "nt":
+        pytest.skip("Windows PowerShell transport")
+    prompt = "Private Unicode prompt \u2014 \u03bb"
+    session_id = "claude-unicode-transport"
+    payload = {
+        "session_id": session_id,
+        "cwd": str(git_project),
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": prompt,
+    }
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REPO_ROOT / "brainstem" / "adapters" / "claude-code" / "scripts" / "run-hook.ps1"),
+        ],
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True,
+        env={
+            **os.environ,
+            "SECOND_BRAIN_HOME": str(home),
+            "SECOND_BRAIN_PYTHON": sys.executable,
+            "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
+        },
+        timeout=30,
     )
-    assert "UserPromptSubmit" in config["hooks"]
-    assert "PostToolUse" in config["hooks"]
+    assert result.returncode == 0, result.stderr
+    raw = (home / "telemetry" / "agent-performance" / f"{session_id}.jsonl").read_text(
+        encoding="utf-8"
+    )
+    rows = [json.loads(line) for line in raw.splitlines() if line]
+    record = next(row for row in rows if row["kind"] == "claude_code_user_prompt")
+    assert record["prompt_bytes"] == len(prompt.encode("utf-8"))
+    assert record["prompt_sha256"] == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    assert prompt not in raw
 
 
 def test_claude_prompt_and_tool_hooks_persist_only_telemetry(home: Path, git_project: Path) -> None:

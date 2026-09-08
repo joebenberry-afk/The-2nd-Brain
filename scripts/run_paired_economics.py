@@ -168,7 +168,7 @@ def _run_host(command: list[str], prompt: str, worktree: Path, env: dict[str, st
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=300,
+            timeout=900,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):

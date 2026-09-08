@@ -43,6 +43,107 @@ def _init_and_seed(
     semantic.curate(home, mid, status="current")
 
 
+def test_native_session_end_records_finalization_without_inferred_failure(
+    tmp_path, monkeypatch
+) -> None:
+    from second_brain import db, telemetry
+
+    monkeypatch.setenv("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE", "CANARY")
+    home = tmp_path / "brain"
+    _init_and_seed(home, title="Alpha rules", body="alpha body content")
+    session_id = "native-codex-end"
+    _run_cli(
+        home,
+        "autoinject",
+        "codex-shadow",
+        stdin=json.dumps(
+            {
+                "session_id": session_id,
+                "project": "proj-a",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "implement alpha rules",
+            }
+        ),
+    )
+    result = _run_cli(
+        home,
+        "autoinject",
+        "codex-shadow",
+        stdin=json.dumps(
+            {
+                "session_id": session_id,
+                "project": "proj-a",
+                "hook_event_name": "SessionEnd",
+            }
+        ),
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(
+        record.get("kind") == "session_finalized" and record.get("session") == session_id
+        for _, _, record in telemetry.iter_records(home)
+    )
+    conn = db.connect(db.db_path(home), readonly=True)
+    try:
+        row = conn.execute(
+            (
+                "SELECT outcome_json, reward FROM decisions "
+                "WHERE session_id = ? AND kind = 'retrieval'"
+            ),
+            (session_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["outcome_json"] is None
+        assert row["reward"] is None
+    finally:
+        conn.close()
+
+
+def test_windows_hook_preserves_unicode_project_scope_and_unknown_counts(tmp_path) -> None:
+    if os.name != "nt":
+        import pytest
+
+        pytest.skip("Windows PowerShell transport")
+    home = tmp_path / "brain"
+    _init_and_seed(home)
+    cwd_dir = tmp_path / "repo-\u03bb"
+    cwd_dir.mkdir()
+    registry.add_project(home, cwd_dir, project_id="proj-a")
+    env = {
+        **os.environ,
+        "SECOND_BRAIN_HOME": str(home),
+        "SECOND_BRAIN_PYTHON": sys.executable,
+        "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
+    }
+    payload = {
+        "session_id": "unicode-hook",
+        "hook_event_name": "UserPromptSubmit",
+        "cwd": str(cwd_dir),
+        "prompt": "migration ordering",
+    }
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REPO_ROOT / "brainstem" / "codex-hooks" / "run.ps1"),
+        ],
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True,
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    response = json.loads(result.stdout.decode("utf-8"))
+    assert "apply migrations in numeric order" in response["additionalContext"]
+    log_path = home / "telemetry" / "agent-performance" / "codex-hooks.jsonl"
+    observation = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert observation["candidate_count"] is None
+    assert observation["selected_count"] is None
+
+
 def _payload(**kw: str) -> str:
     base = {
         "session_id": "codex-s1",

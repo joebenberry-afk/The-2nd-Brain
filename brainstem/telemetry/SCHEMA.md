@@ -365,6 +365,8 @@ P4 field contracts are bounded and metadata-only:
 - `heartbeat_pulse`: `mode`, `event`, `due`, `ran`, `healthy`, `db_ok`,
   `cache_pruned_count`, `git_dirty`, `issue_codes`, `latency_ms`,
   `model_tokens_used` (which must equal zero).
+  `artifacts_gc_count` is an additive non-negative integer measurement when
+  present; older version-2 producers are not required to supply it.
 - `bottleneck_fingerprint`: `fingerprint_id`, `category`, `scope_id`,
   `occurrence_count`, `impact_score`, `evidence_count`, `evidence_hash`.
 - `optimization_*`: `proposal_id`, `status`, `intervention_hash`,

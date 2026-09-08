@@ -408,10 +408,15 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
     telem_dir.mkdir(parents=True, exist_ok=True)
     telem_file = telem_dir / "session-telemetry-fallback.jsonl"
     telem_record = {
+        "v": 3,
+        "ts": "2026-09-08T00:00:00Z",
+        "session": "session-telemetry-fallback",
         "kind": "assistant_usage",
         "total_tokens": 200,
         "input_tokens": 120,
         "output_tokens": 80,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
     }
     telem_file.write_text(json.dumps(telem_record) + "\n", encoding="utf-8")
 
@@ -431,6 +436,59 @@ def test_finalize_session_updates_retrieval_decisions(brain_home, monkeypatch) -
         outcome = json.loads(row["outcome_json"])
         assert outcome["acceptance_passed"] is True
         assert outcome["tokens_total"] == 200
+        assert row["reward"] == pytest.approx(1.0)
+    finally:
+        conn.close()
+
+
+def test_unknown_outcome_stays_pending_and_unattributed_usage_stays_unknown(
+    brain_home, monkeypatch
+) -> None:
+    monkeypatch.setenv("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE", "CANARY")
+    _seed_current(brain_home, "Alpha rules", "alpha body content")
+    lifecycle = autoinject.BrainLifecycle(brain_home)
+    session_id = "unknown-outcome"
+    lifecycle.prepare_injection(
+        "implement alpha rules", project_id="proj-holdout", session_id=session_id
+    )
+    lifecycle.finalize_session(session_id=session_id)
+    query = "SELECT outcome_json, reward FROM decisions WHERE session_id = ? AND kind = 'retrieval'"
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        row = conn.execute(query, (session_id,)).fetchone()
+        assert row is not None
+        assert row["outcome_json"] is None
+        assert row["reward"] is None
+    finally:
+        conn.close()
+
+    # A file with the requested name cannot authorize another session's usage.
+    path = brain_home / "telemetry" / "agent-performance" / f"{session_id}.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "v": 3,
+                "kind": "assistant_usage",
+                "session": "different-session",
+                "input_tokens": 900,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 900,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    lifecycle.finalize_session(session_id=session_id, acceptance_passed=True)
+    conn = db.connect(db.db_path(brain_home), readonly=True)
+    try:
+        row = conn.execute(query, (session_id,)).fetchone()
+        assert row is not None
+        assert json.loads(row["outcome_json"]) == {
+            "acceptance_passed": True,
+            "tokens_total": None,
+        }
         assert row["reward"] == pytest.approx(1.0)
     finally:
         conn.close()
