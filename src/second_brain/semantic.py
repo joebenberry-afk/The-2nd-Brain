@@ -14,11 +14,10 @@ every previous file, so history is preserved.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
 import contextlib
 import hashlib
-import logging
 import json
+import logging
 import math
 import os
 import re
@@ -27,15 +26,17 @@ import sqlite3
 import subprocess
 import tempfile
 import tomllib
-from enum import StrEnum
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as _field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 from . import db, decisions
 from .contracts import canonical_json, estimate_tokens
 from .errors import BrainError
+from .v2_policy import RolloutStage, load_policy
 
 _LOG = logging.getLogger("second_brain.semantic")
 
@@ -91,6 +92,17 @@ _SHA_FIELDS = (
 )
 _CANDIDATE_EVENT_LIMIT = 16
 _CANDIDATE_REF_LIMIT = 256
+
+
+def _admission_stage(home: Path) -> RolloutStage:
+    """Only an absent legacy policy may default to SHADOW."""
+    try:
+        (home / "config" / "v2.toml").lstat()
+    except FileNotFoundError:
+        return RolloutStage.SHADOW
+    return load_policy(home).rollout["admission"]
+
+
 _EARNED_MEMORY_POLICY_VERSION = "earned-memory-v1"
 
 # Rank for upgrade/downgrade decisions; HISTORICAL/REJECTED sit below everything.
@@ -211,7 +223,7 @@ def capture_evidence(repo_root: Path | str, specification: str) -> dict:
     selected = lines[(start or 1) - 1 : end if end is not None else len(lines)]
     try:
         origin_root_sha = hashlib.sha256(target.read_bytes()).hexdigest()
-    except (OSError, IOError) as exc:
+    except OSError as exc:
         raise BrainError("evidence path is not readable") from exc
     return {
         "ref": rel,
@@ -301,6 +313,7 @@ def _insert_sources(
             ),
         )
 
+
 def _validate_sources(sources: list[dict] | None) -> list[dict]:
     if sources is None:
         return []
@@ -325,9 +338,7 @@ def _validate_sources(sources: list[dict] | None) -> list[dict]:
             isinstance(start, bool) or not isinstance(start, int) or start < 1
         ):
             raise BrainError("source range_start must be a positive integer or None")
-        if end is not None and (
-            isinstance(end, bool) or not isinstance(end, int) or end < 1
-        ):
+        if end is not None and (isinstance(end, bool) or not isinstance(end, int) or end < 1):
             raise BrainError("source range_end must be a positive integer or None")
         if start is not None and end is not None and start > end:
             raise BrainError("source range_start must not exceed range_end")
@@ -457,10 +468,7 @@ def _extract_candidate_evidence(
                 add(CandidateTrigger.REPETITION, ref)
         if (
             payload.get("regression_verified") is True
-            or (
-                payload.get("regression") is True
-                and payload.get("verified") is True
-            )
+            or (payload.get("regression") is True and payload.get("verified") is True)
             or (
                 str(payload.get("failure_code") or "").upper() == "REGRESSION"
                 and payload.get("verified") is True
@@ -511,15 +519,7 @@ def _extract_candidate_evidence(
             )
 
     triggers = tuple(sorted(refs_by_trigger))
-    refs = tuple(
-        sorted(
-            {
-                ref
-                for trigger_refs in refs_by_trigger.values()
-                for ref in trigger_refs
-            }
-        )
-    )
+    refs = tuple(sorted({ref for trigger_refs in refs_by_trigger.values() for ref in trigger_refs}))
     return triggers, refs
 
 
@@ -569,15 +569,17 @@ def evaluate_candidate(
         origin_class, origin_root_sha
     )
     triggers, source_refs = _extract_candidate_evidence(events)
+    if _admission_stage(Path(home)) is RolloutStage.OFF:
+        return None
     identity = {
         "title": " ".join(title.strip().casefold().split()),
         "body_sha256": hashlib.sha256(body.strip().encode("utf-8")).hexdigest(),
         "scope": scope,
         "project_id": project_id,
     }
-    candidate_id = "candidate-" + hashlib.sha256(
-        canonical_json(identity).encode("utf-8")
-    ).hexdigest()[:24]
+    candidate_id = (
+        "candidate-" + hashlib.sha256(canonical_json(identity).encode("utf-8")).hexdigest()[:24]
+    )
     inputs = {
         "candidate_id": candidate_id,
         "trigger_set": list(triggers),
@@ -639,9 +641,7 @@ def evaluate_candidate(
                 ),
             )
         else:
-            merged_triggers = sorted(
-                set(json.loads(existing["trigger_set_json"])) | set(triggers)
-            )
+            merged_triggers = sorted(set(json.loads(existing["trigger_set_json"])) | set(triggers))
             merged_refs = sorted(
                 set(json.loads(existing["source_event_refs_json"])) | set(source_refs)
             )
@@ -694,6 +694,8 @@ def _validate_new(title: str, body: str, scope: str, grade: str) -> None:
         raise BrainError(f"scope must be one of {', '.join(SCOPES)}")
     if grade not in GRADES:
         raise BrainError(f"grade must be one of {', '.join(GRADES)}")
+
+
 def _render_file(
     memory_id: str,
     title: str,
@@ -757,32 +759,214 @@ _FTS5_CREATE = (
 # FTS5 vocabulary is derived lazily with the index.  It is intentionally not
 # part of a migration: older databases get it the first time FTS is touched.
 _FTS5_VOCAB_CREATE = (
-    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_vocab "
-    "USING fts5vocab(memory_fts, 'row')"
+    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_vocab USING fts5vocab(memory_fts, 'row')"
 )
 
 # Keep this list literal and local to the query builder so token selection is
 # deterministic and does not depend on an optional NLP package.
 _QUERY_STOPWORDS = frozenset(
-    """
-    a about above after again against all am an and any are aren't as at be
-    because been before being below between both but by can can't cannot could
-    couldn't did didn't do does doesn't doing don't down during each few for
-    from further had hadn't has hasn't have haven't having he he'd he'll he's
-    her here here's hers herself him himself his how how's i i'd i'll i'm i've
-    if in into is isn't it it'd it'll it's its itself let's me more most mustn't
-    my myself no nor not of off on once only or other ought our ours ourselves
-    out over own same shan't she she'd she'll she's should shouldn't so some
-    such than that that's the their theirs them themselves then there there's
-    these they they'd they'll they're they've this those through to too under
-    until up very was wasn't we we'd we'll we're we've were weren't what what's
-    when when's where where's which while who who's whom why why's will with
-    won't would wouldn't you you'd you'll you're you've your yours yourself
-    yourselves able absolutely according accordingly across actually afterwards
-    anyhow anything anyway anyways anywhere apparently appreciate appropriate
-    aside away became become becomes becoming believe
-    """
-    .split()
+    [
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "against",
+        "all",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "aren't",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "can't",
+        "cannot",
+        "could",
+        "couldn't",
+        "did",
+        "didn't",
+        "do",
+        "does",
+        "doesn't",
+        "doing",
+        "don't",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "hadn't",
+        "has",
+        "hasn't",
+        "have",
+        "haven't",
+        "having",
+        "he",
+        "he'd",
+        "he'll",
+        "he's",
+        "her",
+        "here",
+        "here's",
+        "hers",
+        "herself",
+        "him",
+        "himself",
+        "his",
+        "how",
+        "how's",
+        "i",
+        "i'd",
+        "i'll",
+        "i'm",
+        "i've",
+        "if",
+        "in",
+        "into",
+        "is",
+        "isn't",
+        "it",
+        "it'd",
+        "it'll",
+        "it's",
+        "its",
+        "itself",
+        "let's",
+        "me",
+        "more",
+        "most",
+        "mustn't",
+        "my",
+        "myself",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "off",
+        "on",
+        "once",
+        "only",
+        "or",
+        "other",
+        "ought",
+        "our",
+        "ours",
+        "ourselves",
+        "out",
+        "over",
+        "own",
+        "same",
+        "shan't",
+        "she",
+        "she'd",
+        "she'll",
+        "she's",
+        "should",
+        "shouldn't",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "that's",
+        "the",
+        "their",
+        "theirs",
+        "them",
+        "themselves",
+        "then",
+        "there",
+        "there's",
+        "these",
+        "they",
+        "they'd",
+        "they'll",
+        "they're",
+        "they've",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "wasn't",
+        "we",
+        "we'd",
+        "we'll",
+        "we're",
+        "we've",
+        "were",
+        "weren't",
+        "what",
+        "what's",
+        "when",
+        "when's",
+        "where",
+        "where's",
+        "which",
+        "while",
+        "who",
+        "who's",
+        "whom",
+        "why",
+        "why's",
+        "will",
+        "with",
+        "won't",
+        "would",
+        "wouldn't",
+        "you",
+        "you'd",
+        "you'll",
+        "you're",
+        "you've",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "able",
+        "absolutely",
+        "according",
+        "accordingly",
+        "across",
+        "actually",
+        "afterwards",
+        "anyhow",
+        "anything",
+        "anyway",
+        "anyways",
+        "anywhere",
+        "apparently",
+        "appreciate",
+        "appropriate",
+        "aside",
+        "away",
+        "became",
+        "become",
+        "becomes",
+        "becoming",
+        "believe",
+    ]
 )
 
 # Apply the same tokenizer to literal entries so contractions such as
@@ -837,13 +1021,8 @@ def _query_plan(
     except (TypeError, ValueError):
         limit = 8
     limit = min(limit, len(candidates))
-    idf = {
-        token: math.log((total + 1) / (frequencies.get(token, 0) + 1))
-        for token in candidates
-    }
-    selected = tuple(
-        sorted(candidates, key=lambda token: (-idf[token], positions[token]))[:limit]
-    )
+    idf = {token: math.log((total + 1) / (frequencies.get(token, 0) + 1)) for token in candidates}
+    selected = tuple(sorted(candidates, key=lambda token: (-idf[token], positions[token]))[:limit])
     try:
         ratio = min(1.0, max(0.0, float(msm)))
     except (TypeError, ValueError):
@@ -864,15 +1043,13 @@ def build_query(
     return expression
 
 
-
-
 def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
     haystack = " ".join(
-        str(row.get(field) or "")
-        for field in ("title", "summary", "_body", "body")
+        str(row.get(field) or "") for field in ("title", "summary", "_body", "body")
     ).casefold()
     haystack_tokens = re.findall(r"[a-z0-9]{3,}", haystack)
     return sum(any(value.startswith(term) for value in haystack_tokens) for term in terms)
+
 
 # Process-global FTS5 module availability. SQLite's FTS5 support is a
 # property of the sqlite3 build, identical for every database, and cannot
@@ -904,8 +1081,6 @@ def _fts_available(conn: sqlite3.Connection) -> bool:
 
 def _fts_count(conn: sqlite3.Connection) -> int:
     return int(conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0])
-
-
 
 
 def _body_text(home: Path, row: dict) -> str:
@@ -1228,9 +1403,7 @@ def curate(
     new_ceiling = row.get("authority_ceiling") or "advisory"
     if authority_ceiling is not None:
         if authority_ceiling not in AUTHORITY_CEILINGS:
-            raise BrainError(
-                f"authority_ceiling must be one of {', '.join(AUTHORITY_CEILINGS)}"
-            )
+            raise BrainError(f"authority_ceiling must be one of {', '.join(AUTHORITY_CEILINGS)}")
         if _AUTHORITY_RANK[authority_ceiling] > _AUTHORITY_RANK[new_ceiling]:
             raise BrainError("authority_ceiling may only be lowered")
         new_ceiling = authority_ceiling
@@ -1315,7 +1488,7 @@ def supersede(
     change_note: str,
     new_sources: list[dict] | None = None,
 ) -> int:
-    """Create the next version; every previous version file is preserved."""
+    """Create the next immutable version; every previous version is preserved."""
     row = _row(home, memory_id)
     if row is None:
         raise BrainError(f"Unknown memory {memory_id!r}")
@@ -1327,27 +1500,45 @@ def supersede(
         raise BrainError("new_title must be a non-empty string or None")
     clean_sources = _validate_sources(new_sources)
 
-    old_version = row["current_version"]
-    new_version = old_version + 1
-    now = _utcnow()
-    retired_created_at = _version_created_at(home, memory_id, old_version, row["created_at"])
-    new_path = _version_path(home, memory_id, new_version)
+    old_version = int(row["current_version"])
     title = new_title if new_title is not None else row["title"]
-    content = _render_file(
-        memory_id,
-        title,
-        row["scope"],
-        row["project_id"],
-        row["status"],
-        row["evidence_grade"],
-        new_version,
-        row["created_at"],
-        new_body,
-    )
-    _write_file_atomic(new_path, content)
-
+    new_path: Path | None = None
+    wrote_file = False
     conn = db.connect(_dbfile(home))
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        max_row = conn.execute(
+            "SELECT MAX(version) AS max_version FROM memory_versions WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        max_history_version = int(max_row["max_version"] or 0) if max_row else 0
+        new_version = max(old_version, max_history_version) + 1
+        if old_version <= 1:
+            retired_created_at = row["created_at"]
+        else:
+            retired = conn.execute(
+                "SELECT created_at FROM memory_versions WHERE memory_id = ? AND version = ?",
+                (memory_id, old_version),
+            ).fetchone()
+            retired_created_at = retired["created_at"] if retired is not None else row["created_at"]
+        now = _utcnow()
+        new_path = _version_path(home, memory_id, new_version)
+        if new_path.exists():
+            raise BrainError(f"Version path already exists for {memory_id} v{new_version}")
+        content = _render_file(
+            memory_id,
+            title,
+            row["scope"],
+            row["project_id"],
+            row["status"],
+            row["evidence_grade"],
+            new_version,
+            row["created_at"],
+            new_body,
+        )
+        _write_file_atomic(new_path, content)
+        wrote_file = True
+
         conn.execute(
             "INSERT INTO memory_versions "
             "(memory_id, version, created_at, title, body_path, change_note) "
@@ -1369,11 +1560,16 @@ def supersede(
         _insert_sources(conn, memory_id, clean_sources, now)
         db.bump_memory_epoch(conn)
         conn.commit()
-    except sqlite3.Error as exc:
+    except Exception as exc:
         conn.rollback()
-        with contextlib.suppress(OSError):
-            new_path.unlink()  # no orphans
-        raise BrainError(f"Could not supersede memory {memory_id}: {exc}") from exc
+        if wrote_file and new_path is not None:
+            with contextlib.suppress(OSError):
+                new_path.unlink()
+        if isinstance(exc, BrainError):
+            raise
+        if isinstance(exc, sqlite3.Error):
+            raise BrainError(f"Could not supersede memory {memory_id}: {exc}") from exc
+        raise
     finally:
         conn.close()
     _safe_index(home, memory_id)  # derived index follows the new version file
@@ -1667,8 +1863,6 @@ def _score_tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]{3,}", (text or "").lower()))
 
 
-
-
 def _query_tokens(term: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", term.lower()))
 
@@ -1710,6 +1904,8 @@ class RetrievalWeights:
     token_free_limit: int = _TOKEN_FREE_LIMIT
     token_penalty_cap: float = _TOKEN_PENALTY_CAP
     token_penalty_saturation: int = _TOKEN_PENALTY_SATURATION
+
+
 @dataclass(frozen=True)
 class RetrievalGate:
     """Abstention thresholds and rollout policy for ranked retrieval."""
@@ -1783,6 +1979,7 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
                     top_k = raw_k
                 w = scoring.get("weights")
                 if isinstance(w, dict):
+
                     def _f(key: str, fallback: float) -> float:
                         return _coerce_float(w.get(key), fallback)
 
@@ -1790,19 +1987,31 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
                         title_boost_exact=_f("title_boost_exact", weights.title_boost_exact),
                         title_boost_partial=_f("title_boost_partial", weights.title_boost_partial),
                         relevance_cap=_f("relevance_cap", weights.relevance_cap),
-                        bm25_relevance_scale=_f("bm25_relevance_scale", weights.bm25_relevance_scale),
+                        bm25_relevance_scale=_f(
+                            "bm25_relevance_scale", weights.bm25_relevance_scale
+                        ),
                         grade_scores=_coerce_scores(w.get("grade_scores"), weights.grade_scores),
                         status_scores=_coerce_scores(w.get("status_scores"), weights.status_scores),
-                        freshness_half_life_days=_f("freshness_half_life_days", weights.freshness_half_life_days),
-                        freshness_max_penalty=_f("freshness_max_penalty", weights.freshness_max_penalty),
-                        decision_boost_per_hit=_f("decision_boost_per_hit", weights.decision_boost_per_hit),
+                        freshness_half_life_days=_f(
+                            "freshness_half_life_days", weights.freshness_half_life_days
+                        ),
+                        freshness_max_penalty=_f(
+                            "freshness_max_penalty", weights.freshness_max_penalty
+                        ),
+                        decision_boost_per_hit=_f(
+                            "decision_boost_per_hit", weights.decision_boost_per_hit
+                        ),
                         decision_boost_cap=_f("decision_boost_cap", weights.decision_boost_cap),
                         negative_penalty_per_contradiction=_f(
                             "negative_penalty_per_contradiction",
                             weights.negative_penalty_per_contradiction,
                         ),
-                        negative_penalty_cap=_f("negative_penalty_cap", weights.negative_penalty_cap),
-                        token_free_limit=_coerce_int(w.get("token_free_limit"), weights.token_free_limit),
+                        negative_penalty_cap=_f(
+                            "negative_penalty_cap", weights.negative_penalty_cap
+                        ),
+                        token_free_limit=_coerce_int(
+                            w.get("token_free_limit"), weights.token_free_limit
+                        ),
                         token_penalty_cap=_f("token_penalty_cap", weights.token_penalty_cap),
                         token_penalty_saturation=_coerce_int(
                             w.get("token_penalty_saturation"), weights.token_penalty_saturation
@@ -1830,9 +2039,12 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
                 raw_floors = raw_gate.get("lane_floors")
                 if isinstance(raw_floors, dict):
                     for lane, floor in raw_floors.items():
-                        if lane in floors and isinstance(floor, (int, float)) and not isinstance(floor, bool):
-                            if 0.0 <= float(floor) <= 1.0:
-                                floors[lane] = float(floor)
+                        if (
+                            lane in floors
+                            and isinstance(floor, (int, float))
+                            and not isinstance(floor, bool)
+                        ) and 0.0 <= float(floor) <= 1.0:
+                            floors[lane] = float(floor)
                 rollout = raw_gate.get("rollout", gate.rollout)
                 if rollout not in {"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"}:
                     rollout = gate.rollout
@@ -1856,7 +2068,9 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
         except (OSError, tomllib.TOMLDecodeError):
             pass
 
-    max_tokens = round(budget_pct / 100.0 * _CONTEXT_WINDOW_TOKENS) if budget_pct is not None else None
+    max_tokens = (
+        round(budget_pct / 100.0 * _CONTEXT_WINDOW_TOKENS) if budget_pct is not None else None
+    )
     return RetrievalConfig(top_k=top_k, max_tokens=max_tokens, weights=weights, gate=gate)
 
 
@@ -1917,9 +2131,7 @@ def _contradiction_map(rows: list[dict]) -> dict[str, set[str]]:
     return conflicts
 
 
-def _attach_contradictions(
-    rows: list[dict], conflicts: dict[str, set[str]]
-) -> list[dict]:
+def _attach_contradictions(rows: list[dict], conflicts: dict[str, set[str]]) -> list[dict]:
     """Attach deterministic `contradiction_with` markers (sorted ids) to the
     returned rows from a pre-dedupe conflict map. Rows trimmed by the budget
     or collapsed by dedupe keep their markers on the surviving row."""
@@ -2006,6 +2218,8 @@ def _negative_transfer_score(row: dict, weights: RetrievalWeights) -> float:
         else 0
     )
     return 1.0 - weights.negative_penalty_per_contradiction * min(contradictions, max(1, cap_count))
+
+
 def _token_cost_penalty(
     row: dict, weights: RetrievalWeights, home: Path | str | None = None
 ) -> float:
@@ -2041,7 +2255,10 @@ def _score_row(
         if p_need is None and home is not None:
             try:
                 from . import reconsolidation
-                b = reconsolidation.compute_base_level_activation(Path(home), row.get("memory_id", ""))
+
+                b = reconsolidation.compute_base_level_activation(
+                    Path(home), row.get("memory_id", "")
+                )
                 if b <= -10.0:
                     p_need = 0.5
                 else:
@@ -2050,7 +2267,7 @@ def _score_row(
                 p_need = 0.5
         if p_need is None:
             p_need = 0.5
-        score *= (0.5 + float(p_need))
+        score *= 0.5 + float(p_need)
     if "negative" in score_terms:
         score *= _negative_transfer_score(row, w)
     if "token" in score_terms:
@@ -2222,10 +2439,7 @@ def _row_passes_filters(row: dict, *, project_id: str | None, include_history: b
         return bool(
             row_project == str(project_id).strip().lower()
             or row.get("scope") == "global"
-            or (
-                row.get("scope") == "domain"
-                and row_project in {"", "default", "unknown"}
-            )
+            or (row.get("scope") == "domain" and row_project in {"", "default", "unknown"})
         )
     return True
 

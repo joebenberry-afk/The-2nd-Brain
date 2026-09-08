@@ -74,12 +74,13 @@ def test_fingerprint_rejects_invalid_values(brain_home):
             "cache",
             metadata={"x": "y" * 10_000},
         )
+
+
 def test_fingerprint_merges_latest_bounded_evidence_by_hash(brain_home):
     store = BottleneckFingerprintStore(brain_home)
     first_refs = [{"record_hash": f"{index:064x}", "output_bytes": index} for index in range(64)]
     second_refs = [
-        {"record_hash": f"{index:064x}", "output_bytes": index + 100}
-        for index in range(32, 96)
+        {"record_hash": f"{index:064x}", "output_bytes": index + 100} for index in range(32, 96)
     ]
     first = store.record_bottleneck(
         "TOOL_CHAIN_THRASH", "same signal", "cache", scope_id="p", evidence_refs=first_refs
@@ -122,9 +123,7 @@ def test_radar_emits_fingerprint_telemetry_without_raw_payload(brain_home):
     radar.observe_session("telemetry-session", project_id="project-a")
     records = list(telemetry.iter_records(brain_home))
     fingerprint_records = [
-        record
-        for _, _, record in records
-        if record.get("kind") == "bottleneck_fingerprint"
+        record for _, _, record in records if record.get("kind") == "bottleneck_fingerprint"
     ]
     assert len(fingerprint_records) == 1
     record = fingerprint_records[0]
@@ -143,20 +142,23 @@ def test_radar_emits_fingerprint_telemetry_without_raw_payload(brain_home):
 
 def test_radar_cli_retains_existing_keys_and_flattens_fingerprints(brain_home, repo, capsys):
     _write_stream(brain_home, "cli-session", "d" * 64)
-    assert cli.main(
-        [
-            "--home",
-            str(brain_home),
-            "radar",
-            "observe",
-            "cli-session",
-            "--project-id",
-            "project-a",
-            "--repo",
-            str(repo),
-            "--json",
-        ]
-    ) == 0
+    assert (
+        cli.main(
+            [
+                "--home",
+                str(brain_home),
+                "radar",
+                "observe",
+                "cli-session",
+                "--project-id",
+                "project-a",
+                "--repo",
+                str(repo),
+                "--json",
+            ]
+        )
+        == 0
+    )
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) >= {"candidate_count", "candidates", "radar_overhead_ms", "fingerprints"}
     assert len(payload["fingerprints"]) == 1

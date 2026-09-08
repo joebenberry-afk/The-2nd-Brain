@@ -12,6 +12,7 @@ how many records contributed (e.g., cost_total_seen=N of M).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -27,113 +28,113 @@ from . import economics, ledger
 logger = logging.getLogger(__name__)
 
 DEFAULT_FEATURES: dict[str, bool] = {
-    'brain_core': True,
-    'autoinject': True,
-    'observation_firewall': True,
-    'context_paging': True,
-    'action_cache': True,
-    'delta_sync': True,
-    'structural_retrieval': True,
-    'semantic_vectors': True,
-    'tool_working_set': True,
-    'skill_lazy_loading': True,
-    'prompt_compression': True,
+    "brain_core": True,
+    "autoinject": True,
+    "observation_firewall": True,
+    "context_paging": True,
+    "action_cache": True,
+    "delta_sync": True,
+    "structural_retrieval": True,
+    "semantic_vectors": True,
+    "tool_working_set": True,
+    "skill_lazy_loading": True,
+    "prompt_compression": True,
 }
 
 ABLATION_PROFILES: dict[str, dict[str, bool]] = {
-    'A_BRAIN_OFF': {k: False for k in DEFAULT_FEATURES},
-    'B_BASIC_BRAIN': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': False,
-        'context_paging': False,
-        'action_cache': False,
-        'delta_sync': False,
-        'structural_retrieval': False,
-        'semantic_vectors': False,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "A_BRAIN_OFF": {k: False for k in DEFAULT_FEATURES},
+    "B_BASIC_BRAIN": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": False,
+        "context_paging": False,
+        "action_cache": False,
+        "delta_sync": False,
+        "structural_retrieval": False,
+        "semantic_vectors": False,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'C_OBSERVATION_FIREWALL': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': False,
-        'action_cache': False,
-        'delta_sync': False,
-        'structural_retrieval': False,
-        'semantic_vectors': False,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "C_OBSERVATION_FIREWALL": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": False,
+        "action_cache": False,
+        "delta_sync": False,
+        "structural_retrieval": False,
+        "semantic_vectors": False,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'D_CONTEXT_PAGING': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': True,
-        'action_cache': False,
-        'delta_sync': False,
-        'structural_retrieval': False,
-        'semantic_vectors': False,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "D_CONTEXT_PAGING": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": True,
+        "action_cache": False,
+        "delta_sync": False,
+        "structural_retrieval": False,
+        "semantic_vectors": False,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'E_ACTION_CACHE': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': True,
-        'action_cache': True,
-        'delta_sync': False,
-        'structural_retrieval': False,
-        'semantic_vectors': False,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "E_ACTION_CACHE": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": True,
+        "action_cache": True,
+        "delta_sync": False,
+        "structural_retrieval": False,
+        "semantic_vectors": False,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'F_DELTA_SYNC': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': True,
-        'action_cache': True,
-        'delta_sync': True,
-        'structural_retrieval': False,
-        'semantic_vectors': False,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "F_DELTA_SYNC": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": True,
+        "action_cache": True,
+        "delta_sync": True,
+        "structural_retrieval": False,
+        "semantic_vectors": False,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'G_HYBRID_RETRIEVAL': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': True,
-        'action_cache': True,
-        'delta_sync': True,
-        'structural_retrieval': True,
-        'semantic_vectors': True,
-        'tool_working_set': False,
-        'skill_lazy_loading': False,
-        'prompt_compression': False,
+    "G_HYBRID_RETRIEVAL": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": True,
+        "action_cache": True,
+        "delta_sync": True,
+        "structural_retrieval": True,
+        "semantic_vectors": True,
+        "tool_working_set": False,
+        "skill_lazy_loading": False,
+        "prompt_compression": False,
     },
-    'H_TOOL_WORKING_SET': {
-        'brain_core': True,
-        'autoinject': True,
-        'observation_firewall': True,
-        'context_paging': True,
-        'action_cache': True,
-        'delta_sync': True,
-        'structural_retrieval': True,
-        'semantic_vectors': True,
-        'tool_working_set': True,
-        'skill_lazy_loading': True,
-        'prompt_compression': False,
+    "H_TOOL_WORKING_SET": {
+        "brain_core": True,
+        "autoinject": True,
+        "observation_firewall": True,
+        "context_paging": True,
+        "action_cache": True,
+        "delta_sync": True,
+        "structural_retrieval": True,
+        "semantic_vectors": True,
+        "tool_working_set": True,
+        "skill_lazy_loading": True,
+        "prompt_compression": False,
     },
-    'I_FULL_V1': {k: True for k in DEFAULT_FEATURES},
+    "I_FULL_V1": {k: True for k in DEFAULT_FEATURES},
 }
 
 
@@ -145,6 +146,7 @@ class SessionTokens:
     Only fields that actually exist in telemetry are populated;
     missing fields are None. Aggregate fields include _seen count.
     """
+
     session_id: str
     provider: str | None = None
     model: str | None = None
@@ -227,7 +229,7 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
     last_observed_tool_surface_sha: str | None = None
     has_prior_cache_epoch = False
 
-    with open(session_jsonl_path, encoding='utf-8') as f:
+    with open(session_jsonl_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -238,22 +240,22 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
             except json.JSONDecodeError:
                 continue  # Skip malformed records
 
-            kind = record.get('kind')
+            kind = record.get("kind")
 
             # Session start: capture role and model
-            if kind == 'session_start':
-                tokens.role = record.get('role')
+            if kind == "session_start":
+                tokens.role = record.get("role")
                 if tokens.model is None:  # Capture from session_start if not yet set
-                    tokens.model = record.get('model')
+                    tokens.model = record.get("model")
 
             # Before agent start: capture role
-            if kind == 'before_agent_start':
-                tokens.role = record.get('role')
+            if kind == "before_agent_start":
+                tokens.role = record.get("role")
 
             # Turn start: track turn number (cache-epoch attribution, T2.5)
-            if kind == 'turn_start':
+            if kind == "turn_start":
                 saw_turn_start = True
-                turn_value = record.get('turn')
+                turn_value = record.get("turn")
                 if isinstance(turn_value, int) and not isinstance(turn_value, bool):
                     current_turn = turn_value
                 else:
@@ -263,22 +265,22 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 current_tool_surface_sha = None
 
             # Provider request meta: capture prefix/tool-surface shas for this turn
-            if kind == 'provider_request_meta':
-                if 'system_prefix_sha' in record:
-                    current_system_prefix_sha = record['system_prefix_sha']
-                if 'tool_surface_sha' in record:
-                    current_tool_surface_sha = record['tool_surface_sha']
+            if kind == "provider_request_meta":
+                if "system_prefix_sha" in record:
+                    current_system_prefix_sha = record["system_prefix_sha"]
+                if "tool_surface_sha" in record:
+                    current_tool_surface_sha = record["tool_surface_sha"]
 
             # Usage: assistant_usage stores counters at the record root;
             # Hermes model_invocation_completed nests the same mapping.
-            if kind in ('assistant_usage', 'model_invocation_completed'):
-                usage = record if kind == 'assistant_usage' else record.get('usage')
+            if kind in ("assistant_usage", "model_invocation_completed"):
+                usage = record if kind == "assistant_usage" else record.get("usage")
                 if not isinstance(usage, dict):
                     continue
-                tokens.provider = record.get('provider')
+                tokens.provider = record.get("provider")
                 # Only override model if present in record (don't clobber from session_start)
-                if 'model' in record:
-                    tokens.model = record['model']
+                if "model" in record:
+                    tokens.model = record["model"]
                 if tokens.source_kind is None:
                     tokens.source_kind = kind
                 elif tokens.source_kind != kind:
@@ -290,33 +292,35 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 if not saw_turn_start:
                     turn_fallback_counter += 1
                     current_turn = turn_fallback_counter
-                raw_cache_write = usage.get('cache_write_tokens')
+                raw_cache_write = usage.get("cache_write_tokens")
                 if (
                     isinstance(raw_cache_write, int)
                     and not isinstance(raw_cache_write, bool)
                     and raw_cache_write > 0
                 ):
-                    if current_system_prefix_sha is None and current_tool_surface_sha is None:
-                        cause = 'unknown'
-                    elif not has_prior_cache_epoch:
-                        cause = 'unknown'
+                    if (
+                        current_system_prefix_sha is None and current_tool_surface_sha is None
+                    ) or not has_prior_cache_epoch:
+                        cause = "unknown"
                     elif (
                         current_system_prefix_sha is not None
                         and current_system_prefix_sha != last_observed_system_prefix_sha
                     ):
-                        cause = 'brain_prefix'
+                        cause = "brain_prefix"
                     elif (
                         current_tool_surface_sha is not None
                         and current_tool_surface_sha != last_observed_tool_surface_sha
                     ):
-                        cause = 'tool_surface'
+                        cause = "tool_surface"
                     else:
-                        cause = 'harness'
-                    tokens.cache_epochs.append({
-                        'turn': current_turn,
-                        'cause': cause,
-                        'write_tokens': raw_cache_write,
-                    })
+                        cause = "harness"
+                    tokens.cache_epochs.append(
+                        {
+                            "turn": current_turn,
+                            "cause": cause,
+                            "write_tokens": raw_cache_write,
+                        }
+                    )
                     has_prior_cache_epoch = True
                     if current_system_prefix_sha is not None:
                         last_observed_system_prefix_sha = current_system_prefix_sha
@@ -326,133 +330,124 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                     current_system_prefix_sha = None
                     current_tool_surface_sha = None
 
-                if 'context_window' in record:
-                    tokens.context_window = record['context_window']
+                if "context_window" in record:
+                    tokens.context_window = record["context_window"]
 
                 # Aggregate tokens (HONESTY: only count reported values;
                 # explicit null remains distinguishable from a zero).
                 for field in (
-                    'input_tokens',
-                    'output_tokens',
-                    'cache_read_tokens',
-                    'cache_write_tokens',
-                    'total_tokens',
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                    "total_tokens",
                 ):
                     value = usage.get(field)
                     if isinstance(value, int) and not isinstance(value, bool):
                         current = getattr(tokens, field)
                         setattr(tokens, field, (current or 0) + value)
                         numeric_usage_fields.add(field)
-                    elif (
-                        value is None
-                        and field in usage
-                        and field not in numeric_usage_fields
-                    ):
+                    elif value is None and field in usage and field not in numeric_usage_fields:
                         setattr(tokens, field, None)
-                if 'compaction_tokens' in usage:
-                    value = usage['compaction_tokens']
+                if "compaction_tokens" in usage:
+                    value = usage["compaction_tokens"]
                     if isinstance(value, int) and not isinstance(value, bool):
                         tokens.compaction_tokens += value
 
                 # Cost (HONESTY: report missing as None, track how many had it)
-                if 'cost_total' in record:
-                    cost_total = record['cost_total']
+                if "cost_total" in record:
+                    cost_total = record["cost_total"]
                     if isinstance(cost_total, (int, float)) and not isinstance(cost_total, bool):
                         if tokens.cost_total is None:
                             tokens.cost_total = 0.0
                         tokens.cost_total += cost_total
                         tokens.cost_total_seen += 1
             # Tool calls
-            if kind == 'tool_call':
+            if kind == "tool_call":
                 tokens.tool_calls += 1
-                if 'input_bytes' in record:
-                    tokens.tool_input_bytes += record['input_bytes']
+                if "input_bytes" in record:
+                    tokens.tool_input_bytes += record["input_bytes"]
 
             # Tool results
-            if kind == 'tool_result':
-                if 'output_bytes' in record:
-                    tokens.tool_output_bytes += record['output_bytes']
-                if 'raw_bytes' in record:
-                    tokens.tool_output_raw_bytes += record['raw_bytes']
-                elif 'output_bytes' in record:
-                    tokens.tool_output_raw_bytes += record['output_bytes']
-                if 'model_visible_bytes' in record:
-                    tokens.tool_output_model_visible_bytes += record['model_visible_bytes']
+            if kind == "tool_result":
+                if "output_bytes" in record:
+                    tokens.tool_output_bytes += record["output_bytes"]
+                if "raw_bytes" in record:
+                    tokens.tool_output_raw_bytes += record["raw_bytes"]
+                elif "output_bytes" in record:
+                    tokens.tool_output_raw_bytes += record["output_bytes"]
+                if "model_visible_bytes" in record:
+                    tokens.tool_output_model_visible_bytes += record["model_visible_bytes"]
 
             # Brain packet delivered
-            if kind == 'brain_packet_delivered':
-                if record.get('model_visible'):
-                    tokens.brain_injected_tokens += record.get('packet_tokens', 0)
+            if kind == "brain_packet_delivered":
+                if record.get("model_visible"):
+                    tokens.brain_injected_tokens += record.get("packet_tokens", 0)
                     tokens.brain_packets_delivered += 1
                 else:
                     tokens.brain_packets_shadow += 1
-                if 'retrieval_tokens' in record:
-                    tokens.retrieval_result_tokens += record['retrieval_tokens']
-                if 'generated_tokens' in record:
-                    tokens.brain_generated_tokens += record['generated_tokens']
+                if "retrieval_tokens" in record:
+                    tokens.retrieval_result_tokens += record["retrieval_tokens"]
+                if "generated_tokens" in record:
+                    tokens.brain_generated_tokens += record["generated_tokens"]
 
             # Autoinject shadow decisions
-            if kind == 'autoinject_shadow_decision':
-                if record.get('cache_hit'):
+            if kind == "autoinject_shadow_decision":
+                if record.get("cache_hit"):
                     tokens.autoinject_cache_hits += 1
                 else:
                     tokens.autoinject_cache_misses += 1
 
             # Action cache events
-            if kind in ('action_cache', 'action_cache_lookup'):
-                if record.get('hit'):
+            if kind in ("action_cache", "action_cache_lookup"):
+                if record.get("hit"):
                     tokens.action_cache_hits += 1
                 else:
                     tokens.action_cache_misses += 1
-                if 'model_calls_avoided' in record:
-                    tokens.model_calls_avoided += record['model_calls_avoided']
+                if "model_calls_avoided" in record:
+                    tokens.model_calls_avoided += record["model_calls_avoided"]
 
             # Context paging / VMEM events
-            if kind in ('session_vmem', 'session_paging'):
-                if record.get('page_fault'):
+            if kind in ("session_vmem", "session_paging"):
+                if record.get("page_fault"):
                     tokens.session_page_faults += 1
-                if record.get('evicted'):
+                if record.get("evicted"):
                     tokens.session_evictions += 1
 
             # Delta sync / read reuse events
-            if kind in ('delta_sync', 'read_reuse') and record.get('repeated_read_avoided'):
+            if kind in ("delta_sync", "read_reuse") and record.get("repeated_read_avoided"):
                 tokens.repeated_reads_avoided += 1
 
             # Lean kernel dedup
-            if kind == 'lean_kernel' and record.get('dedup_hit'):
+            if kind == "lean_kernel" and record.get("dedup_hit"):
                 tokens.lean_kernel_dedup_hits += 1
 
             # Context peak (from turn_end.context_usage)
-            if kind == 'turn_end':
-                context_usage = record.get('context_usage')
-                if (context_usage and isinstance(context_usage, dict)
-                        and 'percent' in context_usage):
-                    val = context_usage['percent']
+            if kind == "turn_end":
+                context_usage = record.get("context_usage")
+                if context_usage and isinstance(context_usage, dict) and "percent" in context_usage:
+                    val = context_usage["percent"]
                     if tokens.context_peak is None or val > tokens.context_peak:
                         tokens.context_peak = int(val)
 
             # Compactions
-            if kind == 'session_compact':
+            if kind == "session_compact":
                 tokens.compactions += 1
-                if 'compaction_tokens' in record:
-                    tokens.compaction_tokens += record['compaction_tokens']
+                if "compaction_tokens" in record:
+                    tokens.compaction_tokens += record["compaction_tokens"]
 
     # Derived role totals retain the historical integer surface. A null
     # source total contributes no known tokens; it is not converted in the
     # source field itself.
-    if tokens.role == 'driver':
+    if tokens.role == "driver":
         tokens.driver_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
-    elif tokens.role == 'worker':
+    elif tokens.role == "worker":
         tokens.worker_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
 
     if tokens.autoinject_cache_hits + tokens.autoinject_cache_misses > 0:
-        total_decisions = (
-            tokens.autoinject_cache_hits + tokens.autoinject_cache_misses
-        )
+        total_decisions = tokens.autoinject_cache_hits + tokens.autoinject_cache_misses
         if total_decisions > 0:
-            tokens.autoinject_cache_hit_rate = (
-                tokens.autoinject_cache_hits / total_decisions
-            )
+            tokens.autoinject_cache_hit_rate = tokens.autoinject_cache_hits / total_decisions
 
     # Cost defaults to None if not seen in any assistant_usage record
     if tokens.cost_total_seen == 0:
@@ -488,8 +483,7 @@ def get_profile_env(profile_name: str) -> dict[str, str]:
     """
     profile = get_ablation_profile(profile_name)
     return {
-        f"SECOND_BRAIN_GOVERNOR_{key.upper()}": "1" if val else "0"
-        for key, val in profile.items()
+        f"SECOND_BRAIN_GOVERNOR_{key.upper()}": "1" if val else "0" for key, val in profile.items()
     }
 
 
@@ -526,35 +520,35 @@ def attribute_roles(sessions: list[SessionTokens]) -> dict[str, int]:
       - unknown_turns (sessions with no role)
     """
     result = {
-        'driver_turns': 0,
-        'driver_input_tokens': 0,
-        'driver_output_tokens': 0,
-        'driver_total_tokens': 0,
-        'worker_turns': 0,
-        'worker_input_tokens': 0,
-        'worker_output_tokens': 0,
-        'worker_total_tokens': 0,
-        'unknown_turns': 0,
+        "driver_turns": 0,
+        "driver_input_tokens": 0,
+        "driver_output_tokens": 0,
+        "driver_total_tokens": 0,
+        "worker_turns": 0,
+        "worker_input_tokens": 0,
+        "worker_output_tokens": 0,
+        "worker_total_tokens": 0,
+        "unknown_turns": 0,
     }
 
     for session in sessions:
         role_key = None
-        if session.role == 'driver':
-            role_key = 'driver'
-        elif session.role == 'worker':
-            role_key = 'worker'
+        if session.role == "driver":
+            role_key = "driver"
+        elif session.role == "worker":
+            role_key = "worker"
         else:
-            result['unknown_turns'] += session.model_turns
+            result["unknown_turns"] += session.model_turns
             continue
 
-        result[f'{role_key}_turns'] += session.model_turns
-        result[f'{role_key}_input_tokens'] += (
+        result[f"{role_key}_turns"] += session.model_turns
+        result[f"{role_key}_input_tokens"] += (
             session.input_tokens if session.input_tokens is not None else 0
         )
-        result[f'{role_key}_output_tokens'] += (
+        result[f"{role_key}_output_tokens"] += (
             session.output_tokens if session.output_tokens is not None else 0
         )
-        result[f'{role_key}_total_tokens'] += (
+        result[f"{role_key}_total_tokens"] += (
             session.total_tokens if session.total_tokens is not None else 0
         )
 
@@ -582,11 +576,11 @@ def resolve_features(home: Path, env: dict[str, str] | None = None) -> dict[str,
         except ImportError:
             import tomli as tomllib  # type: ignore
 
-        with open(config_path, 'rb') as f:
+        with open(config_path, "rb") as f:
             config_data = tomllib.load(f)
 
-        if 'features' in config_data:
-            features = config_data['features']
+        if "features" in config_data:
+            features = config_data["features"]
             for key, value in features.items():
                 if key not in defaults:
                     raise ValueError(f"Unknown feature flag in governor.toml: {key}")
@@ -597,9 +591,9 @@ def resolve_features(home: Path, env: dict[str, str] | None = None) -> dict[str,
         env_key = f"SECOND_BRAIN_GOVERNOR_{key.upper()}"
         if env_key in environ:
             val = environ[env_key].lower()
-            if val in ('1', 'true', 'yes'):
+            if val in ("1", "true", "yes"):
                 result[key] = True
-            elif val in ('0', 'false', 'no'):
+            elif val in ("0", "false", "no"):
                 result[key] = False
 
     return result
@@ -616,7 +610,7 @@ def feature_source(key: str, home: Path, env: dict[str, str] | None = None) -> s
     # Check env
     env_key = f"SECOND_BRAIN_GOVERNOR_{key.upper()}"
     if env_key in environ:
-        return 'env'
+        return "env"
 
     # Check config
     config_path = home / "config" / "governor.toml"
@@ -626,20 +620,21 @@ def feature_source(key: str, home: Path, env: dict[str, str] | None = None) -> s
         except ImportError:
             import tomli as tomllib  # type: ignore
 
-        with open(config_path, 'rb') as f:
+        with open(config_path, "rb") as f:
             config_data = tomllib.load(f)
 
-        if 'features' in config_data and key in config_data['features']:
-            return 'config'
+        if "features" in config_data and key in config_data["features"]:
+            return "config"
 
     # Must be default
-    return 'default'
+    return "default"
 
 
 @dataclass
 class ROIVerdict:
     """Result of ROI classification."""
-    status: Literal['POSITIVE_ROI', 'NEUTRAL', 'NEGATIVE_ROI', 'INSUFFICIENT_EVIDENCE']
+
+    status: Literal["POSITIVE_ROI", "NEUTRAL", "NEGATIVE_ROI", "INSUFFICIENT_EVIDENCE"]
     on_tokens: float | None = None
     off_tokens: float | None = None
     savings: float | None = None  # on_tokens - off_tokens (negative = savings)
@@ -671,7 +666,7 @@ def classify_roi(
         return verdict
 
     runs: list[dict[str, object]] = []
-    for on_session, off_session in zip(on, off):
+    for on_session, off_session in zip(on, off, strict=False):
         runs.append(
             {
                 "off": {
@@ -735,9 +730,9 @@ def classify_roi(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_BUDGETS: dict[str, float] = {
-    'session_tokens': 400000,
-    'worker_tokens': 120000,
-    'soft_ratio': 0.8,
+    "session_tokens": 400000,
+    "worker_tokens": 120000,
+    "soft_ratio": 0.8,
 }
 
 
@@ -750,20 +745,18 @@ def _budget_config(home: Path) -> dict[str, float]:
     try:
         import tomllib
 
-        with open(config_path, 'rb') as f:
+        with open(config_path, "rb") as f:
             config_data = tomllib.load(f)
     except Exception:
         return dict(_DEFAULT_BUDGETS)
-    budgets = config_data.get('budgets') if isinstance(config_data, dict) else None
+    budgets = config_data.get("budgets") if isinstance(config_data, dict) else None
     if not isinstance(budgets, dict):
         return result
     for key, default in _DEFAULT_BUDGETS.items():
         if key not in budgets:
             continue
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             result[key] = type(default)(budgets[key])
-        except (TypeError, ValueError):
-            pass
     return result
 
 
@@ -830,8 +823,7 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
                 usage = record if kind == "assistant_usage" else record.get("usage")
                 if not isinstance(usage, dict):
                     raise ValueError(
-                        f"malformed usage for session {session_id!r} at "
-                        f"{path.name}:{line_number}"
+                        f"malformed usage for session {session_id!r} at {path.name}:{line_number}"
                     )
                 value = usage.get("total_tokens")
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -898,8 +890,7 @@ def _descendant_total_tokens(home: Path, session_id: str) -> int:
                 internal_id_by_host[host_id] = internal_id
 
     return sum(
-        _session_total_tokens(home, host_id)
-        for host_id in descendants_by_internal_id.values()
+        _session_total_tokens(home, host_id) for host_id in descendants_by_internal_id.values()
     )
 
 
@@ -912,8 +903,8 @@ def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]
     """
     home_path = Path(home)
     budgets = _budget_config(home_path)
-    cap = int(budgets['worker_tokens'] if role == 'worker' else budgets['session_tokens'])
-    soft_ratio = float(budgets['soft_ratio'])
+    cap = int(budgets["worker_tokens"] if role == "worker" else budgets["session_tokens"])
+    soft_ratio = float(budgets["soft_ratio"])
     try:
         used = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
             home_path, session_id

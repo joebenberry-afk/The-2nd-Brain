@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from second_brain import decisions, frontier
+from second_brain import artifacts, db, decisions, frontier
 from second_brain.errors import BrainError
 
 
@@ -132,18 +135,22 @@ def test_frontier_item_links_to_replayable_decision(brain_home: Path) -> None:
         stake_tokens=5000.0,
         p_flip=0.6,
         expected_cost=50.0,
+        evidence_refs=[f"decision:{dec_id}"],
         experiments=[
             {
                 "experiment_id": "exp-local-01",
                 "type": "local_mock_run",
                 "cost": "local",
-                "expected_gain": 0.8,
+                "expected_information_gain": 0.8,
+                "decision_flip_condition": "pass_rate >= 0.95 -> route=T0",
             },
             {
                 "experiment_id": "exp-live-02",
                 "type": "live_model_call",
                 "cost": 150.0,
-                "expected_gain": 0.85,
+                "expected_information_gain": 0.85,
+                "decision_flip_condition": "pass_rate >= 0.95 -> route=T0",
+                "executable_locally": False,
             },
         ],
     )
@@ -155,3 +162,205 @@ def test_frontier_item_links_to_replayable_decision(brain_home: Path) -> None:
     cheapest = frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
     assert cheapest["experiment_id"] == "exp-local-01"
     assert cheapest["cost"] == "local"
+
+
+def _decision_ref(home: Path) -> str:
+    decision_id = decisions.record(
+        home,
+        kind="routing",
+        session_id="frontier-evidence",
+        task_id="local-replay",
+        chosen={"route": "premium"},
+        alternatives=[{"route": "cheap"}],
+        propensity=1.0,
+        randomized=False,
+        policy_version="v7.8",
+        stage="SHADOW",
+        inputs={"task_class": "micro"},
+    )
+    return f"decision:{decision_id}"
+
+
+def _local_experiment(**changes: object) -> dict:
+    return {
+        "experiment_id": "local-replay",
+        "cost": "local",
+        "executable_locally": True,
+        "risk": "low",
+        "expected_information_gain": 0.8,
+        "decision_flip_condition": "pass_rate >= 0.95 -> route=cheap",
+        **changes,
+    }
+
+
+@pytest.mark.parametrize("status", ["CLOSED", "EXPIRED"])
+def test_frontier_refuses_ineligible_status(brain_home: Path, status: str) -> None:
+    ref = _decision_ref(brain_home)
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        ref,
+        status=status,
+        evidence_refs=[ref],
+        experiments=[_local_experiment()],
+    )
+    with pytest.raises(BrainError, match="not eligible"):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+@pytest.mark.parametrize(
+    "evidence_refs",
+    [[], ["plausible-but-unregistered"], ["decision:" + "a" * 24], ["artifact:" + "a" * 64]],
+)
+def test_frontier_resolves_evidence_before_selection(
+    brain_home: Path, evidence_refs: list[str]
+) -> None:
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        _decision_ref(brain_home),
+        evidence_refs=evidence_refs,
+        experiments=[_local_experiment()],
+    )
+    with pytest.raises(BrainError):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+def test_frontier_rechecks_replay_integrity(brain_home: Path) -> None:
+    ref = _decision_ref(brain_home)
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        ref,
+        evidence_refs=[ref],
+        experiments=[_local_experiment()],
+    )
+    assert (
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])["experiment_id"]
+        == "local-replay"
+    )
+    conn = db.connect(db.db_path(brain_home))
+    try:
+        conn.execute(
+            "UPDATE decisions SET inputs_json = ? WHERE decision_id = ?",
+            ('{"task_class":"changed"}', ref.split(":")[1]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(BrainError, match="identity mismatch"):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+def test_frontier_rechecks_artifact_evidence(brain_home: Path) -> None:
+    stored = artifacts.store_text(
+        brain_home, "Replay pass rate: 0.97", kind="generic", tool="local-replay"
+    )
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        _decision_ref(brain_home),
+        evidence_refs=[stored["handle"]],
+        experiments=[_local_experiment()],
+    )
+    assert (
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])["experiment_id"]
+        == "local-replay"
+    )
+    Path(stored["path"]).write_text("Changed replay result", encoding="utf-8")
+    with pytest.raises(BrainError, match="identity mismatch"):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+def test_frontier_refuses_mismatched_decision_kind(brain_home: Path) -> None:
+    ref = _decision_ref(brain_home)
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        f"{ref}:retrieval:threshold",
+        evidence_refs=[ref],
+        experiments=[_local_experiment()],
+    )
+    with pytest.raises(BrainError, match="kind does not match"):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"risk": "not-a-risk"},
+        {"risk": "high"},
+        {"risk": None},
+        {"cost": True},
+        {"cost": False},
+        {"cost": float("nan")},
+        {"cost": float("inf")},
+        {"cost": -1},
+        {"cost": None},
+        {"cost": "10"},
+        {"expected_information_gain": 0},
+        {"expected_information_gain": True},
+        {"expected_information_gain": float("inf")},
+        {"expected_information_gain": None},
+        {"decision_flip_condition": ""},
+        {"executable_locally": False},
+    ],
+)
+def test_frontier_skips_ineligible_experiments(brain_home: Path, changes: dict) -> None:
+    ref = _decision_ref(brain_home)
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        ref,
+        evidence_refs=[ref],
+        experiments=[
+            _local_experiment(**changes),
+            _local_experiment(experiment_id="valid-local", cost=5),
+        ],
+    )
+    assert (
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])["experiment_id"]
+        == "valid-local"
+    )
+
+
+def test_frontier_does_not_invent_experiment(brain_home: Path) -> None:
+    ref = _decision_ref(brain_home)
+    item = frontier.create_frontier_item(
+        brain_home,
+        "Routing uncertainty",
+        ref,
+        evidence_refs=[ref],
+    )
+    with pytest.raises(BrainError, match="no eligible"):
+        frontier.choose_cheapest_experiment(brain_home, item["frontier_id"])
+
+
+@pytest.mark.parametrize("cost", [True, False, float("nan"), float("inf"), -1])
+def test_frontier_rejects_invalid_cost_measurement(brain_home: Path, cost: object) -> None:
+    with pytest.raises(BrainError, match="expected_cost"):
+        frontier.create_frontier_item(
+            brain_home,
+            "Routing uncertainty",
+            _decision_ref(brain_home),
+            expected_cost=cast(float, cost),
+        )
+
+
+def test_frontier_runner_redirects_output_without_overwrite(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parents[1] / "scripts" / "run_frontier_experiment.py"
+    spec = importlib.util.spec_from_file_location("frontier_experiment", script)
+    assert spec is not None and spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    output_path = tmp_path / "frontier-experiment.json"
+    manifest = runner.run_frontier_experiment(output_path)
+    saved = output_path.read_bytes()
+    assert (
+        json.loads(saved)["selected_discriminating_experiment"]["experiment_id"]
+        == "exp-local-replay-01"
+    )
+    assert manifest["metrics"]["chosen_experiment_locally_executable"] is True
+    with pytest.raises(FileExistsError):
+        runner.run_frontier_experiment(output_path)
+    assert output_path.read_bytes() == saved

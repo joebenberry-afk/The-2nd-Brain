@@ -213,6 +213,4 @@ def test_linear_matching_token_and_and_legacy_substring(brain_home):
     # non-tokenizable query keeps legacy verbatim substring matching
     ids = {r["memory_id"] for r in semantic._search_linear(brain_home, "!!!")}
     assert ids == {r["memory_id"] for r in semantic._search_linear(brain_home, "!!!")}
-    assert "Symbol note" in {
-        r["title"] for r in semantic._search_linear(brain_home, "!!!")
-    }
+    assert "Symbol note" in {r["title"] for r in semantic._search_linear(brain_home, "!!!")}

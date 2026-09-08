@@ -117,10 +117,7 @@ def _cache_put(home: Path, memory_id: str, head_sha: str, result: dict) -> None:
         return
 
 
-
-def _cache_is_valid(
-    cached: dict, rows: list[sqlite3.Row], repo_root: Path
-) -> bool:
+def _cache_is_valid(cached: dict, rows: list[sqlite3.Row], repo_root: Path) -> bool:
     """Validate cached states against tracked source blobs.
 
     HEAD is the durable cache key, but uncommitted edits do not change HEAD.
@@ -143,6 +140,7 @@ def _cache_is_valid(
         if not blob or not row["blob_sha"] or blob != row["blob_sha"]:
             return False
     return True
+
 
 def _result(state: str, reason: str) -> dict[str, str]:
     return {"state": state, "reason": reason}
@@ -191,9 +189,7 @@ def resolve(home: Path | str, memory_id: str, repo_root: Path | str) -> dict[str
                 continue
             path, rel = resolved
             if not path.is_file():
-                moved = _run_git(
-                    repo_root, "log", "--follow", "--diff-filter=R", "-1", "--", rel
-                )
+                moved = _run_git(repo_root, "log", "--follow", "--diff-filter=R", "-1", "--", rel)
                 if not moved:
                     history = _run_git(
                         repo_root, "log", "HEAD", "--name-status", "--diff-filter=R", "-1"

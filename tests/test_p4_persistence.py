@@ -15,8 +15,7 @@ def test_p4_tables_are_in_primary_database(brain_home):
     conn = db.connect(db.db_path(brain_home))
     try:
         names = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     finally:
         conn.close()
@@ -57,9 +56,10 @@ def test_migration_is_idempotent(brain_home):
     db.migrate(db.db_path(brain_home))
     conn = db.connect(db.db_path(brain_home))
     try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM schema_version WHERE version = 10"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM schema_version WHERE version = 10").fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 

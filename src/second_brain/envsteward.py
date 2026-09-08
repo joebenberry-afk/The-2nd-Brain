@@ -208,9 +208,7 @@ def classify_mutation(
     if result_state not in {"observed", "failed", "partial"}:
         raise BrainError("result_state must be observed, failed, or partial")
     expected = set(expected_fields or [])
-    changed = sorted(
-        key for key in set(before) | set(after) if before.get(key) != after.get(key)
-    )
+    changed = sorted(key for key in set(before) | set(after) if before.get(key) != after.get(key))
     if result_state in {"failed", "partial"}:
         classification = result_state
         eligible = False
@@ -293,8 +291,7 @@ def assess(
     repo_exists = Path(repo).exists()
     requested = [item.strip() for item in (requested_changes or []) if item.strip()]
     dependency_refs = [
-        f"dependency-{hashlib.sha256(item.encode('utf-8')).hexdigest()[:16]}"
-        for item in requested
+        f"dependency-{hashlib.sha256(item.encode('utf-8')).hexdigest()[:16]}" for item in requested
     ]
     evidence = {
         "schema_version": 1,
@@ -333,7 +330,6 @@ def assess(
     }
     _write_json_atomic(target, evidence)
     return evidence
-
 
 
 # ---------------------------------------------------------------------------

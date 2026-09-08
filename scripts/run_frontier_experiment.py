@@ -1,14 +1,15 @@
-"""Create 3 decision-linked frontier items and verify the cheapest discriminating experiment.
+"""Create 3 decision-linked frontier items and verify the cheapest discriminating
+experiment.
 
-Cheapest real experiment for T7.8:
-Create 3 frontier items from real unresolved routing/retrieval choices and
-verify the top-ranked experiment is actually decision-changing and executable locally.
-DONE-WHEN frontier contains only decision-linked uncertainty and can output one
-cheapest discriminating experiment.
+Cheapest real experiment for T7.8: Create 3 frontier items from real unresolved
+routing/retrieval choices and verify the top-ranked experiment is actually decision-
+changing and executable locally. DONE-WHEN frontier contains only decision-linked
+uncertainty and can output one cheapest discriminating experiment.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import tempfile
@@ -21,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = ROOT / "outputs" / "reports" / "v2" / "frontier" / "frontier-experiment.json"
 
 
-def run_frontier_experiment() -> dict[str, Any]:
+def run_frontier_experiment(output_path: Path | str | None = None) -> dict[str, Any]:
+    output_path = Path(output_path) if output_path is not None else OUTPUT_PATH
     temp_dir = Path(tempfile.mkdtemp(prefix="second_brain_front_exp_"))
     try:
         dbfile = db.db_path(temp_dir)
@@ -75,8 +77,12 @@ def run_frontier_experiment() -> dict[str, Any]:
         # stake: 15,000 tokens, p_flip: 0.7, cost: 100 -> priority = 105.0
         item1 = frontier.create_frontier_item(
             temp_dir,
-            unknown="Can Claude 3.5 Haiku reliably replace Sonnet on low-risk micro tasks without quality drop?",
+            unknown=(
+                "Can Claude 3.5 Haiku reliably replace Sonnet on low-risk micro tasks without"
+                " quality drop?"
+            ),
             decision_ref=f"decision:{dec1}:routing:model_choice",
+            evidence_refs=[f"decision:{dec1}"],
             stake_tokens=15000.0,
             p_flip=0.7,
             expected_cost=100.0,
@@ -98,15 +104,21 @@ def run_frontier_experiment() -> dict[str, Any]:
                     "decision_flip_condition": "pass_rate >= 0.95 -> route=cheap",
                 },
             ],
-            why_matters="Saves 15,000 prompt tokens per session if micro tasks route to cheap model tier.",
+            why_matters=(
+                "Saves 15,000 prompt tokens per session if micro tasks route to cheap model tier."
+            ),
         )
 
         # 2. Frontier Item 2: Retrieval abstention threshold for ambiguous tasks
         # stake: 8,000 tokens, p_flip: 0.4, cost: 200 -> priority = 16.0
-        item2 = frontier.create_frontier_item(
+        frontier.create_frontier_item(
             temp_dir,
-            unknown="Does lowering the score-gap floor from 0.20 to 0.12 reduce unnecessary retrieval abstentions?",
+            unknown=(
+                "Does lowering the score-gap floor from 0.20 to 0.12 reduce unnecessary retrieval"
+                " abstentions?"
+            ),
             decision_ref=f"decision:{dec2}:retrieval:score_gap_floor",
+            evidence_refs=[f"decision:{dec2}"],
             stake_tokens=8000.0,
             p_flip=0.4,
             expected_cost=200.0,
@@ -125,10 +137,14 @@ def run_frontier_experiment() -> dict[str, Any]:
 
         # 3. Frontier Item 3: Context eviction watermark under resident pressure
         # stake: 4,000 tokens, p_flip: 0.25, cost: 250 -> priority = 4.0
-        item3 = frontier.create_frontier_item(
+        frontier.create_frontier_item(
             temp_dir,
-            unknown="Does delaying eviction from 80% to 90% resident context preserve valuable working set?",
+            unknown=(
+                "Does delaying eviction from 80% to 90% resident context preserve valuable working"
+                " set?"
+            ),
             decision_ref=f"decision:{dec3}:eviction:watermark_limit",
+            evidence_refs=[f"decision:{dec3}"],
             stake_tokens=4000.0,
             p_flip=0.25,
             expected_cost=250.0,
@@ -162,9 +178,10 @@ def run_frontier_experiment() -> dict[str, Any]:
         manifest = {
             "experiment": "T7.8 Decision-Linked Knowledge Frontier Replay",
             "hypothesis": (
-                "Operational frontier items link strictly to replayable Brain decisions. "
-                "Ranking by stake_tokens * p_flip / expected_cost prioritizes high-impact uncertainty. "
-                "The coordinator selects the cheapest discriminating experiment that is locally executable."
+                "Operational frontier items link strictly to replayable Brain decisions. Ranking by"
+                " stake_tokens * p_flip / expected_cost prioritizes high-impact uncertainty. The"
+                " coordinator selects the cheapest discriminating experiment that is locally"
+                " executable."
             ),
             "metrics": {
                 "frontier_items_created": 3,
@@ -175,7 +192,9 @@ def run_frontier_experiment() -> dict[str, Any]:
                 "chosen_experiment_id": cheapest_exp["experiment_id"],
                 "chosen_experiment_cost": cheapest_exp["cost"],
                 "chosen_experiment_locally_executable": cheapest_exp["executable_locally"],
-                "chosen_experiment_decision_changing": bool(cheapest_exp.get("decision_flip_condition")),
+                "chosen_experiment_decision_changing": bool(
+                    cheapest_exp.get("decision_flip_condition")
+                ),
             },
             "ranked_frontier_items": [
                 {
@@ -190,15 +209,17 @@ def run_frontier_experiment() -> dict[str, Any]:
             "top_item_experiments": top_item["experiments"],
             "selected_discriminating_experiment": cheapest_exp,
             "conclusion": (
-                f"PASS: Created 3 decision-linked frontier items. Top-ranked item '{top_item['frontier_id']}' "
-                f"attained priority={top_item['priority']}. Selected experiment '{cheapest_exp['experiment_id']}' "
-                "is decision-changing and locally executable at cost=local."
+                "PASS: Created 3 decision-linked frontier items. Top-ranked item"
+                f" '{top_item['frontier_id']}' attained priority={top_item['priority']}. Selected"
+                f" experiment '{cheapest_exp['experiment_id']}' is decision-changing and locally"
+                " executable at cost=local."
             ),
         }
 
-        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        print(f"Wrote frontier experiment results to {OUTPUT_PATH}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(manifest, indent=2))
+        print(f"Wrote frontier experiment results to {output_path}")
         print(f"Top item: {top_item['frontier_id']}, Priority: {top_item['priority']}")
         print(f"Cheapest experiment: {cheapest_exp['experiment_id']} (cost={cheapest_exp['cost']})")
         return manifest
@@ -208,4 +229,6 @@ def run_frontier_experiment() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    run_frontier_experiment()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=OUTPUT_PATH)
+    run_frontier_experiment(parser.parse_args().output)

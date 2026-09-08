@@ -1,3 +1,27 @@
+## 2026-09-08 — Recovery and native dispatch repairs (unreleased)
+
+- Require public recovery to succeed before VMem coverage permits reclamation,
+  including previously covered objects whose backing artifacts disappear.
+- Preserve UTF-8 input bytes and mixed line endings through VMem and firewall
+  CLI round trips; reject invalid UTF-8 rather than replacing it.
+- Stop project discovery at an independent Git boundary and share the same
+  ownership resolver between CLI memory writes and automatic retrieval.
+- Reject backups with missing canonical memory bodies before publishing them;
+  validate restores before mutation and recreate the complete runtime layout.
+- Close native preflight-rejected tasks with durable failure receipts. Allow
+  context-free workers when OFF/SHADOW injection has not created a capsule;
+  retain fail-closed behavior for corrupt or unreadable capsules.
+- Recognize the Astra driver and reject qualification runs that resolve Python
+  from a different source checkout.
+- Initialize isolated economics homes before host launch, sanitize Python
+  environments, and retain raw usage telemetry without retaining host output.
+
+## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
+
+- Reject an invalid existing v2 admission policy instead of silently falling back
+  to SHADOW and recording candidates. Only an absent legacy policy retains the
+  SHADOW default; valid OFF policy still records neither candidates nor decisions.
+
 ## 2026-09-05 — Local budget and qualification closure (unreleased, HOLD)
 
 - Bound every Brainstem injection decision by remaining total allowance,

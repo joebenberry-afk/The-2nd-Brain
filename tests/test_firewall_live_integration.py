@@ -99,6 +99,7 @@ class TestObservationFirewallLiveIntegration:
 
     def test_json_reduction_and_recovery(self, brain_home):
         import json
+
         huge_data = {"items": [{"id": i, "name": f"item_{i}", "val": i * 10} for i in range(100)]}
         raw_json = json.dumps(huge_data, indent=2)
 
@@ -115,7 +116,15 @@ class TestObservationFirewallLiveIntegration:
 
     def test_all_eight_reducers_registered(self):
         expected_kinds = [
-            "pytest", "compiler", "git", "search", "json", "logs", "build", "doctor", "generic"
+            "pytest",
+            "compiler",
+            "git",
+            "search",
+            "json",
+            "logs",
+            "build",
+            "doctor",
+            "generic",
         ]
         for kind in expected_kinds:
             assert kind in REDUCER_MAP

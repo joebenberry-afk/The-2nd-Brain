@@ -68,9 +68,12 @@ def test_validate_reports_one_issue_per_invalid_p4_field(brain_home: Path):
     )
     issues = telemetry.validate(brain_home)["issues"]
     assert len(issues) == 4
-    assert {
-        issue.split("invalid ", 1)[1].split(":", 1)[0] for issue in issues
-    } == {"mode", "due", "latency_ms", "model_tokens_used"}
+    assert {issue.split("invalid ", 1)[1].split(":", 1)[0] for issue in issues} == {
+        "mode",
+        "due",
+        "latency_ms",
+        "model_tokens_used",
+    }
 
 
 def test_operational_report_counts_grouped_events_and_hash_rereads(brain_home: Path):
@@ -179,19 +182,21 @@ def test_operational_report_counts_grouped_events_and_hash_rereads(brain_home: P
 def test_validate_rejects_unbounded_bottleneck_evidence_hash(brain_home: Path):
     _write_records(
         brain_home,
-        [{
-            "v": 2,
-            "kind": "bottleneck_fingerprint",
-            "session": "s",
-            "ts": "2026-08-29T00:00:00Z",
-            "fingerprint_id": "fp",
-            "category": "tool",
-            "scope_id": "project",
-            "occurrence_count": 1,
-            "impact_score": 1.0,
-            "evidence_count": 1,
-            "evidence_hash": "raw-evidence",
-        }],
+        [
+            {
+                "v": 2,
+                "kind": "bottleneck_fingerprint",
+                "session": "s",
+                "ts": "2026-08-29T00:00:00Z",
+                "fingerprint_id": "fp",
+                "category": "tool",
+                "scope_id": "project",
+                "occurrence_count": 1,
+                "impact_score": 1.0,
+                "evidence_count": 1,
+                "evidence_hash": "raw-evidence",
+            }
+        ],
     )
     issues = telemetry.validate(brain_home)["issues"]
     assert len(issues) == 1
@@ -201,14 +206,16 @@ def test_validate_rejects_unbounded_bottleneck_evidence_hash(brain_home: Path):
 def test_operational_report_groups_omp_worker_and_parent_roles(brain_home: Path):
     _write_records(
         brain_home,
-        [{
-            "v": 3,
-            "kind": "omp_worker_context_handoff",
-            "session": "s",
-            "ts": "2026-08-29T00:00:00Z",
-            "worker_role": "worker",
-            "parent_role": "driver",
-        }],
+        [
+            {
+                "v": 3,
+                "kind": "omp_worker_context_handoff",
+                "session": "s",
+                "ts": "2026-08-29T00:00:00Z",
+                "worker_role": "worker",
+                "parent_role": "driver",
+            }
+        ],
     )
     result = telemetry.operational_report(brain_home)
     assert result["worker_events"] == 1

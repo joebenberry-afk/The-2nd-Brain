@@ -8,8 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 from second_brain import semantic, working_set
+
 
 def _env(home: Path):
     env = dict(os.environ)
@@ -17,7 +17,9 @@ def _env(home: Path):
         env.pop(key, None)
     env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
     env["SECOND_BRAIN_HOME"] = str(home)
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
+
 
 def run_cli(
     home: Path, *args: str, cwd: Path | None = None, stdin: str | None = None
@@ -27,11 +29,14 @@ def run_cli(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=_env(home),
         cwd=cwd or home,
         timeout=120,
         input=stdin,
     )
+
+
 def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
     home = tmp_path / "brain"
     repo = tmp_path / "project"
@@ -41,7 +46,16 @@ def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
     source.write_text("first line\nsecond line\n", encoding="utf-8")
     subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
         cwd=repo,
         check=True,
     )
@@ -90,7 +104,16 @@ def test_recall_prints_freshness_state(tmp_path, monkeypatch):
     source.write_text("bounded memory I/O\n", encoding="utf-8")
     subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
         cwd=repo,
         check=True,
     )
@@ -103,10 +126,9 @@ def test_recall_prints_freshness_state(tmp_path, monkeypatch):
 
     result = run_cli(home, "recall", "bounded memory I/O", cwd=repo)
     assert result.stdout.count("\n") <= 3
-    assert f"VERIFIED_CURRENT" in result.stdout
+    assert "VERIFIED_CURRENT" in result.stdout
     assert memory_id in result.stdout
     assert "Use bounded memory I/O" in result.stdout
-
 
 
 def test_remember_rejects_multiline_and_unsupported_flags(tmp_path):
@@ -128,7 +150,16 @@ def test_remember_validates_grade_and_evidence_range(tmp_path):
     (repo / "notes.txt").write_text("one\n", encoding="utf-8")
     subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "fixture"],
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
         cwd=repo,
         check=True,
     )
@@ -156,7 +187,8 @@ def test_recall_abstains_and_truncates_body(tmp_path, monkeypatch):
     assert recalled.returncode == 0
     line = recalled.stdout.strip()
     assert line.startswith("[UNKNOWN] ")
-    assert len(line.split(" — ", 1)[1].split(" (mem-", 1)[0]) == 200
+    assert "longbody " + "x" * 191 in line
+    assert "x" * 193 not in line
     absent = run_cli(home, "recall", "unmatched gibberish", cwd=home)
     assert absent.returncode == 0
     assert absent.stdout.startswith("NO_INJECTION ")
@@ -173,9 +205,7 @@ def test_recall_question_wins_over_unrelated_capsule(tmp_path, monkeypatch):
         scope="project",
         project_id="demo",
     )
-    recall_session = "brainctl-recall-" + hashlib.sha256(
-        "beta-only retrieval".encode("utf-8")
-    ).hexdigest()[:16]
+    recall_session = "brainctl-recall-" + hashlib.sha256(b"beta-only retrieval").hexdigest()[:16]
     working_set.init_capsule(home, recall_session, "alpha-only objective")
 
     result = run_cli(home, "recall", "beta-only retrieval", cwd=home)
@@ -251,13 +281,15 @@ def test_stop_decide_allows_proven_completion_and_records_bounded_evidence(tmp_p
     home = tmp_path / "brain"
     session = "omp-success"
     assert (
-        run_cli(home, "requirements", "add", session, "ship the task", "--importance", "critical")
-        .returncode
+        run_cli(
+            home, "requirements", "add", session, "ship the task", "--importance", "critical"
+        ).returncode
         == 0
     )
     assert (
-        run_cli(home, "requirements", "evidence", session, "REQ-001", "focused test passed")
-        .returncode
+        run_cli(
+            home, "requirements", "evidence", session, "REQ-001", "focused test passed"
+        ).returncode
         == 0
     )
     assert run_cli(home, "requirements", "status", session, "REQ-001", "verified").returncode == 0
@@ -280,8 +312,9 @@ def test_stop_decide_does_not_false_positive_when_acceptance_is_unresolved(tmp_p
     home = tmp_path / "brain"
     session = "omp-incomplete"
     assert (
-        run_cli(home, "requirements", "add", session, "ship the task", "--importance", "critical")
-        .returncode
+        run_cli(
+            home, "requirements", "add", session, "ship the task", "--importance", "critical"
+        ).returncode
         == 0
     )
 
@@ -306,6 +339,29 @@ def test_stop_decide_stops_failed_or_blocked_work(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["decision"] == "stop"
     assert payload["continuation_forbidden"] is True
+
+
+def test_stop_decide_prefers_unresolved_requirements_over_failed_verification(tmp_path):
+    home = tmp_path / "brain"
+    session = "omp-requirements-first"
+    assert (
+        run_cli(
+            home, "requirements", "add", session, "ship the task", "--importance", "critical"
+        ).returncode
+        == 0
+    )
+    args = list(_stop_args(session, "task-requirements-first"))
+    args[args.index("--reason-code") + 1] = "verification_failed"
+    args[args.index("--triggering-condition") + 1] = "verification_failed"
+    args[args.index("--verification-state") + 1] = "failed"
+    args[args.index("--completion-condition-state") + 1] = "failed"
+    result = run_cli(home, *args)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "continue"
+    assert payload["reason_code"] == "requirements_unresolved"
+    assert payload["continuation_forbidden"] is False
+
 
 def test_verify_gate_blocks_stop_until_risk_actions_pass(tmp_path):
     home = tmp_path / "brain"
@@ -376,6 +432,7 @@ def test_verify_gate_blocks_stop_until_risk_actions_pass(tmp_path):
     stop_payload = json.loads(stop.stdout)
     assert stop_payload["decision"] == "continue"
     assert stop_payload["reason_code"] == "accuracy_gate_blocked"
+
 
 def test_independent_verifier_cli_binds_fresh_pass_to_high_gate(tmp_path):
     home = tmp_path / "brain"
@@ -480,6 +537,7 @@ def test_independent_verifier_cli_binds_fresh_pass_to_high_gate(tmp_path):
     gate_payload = json.loads(gate.stdout)
     assert gate_payload["completion_allowed"] is True
     assert gate_payload["verification_id"] == "ver-cli"
+
 
 def test_init_doctor_status_flow(tmp_path):
     home = tmp_path / "brain"
@@ -726,12 +784,22 @@ def test_worker_plane_ceiling_block_complete_respawn(tmp_path):
     assert json.loads(r_status.stdout) == {"active_workers": 2, "max_concurrent_workers": 2}
 
     r_complete = run_cli(
-        home, "worker-plane", "complete", "sess-1", worker1_id,
-        "--status", "COMPLETED", "--summary", "done", "--json",
+        home,
+        "worker-plane",
+        "complete",
+        "sess-1",
+        worker1_id,
+        "--status",
+        "COMPLETED",
+        "--summary",
+        "done",
+        "--json",
     )
     assert r_complete.returncode == 0, r_complete.stderr
     assert json.loads(r_complete.stdout) == {
-        "completed": True, "worker_id": worker1_id, "status": "COMPLETED",
+        "completed": True,
+        "worker_id": worker1_id,
+        "status": "COMPLETED",
     }
 
     r_status2 = run_cli(home, "worker-plane", "status", "sess-1", "--max-workers", "2", "--json")
@@ -760,13 +828,21 @@ def test_fresh_verifier_record_parses_real_verdict_never_fabricates(tmp_path):
     out_dir = tmp_path / "evidence"
 
     r = run_cli(
-        home, "fresh-verifier", "record",
-        "--out", str(out_dir),
-        "--prompt-file", str(prompt_file),
-        "--raw-response", str(raw_response_file),
-        "--provider", "anthropic",
-        "--model", "claude-sonnet-5",
-        "--host", "claude-code",
+        home,
+        "fresh-verifier",
+        "record",
+        "--out",
+        str(out_dir),
+        "--prompt-file",
+        str(prompt_file),
+        "--raw-response",
+        str(raw_response_file),
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-sonnet-5",
+        "--host",
+        "claude-code",
         "--json",
     )
     assert r.returncode == 0, r.stderr
@@ -774,7 +850,8 @@ def test_fresh_verifier_record_parses_real_verdict_never_fabricates(tmp_path):
     assert out["verdict"] == {"verdict": "PASS", "confidence": 0.9}
     assert out["provider"] == "anthropic"
     assert out["session_id"] == {
-        "available": False, "reason": "host does not expose provider run ID"
+        "available": False,
+        "reason": "host does not expose provider run ID",
     }
 
     written = (out_dir / "raw-response.txt").read_text(encoding="utf-8")
@@ -793,10 +870,15 @@ def test_fresh_verifier_record_unparseable_response_never_guesses(tmp_path):
     raw_response_file.write_text("This response never states a clear result.", encoding="utf-8")
 
     r = run_cli(
-        home, "fresh-verifier", "record",
-        "--out", str(tmp_path / "evidence"),
-        "--prompt-file", str(prompt_file),
-        "--raw-response", str(raw_response_file),
+        home,
+        "fresh-verifier",
+        "record",
+        "--out",
+        str(tmp_path / "evidence"),
+        "--prompt-file",
+        str(prompt_file),
+        "--raw-response",
+        str(raw_response_file),
         "--json",
     )
     assert r.returncode == 0, r.stderr
@@ -810,10 +892,15 @@ def test_fresh_verifier_record_missing_raw_response_file_errors(tmp_path):
     prompt_file.write_text("prompt text", encoding="utf-8")
 
     r = run_cli(
-        home, "fresh-verifier", "record",
-        "--out", str(tmp_path / "evidence"),
-        "--prompt-file", str(prompt_file),
-        "--raw-response", str(tmp_path / "does-not-exist.txt"),
+        home,
+        "fresh-verifier",
+        "record",
+        "--out",
+        str(tmp_path / "evidence"),
+        "--prompt-file",
+        str(prompt_file),
+        "--raw-response",
+        str(tmp_path / "does-not-exist.txt"),
     )
     assert r.returncode == 2
     assert "not found" in r.stderr.lower()
@@ -829,14 +916,24 @@ def test_vmem_claim_pages_cli_end_to_end(tmp_path):
     content_file = tmp_path / "finding.txt"
     content_file.write_text("proactive paging target", encoding="utf-8")
     store_res = run_cli(
-        home, "vmem", "store", "sess-claim-cli", "RESEARCH_RESULT", "Claim target",
-        str(content_file), "--json",
+        home,
+        "vmem",
+        "store",
+        "sess-claim-cli",
+        "RESEARCH_RESULT",
+        "Claim target",
+        str(content_file),
+        "--json",
     )
     assert store_res.returncode == 0, store_res.stderr
     obj_id = json.loads(store_res.stdout)["obj_id"]
 
     claim_res = run_cli(
-        home, "vmem", "claim-pages", "sess-claim-cli", "--json",
+        home,
+        "vmem",
+        "claim-pages",
+        "sess-claim-cli",
+        "--json",
         stdin=json.dumps({"candidates": [{"obj_id": obj_id, "kind": "RESEARCH_RESULT"}]}),
     )
     assert claim_res.returncode == 0, claim_res.stderr
@@ -859,8 +956,14 @@ def test_vmem_claim_pages_cli_second_claim_of_same_object_is_not_claimed_again(t
     content_file = tmp_path / "finding.txt"
     content_file.write_text("race target", encoding="utf-8")
     store_res = run_cli(
-        home, "vmem", "store", "sess-claim-cli-race", "RESEARCH_RESULT", "Race target",
-        str(content_file), "--json",
+        home,
+        "vmem",
+        "store",
+        "sess-claim-cli-race",
+        "RESEARCH_RESULT",
+        "Race target",
+        str(content_file),
+        "--json",
     )
     obj_id = json.loads(store_res.stdout)["obj_id"]
     payload = json.dumps({"candidates": [{"obj_id": obj_id, "kind": "RESEARCH_RESULT"}]})
@@ -877,6 +980,7 @@ def test_vmem_claim_pages_cli_malformed_stdin_errors_cleanly(tmp_path):
     r = run_cli(home, "vmem", "claim-pages", "sess-claim-cli-bad", stdin="not json at all")
     assert r.returncode == 2
     assert "JSON" in r.stderr
+
 
 def test_capsule_ensure_and_additive_update_cli(tmp_path):
     home = tmp_path / "brain"
@@ -1001,7 +1105,6 @@ def test_environment_assess_cli_correlates_intended_dependency_mutation(tmp_path
     assert payload["verification_state"] == "passed"
     assert payload["before_environment_hash"] != payload["after_environment_hash"]
     assert payload["dependency_change_refs"]
-
 
 
 def test_verify_gate_blocks_unexpected_environment_mutation(tmp_path):
@@ -1148,6 +1251,7 @@ def test_radar_observe_cli_persists_and_deduplicates_candidate(tmp_path):
     assert second_payload["radar_overhead_ms"] >= 0
     assert len(json.loads((home / "state" / "radar" / "candidates.json").read_text())) == 1
 
+
 def test_doctor_json_includes_environment_steward_check(tmp_path):
     home = tmp_path / "brain"
     project = tmp_path / "project"
@@ -1222,3 +1326,50 @@ def test_project_resolve_finds_manifest_from_nested_directory(tmp_path):
         "repo_root": str(repo.resolve()),
         "resolution": "manifest",
     }
+
+
+def test_nested_repository_memory_commands_share_project_ownership(tmp_path):
+    home = tmp_path / "brain"
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    _git(parent, "init", "-q")
+    _git(child, "init", "-q")
+    assert run_cli(home, "init").returncode == 0
+    assert (
+        run_cli(
+            home,
+            "project",
+            "add",
+            str(parent),
+            "--id",
+            "outer",
+            "--name",
+            "A parent",
+        ).returncode
+        == 0
+    )
+    assert (
+        run_cli(
+            home,
+            "project",
+            "add",
+            str(child),
+            "--id",
+            "nested",
+            "--name",
+            "Z child",
+            "--no-marker",
+            "--no-manifest",
+        ).returncode
+        == 0
+    )
+
+    assert run_cli(home, "remember", "Remember child fact", cwd=child).returncode == 0
+    assert (
+        run_cli(home, "memory", "add", "Child fact", "Scoped child fact", cwd=child).returncode == 0
+    )
+    with sqlite3.connect(home / "db" / "brain.sqlite") as connection:
+        ownership = connection.execute("SELECT title, project_id FROM memories").fetchall()
+
+    assert dict(ownership) == {"Remember child fact": "nested", "Child fact": "nested"}

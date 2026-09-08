@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTOINJECT_CUSTOM_TYPE } from "../src/autoinject";
 import extensionFactory from "../src/index";
+import { TelemetryStore } from "../src/storage";
 import type { ExtensionContext } from "../types/prime";
 
 const runVmemListPrePageSyncMock = vi.hoisted(() => vi.fn());
@@ -38,6 +39,8 @@ type Handler = (event: Record<string, unknown>, ctx: ExtensionContext) => unknow
 
 let tempDir: string;
 let originalHome: string | undefined;
+const stores = new Set<TelemetryStore>();
+const appendTelemetry = TelemetryStore.prototype.append;
 
 function autoinjectMsg(deliveryId: string, content = "x".repeat(300)): unknown {
   return {
@@ -123,9 +126,15 @@ cache_scope = "model"
   runVmemListPrePageSyncMock.mockReset();
   runVmemClaimPagesSyncMock.mockReset();
   runVmemEvictSyncMock.mockReset();
+  vi.spyOn(TelemetryStore.prototype, "append").mockImplementation(function (this: TelemetryStore, record) {
+    stores.add(this);
+    appendTelemetry.call(this, record);
+  });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all([...stores].map((store) => store.flush()));
+  stores.clear();
   if (originalHome !== undefined) {
     process.env.SECOND_BRAIN_HOME = originalHome;
   } else {

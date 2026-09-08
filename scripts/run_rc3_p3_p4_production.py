@@ -76,9 +76,7 @@ def run_p3_p4_production(brain_home: Path) -> None:
         encoding="utf-8",
     )
     (p3_dir / "verification.txt").write_text(
-        "RADAR_DETECTED_FRICTION\n"
-        "GARDENER_COMPUTED_ROI\n"
-        "HANDOFF_DOC_GENERATED\n",
+        "RADAR_DETECTED_FRICTION\nGARDENER_COMPUTED_ROI\nHANDOFF_DOC_GENERATED\n",
         encoding="utf-8",
     )
 
@@ -88,7 +86,7 @@ def run_p3_p4_production(brain_home: Path) -> None:
         "Execute The Second Brain RC3 Campaign",
         "Multi-day goal execution",
         milestone_titles=["Complete Token Economics Campaign"],
-        target_date="2026-08-20"
+        target_date="2026-08-20",
     )
     goal_store.complete_milestone(
         g1.goal_id,
@@ -134,9 +132,7 @@ def run_p3_p4_production(brain_home: Path) -> None:
         encoding="utf-8",
     )
     (p4_dir / "verification.txt").write_text(
-        "GOAL_STATE_MACHINE_VERIFIED\n"
-        "HEARTBEAT_ZERO_TOKENS_VERIFIED\n"
-        "FINGERPRINT_RECORDED\n",
+        "GOAL_STATE_MACHINE_VERIFIED\nHEARTBEAT_ZERO_TOKENS_VERIFIED\nFINGERPRINT_RECORDED\n",
         encoding="utf-8",
     )
 
@@ -147,6 +143,7 @@ def run_p3_p4_production(brain_home: Path) -> None:
     import tempfile
 
     from second_brain import paths as sb_paths
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_base = Path(tmp_dir)
         home1 = tmp_base / "brain1"
@@ -199,9 +196,7 @@ def run_p3_p4_production(brain_home: Path) -> None:
         encoding="utf-8",
     )
     (prod_dir / "verification.txt").write_text(
-        "BACKUP_RESTORE_HASH_MATCH\n"
-        "SECURITY_SCAN_PASSED\n"
-        "8_FAILURE_MODES_HANDLED\n",
+        "BACKUP_RESTORE_HASH_MATCH\nSECURITY_SCAN_PASSED\n8_FAILURE_MODES_HANDLED\n",
         encoding="utf-8",
     )
 
@@ -230,13 +225,13 @@ def run_p3_p4_production(brain_home: Path) -> None:
                     else ""
                 ),
                 "verification_path": str((c_dir / "verification.txt").relative_to(brain_home)),
-                "git_sha": "19ce383"
+                "git_sha": "19ce383",
             }
             mf.write(json.dumps(entry) + "\n")
 
     # 4. Generate Reports 14, 15, 16, 17, 18
     (reports_dir / "14-p3-real-use.md").write_text(
-"""# RC3 P3 Advanced Capabilities Real-Use Evidence Report
+        """# RC3 P3 Advanced Capabilities Real-Use Evidence Report
 
 **Document ID**: `outputs/reports/rc3/14-p3-real-use.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -255,10 +250,12 @@ investment (420 tokens saved / 2 tool calls avoided) from real usage ledger reco
 document transferring working memory state across harnesses without transcript bloating.
 
 Raw evidence: `outputs/reports/rc3/raw/p3-real-use/`.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     (reports_dir / "15-p4-real-use.md").write_text(
-"""# RC3 P4 Autonomous Agency Real-Use Evidence Report
+        """# RC3 P4 Autonomous Agency Real-Use Evidence Report
 
 **Document ID**: `outputs/reports/rc3/15-p4-real-use.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -277,10 +274,12 @@ verified **0 model calls** on unchanged system state.
 fingerprints from tool execution friction.
 
 Raw evidence: `outputs/reports/rc3/raw/p4-real-use/`.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     (reports_dir / "16-production-qualification.md").write_text(
-"""# RC3 Production Qualification & Failure Injection Report
+        """# RC3 Production Qualification & Failure Injection Report
 
 **Document ID**: `outputs/reports/rc3/16-production-qualification.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -307,10 +306,12 @@ sanitization, and shell argument quoting.
   8. Malformed Hook Input -> Logged and ignored safely.
 
 Raw evidence: `outputs/reports/rc3/raw/production-qualification/`.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     (reports_dir / "17-burn-in.md").write_text(
-"""# RC3 Multi-Session Burn-In Report
+        """# RC3 Multi-Session Burn-In Report
 
 **Document ID**: `outputs/reports/rc3/17-burn-in.md`\x20\x20
 **Date**: 2026-08-19\x20\x20
@@ -330,7 +331,9 @@ Raw evidence: `outputs/reports/rc3/raw/production-qualification/`.
   - Worker plane concurrency ceiling gating child spawns.
   - Local zero-token heartbeat.
   - Improvement radar telemetry analysis.
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

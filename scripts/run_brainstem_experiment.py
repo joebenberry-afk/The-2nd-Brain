@@ -1,8 +1,7 @@
 """Replay captured session telemetry through the Brainstem coordinator offline.
 
-Cheapest real experiment for T7.4:
-Replay captured session telemetry through the coordinator offline and
-compare decisions to actual manual outcomes.
+Cheapest real experiment for T7.4: Replay captured session telemetry through the
+coordinator offline and compare decisions to actual manual outcomes.
 """
 
 from __future__ import annotations
@@ -173,14 +172,16 @@ def run_brainstem_experiment() -> dict[str, Any]:
                 and dec.decision_ref == dec_replay.decision_ref
             )
 
-            results.append({
-                "scenario_id": sc["scenario_id"],
-                "description": sc["description"],
-                "decision": dec.to_dict(),
-                "expected": exp,
-                "concordance": match,
-                "replay_identical": replay_match,
-            })
+            results.append(
+                {
+                    "scenario_id": sc["scenario_id"],
+                    "description": sc["description"],
+                    "decision": dec.to_dict(),
+                    "expected": exp,
+                    "concordance": match,
+                    "replay_identical": replay_match,
+                }
+            )
 
         # Adversarial Learned Override Test: Attempt to bypass hard budget and downgrade safety
         adv_signals = brainstem.BrainstemSignals(
@@ -207,15 +208,18 @@ def run_brainstem_experiment() -> dict[str, Any]:
         manifest = {
             "experiment": "T7.4 Brainstem Attention & Intervention Coordinator Replay",
             "hypothesis": (
-                "Deterministic Brainstem rules match expert manual decisions across routine, "
-                "pressure, high-risk, exploration, and cold-start sessions. Replay is 100% deterministic "
-                "from structured inputs and hard safety/budget constraints cannot be bypassed."
+                "Deterministic Brainstem rules match expert manual decisions across routine,"
+                " pressure, high-risk, exploration, and cold-start sessions. Replay is 100%"
+                " deterministic from structured inputs and hard safety/budget constraints cannot be"
+                " bypassed."
             ),
             "metrics": {
                 "total_scenarios_replayed": len(scenarios),
                 "concordance_matches": matches,
                 "concordance_rate": round(matches / len(scenarios), 4),
-                "replay_determinism_rate": 1.0 if all(r["replay_identical"] for r in results) else 0.0,
+                "replay_determinism_rate": (
+                    1.0 if all(r["replay_identical"] for r in results) else 0.0
+                ),
                 "safety_bypass_refusal_rate": 1.0 if safety_bypass_refused else 0.0,
                 "decisions_recorded_count": len(logged_decisions),
             },
@@ -233,9 +237,10 @@ def run_brainstem_experiment() -> dict[str, Any]:
             },
             "scenarios": results,
             "conclusion": (
-                f"PASS: Replayed {len(scenarios)} sessions with {matches}/{len(scenarios)} ({matches / len(scenarios):.1%}) "
-                "concordance. Replay determinism is 100%. Hard budget cap ($2500 tokens) and verification floor (full) "
-                "refused adversarial override bypass in SHADOW mode."
+                f"PASS: Replayed {len(scenarios)} sessions with"
+                f" {matches}/{len(scenarios)} ({matches / len(scenarios):.1%}) concordance. Replay"
+                " determinism is 100%. Hard budget cap ($2500 tokens) and verification floor"
+                " (full) refused adversarial override bypass in SHADOW mode."
             ),
         }
 

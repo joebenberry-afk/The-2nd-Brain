@@ -151,9 +151,14 @@ def test_level_thresholds(tmp_path):
     repo = _make_repo(tmp_path, commits=2)
     assert risk.assess_risk(repo, ["migrations/0001.sql", "hot.py"])["level"] == "HIGH"
     # blast 1 + centrality 2 + persistence 2 + config 2 = 7 -> HIGH.
-    assert risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml"])["level"] == "HIGH"
+    assert (
+        risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml"])["level"]
+        == "HIGH"
+    )
     # blast 1 + centrality 2 + persistence 2 + config 2 + security 2 = 9 -> CRITICAL.
-    result = risk.assess_risk(tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml", "constitution/z.md"])
+    result = risk.assess_risk(
+        tmp_path, ["a.py", "migrations/0001.sql", "config/y.toml", "constitution/z.md"]
+    )
     assert result["level"] == "CRITICAL"
     assert result["score"] == 9
 

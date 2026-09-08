@@ -35,7 +35,10 @@ export interface OmpWorkerLifecycleOptions extends OmpWorkerBindOptions {
   cleanupComplete: boolean;
 }
 
-export interface OmpWorkerDispatchFailedOptions extends WorkerAttemptBase {
+export interface OmpWorkerDispatchFailedOptions
+  extends Omit<WorkerAttemptBase, "worktreeId" | "callbackToken"> {
+  worktreeId: string | null;
+  callbackToken?: string;
   failureCode: string;
 }
 
@@ -98,7 +101,7 @@ export function parseOmpWorkerCallbackOutput(
 }
 
 function runCallback(
-  options: WorkerAttemptBase,
+  options: WorkerAttemptBase | OmpWorkerDispatchFailedOptions,
   payload: Record<string, unknown>,
   sequence?: number,
 ): Promise<OmpWorkerCallbackResult> {
@@ -134,7 +137,7 @@ function runCallback(
   });
 }
 
-function basePayload(options: WorkerAttemptBase): Record<string, unknown> {
+function basePayload(options: WorkerAttemptBase | OmpWorkerDispatchFailedOptions): Record<string, unknown> {
   return {
     harness: "omp",
     host_session_id: bounded(options.sessionId, 128),
@@ -142,8 +145,8 @@ function basePayload(options: WorkerAttemptBase): Record<string, unknown> {
     packet_sha256: bounded(options.packetSha256, 128),
     attempt_id: bounded(options.attemptId, 128),
     project_id: bounded(options.projectId, 128),
-    worktree_id: bounded(options.worktreeId, 512),
-    callback_token: bounded(options.callbackToken, 512),
+    worktree_id: options.worktreeId === null ? null : bounded(options.worktreeId, 512),
+    callback_token: options.callbackToken === undefined ? null : bounded(options.callbackToken, 512),
   };
 }
 

@@ -40,9 +40,7 @@ DEFAULT_LEASE_SECONDS = 300
 MAX_DISPATCH_PAYLOAD_BYTES = 16 * 1024
 WRITER_OWNERSHIP_STATES = frozenset({"held", "quarantined", "released"})
 WRITER_PROTECTING_STATES = frozenset({"held", "quarantined"})
-WORKER_LIFECYCLE_OUTCOMES = frozenset(
-    {"completed", "failed", "cancelled", "interrupted"}
-)
+WORKER_LIFECYCLE_OUTCOMES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 # Ledger session identity requires an explicit host adapter name (ledger.py
 # no longer invents one). This module is genuinely harness-neutral (see the
 # module docstring): most callers thread their real host through, but a few
@@ -71,9 +69,9 @@ _WORKER_EVENT_STATES = {
     "worker_canceled": WorkerLifecycle.CANCELED,
     "task_completed": WorkerLifecycle.COMPLETED,
     "task_failed": WorkerLifecycle.FAILED,
-
-
 }
+
+
 def _memory_id(ref: str) -> str | None:
     value = ref
     if value.startswith("memory:"):
@@ -172,7 +170,6 @@ def context_metadata(
     }
 
 
-
 def _latest_context_snapshot(
     home: Path,
     parent_session_id: str,
@@ -220,9 +217,9 @@ def _store_context_snapshot(
 ) -> str:
     """Store a context snapshot in the existing per-session object store."""
     data = canonical_json(snapshot).encode("utf-8")
-    with ledger.LedgerStore(
-        home, parent_session_id, host=host or _DEFAULT_HOST
-    ).open(create=True) as store:
+    with ledger.LedgerStore(home, parent_session_id, host=host or _DEFAULT_HOST).open(
+        create=True
+    ) as store:
         return store.add_object(data, mime="application/json", role="worker_context_snapshot")
 
 
@@ -235,9 +232,7 @@ def _jit_snapshot(home: Path, packet: WorkerTaskPacket) -> dict[str, Any]:
         )
         text = capsule.read_text(encoding="utf-8")
         body = text.split("\n# Task", 1)[1] if "\n# Task" in text else text
-        body = "\n".join(
-            line for line in body.splitlines() if not line.startswith("updated_at:")
-        )
+        body = "\n".join(line for line in body.splitlines() if not line.startswith("updated_at:"))
         raw = body.encode("utf-8")
         visible = body[:WORKER_CONTEXT_MAX_TOTAL_CHARS]
         return {
@@ -277,8 +272,11 @@ def _handoff_delta(
     jit_delta = ""
     if prior is not None and prior_jit != current_jit_text:
         diff = difflib.unified_diff(
-            prior_jit.splitlines(), current_jit_text.splitlines(),
-            fromfile="previous-jit", tofile="current-jit", lineterm="",
+            prior_jit.splitlines(),
+            current_jit_text.splitlines(),
+            fromfile="previous-jit",
+            tofile="current-jit",
+            lineterm="",
         )
         jit_delta = "\n".join(diff)[:WORKER_CONTEXT_MAX_TOTAL_CHARS]
     delta_bytes = len(
@@ -397,15 +395,33 @@ def prepare_context_handoff(
 def handoff_metadata(handoff: dict[str, Any]) -> dict[str, Any]:
     """Strip raw context from a handoff for ledger/telemetry records."""
     keys = (
-        "resolved_count", "visible_chars", "visible_bytes", "visible_tokens_estimate",
-        "source_chars", "resolution_sha256", "mode", "reused", "cache_hit",
-        "context_fingerprint", "previous_context_fingerprint", "context_snapshot_sha256",
-        "packet_sha256", "context_handoff_bytes", "context_handoff_tokens_estimate",
+        "resolved_count",
+        "visible_chars",
+        "visible_bytes",
+        "visible_tokens_estimate",
+        "source_chars",
+        "resolution_sha256",
+        "mode",
+        "reused",
+        "cache_hit",
+        "context_fingerprint",
+        "previous_context_fingerprint",
+        "context_snapshot_sha256",
+        "packet_sha256",
+        "context_handoff_bytes",
+        "context_handoff_tokens_estimate",
         "context_delta_bytes",
-        "context_delta_tokens_estimate", "changed_ref_count", "removed_ref_count",
-        "jit_body_sha256", "jit_body_bytes", "jit_delta_sha256", "jit_delta_bytes", "refs",
+        "context_delta_tokens_estimate",
+        "changed_ref_count",
+        "removed_ref_count",
+        "jit_body_sha256",
+        "jit_body_bytes",
+        "jit_delta_sha256",
+        "jit_delta_bytes",
+        "refs",
     )
     return {key: handoff.get(key) for key in keys}
+
 
 def validate_context_handoff(
     home: Path | str, packet: WorkerTaskPacket, handoff: Any
@@ -439,9 +455,7 @@ def validate_context_handoff(
         raise WorkerPacketError(
             "CONTEXT_HANDOFF_MISMATCH", "handoff byte accounting does not match"
         )
-    latest = _latest_context_snapshot(
-        Path(home), packet.parent_session_id, packet.canonical_hash()
-    )
+    latest = _latest_context_snapshot(Path(home), packet.parent_session_id, packet.canonical_hash())
     previous = _latest_context_snapshot(
         Path(home), packet.parent_session_id, packet.canonical_hash(), offset=1
     )
@@ -478,9 +492,7 @@ def validate_context_handoff(
     else:
         if previous is None:
             raise WorkerPacketError("CONTEXT_HANDOFF_MISMATCH", "delta snapshot is unavailable")
-        changed, removed, jit_delta, _ = _handoff_delta(
-            resolved, metadata, previous, jit_info
-        )
+        changed, removed, jit_delta, _ = _handoff_delta(resolved, metadata, previous, jit_info)
         expected_context = []
         expected_delta = {
             "changed_refs": prompt_context(changed),
@@ -525,6 +537,8 @@ def prompt_context(resolved: list[WorkerContextResolution]) -> list[dict[str, An
         }
         for item in resolved
     ]
+
+
 def _worker_db(home: Path | str) -> Path:
     home_path = Path(home)
     dbfile = db_path = home_path / "db" / "brain.sqlite"
@@ -532,9 +546,7 @@ def _worker_db(home: Path | str) -> Path:
         try:
             db.migrate(dbfile)
         except MigrationError as exc:
-            raise WorkerPacketError(
-                "WORKTREE_SAFETY_MIGRATION_REQUIRED", str(exc)
-            ) from exc
+            raise WorkerPacketError("WORKTREE_SAFETY_MIGRATION_REQUIRED", str(exc)) from exc
     return db_path
 
 
@@ -570,9 +582,8 @@ def _as_dt(value: datetime | str | None) -> datetime:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
 
-def _renewal_lease(
-    existing: str | None, current: datetime, seconds: int
-) -> str:
+
+def _renewal_lease(existing: str | None, current: datetime, seconds: int) -> str:
     proposed = current + timedelta(seconds=seconds)
     if existing is None:
         return proposed.isoformat()
@@ -589,9 +600,8 @@ def _task_row(conn: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM worker_tasks WHERE task_id = ?", (task_id,)).fetchone()
     return dict(row) if row is not None else None
 
-def lookup_task(
-    home: Path | str, task_id: str, packet_sha256: str
-) -> dict[str, Any] | None:
+
+def lookup_task(home: Path | str, task_id: str, packet_sha256: str) -> dict[str, Any] | None:
     """Authenticate a task identity without mutating lifecycle or leases."""
     digest = _packet_hash(packet_sha256)
     conn = db.connect(_worker_db(home))
@@ -605,9 +615,8 @@ def lookup_task(
     finally:
         conn.close()
 
-def task_owner_session(
-    home: Path | str, task_id: str, packet_sha256: str
-) -> str | None:
+
+def task_owner_session(home: Path | str, task_id: str, packet_sha256: str) -> str | None:
     """Return the immutable driver session for an authenticated task."""
     if lookup_task(home, task_id, packet_sha256) is None:
         return None
@@ -619,6 +628,7 @@ def task_owner_session(
         return row["session_id"] if row is not None else None
     finally:
         conn.close()
+
 
 def verify_result_binding(
     home: Path | str,
@@ -963,21 +973,12 @@ def _native_binding(
     agent_id: Any,
 ) -> tuple[int, str, str | None, str]:
     if type(host_generation) is not int or host_generation < 0:
-        raise WorkerPacketError(
-            "PROTOCOL_ERROR", "host_generation must be a non-negative integer"
-        )
+        raise WorkerPacketError("PROTOCOL_ERROR", "host_generation must be a non-negative integer")
     values = (native_attempt_id, agent_id)
     if native_job_id is not None:
         values += (native_job_id,)
-    if any(
-        not isinstance(value, str)
-        or not value
-        or len(value) > 512
-        for value in values
-    ):
-        raise WorkerPacketError(
-            "PROTOCOL_ERROR", "native binding fields must be bounded strings"
-        )
+    if any(not isinstance(value, str) or not value or len(value) > 512 for value in values):
+        raise WorkerPacketError("PROTOCOL_ERROR", "native binding fields must be bounded strings")
     return host_generation, native_attempt_id, native_job_id, agent_id
 
 
@@ -1066,9 +1067,7 @@ def bind_worker_attempt(
             callback_token=callback_token,
         )
         if row.get("access_intent") != "mutating":
-            raise WorkerPacketError(
-                "BINDING_MISMATCH", "read-only attempts have no writer binding"
-            )
+            raise WorkerPacketError("BINDING_MISMATCH", "read-only attempts have no writer binding")
         if row.get("native_attempt_id") is not None:
             if not _binding_matches(row, *native):
                 raise WorkerPacketError(
@@ -1077,9 +1076,7 @@ def bind_worker_attempt(
             conn.commit()
             return {"status": "accepted", **_result(row, duplicate=True)}
         if row["state"] != WorkerLifecycle.SUBMITTED:
-            raise WorkerPacketError(
-                "INVALID_TRANSITION", "only submitted attempts can be bound"
-            )
+            raise WorkerPacketError("INVALID_TRANSITION", "only submitted attempts can be bound")
         conn.execute(
             "UPDATE worker_tasks SET host_generation=?,native_attempt_id=?,native_job_id=?,"
             "agent_id=?,state=?,accepted_at=?,bound_at=?,updated_at=? WHERE task_id=?",
@@ -1111,18 +1108,14 @@ def record_worker_dispatch_failure(
     host_session_id: str,
     attempt_id: str,
     project_id: str,
-    worktree_id: str,
-    callback_token: str,
+    worktree_id: str | None,
+    callback_token: str | None,
     failure_code: Any,
     now: datetime | str | None = None,
     host: str | None = None,
 ) -> dict[str, Any]:
     """Release only an unbound reservation after a trusted predispatch failure."""
-    if (
-        not isinstance(failure_code, str)
-        or not failure_code
-        or len(failure_code) > 512
-    ):
+    if not isinstance(failure_code, str) or not failure_code or len(failure_code) > 512:
         raise WorkerPacketError(
             "PROTOCOL_ERROR", "dispatch failure requires a bounded failure_code"
         )
@@ -1144,15 +1137,34 @@ def record_worker_dispatch_failure(
         row = _task_row(conn, task_id)
         if row is None:
             raise WorkerPacketError("ORPHAN_TASK", f"unknown task_id: {task_id}")
-        _authenticate_native_callback(
-            row,
-            packet_sha256=packet_sha256,
-            host_session_id=host_session_id,
-            attempt_id=attempt_id,
-            project_id=project_id,
-            worktree_id=worktree_id,
-            callback_token=callback_token,
-        )
+        readonly = row.get("access_intent") == "read_only"
+        if readonly:
+            expected = (
+                (row.get("attempt_id"), attempt_id),
+                (row.get("host_session_id"), host_session_id),
+                (row.get("project_id"), project_id),
+            )
+            if (
+                row["packet_sha256"].lower() != receipt["packet_sha256"]
+                or any(not supplied or persisted != supplied for persisted, supplied in expected)
+                or worktree_id is not None
+                or callback_token is not None
+            ):
+                raise WorkerPacketError(
+                    "BINDING_MISMATCH", "readonly dispatch owner does not match"
+                )
+        else:
+            if not isinstance(worktree_id, str) or not isinstance(callback_token, str):
+                raise WorkerPacketError("PROTOCOL_ERROR", "writer callback identity is required")
+            _authenticate_native_callback(
+                row,
+                packet_sha256=packet_sha256,
+                host_session_id=host_session_id,
+                attempt_id=attempt_id,
+                project_id=project_id,
+                worktree_id=worktree_id,
+                callback_token=callback_token,
+            )
         prior = conn.execute(
             "SELECT receipt_sha256 FROM worker_dispatch_failures WHERE attempt_id=?",
             (attempt_id,),
@@ -1164,23 +1176,26 @@ def record_worker_dispatch_failure(
                 )
             conn.commit()
             return {"status": "accepted", **_result(row, duplicate=True)}
-        if (
-            row.get("access_intent") != "mutating"
-            or row.get("writer_ownership") != "held"
-            or row["state"] != WorkerLifecycle.SUBMITTED
-            or any(
-                row.get(field) is not None
-                for field in (
-                    "host_generation",
-                    "native_attempt_id",
-                    "native_job_id",
-                    "agent_id",
-                )
+        eligible_state = (
+            row.get("writer_ownership") == "released"
+            and row["state"] in {WorkerLifecycle.SUBMITTED, WorkerLifecycle.WORKING}
+            if readonly
+            else row.get("access_intent") == "mutating"
+            and row.get("writer_ownership") == "held"
+            and row["state"] == WorkerLifecycle.SUBMITTED
+        )
+        if not eligible_state or any(
+            row.get(field) is not None
+            for field in (
+                "host_generation",
+                "native_attempt_id",
+                "native_job_id",
+                "agent_id",
             )
         ):
             raise WorkerPacketError(
                 "INVALID_TRANSITION",
-                "dispatch failure can release only an unbound held reservation",
+                "dispatch failure can close only an unbound pending attempt",
             )
         conn.execute(
             "INSERT INTO worker_dispatch_failures("
@@ -1252,9 +1267,7 @@ def ingest_worker_lifecycle(
         agent_id=agent_id,
     )
     if type(sequence) is not int or sequence < 0:
-        raise WorkerPacketError(
-            "PROTOCOL_ERROR", "sequence must be a non-negative integer"
-        )
+        raise WorkerPacketError("PROTOCOL_ERROR", "sequence must be a non-negative integer")
     if outcome is not None and outcome not in WORKER_LIFECYCLE_OUTCOMES:
         raise WorkerPacketError("PROTOCOL_ERROR", "invalid lifecycle outcome")
     if type(executor_settled) is not bool or type(cleanup_complete) is not bool:
@@ -1301,9 +1314,7 @@ def ingest_worker_lifecycle(
             callback_token=callback_token,
         )
         if not _binding_matches(row, *native):
-            raise WorkerPacketError(
-                "BINDING_MISMATCH", "native execution binding does not match"
-            )
+            raise WorkerPacketError("BINDING_MISMATCH", "native execution binding does not match")
 
         prior = conn.execute(
             "SELECT receipt_sha256 FROM worker_lifecycle_receipts "
@@ -1312,31 +1323,21 @@ def ingest_worker_lifecycle(
         ).fetchone()
         if prior is not None:
             if prior["receipt_sha256"] != receipt_sha256:
-                raise WorkerPacketError(
-                    "RECEIPT_CONFLICT", "sequence already has another receipt"
-                )
+                raise WorkerPacketError("RECEIPT_CONFLICT", "sequence already has another receipt")
             conn.commit()
             return {"status": "accepted", **_result(row, duplicate=True)}
         if sequence <= int(row["lifecycle_sequence"]):
-            raise WorkerPacketError(
-                "STALE_RECEIPT", "lifecycle sequence is not monotonic"
-            )
+            raise WorkerPacketError("STALE_RECEIPT", "lifecycle sequence is not monotonic")
         if bool(row.get("executor_settled")) and not executor_settled:
-            raise WorkerPacketError(
-                "STALE_RECEIPT", "executor settlement cannot regress"
-            )
+            raise WorkerPacketError("STALE_RECEIPT", "executor settlement cannot regress")
         if bool(row.get("cleanup_complete")) and not cleanup_complete:
-            raise WorkerPacketError(
-                "STALE_RECEIPT", "cleanup completion cannot regress"
-            )
+            raise WorkerPacketError("STALE_RECEIPT", "cleanup completion cannot regress")
 
         logical_outcome = row.get("logical_outcome")
         incoming_outcome = "unresolved" if outcome == "interrupted" else outcome
         if incoming_outcome is not None:
             if logical_outcome not in (None, "unresolved", incoming_outcome):
-                raise WorkerPacketError(
-                    "OUTCOME_CONFLICT", "logical outcome is immutable"
-                )
+                raise WorkerPacketError("OUTCOME_CONFLICT", "logical outcome is immutable")
             logical_outcome = incoming_outcome
 
         state = row["state"]
@@ -1351,16 +1352,12 @@ def ingest_worker_lifecycle(
 
         ownership = row.get("writer_ownership")
         if ownership not in WRITER_OWNERSHIP_STATES:
-            raise WorkerPacketError(
-                "PROTOCOL_ERROR", "writer ownership state is invalid"
-            )
+            raise WorkerPacketError("PROTOCOL_ERROR", "writer ownership state is invalid")
         if executor_settled and cleanup_complete:
             ownership = "released"
         elif outcome == "interrupted" or executor_settled:
             ownership = "quarantined"
-        lease = _renewal_lease(
-            row["lease_expires_at"], current, _lease_seconds(home)
-        )
+        lease = _renewal_lease(row["lease_expires_at"], current, _lease_seconds(home))
         conn.execute(
             "INSERT INTO worker_lifecycle_receipts("
             "attempt_id,sequence,receipt_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?)",
@@ -1466,9 +1463,9 @@ def _emit_worker_event(
         for kind in event_types
     ]
     try:
-        with ledger.LedgerStore(
-            home, session_id, host=host or _DEFAULT_HOST
-        ).open(create=True) as store:
+        with ledger.LedgerStore(home, session_id, host=host or _DEFAULT_HOST).open(
+            create=True
+        ) as store:
             store.append_events(events)
     except Exception:
         # State persistence remains authoritative; a missing host ledger must
@@ -1532,8 +1529,7 @@ def record_worker_event(
             if event_key == "delivered" or row["state"] == target:
                 if row.get("attempt_id") is not None:
                     receipt = conn.execute(
-                        "SELECT result_sha256 FROM worker_attempt_results "
-                        "WHERE attempt_id=?",
+                        "SELECT result_sha256 FROM worker_attempt_results WHERE attempt_id=?",
                         (row["attempt_id"],),
                     ).fetchone()
                 else:
@@ -1711,9 +1707,7 @@ def record_worker_event(
     return out
 
 
-def process_worker_event(
-    home: Path | str, event: dict[str, Any], **kwargs: Any
-) -> dict[str, Any]:
+def process_worker_event(home: Path | str, event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Mapping-friendly alias used by adapters and transport bridges."""
     if not isinstance(event, dict):
         raise WorkerPacketError("PROTOCOL_ERROR", "worker event must be an object")
@@ -1737,9 +1731,12 @@ def process_worker_event(
 
 
 def _is_sha256(value: object) -> TypeGuard[str]:
-    return isinstance(value, str) and len(value) == 64 and all(
-        char in "0123456789abcdefABCDEF" for char in value
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdefABCDEF" for char in value)
     )
+
 
 def _has_postcondition_evidence(evidence: Any) -> bool:
     """Accept only bounded, executable test or diff evidence."""
@@ -1754,16 +1751,13 @@ def _has_postcondition_evidence(evidence: Any) -> bool:
             return False
         identities = [item[key] for key in ("name", "command") if key in item]
         if not identities or any(
-            not isinstance(value, str) or not 0 < len(value) <= 512
-            for value in identities
+            not isinstance(value, str) or not 0 < len(value) <= 512 for value in identities
         ):
             return False
         return type(item.get("exit_code")) is int
 
     def valid_diff(item: Any) -> bool:
-        if not isinstance(item, dict) or not set(item).issubset(
-            {"diff_sha256", "diff_hash"}
-        ):
+        if not isinstance(item, dict) or not set(item).issubset({"diff_sha256", "diff_hash"}):
             return False
         sha = item.get("diff_sha256")
         alias = item.get("diff_hash")
@@ -1777,8 +1771,7 @@ def _has_postcondition_evidence(evidence: Any) -> bool:
         tests = evidence.get("tests")
         if set(evidence) == {"tests"} and isinstance(tests, list) and len(tests) <= 16:
             return all(valid_test(item) for item in tests) and any(
-                type(item["exit_code"]) is int and item["exit_code"] == 0
-                for item in tests
+                type(item["exit_code"]) is int and item["exit_code"] == 0 for item in tests
             )
         return valid_diff(evidence)
     if isinstance(evidence, list) and len(evidence) <= 16:
@@ -1786,9 +1779,7 @@ def _has_postcondition_evidence(evidence: Any) -> bool:
     return False
 
 
-def _approved_review_evidence(
-    home: Path | str, session_id: str | None, task_id: str
-) -> Any:
+def _approved_review_evidence(home: Path | str, session_id: str | None, task_id: str) -> Any:
     if not session_id:
         return None
     path = ledger.LedgerStore(home, session_id).dbfile
@@ -1816,6 +1807,7 @@ def _approved_review_evidence(
         ):
             return payload["evidence"]
     return None
+
 
 def _approved_review_result_sha(
     home: Path | str, session_id: str | None, task_id: str
@@ -1869,11 +1861,7 @@ def settle_task(
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
     """Record SETTLED only after approval and an executable postcondition."""
-    if (
-        type(approved) is not bool
-        or not approved
-        or not _has_postcondition_evidence(evidence)
-    ):
+    if type(approved) is not bool or not approved or not _has_postcondition_evidence(evidence):
         raise WorkerPacketError(
             "SETTLEMENT_REJECTED",
             "approved settlement requires postcondition evidence",
@@ -1970,8 +1958,7 @@ def reap(
                     (state, logical_outcome, now_text, now_text, row["task_id"]),
                 )
                 conn.execute(
-                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? "
-                    "WHERE task_id=?",
+                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? WHERE task_id=?",
                     ("authority_expired", now_text, row["task_id"]),
                 )
                 item = {
@@ -2000,8 +1987,7 @@ def reap(
                         (WorkerLifecycle.FAILED, now_text, row["task_id"]),
                     )
                     conn.execute(
-                        "UPDATE worker_task_meta SET failure_reason=?,updated_at=? "
-                        "WHERE task_id=?",
+                        "UPDATE worker_task_meta SET failure_reason=?,updated_at=? WHERE task_id=?",
                         ("UNACKNOWLEDGED", now_text, row["task_id"]),
                     )
                     item = {
@@ -2018,13 +2004,11 @@ def reap(
                 if int(row.get("redeliveries") or 0) == 0:
                     lease = (current + timedelta(seconds=renewal_seconds)).isoformat()
                     conn.execute(
-                        "UPDATE worker_task_meta SET redeliveries=1,updated_at=? "
-                        "WHERE task_id=?",
+                        "UPDATE worker_task_meta SET redeliveries=1,updated_at=? WHERE task_id=?",
                         (now_text, row["task_id"]),
                     )
                     conn.execute(
-                        "UPDATE worker_tasks SET lease_expires_at=?,updated_at=? "
-                        "WHERE task_id=?",
+                        "UPDATE worker_tasks SET lease_expires_at=?,updated_at=? WHERE task_id=?",
                         (lease, now_text, row["task_id"]),
                     )
                     dispatch = None
@@ -2050,8 +2034,7 @@ def reap(
                     (WorkerLifecycle.FAILED, now_text, row["task_id"]),
                 )
                 conn.execute(
-                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? "
-                    "WHERE task_id=?",
+                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? WHERE task_id=?",
                     ("UNACKNOWLEDGED", now_text, row["task_id"]),
                 )
                 state = WorkerLifecycle.FAILED
@@ -2062,8 +2045,7 @@ def reap(
                     (WorkerLifecycle.FAILED, now_text, row["task_id"]),
                 )
                 conn.execute(
-                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? "
-                    "WHERE task_id=?",
+                    "UPDATE worker_task_meta SET failure_reason=?,updated_at=? WHERE task_id=?",
                     ("lease_expired", now_text, row["task_id"]),
                 )
                 state = WorkerLifecycle.FAILED
@@ -2098,6 +2080,7 @@ def reap(
 submit_task = register_task
 handle_event = process_worker_event
 worker_event = record_worker_event
+
 
 def correction_metadata(packet: Any) -> dict[str, Any]:
     """Canonical, bounded metadata shared by ledger and telemetry callers."""

@@ -690,6 +690,43 @@ def test_definitive_predispatch_failure_releases_only_with_durable_receipt(
     assert next_attempt["writer_ownership"] == "held"
 
 
+def test_readonly_predispatch_failure_is_owner_bound_and_durable(brain_home, tmp_path):
+    payload = _payload(tmp_path, "readonly-preflight", access_intent="read_only")
+    payload["task"] = "inspect a source file"
+    context = omp_adapter.handle_request(brain_home, payload)
+    failure = {
+        "operation": "worker_dispatch_failed",
+        "task_id": context["task_id"],
+        "packet_sha256": context["packet_sha256"],
+        "host_session_id": "session-readonly-preflight",
+        "attempt_id": context["attempt_id"],
+        "project_id": context["project_id"],
+        "failure_code": "HOST_PREFLIGHT_REJECTED",
+    }
+    rejected = omp_adapter.handle_request(
+        brain_home,
+        {**failure, "host_session_id": "different-owner"},
+    )
+    assert rejected["status"] == "rejected"
+    accepted = omp_adapter.handle_request(brain_home, failure)
+    duplicate = omp_adapter.handle_request(brain_home, failure)
+    assert accepted["status"] == "accepted"
+    assert accepted["state"] == "FAILED"
+    assert accepted["writer_ownership"] == "released"
+    assert duplicate["duplicate"] is True
+    with sqlite3.connect(db.db_path(brain_home)) as connection:
+        row = connection.execute(
+            "SELECT state,native_attempt_id,cleanup_complete FROM worker_tasks WHERE task_id=?",
+            (context["task_id"],),
+        ).fetchone()
+        receipts = connection.execute(
+            "SELECT COUNT(*) FROM worker_dispatch_failures WHERE attempt_id=?",
+            (context["attempt_id"],),
+        ).fetchone()[0]
+    assert row == ("FAILED", None, 1)
+    assert receipts == 1
+
+
 def test_reaper_quarantines_lost_authority_without_failure_or_redelivery(
     brain_home, tmp_path
 ) -> None:

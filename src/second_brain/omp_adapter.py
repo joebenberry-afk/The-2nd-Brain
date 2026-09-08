@@ -45,6 +45,12 @@ def _context_refs(home: Path, session_id: str, override: Any) -> list[str]:
         if not isinstance(override, list):
             raise contracts.WorkerPacketError("MALFORMED_TASK", "context_refs must be a list")
         return [value for value in override if isinstance(value, str)]
+    # OFF/SHADOW injection does not create a capsule. Its references are optional,
+    # but an existing unreadable or corrupt capsule must still fail closed.
+    try:
+        (working_set.session_dir(home, session_id) / "active-state.json").lstat()
+    except FileNotFoundError:
+        return []
     capsule = working_set.show_capsule(home, session_id)
     refs = list(capsule.get("brain_refs") or [])
     refs.extend(
@@ -176,7 +182,6 @@ def _candidates(payload: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
         candidate["model"] = _text(candidate.get("model"))
         result.append(candidate)
     return result
-
 
 
 def _list_or_none(value: Any) -> list[str] | None:
@@ -333,9 +338,7 @@ def _prepare_worker_bind(home: Path, payload: Mapping[str, Any]) -> dict[str, An
     )
 
 
-def _prepare_worker_dispatch_failed(
-    home: Path, payload: Mapping[str, Any]
-) -> dict[str, Any]:
+def _prepare_worker_dispatch_failed(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     return worker_protocol.record_worker_dispatch_failure(
         home,
         task_id=_required_text(payload, "task_id"),
@@ -343,8 +346,16 @@ def _prepare_worker_dispatch_failed(
         host_session_id=_required_text(payload, "host_session_id"),
         attempt_id=_required_text(payload, "attempt_id"),
         project_id=_required_text(payload, "project_id"),
-        worktree_id=_required_text(payload, "worktree_id"),
-        callback_token=_required_text(payload, "callback_token"),
+        worktree_id=(
+            _required_text(payload, "worktree_id")
+            if payload.get("worktree_id") is not None
+            else None
+        ),
+        callback_token=(
+            _required_text(payload, "callback_token")
+            if payload.get("callback_token") is not None
+            else None
+        ),
         failure_code=payload.get("failure_code"),
         host="omp",
     )

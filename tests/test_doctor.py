@@ -1,6 +1,6 @@
 import json
 
-from second_brain import db, doctor
+from second_brain import db, doctor, semantic
 
 
 def _statuses(result):
@@ -14,6 +14,17 @@ def test_doctor_passes_on_fresh_brain(brain_home, monkeypatch):
     assert _statuses(result)["database"] == "ok"
     assert _statuses(result)["migrations"] == "ok"
     assert _statuses(result)["layout"] == "ok"
+
+
+def test_doctor_detects_missing_canonical_memory(brain_home):
+    memory_id = semantic.add_memory(brain_home, "Durable fact", "Canonical source.", scope="global")
+    relative = semantic.show_memory(brain_home, memory_id)["row"]["body_path"]
+    (brain_home / relative).unlink()
+    checks = []
+
+    doctor.check_db(brain_home, checks)
+
+    assert any(check.status == doctor.STATUS_FAIL for check in checks)
 
 
 def test_doctor_fails_on_missing_home(tmp_path, monkeypatch):

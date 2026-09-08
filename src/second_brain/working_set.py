@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .errors import BrainError
+
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 TASK_MODES: tuple[str, ...] = (
@@ -101,6 +102,7 @@ def session_dir(home: Path, session_id: str) -> Path:
     if hashed.exists() and not raw.exists():
         return hashed
     return raw
+
 
 # ---------------------------------------------------------------------------
 # JSON I/O
@@ -430,6 +432,8 @@ def _load_reads(path: Path) -> list[dict]:
     for index, entry in enumerate(data):
         _validate_read_entry(path, index, entry)
     return data
+
+
 def record_read(
     home: Path,
     session_id: str,
@@ -505,9 +509,6 @@ def reread_hint(home: Path, session_id: str, path: str) -> dict | None:
             "prior_turn": entry.get("turn"),
         }
     return None
-    entries.append(entry)
-    _atomic_write_json(ledger_path, entries)
-    return entry
 
 
 def show_reads(home: Path, session_id: str) -> list[dict]:

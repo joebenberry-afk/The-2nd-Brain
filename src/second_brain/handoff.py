@@ -54,6 +54,7 @@ def _safe_stem(session_id: str) -> str:
 @dataclass
 class BrainHandoffArtifact:
     """A structured, human-readable handoff artifact (§3 P3.17)."""
+
     session_id: str
     target_agent: str
     objective: str
@@ -89,30 +90,36 @@ class BrainHandoffArtifact:
         else:
             lines.append("- (none recorded)")
 
-        lines.extend([
-            "",
-            "## Key Architectural Decisions",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Key Architectural Decisions",
+            ]
+        )
         if self.key_decisions:
             for d in self.key_decisions:
                 lines.append(f"- **Decision**: {d}")
         else:
             lines.append("- (none recorded)")
 
-        lines.extend([
-            "",
-            "## Pending Blockers & Open Questions",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Pending Blockers & Open Questions",
+            ]
+        )
         if self.pending_blockers:
             for b in self.pending_blockers:
                 lines.append(f"- [!] {b}")
         else:
             lines.append("- (no blockers)")
 
-        lines.extend([
-            "",
-            "## Relevant Files & Context Artifacts",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Relevant Files & Context Artifacts",
+            ]
+        )
         if self.relevant_files:
             for f in self.relevant_files:
                 lines.append(f"- `{f}`")
@@ -120,10 +127,12 @@ class BrainHandoffArtifact:
             for e in self.evidence_refs:
                 lines.append(f"- Evidence Ref: `{e}`")
 
-        lines.extend([
-            "",
-            "## Recommended Next Actions",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Recommended Next Actions",
+            ]
+        )
         if self.next_recommended_actions:
             for a in self.next_recommended_actions:
                 lines.append(f"1. {a}")
@@ -131,15 +140,17 @@ class BrainHandoffArtifact:
             lines.append("1. Continue from last verified milestone.")
 
         if self.handoff_id:
-            lines.extend([
-                "",
-                "## Canonical Handoff Envelope",
-                f"- **Handoff ID**: `{self.handoff_id}`",
-                f"- **Source Harness**: `{self.source_harness}`",
-                f"- **Capsule SHA-256**: `{self.capsule_sha256}`",
-                f"- **Payload SHA-256**: `{self.payload_sha256}`",
-                f"- **Envelope Ref**: `{self.envelope_ref}`",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## Canonical Handoff Envelope",
+                    f"- **Handoff ID**: `{self.handoff_id}`",
+                    f"- **Source Harness**: `{self.source_harness}`",
+                    f"- **Capsule SHA-256**: `{self.capsule_sha256}`",
+                    f"- **Payload SHA-256**: `{self.payload_sha256}`",
+                    f"- **Envelope Ref**: `{self.envelope_ref}`",
+                ]
+            )
 
         return "\n".join(lines) + "\n"
 
@@ -264,8 +275,11 @@ def create_handoff_envelope(
     payload_text = canonical_json(payload)
     payload_canonical_sha256 = stable_content_hash(payload)
     stored = artifacts.store_text(
-        home_path, payload_text, kind="handoff_payload",
-        tool="second_brain.handoff", session=session_id,
+        home_path,
+        payload_text,
+        kind="handoff_payload",
+        tool="second_brain.handoff",
+        session=session_id,
     )
     artifacts.add_ref(
         home_path, stored["hash"], owner=f"handoff:{ledger.internal_session_id(session_id)}"

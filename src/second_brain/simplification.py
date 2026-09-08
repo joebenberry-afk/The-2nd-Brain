@@ -64,8 +64,7 @@ class SimplificationReview:
             if not isinstance(values, list) or len(values) > MAX_HASHES:
                 raise BrainError(f"invalid simplification review {name}")
             if any(
-                not isinstance(item, str) or len(item) != 64 or not _is_hex(item)
-                for item in values
+                not isinstance(item, str) or len(item) != 64 or not _is_hex(item) for item in values
             ):
                 raise BrainError(f"invalid simplification review {name}")
         if self.debt_ref is not None and not DEBT_ID_RE.fullmatch(self.debt_ref):
@@ -98,8 +97,6 @@ class SimplificationReview:
         if debt_status is not None:
             result["debt_status"] = debt_status
         return result
-
-
 
 
 def canonical_task_body_sha256(task: str) -> str:

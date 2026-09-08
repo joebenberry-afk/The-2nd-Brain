@@ -212,5 +212,3 @@ def test_lean_telemetry_emission_active_vs_off(
     assert pre_off["lean_mode"] == "off"
     assert pre_off["lean_eval_source"] == "env"
     assert pre_off["lean_kernel_chars"] == 0
-
-

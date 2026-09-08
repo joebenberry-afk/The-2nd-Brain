@@ -10,9 +10,10 @@ import json
 import math
 import re
 import tomllib
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,11 @@ def load_config(home: Path | str) -> EconomicsConfig:
 
     def number(name: str, default: float) -> float:
         value = section.get(name, default)
-        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+        return (
+            float(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+            else default
+        )
 
     prices_raw = raw.get("prices") if isinstance(raw, dict) else None
     prices: dict[str, dict[str, float | None]] = {}
@@ -47,7 +52,11 @@ def load_config(home: Path | str) -> EconomicsConfig:
         for model, values in prices_raw.items():
             if isinstance(model, str) and isinstance(values, dict):
                 prices[model] = {
-                    str(name): (float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None)
+                    str(name): (
+                        float(value)
+                        if isinstance(value, (int, float)) and not isinstance(value, bool)
+                        else None
+                    )
                     for name, value in values.items()
                     if isinstance(name, str)
                 }
@@ -74,7 +83,9 @@ def covariance(left: Sequence[float], right: Sequence[float]) -> float:
         return float("nan")
     left_mean = sum(left) / len(left)
     right_mean = sum(right) / len(right)
-    return sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right)) / len(left)
+    return sum((x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=False)) / len(
+        left
+    )
 
 
 def cuped(covariate: Sequence[float], deltas: Sequence[float]) -> tuple[float, list[float]]:
@@ -84,7 +95,7 @@ def cuped(covariate: Sequence[float], deltas: Sequence[float]) -> tuple[float, l
     x_mean = sum(covariate) / len(covariate)
     x_variance = variance(covariate)
     theta = 0.0 if x_variance == 0 else covariance(covariate, deltas) / x_variance
-    return theta, [d - theta * (x - x_mean) for x, d in zip(covariate, deltas)]
+    return theta, [d - theta * (x - x_mean) for x, d in zip(covariate, deltas, strict=False)]
 
 
 def _value(mapping: Mapping[str, Any], *names: str) -> Any:
@@ -104,7 +115,13 @@ def _metric(run: Mapping[str, Any], profile: str, *names: str) -> Any:
 
 
 def _number(value: Any) -> float | None:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) else None
+    return (
+        float(value)
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        else None
+    )
 
 
 def _price_values(prices: Mapping[str, Any] | None) -> tuple[float, float] | None:
@@ -136,12 +153,7 @@ def cost_per_run(
     cache_read = _number(_value(usage, "cache_read_tokens", "cache_read"))
     cache_write = _number(_value(usage, "cache_write_tokens", "cache_write"))
     output = _number(_value(usage, "output_tokens", "output"))
-    if (
-        uncached_in is None
-        or cache_read is None
-        or cache_write is None
-        or output is None
-    ):
+    if uncached_in is None or cache_read is None or cache_write is None or output is None:
         return None
     multipliers = multipliers or {}
     mi_value = _number(_value(multipliers, "uncached_in", "uncached_in_multiplier"))
@@ -157,18 +169,24 @@ def cost_per_run(
 def _pairs(runs: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     pairs: list[dict[str, Any]] = []
     for run in runs:
-        pairs.append({
-            "off_tokens": _number(_metric(run, "off", "tokens", "total_tokens", "total")),
-            "on_tokens": _number(_metric(run, "on", "tokens", "total_tokens", "total")),
-            "off_dollars": _number(_metric(run, "off", "dollars", "cost_total")),
-            "on_dollars": _number(_metric(run, "on", "dollars", "cost_total")),
-            "off_turns": _number(_metric(run, "off", "turns", "model_turns")),
-            "on_turns": _number(_metric(run, "on", "turns", "model_turns")),
-            "off_wall": _number(_metric(run, "off", "wall_ms", "wall")),
-            "on_wall": _number(_metric(run, "on", "wall_ms", "wall")),
-            "pass_off": _metric(run, "off", "pass", "acceptance_pass") if isinstance(run.get("off"), Mapping) else _value(run, "pass_off"),
-            "pass_on": _metric(run, "on", "pass", "acceptance_pass") if isinstance(run.get("on"), Mapping) else _value(run, "pass_on"),
-        })
+        pairs.append(
+            {
+                "off_tokens": _number(_metric(run, "off", "tokens", "total_tokens", "total")),
+                "on_tokens": _number(_metric(run, "on", "tokens", "total_tokens", "total")),
+                "off_dollars": _number(_metric(run, "off", "dollars", "cost_total")),
+                "on_dollars": _number(_metric(run, "on", "dollars", "cost_total")),
+                "off_turns": _number(_metric(run, "off", "turns", "model_turns")),
+                "on_turns": _number(_metric(run, "on", "turns", "model_turns")),
+                "off_wall": _number(_metric(run, "off", "wall_ms", "wall")),
+                "on_wall": _number(_metric(run, "on", "wall_ms", "wall")),
+                "pass_off": _metric(run, "off", "pass", "acceptance_pass")
+                if isinstance(run.get("off"), Mapping)
+                else _value(run, "pass_off"),
+                "pass_on": _metric(run, "on", "pass", "acceptance_pass")
+                if isinstance(run.get("on"), Mapping)
+                else _value(run, "pass_on"),
+            }
+        )
     return pairs
 
 
@@ -190,7 +208,8 @@ def verdict(
         alpha, tau = config.alpha, config.tau
     pairs = _pairs(runs)
     valid = [
-        pair for pair in pairs
+        pair
+        for pair in pairs
         if pair.get("off_tokens") is not None
         and pair.get("on_tokens") is not None
         and pair["off_tokens"] != 0
@@ -209,7 +228,7 @@ def verdict(
         x = [float(pair["off_tokens"]) for pair in valid]
         deltas = [float(pair["on_tokens"]) - float(pair["off_tokens"]) for pair in valid]
         _, adjusted = cuped(x, deltas)
-        relatives = [delta / base for delta, base in zip(adjusted, x)]
+        relatives = [delta / base for delta, base in zip(adjusted, x, strict=False)]
         r_bar = sum(relatives) / n
         result["r_bar"] = r_bar
         if n >= 3:
@@ -219,16 +238,25 @@ def verdict(
             elif sigma2 > 0 and tau >= 0 and alpha > 0:
                 denominator = sigma2 + n * tau * tau
                 exponent = n * n * tau * tau * r_bar * r_bar / (2 * sigma2 * denominator)
-                likelihood = float("inf") if exponent > 709 else math.sqrt(sigma2 / denominator) * math.exp(exponent)
+                likelihood = (
+                    float("inf")
+                    if exponent > 709
+                    else math.sqrt(sigma2 / denominator) * math.exp(exponent)
+                )
             else:
                 likelihood = None
             result["lambda"] = likelihood
             if likelihood is not None and likelihood >= 1 / alpha:
-                result["verdict"] = "POSITIVE" if r_bar < 0 else "NEGATIVE" if r_bar > 0 else "INSUFFICIENT"
+                result["verdict"] = (
+                    "POSITIVE" if r_bar < 0 else "NEGATIVE" if r_bar > 0 else "INSUFFICIENT"
+                )
     successes = [float(bool(pair["pass_on"])) - float(bool(pair["pass_off"])) for pair in pairs]
-    if pairs and all(pair.get("pass_on") is not None and pair.get("pass_off") is not None for pair in pairs):
+    if pairs and all(
+        pair.get("pass_on") is not None and pair.get("pass_off") is not None for pair in pairs
+    ):
         result["success_delta"] = sum(successes) / len(successes)
     return result
+
 
 def validate_fixture(data: Mapping[str, Any]) -> None:
     """Validate one economics fixture, raising ``ValueError`` on malformed data."""
@@ -280,6 +308,7 @@ def _actions_equal(left: Any, right: Any) -> bool:
             pass
     try:
         from . import contracts
+
         return contracts.canonical_json(left) == contracts.canonical_json(right)
     except Exception:
         return False
@@ -394,7 +423,7 @@ def ope_ips(
 
     sum_w = sum(weights)
     sum_w2 = sum(w * w for w in weights)
-    sum_wr = sum(w * r for w, r in zip(weights, rewards))
+    sum_wr = sum(w * r for w, r in zip(weights, rewards, strict=False))
 
     val = sum_wr / n
     val_snips = (sum_wr / sum_w) if sum_w > 0 else 0.0

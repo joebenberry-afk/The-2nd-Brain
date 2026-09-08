@@ -71,23 +71,17 @@ def current_version(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version").fetchone()
     return int(row["v"])
 
+
 def ensure_brain_meta(conn: sqlite3.Connection) -> None:
     """Ensure control metadata exists for older databases."""
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS brain_meta("
-        "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO brain_meta(key, value) VALUES ('memory_epoch', '0')"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS brain_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT OR IGNORE INTO brain_meta(key, value) VALUES ('memory_epoch', '0')")
 
 
 def memory_epoch(conn: sqlite3.Connection) -> int:
     """Read the current canonical-memory epoch from an open connection."""
     ensure_brain_meta(conn)
-    row = conn.execute(
-        "SELECT value FROM brain_meta WHERE key = 'memory_epoch'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM brain_meta WHERE key = 'memory_epoch'").fetchone()
     try:
         return int(row["value"]) if row is not None else 0
     except (TypeError, ValueError):
@@ -98,8 +92,7 @@ def bump_memory_epoch(conn: sqlite3.Connection) -> int:
     """Increment and return the canonical-memory epoch in the open transaction."""
     ensure_brain_meta(conn)
     conn.execute(
-        "UPDATE brain_meta SET value = CAST(value AS INTEGER) + 1 "
-        "WHERE key = 'memory_epoch'"
+        "UPDATE brain_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_epoch'"
     )
     return memory_epoch(conn)
 
@@ -108,9 +101,7 @@ def read_memory_epoch(dbfile: str | Path) -> int:
     """Read an epoch by database path without creating a write transaction."""
     conn = connect(dbfile)
     try:
-        row = conn.execute(
-            "SELECT value FROM brain_meta WHERE key = 'memory_epoch'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM brain_meta WHERE key = 'memory_epoch'").fetchone()
         try:
             return int(row["value"]) if row is not None else 0
         except (TypeError, ValueError):
@@ -121,9 +112,7 @@ def read_memory_epoch(dbfile: str | Path) -> int:
         conn.close()
 
 
-def _execute_migration_statement(
-    conn: sqlite3.Connection, stmt: str, *, version: int
-) -> None:
+def _execute_migration_statement(conn: sqlite3.Connection, stmt: str, *, version: int) -> None:
     """Execute one migration statement, guarding additive column changes.
 
     SQLite has no portable ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``.
@@ -189,6 +178,7 @@ def apply_migration(conn: sqlite3.Connection, path: Path, version: int, applied_
     except Exception:
         conn.rollback()
         raise
+
 
 def migrate(dbfile: str | Path, migrations_dir: Path | None = None) -> list[int]:
     """Apply all pending migrations. Returns the versions applied (empty if current)."""

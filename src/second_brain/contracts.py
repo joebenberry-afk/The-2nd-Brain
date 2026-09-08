@@ -63,6 +63,7 @@ class NoInjectionReason(StrEnum):
     BUDGET_SOFT = "BUDGET_SOFT"
     HOLDOUT = "HOLDOUT"
 
+
 class MemoryItemStatus(StrEnum):
     CURRENT = "current"
     UNCERTAIN = "uncertain"
@@ -240,6 +241,7 @@ def _valid_ratio(value: object) -> float | None:
         return None
     return ratio
 
+
 def _positive_finite(value: object) -> float | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
@@ -248,6 +250,7 @@ def _positive_finite(value: object) -> float | None:
     except (OverflowError, ValueError, TypeError):
         return None
     return number if math.isfinite(number) and number > 0 else None
+
 
 def _positive_integer(value: object) -> int | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -296,17 +299,13 @@ def token_estimator_info(
     return {"chars_per_token": ratio, "source": source, "pair_count": pair_count}
 
 
-def estimate_tokens(
-    text: str, model: str | None = None, *, home: Path | str | None = None
-) -> int:
+def estimate_tokens(text: str, model: str | None = None, *, home: Path | str | None = None) -> int:
     """Estimate text tokens using calibrated chars/token, defaulting explicitly to 4.0."""
     info = token_estimator_info(model, home=home)
     ratio = info["chars_per_token"]
     if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
         ratio = DEFAULT_CHARS_PER_TOKEN
     return max(1, int(len(text or "") / float(ratio)))
-
-
 
 
 def _calibration_pairs(home: Path) -> dict[str, list[tuple[float, float]]]:
@@ -524,7 +523,6 @@ class WorkerPacketError(BrainError):
         super().__init__(f"{code}: {message or code}")
 
 
-
 class WorkerLifecycle:
     """A2A-aligned worker state machine (Phase R4/T4.1)."""
 
@@ -538,24 +536,28 @@ class WorkerLifecycle:
     REJECTED = "REJECTED"
     UNRESOLVED = "UNRESOLVED"
 
-    STATES = frozenset({
-        SUBMITTED,
-        WORKING,
-        INPUT_REQUIRED,
-        AUTH_REQUIRED,
-        COMPLETED,
-        CANCELED,
-        FAILED,
-        REJECTED,
-        UNRESOLVED,
-    })
+    STATES = frozenset(
+        {
+            SUBMITTED,
+            WORKING,
+            INPUT_REQUIRED,
+            AUTH_REQUIRED,
+            COMPLETED,
+            CANCELED,
+            FAILED,
+            REJECTED,
+            UNRESOLVED,
+        }
+    )
 
-    TERMINAL_STATES = frozenset({
-        COMPLETED,
-        CANCELED,
-        FAILED,
-        REJECTED,
-    })
+    TERMINAL_STATES = frozenset(
+        {
+            COMPLETED,
+            CANCELED,
+            FAILED,
+            REJECTED,
+        }
+    )
 
     TRANSITIONS: ClassVar[dict[str, frozenset[str]]] = {
         SUBMITTED: frozenset({WORKING, REJECTED, CANCELED}),
@@ -594,9 +596,7 @@ class WorkerLifecycle:
         evt_norm = cls.normalize_state(evt)
 
         if cur_norm not in cls.STATES:
-            raise WorkerPacketError(
-                "INVALID_TRANSITION", f"unknown current state: {cur!r}"
-            )
+            raise WorkerPacketError("INVALID_TRANSITION", f"unknown current state: {cur!r}")
         if cur_norm in cls.TERMINAL_STATES:
             raise WorkerPacketError(
                 "INVALID_TRANSITION", f"cannot transition from terminal state: {cur_norm}"
@@ -614,6 +614,7 @@ class WorkerLifecycle:
         self.state = self.transition(self.state, evt)
         return self.state
 
+
 def _check_worker_text(value: Any, field_name: str, limit: int = WORKER_TEXT_MAX_CHARS) -> None:
     if not isinstance(value, str) or not value or len(value) > limit:
         raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
@@ -627,9 +628,8 @@ def _check_worker_list(values: Any, field_name: str) -> None:
     ):
         raise WorkerPacketError("MALFORMED_TASK", f"invalid {field_name}")
 
-def _check_wire_lists(
-    values: Mapping[str, Any], fields: tuple[str, ...], code: str
-) -> None:
+
+def _check_wire_lists(values: Mapping[str, Any], fields: tuple[str, ...], code: str) -> None:
     for name in fields:
         if name in values and not isinstance(values[name], list):
             raise WorkerPacketError(code, f"invalid {name}")
@@ -701,9 +701,9 @@ class WorkerTaskPacket:
 
     def canonical_json(self) -> str:
         return canonical_json(self)
+
     def canonical_hash(self) -> str:
         return stable_content_hash(self)
-
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> WorkerTaskPacket:
@@ -872,6 +872,7 @@ class WorkerCorrectionPacket:
 
     def canonical_json(self) -> str:
         return canonical_json(self)
+
     def canonical_hash(self) -> str:
         return stable_content_hash(self)
 
@@ -1255,7 +1256,6 @@ class SessionSegment:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Ledger schema versioning (§14).
 # ---------------------------------------------------------------------------
@@ -1294,6 +1294,7 @@ def read_ledger_header(data: Mapping[str, Any]) -> LedgerHeader:
         adapter_version=str(data["adapter_version"]),
         created_at=str(data["created_at"]),
     )
+
 
 # ---------------------------------------------------------------------------
 # Brain Handoff Envelope (plan §3 P3.17): bounded, harness-neutral transport.
@@ -1411,8 +1412,11 @@ class BrainHandoffEnvelope:
                 getattr(self, name), name, limit=HANDOFF_IDENTITY_MAX_CHARS, allow_empty=False
             )
         for name in (
-            "project_id", "source_task_id", "source_role",
-            "destination_harness", "destination_role",
+            "project_id",
+            "source_task_id",
+            "source_role",
+            "destination_harness",
+            "destination_role",
         ):
             _check_handoff_text(
                 getattr(self, name), name, limit=HANDOFF_IDENTITY_MAX_CHARS, allow_empty=True
@@ -1427,8 +1431,10 @@ class BrainHandoffEnvelope:
             not isinstance(self.requirement_summary, dict)
             or len(self.requirement_summary) > HANDOFF_LIST_MAX_ITEMS * 2
             or any(
-                not isinstance(k, str) or not isinstance(v, str)
-                or len(k) > HANDOFF_REF_MAX_CHARS or len(v) > HANDOFF_REF_MAX_CHARS
+                not isinstance(k, str)
+                or not isinstance(v, str)
+                or len(k) > HANDOFF_REF_MAX_CHARS
+                or len(v) > HANDOFF_REF_MAX_CHARS
                 for k, v in self.requirement_summary.items()
             )
         ):

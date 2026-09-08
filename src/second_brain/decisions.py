@@ -17,12 +17,36 @@ from .errors import BrainError
 
 _ROLLOUT_STAGES = frozenset({"OFF", "SHADOW", "ADVISORY", "CANARY", "ACTIVE"})
 _DECISION_KINDS = frozenset(
-    {"retrieval", "routing", "eviction", "budget", "verification",
-     "admission", "reread", "reconsolidation", "brainstem", "learning", "frontier"}
+    {
+        "retrieval",
+        "routing",
+        "eviction",
+        "budget",
+        "verification",
+        "admission",
+        "reread",
+        "reconsolidation",
+        "brainstem",
+        "learning",
+        "frontier",
+    }
 )
 _FORBIDDEN_METADATA_FIELDS = frozenset(
-    {"prompt", "payload", "secret", "content", "text", "query", "input",
-     "output", "body", "message", "token", "thought", "reasoning"}
+    {
+        "prompt",
+        "payload",
+        "secret",
+        "content",
+        "text",
+        "query",
+        "input",
+        "output",
+        "body",
+        "message",
+        "token",
+        "thought",
+        "reasoning",
+    }
 )
 MAX_METADATA_TEXT_CHARS = 512
 _MAX_METADATA_DEPTH = 4
@@ -46,6 +70,7 @@ def _canonical(value: Any, name: str) -> str:
         return contracts.canonical_json(value)
     except (TypeError, ValueError, OverflowError, RecursionError) as exc:
         raise BrainError(f"{name} must be JSON-serializable") from exc
+
 
 def _validate_metadata(value: Any, name: str, depth: int = 0) -> None:
     if depth > _MAX_METADATA_DEPTH:
@@ -80,6 +105,7 @@ def _metadata_json(value: Any, name: str) -> str:
     if len(serialized.encode("utf-8")) > _MAX_METADATA_BYTES:
         raise BrainError(f"{name} exceeds metadata byte bound")
     return serialized
+
 
 def _text(value: Any, name: str, *, nullable: bool = False) -> str | None:
     if value is None and nullable:
@@ -150,9 +176,7 @@ def record(
     if len(inputs_json.encode("utf-8")) > _MAX_METADATA_BYTES:
         raise BrainError("inputs exceeds metadata byte bound")
     inputs_hash = contracts.stable_content_hash(inputs)
-    decision_id = hashlib.sha256(
-        (inputs_json + session_id + kind).encode("utf-8")
-    ).hexdigest()[:24]
+    decision_id = hashlib.sha256((inputs_json + session_id + kind).encode("utf-8")).hexdigest()[:24]
 
     _ensure_migrated(home)
     conn = db.connect(_dbfile(home))
@@ -223,6 +247,8 @@ def set_outcome(
         raise BrainError(f"Could not set decision outcome: {exc}") from exc
     finally:
         conn.close()
+
+
 record_outcome = set_outcome
 
 
@@ -233,12 +259,20 @@ def randomize(
     rng_seed: Any = None,
 ) -> tuple[Any, float, bool]:
     """Epsilon-randomize a policy choice with its exact action propensity."""
-    if isinstance(policy_choice, Path) or (
-        isinstance(policy_choice, str)
-        and (os.path.sep in policy_choice or "/" in policy_choice or policy_choice.endswith(".sqlite"))
+    if (
+        isinstance(policy_choice, Path)
+        or (
+            isinstance(policy_choice, str)
+            and (
+                os.path.sep in policy_choice
+                or "/" in policy_choice
+                or policy_choice.endswith(".sqlite")
+            )
+        )
+    ) and (
+        isinstance(alternatives, Sequence) and alternatives and policy_choice not in alternatives
     ):
-        if isinstance(alternatives, Sequence) and alternatives and policy_choice not in alternatives:
-            policy_choice = alternatives[0]
+        policy_choice = alternatives[0]
     if isinstance(alternatives, (str, bytes)) or not isinstance(alternatives, Sequence):
         raise BrainError("alternatives must be a non-empty sequence")
     if not alternatives:

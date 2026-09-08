@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from second_brain import backup as backup_mod
-from second_brain import db, paths, semantic
+from second_brain import db, doctor, paths, semantic
 from second_brain.errors import BackupError
 
 
@@ -31,9 +31,7 @@ def test_backup_roundtrip_into_empty_home(brain_home, tmp_path, monkeypatch):
 
     # restore into a fresh brain home
     home2 = tmp_path / "brain2"
-    home2.mkdir()
     monkeypatch.setenv("SECOND_BRAIN_HOME", str(home2))
-    paths.ensure_layout(home2)
     backup_mod.restore_backup(home2, bdir)
     conn = db.connect(db.db_path(home2))
     try:
@@ -41,6 +39,41 @@ def test_backup_roundtrip_into_empty_home(brain_home, tmp_path, monkeypatch):
     finally:
         conn.close()
     assert (home2 / "config" / "brain.toml").read_text(encoding="utf-8").find("orig") != -1
+    checks = []
+    doctor.check_layout(home2, checks)
+    assert all(check.status == doctor.STATUS_OK for check in checks)
+
+
+def test_backup_refuses_missing_canonical_memory_before_publishing(brain_home):
+    memory_id = semantic.add_memory(
+        brain_home, "Durable fact", "Keep its original body.", scope="global"
+    )
+    row = semantic.show_memory(brain_home, memory_id)["row"]
+    (brain_home / row["body_path"]).unlink()
+
+    with pytest.raises(BackupError):
+        backup_mod.create_backup(brain_home)
+
+    assert backup_mod.list_backups(brain_home) == []
+
+
+def test_incomplete_snapshot_is_refused_before_creating_restore_target(brain_home, tmp_path):
+    memory_id = semantic.add_memory(
+        brain_home, "Durable fact", "Keep its original body.", scope="global"
+    )
+    relative = semantic.show_memory(brain_home, memory_id)["row"]["body_path"]
+    snapshot = backup_mod.create_backup(brain_home)
+    (snapshot / relative).unlink()
+    manifest_path = snapshot / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"].pop(str(relative).replace("\\", "/"))
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    target = tmp_path / "must-stay-absent"
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, snapshot)
+
+    assert not target.exists()
 
 
 def test_backup_db_is_consistent_snapshot(brain_home):
@@ -428,21 +461,3 @@ def test_restore_rejects_modified_canonical_file(brain_home, tmp_path):
         backup_mod.restore_backup(tmp_path / "restored", backup_dir)
 
 
-def test_restore_rejects_missing_memory_body_reference(brain_home, tmp_path):
-    memory_id = semantic.add_memory(brain_home, "Durable rule", "body")
-    backup_dir = backup_mod.create_backup(brain_home)
-    manifest = backup_mod.load_manifest(backup_dir)
-    conn = db.connect(backup_dir / manifest["db"]["file"])
-    try:
-        conn.execute(
-            "UPDATE memories SET body_path = ? WHERE memory_id = ?",
-            ("memory/semantic/missing.md", memory_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    manifest["db"]["sha256"] = backup_mod.sha256_file(backup_dir / manifest["db"]["file"])
-    (backup_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-
-    with pytest.raises(BackupError, match="missing canonical memory"):
-        backup_mod.restore_backup(tmp_path / "restored", backup_dir)

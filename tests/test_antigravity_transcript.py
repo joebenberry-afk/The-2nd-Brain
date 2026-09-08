@@ -156,17 +156,20 @@ def test_real_antigravity_transcript_schema(tmp_path) -> None:
 
 
 def test_real_transcript_followup_wins(tmp_path) -> None:
-    p = _write(tmp_path, [
-        {
-            "source": "USER_EXPLICIT",
-            "type": "USER_INPUT",
-            "content": "<USER_REQUEST>first task</USER_REQUEST>",
-        },
-        {"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": [{"name": "view_file"}]},
-        {
-            "source": "USER_EXPLICIT",
-            "type": "USER_INPUT",
-            "content": "<USER_REQUEST>follow-up task</USER_REQUEST>",
-        },
-    ])
+    p = _write(
+        tmp_path,
+        [
+            {
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "content": "<USER_REQUEST>first task</USER_REQUEST>",
+            },
+            {"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": [{"name": "view_file"}]},
+            {
+                "source": "USER_EXPLICIT",
+                "type": "USER_INPUT",
+                "content": "<USER_REQUEST>follow-up task</USER_REQUEST>",
+            },
+        ],
+    )
     assert at.extract_latest_user_task(p) == "follow-up task"

@@ -78,6 +78,8 @@ def load_retention_config(home: Path | str) -> dict[str, Any]:
         except (OSError, tomllib.TOMLDecodeError):
             pass
     return out
+
+
 LEDGER_ADAPTER_NAME = "second-brain"
 LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
@@ -210,8 +212,8 @@ def _now() -> str:
 
 
 def internal_session_id(host_session_id: str) -> str:
-    """sha256 hex of the host session id — the ONLY path component derived
-    from a host id (plan §13.1: session identifiers are not paths)."""
+    """Sha256 hex of the host session id — the ONLY path component derived from a host
+    id (plan §13.1: session identifiers are not paths)."""
     return hashlib.sha256((host_session_id or "").encode("utf-8")).hexdigest()
 
 
@@ -231,7 +233,8 @@ def _resolve_under_retry(root: Path, relative: str) -> Path:
     existence check and the Windows path resolution, and the transient
     handle-open failure surfaces as an OSError-wrapped ValueError. Retrying
     a few times with a short delay lets the sibling finish; the failure is
-    otherwise deterministic (bounded, never silent)."""
+    otherwise deterministic (bounded, never silent).
+    """
     last: BaseException | None = None
     for _attempt in range(3):
         try:
@@ -249,24 +252,16 @@ def session_dir(home: Path | str, host_session_id: str) -> Path:
     return _resolve_under_retry(root, internal)
 
 
-def resolve_root_parent_session_id(
-    home: Path | str, parent_host_session_id: str
-) -> str:
+def resolve_root_parent_session_id(home: Path | str, parent_host_session_id: str) -> str:
     """Resolve a HOST parent to its canonical internal root without writes."""
     if not parent_host_session_id:
         raise BrainError("parent host session id must not be empty")
     parent_internal = internal_session_id(parent_host_session_id)
-    dbfile = _resolve_under_retry(
-        session_dir(home, parent_host_session_id), "ledger.sqlite"
-    )
+    dbfile = _resolve_under_retry(session_dir(home, parent_host_session_id), "ledger.sqlite")
     if not dbfile.is_file():
-        raise BrainError(
-            f"parent ledger not initialized for {parent_host_session_id!r}"
-        )
+        raise BrainError(f"parent ledger not initialized for {parent_host_session_id!r}")
     try:
-        conn = sqlite3.connect(
-            f"{dbfile.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0
-        )
+        conn = sqlite3.connect(f"{dbfile.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
@@ -277,20 +272,14 @@ def resolve_root_parent_session_id(
         finally:
             conn.close()
     except sqlite3.Error as exc:
-        raise BrainError(
-            f"parent ledger unreadable for {parent_host_session_id!r}: {exc}"
-        ) from exc
+        raise BrainError(f"parent ledger unreadable for {parent_host_session_id!r}: {exc}") from exc
     if row is None or row["host_session_id"] != parent_host_session_id:
-        raise BrainError(
-            f"parent ledger is not owned by host session {parent_host_session_id!r}"
-        )
+        raise BrainError(f"parent ledger is not owned by host session {parent_host_session_id!r}")
     root = row["root_parent_session_id"]
     if root is None:
         return parent_internal
     if not _is_internal_session_id(root):
-        raise BrainError(
-            f"parent ledger has invalid canonical root for {parent_host_session_id!r}"
-        )
+        raise BrainError(f"parent ledger has invalid canonical root for {parent_host_session_id!r}")
     return root
 
 
@@ -310,9 +299,7 @@ class ProjectedContext:
 class LedgerStore:
     """Append-only ledger for one session (stdlib sqlite3; db.py pragmas)."""
 
-    def __init__(
-        self, home: Path | str, host_session_id: str, *, host: str | None = None
-    ) -> None:
+    def __init__(self, home: Path | str, host_session_id: str, *, host: str | None = None) -> None:
         self._home = Path(home)
         self._host_session_id = host_session_id
         self._internal = internal_session_id(host_session_id)
@@ -404,9 +391,11 @@ class LedgerStore:
     @staticmethod
     def _brain_version() -> str:
         try:
-            version = (Path(__file__).resolve().parent.parent.parent / "VERSION").read_text(
-                encoding="utf-8"
-            ).strip()
+            version = (
+                (Path(__file__).resolve().parent.parent.parent / "VERSION")
+                .read_text(encoding="utf-8")
+                .strip()
+            )
             if version:
                 return version
         except OSError:
@@ -426,15 +415,14 @@ class LedgerStore:
             # BrainError (CLI prints it cleanly, exit 2) instead of an
             # unhandled traceback — the extension's single retry then re-runs
             # the init chain and the append lands.
-            raise BrainError(
-                f"ledger not initialized (schema not ready): {exc}"
-            ) from exc
+            raise BrainError(f"ledger not initialized (schema not ready): {exc}") from exc
         if row is None:
             raise BrainError("ledger missing schema_version header")
         version = int(row["value"])
         if version != LEDGER_SCHEMA_VERSION:
             raise BrainError(
-                f"ledger schema version {version} unsupported (this runtime requires {LEDGER_SCHEMA_VERSION})"
+                f"ledger schema version {version} unsupported (this runtime requires"
+                f" {LEDGER_SCHEMA_VERSION})"
             )
         # reading never rewrites: no DDL/DML executed on the open path
 
@@ -447,18 +435,12 @@ class LedgerStore:
             identity.internal_session_id != self._internal
             or identity.host_session_id != self._host_session_id
         ):
-            raise BrainError(
-                f"session identity does not own ledger {self._host_session_id!r}"
-            )
+            raise BrainError(f"session identity does not own ledger {self._host_session_id!r}")
         incoming_root = identity.root_parent_session_id
         if incoming_root is not None and not _is_internal_session_id(incoming_root):
-            raise BrainError(
-                f"invalid canonical root parent for session {self._host_session_id!r}"
-            )
+            raise BrainError(f"invalid canonical root parent for session {self._host_session_id!r}")
         if incoming_root == self._internal:
-            raise BrainError(
-                f"root parent cannot be the session itself: {self._host_session_id!r}"
-            )
+            raise BrainError(f"root parent cannot be the session itself: {self._host_session_id!r}")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             existing = self._conn.execute(
@@ -488,9 +470,7 @@ class LedgerStore:
                 )
             else:
                 if existing["host_session_id"] != identity.host_session_id:
-                    raise BrainError(
-                        f"conflicting session identity for {self._host_session_id!r}"
-                    )
+                    raise BrainError(f"conflicting session identity for {self._host_session_id!r}")
                 existing_root = existing["root_parent_session_id"]
                 if (
                     existing_root is not None
@@ -574,12 +554,14 @@ class LedgerStore:
             (agent_id, self._internal, agent_id, _now()),
         )
 
-
     def append_events(self, events: list[BrainLifecycleEvent]) -> list[int]:
-        """Transactional batch append. Contiguity: batch seqs must start at
+        """Transactional batch append.
+
+        Contiguity: batch seqs must start at
         max(seq)+1. Duplicate event_id or invalid parent ref rejects the WHOLE
         batch deterministically. Missing session/agent rows are ensured
-        (INSERT OR IGNORE) so event streams never fail on FK drift."""
+        (INSERT OR IGNORE) so event streams never fail on FK drift.
+        """
         assert self._conn is not None
         if not events:
             return []
@@ -611,9 +593,7 @@ class LedgerStore:
                         (event.parent_event_id,),
                     ).fetchone()
                     if parent_in_db is None and event.parent_event_id not in batch_ids:
-                        raise BrainError(
-                            f"invalid parent_event_id: {event.parent_event_id!r}"
-                        )
+                        raise BrainError(f"invalid parent_event_id: {event.parent_event_id!r}")
             seqs: list[int] = []
             prior_row_hash = self._conn.execute(
                 "SELECT prev_hash FROM events ORDER BY seq DESC LIMIT 1"
@@ -712,9 +692,9 @@ class LedgerStore:
         self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
 
     def _verify_object_digests(self) -> tuple[bool, list[str]]:
-        """Full digest re-verification of every object_refs row (session-
-        scoped; used by replay(), not by integrity()/checkpoint_ledger's hot
-        path — see integrity()'s docstring)."""
+        """Full digest re-verification of every object_refs row (session- scoped; used
+        by replay(), not by integrity()/checkpoint_ledger's hot path — see integrity()'s
+        docstring)."""
         bad: list[str] = []
         assert self._conn is not None
         for obj in self._conn.execute("SELECT sha256, size FROM object_refs").fetchall():
@@ -728,15 +708,18 @@ class LedgerStore:
         return (not bad, bad)
 
     def integrity(self) -> dict[str, Any]:
-        """Seq contiguity, orphan parents, schema version, and an
-        incremental hash-chain check (plan T6.3): verification resumes from
-        ``ledger_meta['last_verified_seq']`` (default 0) rather than
-        re-hashing every event on every call. Object payloads are NOT
+        """Seq contiguity, orphan parents, schema version, and an incremental hash-chain
+        check (plan T6.3): verification resumes from
+        ``ledger_meta['last_verified_seq']`` (default 0) rather than re-hashing every
+        event on every call.
+
+        Object payloads are NOT
         re-hashed here — ``read_object()`` digest-verifies on every read,
         and ``replay()`` separately full-verifies every object_refs row
         before returning a projection; re-hashing all objects on every
         integrity()/checkpoint_ledger() call was the eager cost this
-        rewrite removes."""
+        rewrite removes.
+        """
         assert self._conn is not None
         row = self._conn.execute(
             "SELECT COALESCE(MAX(seq), 0) AS mx, COALESCE(MIN(seq), 0) AS mn, COUNT(*) AS n "
@@ -801,8 +784,11 @@ class LedgerStore:
     # -- segments ---------------------------------------------------------------
 
     def open_segment(self, started_reason: str = "manual") -> str:
-        """Close the prior active segment (end_seq = max seq) and open a new
-        one (index+1, start_seq = max seq + 1). Returns the new segment_id."""
+        """Close the prior active segment (end_seq = max seq) and open a new one
+        (index+1, start_seq = max seq + 1).
+
+        Returns the new segment_id.
+        """
         assert self._conn is not None
         self._conn.execute("BEGIN IMMEDIATE")
         try:
@@ -818,9 +804,10 @@ class LedgerStore:
                     "UPDATE segments SET end_seq = ?, active = 0 WHERE segment_id = ?",
                     (max_seq, active["segment_id"]),
                 )
-            idx = int(
-                self._conn.execute("SELECT COALESCE(MAX(idx), -1) FROM segments").fetchone()[0]
-            ) + 1
+            idx = (
+                int(self._conn.execute("SELECT COALESCE(MAX(idx), -1) FROM segments").fetchone()[0])
+                + 1
+            )
             segment_id = f"seg-{idx + 1}"
             self._conn.execute(
                 "INSERT INTO segments (segment_id, internal_session_id, idx, start_seq, "
@@ -835,15 +822,13 @@ class LedgerStore:
             raise
 
     def close_segment(self) -> dict[str, Any] | None:
-        """Close the active segment at the current max seq. Returns the closed
-        segment row (or None when no segment is active)."""
+        """Close the active segment at the current max seq.
+
+        Returns the closed segment row (or None when no segment is active).
+        """
         assert self._conn is not None
-        max_seq = int(
-            self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
-        )
-        row = self._conn.execute(
-            "SELECT * FROM segments WHERE active = 1"
-        ).fetchone()
+        max_seq = int(self._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0])
+        row = self._conn.execute("SELECT * FROM segments WHERE active = 1").fetchone()
         if row is None:
             return None
         self._conn.execute(
@@ -857,8 +842,8 @@ class LedgerStore:
         return dict(updated)
 
     def continuation_capsule(self) -> dict[str, Any]:
-        """Continuation capsule from recent events (plan §17.5/§10.4): only
-        what exists in the ledger — never fabricated."""
+        """Continuation capsule from recent events (plan §17.5/§10.4): only what exists
+        in the ledger — never fabricated."""
         assert self._conn is not None
         rows = self._conn.execute("SELECT * FROM events ORDER BY seq DESC LIMIT 500").fetchall()
         events = [_row_to_event(r) for r in rows][::-1]
@@ -897,8 +882,7 @@ class LedgerStore:
                     "uncertainty": e.payload.get("uncertainty"),
                 }
         segments = [
-            dict(r)
-            for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
+            dict(r) for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
         ]
         return {
             "current_task": current_task,
@@ -984,7 +968,7 @@ class LedgerStore:
             sql = (
                 f"{base} JOIN events_fts f ON f.event_id = e.event_id "
                 f"WHERE events_fts MATCH ?{(' AND ' + ' AND '.join(filters)) if filters else ''} "
-                f"ORDER BY e.seq LIMIT ?"
+                "ORDER BY e.seq LIMIT ?"
             )
             params = [match, *params, limit]
         else:
@@ -992,12 +976,12 @@ class LedgerStore:
             if filters:
                 sql = (
                     f"{base} WHERE {' AND '.join(filters)} "
-                    f"AND (e.event_type LIKE ? OR e.payload_json LIKE ?) ORDER BY e.seq LIMIT ?"
+                    "AND (e.event_type LIKE ? OR e.payload_json LIKE ?) ORDER BY e.seq LIMIT ?"
                 )
             else:
                 sql = (
                     f"{base} WHERE (e.event_type LIKE ? OR e.payload_json LIKE ?) "
-                    f"ORDER BY e.seq LIMIT ?"
+                    "ORDER BY e.seq LIMIT ?"
                 )
             params = [like, like, *params, limit]
         rows = self._conn.execute(sql, params).fetchall()
@@ -1011,11 +995,13 @@ class LedgerStore:
     # -- replay -----------------------------------------------------------------
 
     def replay(self, lineage: list[str]) -> ProjectedContext:
-        """Independent replay (plan §9.10): fresh-connection semantics via this
-        store's own connection + validation, reconstructing the root->leaf
-        lineage projection. Detects seq gaps, orphan parents, object failures,
-        and payload tampering (seq/payload mismatch is detected by the
-        projection hash comparison in compare_projection)."""
+        """Independent replay (plan §9.10): fresh-connection semantics via this store's
+        own connection + validation, reconstructing the root->leaf lineage projection.
+
+        Detects seq gaps, orphan parents, object failures, and payload tampering
+        (seq/payload mismatch is detected by the projection hash comparison in
+        compare_projection).
+        """
         assert self._conn is not None
         integrity = self.integrity()
         if not integrity["seq_contiguous"]:
@@ -1024,9 +1010,7 @@ class LedgerStore:
             raise BrainError("replay rejected: orphan parent_event_id")
         digests_ok, bad_objects = self._verify_object_digests()
         if not digests_ok:
-            raise BrainError(
-                f"replay rejected: object digest failures {bad_objects}"
-            )
+            raise BrainError(f"replay rejected: object digest failures {bad_objects}")
         chain = _lineage_chain(self._conn, lineage)
         rows = self._conn.execute(
             f"SELECT * FROM events WHERE event_id IN ({','.join('?' for _ in chain)}) ORDER BY seq",
@@ -1046,9 +1030,7 @@ class LedgerStore:
                     "active": bool(r["active"]),
                 }
             )
-            for r in self._conn.execute(
-                "SELECT * FROM segments ORDER BY idx"
-            ).fetchall()
+            for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
         ]
         epochs = [
             RequestEpoch.from_dict(dict(r))
@@ -1101,9 +1083,7 @@ class LedgerStore:
         # P3-E fix: a FIXED tmp name collided under concurrent init of the
         # same fresh session. Readers can also briefly deny replacement on
         # Windows; retry only those errors, without removing the destination.
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f"{_MANIFEST}.tmp.", dir=self._dir, text=True
-        )
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{_MANIFEST}.tmp.", dir=self._dir, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(canonical_json(manifest) + "\n")
@@ -1122,15 +1102,20 @@ class LedgerStore:
 
 
 def replay_session(home: Path | str, host_session_id: str, lineage: list[str]) -> ProjectedContext:
-    """Open fresh + replay. Independent of any live in-memory projection."""
+    """Open fresh + replay.
+
+    Independent of any live in-memory projection.
+    """
     with LedgerStore(home, host_session_id).open() as store:
         return store.replay(lineage)
 
 
 def compare_projection(captured: ProjectedContext, replayed: ProjectedContext) -> str | None:
-    """First divergence between a captured and a replayed projection (plan
-    §9.10): compare event streams in seq order by (event_id, payload hash,
-    parent). Returns a description or None when identical."""
+    """First divergence between a captured and a replayed projection (plan §9.10):
+    compare event streams in seq order by (event_id, payload hash, parent).
+
+    Returns a description or None when identical.
+    """
     a = captured.events
     b = replayed.events
     if len(a) != len(b):
@@ -1186,8 +1171,11 @@ def _row_to_event(row: sqlite3.Row) -> BrainLifecycleEvent:
 
 
 def _lineage_chain(conn: sqlite3.Connection, lineage: list[str]) -> list[str]:
-    """Walk parent_event_id pointers from the lineage leaf back to the root;
-    returns the chain (root->leaf). Raises on a broken pointer."""
+    """Walk parent_event_id pointers from the lineage leaf back to the root; returns the
+    chain (root->leaf).
+
+    Raises on a broken pointer.
+    """
     chain: list[str] = []
     if not lineage:
         return chain
@@ -1211,9 +1199,8 @@ def _lineage_chain(conn: sqlite3.Connection, lineage: list[str]) -> list[str]:
 def classify_tool_outcome(events: Iterable[BrainLifecycleEvent]) -> dict[str, dict[str, Any]]:
     """Plan §11.2 tool crash states per tool-call id.
 
-    REQUESTED + no TOOL_STARTED -> TOOL_NOT_STARTED
-    TOOL_STARTED  + no result    -> TOOL_OUTCOME_UNKNOWN (verify-before-retry)
-    TOOL_STARTED  + result       -> COMPLETE
+    REQUESTED + no TOOL_STARTED -> TOOL_NOT_STARTED TOOL_STARTED  + no result    ->
+    TOOL_OUTCOME_UNKNOWN (verify-before-retry) TOOL_STARTED  + result       -> COMPLETE
     """
     per_tool: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -1252,6 +1239,7 @@ def classify_tool_outcome(events: Iterable[BrainLifecycleEvent]) -> dict[str, di
         out[tool_id] = {"state": state.value, "guidance": guidance}
     return out
 
+
 # ---------------------------------------------------------------------------
 # Segments, checkpoint barrier, continuation capsule, rehydration (plan
 # §10.2/§10.3/§17.5, amendment §19.4; Phase G/T-G4).
@@ -1285,8 +1273,7 @@ class LedgerRehydrator:
         store = self._store
         assert store._conn is not None
         segments = [
-            dict(r)
-            for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
+            dict(r) for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
         ]
         event_where: list[str] = []
         params: list[Any] = []
@@ -1300,9 +1287,7 @@ class LedgerRehydrator:
             event_where.append("seq <= ?")
             params.append(to_seq)
         where = f" WHERE {' AND '.join(event_where)}" if event_where else ""
-        rows = store._conn.execute(
-            f"SELECT * FROM events{where} ORDER BY seq", params
-        ).fetchall()
+        rows = store._conn.execute(f"SELECT * FROM events{where} ORDER BY seq", params).fetchall()
         events = [_row_to_event(r) for r in rows]
 
         if level == 1:
@@ -1327,6 +1312,7 @@ class LedgerRehydrator:
                 "citation": f"segments/{segment or 'all'}/events",
             }
         elif level == 2:
+
             def matches_decision(e: BrainLifecycleEvent) -> bool:
                 if decision is None:
                     return True
@@ -1341,8 +1327,7 @@ class LedgerRehydrator:
             decisions = [
                 e
                 for e in events
-                if e.event_type
-                in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
+                if e.event_type in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
                 and matches_decision(e)
             ]
             content = {
@@ -1351,12 +1336,16 @@ class LedgerRehydrator:
                     {
                         "event_id": e.event_id,
                         "seq": e.seq,
-                        "decision": e.payload.get("decision")
-                        or e.payload.get("title")
-                        or e.payload.get("summary"),
-                        "rationale": e.payload.get("rationale")
-                        or e.payload.get("guidance")
-                        or e.payload.get("observation"),
+                        "decision": (
+                            e.payload.get("decision")
+                            or e.payload.get("title")
+                            or e.payload.get("summary")
+                        ),
+                        "rationale": (
+                            e.payload.get("rationale")
+                            or e.payload.get("guidance")
+                            or e.payload.get("observation")
+                        ),
                         "evidence_refs": e.source_event_ids or [],
                         "segment_id": e.segment_id,
                     }
@@ -1477,7 +1466,9 @@ class LedgerRehydrator:
 
 def checkpoint_ledger(store: LedgerStore) -> dict[str, Any]:
     """Pre-compaction durability barrier (plan §10.2): flush + integrity.
-    Returns {ok, integrity, closed_segment?}. Never raises."""
+
+    Returns {ok, integrity, closed_segment?}. Never raises.
+    """
     try:
         store.flush()
         integrity = store.integrity()
@@ -1489,6 +1480,7 @@ def checkpoint_ledger(store: LedgerStore) -> dict[str, Any]:
         return {"ok": ok, "durability": "flushed", "integrity": integrity}
     except Exception as exc:  # fail open to a failure flag, never raise
         return {"ok": False, "durability": "failed", "error": str(exc)}
+
 
 # ---------------------------------------------------------------------------
 # Session lifecycle: crash recovery, retention, finalization, purge
@@ -1561,9 +1553,7 @@ class SessionLifecycle:
             raise SessionLifecycleError(f"unknown session status {status!r}")
         current = self.status()
         if status != current and status not in _STATUS_TRANSITIONS.get(current, ()):
-            raise SessionLifecycleError(
-                f"invalid transition {current!r} -> {status!r}"
-            )
+            raise SessionLifecycleError(f"invalid transition {current!r} -> {status!r}")
         with LedgerStore(self._home, self._host_session_id).open() as store:
             assert store._conn is not None
             store._conn.execute(
@@ -1593,15 +1583,15 @@ class SessionLifecycle:
     # -- crash recovery (plan §11.3, §17.6) ---------------------------------
 
     def recover_report(self) -> dict[str, Any]:
-        """Detect interrupted compaction brackets, unclosed segments, and
-        tool crash states; append ONE recovery finding event when an
-        interrupted compaction is found. Returns the report (no fabrication).
+        """Detect interrupted compaction brackets, unclosed segments, and tool crash
+        states; append ONE recovery finding event when an interrupted compaction is
+        found.
+
+        Returns the report (no fabrication).
         """
         with LedgerStore(self._home, self._host_session_id).open() as store:
             assert store._conn is not None
-            rows = store._conn.execute(
-                "SELECT * FROM events ORDER BY seq"
-            ).fetchall()
+            rows = store._conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
             events = [_row_to_event(r) for r in rows]
             starts = [e for e in events if e.event_type is LifecycleEventType.COMPACTION_STARTED]
             completions = {
@@ -1622,9 +1612,7 @@ class SessionLifecycle:
             ]
             unclosed_segments = [
                 dict(r)
-                for r in store._conn.execute(
-                    "SELECT * FROM segments WHERE active = 1"
-                ).fetchall()
+                for r in store._conn.execute("SELECT * FROM segments WHERE active = 1").fetchall()
             ]
             tools = classify_tool_outcome(events)
             outcome_unknown = [
@@ -1640,11 +1628,14 @@ class SessionLifecycle:
             wal_exists = (self._dir / "ledger.sqlite-wal").is_file()
             if unclosed:
                 # explicit recovery event (plan §11.3)
-                next_seq = int(
-                    store._conn.execute(
-                        "SELECT COALESCE(MAX(seq), 0) FROM events"
-                    ).fetchone()[0]
-                ) + 1
+                next_seq = (
+                    int(
+                        store._conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[
+                            0
+                        ]
+                    )
+                    + 1
+                )
                 store.append_events(
                     [
                         BrainLifecycleEvent(
@@ -1752,9 +1743,7 @@ class SessionLifecycle:
             try:
                 extracted_ids = self.extract_durable()
             except Exception as exc:  # extraction failure must block purge
-                raise SessionLifecycleError(
-                    f"extraction failed ({exc}); refusing purge"
-                ) from exc
+                raise SessionLifecycleError(f"extraction failed ({exc}); refusing purge") from exc
             if not extracted_ids and self._has_decisions():
                 raise SessionLifecycleError("extraction produced no memories: refusing purge")
             self.mark_status("extracted")

@@ -2,7 +2,7 @@
 
 import pytest
 
-from second_brain import jit, registry
+from second_brain import brainstem, jit, registry, semantic
 from second_brain import working_set as ws
 from second_brain.errors import BrainError
 
@@ -187,6 +187,46 @@ def test_corrupt_capsule_degrades_to_none(brain_home):
     path.write_text("{broken", encoding="utf-8")
     _, text = _compile(brain_home, "s1", "Task")
     assert "# Active State\n\n(none)" in _body(text)
+
+
+def test_ordered_protected_evidence_decision_memory_procedure_context(brain_home):
+    memory_id = semantic.add_memory(
+        brain_home,
+        "Protected ordering memory",
+        "Verified ordering evidence.",
+        grade="VERIFIED",
+    )
+    semantic.curate(brain_home, memory_id, status="current", verify=False)
+    decision = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(task_class="verification", risk_class="HIGH"),
+        session_id="s1",
+        task_id="ordering-gate",
+    )
+    _, text = _compile(
+        brain_home,
+        "s1",
+        "Implement the ordering gate",
+        protected_refs=[f"memory:{memory_id}@v1"],
+        task_evidence=["REQ-001:evidence:pytest"],
+        verified_decisions=[f"decision:{decision.decision_ref}"],
+        memory_refs=[f"memory:{memory_id}@v1"],
+        procedure_refs=["skills/review/SKILL.md#Procedure"],
+    )
+    body = _body(text)
+    positions = [
+        body.index("# Task"),
+        body.index("# Protected References"),
+        body.index("# Task Evidence"),
+        body.index("# Verified Decisions"),
+        body.index("# Memory"),
+        body.index("# Procedure"),
+        body.index("# Requirements"),
+        body.index("# Active State"),
+    ]
+    assert positions == sorted(positions)
+    assert f"- memory:{memory_id}@v1" in body
+    assert f"- decision:{decision.decision_ref}" in body
 
 
 def test_compile_rejects_non_string_task(brain_home):

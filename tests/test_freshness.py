@@ -1,7 +1,6 @@
 """Focused T1.4 evidence fingerprint/freshness contracts."""
 
 import hashlib
-import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -9,12 +8,19 @@ from second_brain import autoinject, contracts, db, freshness, semantic
 
 
 def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def _commit(repo: Path, message: str = "fixture") -> str:
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=Test", "commit", "-qm", message], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=Test", "commit", "-qm", message],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -42,7 +48,9 @@ def test_unchanged_blob_is_verified_current(brain_home: Path, tmp_path: Path) ->
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     (repo / "note.txt").write_text("one\ntwo\n", encoding="utf-8")
     _commit(repo)
-    mid = semantic.add_memory(brain_home, "fact", "one", scope="global", sources=[_source(repo, "note.txt")])
+    mid = semantic.add_memory(
+        brain_home, "fact", "one", scope="global", sources=[_source(repo, "note.txt")]
+    )
     result = freshness.resolve(brain_home, mid, repo)
     assert result == {"state": "VERIFIED_CURRENT", "reason": "blob unchanged"}
 
@@ -53,7 +61,9 @@ def test_changed_blob_is_stale_and_dropped(brain_home: Path, tmp_path: Path) -> 
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     (repo / "note.txt").write_text("one\n", encoding="utf-8")
     _commit(repo)
-    mid = semantic.add_memory(brain_home, "fact", "one", scope="global", sources=[_source(repo, "note.txt")])
+    mid = semantic.add_memory(
+        brain_home, "fact", "one", scope="global", sources=[_source(repo, "note.txt")]
+    )
     (repo / "note.txt").write_text("changed\n", encoding="utf-8")
     result = freshness.resolve(brain_home, mid, repo)
     assert result["state"] == "STALE"
@@ -73,7 +83,17 @@ def test_migration_adds_nullable_source_columns_idempotently(brain_home: Path) -
     cols_after = [r[1] for r in conn.execute("PRAGMA table_info(memory_sources)")]
     conn.close()
     assert cols_before == cols_after
-    assert {"repo_id", "path", "symbol", "commit_sha", "blob_sha", "range_start", "range_end", "range_sha", "verified_at"} <= set(cols_after)
+    assert {
+        "repo_id",
+        "path",
+        "symbol",
+        "commit_sha",
+        "blob_sha",
+        "range_start",
+        "range_end",
+        "range_sha",
+        "verified_at",
+    } <= set(cols_after)
 
 
 def test_cache_detects_uncommitted_blob_change(brain_home: Path, tmp_path: Path) -> None:
@@ -120,7 +140,7 @@ def test_no_sources_is_unknown_and_still_admitted_low(brain_home: Path) -> None:
     mid = semantic.add_memory(brain_home, "fact", "one", scope="global", grade="OBSERVED")
     row = semantic._row(brain_home, mid)
     assert row is not None
-    intent = autoinject.RetrievalIntent(
+    autoinject.RetrievalIntent(
         task_text="fact one",
         project_id="proj-a",
         agent_id="a1",
@@ -173,18 +193,28 @@ def test_migration_guard_is_case_insensitive(tmp_path: Path) -> None:
     conn.close()
     migration_dir = tmp_path / "migrations"
     migration_dir.mkdir()
-    source = Path(__file__).parents[1] / "src" / "second_brain" / "migrations" / "0012_evidence_freshness.sql"
+    source = (
+        Path(__file__).parents[1]
+        / "src"
+        / "second_brain"
+        / "migrations"
+        / "0012_evidence_freshness.sql"
+    )
     (migration_dir / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     assert db.migrate(dbfile, migration_dir) == [12]
     conn = db.connect(dbfile)
-    columns = {str(row["name"]).casefold() for row in conn.execute("PRAGMA table_info(memory_sources)")}
+    columns = {
+        str(row["name"]).casefold() for row in conn.execute("PRAGMA table_info(memory_sources)")
+    }
     conn.close()
     assert "repo_id" in columns and "verified_at" in columns
 
 
 def test_freshness_failure_fails_open(brain_home: Path, monkeypatch) -> None:
     semantic.add_memory(brain_home, "failure fact", "failure fact", scope="global")
-    monkeypatch.setattr(semantic, "_sources", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(
+        semantic, "_sources", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("x"))
+    )
     intent = autoinject.RetrievalIntent(
         task_text="failure fact",
         project_id="proj-a",

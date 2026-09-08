@@ -21,8 +21,17 @@ from .radar import ImprovementRadar
 SHUTDOWN_EVENT = "session_shutdown"
 
 _HEARTBEAT_RECORD_FIELDS = (
-    "mode", "event", "due", "ran", "healthy", "db_ok", "cache_pruned_count",
-    "git_dirty", "issue_codes", "latency_ms", "model_tokens_used",
+    "mode",
+    "event",
+    "due",
+    "ran",
+    "healthy",
+    "db_ok",
+    "cache_pruned_count",
+    "git_dirty",
+    "issue_codes",
+    "latency_ms",
+    "model_tokens_used",
     "artifacts_gc_count",
 )
 

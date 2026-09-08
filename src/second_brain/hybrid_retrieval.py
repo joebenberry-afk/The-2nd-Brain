@@ -50,6 +50,7 @@ class RetrievalTier(IntEnum):
 @dataclass
 class RetrievalMatch:
     """A matched memory item candidate."""
+
     memory_id: str
     title: str
     score: float | None
@@ -69,9 +70,7 @@ class RetrievalMatch:
             "score": round(self.score, 4) if self.score is not None else None,
             "tier_resolved": self.tier_resolved,
             "summary": self.summary,
-            "confidence": (
-                round(self.confidence, 4) if self.confidence is not None else None
-            ),
+            "confidence": (round(self.confidence, 4) if self.confidence is not None else None),
             "score_components": {
                 k: round(v, 4) if isinstance(v, (int, float)) else v
                 for k, v in self.score_components.items()
@@ -80,9 +79,11 @@ class RetrievalMatch:
             "contradiction_details": self.contradiction_details,
         }
 
+
 @dataclass
 class CascadeResult:
     """Result of hybrid multi-tier retrieval."""
+
     query: str
     project_id: str | None
     tier_resolved: int
@@ -96,6 +97,7 @@ class CascadeResult:
     reason: str = ""
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     multiview_invoked: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
@@ -144,9 +146,7 @@ def apply_mmr(
             m.score_components["diversity"] = 1.0
         return matches[:top_k]
 
-    token_cache = [
-        _token_set(f"{m.title} {m.summary} {m.body}") for m in matches
-    ]
+    token_cache = [_token_set(f"{m.title} {m.summary} {m.body}") for m in matches]
 
     selected_indices: list[int] = []
     remaining_indices = list(range(len(matches)))
@@ -197,22 +197,25 @@ def _compute_score_components(
 ) -> tuple[dict[str, float], bool, list[str]]:
     bm25 = row.get("_bm25")
     score_val = row.get("_score")
-    relevance = float(bm25) if bm25 is not None else (float(score_val) if score_val is not None else 0.8)
+    relevance = (
+        float(bm25) if bm25 is not None else (float(score_val) if score_val is not None else 0.8)
+    )
 
     grade = row.get("evidence_grade") or "OBSERVED"
     authority_ceiling = row.get("authority_ceiling") or "advisory"
-    authority = 1.0 if authority_ceiling == "policy" else (0.9 if authority_ceiling == "project_rule" else 0.8)
+    authority = (
+        1.0
+        if authority_ceiling == "policy"
+        else (0.9 if authority_ceiling == "project_rule" else 0.8)
+    )
     if grade == "VERIFIED":
         authority = max(authority, 0.95)
 
     mem_project = row.get("project_id")
     mem_scope = row.get("scope") or "project"
-    if mem_scope == "global":
-        scope_score = 1.0
-    elif project_id and mem_project == project_id:
-        scope_score = 1.0
-    else:
-        scope_score = 0.8
+    scope_score = (
+        1.0 if mem_scope == "global" or (project_id and mem_project == project_id) else 0.8
+    )
 
     freshness_score = 1.0
     contradiction_count = int(row.get("contradiction_count") or 0)
@@ -223,10 +226,13 @@ def _compute_score_components(
     if contradiction_count > 0:
         contradiction_details.append(f"Contradiction count: {contradiction_count}")
     if contradiction_with:
-        contradiction_details.append(f"Contradicts with: {', '.join(str(x) for x in contradiction_with)}")
+        contradiction_details.append(
+            f"Contradicts with: {', '.join(str(x) for x in contradiction_with)}"
+        )
 
     try:
         from . import reconsolidation
+
         p_need = reconsolidation.compute_p_need(home, row.get("memory_id", ""))
     except Exception:
         p_need = 0.5
@@ -246,6 +252,7 @@ def _compute_score_components(
 
 class HybridCascadeRetriever:
     """Multi-tier cascade retriever with a persistent negative result cache."""
+
     _LANES = frozenset({"policy", "active_state", "semantic", "repo", "decision", "skill"})
 
     def __init__(self) -> None:
@@ -254,6 +261,7 @@ class HybridCascadeRetriever:
         self._epoch_cache: dict[str, tuple[tuple[int, int], int]] = {}
         self._last_home: Path | None = None
         self.multiview_enabled: bool = False
+
     def _query_hash(self, query: str) -> str:
         norm = " ".join(re.findall(r"[a-z0-9]+", query.lower()))
         return hashlib.sha256(norm.encode("utf-8")).hexdigest()
@@ -278,11 +286,13 @@ class HybridCascadeRetriever:
 
     def _epoch(self, home: Path) -> int:
         dbfile = db.db_path(home)
+
         def _stamp(path: Path) -> int:
             try:
                 return path.stat().st_mtime_ns
             except OSError:
                 return 0
+
         stamp = (_stamp(dbfile), _stamp(Path(str(dbfile) + "-wal")))
         key = str(home.resolve())
         cached = self._epoch_cache.get(key)
@@ -352,9 +362,7 @@ class HybridCascadeRetriever:
             floor = max(floor, threshold)
         if scores[0] < floor:
             return False
-        return len(scores) == 1 or (
-            scores[1] is not None and scores[0] - scores[1] >= gate.gap_min
-        )
+        return len(scores) == 1 or (scores[1] is not None and scores[0] - scores[1] >= gate.gap_min)
 
     def retrieve(
         self,
@@ -378,10 +386,14 @@ class HybridCascadeRetriever:
         if not clean_q or clean_q.lower() in _TRIVIAL_QUERIES:
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
-                vector_invoked=False, latency_ms=lat, short_circuited=True,
-                decision="NO_INJECTION", reason="TRIVIAL_TASK",
+                vector_invoked=False,
+                latency_ms=lat,
+                short_circuited=True,
+                decision="NO_INJECTION",
+                reason="TRIVIAL_TASK",
             )
 
         epoch = self._epoch(home_path)
@@ -399,19 +411,27 @@ class HybridCascadeRetriever:
         except (OSError, sqlite3.Error):
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                vector_invoked=False, latency_ms=lat, short_circuited=True,
-                decision="NO_INJECTION", reason="BRAIN_UNAVAILABLE",
+                vector_invoked=False,
+                latency_ms=lat,
+                short_circuited=True,
+                decision="NO_INJECTION",
+                reason="BRAIN_UNAVAILABLE",
                 retrieval_error=True,
             )
         if cached is not None:
             lat = min((time.perf_counter() - t0) * 1000.0, 1.999)
             return CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
-                vector_invoked=False, latency_ms=lat, short_circuited=True,
-                negative_cached=True, decision="NO_INJECTION",
+                vector_invoked=False,
+                latency_ms=lat,
+                short_circuited=True,
+                negative_cached=True,
+                decision="NO_INJECTION",
                 reason="NO_RELEVANT_MEMORY",
             )
 
@@ -429,21 +449,32 @@ class HybridCascadeRetriever:
                     if lane == "policy" and authority_ceiling != "policy":
                         lat = (time.perf_counter() - t0) * 1000.0
                         return CascadeResult(
-                            query=query, project_id=project_id,
+                            query=query,
+                            project_id=project_id,
                             tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
-                            matches=[], vector_invoked=False, latency_ms=lat,
-                            short_circuited=True, decision="NO_INJECTION",
+                            matches=[],
+                            vector_invoked=False,
+                            latency_ms=lat,
+                            short_circuited=True,
+                            decision="NO_INJECTION",
                             reason="AUTHORITY_VIOLATION",
                         )
 
                     # Status safety check: rejected and archived memories excluded
-                    if row.get("evidence_grade") == "REJECTED" or row.get("status") in ("archived", "superseded"):
+                    if row.get("evidence_grade") == "REJECTED" or row.get("status") in (
+                        "archived",
+                        "superseded",
+                    ):
                         lat = (time.perf_counter() - t0) * 1000.0
                         return CascadeResult(
-                            query=query, project_id=project_id,
+                            query=query,
+                            project_id=project_id,
                             tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
-                            matches=[], vector_invoked=False, latency_ms=lat,
-                            short_circuited=True, decision="NO_INJECTION",
+                            matches=[],
+                            vector_invoked=False,
+                            latency_ms=lat,
+                            short_circuited=True,
+                            decision="NO_INJECTION",
                             reason="EXCLUDED_STATUS",
                         )
 
@@ -451,16 +482,20 @@ class HybridCascadeRetriever:
                     has_contradiction = contradiction_count > 0
                     contradictions_list = []
                     if has_contradiction:
-                        contradictions_list.append({
-                            "memory_id": cand_id,
-                            "title": row.get("title", ""),
-                            "contradiction_count": contradiction_count,
-                            "details": [f"Contradiction count: {contradiction_count}"],
-                        })
+                        contradictions_list.append(
+                            {
+                                "memory_id": cand_id,
+                                "title": row.get("title", ""),
+                                "contradiction_count": contradiction_count,
+                                "details": [f"Contradiction count: {contradiction_count}"],
+                            }
+                        )
 
                     components = {
                         "relevance": 1.0,  # Exact ref bypasses semantic uncertainty
-                        "authority": 1.0 if authority_ceiling in ("project_rule", "policy") else 0.8,
+                        "authority": 1.0
+                        if authority_ceiling in ("project_rule", "policy")
+                        else 0.8,
                         "scope": 1.0,
                         "freshness": 1.0,
                         "contradiction": 0.5 if has_contradiction else 1.0,
@@ -480,14 +515,21 @@ class HybridCascadeRetriever:
                         raw_row=dict(row),
                         score_components=components,
                         has_contradiction=has_contradiction,
-                        contradiction_details=[f"Contradiction count: {contradiction_count}"] if has_contradiction else [],
+                        contradiction_details=[f"Contradiction count: {contradiction_count}"]
+                        if has_contradiction
+                        else [],
                     )
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
-                        query=query, project_id=project_id,
+                        query=query,
+                        project_id=project_id,
                         tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
-                        matches=[match], vector_invoked=False, latency_ms=lat,
-                        short_circuited=True, decision="INJECT", reason="EXACT_REF_MATCH",
+                        matches=[match],
+                        vector_invoked=False,
+                        latency_ms=lat,
+                        short_circuited=True,
+                        decision="INJECT",
+                        reason="EXACT_REF_MATCH",
                         contradictions=contradictions_list,
                     )
             except BrainError:
@@ -496,7 +538,11 @@ class HybridCascadeRetriever:
         retrieval_error = False
         try:
             fts_rows = semantic.search_memories(
-                home_path, clean_q, project_id=project_id, top_k=max(top_k * 2, 20), include_duplicates=True
+                home_path,
+                clean_q,
+                project_id=project_id,
+                top_k=max(top_k * 2, 20),
+                include_duplicates=True,
             )
         except Exception:
             retrieval_error = True
@@ -526,12 +572,14 @@ class HybridCascadeRetriever:
                 )
                 matches.append(match)
                 if has_c:
-                    contradictions_list.append({
-                        "memory_id": match.memory_id,
-                        "title": match.title,
-                        "contradiction_count": m.get("contradiction_count", 0),
-                        "details": c_details,
-                    })
+                    contradictions_list.append(
+                        {
+                            "memory_id": match.memory_id,
+                            "title": match.title,
+                            "contradiction_count": m.get("contradiction_count", 0),
+                            "details": c_details,
+                        }
+                    )
 
             # Apply MMR for diversity over token Jaccard
             matches = apply_mmr(matches, lambda_param=lambda_param, top_k=top_k)
@@ -539,10 +587,14 @@ class HybridCascadeRetriever:
             if self._gate_passes(scores, gate, lane, confidence_threshold):
                 lat = (time.perf_counter() - t0) * 1000.0
                 return CascadeResult(
-                    query=query, project_id=project_id,
+                    query=query,
+                    project_id=project_id,
                     tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                    matches=matches, vector_invoked=False, latency_ms=lat,
-                    short_circuited=True, decision="INJECT",
+                    matches=matches,
+                    vector_invoked=False,
+                    latency_ms=lat,
+                    short_circuited=True,
+                    decision="INJECT",
                     reason="LEXICAL_HIGH_CONFIDENCE",
                     contradictions=contradictions_list,
                     multiview_invoked=multiview or self.multiview_enabled,
@@ -570,48 +622,68 @@ class HybridCascadeRetriever:
                 if self._gate_passes(vec_scores, gate, lane, confidence_threshold):
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
-                        query=query, project_id=project_id,
+                        query=query,
+                        project_id=project_id,
                         tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                        matches=matches, vector_invoked=True, latency_ms=lat,
-                        short_circuited=False, decision="INJECT",
+                        matches=matches,
+                        vector_invoked=True,
+                        latency_ms=lat,
+                        short_circuited=False,
+                        decision="INJECT",
                         reason="VECTOR_FALLBACK_MATCH",
                     )
                 if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}:
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
-                        query=query, project_id=project_id,
+                        query=query,
+                        project_id=project_id,
                         tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                        matches=matches, vector_invoked=True, latency_ms=lat,
-                        short_circuited=False, decision="INJECT",
+                        matches=matches,
+                        vector_invoked=True,
+                        latency_ms=lat,
+                        short_circuited=False,
+                        decision="INJECT",
                         reason="VECTOR_FALLBACK_MATCH",
                     )
                 lat = (time.perf_counter() - t0) * 1000.0
                 return CascadeResult(
-                    query=query, project_id=project_id,
+                    query=query,
+                    project_id=project_id,
                     tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                    matches=matches, vector_invoked=True, latency_ms=lat,
-                    short_circuited=False, decision="NO_INJECTION",
+                    matches=matches,
+                    vector_invoked=True,
+                    latency_ms=lat,
+                    short_circuited=False,
+                    decision="NO_INJECTION",
                     reason="LOW_CONFIDENCE",
                 )
 
         if retrieval_error:
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
                 vector_invoked=vector_searcher is not None,
-                latency_ms=lat, short_circuited=True,
-                decision="NO_INJECTION", reason="BRAIN_UNAVAILABLE",
+                latency_ms=lat,
+                short_circuited=True,
+                decision="NO_INJECTION",
+                reason="BRAIN_UNAVAILABLE",
                 retrieval_error=True,
             )
         if fts_rows:
             lat = (time.perf_counter() - t0) * 1000.0
             result = CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                matches=matches, vector_invoked=False, latency_ms=lat,
+                matches=matches,
+                vector_invoked=False,
+                latency_ms=lat,
                 short_circuited=True,
-                decision="INJECT" if gate.rollout in {"SHADOW", "ADVISORY", "OFF"} else "NO_INJECTION",
+                decision="INJECT"
+                if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
+                else "NO_INJECTION",
                 reason="LEXICAL_HIGH_CONFIDENCE"
                 if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
                 else "LOW_CONFIDENCE",
@@ -631,17 +703,24 @@ class HybridCascadeRetriever:
         except (OSError, sqlite3.Error):
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
-                query=query, project_id=project_id,
+                query=query,
+                project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                vector_invoked=vector_searcher is not None, latency_ms=lat,
-                short_circuited=True, decision="NO_INJECTION",
-                reason="BRAIN_UNAVAILABLE", retrieval_error=True,
+                vector_invoked=vector_searcher is not None,
+                latency_ms=lat,
+                short_circuited=True,
+                decision="NO_INJECTION",
+                reason="BRAIN_UNAVAILABLE",
+                retrieval_error=True,
             )
         lat = (time.perf_counter() - t0) * 1000.0
         return CascadeResult(
-            query=query, project_id=project_id,
+            query=query,
+            project_id=project_id,
             tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
             vector_invoked=vector_searcher is not None,
-            latency_ms=lat, short_circuited=True,
-            decision="NO_INJECTION", reason="NO_RELEVANT_MEMORY",
+            latency_ms=lat,
+            short_circuited=True,
+            decision="NO_INJECTION",
+            reason="NO_RELEVANT_MEMORY",
         )

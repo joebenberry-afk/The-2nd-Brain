@@ -21,9 +21,16 @@ def test_grade_dominance_when_relevance_equal(brain_home):
     # Unit level with FIXED ranks: trust (grade) decides when relevance ties.
     tokens = semantic._query_tokens("wal frame")
     base = {
-        "memory_id": "m1", "title": "Alpha rule", "summary": "", "status": "current",
-        "scope": "project", "project_id": None, "updated_at": "2026-08-15T00:00:00+00:00",
-        "current_version": 1, "successful_retrieval_count": 0, "contradiction_count": 0,
+        "memory_id": "m1",
+        "title": "Alpha rule",
+        "summary": "",
+        "status": "current",
+        "scope": "project",
+        "project_id": None,
+        "updated_at": "2026-08-15T00:00:00+00:00",
+        "current_version": 1,
+        "successful_retrieval_count": 0,
+        "contradiction_count": 0,
         "_body": "wal frame durability note here",
     }
     verified = dict(base, evidence_grade="VERIFIED")
@@ -176,7 +183,9 @@ def test_boundedness_pathological_rows(brain_home):
 def test_score_terms_ablation_knob(brain_home):
     # a: higher term frequency (bm25-favored) AND VERIFIED -> deterministically first
     a = _add(
-        brain_home, title="Alpha record", body="ablation body content here ablation body",
+        brain_home,
+        title="Alpha record",
+        body="ablation body content here ablation body",
         grade="VERIFIED",
     )
     b = _add(brain_home, title="Beta record", body="ablation body content here", grade="OBSERVED")

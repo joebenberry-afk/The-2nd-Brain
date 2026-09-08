@@ -23,9 +23,12 @@ def test_goal_transitions_and_audit_events(brain_home):
 
     conn = db.connect(db.db_path(brain_home))
     try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM goal_events WHERE goal_id = ?", (goal.goal_id,)
-        ).fetchone()[0] >= 4
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM goal_events WHERE goal_id = ?", (goal.goal_id,)
+            ).fetchone()[0]
+            >= 4
+        )
     finally:
         conn.close()
 
@@ -72,9 +75,10 @@ def test_unknown_milestone_and_empty_milestones(brain_home):
         store.complete_milestone(goal.goal_id, "m-2", "test://p4")
     empty = store.create_goal("empty", "no steps")
     assert empty.status is GoalStatus.ACTIVE
-    assert store.transition(
-        empty.goal_id, GoalStatus.COMPLETED, evidence_ref="test://empty"
-    ).status is GoalStatus.COMPLETED
+    assert (
+        store.transition(empty.goal_id, GoalStatus.COMPLETED, evidence_ref="test://empty").status
+        is GoalStatus.COMPLETED
+    )
     persisted = store.get_goal(empty.goal_id)
     assert persisted is not None
     assert persisted.completed_at is not None

@@ -24,12 +24,24 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_SCENARIOS = {
-    "fresh_session", "resumed_session", "compacted_session",
-    "cross_session_continuity", "harness_isolation", "harness_switch",
-    "driver_worker", "failed_worker", "malformed_state", "stale_state",
-    "token_pressure", "cache_sensitive", "long_running_goal",
-    "brain_off", "brain_on", "recovery_rollback",
-    "security_boundary", "genuine_project_dogfood",
+    "fresh_session",
+    "resumed_session",
+    "compacted_session",
+    "cross_session_continuity",
+    "harness_isolation",
+    "harness_switch",
+    "driver_worker",
+    "failed_worker",
+    "malformed_state",
+    "stale_state",
+    "token_pressure",
+    "cache_sensitive",
+    "long_running_goal",
+    "brain_off",
+    "brain_on",
+    "recovery_rollback",
+    "security_boundary",
+    "genuine_project_dogfood",
 }
 
 
@@ -69,14 +81,46 @@ def _git_manifest(repo: Path, recorded_sha: str) -> dict:
     return {"repo": str(repo), "git": {"sha": recorded_sha}}
 
 
+def test_qualification_rejects_foreign_runtime_before_initializing_home(tmp_path):
+    repo = tmp_path / "other-repository"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "source.py").write_text("value = 1\n", encoding="utf-8")
+    _git(repo, "add", "source.py")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    output = tmp_path / "qualification"
+
+    with pytest.raises(RuntimeError):
+        run_qualification(output, repo)
+
+    assert not (output / "homes" / "shared").exists()
+
+
 def test_git_currency_accepts_exact_recorded_sha(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")
     (repo / "source.py").write_text("baseline\n", encoding="utf-8")
     _git(repo, "add", "source.py")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "baseline")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "baseline",
+    )
     recorded_sha = _git(repo, "rev-parse", "HEAD")
 
     result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
@@ -91,16 +135,32 @@ def test_git_currency_accepts_evidence_only_descendant(tmp_path):
     _git(repo, "init")
     (repo / "source.py").write_text("baseline\n", encoding="utf-8")
     _git(repo, "add", "source.py")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "baseline")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "baseline",
+    )
     recorded_sha = _git(repo, "rev-parse", "HEAD")
 
     evidence = repo / "outputs" / "reports" / "v1-p4" / "raw" / "capture.stdout"
     evidence.parent.mkdir(parents=True)
     evidence.write_text("captured\n", encoding="utf-8")
     _git(repo, "add", str(evidence.relative_to(repo)))
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "evidence")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "evidence",
+    )
 
     result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
 
@@ -114,41 +174,74 @@ def test_git_currency_rejects_source_change_descendant(tmp_path):
     _git(repo, "init")
     (repo / "source.py").write_text("baseline\n", encoding="utf-8")
     _git(repo, "add", "source.py")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "baseline")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "baseline",
+    )
     recorded_sha = _git(repo, "rev-parse", "HEAD")
 
     (repo / "source.py").write_text("changed\n", encoding="utf-8")
     _git(repo, "add", "source.py")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "source change")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "source change",
+    )
 
     result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
 
     assert result["ok"] is False, result
     assert result["detail"]["disallowed_paths"] == ["source.py"]
+
+
 def test_git_currency_rejects_source_rename_into_evidence_namespace(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")
     (repo / "source.py").write_text("baseline\n", encoding="utf-8")
     _git(repo, "add", "source.py")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "baseline")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "baseline",
+    )
     recorded_sha = _git(repo, "rev-parse", "HEAD")
 
     destination = repo / "outputs" / "reports" / "v1-p4" / "raw" / "source.py"
     destination.parent.mkdir(parents=True)
     (repo / "source.py").rename(destination)
     _git(repo, "add", "-A")
-    _git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
-         "commit", "-m", "rename source into evidence")
+    _git(
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "rename source into evidence",
+    )
 
     result = VERIFIER.check_git_currency(_git_manifest(repo, recorded_sha))
 
     assert result["ok"] is False, result
     assert result["detail"]["disallowed_paths"] == ["source.py"]
-
 
 
 def test_qualification_manifest_has_all_required_scenarios(tmp_path):
@@ -308,7 +401,8 @@ def test_claims_grounded_accepts_claim_backed_only_by_evidence_ref_file(tmp_path
     scen_dir.mkdir(parents=True)
     evidence_path = scen_dir / "01-compact-telemetry-records.json"
     evidence_path.write_text(
-        json.dumps([{"kind": "session_compact", "model": "claude-real-model"}]), encoding="utf-8",
+        json.dumps([{"kind": "session_compact", "model": "claude-real-model"}]),
+        encoding="utf-8",
     )
     ref = str(evidence_path.relative_to(out_dir).as_posix())
 
@@ -398,17 +492,19 @@ def test_check_privacy_absence_scans_nested_command_json_fields(tmp_path):
     manifest = {
         "home": str(tmp_path / "nonexistent-home"),
         "setup_commands": [],
-        "scenarios": [{
-            "name": "security_boundary",
-            "commands": [
-                {
-                    "argv": ["python", "safe-command"],
-                    "stdout_ref": stdout_ref,
-                    "stderr_ref": stderr_ref,
-                }
-            ],
-            "evidence_refs": [],
-        }],
+        "scenarios": [
+            {
+                "name": "security_boundary",
+                "commands": [
+                    {
+                        "argv": ["python", "safe-command"],
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                    }
+                ],
+                "evidence_refs": [],
+            }
+        ],
     }
     result = check_privacy_absence(manifest, out_dir)
     assert result["ok"] is False
@@ -432,15 +528,19 @@ def test_check_privacy_absence_allows_action_cache_content(tmp_path):
     manifest = {
         "home": str(tmp_path / "nonexistent-home"),
         "setup_commands": [],
-        "scenarios": [{
-            "name": "cache_sensitive",
-            "commands": [{
-                "argv": ["python", "-m", "second_brain.cli", "action-cache", "search"],
-                "stdout_ref": stdout_ref,
-                "stderr_ref": stderr_ref,
-            }],
-            "evidence_refs": [],
-        }],
+        "scenarios": [
+            {
+                "name": "cache_sensitive",
+                "commands": [
+                    {
+                        "argv": ["python", "-m", "second_brain.cli", "action-cache", "search"],
+                        "stdout_ref": stdout_ref,
+                        "stderr_ref": stderr_ref,
+                    }
+                ],
+                "evidence_refs": [],
+            }
+        ],
     }
     result = check_privacy_absence(manifest, out_dir)
     assert result["ok"] is True, result
@@ -570,8 +670,7 @@ def test_check_privacy_absence_scans_nested_evidence_fields_case_insensitively(t
     result = check_privacy_absence(manifest, out_dir)
     assert result["ok"] is False
     assert any(
-        ref in offender and "PROMPT" in offender
-        for offender in result["detail"]["offenders"]
+        ref in offender and "PROMPT" in offender for offender in result["detail"]["offenders"]
     )
 
 

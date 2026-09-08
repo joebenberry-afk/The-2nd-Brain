@@ -112,9 +112,7 @@ def run(home: Path) -> int:
         role=role,
         task=task,
     )
-    prefix_drift = injection_slots.record_and_check_prefix_drift(
-        home, session_id, prefix
-    )
+    injection_slots.record_and_check_prefix_drift(home, session_id, prefix)
     tail = injection_slots.assemble_tail(delta_context=packet)
     mode = os.environ.get("SECOND_BRAIN_AUTOINJECT_MODE", "shadow").strip().lower()
     if mode in ("advisory", "active"):

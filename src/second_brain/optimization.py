@@ -45,9 +45,7 @@ def _require_text(value: object, name: str) -> str:
 def _proposal_id(fingerprint_id: str, intervention_hash: str) -> str:
     return (
         "proposal-"
-        + hashlib.sha256(
-            fingerprint_id.encode() + intervention_hash.encode()
-        ).hexdigest()[:24]
+        + hashlib.sha256(fingerprint_id.encode() + intervention_hash.encode()).hexdigest()[:24]
     )
 
 
@@ -136,9 +134,12 @@ def _emit(
     evidence_hash: str = "",
     session: str = "",
 ) -> None:
-    evidence_hash = evidence_hash or hashlib.sha256(
-        json.dumps(proposal, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
+    evidence_hash = (
+        evidence_hash
+        or hashlib.sha256(
+            json.dumps(proposal, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+    )
     telemetry.append_record(
         home,
         session or proposal["proposal_id"],
@@ -208,9 +209,8 @@ def propose(
 
 def _counterfactual_evidence(result: dict, intervention_hash: str) -> tuple[dict, bool]:
     evidence = result.get("counterfactual_result", result)
-    if (
-        not isinstance(evidence, dict)
-        or not credit.is_counterfactual_result_current(evidence, intervention_hash)
+    if not isinstance(evidence, dict) or not credit.is_counterfactual_result_current(
+        evidence, intervention_hash
     ):
         raise BrainError("counterfactual evidence is stale or malformed")
     with_arm, without_arm = evidence.get("with_arm"), evidence.get("without_arm")
@@ -219,9 +219,8 @@ def _counterfactual_evidence(result: dict, intervention_hash: str) -> tuple[dict
     if with_arm.get("run_id") == without_arm.get("run_id"):
         raise BrainError("counterfactual arms must have distinct run ids")
     for arm in (with_arm, without_arm):
-        if (
-            not isinstance(arm.get("verification"), dict)
-            or not isinstance(arm.get("regressions"), dict)
+        if not isinstance(arm.get("verification"), dict) or not isinstance(
+            arm.get("regressions"), dict
         ):
             raise BrainError(
                 "counterfactual evidence requires verification and regression evidence"
@@ -250,11 +249,15 @@ def _counterfactual_evidence(result: dict, intervention_hash: str) -> tuple[dict
         "baseline": {"input_tokens": int(without_tokens), "output_tokens": 0},
         "candidate": {"input_tokens": int(with_tokens), "output_tokens": 0},
         "quality": {
-            "correctness": verified, "requirements": verified, "protected_values": verified,
-            "regressions": not verified, "verification": verified,
+            "correctness": verified,
+            "requirements": verified,
+            "protected_values": verified,
+            "regressions": not verified,
+            "verification": verified,
         },
         "gates": {
-            "trigger": {"failed": 0}, "workflow": {"structural": verified, "failed": 0},
+            "trigger": {"failed": 0},
+            "workflow": {"structural": verified, "failed": 0},
             "regression": {"regression": not verified, "failed": 0},
             "security": {"passed": verified},
         },
@@ -363,7 +366,10 @@ def evaluate(home: Path, proposal_id: str, result: dict) -> dict:
         net_value = roi.get("net_tokens_saved", 0)
         if isinstance(net_value, (int, float)) and net_value > 0:
             plasticity.utility_update(
-                home, skill_name, "skill", float(net_value),
+                home,
+                skill_name,
+                "skill",
+                float(net_value),
                 f"verified optimization evaluation {summary.get('evaluation_id', '')}",
             )
     return updated

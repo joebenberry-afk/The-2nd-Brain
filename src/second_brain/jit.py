@@ -1,11 +1,9 @@
 """JIT context compiler (plan §25): deterministic task context capsules.
 
-Compiles the working set (capsule, requirement ledger, read ledger) plus
-optional project state into one markdown capsule at
-``outputs/context-capsules/<session-id>-<slug>.md``. No model, no network:
-identical inputs produce an identical body; only the header's ``compiled_at``
-timestamp changes between runs. Missing or corrupt working-set files degrade
-to ``(none)`` markers instead of crashing.
+The body uses a fixed safety ordering: task, protected references, task
+evidence, verified decisions, memory references, procedures, then the existing
+working-set sections. Optional ordered references are caller-supplied evidence
+handles; they are bounded and rendered without executing or resolving them.
 """
 
 from __future__ import annotations
@@ -29,6 +27,16 @@ from .working_set import (
 )
 
 SLUG_MAX = 40
+
+CONTEXT_ORDER: tuple[str, ...] = (
+    "protected_refs",
+    "task_evidence",
+    "verified_decisions",
+    "memory_refs",
+    "procedure_refs",
+)
+_CONTEXT_REF_MAX = 512
+_CONTEXT_REF_LIMIT = 32
 BODY_MARKER = "# Task"  # the body starts at this line; everything before is header
 
 
@@ -141,10 +149,41 @@ def compile_context(
     session_id: str,
     task: str,
     project_key: str | None = None,
+    *,
+    protected_refs: list[str] | None = None,
+    task_evidence: list[str] | None = None,
+    verified_decisions: list[str] | None = None,
+    memory_refs: list[str] | None = None,
+    procedure_refs: list[str] | None = None,
 ) -> Path:
-    """Compile the task context capsule. Returns its path."""
+    """Compile the task context capsule. Returns its path.
+
+    Ordered references are metadata only. Resolution and authorization remain
+    the responsibility of the caller; this compiler never treats them as
+    executable instructions.
+    """
     if not isinstance(task, str):
         raise BrainError("task must be a string")
+    ordered_refs = {
+        "protected_refs": protected_refs,
+        "task_evidence": task_evidence,
+        "verified_decisions": verified_decisions,
+        "memory_refs": memory_refs,
+        "procedure_refs": procedure_refs,
+    }
+    for name, refs in ordered_refs.items():
+        if refs is not None and (
+            not isinstance(refs, list)
+            or len(refs) > _CONTEXT_REF_LIMIT
+            or any(
+                not isinstance(ref, str) or not ref.strip() or len(ref) > _CONTEXT_REF_MAX
+                for ref in refs
+            )
+        ):
+            raise BrainError(
+                f"{name} must be a list of non-empty strings "
+                f"(max {_CONTEXT_REF_LIMIT} refs of {_CONTEXT_REF_MAX} chars)"
+            )
     session = session_dir(home, session_id)
     proj, project_sources = _project_files(home, project_key)
 
@@ -168,6 +207,23 @@ def compile_context(
     body.append("")
     body.append(task.strip() if task.strip() else "(none)")
     body.append("")
+
+    section_titles = {
+        "protected_refs": "Protected References",
+        "task_evidence": "Task Evidence",
+        "verified_decisions": "Verified Decisions",
+        "memory_refs": "Memory",
+        "procedure_refs": "Procedure",
+    }
+    for name in CONTEXT_ORDER:
+        body.append(f"# {section_titles[name]}")
+        body.append("")
+        refs = ordered_refs[name]
+        if refs:
+            body.extend(f"- {ref}" for ref in refs)
+        else:
+            body.append("(none)")
+        body.append("")
 
     body.append("# Requirements")
     body.append("")

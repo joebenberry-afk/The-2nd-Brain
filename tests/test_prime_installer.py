@@ -35,8 +35,10 @@ def test_installer_uses_source_root_and_rollback_is_byte_exact(tmp_path: Path) -
 
     installed = run_script(
         INSTALLER,
-        "-SourceRoot", str(source),
-        "-ExtensionsDir", str(extensions),
+        "-SourceRoot",
+        str(source),
+        "-ExtensionsDir",
+        str(extensions),
         env=env,
     )
 
@@ -49,9 +51,12 @@ def test_installer_uses_source_root_and_rollback_is_byte_exact(tmp_path: Path) -
 
     restored = run_script(
         UNINSTALLER,
-        "-SourceRoot", str(source),
-        "-ExtensionsDir", str(extensions),
-        "-BackupDir", str(backups[0]),
+        "-SourceRoot",
+        str(source),
+        "-ExtensionsDir",
+        str(extensions),
+        "-BackupDir",
+        str(backups[0]),
         env=env,
     )
 
@@ -68,8 +73,10 @@ def test_missing_source_does_not_delete_installed_extension(tmp_path: Path) -> N
 
     result = run_script(
         INSTALLER,
-        "-SourceRoot", str(tmp_path / "missing"),
-        "-ExtensionsDir", str(extensions),
+        "-SourceRoot",
+        str(tmp_path / "missing"),
+        "-ExtensionsDir",
+        str(extensions),
     )
 
     assert result.returncode != 0

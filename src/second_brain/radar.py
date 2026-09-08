@@ -45,9 +45,11 @@ _FINGERPRINT_CATEGORY = {
     InefficiencyPattern.CONTEXT_CHURN: BottleneckCategory.PROMPT_BLOAT,
 }
 
+
 @dataclass
 class ImprovementAlert:
     """An alert emitted by the Improvement Radar (§3 P3.10)."""
+
     pattern: InefficiencyPattern
     severity: str  # "INFO", "WARNING", "CRITICAL"
     summary: str
@@ -110,11 +112,10 @@ class ImprovementRadar:
     @staticmethod
     def _signal_key(alert: ImprovementAlert) -> str:
         stable = [
-            item
-            for item in alert.evidence
-            if item.startswith("Path:") or item.startswith("Tool:")
+            item for item in alert.evidence if item.startswith("Path:") or item.startswith("Tool:")
         ]
         return f"{alert.pattern.value}|{'|'.join(stable)}"
+
     def _session_rows(self, session_id: str) -> list[tuple[str, int, dict[str, Any]]]:
         path = telemetry.telemetry_dir(self.home) / f"{session_id}.jsonl"
         if path.is_file():
@@ -135,7 +136,6 @@ class ImprovementRadar:
             for filename, line_number, record in telemetry.iter_records(self.home)
             if record.get("session") == session_id
         ]
-
 
     def observe_session(
         self,
@@ -242,8 +242,7 @@ class ImprovementRadar:
                 candidates.append(existing)
             existing.setdefault("fingerprints", [])
             duplicate_observation = any(
-                item.get("observation_id") == observation_id
-                for item in existing["observations"]
+                item.get("observation_id") == observation_id for item in existing["observations"]
             )
             if not duplicate_observation or not existing["fingerprints"]:
                 fingerprint = project_fingerprint(alert, refs)
@@ -314,14 +313,11 @@ class ImprovementRadar:
         if candidate is None:
             raise BrainError(f"unknown Radar candidate: {candidate_id}")
         return candidate
+
     def validate_candidate(self, candidate_id: str) -> dict[str, Any]:
         """Re-read referenced telemetry; stale evidence is never promotable."""
         candidate = next(
-            (
-                item
-                for item in self._load_candidates()
-                if item.get("candidate_id") == candidate_id
-            ),
+            (item for item in self._load_candidates() if item.get("candidate_id") == candidate_id),
             None,
         )
         if candidate is None:
@@ -427,8 +423,7 @@ class ImprovementRadar:
                             f"Consecutive errors: {consecutive_errors}",
                         ],
                         suggested_action=(
-                            "Review tool parameters or inspect error diagnostics "
-                            "before retrying."
+                            "Review tool parameters or inspect error diagnostics before retrying."
                         ),
                         tokens_wasted_estimate=consecutive_errors * 500,
                         created_at=now,
@@ -468,8 +463,7 @@ class ImprovementRadar:
     def analyze_session(self, session_id: str) -> list[ImprovementAlert]:
         """Load session telemetry and return detected improvement alerts."""
         safe_stem = (
-            "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in session_id)
-            or "anon"
+            "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in session_id) or "anon"
         )
         t_file = telemetry.telemetry_dir(self.home) / f"{safe_stem}.jsonl"
         if not t_file.exists():

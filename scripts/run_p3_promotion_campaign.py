@@ -238,7 +238,8 @@ def validate_arm(arm: dict) -> list[str]:
     if not arm.get("brain_telemetry"):
         problems.append("no Brain hook telemetry captured")
     tool_records = [
-        t for t in arm.get("brain_telemetry", [])
+        t
+        for t in arm.get("brain_telemetry", [])
         if (
             isinstance(t, dict)
             and t.get("kind") == "tool_result"
@@ -248,7 +249,8 @@ def validate_arm(arm: dict) -> list[str]:
     if not tool_records:
         problems.append("no real tool activity recorded in hook telemetry")
     lean_telems = [
-        t for t in arm.get("lean_telemetry", [])
+        t
+        for t in arm.get("lean_telemetry", [])
         if isinstance(t, dict) and t.get("lean_decision") is not None
     ]
     if arm["lean_state"] == "ON":
@@ -377,9 +379,7 @@ def run_arm(task_id: str, slug: str, arm_type: str, provider: str, tmp_root: Pat
     numstat = run_cmd(["git", "diff", "--numstat", "HEAD"], cwd=workdir)
     nameonly = run_cmd(["git", "diff", "--name-only", "HEAD"], cwd=workdir)
     status = run_cmd(["git", "status", "--porcelain"], cwd=workdir)
-    arm["diff"]["changed_files"] = [
-        f.strip() for f in nameonly.stdout.splitlines() if f.strip()
-    ]
+    arm["diff"]["changed_files"] = [f.strip() for f in nameonly.stdout.splitlines() if f.strip()]
     arm["diff"]["new_files"] = [
         line.strip()[3:] for line in status.stdout.splitlines() if line.startswith("??")
     ]

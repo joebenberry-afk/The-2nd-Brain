@@ -1,141 +1,367 @@
-"""Focused T7.6 Engrams + model/harness culture + teacher/student distillation tests."""
+"""Focused workflow engram execution, cache, and distillation tests."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from second_brain import crossmodel, engram
+from second_brain.errors import BrainError
+from second_brain.security.paths import resolve_under
 
 
-def test_engram_detected_only_with_min_support() -> None:
-    """Tool-call sequences must meet the minimum support threshold (>=2) to be detected."""
-    seq1 = [
-        {"kind": "tool_call", "tool": "git_status"},
-        {"kind": "tool_call", "tool": "git_diff"},
-        {"kind": "tool_call", "tool": "run_test"},
-    ]
-    seq2 = [
-        {"kind": "tool_call", "tool": "read_file"},
-        {"kind": "tool_call", "tool": "edit_file"},
-    ]
+def _event(tool: str, session: str = "session", **args: object) -> dict[str, object]:
+    return {
+        "kind": "tool_call",
+        "session": session,
+        "tool": tool,
+        "input": args,
+        "result": {"exit_code": 0, "side_effect": False},
+    }
 
-    # Support = 1: Should NOT detect seq1
-    res_single = engram.detect_workflow_engrams([seq1], min_support=2, min_len=3, max_len=5)
-    assert res_single == []
 
-    # Support = 2: Both session 1 and session 3 have seq1 -> Detected!
+def _result(
+    tool: str, *, exit_code: int = 0, side_effect: bool = False, **extra: object
+) -> dict[str, object]:
+    return {"tool": tool, "exit_code": exit_code, "side_effect": side_effect, **extra}
+
+
+def _io_runner(home: Path, calls: list[str]):
+    def run(tool: str, args: Mapping[str, object]) -> dict[str, object]:
+        calls.append(tool)
+        if tool == "write_marker":
+            path = resolve_under(home, str(args["path"]), allow_missing=True)
+            path.write_text(str(args["content"]), encoding="utf-8")
+            return _result(tool, side_effect=True)
+        if tool == "read_file":
+            path = resolve_under(home, str(args["path"]))
+            return _result(tool, content=path.read_text(encoding="utf-8"))
+        raise RuntimeError(f"unsupported owned test tool: {tool}")
+
+    return run
+
+
+def _predicate_runner(home: Path, calls: list[str]):
+    def run(predicate: str, args: Mapping[str, object]) -> dict[str, object]:
+        calls.append(predicate)
+        path = resolve_under(home, str(args["path"]), allow_missing=predicate == "path_exists")
+        if predicate == "path_exists":
+            return _result(predicate, exit_code=0 if path.exists() else 1)
+        if predicate == "file_nonempty":
+            return _result(predicate, exit_code=0 if path.is_file() and path.stat().st_size else 1)
+        if predicate == "file_contains":
+            return _result(
+                predicate,
+                exit_code=0
+                if path.is_file() and str(args["text"]) in path.read_text(encoding="utf-8")
+                else 1,
+            )
+        raise RuntimeError(f"unsupported owned test predicate: {predicate}")
+
+    return run
+
+
+def test_engram_detected_only_from_repeated_successful_calls() -> None:
+    seq1 = [_event("git_status"), _event("git_diff"), _event("run_test")]
+    seq2 = [_event("read_file"), _event("edit_file")]
     seq3 = [
-        {"kind": "tool_call", "tool": "git_status"},
-        {"kind": "tool_call", "tool": "git_diff"},
-        {"kind": "tool_call", "tool": "run_test"},
-        {"kind": "tool_call", "tool": "git_commit"},
+        _event("git_status"),
+        _event("git_diff"),
+        _event("run_test"),
+        _event("git_commit"),
     ]
-    res_multi = engram.detect_workflow_engrams([seq1, seq2, seq3], min_support=2, min_len=3, max_len=5)
-    assert len(res_multi) >= 1
-    found = res_multi[0]
+    assert engram.detect_workflow_engrams([seq1], min_support=2, min_len=3, max_len=5) == []
+
+    found = engram.detect_workflow_engrams([seq1, seq2, seq3], min_support=2, min_len=3, max_len=5)[
+        0
+    ]
     assert found["sequence"] == ["git_status", "git_diff", "run_test"]
-    assert found["support"] >= 2
+    assert found["support"] == 2
     assert len(found["procedure"]) == 3
+    assert found["provenance"]
+    assert "valid_for" not in found
+    assert "precondition" not in found["procedure"][0]
 
 
-def test_engram_run_uses_zero_model_calls(brain_home: Path) -> None:
-    """Deterministic engram execution executes through action_cache with zero model calls."""
-    engram_def = {
-        "engram_id": "engram-clean-check",
-        "version": 1,
-        "procedure": [
-            {
-                "tool": "check_clean",
-                "args_template": {"path": "$target_dir"},
-                "precondition": {"expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"expect_exit": 0, "actual_exit": 0},
-            },
-            {
-                "tool": "run_build",
-                "args_template": {"mode": "fast"},
-                "precondition": {"expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"expect_exit": 0, "actual_exit": 0},
-            },
-            {
-                "tool": "verify_output",
-                "args_template": {"artifact": "dist/bundle.js"},
-                "precondition": {"expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"expect_exit": 0, "actual_exit": 0},
-            },
-        ],
-    }
-    engram.register_workflow_engram(brain_home, engram_def)
-
-    tool_call_count = 0
-
-    def mock_runner(tool: str, args: Mapping[str, object]) -> dict[str, object]:
-        nonlocal tool_call_count
-        tool_call_count += 1
-        return {"tool": tool, "args": args, "status": "ok"}
-
-    # Run 1: Cold execution
-    res1 = engram.run_deterministic(
+def test_missing_executor_is_refused(brain_home: Path) -> None:
+    engram.register_workflow_engram(
         brain_home,
-        "engram-clean-check",
-        params={"target_dir": "src/"},
-        tool_runner=mock_runner,
+        {"engram_id": "requires-runner", "version": 1, "procedure": [{"tool": "read_file"}]},
     )
-    assert res1["success"] is True
-    assert res1["model_calls"] == 0
-    assert res1["cache_hit"] is False
-    assert tool_call_count == 3
+    with pytest.raises(BrainError, match="tool_runner"):
+        engram.run_deterministic(brain_home, "requires-runner", params={})
 
-    # Run 2: Cached execution through action_cache
-    res2 = engram.run_deterministic(
+
+def test_real_side_effects_and_predicates_execute_each_time(brain_home: Path) -> None:
+    engram.register_workflow_engram(
         brain_home,
-        "engram-clean-check",
-        params={"target_dir": "src/"},
-        tool_runner=mock_runner,
+        {
+            "engram_id": "owned-side-effect",
+            "version": 1,
+            "procedure": [
+                {
+                    "tool": "write_marker",
+                    "args_template": {"path": "$path", "content": "$content"},
+                    "precondition": {
+                        "predicate": "path_exists",
+                        "args_template": {"path": "$path"},
+                        "expect_exit": 1,
+                    },
+                    "postcondition": {
+                        "predicate": "file_contains",
+                        "args_template": {"path": "$path", "text": "$content"},
+                        "expect_exit": 0,
+                    },
+                }
+            ],
+        },
     )
-    assert res2["success"] is True
-    assert res2["model_calls"] == 0
-    assert res2["cache_hit"] is True
-    # Tool runner not invoked again because action_cache hit!
-    assert tool_call_count == 3
+    tool_calls: list[str] = []
+    predicate_calls: list[str] = []
+    runner = _io_runner(brain_home, tool_calls)
+    predicates = _predicate_runner(brain_home, predicate_calls)
+    first = engram.run_deterministic(
+        brain_home,
+        "owned-side-effect",
+        params={"path": "state/marker.txt", "content": "owned"},
+        tool_runner=runner,
+        predicate_runner=predicates,
+    )
+    assert first["success"] is True
+    assert first["cache_hit"] is False
+    assert (brain_home / "state" / "marker.txt").read_text(encoding="utf-8") == "owned"
+    second = engram.run_deterministic(
+        brain_home,
+        "owned-side-effect",
+        params={"path": "state/marker.txt", "content": "owned"},
+        tool_runner=runner,
+        predicate_runner=predicates,
+    )
+    assert second["success"] is False
+    assert second["reason"] == "precondition_failed"
+    assert tool_calls == ["write_marker"]
+    assert predicate_calls.count("path_exists") == 2
 
 
-def test_engram_postcondition_failure_marks_run_failed(brain_home: Path) -> None:
-    """Postcondition check failures immediately halt the run and mark it failed."""
-    engram_def = {
-        "engram_id": "engram-failing-post",
-        "version": 1,
-        "procedure": [
-            {
-                "tool": "step_one",
-                "args_template": {},
-                "precondition": {"expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"expect_exit": 0, "actual_exit": 0},
-            },
-            {
-                "tool": "step_two_fails_postcondition",
-                "args_template": {},
-                "precondition": {"expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"expect_exit": 0, "actual_exit": 1},  # Exit 1 != 0!
-            },
-            {
-                "tool": "step_three_never_run",
-                "args_template": {},
-            },
-        ],
-    }
-    engram.register_workflow_engram(brain_home, engram_def)
+@pytest.mark.parametrize(
+    ("initial", "content", "expected_success"),
+    [(None, "created", True), ("original", "", False)],
+)
+def test_step_preconditions_observe_prior_effects(
+    brain_home: Path, initial: str | None, content: str, expected_success: bool
+) -> None:
+    target = brain_home / "state" / "ordered.txt"
+    if initial is not None:
+        target.write_text(initial, encoding="utf-8")
+    engram.register_workflow_engram(
+        brain_home,
+        {
+            "engram_id": "ordered-conditions",
+            "procedure": [
+                {
+                    "tool": "write_marker",
+                    "args_template": {"path": "$path", "content": "$content"},
+                    "effect": "write",
+                },
+                {
+                    "tool": "read_file",
+                    "args_template": {"path": "$path"},
+                    "effect": "read",
+                    "precondition": {
+                        "predicate": "file_nonempty",
+                        "args_template": {"path": "$path"},
+                        "expect_exit": 0,
+                    },
+                },
+            ],
+        },
+    )
+    result = engram.run_deterministic(
+        brain_home,
+        "ordered-conditions",
+        {"path": "state/ordered.txt", "content": content},
+        tool_runner=_io_runner(brain_home, []),
+        predicate_runner=_predicate_runner(brain_home, []),
+    )
+    assert result["success"] is expected_success
+    assert target.read_text(encoding="utf-8") == content
+    if expected_success:
+        assert result["steps"][1]["output"]["content"] == content
+    else:
+        assert result["failed_step"] == 1
+        assert result["failed_phase"] == "precondition"
+        assert result["steps_executed"] == 1
 
-    res = engram.run_deterministic(brain_home, "engram-failing-post", params={})
-    assert res["success"] is False
-    assert res["failed_step"] == 1
-    assert res["failed_phase"] == "postcondition"
-    assert res["reason"] == "postcondition_failed"
-    assert res["steps_executed"] == 1
+
+def test_failed_tool_preserves_actual_outcome_and_side_effects(brain_home: Path) -> None:
+    target = brain_home / "state" / "partial.txt"
+
+    def partial_write(tool: str, _args: Mapping[str, object]) -> dict[str, object]:
+        target.write_text("partial", encoding="utf-8")
+        return _result(tool, exit_code=7, side_effect=True, stderr="write failed after mutation")
+
+    engram.register_workflow_engram(
+        brain_home,
+        {
+            "engram_id": "partial-outcome",
+            "procedure": [{"tool": "partial_write", "effect": "write"}],
+        },
+    )
+    result = engram.run_deterministic(brain_home, "partial-outcome", {}, tool_runner=partial_write)
+    assert result["success"] is False
+    assert result["steps_executed"] == 1
+    assert result["steps"][0]["output"]["exit_code"] == 7
+    assert result["steps"][0]["output"]["stderr"] == "write failed after mutation"
+    assert target.read_text(encoding="utf-8") == "partial"
+
+
+def test_read_only_cache_invalidates_on_changed_input(brain_home: Path) -> None:
+    source = brain_home / "state" / "input.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("before", encoding="utf-8")
+    engram.register_workflow_engram(
+        brain_home,
+        {
+            "engram_id": "owned-read-cache",
+            "version": 1,
+            "cache_policy": "read_only",
+            "cache_inputs": ["path"],
+            "procedure": [
+                {
+                    "tool": "read_file",
+                    "effect": "read",
+                    "args_template": {"path": "$path"},
+                    "postcondition": {
+                        "predicate": "file_nonempty",
+                        "args_template": {"path": "$path"},
+                        "expect_exit": 0,
+                    },
+                }
+            ],
+        },
+    )
+    tool_calls: list[str] = []
+    predicates: list[str] = []
+    params = {"path": "state/input.txt"}
+    first = engram.run_deterministic(
+        brain_home,
+        "owned-read-cache",
+        params=params,
+        tool_runner=_io_runner(brain_home, tool_calls),
+        predicate_runner=_predicate_runner(brain_home, predicates),
+    )
+    second = engram.run_deterministic(
+        brain_home,
+        "owned-read-cache",
+        params=params,
+        tool_runner=_io_runner(brain_home, tool_calls),
+        predicate_runner=_predicate_runner(brain_home, predicates),
+    )
+    source.write_text("after", encoding="utf-8")
+    third = engram.run_deterministic(
+        brain_home,
+        "owned-read-cache",
+        params=params,
+        tool_runner=_io_runner(brain_home, tool_calls),
+        predicate_runner=_predicate_runner(brain_home, predicates),
+    )
+    assert first["cache_hit"] is False
+    assert second["cache_hit"] is True
+    assert second["steps_executed"] == 0
+    assert third["cache_hit"] is False
+    assert third["steps"][0]["output"]["content"] == "after"
+    assert tool_calls == ["read_file", "read_file"]
+
+
+def test_failed_tool_and_failed_postcondition_are_not_cached(brain_home: Path) -> None:
+    source = brain_home / "state" / "input.txt"
+    gate = brain_home / "state" / "gate.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("data", encoding="utf-8")
+    gate.write_text("", encoding="utf-8")
+    engram.register_workflow_engram(
+        brain_home,
+        {
+            "engram_id": "owned-failure-cache",
+            "version": 1,
+            "cache_policy": "read_only",
+            "cache_inputs": ["path"],
+            "procedure": [
+                {
+                    "tool": "read_file",
+                    "effect": "read",
+                    "args_template": {"path": "$path"},
+                    "postcondition": {
+                        "predicate": "file_contains",
+                        "args_template": {"path": "$gate", "text": "open"},
+                        "expect_exit": 0,
+                    },
+                }
+            ],
+        },
+    )
+    calls: list[str] = []
+    predicates: list[str] = []
+    params = {"path": "state/input.txt", "gate": "state/gate.txt"}
+    first = engram.run_deterministic(
+        brain_home,
+        "owned-failure-cache",
+        params=params,
+        tool_runner=_io_runner(brain_home, calls),
+        predicate_runner=_predicate_runner(brain_home, predicates),
+    )
+    gate.write_text("open", encoding="utf-8")
+    second = engram.run_deterministic(
+        brain_home,
+        "owned-failure-cache",
+        params=params,
+        tool_runner=_io_runner(brain_home, calls),
+        predicate_runner=_predicate_runner(brain_home, predicates),
+    )
+    assert first["success"] is False
+    assert first["reason"] == "postcondition_failed"
+    assert second["success"] is True
+    assert second["cache_hit"] is False
+    assert calls == ["read_file", "read_file"]
+
+
+def test_invalid_identity_and_immutable_versions(brain_home: Path) -> None:
+    with pytest.raises(BrainError, match="engram name"):
+        engram.register_workflow_engram(
+            brain_home, {"engram_id": "../escape", "procedure": [{"tool": "read_file"}]}
+        )
+    with pytest.raises(BrainError, match="positive integer"):
+        engram.register_workflow_engram(
+            brain_home,
+            {
+                "engram_id": "versioned",
+                "version": 0,
+                "procedure": [{"tool": "read_file"}],
+            },
+        )
+    first = engram.register_workflow_engram(
+        brain_home,
+        {"engram_id": "versioned", "version": 1, "procedure": [{"tool": "read_file"}]},
+    )
+    with pytest.raises(BrainError, match="already exists"):
+        engram.register_workflow_engram(
+            brain_home,
+            {"engram_id": "versioned", "version": 1, "procedure": [{"tool": "write_marker"}]},
+        )
+    second = engram.register_workflow_engram(
+        brain_home,
+        {"engram_id": "versioned", "version": 2, "procedure": [{"tool": "write_marker"}]},
+    )
+    assert first["content_sha256"] != second["content_sha256"]
+    assert json.loads((brain_home / "engrams" / "deterministic" / "versioned_v1.json").read_text())[
+        "procedure"
+    ] == [{"tool": "read_file"}]
 
 
 def test_crossmodel_transfer_stays_candidate_until_verified(brain_home: Path) -> None:
-    """Cross-model transfer of an engram remains a candidate in SHADOW without global scope."""
     transfer = crossmodel.propose_transfer(
         brain_home,
         engram_id="engram-clean-check",
@@ -143,25 +369,20 @@ def test_crossmodel_transfer_stays_candidate_until_verified(brain_home: Path) ->
         to_model="claude-3-5-haiku",
         harness="claude-code",
     )
-
     assert transfer["status"] == "candidate"
     assert transfer["rollout_stage"] == "SHADOW"
     assert transfer["verified"] is False
-    # No global scope granted merely because teacher was premium model!
     assert transfer["scope"] == "candidate"
 
 
 def test_teacher_student_requires_same_acceptance(brain_home: Path) -> None:
-    """Student distillation must satisfy 100% of the same postconditions as the teacher."""
     fixture = {
         "expected_postconditions": ["exit_code_0", "diff_clean", "lint_passed"],
         "student_run": {
-            "passed_postconditions": ["exit_code_0", "diff_clean"],  # missing lint_passed!
+            "passed_postconditions": ["exit_code_0", "diff_clean"],
             "acceptance_passed": False,
         },
     }
-
-    # Case A: Student fails one postcondition -> HELD, not approved
     eval_fail = crossmodel.evaluate_teacher_student(
         brain_home,
         engram_id="engram-clean-check",
@@ -172,7 +393,6 @@ def test_teacher_student_requires_same_acceptance(brain_home: Path) -> None:
     assert eval_fail["status"] == "HELD"
     assert eval_fail["transfer_approved"] is False
 
-    # Case B: Student satisfies all postconditions -> VERIFIED
     fixture_pass = {
         "expected_postconditions": ["exit_code_0", "diff_clean", "lint_passed"],
         "student_run": {

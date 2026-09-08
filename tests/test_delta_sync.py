@@ -205,7 +205,12 @@ class TestDeltaSyncEngine:
 
     def test_engine_without_constructor_session_persists_per_sync_session(self, tmp_path):
         home = tmp_path / "brain"
-        item = {"memory_id": "mem-persist-default", "version": 1, "status": "current", "title": "Persisted"}
+        item = {
+            "memory_id": "mem-persist-default",
+            "version": 1,
+            "status": "current",
+            "title": "Persisted",
+        }
         first = DeltaSyncEngine(home=home)
         first.sync_memories("sess-default", [item])
         second = DeltaSyncEngine(home=home)
@@ -221,6 +226,7 @@ class TestDeltaSyncEngine:
                 [{"memory_id": "m", "version": 1, "status": "current", "title": "x"}],
             )
         assert not (home.parent / "state" / "sessions" / "delta-sync.json").exists()
+
     def test_malformed_delta_sync_state_fails_open_without_overwrite(self, tmp_path):
         home = tmp_path / "brain"
         state = home / "state" / "sessions" / "sess-malformed" / "delta-sync.json"

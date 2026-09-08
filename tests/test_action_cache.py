@@ -252,11 +252,16 @@ class TestActionCacheStoreAndReplay:
             and "where" in sql.lower()
             and sql.strip().upper().startswith("SELECT")
         ]
-        assert target_where_queries, executed  # must actually filter by target in SQL, not in Python
+        assert target_where_queries, (
+            executed
+        )  # must actually filter by target in SQL, not in Python
 
         plan = conn.execute(f"EXPLAIN QUERY PLAN {target_where_queries[0]}").fetchall()
         details = [" ".join(str(v) for v in row) for row in plan]
-        assert any("USING INDEX idx_action_target" in d for d in details), (target_where_queries, details)
+        assert any("USING INDEX idx_action_target" in d for d in details), (
+            target_where_queries,
+            details,
+        )
 
 
 class TestActionCacheGateBenchmark:
@@ -368,18 +373,27 @@ class TestActionCacheArtifactRefs:
             constant_fingerprint={"test": "artifact-ref-lru"},
         )
         e1 = cache.put(
-            action_type=ActionType.GENERIC_PURE, target="f1.py", content="c1",
-            proof=proof, params={"p": 1},
+            action_type=ActionType.GENERIC_PURE,
+            target="f1.py",
+            content="c1",
+            proof=proof,
+            params={"p": 1},
         )
         time.sleep(0.01)
         e2 = cache.put(
-            action_type=ActionType.GENERIC_PURE, target="f2.py", content="c2",
-            proof=proof, params={"p": 2},
+            action_type=ActionType.GENERIC_PURE,
+            target="f2.py",
+            content="c2",
+            proof=proof,
+            params={"p": 2},
         )
         time.sleep(0.01)
         e3 = cache.put(
-            action_type=ActionType.GENERIC_PURE, target="f3.py", content="c3",
-            proof=proof, params={"p": 3},
+            action_type=ActionType.GENERIC_PURE,
+            target="f3.py",
+            content="c3",
+            proof=proof,
+            params={"p": 3},
         )
         assert e1 is not None and e2 is not None and e3 is not None
         conn = db_mod.connect(db_mod.db_path(tmp_path), readonly=True)

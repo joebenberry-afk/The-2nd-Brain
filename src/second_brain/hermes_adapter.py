@@ -1,14 +1,15 @@
 """Thin Hermes-to-Second-Brain lifecycle adapter.
 
-Hermes owns the plugin lifecycle and ephemeral prompt injection. This module
-only translates those callbacks into the existing Brain session, AutoInject,
-semantic writeback, telemetry, and ledger primitives. It deliberately does
-not maintain a Hermes-specific memory or retrieval store.
+Hermes owns the plugin lifecycle and ephemeral prompt injection. This module only
+translates those callbacks into the existing Brain session, AutoInject, semantic
+writeback, telemetry, and ledger primitives. It deliberately does not maintain a Hermes-
+specific memory or retrieval store.
 """
 
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -37,6 +38,7 @@ from . import (
     working_set,
 )
 from .errors import BrainError
+
 ADAPTER_VERSION = "0.1.0"
 _HOST = "hermes"
 _SUPPORTED_EVENTS = {
@@ -70,9 +72,9 @@ _BUDGET_POLICY_VERSION = "v3.1"
 
 
 def _budget_rollout_stage(home: Path) -> str:
-    """config/v2.toml [rollout] brainstem; SHADOW default (same
-    stage-resolution pattern used by the "routing"/"eviction" decisions()
-    call sites in this module and in vmem.py)."""
+    """config/v2.toml [rollout] brainstem; SHADOW default (same stage-resolution pattern
+    used by the "routing"/"eviction" decisions() call sites in this module and in
+    vmem.py)."""
     stage = "SHADOW"
     try:
         v2_raw = tomllib.loads((home / "config" / "v2.toml").read_text(encoding="utf-8"))
@@ -125,10 +127,9 @@ def _save_vmem_cache_state(home: Path, host_session_id: str, state: dict[str, An
         tmp.write_text(json.dumps(state), encoding="utf-8")
         tmp.replace(fpath)
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             fpath.write_text(json.dumps(state), encoding="utf-8")
-        except Exception:
-            pass
+
 
 @dataclass(frozen=True)
 class HermesBinding:
@@ -235,9 +236,7 @@ def _reread_path(tool_name: str, payload: dict[str, Any]) -> str | None:
         payload.get("path"),
         payload.get("file"),
         payload.get("file_path"),
-        payload.get("args", {}).get("path")
-        if isinstance(payload.get("args"), dict)
-        else None,
+        payload.get("args", {}).get("path") if isinstance(payload.get("args"), dict) else None,
     ):
         if isinstance(value, str) and value.strip():
             return value
@@ -275,7 +274,7 @@ def _reread_hint(
     if hint is None:
         return None
     path_sha = _sha256(path)
-    try:
+    with contextlib.suppress(Exception):
         decisions.record(
             home,
             kind="reread",
@@ -289,8 +288,6 @@ def _reread_hint(
             stage=mode,
             inputs={"path_sha256": path_sha},
         )
-    except Exception:
-        pass
     autoinject._append_telemetry(
         home,
         binding.host_session_id,
@@ -322,6 +319,7 @@ def _reread_replacement(info: dict[str, Any], current_sha: str) -> str | None:
         f"Prior distilled view reference: {ref}"
     )
 
+
 def _default_role(bot_name: str) -> str:
     return {
         "brain-dev": "dev",
@@ -333,10 +331,10 @@ def _default_role(bot_name: str) -> str:
 def resolve_binding(home: Path | str, payload: dict[str, Any]) -> HermesBinding:
     """Resolve Hermes metadata into one stable Brain session binding.
 
-    The raw Hermes session identifier is kept as metadata, while the canonical
-    Brain host-session key includes the configured bot name. This prevents a
-    reconnect from creating unrelated Brain state and keeps the three team bots
-    distinguishable even when they use the same project.
+    The raw Hermes session identifier is kept as metadata, while the canonical Brain
+    host-session key includes the configured bot name. This prevents a reconnect from
+    creating unrelated Brain state and keeps the three team bots distinguishable even
+    when they use the same project.
     """
     home_path = Path(home)
     bot_name = _first_text(
@@ -553,9 +551,7 @@ def _context_event_payload(
         "context_fingerprint": metadata.get("context_fingerprint"),
         "previous_context_fingerprint": metadata.get("previous_context_fingerprint"),
         "context_handoff_bytes": metadata.get("context_handoff_bytes", 0),
-        "context_handoff_tokens_estimate": metadata.get(
-            "context_handoff_tokens_estimate", 0
-        ),
+        "context_handoff_tokens_estimate": metadata.get("context_handoff_tokens_estimate", 0),
         "context_delta_bytes": metadata.get("context_delta_bytes", 0),
         "context_delta_tokens_estimate": metadata.get("context_delta_tokens_estimate", 0),
         "context_changed_ref_count": metadata.get("changed_ref_count", 0),
@@ -627,9 +623,7 @@ def prepare_worker_task(
     home_path = Path(home)
     try:
         packet = contracts.WorkerTaskPacket.from_dict(packet_data)
-        existing = worker_protocol.lookup_task(
-            home_path, packet.task_id, packet.canonical_hash()
-        )
+        existing = worker_protocol.lookup_task(home_path, packet.task_id, packet.canonical_hash())
         if (
             existing
             and existing.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
@@ -662,7 +656,10 @@ def prepare_worker_task(
             session_id=binding.host_session_id,
             dispatch_payload=packet_data,
         )
-        if registration.get("duplicate") and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES:
+        if (
+            registration.get("duplicate")
+            and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
+        ):
             return {
                 **_response_base(binding, "worker_task_prepare"),
                 "status": "prepared",
@@ -722,9 +719,7 @@ def request_worker_task(
         }
     home_path = Path(home)
     try:
-        existing = worker_protocol.lookup_task(
-            home_path, packet.task_id, packet.canonical_hash()
-        )
+        existing = worker_protocol.lookup_task(home_path, packet.task_id, packet.canonical_hash())
     except contracts.WorkerPacketError as exc:
         return {
             **_response_base(binding, "worker_task_request"),
@@ -877,13 +872,21 @@ def request_worker_task(
         home_path,
         binding.host_session_id,
         "handoff_received",
-        {"task_id": packet.task_id, "packet_sha256": packet.canonical_hash(), "state": contracts.WorkerLifecycle.WORKING},
+        {
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+            "state": contracts.WorkerLifecycle.WORKING,
+        },
     )
     autoinject._append_telemetry(
         home_path,
         binding.host_session_id,
         "handoff_accepted",
-        {"task_id": packet.task_id, "packet_sha256": packet.canonical_hash(), "state": contracts.WorkerLifecycle.WORKING},
+        {
+            "task_id": packet.task_id,
+            "packet_sha256": packet.canonical_hash(),
+            "state": contracts.WorkerLifecycle.WORKING,
+        },
     )
     if result_data is None:
         result = _unavailable_result(packet)
@@ -933,9 +936,7 @@ def request_worker_task(
             "evidence_hash": result.canonical_hash(),
         },
     )
-    result_evidence = _review_evidence(
-        result, result_data if isinstance(result_data, dict) else {}
-    )
+    result_evidence = _review_evidence(result, result_data if isinstance(result_data, dict) else {})
     result_payload = _worker_payload(
         binding, packet, result, result.status, context_metadata=context_metadata
     )
@@ -967,6 +968,7 @@ def request_worker_task(
         "result": result_wire,
     }
 
+
 def handle_worker_event(
     home: Path | str,
     binding: HermesBinding,
@@ -995,37 +997,42 @@ def handle_worker_event(
             "duplicate",
         )
     }
-    event_kind = str(event_data.get("event") or event_data.get("type") or event_data.get("status") or "")
+    event_kind = str(
+        event_data.get("event") or event_data.get("type") or event_data.get("status") or ""
+    )
     telemetry_kind = (
         "handoff_accepted"
-        if event_kind.casefold() in {
+        if event_kind.casefold()
+        in {
             "accepted",
             "worker_accepted",
             "started",
             "worker_started",
             "working",
         }
-        else "handoff_result"
-        if event_kind.casefold() in {
-            "completed",
-            "worker_completed",
-            "task_completed",
-            "failed",
-            "worker_failed",
-            "task_failed",
-            "rejected",
-            "worker_rejected",
-            "cancelled",
-            "canceled",
-            "worker_cancelled",
-            "worker_canceled",
-        }
-        else "handoff_received"
+        else (
+            "handoff_result"
+            if event_kind.casefold()
+            in {
+                "completed",
+                "worker_completed",
+                "task_completed",
+                "failed",
+                "worker_failed",
+                "task_failed",
+                "rejected",
+                "worker_rejected",
+                "cancelled",
+                "canceled",
+                "worker_cancelled",
+                "worker_canceled",
+            }
+            else "handoff_received"
+        )
     )
-    autoinject._append_telemetry(
-        Path(home), binding.host_session_id, telemetry_kind, safe
-    )
+    autoinject._append_telemetry(Path(home), binding.host_session_id, telemetry_kind, safe)
     return {**_response_base(binding, "worker_event"), "status": "ok", **safe}
+
 
 _REVIEW_EVIDENCE_MAX_BYTES = 4_096
 
@@ -1048,10 +1055,12 @@ def _bounded_review_evidence(evidence: Any) -> Any:
                 )
                 for item in tests
             )
-            candidate = {"tests": tests} if valid_tests and any(
-                type(item["exit_code"]) is int and item["exit_code"] == 0
-                for item in tests
-            ) else None
+            candidate = (
+                {"tests": tests}
+                if valid_tests
+                and any(type(item["exit_code"]) is int and item["exit_code"] == 0 for item in tests)
+                else None
+            )
         elif (
             set(evidence).issubset({"diff_sha256", "diff_hash"})
             and worker_protocol._is_sha256(evidence.get("diff_sha256"))
@@ -1061,9 +1070,8 @@ def _bounded_review_evidence(evidence: Any) -> Any:
             )
         ):
             candidate = {"diff_sha256": evidence["diff_sha256"]}
-        elif (
-            set(evidence).issubset({"diff_hash"})
-            and worker_protocol._is_sha256(evidence.get("diff_hash"))
+        elif set(evidence).issubset({"diff_hash"}) and worker_protocol._is_sha256(
+            evidence.get("diff_hash")
         ):
             candidate = {"diff_sha256": evidence["diff_hash"]}
         else:
@@ -1095,16 +1103,14 @@ def _bounded_review_evidence(evidence: Any) -> Any:
     return candidate
 
 
-def _review_evidence(
-    result: contracts.WorkerResultPacket, result_data: dict[str, Any]
-) -> Any:
+def _review_evidence(result: contracts.WorkerResultPacket, result_data: dict[str, Any]) -> Any:
     evidence = _bounded_review_evidence(result_data.get("evidence"))
-    if evidence is None and result.evidence_refs and all(
-        worker_protocol._is_sha256(ref) for ref in result.evidence_refs
+    if (
+        evidence is None
+        and result.evidence_refs
+        and all(worker_protocol._is_sha256(ref) for ref in result.evidence_refs)
     ):
-        evidence = _bounded_review_evidence(
-            [{"diff_sha256": ref} for ref in result.evidence_refs]
-        )
+        evidence = _bounded_review_evidence([{"diff_sha256": ref} for ref in result.evidence_refs])
     return evidence
 
 
@@ -1140,9 +1146,13 @@ def review_worker_result(
         if evidence is not None
         else _review_evidence(result, result_data)
     )
-    if approved and preliminary_evidence is None and (
-        not worker_protocol._is_sha256(result_data.get("packet_sha256"))
-        or not worker_protocol._is_sha256(result_data.get("result_sha256"))
+    if (
+        approved
+        and preliminary_evidence is None
+        and (
+            not worker_protocol._is_sha256(result_data.get("packet_sha256"))
+            or not worker_protocol._is_sha256(result_data.get("result_sha256"))
+        )
     ):
         return {
             **_response_base(binding, "worker_result_review"),
@@ -1172,9 +1182,7 @@ def review_worker_result(
             "status": "failed",
             "failure_code": binding_error,
         }
-    owner_session = worker_protocol.task_owner_session(
-        Path(home), result.task_id, packet_sha256
-    )
+    owner_session = worker_protocol.task_owner_session(Path(home), result.task_id, packet_sha256)
     if owner_session != binding.host_session_id:
         return {
             **_response_base(binding, "worker_result_review"),
@@ -1401,9 +1409,7 @@ def return_corrected_worker_result(
             raise contracts.WorkerPacketError(
                 "CORRECTION_MISMATCH", "corrected worker identity does not correlate"
             )
-        task = worker_protocol.lookup_task(
-            Path(home), packet.task_id, packet.canonical_hash()
-        )
+        task = worker_protocol.lookup_task(Path(home), packet.task_id, packet.canonical_hash())
         if task is None:
             raise contracts.WorkerPacketError("ORPHAN_TASK", "unknown worker task")
         if task["state"] != contracts.WorkerLifecycle.COMPLETED:
@@ -1485,8 +1491,8 @@ def _injection_attribution(
     """Build one bounded, privacy-safe attribution shared by all surfaces.
 
     The decision is always the value returned by the live AutoInject lifecycle
-    authority.  The identifier contains no task text and is stable for the
-    same host session, task hash, turn, and decision.
+    authority.  The identifier contains no task text and is stable for the same host
+    session, task hash, turn, and decision.
     """
     task_sha256 = _sha256(task)
     decision_value = decision.decision.value
@@ -1532,9 +1538,9 @@ def _append_event(
         payload=payload,
     )
     try:
-        with ledger.LedgerStore(
-            home, binding.host_session_id, host=binding.session.host
-        ).open(create=True) as store:
+        with ledger.LedgerStore(home, binding.host_session_id, host=binding.session.host).open(
+            create=True
+        ) as store:
             store.append_events([event])
         return True
     except Exception:
@@ -1548,9 +1554,9 @@ def _register_binding(home: Path, binding: HermesBinding) -> None:
     lifecycle = autoinject.BrainLifecycle(home, binding.session)
     lifecycle.start_session(binding.session)
 
-    with ledger.LedgerStore(
-        home, binding.host_session_id, host=binding.session.host
-    ).open(create=True) as store:
+    with ledger.LedgerStore(home, binding.host_session_id, host=binding.session.host).open(
+        create=True
+    ) as store:
         store.create_session(binding.session)
         store.register_agent(
             {
@@ -1611,8 +1617,10 @@ def _route_task(home: Path, task: str) -> tuple[list[str], bool]:
 def _visibility_task(
     home: Path, task: str, session_id: str, project_id: str
 ) -> tuple[dict[str, Any] | None, dict[str, str]]:
-    """Run the visibility plan without owning routing state. Advisory/shadow
-    by default; only 'enforced' mode may extend the returned packet."""
+    """Run the visibility plan without owning routing state.
+
+    Advisory/shadow by default; only 'enforced' mode may extend the returned packet.
+    """
     try:
         plan = skills.build_plan(home, task, session_id=session_id, project_id=project_id)
         plan, hydrated_bodies = skills.hydrate_plan(home, plan)
@@ -1798,10 +1806,10 @@ def model_switch_preflight(
     """Execute model-switch preflight (Deep Upgrade Plan U6 §7.4, literal order 1-8).
 
     1. Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000);
-    2. Resolve cache scope from config/v2.toml [providers].<id>.cache_scope = model|account (default model);
+    2. Resolve provider cache_scope from config/v2.toml (model or account; default model);
     3. If model-scoped: mark prefix cache cold (set cache cold flag / cache_read_tokens = 0);
     4. Recompute resident load with T0.6 estimator (contracts.estimate_tokens);
-    5. If load > target capacity * 0.85: run T2.0/T2.1 reclaim (evict_to_budget to target capacity * 0.85);
+    5. Above 85% of target capacity, reclaim to that threshold using evict_to_budget;
     6. Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW);
     7. Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0);
     8. Send / proceed. Never compare pressure against the previous model's capacity.
@@ -1848,19 +1856,21 @@ def model_switch_preflight(
     # Step 4: Recompute resident load with T0.6 estimator (contracts.estimate_tokens)
     store = vmem.VMemStore(home_path, session_id)
     resident_objects = [
-        o for o in store.list_objects()
+        o
+        for o in store.list_objects()
         if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
     ]
     load = _estimate_resident_load(home_path, resident_objects, target_model)
     load_before = load
 
-    # Step 5: If load > target capacity * 0.85: run T2.0/T2.1 reclaim (evict_to_budget to target capacity * 0.85)
+    # Step 5: reclaim against the target model's 85% capacity threshold.
     reclaimed_objects = []
     reclaim_threshold = int(target_capacity * 0.85)
     if load > reclaim_threshold:
         reclaimed_objects = store.evict_to_budget(max_tokens=reclaim_threshold)
         resident_after = [
-            o for o in store.list_objects()
+            o
+            for o in store.list_objects()
             if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
         ]
         load = _estimate_resident_load(home_path, resident_after, target_model)
@@ -1891,7 +1901,9 @@ def model_switch_preflight(
         "load_after": load,
         "reclaimed_count": len(reclaimed_objects),
     }
-    autoinject._append_telemetry(home_path, session_id, "MODEL_ROUTE_TRANSITION", transition_telemetry)
+    autoinject._append_telemetry(
+        home_path, session_id, "MODEL_ROUTE_TRANSITION", transition_telemetry
+    )
 
     rollout_stage = "SHADOW"
     if v2_toml.is_file():
@@ -1903,14 +1915,16 @@ def model_switch_preflight(
         except Exception:
             pass
 
-    try:
+    with contextlib.suppress(Exception):
         decisions.record(
             home_path,
             kind="routing",
             session_id=session_id,
             task_id=task_id,
             chosen={"provider": target_provider, "model": target_model},
-            alternatives=[{"provider": current_provider, "model": current_model}] if current_model else [],
+            alternatives=(
+                [{"provider": current_provider, "model": current_model}] if current_model else []
+            ),
             propensity=1.0,
             randomized=False,
             policy_version="v2.3",
@@ -1919,11 +1933,11 @@ def model_switch_preflight(
                 "target_capacity": target_capacity,
                 "cache_scope": cache_scope,
                 "load": load,
-                "transition": f"{current_provider}/{current_model}->{target_provider}/{target_model}",
+                "transition": (
+                    f"{current_provider}/{current_model}->{target_provider}/{target_model}"
+                ),
             },
         )
-    except Exception:
-        pass
 
     # Step 8: Send / proceed. Never compare pressure against the previous model's capacity.
     return {
@@ -1947,15 +1961,14 @@ def _vmem_context(
 ) -> dict[str, Any]:
     """Render existing VMem and fault in a task-referenced cold object.
 
-    Enforces cache break-point gate (a)-(e):
-    (a) previous tool_result bytes > [rtd].threshold_chars (default 8000);
-    (b) session_before_compact event occurred;
-    (c) model/provider changed since last request;
-    (d) last assistant_usage.cache_read_tokens == 0;
-    (e) resident tokens > capacity_hard (default 6000).
+    Enforces cache break-point gate (a)-(e): (a) previous tool_result bytes >
+    [rtd].threshold_chars (default 8000); (b) session_before_compact event occurred; (c)
+    model/provider changed since last request; (d) last
+    assistant_usage.cache_read_tokens == 0; (e) resident tokens > capacity_hard (default
+    6000).
 
-    If NONE hold and a previous rendered view exists, return the previous
-    view byte-identical without running eviction or fault-in.
+    If NONE hold and a previous rendered view exists, return the previous view byte-
+    identical without running eviction or fault-in.
     """
     try:
         store = vmem.VMemStore(home, binding.host_session_id)
@@ -2016,7 +2029,8 @@ def _vmem_context(
         # (e) resident tokens > capacity_hard (default 6000 or 1.5 * budget)
         capacity_hard = 6000
         current_resident = [
-            o for o in store.list_objects()
+            o
+            for o in store.list_objects()
             if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
         ]
         resident_tokens = sum(o.token_estimate for o in current_resident)
@@ -2150,9 +2164,7 @@ def _handle_post_tool_call(
     old_hint = artifacts.recover_hint(reduction.raw_object_ref)
     visible_text = visible_text.replace(old_hint, artifacts.recover_hint(raw_sha))
 
-    recovery_line = (
-        f"Raw Artifact: {raw_artifact['handle']}\n{artifacts.recover_hint(raw_sha)}"
-    )
+    recovery_line = f"Raw Artifact: {raw_artifact['handle']}\n{artifacts.recover_hint(raw_sha)}"
     if raw_artifact["handle"] not in visible_text:
         visible_text = visible_text[: firewall.MAX_DISTILL_CHARS - len(recovery_line)]
         visible_text += "\n" + recovery_line
@@ -2187,8 +2199,7 @@ def _handle_post_tool_call(
         artifact_ref=raw_sha,
         metadata=vmem_metadata,
     )
-    # T2.3: Drop per-tool-call eviction. Only store the object. Record tool_result bytes for condition (a).
-    evicted: list[dict[str, Any]] = []
+    # Store without per-tool-call eviction; retain byte count for cache-break condition (a).
     stored = store.get_object(obj.obj_id)
     state = _load_vmem_cache_state(home, binding.host_session_id)
     state["last_tool_result_bytes"] = len(raw_bytes)
@@ -2240,6 +2251,8 @@ def _handle_post_tool_call(
         "visible_result_bytes": visible_bytes,
         "reduction_ratio": round(reduction_ratio, 6),
     }
+
+
 def _handle_pre_tool_call(
     home: Path, binding: HermesBinding, payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2283,12 +2296,18 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     _register_binding(home, binding)
     task = _first_text(payload, "task", "user_message", "prompt")
     turn_id = _first_text(payload, "turn_id", default="") or None
-    current_provider = payload.get("provider") or payload.get("selected_provider") or binding.provider
+    current_provider = (
+        payload.get("provider") or payload.get("selected_provider") or binding.provider
+    )
     current_model = payload.get("model") or payload.get("selected_model") or binding.model
     state = _load_vmem_cache_state(home, binding.host_session_id)
     last_prov = state.get("last_provider")
     last_mod = state.get("last_model")
-    if last_prov is not None and last_mod is not None and (current_provider != last_prov or current_model != last_mod):
+    if (
+        last_prov is not None
+        and last_mod is not None
+        and (current_provider != last_prov or current_model != last_mod)
+    ):
         preflight_res = model_switch_preflight(
             home,
             binding.host_session_id,
@@ -2358,12 +2377,14 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     )
     tail = injection_slots.assemble_tail(
         delta_context=visible_packet,
-        hot_context_refs=vmem_context.get("rendered_text") if isinstance(vmem_context, dict) else None,
+        hot_context_refs=(
+            vmem_context.get("rendered_text") if isinstance(vmem_context, dict) else None
+        ),
         hydrated_skills=hydrated_bodies if enforced_visible else None,
         budget_warning=_BUDGET_HARD_LINE if budget_is_hard else None,
     )
     if budget_is_hard:
-        try:
+        with contextlib.suppress(Exception):
             decisions.record(
                 home,
                 kind="budget",
@@ -2377,8 +2398,6 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
                 stage=_budget_rollout_stage(home),
                 inputs={"used": budget.get("used", 0), "cap": budget.get("cap", 0)},
             )
-        except Exception:
-            pass
     reason = decision.reason.value if decision.reason is not None else None
     attribution = _injection_attribution(binding, task, turn_id, decision)
     event_type = (
@@ -2405,13 +2424,9 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "visibility_plan": visibility_plan,
         "routing_error": routing_error,
         "model_decision_id": model_decision.decision_id if model_decision else None,
-        "model_routing_status": (
-            model_decision.status if model_decision else "fail_open"
-        ),
+        "model_routing_status": model_decision.status if model_decision else "fail_open",
         "model_routing_error": model_routing_error,
-        "model_selected_provider": (
-            model_decision.selected_provider if model_decision else None
-        ),
+        "model_selected_provider": model_decision.selected_provider if model_decision else None,
         "model_selected_model": model_decision.selected_model if model_decision else None,
         "model_selected_tier": model_decision.selected_tier if model_decision else None,
         "model_reason_code": model_decision.reason_code if model_decision else None,
@@ -2545,9 +2560,7 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "original_selected_model": (
             model_decision.original_selected_model if model_decision else None
         ),
-        "original_selected_tier": (
-            model_decision.original_selected_tier if model_decision else None
-        ),
+        "original_selected_tier": model_decision.original_selected_tier if model_decision else None,
     }
 
 
@@ -2601,9 +2614,17 @@ def _handle_writeback(
 def _bounded_invocation_value(value: Any) -> Any:
     if isinstance(value, dict):
         allowed = {
-            "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens",
-            "output_tokens", "cache_read_tokens", "cache_write_tokens", "amount",
-            "value", "currency", "unit",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "amount",
+            "value",
+            "currency",
+            "unit",
         }
         return {
             str(key)[:64]: _bounded_invocation_value(item)
@@ -2665,8 +2686,7 @@ def _handle_api_lifecycle(
             payload.get("response_model"), _ATTRIBUTION_FIELD_MAX_CHARS
         ),
         "status": _bounded_text(
-            payload.get("status")
-            or ("completed" if event == "post_api_request" else "failed"),
+            payload.get("status") or ("completed" if event == "post_api_request" else "failed"),
             64,
         ),
     }
@@ -2709,9 +2729,7 @@ def _handle_api_lifecycle(
         key=key,
     )
     telemetry_kind = (
-        "model_invocation_completed"
-        if event == "post_api_request"
-        else "model_invocation_failed"
+        "model_invocation_completed" if event == "post_api_request" else "model_invocation_failed"
     )
     autoinject._append_telemetry(
         home,
@@ -2757,8 +2775,7 @@ def _handle_session_end(
     lifecycle = autoinject.BrainLifecycle(home, binding.session)
     lifecycle.finalize_session(
         tool_call_args=tool_args,
-        final_message=payload.get("final_message")
-        or payload.get("last_assistant_message"),
+        final_message=payload.get("final_message") or payload.get("last_assistant_message"),
     )
     _append_event(
         home,
@@ -2787,6 +2804,7 @@ def _handle_session_end(
         "status": "finalized",
         "checkpoint": checkpoint,
     }
+
 
 def _handoff_list_or_none(value: Any) -> list[str] | None:
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else None
@@ -2866,7 +2884,6 @@ def _handle_handoff_read(
             "failure_code": exc.code,
         }
     return {**_response_base(binding, "handoff_read"), "status": "recovered", **recovered}
-
 
 
 def handle_request(home: Path | str, payload: object) -> dict[str, Any]:

@@ -13,14 +13,14 @@ import sqlite3
 
 import pytest
 
-from second_brain import ledger, working_set
-from second_brain.errors import BrainError
+from second_brain import artifacts, ledger, working_set
 from second_brain.vmem import (
     DURABILITY_CLEAN,
     DURABILITY_DIRTY,
     ResidencyState,
     SessionObjectKind,
     VMemStore,
+    resolve_object,
 )
 
 
@@ -38,6 +38,69 @@ def _corrupt_backing_artifact_bytes(home, sha256: str) -> None:
     blob_path = home / "state" / "artifacts" / "blobs" / f"{sha256}.bin"
     assert blob_path.exists()
     blob_path.write_bytes(b"corrupted-bytes-do-not-match-hash")
+
+
+@pytest.mark.parametrize(
+    "kind", [SessionObjectKind.RESEARCH_RESULT, SessionObjectKind.TOOL_OBSERVATION]
+)
+def test_direct_content_resolves_exactly_after_compaction(brain_home, kind):
+    store = VMemStore(brain_home, "direct-content")
+    original = "Café exporter finding\r\npreserve both lines exactly\n"
+    obj = store.store_object(kind, "Direct evidence", original)
+
+    assert store.prepare_compaction()["cancel"] is False
+    result = resolve_object(brain_home, store.session_id, obj.obj_id)
+
+    assert result["ok"] is True
+    assert result["content"].encode("utf-8") == original.encode("utf-8")
+    current = store.get_object(obj.obj_id)
+    assert current is not None and current.residency_state == ResidencyState.FAULTED_IN
+
+
+@pytest.mark.parametrize(
+    ("kind", "metadata"),
+    [
+        (SessionObjectKind.RESEARCH_RESULT, {"deliveryId": "del-missing"}),
+        (SessionObjectKind.TOOL_OBSERVATION, {"artifactRef": "a" * 64}),
+    ],
+)
+def test_unresolvable_reference_prevents_reclaim_and_compaction(brain_home, kind, metadata):
+    store = VMemStore(brain_home, "missing-reference")
+    obj = store.store_object(kind, "Referenced evidence", "small pointer", metadata=metadata)
+
+    assert store.evict_to_budget(max_tokens=0) == []
+    assert store.prepare_compaction()["cancel"] is True
+    current = store.get_object(obj.obj_id)
+    assert current is not None and current.residency_state == ResidencyState.RESIDENT
+    result = resolve_object(brain_home, store.session_id, obj.obj_id)
+    assert result["ok"] is False  # Never replace a broken reference with the pointer text.
+
+
+def test_bad_packet_hash_is_not_covered_by_its_valid_descriptor(brain_home):
+    store = VMemStore(brain_home, "bad-packet-hash")
+    packet = artifacts.store_text(brain_home, "original delivered packet", kind="autoinject_packet")
+    obj = store.store_object(
+        SessionObjectKind.RESEARCH_RESULT,
+        "Packet",
+        "small pointer",
+        metadata={"packetArtifactRef": packet["handle"], "packetSha256": "0" * 64},
+    )
+
+    assert store.cover(obj) is False
+    assert store.prepare_compaction()["cancel"] is True
+    current = store.get_object(obj.obj_id)
+    assert current is not None and current.residency_state == ResidencyState.RESIDENT
+
+
+def test_prior_coverage_does_not_hide_later_artifact_loss(brain_home):
+    store = VMemStore(brain_home, "lost-covered-artifact")
+    obj = store.store_object(SessionObjectKind.GENERIC, "Evidence", "original content")
+    assert store.cover(obj) is True
+    _delete_backing_artifact(brain_home, obj.content_sha256)
+
+    assert store.prepare_compaction()["cancel"] is True
+    current = store.get_object(obj.obj_id)
+    assert current is not None and current.residency_state == ResidencyState.RESIDENT
 
 
 class TestDirtyMaterialObjectNeverEvicted:

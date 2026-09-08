@@ -117,8 +117,8 @@ def _env_int(name: str, fallback: int) -> int:
 
 
 def load_config(home: Path | str) -> AutoInjectConfig:
-    """config/autoinject.toml [budget] and [delta_budget] with env override;
-    fail open to defaults."""
+    """config/autoinject.toml [budget] and [delta_budget] with env override; fail open
+    to defaults."""
     target = DEFAULT_TARGET_TOKENS
     cap = DEFAULT_HARD_CAP_TOKENS
     delta_target = DEFAULT_DELTA_TARGET_TOKENS
@@ -166,6 +166,7 @@ def load_config(home: Path | str) -> AutoInjectConfig:
         delta_hard_cap_tokens=delta_cap,
     )
 
+
 def token_estimate(text: str, home: Path | str | None = None) -> int:
     return estimate_tokens(text, home=home)
 
@@ -189,12 +190,14 @@ class RetrievalIntent:
     cwd: str | None = None
     lane: str = "semantic"
 
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
 def _task_sha256(task: str) -> str:
     return hashlib.sha256((task or "").encode("utf-8")).hexdigest()
+
 
 def _record_retrieval_abstention(
     home: Path, intent: RetrievalIntent, lane: str = "semantic"
@@ -223,12 +226,13 @@ def _record_retrieval_abstention(
     except Exception:
         logger.debug("retrieval abstention decision record failed", exc_info=True)
 
+
 _BUDGET_POLICY_VERSION = "v3.1"
 
 
 def _budget_rollout_stage(home: Path) -> str:
-    """config/v2.toml [rollout] brainstem; SHADOW default (matches the
-    routing/eviction decisions(kind=...) stage-resolution pattern)."""
+    """config/v2.toml [rollout] brainstem; SHADOW default (matches the routing/eviction
+    decisions(kind=...) stage-resolution pattern)."""
     stage = "SHADOW"
     try:
         v2_path = Path(home) / "config" / "v2.toml"
@@ -243,9 +247,8 @@ def _budget_rollout_stage(home: Path) -> str:
 
 
 def _record_budget_soft(home: Path, intent: RetrievalIntent, used: int, cap: int) -> None:
-    """Record the SOFT budget determination (T3.1) without persisting
-    task/query content, following the exact pattern of
-    `_record_retrieval_abstention`."""
+    """Record the SOFT budget determination (T3.1) without persisting task/query
+    content, following the exact pattern of `_record_retrieval_abstention`."""
     try:
         decisions.record(
             home,
@@ -263,6 +266,7 @@ def _record_budget_soft(home: Path, intent: RetrievalIntent, used: int, cap: int
     except Exception:
         logger.debug("budget SOFT decision record failed", exc_info=True)
 
+
 _ROLLOUT_STAGE_RANKS: dict[str, int] = {
     "OFF": 0,
     "SHADOW": 1,
@@ -275,8 +279,8 @@ _ROLLOUT_STAGE_RANKS: dict[str, int] = {
 def _retrieval_holdout_stage(home: Path | str) -> str:
     """Read rollout stage for retrieval_holdout.
 
-    Checks SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE env var first,
-    then config/v2.toml [rollout] retrieval_holdout, defaulting to 'SHADOW'.
+    Checks SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE env var first, then config/v2.toml
+    [rollout] retrieval_holdout, defaulting to 'SHADOW'.
     """
     env_stage = os.environ.get("SECOND_BRAIN_RETRIEVAL_HOLDOUT_STAGE")
     if env_stage and env_stage in decisions._ROLLOUT_STAGES:
@@ -297,8 +301,8 @@ def _retrieval_holdout_stage(home: Path | str) -> str:
 def _retrieval_holdout_epsilon(home: Path | str) -> float:
     """Read holdout epsilon rate.
 
-    Checks SECOND_BRAIN_HOLDOUT_EPSILON env var, then config/v2.toml or config/retrieval.toml
-    [retrieval_holdout] epsilon, defaulting to 0.1.
+    Checks SECOND_BRAIN_HOLDOUT_EPSILON env var, then config/v2.toml or
+    config/retrieval.toml [retrieval_holdout] epsilon, defaulting to 0.1.
     """
     env_eps = os.environ.get("SECOND_BRAIN_HOLDOUT_EPSILON")
     if env_eps is not None:
@@ -342,24 +346,21 @@ def _retrieval_holdout_epsilon(home: Path | str) -> float:
 _MANIFEST_WALK_MAX_LEVELS = 64
 
 
-def _detect_explicit_id_upward(cwd_path: Path) -> tuple[str, Path] | None:
-    """Find `.brain/project.toml` starting at `cwd_path` and walking upward
-    to the filesystem root, the same discovery semantics `git` itself uses
-    for `.git`. A manifest declared at the repository root must resolve the
-    same canonical project id for every nested working directory inside
-    that repository, not only an exact manifest-directory match. Returns
-    (project_id, manifest_root) so callers can report the REAL project
-    root instead of the caller's raw cwd."""
+def _project_ancestors(cwd_path: Path) -> list[Path]:
+    """Candidate project roots, stopping at the nearest Git repository boundary."""
+    ancestors = []
     current = cwd_path
     for _ in range(_MANIFEST_WALK_MAX_LEVELS):
-        manifest_id = registry.detect_explicit_id(str(current))
-        if manifest_id:
-            return manifest_id, current
+        ancestors.append(current)
+        # A linked worktree uses a .git file. Even a broken marker must not
+        # allow identity from an unrelated enclosing repository to leak in.
+        if os.path.lexists(current / ".git"):
+            break
         parent = current.parent
         if parent == current:
-            return None
+            break
         current = parent
-    return None
+    return ancestors
 
 
 def resolve_project(
@@ -377,16 +378,17 @@ def resolve_project(
     home_path = Path(home)
     cwd_path = Path(cwd).resolve() if cwd and str(cwd).strip() else None
     if cwd_path is not None:
+        ancestors = _project_ancestors(cwd_path)
         try:
-            found = _detect_explicit_id_upward(cwd_path)
-            if found is not None:
-                manifest_id, manifest_root = found
-                return {
-                    "project_id": manifest_id,
-                    "resolution": "manifest",
-                    "repo_root": str(manifest_root),
-                    "confidence": "high",
-                }
+            for manifest_root in ancestors:
+                manifest_id = registry.detect_explicit_id(str(manifest_root))
+                if manifest_id:
+                    return {
+                        "project_id": manifest_id,
+                        "resolution": "manifest",
+                        "repo_root": str(manifest_root),
+                        "confidence": "high",
+                    }
         except Exception:
             pass
         try:
@@ -395,9 +397,7 @@ def resolve_project(
                 if not project.repo_path:
                     continue
                 root = Path(project.repo_path).resolve()
-                try:
-                    cwd_path.relative_to(root)
-                except ValueError:
+                if root not in ancestors:
                     continue
                 matches.append((len(root.parts), project, root))
             if matches:
@@ -468,8 +468,6 @@ def _resolve_project_id(home: Path | str, cwd: str | None, explicit: str | None)
     return resolve_project(home, cwd, explicit)["project_id"]
 
 
-
-
 def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
     """Use active capsule intent when available; otherwise use task text."""
     try:
@@ -486,13 +484,13 @@ def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
             return " ".join(parts)
     return intent.task_text
 
+
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
     """Apply the literal corpus admission policy before ranking/rendering.
 
-    Missing or unknown metadata is rejected rather than assigned a default.
-    Domain memories are usable when their project is known and matches, or
-    when either side explicitly has no project identity; global memories are
-    always eligible.
+    Missing or unknown metadata is rejected rather than assigned a default. Domain
+    memories are usable when their project is known and matches, or when either side
+    explicitly has no project identity; global memories are always eligible.
     """
     allowed_statuses = {"current", "candidate", "labile"}
     allowed_grades = {"VERIFIED", "TESTED", "OBSERVED"}
@@ -534,16 +532,15 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
                 )
         if not scope_ok:
             continue
-        if intent.lane == "policy":
-            # Policy context is a hard authority boundary. Missing or
-            # unknown metadata is rejected rather than defaulted.
-            if row.get("authority_ceiling") not in {"project_rule", "policy"}:
-                continue
+        if intent.lane == "policy" and row.get("authority_ceiling") not in {
+            "project_rule",
+            "policy",
+        }:
+            # Missing authority metadata must not enter policy context.
+            continue
         # Delta injection remains intentionally strict: only current,
         # high-confidence truth can be introduced mid-session.
-        if intent.is_delta and (
-            status != "current" or grade not in {"VERIFIED", "TESTED"}
-        ):
+        if intent.is_delta and (status != "current" or grade not in {"VERIFIED", "TESTED"}):
             continue
         out.append(row)
     return out
@@ -580,12 +577,11 @@ def _tags_for(home: Path | str, memory_ids: list[str]) -> dict[str, set[str]]:
 def _role_filter(home: Path | str, rows: list[dict], role_profile: str) -> list[dict]:
     """P0-G7 worker-specific packets (hard filter, §6.3.1).
 
-    Rule (documented, no invented metadata): a role keeps memories tagged
-    with exactly its own tag OR untagged task-relevant memories. Memories
-    tagged with another role are excluded — a worker never receives the
-    parent's orchestrator-tagged memory and vice versa. Roles:
-    orchestrator -> "orchestrator" tag; worker family (worker/explorer/
-    verifier) -> their own tag. Unknown/control roles get no filter.
+    Rule (documented, no invented metadata): a role keeps memories tagged with exactly
+    its own tag OR untagged task-relevant memories. Memories tagged with another role
+    are excluded — a worker never receives the parent's orchestrator-tagged memory and
+    vice versa. Roles: orchestrator -> "orchestrator" tag; worker family
+    (worker/explorer/ verifier) -> their own tag. Unknown/control roles get no filter.
     """
     if not rows:
         return rows
@@ -625,9 +621,7 @@ def _canonical_line(text: str | None) -> str:
     return " ".join((text or "").split())
 
 
-def _build_items(
-    home: Path | str, rows: list[dict], *, lane: str = "semantic"
-) -> list[PacketItem]:
+def _build_items(home: Path | str, rows: list[dict], *, lane: str = "semantic") -> list[PacketItem]:
     """Rows (already validity-gated, search-ranked) -> canonical packet items.
 
     Policy lane (§T1.7): a contradiction from a memory that did not itself
@@ -643,9 +637,7 @@ def _build_items(
         memory_id = str(row.get("memory_id") or "")
         version = int(row.get("current_version") or 1)
         contradiction_ids = {str(i) for i in (row.get("contradiction_with") or [])}
-        conflicting = (
-            (contradiction_ids & admitted_ids) if lane == "policy" else contradiction_ids
-        )
+        conflicting = (contradiction_ids & admitted_ids) if lane == "policy" else contradiction_ids
         contradicted = bool(conflicting) or (row.get("_freshness_state") == freshness.CONTRADICTED)
         status, confidence = _grade_confidence(
             row.get("evidence_grade"), row.get("strength"), contradicted
@@ -678,13 +670,15 @@ def _build_items(
             )
         )
     return items
+
+
 # ---------------------------------------------------------------------------
 # Canonical hashing + delivery ledger dedupe (§6.5).
 # ---------------------------------------------------------------------------
 
 
 def item_canonical_hash(item: PacketItem) -> str:
-    """sha256 of the canonical ITEM block (fixed order/labels/whitespace).
+    """Sha256 of the canonical ITEM block (fixed order/labels/whitespace).
 
     This is the per-item dedupe key stored in ``deliveries.canonical_hash``:
     identical memory content always produces the identical hash, and any
@@ -728,10 +722,9 @@ def insert_deliveries(
 ) -> list[str]:
     """Persist one delivery row per selected item. Returns delivery_ids.
 
-    Idempotent per lineage+item (INSERT OR IGNORE). When an item supersedes
-    a previously delivered version, the old row's pointer is updated — the
-    host message itself is never rewritten (§6.5). Raises on DB error; the
-    caller applies fail-open.
+    Idempotent per lineage+item (INSERT OR IGNORE). When an item supersedes a previously
+    delivered version, the old row's pointer is updated — the host message itself is
+    never rewritten (§6.5). Raises on DB error; the caller applies fail-open.
     """
     home = Path(home)
     cached = _PACKET_CACHE.get(decision.packet_ref or "")
@@ -794,6 +787,8 @@ def _packet_id(items: list[PacketItem]) -> str:
         "\n".join(f"{i.memory_id}@{i.version}" for i in items).encode("utf-8")
     ).hexdigest()
     return f"pkt-{digest[:16]}"
+
+
 def _render_packet_text(
     items: list[PacketItem], project: str | None, *, lane: str = "semantic"
 ) -> str:
@@ -827,6 +822,7 @@ def _ids_only(items: list[PacketItem]) -> list[PacketItem]:
         for i in items
     ]
 
+
 def _fit_budget(
     items: list[PacketItem],
     project: str | None,
@@ -836,6 +832,7 @@ def _fit_budget(
     lane: str = "semantic",
 ) -> tuple[list[PacketItem], bool] | None:
     """§6.6: fit packets within target and hard token budgets."""
+
     def est(candidate: list[PacketItem]) -> int:
         return token_estimate(_render_packet_text(candidate, project, lane=lane), home=home)
 
@@ -891,8 +888,11 @@ def prepare_injection(
     seed: Any = None,
     random_fn: Callable[[], float] | None = None,
 ) -> BrainInjectionDecision:
-    """Decision pipeline. NEVER raises: every failure degrades to
-    NO_INJECTION(BRAIN_UNAVAILABLE) (§6.8). No model-visible mutation."""
+    """Decision pipeline.
+
+    NEVER raises: every failure degrades to
+    NO_INJECTION(BRAIN_UNAVAILABLE) (§6.8). No model-visible mutation.
+    """
     home = Path(home)
     cfg = config or load_config(home)
     empty = BrainInjectionDecision(
@@ -1125,6 +1125,7 @@ def prepare_injection(
         if p_need is None and home is not None:
             try:
                 from . import reconsolidation
+
                 b = reconsolidation.compute_base_level_activation(Path(home), item.memory_id)
                 if b <= -10.0:
                     p_need = 0.5
@@ -1187,10 +1188,9 @@ def prepare_injection(
         intent.task_text or "", risk_class=getattr(intent, "risk_class", None)
     )
     t_class_val = t_class.value if isinstance(t_class, model_routing.TaskClass) else str(t_class)
-    is_class_eligible = (
-        t_class_val in {"trivial", "navigation", "implementation"}
-        and getattr(intent, "risk_class", None) not in ("HIGH", "CRITICAL")
-    )
+    is_class_eligible = t_class_val in {"trivial", "navigation", "implementation"} and getattr(
+        intent, "risk_class", None
+    ) not in ("HIGH", "CRITICAL")
 
     is_authority_eligible = intent.lane != "policy" and all(
         (getattr(item, "authority", "advisory") == "advisory")
@@ -1293,9 +1293,7 @@ def _sanitize_stem(session: str) -> str:
     return f"anon-{_task_sha256(session or '')[:12]}"
 
 
-def _append_telemetry(
-    home: Path | str, session: str, kind: str, extra: dict[str, Any]
-) -> bool:
+def _append_telemetry(home: Path | str, session: str, kind: str, extra: dict[str, Any]) -> bool:
     try:
         tdir = telemetry.telemetry_dir(Path(home))
         tdir.mkdir(parents=True, exist_ok=True)
@@ -1322,12 +1320,15 @@ def _session_started_marker_path(home: Path | str, host_session_id: str) -> Path
 
 
 def _has_session_started(home: Path | str, host_session_id: str) -> bool:
-    """O(1) idempotency check: has a durable marker for this host_session_id
-    already been written? Replaces a prior full JSONL-telemetry-file scan
+    """O(1) idempotency check: has a durable marker for this host_session_id already
+    been written?
+
+    Replaces a prior full JSONL-telemetry-file scan
     (re-reading the whole growing per-session file on every call) with a
     single ``Path.exists()``. Fails open (returns False, i.e. "allow the
     write") on any read error so a corrupt/unreadable state directory never
-    blocks lifecycle telemetry."""
+    blocks lifecycle telemetry.
+    """
     try:
         marker = _session_started_marker_path(home, host_session_id)
         return marker is not None and marker.exists()
@@ -1336,9 +1337,12 @@ def _has_session_started(home: Path | str, host_session_id: str) -> bool:
 
 
 def _mark_session_started(home: Path | str, host_session_id: str) -> None:
-    """Create the durable marker checked by `_has_session_started`. Never
+    """Create the durable marker checked by `_has_session_started`.
+
+    Never
     raises: a marker-write failure only means the next call re-scans the
-    (fail-open) idempotency check, never blocks lifecycle telemetry."""
+    (fail-open) idempotency check, never blocks lifecycle telemetry.
+    """
     try:
         marker = _session_started_marker_path(home, host_session_id)
         if marker is None:
@@ -1354,10 +1358,7 @@ def _mark_session_started(home: Path | str, host_session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-
-def _feedback_exists(
-    home: Path | str, table: str, memory_id: str, session_id: str
-) -> bool:
+def _feedback_exists(home: Path | str, table: str, memory_id: str, session_id: str) -> bool:
     """Check one session-bound feedback row without exposing its contents."""
     if table not in {"memory_retrievals", "memory_activations"}:
         return False
@@ -1372,9 +1373,7 @@ def _feedback_exists(
         conn.close()
 
 
-def _record_delivery_feedback(
-    home: Path | str, memory_ids: list[str], session_id: str
-) -> None:
+def _record_delivery_feedback(home: Path | str, memory_ids: list[str], session_id: str) -> None:
     """Record one retrieval per delivered memory, best-effort and idempotently."""
     for memory_id in dict.fromkeys(memory_ids):
         try:
@@ -1428,6 +1427,7 @@ def _record_activation_feedback(
         except Exception:
             logger.debug("activation feedback failed", exc_info=True)
 
+
 def _delivered_memory_ids(home: Path | str, session_id: str) -> list[str]:
     conn = db.connect(db_path(Path(home)), readonly=True)
     try:
@@ -1438,7 +1438,6 @@ def _delivered_memory_ids(home: Path | str, session_id: str) -> list[str]:
         return [str(row["memory_id"]) for row in rows if row["memory_id"]]
     finally:
         conn.close()
-
 
 
 class BrainLifecycle:
@@ -1500,7 +1499,8 @@ class BrainLifecycle:
         ``cwd`` feeds project resolution: explicit project_id wins,
         then a registered project whose root contains cwd, then env, then
         "default". The retrieval-attempt telemetry (with query_mode and is_delta) is
-        recorded inside the module pipeline."""
+        recorded inside the module pipeline.
+        """
         del context  # reserved for 0D adapter integration
         effective_session = session_id or (
             self._session.host_session_id if self._session is not None else "anon"
@@ -1556,9 +1556,7 @@ class BrainLifecycle:
                 },
             )
             if self._last_delivery_ids:
-                _record_delivery_feedback(
-                    self._home, decision.selected_ids, effective_session
-                )
+                _record_delivery_feedback(self._home, decision.selected_ids, effective_session)
         else:
             _append_telemetry(
                 self._home,
@@ -1598,8 +1596,10 @@ class BrainLifecycle:
         acceptance_passed: bool | None = None,
         tokens_total: int | None = None,
     ) -> None:
-        feedback_session = session_id or self._feedback_session_id or (
-            self._session.host_session_id if self._session is not None else None
+        feedback_session = (
+            session_id
+            or self._feedback_session_id
+            or (self._session.host_session_id if self._session is not None else None)
         )
         if feedback_session:
             try:
@@ -1621,7 +1621,8 @@ class BrainLifecycle:
                     conn = db.connect(dbfile)
                     try:
                         rows = conn.execute(
-                            "SELECT decision_id FROM decisions WHERE session_id = ? AND kind = 'retrieval' AND outcome_json IS NULL",
+                            "SELECT decision_id FROM decisions WHERE session_id = ? AND kind ="
+                            " 'retrieval' AND outcome_json IS NULL",
                             (feedback_session,),
                         ).fetchall()
                         decision_ids = [str(r[0]) for r in rows if r and r[0]]
@@ -1658,10 +1659,17 @@ class BrainLifecycle:
                                                     if not tline.strip():
                                                         continue
                                                     rec = json.loads(tline)
-                                                    if "total_tokens" in rec and isinstance(rec["total_tokens"], int):
+                                                    if "total_tokens" in rec and isinstance(
+                                                        rec["total_tokens"], int
+                                                    ):
                                                         tot += rec["total_tokens"]
-                                                    elif "input_tokens" in rec or "output_tokens" in rec:
-                                                        tot += int(rec.get("input_tokens") or 0) + int(rec.get("output_tokens") or 0)
+                                                    elif (
+                                                        "input_tokens" in rec
+                                                        or "output_tokens" in rec
+                                                    ):
+                                                        tot += int(
+                                                            rec.get("input_tokens") or 0
+                                                        ) + int(rec.get("output_tokens") or 0)
                                             if tot > 0:
                                                 actual_tokens = tot
                                         except Exception:
@@ -1676,7 +1684,9 @@ class BrainLifecycle:
                                 decisions.record_outcome(self._home, dec_id, outcome, reward)
                             except Exception:
                                 logger.debug(
-                                    "Failed to record outcome for decision %s", dec_id, exc_info=True
+                                    "Failed to record outcome for decision %s",
+                                    dec_id,
+                                    exc_info=True,
                                 )
             except Exception:
                 logger.debug("retrieval decision finalization failed", exc_info=True)
@@ -1739,7 +1749,6 @@ class BrainLifecycle:
             },
         )
         return memory_id
-
 
 
 AUTOINJECT_MODE_OFF_VALUES = {"off", "0", "false", "no"}

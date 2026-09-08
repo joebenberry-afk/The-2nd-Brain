@@ -76,9 +76,7 @@ def _router_skill(home: Path) -> None:
         "- verify migrations\n",
         encoding="utf-8",
     )
-    (home / "config" / "skills.toml").write_text(
-        "[router]\nmax_active = 2\n", encoding="utf-8"
-    )
+    (home / "config" / "skills.toml").write_text("[router]\nmax_active = 2\n", encoding="utf-8")
 
 
 def _start_payload(session: str = "hermes-session-1", bot: str = "Brain-Dev") -> dict[str, Any]:
@@ -197,9 +195,7 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
     )
 
     review_data = json.loads(result.canonical_json())
-    review_data.update(
-        {"packet_sha256": "b" * 64, "result_sha256": result.canonical_hash()}
-    )
+    review_data.update({"packet_sha256": "b" * 64, "result_sha256": result.canonical_hash()})
     response = hermes_adapter.review_worker_result(
         brain_home,
         binding,
@@ -241,6 +237,7 @@ def test_approved_worker_review_records_approved_in_ledger_and_telemetry(
     assert telemetry_payload["approved"] is True
     assert telemetry_payload["worker_role"] == "dev"
 
+
 def test_review_rejects_unknown_task_before_ledger(brain_home: Path) -> None:
     start = _start_payload(bot="Brain-Integrator") | {"bot_role": "integrator"}
     binding = hermes_adapter.resolve_binding(brain_home, start)
@@ -260,9 +257,7 @@ def test_review_rejects_unknown_task_before_ledger(brain_home: Path) -> None:
         summary="synthetic",
     )
     review_data = json.loads(result.canonical_json())
-    review_data.update(
-        {"packet_sha256": "a" * 64, "result_sha256": result.canonical_hash()}
-    )
+    review_data.update({"packet_sha256": "a" * 64, "result_sha256": result.canonical_hash()})
     response = hermes_adapter.review_worker_result(
         brain_home,
         binding,
@@ -272,6 +267,7 @@ def test_review_rejects_unknown_task_before_ledger(brain_home: Path) -> None:
     )
     assert response["status"] == "failed"
     assert response["failure_code"] == "ORPHAN_TASK"
+
 
 def test_approved_worker_review_without_real_evidence_stays_unsettled(
     brain_home: Path,
@@ -315,6 +311,7 @@ def test_worker_event_missing_task_id_is_protocol_error(brain_home: Path) -> Non
     assert response["status"] == "failed"
     assert response["failure_code"] == "PROTOCOL_ERROR"
 
+
 def test_approved_worker_review_rejects_unbounded_raw_evidence(
     brain_home: Path,
 ) -> None:
@@ -347,28 +344,36 @@ def test_approved_worker_review_rejects_unbounded_raw_evidence(
 
 
 def test_review_evidence_rejects_bool_exit_and_canonicalizes_diff_alias() -> None:
-    assert hermes_adapter._bounded_review_evidence(
-        {"tests": [{"name": "pytest", "exit_code": False}]}
-    ) is None
+    assert (
+        hermes_adapter._bounded_review_evidence({"tests": [{"name": "pytest", "exit_code": False}]})
+        is None
+    )
     assert hermes_adapter._bounded_review_evidence({"diff_hash": "a" * 64}) == {
         "diff_sha256": "a" * 64
     }
-    assert hermes_adapter._bounded_review_evidence(
-        {"tests": [{"name": "", "exit_code": 0}]}
-    ) is None
-    assert hermes_adapter._bounded_review_evidence(
-        {"tests": [{"command": "", "exit_code": 0}]}
-    ) is None
-    assert hermes_adapter._bounded_review_evidence(
-        {"diff_sha256": "invalid", "diff_hash": "a" * 64}
-    ) is None
-    assert hermes_adapter._bounded_review_evidence(
-        {"diff_sha256": None, "diff_hash": "a" * 64}
-    ) is None
+    assert (
+        hermes_adapter._bounded_review_evidence({"tests": [{"name": "", "exit_code": 0}]}) is None
+    )
+    assert (
+        hermes_adapter._bounded_review_evidence({"tests": [{"command": "", "exit_code": 0}]})
+        is None
+    )
+    assert (
+        hermes_adapter._bounded_review_evidence({"diff_sha256": "invalid", "diff_hash": "a" * 64})
+        is None
+    )
+    assert (
+        hermes_adapter._bounded_review_evidence({"diff_sha256": None, "diff_hash": "a" * 64})
+        is None
+    )
     assert hermes_adapter._bounded_review_evidence([]) is None
-    assert hermes_adapter._bounded_review_evidence(
-        {"tests": [{"name": 7, "command": "pytest", "exit_code": 0}]}
-    ) is None
+    assert (
+        hermes_adapter._bounded_review_evidence(
+            {"tests": [{"name": 7, "command": "pytest", "exit_code": 0}]}
+        )
+        is None
+    )
+
 
 def test_handoff_create_preserves_machine_readable_error_code(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
@@ -380,15 +385,14 @@ def test_handoff_create_preserves_machine_readable_error_code(
     def raise_handoff_error(*args: Any, **kwargs: Any) -> Any:
         raise contracts.HandoffError("HANDOFF_MALFORMED", "bad envelope")
 
-    monkeypatch.setattr(
-        hermes_adapter.handoff, "create_handoff_envelope", raise_handoff_error
-    )
+    monkeypatch.setattr(hermes_adapter.handoff, "create_handoff_envelope", raise_handoff_error)
     response = hermes_adapter._handle_handoff_create(
         brain_home,
         binding,
         {"target_harness": "hermes", "target_role": "dev", "task_id": "handoff-task"},
     )
     assert response["failure_code"] == "HANDOFF_MALFORMED"
+
 
 def test_pre_llm_uses_real_bounded_brain_packet_when_mode_is_active(brain_home: Path) -> None:
     _current_memory(brain_home)
@@ -550,9 +554,7 @@ def test_pre_llm_enforced_mode_injects_hydrated_skill(brain_home: Path) -> None:
 def test_pre_llm_enforced_mode_rejects_oversized_hydrated_skill(brain_home: Path) -> None:
     _current_memory(brain_home)
     _visibility_skill(brain_home, name="oversized-visibility-skill")
-    skill_path = (
-        brain_home / "skills" / "shadow" / "oversized-visibility-skill" / "SKILL.md"
-    )
+    skill_path = brain_home / "skills" / "shadow" / "oversized-visibility-skill" / "SKILL.md"
     skill_path.write_text(
         skill_path.read_text(encoding="utf-8") + ("x" * 5000),
         encoding="utf-8",
@@ -866,7 +868,6 @@ def test_pre_tool_call_unaffected_by_hard_budget(brain_home: Path) -> None:
     assert "block" not in result
 
 
-
 def test_pre_llm_model_decision_records_unavailable_fallback(brain_home: Path) -> None:
     payload = {
         **_start_payload(session="routing-fallback", bot="Brain-Dev"),
@@ -985,9 +986,10 @@ def test_pre_llm_attribution_is_byte_identical_across_response_ledger_and_teleme
     assert json.dumps(attribution, sort_keys=True, separators=(",", ":")) == json.dumps(
         telemetry_record["attribution"], sort_keys=True, separators=(",", ":")
     )
-    assert ledger_payload["attribution"]["injection_decision_id"] == attribution[
-        "injection_decision_id"
-    ]
+    assert (
+        ledger_payload["attribution"]["injection_decision_id"]
+        == attribution["injection_decision_id"]
+    )
 
 
 def test_pre_llm_no_injection_attribution_is_actual_and_bounded(brain_home: Path) -> None:
@@ -1063,9 +1065,10 @@ def test_router_failure_fails_open_without_regressing_autoinject(
     assert out["routing_error"] is True
     assert out["bot_name"] == "Brain-Dev"
     assert out["bot_role"] == "dev"
-    assert out["brain_session_id"] == hermes_adapter.resolve_binding(
-        brain_home, payload
-    ).brain_session_id
+    assert (
+        out["brain_session_id"]
+        == hermes_adapter.resolve_binding(brain_home, payload).brain_session_id
+    )
 
 
 def test_writeback_uses_existing_candidate_memory_with_provenance(brain_home: Path) -> None:
@@ -1172,6 +1175,7 @@ class _FakeContext:
     def register_tool(self, **kwargs: Any) -> None:
         self.tools[kwargs["name"]] = kwargs
 
+
 def _load_plugin() -> ModuleType:
     spec = importlib.util.spec_from_file_location("second_brain_hermes_plugin", HERMES_PLUGIN)
     if spec is None or spec.loader is None:
@@ -1253,6 +1257,7 @@ def test_handle_request_preserves_raw_correction_attempt(
         assert output["status"] == "captured"
     assert attempts == [1.5, True]
 
+
 def test_hermes_plugin_forwards_review_evidence(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1332,6 +1337,8 @@ def test_hermes_plugin_terminal_delegate_does_not_invoke_worker(
     )
     assert json.loads(output)["terminal_noop"] is True
     assert len(calls) == 1
+
+
 def test_hermes_plugin_forwards_pre_tool_call_to_brain(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1361,6 +1368,7 @@ def test_hermes_plugin_forwards_pre_tool_call_to_brain(
     assert result == {"replacement": "[SECOND_BRAIN_UNCHANGED marker]"}
     assert calls[-1]["event"] == "pre_tool_call"
     assert calls[-1]["tool_name"] == "read"
+
 
 def test_hermes_plugin_brain_decision_drives_safe_middleware_handoff(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
@@ -1439,6 +1447,7 @@ def test_hermes_plugin_brain_decision_drives_safe_middleware_handoff(
         for call in calls
     )
 
+
 def test_hermes_plugin_observer_uses_effective_middleware_model(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1486,7 +1495,6 @@ def test_hermes_plugin_observer_uses_effective_middleware_model(
     assert calls[-1]["event"] == "post_api_request"
     assert calls[-1]["model"] == "selected-model"
     assert calls[-1]["provider"] == "selected-provider"
-
 
 
 def test_hermes_plugin_observers_emit_correlated_bounded_lifecycle(
@@ -1571,6 +1579,7 @@ def test_brain_lifecycle_events_correlate_identity_and_bound_metrics(
     assert lifecycle["usage"] == {"total_tokens": 9}
     assert "raw_response" not in json.dumps(lifecycle)
 
+
 def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home: Path) -> None:
     first_payload = {
         **_start_payload(session="vmem-runtime"),
@@ -1604,9 +1613,7 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
     assert initial["status"] == "ok"
     objects_after_break = store.list_objects(kind=vmem.SessionObjectKind.TOOL_OBSERVATION)
     cold = next(
-        obj
-        for obj in objects_after_break
-        if obj.residency_state == vmem.ResidencyState.EVICTED
+        obj for obj in objects_after_break if obj.residency_state == vmem.ResidencyState.EVICTED
     )
     assert cold.residency_state == vmem.ResidencyState.EVICTED
     assert cold.metadata["tool_call_id"] in {"tool-1", "tool-2"}
@@ -1675,9 +1682,10 @@ def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home
 def test_oversized_raw_result_preserves_artifact_reduces_and_faults_in(
     brain_home: Path,
 ) -> None:
-    raw_output = "\n".join(
-        [f"PASSED tests/test_{index}.py::test_case" for index in range(400)]
-    ) + "\n400 passed in 1.0s\n"
+    raw_output = (
+        "\n".join([f"PASSED tests/test_{index}.py::test_case" for index in range(400)])
+        + "\n400 passed in 1.0s\n"
+    )
     payload = {
         **_start_payload(session="vmem-oversized-lossless"),
         "event": "post_tool_call",
@@ -1759,6 +1767,7 @@ def test_post_tool_and_vmem_fail_open(brain_home: Path, monkeypatch: pytest.Monk
         "tool_name": "broken",
         "result": "ignored",
     }
+
     def fail_store(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
         raise RuntimeError("down")
@@ -1800,6 +1809,7 @@ def test_supported_events_are_explicit(brain_home: Path, event: str) -> None:
 
     assert response["status"] in {"registered", "ok", "candidate", "finalized"}
 
+
 def test_session_end_records_activation_from_tool_args(brain_home: Path) -> None:
     mid = _current_memory(brain_home)
     start = _start_payload() | {
@@ -1819,10 +1829,13 @@ def test_session_end_records_activation_from_tool_args(brain_home: Path) -> None
     import sqlite3
 
     with sqlite3.connect(brain_home / "db" / "brain.sqlite") as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
-            (mid, "hermes:Brain-Dev:hermes-session-1"),
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM memory_activations WHERE memory_id = ? AND session_id = ?",
+                (mid, "hermes:Brain-Dev:hermes-session-1"),
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_pre_tool_call_active_replaces_only_unchanged_read(brain_home: Path) -> None:
@@ -1894,6 +1907,7 @@ def test_pre_tool_call_shadow_retains_read_and_records_decision(brain_home: Path
         ).fetchone()
     assert row == ("reread", 1.0)
 
+
 def test_pre_tool_call_off_skips_lookup_and_telemetry(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1922,6 +1936,7 @@ def test_pre_tool_call_off_skips_lookup_and_telemetry(
     assert result["status"] == "ok"
     assert "replacement" not in result
     assert "reread_avoidable" not in telemetry
+
 
 def test_hermes_plugin_correction_cache_preserves_result_identity(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch

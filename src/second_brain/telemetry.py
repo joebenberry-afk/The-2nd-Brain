@@ -16,45 +16,108 @@ from pathlib import Path
 
 SCHEMA_VERSION = 2
 KNOWN_KINDS = {
-    "OMP_SECOND_BRAIN_READY", "active_state_delivery", "agent_end",
-    "assistant_usage", "autoinject_shadow_decision", "before_agent_start",
-    "brain_no_injection", "brain_packet_delivered", "brain_retrieval_attempt",
-    "claude_code_stop_turn", "claude_code_user_prompt", "claude_code_tool_result",
-    "codex_hook_shadow_decision", "context", "context_paging", "context_structure",
+    "OMP_SECOND_BRAIN_READY",
+    "active_state_delivery",
+    "agent_end",
+    "assistant_usage",
+    "autoinject_shadow_decision",
+    "before_agent_start",
+    "brain_no_injection",
+    "brain_packet_delivered",
+    "brain_retrieval_attempt",
+    "claude_code_stop_turn",
+    "claude_code_user_prompt",
+    "claude_code_tool_result",
+    "codex_hook_shadow_decision",
+    "context",
+    "context_paging",
+    "context_structure",
     "extension_error",
-    "hermes_model_decision", "hermes_post_tool_call", "hermes_pre_llm_call",
-    "handoff_sent", "handoff_received", "handoff_accepted", "handoff_result", "handoff_settled",
-    "hermes_session_finalized", "hermes_session_started",
-    "hermes_worker_context_resolved", "hermes_worker_lifecycle",
-    "hermes_worker_result_corrected", "hermes_worker_result_correction_requested",
-    "hermes_worker_result_reviewed", "hermes_writeback_candidate", "lean_kernel",
-    "model_fallback_used", "model_invocation_completed",
-    "model_invocation_failed", "model_invocation_started", "model_routing_decision",
-    "omp_routing_decision", "omp_routing_handoff_failure",
-    "omp_routing_invocation", "omp_routing_response",
-    "omp_visibility_plan", "omp_worker_child_result", "omp_worker_context_failure",
-    "omp_worker_context_handoff", "orchestration_record", "orchestrator_policy_violation",
-    "preinvocation", "preinvocation_no_task", "prime_tool_surface",
-    "provider_request_meta", "provider_response_meta", "rtd_shadow",
-    "session_before_compact", "session_compact", "session_finalized",
-    "session_shutdown", "session_start", "session_started",
-    "simplification_review", "stop_allowed", "stop_blocked",
-    "stop_blocked_result", "stop_boundary", "stop_continue",
-    "stop_control_result", "stop_finalization_error", "stop_finalized",
-    "stop_not_triggered", "tool_call", "tool_result", "turn_end", "turn_start",
-    "vmem_compact_prep", "vmem_fault_in", "vmem_hot_context", "writeback_candidate",
-    "heartbeat_pulse", "bottleneck_fingerprint", "optimization_proposal",
-    "optimization_evaluation", "optimization_activation", "optimization_rollback",
+    "hermes_model_decision",
+    "hermes_post_tool_call",
+    "hermes_pre_llm_call",
+    "handoff_sent",
+    "handoff_received",
+    "handoff_accepted",
+    "handoff_result",
+    "handoff_settled",
+    "hermes_session_finalized",
+    "hermes_session_started",
+    "hermes_worker_context_resolved",
+    "hermes_worker_lifecycle",
+    "hermes_worker_result_corrected",
+    "hermes_worker_result_correction_requested",
+    "hermes_worker_result_reviewed",
+    "hermes_writeback_candidate",
+    "lean_kernel",
+    "model_fallback_used",
+    "model_invocation_completed",
+    "model_invocation_failed",
+    "model_invocation_started",
+    "model_routing_decision",
+    "omp_routing_decision",
+    "omp_routing_handoff_failure",
+    "omp_routing_invocation",
+    "omp_routing_response",
+    "omp_visibility_plan",
+    "omp_worker_child_result",
+    "omp_worker_context_failure",
+    "omp_worker_context_handoff",
+    "orchestration_record",
+    "orchestrator_policy_violation",
+    "preinvocation",
+    "preinvocation_no_task",
+    "prime_tool_surface",
+    "provider_request_meta",
+    "provider_response_meta",
+    "rtd_shadow",
+    "session_before_compact",
+    "session_compact",
+    "session_finalized",
+    "session_shutdown",
+    "session_start",
+    "session_started",
+    "simplification_review",
+    "stop_allowed",
+    "stop_blocked",
+    "stop_blocked_result",
+    "stop_boundary",
+    "stop_continue",
+    "stop_control_result",
+    "stop_finalization_error",
+    "stop_finalized",
+    "stop_not_triggered",
+    "tool_call",
+    "tool_result",
+    "turn_end",
+    "turn_start",
+    "vmem_compact_prep",
+    "vmem_fault_in",
+    "vmem_hot_context",
+    "writeback_candidate",
+    "heartbeat_pulse",
+    "bottleneck_fingerprint",
+    "optimization_proposal",
+    "optimization_evaluation",
+    "optimization_activation",
+    "optimization_rollback",
     "cache_store_skipped_inputs_changed",
 }
 KIND_SCHEMA_VERSION = {
     kind: 3
     for kind in {
-        "assistant_usage", "provider_request_meta", "provider_response_meta",
-        "OMP_SECOND_BRAIN_READY", "omp_routing_decision",
-        "omp_routing_handoff_failure", "omp_routing_invocation",
-        "omp_routing_response", "omp_visibility_plan", "omp_worker_child_result",
-        "omp_worker_context_failure", "omp_worker_context_handoff",
+        "assistant_usage",
+        "provider_request_meta",
+        "provider_response_meta",
+        "OMP_SECOND_BRAIN_READY",
+        "omp_routing_decision",
+        "omp_routing_handoff_failure",
+        "omp_routing_invocation",
+        "omp_routing_response",
+        "omp_visibility_plan",
+        "omp_worker_child_result",
+        "omp_worker_context_failure",
+        "omp_worker_context_handoff",
     }
 }
 REQUIRED_FIELDS = ("v", "kind", "session")
@@ -89,21 +152,43 @@ def iter_records(home: Path) -> list[tuple[str, int, dict]]:
 
 
 _HEARTBEAT_FIELDS = (
-    "mode", "event", "due", "ran", "healthy", "db_ok", "cache_pruned_count",
-    "git_dirty", "issue_codes", "latency_ms", "model_tokens_used",
+    "mode",
+    "event",
+    "due",
+    "ran",
+    "healthy",
+    "db_ok",
+    "cache_pruned_count",
+    "git_dirty",
+    "issue_codes",
+    "latency_ms",
+    "model_tokens_used",
     "artifacts_gc_count",
 )
 _HEARTBEAT_MODES = frozenset({"off", "shadow", "active"})
-_P4_OPTIMIZATION_KINDS = frozenset({
-    "optimization_proposal", "optimization_evaluation",
-    "optimization_activation", "optimization_rollback",
-})
+_P4_OPTIMIZATION_KINDS = frozenset(
+    {
+        "optimization_proposal",
+        "optimization_evaluation",
+        "optimization_activation",
+        "optimization_rollback",
+    }
+)
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-_FORBIDDEN_P4_FIELDS = frozenset({
-    "prompt", "payload", "secret", "content", "tool_input", "tool_output",
-    "chain_of_thought", "thinking", "internal_monologue",
-})
+_FORBIDDEN_P4_FIELDS = frozenset(
+    {
+        "prompt",
+        "payload",
+        "secret",
+        "content",
+        "tool_input",
+        "tool_output",
+        "chain_of_thought",
+        "thinking",
+        "internal_monologue",
+    }
+)
 
 
 def _field_issue(identity: str, field: str, message: str) -> str:
@@ -125,14 +210,10 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
     if kind == "heartbeat_pulse":
         values = {field: require(field) for field in _HEARTBEAT_FIELDS}
         mode = values["mode"]
-        if "mode" in record and (
-            not isinstance(mode, str) or mode not in _HEARTBEAT_MODES
-        ):
+        if "mode" in record and (not isinstance(mode, str) or mode not in _HEARTBEAT_MODES):
             issues.append(_field_issue(identity, "mode", "must be off, shadow, or active"))
         event = values["event"]
-        if "event" in record and (
-            not isinstance(event, str) or len(event) > 128
-        ):
+        if "event" in record and (not isinstance(event, str) or len(event) > 128):
             issues.append(
                 _field_issue(
                     identity,
@@ -144,7 +225,12 @@ def _p4_issues(record: dict, identity: str) -> list[str]:
             value = values[field]
             if field in record and not isinstance(value, bool):
                 issues.append(_field_issue(identity, field, "must be boolean"))
-        for field in ("cache_pruned_count", "latency_ms", "model_tokens_used", "artifacts_gc_count"):
+        for field in (
+            "cache_pruned_count",
+            "latency_ms",
+            "model_tokens_used",
+            "artifacts_gc_count",
+        ):
             value = values[field]
             if field in record and (
                 isinstance(value, bool) or not isinstance(value, int) or value < 0
@@ -253,24 +339,24 @@ def _record_issues(record: object, identity: str) -> list[str]:
     if kind not in KNOWN_KINDS:
         issues.append(f"{identity}: unknown kind {kind!r}")
     expected_v = (
-        KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION)
-        if isinstance(kind, str)
-        else SCHEMA_VERSION
+        KIND_SCHEMA_VERSION.get(kind, SCHEMA_VERSION) if isinstance(kind, str) else SCHEMA_VERSION
     )
     version = record.get("v")
     if isinstance(version, bool) or (version is not None and not isinstance(version, int)):
         issues.append(f"{identity}: schema version is not an integer")
     elif isinstance(version, int) and version != expected_v:
-        issues.append(
-            f"{identity}: schema v{version} != expected v{expected_v} for kind {kind!r}"
-        )
+        issues.append(f"{identity}: schema v{version} != expected v{expected_v} for kind {kind!r}")
     if not isinstance(record.get("ts"), str):
         issues.append(f"{identity}: ts missing or not a string")
     if kind in {
-        "heartbeat_pulse", "bottleneck_fingerprint", *_P4_OPTIMIZATION_KINDS,
+        "heartbeat_pulse",
+        "bottleneck_fingerprint",
+        *_P4_OPTIMIZATION_KINDS,
     }:
         issues.extend(_p4_issues(record, identity))
     return issues
+
+
 def validate(home: Path) -> dict:
     """Check every record. Returns {'files', 'records', 'issues': [..]}."""
     issues: list[str] = []
@@ -339,7 +425,7 @@ def session_usage(home: Path, session_id: str) -> dict:
             if isinstance(value, int) and not isinstance(value, bool):
                 reasoning_seen = True
                 reasoning_total += value
-    result: dict[str, int | None | str] = dict(totals)
+    result: dict[str, int | str | None] = dict(totals)
     result["reasoning"] = reasoning_total if reasoning_seen else None
     result["message_count"] = message_count
     result["source_kind"] = source_kind
@@ -370,6 +456,7 @@ def session_wall_time_ms(home: Path, session_id: str) -> float | None:
     if len(ts_values) < 2:
         return None
     from datetime import datetime as _datetime
+
     start = _datetime.fromisoformat(ts_values[0].replace("Z", "+00:00"))
     end = _datetime.fromisoformat(ts_values[-1].replace("Z", "+00:00"))
     return max((end - start).total_seconds() * 1000, 0.0)
@@ -378,15 +465,27 @@ def session_wall_time_ms(home: Path, session_id: str) -> float | None:
 def operational_report(home: Path, since: str | None = None) -> dict:
     """Aggregate bounded operational counters in one deterministic pass."""
     tokens: dict[str, int | None] = {
-        "input": None, "output": None, "total": None,
-        "cache_read": None, "cache_write": None,
+        "input": None,
+        "output": None,
+        "total": None,
+        "cache_read": None,
+        "cache_write": None,
     }
     counts = {
-        "tool_calls": 0, "tool_result_bytes": 0, "file_reads": 0,
-        "file_rereads": 0, "compactions": 0, "driver_events": 0,
-        "worker_events": 0, "background_events": 0, "tool_errors": 0,
-        "extension_errors": 0, "heartbeat_runs": 0, "fingerprint_events": 0,
-        "optimization_events": 0, "validation_issues": 0,
+        "tool_calls": 0,
+        "tool_result_bytes": 0,
+        "file_reads": 0,
+        "file_rereads": 0,
+        "compactions": 0,
+        "driver_events": 0,
+        "worker_events": 0,
+        "background_events": 0,
+        "tool_errors": 0,
+        "extension_errors": 0,
+        "heartbeat_runs": 0,
+        "fingerprint_events": 0,
+        "optimization_events": 0,
+        "validation_issues": 0,
     }
     seen_targets: set[str] = set()
     for _, _, record in iter_records(home):
@@ -397,8 +496,10 @@ def operational_report(home: Path, since: str | None = None) -> dict:
         kind = record.get("kind")
         if kind == "assistant_usage":
             for field, source in (
-                ("input", "input_tokens"), ("output", "output_tokens"),
-                ("total", "total_tokens"), ("cache_read", "cache_read_tokens"),
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+                ("total", "total_tokens"),
+                ("cache_read", "cache_read_tokens"),
                 ("cache_write", "cache_write_tokens"),
             ):
                 value = record.get(source)
@@ -450,8 +551,7 @@ def operational_report(home: Path, since: str | None = None) -> dict:
             counts["worker_events"] += 1
         harness = record.get("harness")
         if (
-            isinstance(harness, str)
-            and harness.lower() in {"background", "daemon", "cron"}
+            isinstance(harness, str) and harness.lower() in {"background", "daemon", "cron"}
         ) or "background" in roles:
             counts["background_events"] += 1
 
@@ -461,7 +561,8 @@ def operational_report(home: Path, since: str | None = None) -> dict:
 def report(home: Path, *, since: str | None = None) -> dict:
     """Aggregate telemetry into a compact report (deterministic)."""
     records = [
-        rec for _, _, rec in iter_records(home)
+        rec
+        for _, _, rec in iter_records(home)
         if isinstance(rec, dict) and "__parse_error__" not in rec
     ]
     if since:
@@ -550,14 +651,22 @@ def format_report(rep: dict) -> str:
         for k, v in rep["models"].items():
             lines.append(f"  {k:40s} {v}")
     return "\n".join(lines)
+
+
 _APPEND_FIELDS = {
     "heartbeat_pulse": set(_HEARTBEAT_FIELDS),
     "bottleneck_fingerprint": {
-        "fingerprint_id", "category", "scope_id", "occurrence_count",
-        "impact_score", "evidence_count", "evidence_hash",
+        "fingerprint_id",
+        "category",
+        "scope_id",
+        "occurrence_count",
+        "impact_score",
+        "evidence_count",
+        "evidence_hash",
     },
     "cache_store_skipped_inputs_changed": {
-        "action_type", "dependency_class",
+        "action_type",
+        "dependency_class",
     },
 }
 for _handoff_kind in (
@@ -568,13 +677,23 @@ for _handoff_kind in (
     "handoff_settled",
 ):
     _APPEND_FIELDS[_handoff_kind] = {
-        "task_id", "packet_sha256", "state", "duplicate", "approved",
-        "settled", "failure_code", "evidence_hash",
+        "task_id",
+        "packet_sha256",
+        "state",
+        "duplicate",
+        "approved",
+        "settled",
+        "failure_code",
+        "evidence_hash",
     }
 for _optimization_kind in _P4_OPTIMIZATION_KINDS:
     _APPEND_FIELDS[_optimization_kind] = {
-        "proposal_id", "status", "intervention_hash", "evidence_hash",
-        "approval_state", "rollback_state",
+        "proposal_id",
+        "status",
+        "intervention_hash",
+        "evidence_hash",
+        "approval_state",
+        "rollback_state",
     }
 
 
@@ -636,7 +755,3 @@ def append_record(
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
     return record
-
-
-
-

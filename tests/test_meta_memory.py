@@ -2,27 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 from second_brain import db, decisions, reconsolidation, semantic
 from second_brain.errors import BrainError
-
-
-def test_reconsolidation_actions_are_bounded() -> None:
-    expected = (
-        "strengthen",
-        "narrow",
-        "update",
-        "split",
-        "merge",
-        "supersede",
-        "demote",
-        "archive",
-    )
-    assert reconsolidation.RECONSOLIDATION_ACTIONS == expected
 
 
 def test_reconsolidation_preserves_evidence(brain_home: Path) -> None:
@@ -143,7 +128,7 @@ def test_contradiction_prevents_silent_strengthening(brain_home: Path) -> None:
     assert "silent strengthening blocked" in post_eval["reason"]
 
     # Running decay_pass does NOT escalate back to HOT
-    changes = reconsolidation.decay_pass(brain_home)
+    reconsolidation.decay_pass(brain_home)
     row_final = reconsolidation._memory_row(brain_home, mid)
     assert row_final["heat"] == "COLD"
 
@@ -199,6 +184,263 @@ def test_supersede_is_reversible(brain_home: Path) -> None:
     versions = {h["version"] for h in hist}
     assert 1 in versions
     assert 2 in versions
+
+
+def test_archive_plan_mutates_status_and_reverts(brain_home: Path) -> None:
+    mid = semantic.add_memory(
+        brain_home,
+        title="Archive candidate",
+        body="Retain this history but exclude it from default retrieval.",
+        grade="TESTED",
+    )
+    semantic.curate(brain_home, mid, status="current")
+    plan = reconsolidation.propose_plan(brain_home, "archive", mid)
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    assert semantic.show_memory(brain_home, mid)["row"]["status"] == "archived"
+    assert semantic.list_memories(brain_home, status="current") == []
+
+    reverted = reconsolidation.revert_plan(brain_home, applied)
+    assert reverted["status"] == "reverted"
+    assert semantic.show_memory(brain_home, mid)["row"]["status"] == "current"
+
+
+@pytest.mark.parametrize("action", ["strengthen", "narrow", "update", "split", "merge"])
+def test_incomplete_action_refuses_without_mutation(brain_home: Path, action: str) -> None:
+    mid = semantic.add_memory(brain_home, title="Action coverage", body="Original body.")
+    before = semantic.show_memory(brain_home, mid)
+    with pytest.raises(BrainError):
+        reconsolidation.propose_plan(brain_home, action, mid)
+    assert semantic.show_memory(brain_home, mid) == before
+
+
+@pytest.mark.parametrize("action", ["narrow", "update"])
+def test_content_plan_restores_version_and_retains_new_evidence(
+    brain_home: Path, action: str
+) -> None:
+    mid = semantic.add_memory(
+        brain_home,
+        "Cache rule",
+        "Cache every response.",
+        sources=[{"ref": "test:old"}],
+        origin_class="LOCAL_REPO",
+        origin_root_sha="a" * 64,
+    )
+    before = semantic.show_memory(brain_home, mid)
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        action,
+        mid,
+        new_body="Cache only successful responses.",
+        new_sources=[{"ref": "test:successful-only"}],
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    current = semantic.show_memory(brain_home, mid)
+    assert current["row"]["current_version"] > before["row"]["current_version"]
+    assert "Cache only successful responses." in current["body"]
+    assert current["row"]["origin_root_sha"] == "a" * 64
+    assert current["row"]["authority_ceiling"] == "project_rule"
+    reverted = reconsolidation.revert_plan(brain_home, applied)
+    assert semantic.show_memory(brain_home, mid)["body"] == before["body"]
+    assert {source["ref"] for source in semantic._sources(brain_home, mid)} == {
+        "test:old",
+        "test:successful-only",
+    }
+    assert {version["version"] for version in semantic.history(brain_home, mid)} == {1, 2}
+    assert reverted["reverted_result"]["states"][mid]["origin_root_sha"] == "a" * 64
+    second_plan = reconsolidation.propose_plan(
+        brain_home,
+        action,
+        mid,
+        new_body="Cache only successful and verified responses.",
+    )
+    second_applied = reconsolidation.apply_plan(brain_home, second_plan)
+    assert second_applied["applied_result"]["new_version"] == 3
+    history = semantic.history(brain_home, mid)
+    assert {version["version"] for version in history} == {1, 2, 3}
+    version_two = next(version for version in history if version["version"] == 2)
+    assert "Cache only successful responses." in Path(
+        brain_home / version_two["body_path"]
+    ).read_text(encoding="utf-8")
+
+
+def test_strengthen_restores_storage_not_intrinsic_strength_or_evidence(brain_home: Path) -> None:
+    mid = semantic.add_memory(brain_home, "Supported fact", "A supported claim.")
+    before = semantic.show_memory(brain_home, mid)["row"]
+    plan = reconsolidation.propose_plan(
+        brain_home, "strengthen", mid, new_sources=[{"ref": "test:new-proof", "kind": "test"}]
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    strengthened = semantic.show_memory(brain_home, mid)["row"]
+    assert strengthened["storage_strength"] == pytest.approx(before["storage_strength"] + 0.1)
+    for key in ("strength", "stability", "evidence_grade", "origin_class", "authority_ceiling"):
+        assert strengthened[key] == before[key]
+    reconsolidation.revert_plan(brain_home, applied)
+    restored = semantic.show_memory(brain_home, mid)["row"]
+    assert restored["storage_strength"] == before["storage_strength"]
+    assert restored["strength"] == before["strength"]
+    assert semantic._sources(brain_home, mid)[0]["ref"] == "test:new-proof"
+    with pytest.raises(BrainError, match="Stale"):
+        reconsolidation.revert_plan(brain_home, applied)
+    reconsolidation.record_activation(brain_home, mid, "contradicted")
+    with pytest.raises(BrainError, match="Contradictions"):
+        reconsolidation.propose_plan(
+            brain_home, "strengthen", mid, new_sources=[{"ref": "test:another-proof"}]
+        )
+
+
+def test_split_preserves_lineage_and_archives_outputs_on_rollback(brain_home: Path) -> None:
+    mid = semantic.add_memory(
+        brain_home,
+        "Combined rule",
+        "Read safely. Write safely.",
+        grade="TESTED",
+        sources=[{"ref": "test:safety", "range_sha": "c" * 64}],
+        origin_class="LOCAL_REPO",
+        origin_root_sha="a" * 64,
+    )
+    semantic.curate(brain_home, mid, status="current", authority_ceiling="advisory")
+    before = semantic.show_memory(brain_home, mid)
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        "split",
+        mid,
+        parts=[
+            {"title": "Read rule", "body": "Read safely."},
+            {"title": "Write rule", "body": "Write safely."},
+        ],
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    outputs = applied["applied_result"]["created_memory_ids"]
+    assert semantic.show_memory(brain_home, mid)["row"]["status"] == "superseded"
+    bodies = set()
+    for out in outputs:
+        row = semantic._row(brain_home, out)
+        assert row is not None
+        bodies.add(semantic._body_text(brain_home, row).strip())
+    assert bodies == {"Read safely.", "Write safely."}
+    for out in outputs:
+        row = semantic.show_memory(brain_home, out)["row"]
+        assert (row["origin_class"], row["origin_root_sha"], row["authority_ceiling"]) == (
+            "LOCAL_REPO",
+            "a" * 64,
+            "advisory",
+        )
+        refs = {source["ref"]: source for source in semantic._sources(brain_home, out)}
+        assert refs["test:safety"]["range_sha"] == "c" * 64
+        assert f"memory:{mid}@v1" in refs
+    reconsolidation.revert_plan(brain_home, applied)
+    assert semantic.show_memory(brain_home, mid)["body"] == before["body"]
+    assert semantic.show_memory(brain_home, mid)["row"]["status"] == "current"
+    for out in outputs:
+        assert semantic.show_memory(brain_home, out)["row"]["status"] == "archived"
+        assert Path(semantic.show_memory(brain_home, out)["path"]).is_file()
+
+
+def test_merge_inherits_weakest_authority_and_guards_every_output(brain_home: Path) -> None:
+    trusted = semantic.add_memory(
+        brain_home,
+        "Local claim",
+        "Local fact.",
+        grade="TESTED",
+        origin_class="LOCAL_REPO",
+        origin_root_sha="a" * 64,
+        sources=[{"ref": "test:local"}],
+    )
+    foreign = semantic.add_memory(
+        brain_home,
+        "Foreign claim",
+        "External fact.",
+        origin_class="EXTERNAL_WEB",
+        origin_root_sha="b" * 64,
+        sources=[{"ref": "https://example.com/fact"}],
+    )
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        "merge",
+        trusted,
+        merge_memory_ids=[foreign],
+        new_title="Combined claim",
+        new_body="Local and external facts.",
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    merged = applied["applied_result"]["created_memory_ids"][0]
+    row = semantic.show_memory(brain_home, merged)["row"]
+    assert (row["origin_class"], row["origin_root_sha"], row["authority_ceiling"]) == (
+        "EXTERNAL_WEB",
+        "b" * 64,
+        "advisory",
+    )
+    assert row["evidence_grade"] == "OBSERVED"
+    assert {source["ref"] for source in semantic._sources(brain_home, merged)} == {
+        "test:local",
+        "https://example.com/fact",
+        f"memory:{trusted}@v1",
+        f"memory:{foreign}@v1",
+    }
+    reconsolidation.revert_plan(brain_home, applied)
+    assert semantic.show_memory(brain_home, trusted)["row"]["status"] == "candidate"
+    assert semantic.show_memory(brain_home, foreign)["row"]["status"] == "candidate"
+    assert semantic.show_memory(brain_home, merged)["row"]["status"] == "archived"
+    next_plan = reconsolidation.propose_plan(
+        brain_home,
+        "merge",
+        trusted,
+        merge_memory_ids=[foreign],
+        new_body="Another merge.",
+    )
+    next_applied = reconsolidation.apply_plan(brain_home, next_plan)
+    next_merged = next_applied["applied_result"]["created_memory_ids"][0]
+    semantic.supersede(
+        brain_home, next_merged, new_body="Later edit.", change_note="Independent edit"
+    )
+    with pytest.raises(BrainError, match="Stale"):
+        reconsolidation.revert_plan(brain_home, next_applied)
+    assert semantic.show_memory(brain_home, trusted)["row"]["status"] == "superseded"
+    assert "Later edit." in semantic.show_memory(brain_home, next_merged)["body"]
+
+
+def test_plan_cannot_apply_after_evidence_or_version_changes(brain_home: Path) -> None:
+    mid = semantic.add_memory(brain_home, "Mutable fact", "Before.")
+    plan = reconsolidation.propose_plan(brain_home, "update", mid, new_body="Proposed.")
+    semantic.curate(brain_home, mid, sources=[{"ref": "test:intervening"}], verify=False)
+    with pytest.raises(BrainError, match="Stale"):
+        reconsolidation.apply_plan(brain_home, plan)
+    assert semantic.show_memory(brain_home, mid)["row"]["current_version"] == 1
+
+
+def test_split_failure_restores_input_and_retains_partial_output_as_history(
+    brain_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mid = semantic.add_memory(
+        brain_home, "Two rules", "First and second.", sources=[{"ref": "test:original"}]
+    )
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        "split",
+        mid,
+        parts=[
+            {"title": "First", "body": "First rule."},
+            {"title": "Second", "body": "Second rule."},
+        ],
+    )
+    original_add = semantic.add_memory
+    created = []
+
+    def fail_second(*args, **kwargs):
+        if created:
+            raise BrainError("Storage unavailable")
+        output = original_add(*args, **kwargs)
+        created.append(output)
+        return output
+
+    monkeypatch.setattr(semantic, "add_memory", fail_second)
+    with pytest.raises(BrainError, match="Storage unavailable"):
+        reconsolidation.apply_plan(brain_home, plan)
+    assert semantic.show_memory(brain_home, mid)["row"]["status"] == "candidate"
+    assert semantic.show_memory(brain_home, created[0])["row"]["status"] == "archived"
+    assert "test:original" in {
+        source["ref"] for source in semantic._sources(brain_home, created[0])
+    }
 
 
 def test_hotset_demotion_does_not_delete_memory(brain_home: Path) -> None:

@@ -1,8 +1,8 @@
 """Replay the full causal update path using paired and holdout results.
 
-Cheapest real experiment for T7.5:
-Use paired/holdout results already produced by T0.5/T5.2 to replay the full causal update path.
-DONE-WHEN at least one positive and one negative intervention produce distinct, evidence-grounded candidate outcomes.
+Cheapest real experiment for T7.5: Use paired/holdout results already produced by
+T0.5/T5.2 to replay the full causal update path. DONE-WHEN at least one positive and one
+negative intervention produce distinct, evidence-grounded candidate outcomes.
 """
 
 from __future__ import annotations
@@ -31,7 +31,15 @@ def run_causal_experiment() -> dict[str, Any]:
             temp_dir,
             intervention_type="tool_working_set_filter",
             target_ref="policy:active_tool_filtering",
-            expected_outcome={"metric": "tokens_delta", "expected_delta": -200.0},
+            expected_outcome={
+                "metric": "tokens_delta",
+                "expected_delta": -200.0,
+                "direction": "decrease",
+                "expected_range": [-201.0, -199.0],
+                "horizon": 1,
+                "confidence": 0.95,
+                "evaluator": "paired-runner",
+            },
             baseline_ref="paired_t05:baseline_run_01",
             session_id="sess-causal-pos-01",
         )
@@ -57,7 +65,15 @@ def run_causal_experiment() -> dict[str, Any]:
             temp_dir,
             intervention_type="speculative_memory_injection",
             target_ref="candidate:speculative_autoinject",
-            expected_outcome={"metric": "tokens_delta", "expected_delta": -150.0},
+            expected_outcome={
+                "metric": "tokens_delta",
+                "expected_delta": -150.0,
+                "direction": "decrease",
+                "expected_range": [-151.0, -149.0],
+                "horizon": 1,
+                "confidence": 0.95,
+                "evaluator": "paired-runner",
+            },
             baseline_ref="holdout_t52:baseline_run_02",
             session_id="sess-causal-neg-02",
         )
@@ -80,7 +96,7 @@ def run_causal_experiment() -> dict[str, Any]:
         # Verify distinct, evidence-grounded candidate outcomes
         action_a = obs_a["candidate_action"]["action"]
         action_b = obs_b["candidate_action"]["action"]
-        distinct_outcomes = (action_a != action_b)
+        distinct_outcomes = action_a != action_b
 
         assert action_a == "propose_candidate_update"
         assert action_b == "demote_candidate"
@@ -102,9 +118,10 @@ def run_causal_experiment() -> dict[str, Any]:
         manifest = {
             "experiment": "T7.5 Prediction-Error and Causal Learning Loop Replay",
             "hypothesis": (
-                "Verified positive interventions attribute causal credit (DIRECT) and propose candidate policy updates, "
-                "while regressed/negative interventions attribute UNRELATED_NEGATIVE credit and trigger candidate demotion. "
-                "All candidate actions remain in SHADOW stage with zero direct self-mutation."
+                "Verified positive interventions attribute causal credit (DIRECT) and propose"
+                " candidate policy updates, while regressed/negative interventions attribute"
+                " UNRELATED_NEGATIVE credit and trigger candidate demotion. All candidate actions"
+                " remain in SHADOW stage with zero direct self-mutation."
             ),
             "metrics": {
                 "positive_intervention_id": intv_a["intervention_id"],
@@ -130,10 +147,10 @@ def run_causal_experiment() -> dict[str, Any]:
                 },
             ],
             "conclusion": (
-                f"PASS: Replayed full causal update path. Positive intervention yielded '{action_a}' "
-                f"with {obs_a['credit_class']} credit. Negative intervention yielded '{action_b}' "
-                f"with {obs_b['credit_class']} credit. Distinct evidence-grounded outcomes achieved "
-                "under 100% SHADOW rollout compliance."
+                "PASS: Replayed full causal update path. Positive intervention yielded"
+                f" '{action_a}' with {obs_a['credit_class']} credit. Negative intervention yielded"
+                f" '{action_b}' with {obs_b['credit_class']} credit. Distinct evidence-grounded"
+                " outcomes achieved under 100% SHADOW rollout compliance."
             ),
         }
 

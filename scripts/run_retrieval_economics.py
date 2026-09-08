@@ -1,7 +1,6 @@
 """Run paired economics benchmark for Retrieval Intelligence 2.0.
 
-Economics requirement for T7.3:
-Use T0.5 paired runner with retrieval feature isolation.
+Economics requirement for T7.3: Use T0.5 paired runner with retrieval feature isolation.
 Do not promote on relevance-only benchmarks if token/turn economics regress materially.
 """
 
@@ -21,16 +20,34 @@ OUTPUT_PATH = ROOT / "outputs" / "reports" / "v2" / "retrieval" / "retrieval-eco
 
 def _seed_benchmark_corpus(home: Path) -> list[dict[str, str]]:
     topics = [
-        ("PostgreSQL Pooling", "Configure PgBouncer with 100 max connections and transaction pooling."),
-        ("PostgreSQL Pool Guide", "Configure PgBouncer with 100 max connections and transaction pooling."),
-        ("PostgreSQL Pool Tunings", "Configure PgBouncer with 100 max connections and transaction pooling."),
-        ("Redis Session Cache", "Use Redis standalone cluster with LRU eviction for session cookies."),
+        (
+            "PostgreSQL Pooling",
+            "Configure PgBouncer with 100 max connections and transaction pooling.",
+        ),
+        (
+            "PostgreSQL Pool Guide",
+            "Configure PgBouncer with 100 max connections and transaction pooling.",
+        ),
+        (
+            "PostgreSQL Pool Tunings",
+            "Configure PgBouncer with 100 max connections and transaction pooling.",
+        ),
+        (
+            "Redis Session Cache",
+            "Use Redis standalone cluster with LRU eviction for session cookies.",
+        ),
         ("Redis Key Eviction", "Configure maxmemory-policy allkeys-lru in redis.conf."),
         ("SQLite WAL Mode", "Set journal_mode=WAL and busy_timeout=5000 for concurrent reads."),
         ("SQLite Concurrency", "Set journal_mode=WAL and busy_timeout=5000 for concurrent reads."),
-        ("HTTP Timeout Limits", "Enforce 5s connect timeout and 30s read timeout on outgoing requests."),
+        (
+            "HTTP Timeout Limits",
+            "Enforce 5s connect timeout and 30s read timeout on outgoing requests.",
+        ),
         ("HTTP Retry Strategy", "Use exponential backoff with full jitter on 5xx status codes."),
-        ("Token Rate Limiting", "Implement token bucket with 60 requests per minute burst capacity."),
+        (
+            "Token Rate Limiting",
+            "Implement token bucket with 60 requests per minute burst capacity.",
+        ),
     ]
     created = []
     for title, body in topics:
@@ -72,7 +89,9 @@ def run_retrieval_economics() -> dict[str, Any]:
         for idx, (q, task_class) in enumerate(queries):
             # Arm OFF: Base retrieval without MMR (duplicate items admitted to top-k context)
             # Fetch raw lexical results without MMR diversity re-ranking
-            fts_rows = semantic.search_memories(temp_dir, q, project_id="bench-proj", top_k=4, include_duplicates=True)
+            fts_rows = semantic.search_memories(
+                temp_dir, q, project_id="bench-proj", top_k=4, include_duplicates=True
+            )
             off_matches = [
                 hybrid_retrieval.RetrievalMatch(
                     memory_id=m["memory_id"],
@@ -87,7 +106,9 @@ def run_retrieval_economics() -> dict[str, Any]:
             off_tokens = int(contracts.estimate_tokens(off_context))
 
             # Arm ON: Retrieval Intelligence 2.0 (with MMR lambda=0.7 diversity)
-            res_on = retriever.retrieve(temp_dir, q, project_id="bench-proj", top_k=4, lambda_param=0.7)
+            res_on = retriever.retrieve(
+                temp_dir, q, project_id="bench-proj", top_k=4, lambda_param=0.7
+            )
             on_matches = res_on.matches
             on_context = "\n\n".join(f"[{m.title}]\n{m.body}" for m in on_matches)
             on_tokens = int(contracts.estimate_tokens(on_context))
@@ -99,8 +120,12 @@ def run_retrieval_economics() -> dict[str, Any]:
             total_on_tokens = base_prompt_tokens + on_tokens + 200
 
             # Cost calculation at standard prices: $3/M input, $15/M output
-            off_cost = (base_prompt_tokens + off_tokens) * (3.0 / 1_000_000) + 200 * (15.0 / 1_000_000)
-            on_cost = (base_prompt_tokens + on_tokens) * (3.0 / 1_000_000) + 200 * (15.0 / 1_000_000)
+            off_cost = (base_prompt_tokens + off_tokens) * (3.0 / 1_000_000) + 200 * (
+                15.0 / 1_000_000
+            )
+            on_cost = (base_prompt_tokens + on_tokens) * (3.0 / 1_000_000) + 200 * (
+                15.0 / 1_000_000
+            )
 
             run = {
                 "pair_id": f"ret-pair-{idx}",
@@ -129,8 +154,8 @@ def run_retrieval_economics() -> dict[str, Any]:
         manifest = {
             "experiment": "T7.3 Retrieval Intelligence 2.0 Paired Economics",
             "hypothesis": (
-                "MMR diversity with lambda=0.7 eliminates near-duplicate memory injection, "
-                "reducing token expenditure and context window bloat while preserving 100% acceptance."
+                "MMR diversity with lambda=0.7 eliminates near-duplicate memory injection, reducing"
+                " token expenditure and context window bloat while preserving 100% acceptance."
             ),
             "verdict": v,
             "summary": {
@@ -152,7 +177,10 @@ def run_retrieval_economics() -> dict[str, Any]:
         OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
         OUTPUT_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         print(f"Wrote retrieval economics results to {OUTPUT_PATH}")
-        print(f"Verdict: {v.get('verdict')}, Pairs: {v.get('n')}, Dollars delta: {v.get('dollars_delta')}")
+        print(
+            f"Verdict: {v.get('verdict')}, Pairs: {v.get('n')}, Dollars delta:"
+            f" {v.get('dollars_delta')}"
+        )
         return manifest
 
     finally:

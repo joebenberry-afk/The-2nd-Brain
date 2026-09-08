@@ -139,11 +139,21 @@ class TestSessionTokensBasic:
         """Track how many records had cost_total (HONESTY RULE)."""
         records = [
             _rec("session_start"),
-            _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150,
-            cost_total=0.01),
+            _rec(
+                "assistant_usage",
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                cost_total=0.01,
+            ),
             _rec("assistant_usage", input_tokens=50, output_tokens=30, total_tokens=80),  # no cost
-            _rec("assistant_usage", input_tokens=75, output_tokens=40, total_tokens=115,
-            cost_total=0.015),
+            _rec(
+                "assistant_usage",
+                input_tokens=75,
+                output_tokens=40,
+                total_tokens=115,
+                cost_total=0.015,
+            ),
         ]
         _write_session(brain_home, "partial_cost", records)
 
@@ -251,14 +261,22 @@ class TestRoleAttribution:
 
     def test_driver_vs_worker(self, brain_home):
         """Attribute tokens by role."""
-        _write_session(brain_home, "driver", [
-            _rec("session_start", role="driver"),
-            _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
-        ])
-        _write_session(brain_home, "worker", [
-            _rec("session_start", role="worker"),
-            _rec("assistant_usage", input_tokens=200, output_tokens=100, total_tokens=300),
-        ])
+        _write_session(
+            brain_home,
+            "driver",
+            [
+                _rec("session_start", role="driver"),
+                _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
+            ],
+        )
+        _write_session(
+            brain_home,
+            "worker",
+            [
+                _rec("session_start", role="worker"),
+                _rec("assistant_usage", input_tokens=200, output_tokens=100, total_tokens=300),
+            ],
+        )
 
         sessions = governor.parse_telemetry(brain_home)
         attribution = governor.attribute_roles(sessions)
@@ -316,11 +334,7 @@ class TestFeatureFlags:
         config_dir.mkdir(parents=True, exist_ok=True)
 
         config_file = config_dir / "governor.toml"
-        config_file.write_text(
-            "[features]\n"
-            "autoinject = false\n"
-            "semantic_vectors = false\n"
-        )
+        config_file.write_text("[features]\nautoinject = false\nsemantic_vectors = false\n")
 
         flags = governor.resolve_features(brain_home)
 
@@ -346,10 +360,7 @@ class TestFeatureFlags:
         config_dir.mkdir(parents=True, exist_ok=True)
 
         config_file = config_dir / "governor.toml"
-        config_file.write_text(
-            "[features]\n"
-            "unknown_feature = false\n"
-        )
+        config_file.write_text("[features]\nunknown_feature = false\n")
 
         with pytest.raises(ValueError, match="Unknown feature flag"):
             governor.resolve_features(brain_home)
@@ -385,20 +396,62 @@ class TestROIClassification:
     def test_positive_roi(self, brain_home):
         """Brain ON uses fewer tokens than Brain OFF."""
         on_records = [
-            [_rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150,
-            cost_total=0.01)],
-            [_rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150,
-            cost_total=0.01)],
-            [_rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150,
-            cost_total=0.01)],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=100,
+                    output_tokens=50,
+                    total_tokens=150,
+                    cost_total=0.01,
+                )
+            ],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=100,
+                    output_tokens=50,
+                    total_tokens=150,
+                    cost_total=0.01,
+                )
+            ],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=100,
+                    output_tokens=50,
+                    total_tokens=150,
+                    cost_total=0.01,
+                )
+            ],
         ]
         off_records = [
-            [_rec("assistant_usage", input_tokens=200, output_tokens=100, total_tokens=300,
-            cost_total=0.02)],
-            [_rec("assistant_usage", input_tokens=200, output_tokens=100, total_tokens=300,
-            cost_total=0.02)],
-            [_rec("assistant_usage", input_tokens=200, output_tokens=100, total_tokens=300,
-            cost_total=0.02)],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=200,
+                    output_tokens=100,
+                    total_tokens=300,
+                    cost_total=0.02,
+                )
+            ],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=200,
+                    output_tokens=100,
+                    total_tokens=300,
+                    cost_total=0.02,
+                )
+            ],
+            [
+                _rec(
+                    "assistant_usage",
+                    input_tokens=200,
+                    output_tokens=100,
+                    total_tokens=300,
+                    cost_total=0.02,
+                )
+            ],
         ]
 
         for i, recs in enumerate(on_records):
@@ -407,14 +460,8 @@ class TestROIClassification:
             _write_session(brain_home, f"off_{i}", recs)
 
         tel_path = brain_home / "telemetry" / "agent-performance"
-        on = [
-            governor.parse_telemetry_session(tel_path / f"on_{i}.jsonl")
-            for i in range(3)
-        ]
-        off = [
-            governor.parse_telemetry_session(tel_path / f"off_{i}.jsonl")
-            for i in range(3)
-        ]
+        on = [governor.parse_telemetry_session(tel_path / f"on_{i}.jsonl") for i in range(3)]
+        off = [governor.parse_telemetry_session(tel_path / f"off_{i}.jsonl") for i in range(3)]
 
         verdict = governor.classify_roi(on, off)
 
@@ -428,20 +475,28 @@ class TestROIClassification:
         off = []
 
         for i in range(3):
-            _write_session(brain_home, f"on_neg_{i}", [
-                _rec("assistant_usage", input_tokens=200, output_tokens=100, cost_total=0.02)
-            ])
-            on.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"on_neg_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"on_neg_{i}",
+                [_rec("assistant_usage", input_tokens=200, output_tokens=100, cost_total=0.02)],
+            )
+            on.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"on_neg_{i}.jsonl"
+                )
+            )
 
         for i in range(3):
-            _write_session(brain_home, f"off_neg_{i}", [
-                _rec("assistant_usage", input_tokens=100, output_tokens=50, cost_total=0.01)
-            ])
-            off.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"off_neg_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"off_neg_{i}",
+                [_rec("assistant_usage", input_tokens=100, output_tokens=50, cost_total=0.01)],
+            )
+            off.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"off_neg_{i}.jsonl"
+                )
+            )
 
         verdict = governor.classify_roi(on, off)
 
@@ -453,25 +508,35 @@ class TestROIClassification:
         off = []
 
         for i in range(3):
-            _write_session(brain_home, f"on_neut_{i}", [
-_rec(
-                    "assistant_usage",
-                    input_tokens=100,
-                    output_tokens=50,
-                    cost_total=0.0102,  # +2%
+            _write_session(
+                brain_home,
+                f"on_neut_{i}",
+                [
+                    _rec(
+                        "assistant_usage",
+                        input_tokens=100,
+                        output_tokens=50,
+                        cost_total=0.0102,  # +2%
+                    )
+                ],
+            )
+            on.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"on_neut_{i}.jsonl"
                 )
-            ])
-            on.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"on_neut_{i}.jsonl"
-            ))
+            )
 
         for i in range(3):
-            _write_session(brain_home, f"off_neut_{i}", [
-                _rec("assistant_usage", input_tokens=100, output_tokens=50, cost_total=0.01)
-            ])
-            off.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"off_neut_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"off_neut_{i}",
+                [_rec("assistant_usage", input_tokens=100, output_tokens=50, cost_total=0.01)],
+            )
+            off.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"off_neut_{i}.jsonl"
+                )
+            )
 
         verdict = governor.classify_roi(on, off, neutral_band=0.02)
 
@@ -481,21 +546,29 @@ _rec(
         """Insufficient sessions (below min_sessions)."""
         on = []
         for i in range(2):  # Only 2, need 3
-            _write_session(brain_home, f"on_tiny_{i}", [
-                _rec("assistant_usage", input_tokens=100, cost_total=0.01)
-            ])
-            on.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"on_tiny_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"on_tiny_{i}",
+                [_rec("assistant_usage", input_tokens=100, cost_total=0.01)],
+            )
+            on.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"on_tiny_{i}.jsonl"
+                )
+            )
 
         off = []
         for i in range(3):
-            _write_session(brain_home, f"off_tiny_{i}", [
-                _rec("assistant_usage", input_tokens=100, cost_total=0.01)
-            ])
-            off.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"off_tiny_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"off_tiny_{i}",
+                [_rec("assistant_usage", input_tokens=100, cost_total=0.01)],
+            )
+            off.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"off_tiny_{i}.jsonl"
+                )
+            )
 
         verdict = governor.classify_roi(on, off)
 
@@ -506,21 +579,31 @@ _rec(
         """HONESTY: missing cost_total makes verdict INSUFFICIENT_EVIDENCE."""
         on = []
         for i in range(3):
-            _write_session(brain_home, f"on_no_cost_{i}", [
-                _rec("assistant_usage", input_tokens=100)  # no cost_total
-            ])
-            on.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"on_no_cost_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"on_no_cost_{i}",
+                [
+                    _rec("assistant_usage", input_tokens=100)  # no cost_total
+                ],
+            )
+            on.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"on_no_cost_{i}.jsonl"
+                )
+            )
 
         off = []
         for i in range(3):
-            _write_session(brain_home, f"off_no_cost_{i}", [
-                _rec("assistant_usage", input_tokens=100, cost_total=0.01)
-            ])
-            off.append(governor.parse_telemetry_session(
-                brain_home / "telemetry" / "agent-performance" / f"off_no_cost_{i}.jsonl"
-            ))
+            _write_session(
+                brain_home,
+                f"off_no_cost_{i}",
+                [_rec("assistant_usage", input_tokens=100, cost_total=0.01)],
+            )
+            off.append(
+                governor.parse_telemetry_session(
+                    brain_home / "telemetry" / "agent-performance" / f"off_no_cost_{i}.jsonl"
+                )
+            )
 
         verdict = governor.classify_roi(on, off)
 
@@ -533,10 +616,14 @@ class TestCLI:
 
     def test_governor_report_json(self, brain_home):
         """CLI: brainctl governor report --json."""
-        _write_session(brain_home, "cli_test", [
-            _rec("session_start", model="test-model"),
-            _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
-        ])
+        _write_session(
+            brain_home,
+            "cli_test",
+            [
+                _rec("session_start", model="test-model"),
+                _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
+            ],
+        )
 
         result = subprocess.run(
             [
@@ -898,9 +985,7 @@ class TestCheckBudget:
     def test_soft_cap_at_boundary(self, brain_home):
         """Usage exactly at cap * soft_ratio is SOFT (>= boundary)."""
         # worker cap defaults to 120000; soft_ratio 0.8 -> soft threshold 96000.
-        records = [
-            _rec("assistant_usage", session="budget-soft", total_tokens=96000)
-        ]
+        records = [_rec("assistant_usage", session="budget-soft", total_tokens=96000)]
         _write_session(brain_home, "budget-soft", records)
         result = governor.check_budget(brain_home, "budget-soft", "worker")
         assert result == {"state": "SOFT", "used": 96000, "cap": 120000}
@@ -920,9 +1005,7 @@ class TestCheckBudget:
 
     def test_hard_cap_at_boundary(self, brain_home):
         """Usage exactly at cap is HARD (>= boundary)."""
-        records = [
-            _rec("assistant_usage", session="budget-hard", total_tokens=120000)
-        ]
+        records = [_rec("assistant_usage", session="budget-hard", total_tokens=120000)]
         _write_session(brain_home, "budget-hard", records)
         result = governor.check_budget(brain_home, "budget-hard", "worker")
         assert result == {"state": "HARD", "used": 120000, "cap": 120000}
@@ -948,9 +1031,7 @@ class TestCheckBudget:
         }
 
     @pytest.mark.parametrize("identity", ["missing", "null"])
-    def test_usage_without_session_identity_is_accounting_unavailable(
-        self, brain_home, identity
-    ):
+    def test_usage_without_session_identity_is_accounting_unavailable(self, brain_home, identity):
         """Malformed usage cannot become factual cap consumption."""
         record = _rec("assistant_usage", total_tokens=500000)
         if identity == "missing":
@@ -959,9 +1040,7 @@ class TestCheckBudget:
             record["session"] = None
         _write_session(brain_home, f"{identity}-usage-session", [record])
 
-        assert governor.check_budget(
-            brain_home, f"{identity}-usage-session", "driver"
-        ) == {
+        assert governor.check_budget(brain_home, f"{identity}-usage-session", "driver") == {
             "state": "OK",
             "used": None,
             "cap": 400000,
@@ -980,9 +1059,7 @@ class TestCheckBudget:
             "[budgets]\nsession_tokens = 1000\nworker_tokens = 500\nsoft_ratio = 0.5\n",
             encoding="utf-8",
         )
-        records = [
-            _rec("assistant_usage", session="budget-custom", total_tokens=500)
-        ]
+        records = [_rec("assistant_usage", session="budget-custom", total_tokens=500)]
         _write_session(brain_home, "budget-custom", records)
         result = governor.check_budget(brain_home, "budget-custom", "driver")
         assert result == {"state": "SOFT", "used": 500, "cap": 1000}
@@ -1020,7 +1097,9 @@ class TestCheckBudget:
             ],
         )
 
-        with ledger.LedgerStore(brain_home, child_host_id, host="hermes").open(create=True) as store:
+        with ledger.LedgerStore(brain_home, child_host_id, host="hermes").open(
+            create=True
+        ) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(child_host_id),
@@ -1058,7 +1137,9 @@ class TestCheckBudget:
             [_rec("assistant_usage", session=stray_host_id, total_tokens=99999)],
         )
 
-        with ledger.LedgerStore(brain_home, stray_host_id, host="hermes").open(create=True) as store:
+        with ledger.LedgerStore(brain_home, stray_host_id, host="hermes").open(
+            create=True
+        ) as store:
             store.create_session(
                 contracts.BrainSessionIdentity(
                     internal_session_id=ledger.internal_session_id(stray_host_id),
@@ -1076,9 +1157,7 @@ class TestCheckBudget:
         result = governor.check_budget(brain_home, parent_host_id, "driver")
         assert result["used"] == 10
 
-    def test_independent_roots_nested_worker_duplicate_resume_and_old_home(
-        self, brain_home
-    ):
+    def test_independent_roots_nested_worker_duplicate_resume_and_old_home(self, brain_home):
         """A/B/C scope, nested A usage, duplicate rows, resume, and old history."""
         from second_brain import ledger
 
@@ -1148,9 +1227,7 @@ class TestCheckBudget:
             "cap": 40,
         }
 
-    def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(
-        self, brain_home
-    ):
+    def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(self, brain_home):
         session_id = "worker.child"
         _write_session(
             brain_home,
@@ -1175,9 +1252,7 @@ class TestCheckBudget:
     def test_malformed_telemetry_fails_open_with_diagnostic(self, brain_home):
         telemetry_dir = brain_home / "telemetry" / "agent-performance"
         telemetry_dir.mkdir(parents=True, exist_ok=True)
-        (telemetry_dir / "malformed.jsonl").write_text(
-            "{not-json}\n", encoding="utf-8"
-        )
+        (telemetry_dir / "malformed.jsonl").write_text("{not-json}\n", encoding="utf-8")
 
         assert governor.check_budget(brain_home, "malformed", "worker") == {
             "state": "OK",

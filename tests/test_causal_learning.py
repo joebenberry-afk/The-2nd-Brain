@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import credit, db, decisions
+from second_brain import credit, decisions
 from second_brain.errors import BrainError
 
 
 def test_prediction_error_requires_prior_expectation(brain_home: Path) -> None:
-    """Every adaptive intervention requires a measurable prior expected outcome before execution."""
+    """Every adaptive intervention requires a measurable prior expected outcome before
+    execution."""
     # 1. Reject empty or non-measurable expectation when recording intervention
     with pytest.raises(BrainError, match="measurable expected_outcome"):
         credit.record_intervention(
@@ -33,13 +34,49 @@ def test_prediction_error_requires_prior_expectation(brain_home: Path) -> None:
         )
 
 
+def test_prior_expectation_requires_causal_bounds_and_identity(brain_home: Path) -> None:
+    with pytest.raises(BrainError, match="baseline_ref"):
+        credit.record_intervention(
+            brain_home,
+            "routing_policy",
+            "policy:missing-baseline",
+            {
+                "metric": "token_delta",
+                "expected_delta": -10.0,
+                "direction": "decrease",
+                "expected_range": [-11.0, -9.0],
+                "horizon": 1,
+                "confidence": 0.95,
+                "evaluator": "test-evaluator",
+            },
+            "",
+        )
+    with pytest.raises(BrainError, match="prior causal fields"):
+        credit.record_intervention(
+            brain_home,
+            "routing_policy",
+            "policy:metric-only",
+            {"metric": "token_delta"},
+            "baseline:present",
+        )
+
+
 def test_model_self_report_is_not_observation(brain_home: Path) -> None:
-    """Observations must originate from telemetry, test runner, or benchmark, never model self-assertion."""
+    """Observations must originate from telemetry, test runner, or benchmark, never
+    model self-assertion."""
     intv = credit.record_intervention(
         brain_home,
         intervention_type="prompt_compaction",
         target_ref="prompt:system_prefix",
-        expected_outcome={"metric": "token_delta", "expected_delta": -150.0},
+        expected_outcome={
+            "metric": "token_delta",
+            "expected_delta": -150.0,
+            "direction": "decrease",
+            "expected_range": [-151.0, -149.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         baseline_ref="baseline:session-002",
     )
 
@@ -64,12 +101,21 @@ def test_model_self_report_is_not_observation(brain_home: Path) -> None:
 
 
 def test_surprise_creates_candidate_not_active_policy(brain_home: Path) -> None:
-    """Surprise from verified evidence creates a candidate policy in SHADOW, not active policy mutation."""
+    """Surprise from verified evidence creates a candidate policy in SHADOW, not active
+    policy mutation."""
     intv = credit.record_intervention(
         brain_home,
         intervention_type="cache_bypass",
         target_ref="policy:retrieval_bypass",
-        expected_outcome={"metric": "latency_ms", "expected_delta": -25.0},
+        expected_outcome={
+            "metric": "latency_ms",
+            "expected_delta": -25.0,
+            "direction": "decrease",
+            "expected_range": [-26.0, -24.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         baseline_ref="baseline:session-003",
     )
 
@@ -103,12 +149,21 @@ def test_surprise_creates_candidate_not_active_policy(brain_home: Path) -> None:
 
 
 def test_negative_effect_can_demote_candidate(brain_home: Path) -> None:
-    """Interventions yielding verified negative effects produce demote_candidate actions."""
+    """Interventions yielding verified negative effects produce demote_candidate
+    actions."""
     intv = credit.record_intervention(
         brain_home,
         intervention_type="aggressive_preloading",
         target_ref="candidate:preload_rule",
-        expected_outcome={"metric": "token_delta", "expected_delta": -100.0},
+        expected_outcome={
+            "metric": "token_delta",
+            "expected_delta": -100.0,
+            "direction": "decrease",
+            "expected_range": [-101.0, -99.0],
+            "horizon": 1,
+            "confidence": 0.95,
+            "evaluator": "test-evaluator",
+        },
         baseline_ref="baseline:session-004",
     )
 

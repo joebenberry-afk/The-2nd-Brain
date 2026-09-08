@@ -214,9 +214,8 @@ def test_search_title_summary_body(brain_home):
     with pytest.raises(BrainError, match="term"):
         semantic.search_memories(brain_home, " ")
 
-def test_project_search_retains_unknown_domain_for_fts_and_linear(
-    brain_home, monkeypatch
-):
+
+def test_project_search_retains_unknown_domain_for_fts_and_linear(brain_home, monkeypatch):
     mid = _add(
         brain_home,
         title="Domain fallback retrieval",

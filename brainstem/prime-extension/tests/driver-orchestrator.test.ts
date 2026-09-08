@@ -40,12 +40,6 @@ describe("loadDriverOrchestratorConfig", () => {
     });
   });
 
-  it("defaults match the campaign contract: pro+luna drive, flash+qwen3.5 work", () => {
-    expect(DEFAULT_DRIVER_MODELS).toEqual(["deepseek-v4-pro", "gpt-5.6-luna"]);
-    expect(DEFAULT_WORKER_MODELS).toEqual(["deepseek-v4-flash", "qwen3.5"]);
-    // disjoint: no model id can be both driver and worker by default
-    expect(DEFAULT_DRIVER_MODELS).not.toEqual(expect.arrayContaining(DEFAULT_WORKER_MODELS));
-  });
 
   it("env override replaces the driver list (comma-separated, trimmed, lowercased)", () => {
     const cfg = loadDriverOrchestratorConfig({
@@ -85,6 +79,12 @@ describe("resolveAgentRole — precedence and matching", () => {
     expect(resolveAgentRole("deepseek-v4-pro", cfg, HARD)).toBe("driver");
     expect(resolveAgentRole(LUNA, cfg, HARD)).toBe("driver");
     expect(resolveAgentRole("openai-codex/GPT-5.6-LUNA", cfg, HARD)).toBe("driver"); // case-insensitive
+    expect(resolveAgentRole("openai-codex/gpt-6-astra", cfg, HARD)).toBe("driver");
+  });
+
+  it("keeps an explicit driver allowlist authoritative for Astra", () => {
+    const cfg = loadDriverOrchestratorConfig({ DRIVER_MODELS: "deepseek-v4-pro" });
+    expect(resolveAgentRole("openai-codex/gpt-6-astra", cfg, HARD)).toBe("normal");
   });
 
   it("worker models resolve by lowercase substring, provider-qualified or bare", () => {

@@ -99,6 +99,7 @@ def _snapshot_db(src: Path, dst: Path) -> None:
 
 def create_backup(home: Path, *, note: str | None = None) -> Path:
     """Create a timestamped backup. Returns the backup directory."""
+    _verify_memory_references(home)
     stamps = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     bdir = paths.backups_dir(home) / f"backup-{stamps}"
     if bdir.exists():
@@ -121,6 +122,11 @@ def create_backup(home: Path, *, note: str | None = None) -> Path:
         if src.exists():
             shutil.copy2(src, bdir / rel)
             copied.append(rel)
+    try:
+        _verify_memory_references(bdir, database_file=bdir / "brain.sqlite")
+    except BackupError:
+        shutil.rmtree(bdir)
+        raise
 
     conn = db.connect(src_db, readonly=True)
     try:
@@ -187,9 +193,7 @@ def _validate_db_file_name(file_name: object) -> str:
         or ":" in file_name
         or file_name in (".", "..")
     ):
-        raise BackupError(
-            f"Backup manifest db.file is not a plain file name: {file_name!r}"
-        )
+        raise BackupError(f"Backup manifest db.file is not a plain file name: {file_name!r}")
     return file_name
 
 
@@ -228,25 +232,41 @@ def _verify_file_hashes(backup_dir: Path, manifest: dict) -> None:
             )
 
 
-def _verify_memory_references(home: Path) -> None:
-    conn = db.connect(db.db_path(home), readonly=True)
+def _verify_memory_references(home: Path, *, database_file: Path | None = None) -> None:
+    """Verify current and historical canonical files without mutating the database."""
     try:
+        conn = db.connect(database_file or db.db_path(home), readonly=True)
+    except sqlite3.Error as exc:
+        raise BackupError(f"Cannot inspect canonical memory references: {exc}") from exc
+    try:
+        required = {"memories", "memory_versions"}
+        present = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('memories', 'memory_versions')"
+            )
+        }
+        if not present and db.current_version(conn) < 3:
+            return  # Supported backups predating semantic memory have no such references.
+        if present != required:
+            raise BackupError("Canonical memory reference tables are missing")
         rows = conn.execute(
             "SELECT body_path FROM memories WHERE body_path IS NOT NULL "
             "UNION SELECT body_path FROM memory_versions WHERE body_path IS NOT NULL"
         ).fetchall()
+    except sqlite3.Error as exc:
+        raise BackupError(f"Cannot inspect canonical memory references: {exc}") from exc
     finally:
         conn.close()
     for row in rows:
         rel = str(row["body_path"]).replace("\\", "/")
         try:
             target = resolve_under(home, rel, allow_missing=False)
-        except (ValueError, FileNotFoundError) as exc:
-            raise BackupError(
-                f"Restored DB references missing canonical memory {rel!r}"
-            ) from exc
-        if not target.is_file():
-            raise BackupError(f"Restored DB references missing canonical memory {rel!r}")
+            if not target.is_file():
+                raise FileNotFoundError(rel)
+        except (ValueError, OSError) as exc:
+            raise BackupError(f"Canonical memory file is missing or unsafe: {rel!r}") from exc
 
 
 def _targets_exist(home: Path, copied: list[str] | None = None) -> list[str]:
@@ -329,16 +349,14 @@ def _restore_plan(home: Path, backup_dir: Path, manifest: dict) -> list[tuple[st
     for rel in copied:
         if not isinstance(rel, str) or not rel.strip():
             raise BackupError(
-                "Backup manifest entry must be a non-empty string (got "
-                f"{type(rel).__name__})"
+                f"Backup manifest entry must be a non-empty string (got {type(rel).__name__})"
             )
         try:
             source = resolve_under(backup_dir, rel, allow_missing=False)
             destination = resolve_under(home, rel, allow_missing=True)
         except ValueError as exc:
             raise BackupError(
-                f"Backup restore rejected: manifest entry {rel!r} is unsafe "
-                f"({exc})."
+                f"Backup restore rejected: manifest entry {rel!r} is unsafe ({exc})."
             ) from exc
         if source.is_dir():
             # Reject symlinks anywhere inside a restored tree: a linked file
@@ -375,6 +393,11 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
     manifest = load_manifest(backup_dir)
     _verify_db_hash(backup_dir, manifest)
     _verify_file_hashes(backup_dir, manifest)
+    if manifest["format"] >= 2:
+        _verify_memory_references(
+            backup_dir,
+            database_file=backup_dir / _validate_db_file_name(manifest["db"]["file"]),
+        )
 
     home.mkdir(parents=True, exist_ok=True)
     # Preflight the complete restore plan before mutating anything.
@@ -414,6 +437,7 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         db.migrate(dst_db)
         _verify_memory_references(home)
         _drop_stale_db_sidecars(home)
+        paths.ensure_layout(home)
         # The Brain root must be a Git repository (doctor requires it).
         if not (home / ".git").exists():
             subprocess.run(["git", "init", "-q"], cwd=home, check=False)

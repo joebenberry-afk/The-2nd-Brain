@@ -70,9 +70,7 @@ def test_contradiction_pair_marked_in_results(brain_home):
     assert survivor["contradiction_with"] == [a if survivor["memory_id"] == b else b]
 
     # comparison path: both sides returned, each marked with the other
-    both = semantic.search_memories(
-        brain_home, "wal journal", include_duplicates=True, top_k=20
-    )
+    both = semantic.search_memories(brain_home, "wal journal", include_duplicates=True, top_k=20)
     by_id = {r["memory_id"]: r for r in both}
     assert a in by_id and b in by_id
     assert by_id[a]["contradiction_with"] == [b]

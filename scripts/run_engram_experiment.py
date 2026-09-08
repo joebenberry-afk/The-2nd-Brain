@@ -1,205 +1,245 @@
-"""Extract a repeated 3-5 tool workflow from real sessions and prove deterministic replay.
-
-Cheapest real experiment for T7.6:
-Extract one repeated 3-5 tool workflow from real Second Brain sessions and
-prove deterministic replay on the same fixture.
-DONE-WHEN one workflow is distilled and replayed deterministically with preserved
-pre/postconditions and no model call.
-"""
+"""Provider-free workflow engram qualification using real owned I/O."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from second_brain import crossmodel, db, engram
+from second_brain import engram
+from second_brain.security.paths import resolve_under
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = ROOT / "outputs" / "reports" / "v2" / "engrams" / "engram-experiment.json"
 
 
-def run_engram_experiment() -> dict[str, Any]:
+def _result(
+    tool: str, *, exit_code: int = 0, side_effect: bool = False, **extra: object
+) -> dict[str, object]:
+    return {"tool": tool, "exit_code": exit_code, "side_effect": side_effect, **extra}
+
+
+def _owned_tool_runner(home: Path):
+    def run(tool: str, args: Mapping[str, object]) -> dict[str, object]:
+        if tool == "write_marker":
+            path = resolve_under(home, str(args["path"]), allow_missing=True)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(args["content"]), encoding="utf-8")
+            return _result(tool, side_effect=True)
+        if tool == "read_file":
+            path = resolve_under(home, str(args["path"]))
+            return _result(tool, content=path.read_text(encoding="utf-8"))
+        if tool == "verify_marker":
+            path = resolve_under(home, str(args["path"]))
+            expected = str(args["content"])
+            return _result(
+                tool,
+                exit_code=0 if path.read_text(encoding="utf-8") == expected else 1,
+                content=path.read_text(encoding="utf-8"),
+            )
+        raise RuntimeError(f"unsupported owned workflow tool: {tool}")
+
+    return run
+
+
+def _owned_predicate_runner(home: Path):
+    def run(predicate: str, args: Mapping[str, object]) -> dict[str, object]:
+        path = resolve_under(home, str(args["path"]), allow_missing=predicate == "path_exists")
+        if predicate == "path_exists":
+            return _result(predicate, exit_code=0 if path.exists() else 1)
+        if predicate == "file_nonempty":
+            return _result(predicate, exit_code=0 if path.is_file() and path.stat().st_size else 1)
+        if predicate == "file_contains":
+            return _result(
+                predicate,
+                exit_code=0
+                if path.is_file() and str(args["text"]) in path.read_text(encoding="utf-8")
+                else 1,
+            )
+        raise RuntimeError(f"unsupported owned workflow predicate: {predicate}")
+
+    return run
+
+
+def _event(tool: str, session: str, **args: object) -> dict[str, object]:
+    return {
+        "kind": "tool_call",
+        "session": session,
+        "tool": tool,
+        "input": args,
+        "result": {"exit_code": 0, "side_effect": tool == "write_marker"},
+    }
+
+
+def run_engram_experiment(output_path: Path | None = None) -> dict[str, Any]:
     temp_dir = Path(tempfile.mkdtemp(prefix="second_brain_engram_exp_"))
     try:
-        dbfile = db.db_path(temp_dir)
-        db.migrate(dbfile)
-
-        # 1. Real session tool sequences containing a repeated 3-step verification workflow
-        # Workflow: read_file -> run_linter -> run_tests
-        session_a_events = [
-            {"kind": "session_start", "session": "sess-a"},
-            {"kind": "tool_call", "tool": "read_file", "input": {"path": "src/core.py"}},
-            {"kind": "tool_call", "tool": "run_linter", "input": {"path": "src/core.py"}},
-            {"kind": "tool_call", "tool": "run_tests", "input": {"test": "tests/test_core.py"}},
-            {"kind": "session_end", "session": "sess-a"},
+        (temp_dir / "workspace").mkdir()
+        repeated = [
+            _event("write_marker", "sess-a", path="workspace/marker.txt", content="v1"),
+            _event("read_file", "sess-a", path="workspace/marker.txt"),
+            _event("verify_marker", "sess-a", path="workspace/marker.txt", content="v1"),
         ]
-
-        session_b_events = [
-            {"kind": "session_start", "session": "sess-b"},
-            {"kind": "tool_call", "tool": "git_status", "input": {}},
-            {"kind": "tool_call", "tool": "read_file", "input": {"path": "src/core.py"}},
-            {"kind": "tool_call", "tool": "run_linter", "input": {"path": "src/core.py"}},
-            {"kind": "tool_call", "tool": "run_tests", "input": {"test": "tests/test_core.py"}},
-            {"kind": "tool_call", "tool": "git_commit", "input": {"msg": "update"}},
+        repeated_b = [
+            _event("write_marker", "sess-b", path="workspace/marker.txt", content="v1"),
+            _event("read_file", "sess-b", path="workspace/marker.txt"),
+            _event("verify_marker", "sess-b", path="workspace/marker.txt", content="v1"),
         ]
-
-        session_c_events = [
-            {"kind": "session_start", "session": "sess-c"},
-            {"kind": "tool_call", "tool": "read_file", "input": {"path": "docs/README.md"}},
-        ]
-
-        # 2. Extract repeated 3-5 tool workflow using detect_workflow_engrams (support >= 2)
         detected = engram.detect_workflow_engrams(
-            [session_a_events, session_b_events, session_c_events],
-            min_support=2,
-            min_len=3,
-            max_len=5,
+            [repeated, repeated_b], min_support=2, min_len=3, max_len=3
         )
-
-        assert len(detected) >= 1
+        if not detected:
+            raise RuntimeError("no repeated successful workflow was detected")
         distilled = detected[0]
-        assert distilled["sequence"] == ["read_file", "run_linter", "run_tests"]
-        assert distilled["support"] == 2
-
-        # 3. Register distilled engram procedure with preserved pre/postconditions
         procedure = [
+            {
+                "tool": "write_marker",
+                "args_template": {"path": "$path", "content": "$content"},
+                "precondition": {
+                    "predicate": "path_exists",
+                    "args_template": {"path": "$directory"},
+                    "expect_exit": 0,
+                },
+                "postcondition": {
+                    "predicate": "file_contains",
+                    "args_template": {"path": "$path", "text": "$content"},
+                    "expect_exit": 0,
+                },
+            },
             {
                 "tool": "read_file",
                 "args_template": {"path": "$path"},
-                "precondition": {"cmd": "test -f \"$path\"", "expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"cmd": "test -s \"$path\"", "expect_exit": 0, "actual_exit": 0},
+                "postcondition": {
+                    "predicate": "file_nonempty",
+                    "args_template": {"path": "$path"},
+                    "expect_exit": 0,
+                },
             },
             {
-                "tool": "run_linter",
-                "args_template": {"path": "$path"},
-                "precondition": {"cmd": "which ruff", "expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"cmd": "test $? -eq 0", "expect_exit": 0, "actual_exit": 0},
-            },
-            {
-                "tool": "run_tests",
-                "args_template": {"path": "$path"},
-                "precondition": {"cmd": "test -f tests/test_core.py", "expect_exit": 0, "actual_exit": 0},
-                "postcondition": {"cmd": "test $? -eq 0", "expect_exit": 0, "actual_exit": 0},
+                "tool": "verify_marker",
+                "args_template": {"path": "$path", "content": "$content"},
             },
         ]
-
         registered = engram.register_workflow_engram(
             temp_dir,
             {
                 "engram_id": distilled["engram_id"],
                 "version": 1,
                 "procedure": procedure,
-                "valid_for": {
-                    "harness": "universal",
-                    "tool_versions": {"read_file": "1.0", "run_linter": "1.0", "run_tests": "1.0"},
-                    "model": "all",
-                },
+                "provenance": distilled["provenance"],
                 "status": "candidate",
             },
         )
-
-        # 4. Prove deterministic replay with ZERO model calls
-        model_calls = 0
-
-        def deterministic_tool_runner(tool: str, args: dict[str, Any]) -> dict[str, Any]:
-            nonlocal model_calls
-            # Tool execution is deterministic shell / file manipulation; ZERO model calls!
-            return {"tool": tool, "args": args, "status": "ok", "exit_code": 0}
-
-        # Run 1: First replay
+        tool_runner = _owned_tool_runner(temp_dir)
+        predicate_runner = _owned_predicate_runner(temp_dir)
+        params = {
+            "directory": "workspace",
+            "path": "workspace/marker.txt",
+            "content": "v1",
+        }
         run1 = engram.run_deterministic(
             temp_dir,
             registered["engram_id"],
-            params={"path": "src/core.py"},
-            tool_runner=deterministic_tool_runner,
+            params=params,
+            tool_runner=tool_runner,
+            predicate_runner=predicate_runner,
         )
-
-        # Run 2: Second replay (action cache hit)
         run2 = engram.run_deterministic(
             temp_dir,
             registered["engram_id"],
-            params={"path": "src/core.py"},
-            tool_runner=deterministic_tool_runner,
+            params=params,
+            tool_runner=tool_runner,
+            predicate_runner=predicate_runner,
         )
-
-        assert run1["success"] is True
-        assert run1["model_calls"] == 0
-        assert run1["steps_executed"] == 3
-        assert run1["cache_hit"] is False
-
-        assert run2["success"] is True
-        assert run2["model_calls"] == 0
-        assert run2["cache_hit"] is True
-
-        # 5. Teacher -> Student distillation evaluation
-        fixture = {
-            "expected_postconditions": [
-                "read_file:test -s \"$path\"",
-                "run_linter:test $? -eq 0",
-                "run_tests:test $? -eq 0",
-            ],
-            "student_run": {
-                "passed_postconditions": [
-                    "read_file:test -s \"$path\"",
-                    "run_linter:test $? -eq 0",
-                    "run_tests:test $? -eq 0",
-                ],
-                "acceptance_passed": True,
-            },
-        }
-
-        distillation_eval = crossmodel.evaluate_teacher_student(
+        read_only = engram.register_workflow_engram(
             temp_dir,
-            engram_id=registered["engram_id"],
-            teacher_model="claude-3-5-sonnet",
-            student_model="claude-3-5-haiku",
-            fixture=fixture,
+            {
+                "engram_id": "owned-read-replay",
+                "version": 1,
+                "cache_policy": "read_only",
+                "cache_inputs": ["path"],
+                "procedure": [
+                    {
+                        "tool": "read_file",
+                        "effect": "read",
+                        "args_template": {"path": "$path"},
+                        "postcondition": {
+                            "predicate": "file_nonempty",
+                            "args_template": {"path": "$path"},
+                            "expect_exit": 0,
+                        },
+                    }
+                ],
+            },
         )
-
-        assert distillation_eval["status"] == "VERIFIED"
-        assert distillation_eval["transfer_approved"] is True
-
+        read1 = engram.run_deterministic(
+            temp_dir,
+            read_only["engram_id"],
+            params={"path": "workspace/marker.txt"},
+            tool_runner=tool_runner,
+            predicate_runner=predicate_runner,
+        )
+        read2 = engram.run_deterministic(
+            temp_dir,
+            read_only["engram_id"],
+            params={"path": "workspace/marker.txt"},
+            tool_runner=tool_runner,
+            predicate_runner=predicate_runner,
+        )
+        (temp_dir / "workspace" / "marker.txt").write_text("v2", encoding="utf-8")
+        read3 = engram.run_deterministic(
+            temp_dir,
+            read_only["engram_id"],
+            params={"path": "workspace/marker.txt"},
+            tool_runner=tool_runner,
+            predicate_runner=predicate_runner,
+        )
+        if not run1["success"] or not run2["success"]:
+            raise RuntimeError("real workflow replay failed")
+        if read1["cache_hit"] or not read2["cache_hit"] or read3["cache_hit"]:
+            raise RuntimeError("read-only cache invalidation contract failed")
         manifest = {
-            "experiment": "T7.6 Deterministic Engrams & Teacher-Student Distillation Replay",
-            "hypothesis": (
-                "Repeated 3-5 tool workflows can be distilled into deterministic composite engrams, "
-                "replayed with preserved pre/postconditions and zero model calls, and transferred "
-                "to cheaper student models under identical acceptance postconditions."
-            ),
+            "experiment": "P3.3 provider-free real workflow replay",
+            "scope": "local workflow-to-macro execution only; teacher/student transfer is external",
             "metrics": {
                 "extracted_workflow_sequence": distilled["sequence"],
-                "extracted_workflow_length": len(distilled["sequence"]),
                 "workflow_support_count": distilled["support"],
-                "deterministic_run_success": run1["success"],
-                "deterministic_run_model_calls": run1["model_calls"],
-                "action_cache_hit_verified": run2["cache_hit"],
-                "teacher_student_distillation_status": distillation_eval["status"],
-                "teacher_student_same_acceptance": distillation_eval["same_acceptance"],
+                "source_provenance_count": len(distilled["provenance"]),
+                "real_workflow_first_success": run1["success"],
+                "real_workflow_second_success": run2["success"],
+                "read_cache_first_hit": read1["cache_hit"],
+                "read_cache_second_hit": read2["cache_hit"],
+                "read_cache_changed_input_hit": read3["cache_hit"],
+                "changed_content": read3["steps"][0]["output"]["content"],
             },
             "distilled_engram": registered,
             "first_run_result": run1,
-            "cached_run_result": run2,
-            "distillation_result": distillation_eval,
+            "second_run_result": run2,
+            "read_cache_results": [read1, read2, read3],
+            "external_transfer": "not_attempted",
             "conclusion": (
-                f"PASS: Distilled 3-step workflow ({' -> '.join(distilled['sequence'])}) with support={distilled['support']}. "
-                "Replayed deterministically with preserved preconditions and postconditions using ZERO model calls. "
-                "Action cache hit on repeat verified. Teacher-to-student distillation satisfied 100% same acceptance."
+                "PASS: real owned tools and predicates executed; side-effecting "
+                "workflow was not cached; read-only cache invalidated on changed "
+                "input; cache resources closed."
             ),
         }
-
-        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT_PATH.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        print(f"Wrote engram experiment results to {OUTPUT_PATH}")
+        destination = output_path or OUTPUT_PATH
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(manifest, handle, indent=2)
+            handle.write("\n")
+        print(f"Wrote engram experiment results to {destination}")
         print(f"Workflow: {' -> '.join(distilled['sequence'])}, Support: {distilled['support']}")
-        print(f"Model calls: {run1['model_calls']}, Cache hit: {run2['cache_hit']}")
         return manifest
-
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":
-    run_engram_experiment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, default=OUTPUT_PATH)
+    run_engram_experiment(parser.parse_args().output)

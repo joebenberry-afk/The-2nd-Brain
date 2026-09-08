@@ -14,7 +14,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__, build_identity, db, envsteward, paths
+from . import __version__, backup, build_identity, db, envsteward, paths
+from .errors import BackupError
 
 STATUS_OK = "ok"
 STATUS_WARN = "warn"
@@ -224,6 +225,14 @@ def check_db(home: Path, checks: list[Check]) -> None:
             checks.append(Check("migrations", STATUS_OK, f"current at version {v}"))
     finally:
         conn.close()
+    try:
+        backup._verify_memory_references(home)
+    except BackupError as exc:
+        checks.append(Check("canonical memories", STATUS_FAIL, str(exc)))
+    else:
+        checks.append(
+            Check("canonical memories", STATUS_OK, "current and historical files present")
+        )
 
 
 def check_tools(checks: list[Check]) -> None:

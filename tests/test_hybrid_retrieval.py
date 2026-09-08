@@ -86,6 +86,7 @@ class TestCascadeShortCircuitAndTiers:
         retriever.invalidate_negative_cache(project_id="p1")
         res3 = retriever.retrieve(brain_home, q, project_id="p1")
         assert res3.negative_cached is False
+
     def test_negative_cache_invalidated_by_epoch_bump(self, brain_home):
         query = "missing persisted epoch query"
         first = HybridCascadeRetriever().retrieve(brain_home, query, project_id="p1")
@@ -104,9 +105,10 @@ class TestCascadeShortCircuitAndTiers:
 
         third = HybridCascadeRetriever().retrieve(brain_home, query, project_id="p1")
         assert third.negative_cached is False
+
     def test_missing_score_never_crosses_active_gate(self, brain_home, monkeypatch):
         (brain_home / "config" / "retrieval.toml").write_text(
-            "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+            'schema_version = 2\n[gate]\nrollout = "ACTIVE"\n',
             encoding="utf-8",
         )
         monkeypatch.setattr(
@@ -121,7 +123,7 @@ class TestCascadeShortCircuitAndTiers:
 
     def test_policy_lane_uses_higher_floor(self, brain_home, monkeypatch):
         (brain_home / "config" / "retrieval.toml").write_text(
-            "schema_version = 2\n[gate]\nrollout = \"ACTIVE\"\n",
+            'schema_version = 2\n[gate]\nrollout = "ACTIVE"\n',
             encoding="utf-8",
         )
         monkeypatch.setattr(
@@ -129,11 +131,10 @@ class TestCascadeShortCircuitAndTiers:
             "search_memories",
             lambda *_a, **_kw: [{"memory_id": "mem-policy", "title": "Policy", "_score": 0.75}],
         )
-        result = HybridCascadeRetriever().retrieve(
-            brain_home, "policy query", lane="policy"
-        )
+        result = HybridCascadeRetriever().retrieve(brain_home, "policy query", lane="policy")
         assert result.decision == "NO_INJECTION"
         assert result.reason == "LOW_CONFIDENCE"
+
     def test_invalidate_cache_without_home_is_safe(self):
         HybridCascadeRetriever().invalidate_negative_cache()
 
@@ -144,8 +145,6 @@ class TestCascadeShortCircuitAndTiers:
         assert result.decision == "NO_INJECTION"
         assert result.reason == "BRAIN_UNAVAILABLE"
         assert result.retrieval_error is True
-
-
 
     def test_tier_3_vector_fallback_when_fts_misses(self, brain_home):
         vector_called = False
@@ -233,11 +232,15 @@ class TestPhase6GateBenchmark:
                 q_text,
                 vector_searcher=mock_vector_searcher,
             )
-            if res.tier_resolved in (
-                RetrievalTier.TIER_0_EXACT_REF,
-                RetrievalTier.TIER_1_METADATA_FILTER,
-                RetrievalTier.TIER_2_LEXICAL_FTS5,
-            ) and not res.vector_invoked:
+            if (
+                res.tier_resolved
+                in (
+                    RetrievalTier.TIER_0_EXACT_REF,
+                    RetrievalTier.TIER_1_METADATA_FILTER,
+                    RetrievalTier.TIER_2_LEXICAL_FTS5,
+                )
+                and not res.vector_invoked
+            ):
                 tier_0_2_count += 1
 
         ratio = tier_0_2_count / total_queries

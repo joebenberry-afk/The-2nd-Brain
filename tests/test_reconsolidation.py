@@ -85,9 +85,7 @@ def test_record_activation_outcomes(brain_home):
 
 def test_feedback_idempotency_is_opt_in_and_atomic(brain_home):
     mid = _memory(brain_home)
-    first = reconsolidation.record_retrieval(
-        brain_home, mid, session_id="hook-s1", idempotent=True
-    )
+    first = reconsolidation.record_retrieval(brain_home, mid, session_id="hook-s1", idempotent=True)
     second = reconsolidation.record_retrieval(
         brain_home, mid, session_id="hook-s1", idempotent=True
     )
@@ -245,7 +243,9 @@ def test_lazy_migration_0005(brain_home):
         conn.commit()
     finally:
         conn.close()
-    assert db.pending_migrations(dbfile) == [v for v in [int(p.name[:4]) for p in db.migration_files()] if v >= 5]
+    assert db.pending_migrations(dbfile) == [
+        v for v in [int(p.name[:4]) for p in db.migration_files()] if v >= 5
+    ]
     mid = semantic.add_memory(brain_home, "new memory", "body")
     assert db.pending_migrations(dbfile) == []
     assert _row(brain_home, mid)["heat"] == "WARM"

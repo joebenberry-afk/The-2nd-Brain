@@ -69,7 +69,7 @@ def _seed(store, n: int = 4, prefix: str = "e") -> list[BrainLifecycleEvent]:
                 i,
                 f"{prefix}-{i}",
                 LifecycleEventType.USER_TASK,
-                parent=f"{prefix}-{i-1}" if i > 1 else None,
+                parent=f"{prefix}-{i - 1}" if i > 1 else None,
             )
         )
     store.append_events(events)
@@ -451,8 +451,14 @@ def test_cli_ledger_init_project_attribution(tmp_path) -> None:
 
     # explicit --project still wins over --cwd resolution
     r = run(
-        "ledger", "init", "--session", "host-exp",
-        "--project", "explicit-proj", "--cwd", str(proj_dir),
+        "ledger",
+        "init",
+        "--session",
+        "host-exp",
+        "--project",
+        "explicit-proj",
+        "--cwd",
+        str(proj_dir),
     )
     assert r.returncode == 0, r.stderr
     assert project_id("host-exp") == "explicit-proj"
@@ -493,13 +499,7 @@ def test_cli_ledger_init_persists_canonical_ancestry_and_resume(tmp_path) -> Non
     home, run = _cli_env(tmp_path)
 
     def dbfile(host: str):
-        return (
-            home
-            / "state"
-            / "sessions"
-            / ledger_mod.internal_session_id(host)
-            / "ledger.sqlite"
-        )
+        return home / "state" / "sessions" / ledger_mod.internal_session_id(host) / "ledger.sqlite"
 
     def identity(host: str) -> tuple:
         conn = sqlite3.connect(dbfile(host))
@@ -549,9 +549,7 @@ def test_cli_ledger_init_persists_canonical_ancestry_and_resume(tmp_path) -> Non
     assert identity(grandchild_c)[-1] == root_a_internal
     assert dbfile(child_b).read_bytes() == parent_bytes
 
-    cycle = run(
-        "ledger", "init", "--session", root_a, "--parent-session", grandchild_c
-    )
+    cycle = run("ledger", "init", "--session", root_a, "--parent-session", grandchild_c)
     assert cycle.returncode == 2
     assert "cannot resolve to the child session itself" in cycle.stderr
     assert identity(root_a)[-1] is None
@@ -559,16 +557,12 @@ def test_cli_ledger_init_persists_canonical_ancestry_and_resume(tmp_path) -> Non
     resumed = run("ledger", "init", "--session", child_b)
     assert resumed.returncode == 0, resumed.stderr
     assert identity(child_b) == original_child_identity
-    repeated = run(
-        "ledger", "init", "--session", child_b, "--parent-session", root_a
-    )
+    repeated = run("ledger", "init", "--session", child_b, "--parent-session", root_a)
     assert repeated.returncode == 0, repeated.stderr
     assert identity(child_b) == original_child_identity
 
     assert run("ledger", "init", "--session", root_d).returncode == 0
-    conflict = run(
-        "ledger", "init", "--session", child_b, "--parent-session", root_d
-    )
+    conflict = run("ledger", "init", "--session", child_b, "--parent-session", root_d)
     assert conflict.returncode == 2
     assert "conflicting root parent" in conflict.stderr
     assert identity(child_b) == original_child_identity
@@ -580,31 +574,20 @@ def test_cli_ledger_parent_resolution_rejects_unowned_parent_without_writes(
     home, run = _cli_env(tmp_path)
     parent = "claimed-parent"
     child = "unattributed-child"
-    missing = run(
-        "ledger", "init", "--session", child, "--parent-session", "missing-parent"
-    )
+    missing = run("ledger", "init", "--session", child, "--parent-session", "missing-parent")
     assert missing.returncode == 2
     assert "parent ledger not initialized" in missing.stderr
     assert not (
-        home
-        / "state"
-        / "sessions"
-        / ledger_mod.internal_session_id(child)
-        / "ledger.sqlite"
+        home / "state" / "sessions" / ledger_mod.internal_session_id(child) / "ledger.sqlite"
     ).exists()
     assert run("ledger", "init", "--session", parent).returncode == 0
     parent_db = (
-        home
-        / "state"
-        / "sessions"
-        / ledger_mod.internal_session_id(parent)
-        / "ledger.sqlite"
+        home / "state" / "sessions" / ledger_mod.internal_session_id(parent) / "ledger.sqlite"
     )
     conn = sqlite3.connect(parent_db)
     try:
         conn.execute(
-            "UPDATE sessions SET host_session_id = 'different-owner' "
-            "WHERE internal_session_id = ?",
+            "UPDATE sessions SET host_session_id = 'different-owner' WHERE internal_session_id = ?",
             (ledger_mod.internal_session_id(parent),),
         )
         conn.commit()
@@ -612,18 +595,12 @@ def test_cli_ledger_parent_resolution_rejects_unowned_parent_without_writes(
         conn.close()
     parent_bytes = parent_db.read_bytes()
 
-    result = run(
-        "ledger", "init", "--session", child, "--parent-session", parent
-    )
+    result = run("ledger", "init", "--session", child, "--parent-session", parent)
     assert result.returncode == 2
     assert "not owned by host session" in result.stderr
     assert parent_db.read_bytes() == parent_bytes
     assert not (
-        home
-        / "state"
-        / "sessions"
-        / ledger_mod.internal_session_id(child)
-        / "ledger.sqlite"
+        home / "state" / "sessions" / ledger_mod.internal_session_id(child) / "ledger.sqlite"
     ).exists()
 
 
@@ -649,8 +626,9 @@ def test_cli_append_accepts_live_prime_events(tmp_path) -> None:
     _home, run = _cli_env(tmp_path)
     assert run("ledger", "init", "--session", HOST).returncode == 0
     batch = [
-        _mirror_event("live-1", "session_started", agent_id="a1",
-            model="deepseek/deepseek-v4-flash"),
+        _mirror_event(
+            "live-1", "session_started", agent_id="a1", model="deepseek/deepseek-v4-flash"
+        ),
         _mirror_event("live-2", "user_task", task_sha256="abc123"),
         _mirror_event("live-3", "tool_requested", tool="bash", tool_call_id="t1"),
         _mirror_event("live-4", "tool_completed", tool="bash", tool_call_id="t1", output_bytes=42),
@@ -725,7 +703,11 @@ def test_cli_concurrent_appends_all_contiguous(tmp_path) -> None:
 
     def append(i: int):
         return run(
-            "ledger", "append", "--session", HOST, "--stdin-json",
+            "ledger",
+            "append",
+            "--session",
+            HOST,
+            "--stdin-json",
             stdin=json.dumps(_mirror_event(f"race-{i}", "user_task", task_sha256=str(i))),
         )
 
@@ -759,7 +741,11 @@ def test_cli_concurrent_init_and_append_burst(tmp_path) -> None:
         if init.returncode != 0:
             return init
         return run(
-            "ledger", "append", "--session", host, "--stdin-json",
+            "ledger",
+            "append",
+            "--session",
+            host,
+            "--stdin-json",
             stdin=json.dumps(_mirror_event(f"burst-{i}", "user_task", task_sha256=str(i))),
         )
 
@@ -788,14 +774,34 @@ def test_host_artifact_manifest_roundtrip(tmp_path) -> None:
     home.mkdir()
     subprocess.run(
         [sys.executable, "-m", "second_brain", "--home", str(home), "init"],
-        capture_output=True, text=True, env=env, cwd=home, timeout=120, check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=home,
+        timeout=120,
+        check=True,
     )
     r = subprocess.run(
-        [sys.executable, "-m", "second_brain", "--home", str(home), "ledger", "init",
-         "--session", HOST,
-         "--host-artifact", "transcript=C:/sessions/host-1.jsonl",
-         "--host-artifact", "telemetry=C:/brain/telemetry/agent-performance/host-1.jsonl"],
-        capture_output=True, text=True, env=env, cwd=home, timeout=120,
+        [
+            sys.executable,
+            "-m",
+            "second_brain",
+            "--home",
+            str(home),
+            "ledger",
+            "init",
+            "--session",
+            HOST,
+            "--host-artifact",
+            "transcript=C:/sessions/host-1.jsonl",
+            "--host-artifact",
+            "telemetry=C:/brain/telemetry/agent-performance/host-1.jsonl",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=home,
+        timeout=120,
     )
     assert r.returncode == 0, r.stderr
     internal = ledger_mod.internal_session_id(HOST)
@@ -808,9 +814,24 @@ def test_host_artifact_manifest_roundtrip(tmp_path) -> None:
     ]
     # malformed artifact spec -> usage error
     r2 = subprocess.run(
-        [sys.executable, "-m", "second_brain", "--home", str(home), "ledger", "init",
-         "--session", "other-session", "--host-artifact", "noseparator"],
-        capture_output=True, text=True, env=env, cwd=home, timeout=120,
+        [
+            sys.executable,
+            "-m",
+            "second_brain",
+            "--home",
+            str(home),
+            "ledger",
+            "init",
+            "--session",
+            "other-session",
+            "--host-artifact",
+            "noseparator",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=home,
+        timeout=120,
     )
     assert r2.returncode == 2
 
@@ -1047,9 +1068,7 @@ def test_rehydrate_levels_and_dedupe(store) -> None:
     )
     digest = store.add_object(b"exact artifact bytes", mime="text/plain", role="artifact")
     # attach the artifact to the decision event via direct update (mirror of tool flow)
-    store._conn.execute(
-        "UPDATE events SET artifact_sha256 = ? WHERE event_id = 'dec'", (digest,)
-    )
+    store._conn.execute("UPDATE events SET artifact_sha256 = ? WHERE event_id = 'dec'", (digest,))
     store._conn.commit()
     store.open_segment("compact")
 
@@ -1342,24 +1361,25 @@ def test_ledger_store_requires_explicit_host_on_first_init(tmp_path) -> None:
     host='prime' (T4.2)."""
     with pytest.raises(BrainError, match="requires an explicit host"):
         ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(create=True)
-    session_dir = tmp_path / "state" / "sessions" / ledger_mod.internal_session_id(
-        "never-initialized-session"
+    session_dir = (
+        tmp_path
+        / "state"
+        / "sessions"
+        / ledger_mod.internal_session_id("never-initialized-session")
     )
     assert not (session_dir / "manifest.json").exists()
 
     # An explicit host succeeds and the manifest records it (never 'prime').
-    with ledger_mod.LedgerStore(
-        tmp_path, "never-initialized-session", host="hermes"
-    ).open(create=True) as s:
+    with ledger_mod.LedgerStore(tmp_path, "never-initialized-session", host="hermes").open(
+        create=True
+    ) as s:
         assert s.header()["schema_version"] == str(ledger_mod.LEDGER_SCHEMA_VERSION)
     manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["host"] == "hermes"
 
     # Re-opening the now-initialized ledger without a host preserves the
     # already-recorded host instead of raising (re-open/append is unaffected).
-    with ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(
-        create=True
-    ) as s:
+    with ledger_mod.LedgerStore(tmp_path, "never-initialized-session").open(create=True) as s:
         assert s.header()["schema_version"] == str(ledger_mod.LEDGER_SCHEMA_VERSION)
     manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["host"] == "hermes"
@@ -1414,18 +1434,14 @@ def test_single_session_id_scheme(brain_home, monkeypatch) -> None:
     cli._cmd_codex_shadow(brain_home)
 
     # 3) antigravity hook.
-    monkeypatch.setattr(
-        sys, "stdin", io.StringIO(json.dumps({"conversationId": "agy-sess"}))
-    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"conversationId": "agy-sess"})))
     cli._cmd_antigravity_hook(brain_home)
 
     # 4) claude-code hook.
     monkeypatch.setattr(
         sys,
         "stdin",
-        io.StringIO(
-            json.dumps({"session_id": "claude-sess", "hook_event_name": "SessionStart"})
-        ),
+        io.StringIO(json.dumps({"session_id": "claude-sess", "hook_event_name": "SessionStart"})),
     )
     cli._cmd_claude_code_hook(brain_home)
 

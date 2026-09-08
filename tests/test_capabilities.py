@@ -138,7 +138,7 @@ cache_scope = "galaxy"
 def test_never_infers_from_provider_name(brain_home):
     """A provider_id that looks like a well-known caching provider (e.g.
     'anthropic') gets no special-cased behavior when its row is absent."""
-    _write_v2_toml(brain_home, "[providers.other]\ncache_support = \"explicit\"\n")
+    _write_v2_toml(brain_home, '[providers.other]\ncache_support = "explicit"\n')
     result = capabilities.get_provider_capabilities(brain_home, "anthropic")
     assert result["cache_support"] == "none"
     assert result["cache_scope"] is None
@@ -216,7 +216,9 @@ cache_support = "none"
         assert econ["cache_read"] == 0.10
         assert econ["cache_write"] == 1.25
 
-    def test_provider_table_price_override_still_applies_before_cache_support_check(self, brain_home):
+    def test_provider_table_price_override_still_applies_before_cache_support_check(
+        self, brain_home
+    ):
         """The existing [providers.<id>] cache_read/cache_write price
         override logic (untouched by T2.6) still runs; cache_support='none'
         then collapses cache_write onto whatever cache_read resolved to."""
