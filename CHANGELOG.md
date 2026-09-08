@@ -27,6 +27,10 @@
 - Keep retrieval outcomes pending when acceptance is unknown. Use the canonical
   identity-checked usage reader; unavailable or unattributable token totals stay
   null rather than becoming fabricated zero-cost failures.
+- Seed the safe v2 policy into initialized Brain homes without overwriting
+  operator configuration.
+- Refuse empty transfer acceptance contracts before executing a student, and
+  require an explicit successful acceptance result for transfer verification.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 

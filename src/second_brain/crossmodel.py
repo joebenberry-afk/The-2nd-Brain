@@ -316,39 +316,25 @@ def evaluate_teacher_student(
     *,
     student_runner: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate teacher-to-student distillation requiring the same postconditions."""
-    home_p = Path(home)
-    del home_p
-    expected_postconditions = list(fixture.get("expected_postconditions") or [])
-
-    if student_runner is not None:
-        student_run = student_runner(fixture)
-    else:
-        student_run = dict(fixture.get("student_run") or {})
-
-    # Check if student satisfied 100% of the same postconditions as the teacher
-    satisfied = True
-    student_postconditions = list(student_run.get("passed_postconditions") or [])
-    for postcond in expected_postconditions:
-        if postcond not in student_postconditions:
-            satisfied = False
-            break
-
-    if student_run.get("acceptance_passed") is False:
-        satisfied = False
-
-    if satisfied:
-        status = "VERIFIED"
-        transfer_approved = True
-    else:
-        status = "HELD"
-        transfer_approved = False
-
+    """Require explicit acceptance of a non-empty shared postcondition contract."""
+    expected_value = fixture.get("expected_postconditions")
+    expected = expected_value if isinstance(expected_value, list) else []
+    valid_contract = bool(expected) and all(
+        isinstance(item, str) and bool(item.strip()) for item in expected
+    )
+    expected_set = set(expected) if valid_contract else set()
+    satisfied = False
+    if expected_set and len(expected_set) == len(expected):
+        student_run = student_runner(fixture) if student_runner else fixture.get("student_run")
+        if isinstance(student_run, Mapping) and student_run.get("acceptance_passed") is True:
+            passed = student_run.get("passed_postconditions")
+            if isinstance(passed, list) and all(isinstance(item, str) for item in passed):
+                satisfied = expected_set.issubset(passed)
     return {
         "engram_id": engram_id,
         "teacher_model": teacher_model,
         "student_model": student_model,
-        "status": status,
-        "transfer_approved": transfer_approved,
+        "status": "VERIFIED" if satisfied else "HELD",
+        "transfer_approved": satisfied,
         "same_acceptance": satisfied,
     }

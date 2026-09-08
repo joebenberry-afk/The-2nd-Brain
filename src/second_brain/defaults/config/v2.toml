@@ -1,0 +1,53 @@
+# Shared v2 policy defaults. Adaptive features remain observational until promoted.
+schema_version = 1
+
+[rollout]
+admission = "SHADOW"
+retrieval = "SHADOW"
+brainstem = "SHADOW"
+learning = "SHADOW"
+culture = "SHADOW"
+frontier = "SHADOW"
+verification = "SHADOW"
+
+[admission]
+min_score = 0.75
+
+[retrieval]
+max_candidates = 20
+top_k = 5
+token_budget = 1200
+
+[brainstem]
+context_char_budget = 12000
+worker_slots = 1
+premium_model_turns = 1
+
+[learning]
+surprise_threshold = 0.8
+
+[culture]
+
+[frontier]
+min_importance = 0.7
+
+[verification]
+floor = "targeted"
+# Experimental paired economics defaults. Prices are USD per token; null means
+# the host does not expose a verified price and dollars must remain null.
+[economics]
+uncached_in = 1.0
+cache_read = 0.10
+cache_write = 1.25
+alpha = 0.05
+tau = 0.05
+
+[prices.deepseek-v4-flash]
+base_in = 0.00000014
+base_out = 0.00000028
+
+[models.default]
+context_tokens = 128000
+
+[providers.default]
+cache_scope = "model"
