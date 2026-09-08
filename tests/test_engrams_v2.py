@@ -409,3 +409,30 @@ def test_teacher_student_requires_same_acceptance(brain_home: Path) -> None:
     )
     assert eval_pass["status"] == "VERIFIED"
     assert eval_pass["transfer_approved"] is True
+
+
+def test_transfer_refuses_empty_contract_and_unknown_student_acceptance(brain_home: Path) -> None:
+    def unexpected_execution(_fixture):
+        raise AssertionError("An empty acceptance contract must not execute the student")
+
+    empty = crossmodel.evaluate_teacher_student(
+        brain_home,
+        "config-macro",
+        "teacher",
+        "student",
+        {"expected_postconditions": []},
+        student_runner=unexpected_execution,
+    )
+    assert empty["transfer_approved"] is False
+    unknown = crossmodel.evaluate_teacher_student(
+        brain_home,
+        "config-macro",
+        "teacher",
+        "student",
+        {
+            "expected_postconditions": ["same_configuration"],
+            "student_run": {"passed_postconditions": ["same_configuration"]},
+        },
+    )
+    assert unknown["transfer_approved"] is False
+    assert unknown["status"] == "HELD"

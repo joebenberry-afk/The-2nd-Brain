@@ -557,6 +557,22 @@ def test_init_doctor_status_flow(tmp_path):
     assert f"schema v{expected}" in r.stdout
 
 
+def test_init_seeds_v2_policy_without_overwriting_operator_settings(tmp_path):
+    import tomllib
+
+    home = tmp_path / "brain"
+    result = run_cli(home, "init")
+    assert result.returncode == 0, result.stderr
+    policy_path = home / "config" / "v2.toml"
+    original = policy_path.read_text(encoding="utf-8")
+    assert all(stage in {"OFF", "SHADOW"} for stage in tomllib.loads(original)["rollout"].values())
+    operator_policy = original.replace('learning = "SHADOW"', 'learning = "OFF"')
+    policy_path.write_bytes(operator_policy.encode("utf-8"))
+    result = run_cli(home, "init")
+    assert result.returncode == 0, result.stderr
+    assert policy_path.read_bytes() == operator_policy.encode("utf-8")
+
+
 def test_init_refuses_non_empty_non_brain(tmp_path):
     home = tmp_path / "not-a-brain"
     home.mkdir()
