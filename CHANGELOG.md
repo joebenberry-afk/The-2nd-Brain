@@ -15,6 +15,8 @@
   from a different source checkout.
 - Initialize isolated economics homes before host launch, sanitize Python
   environments, and retain raw usage telemetry without retaining host output.
+  Keep each executed checkout beside its telemetry instead of deleting it while
+  the native host may still hold operating-system handles.
 
 ## 2026-09-07 — Fail-closed admission policy (unreleased, HOLD)
 
