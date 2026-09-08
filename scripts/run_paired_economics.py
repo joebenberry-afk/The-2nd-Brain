@@ -9,7 +9,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -202,94 +201,87 @@ def _run_one(
     harness: str, task: dict[str, Any], profile: str, command: list[str]
 ) -> dict[str, Any] | None:
     run_id = f"{harness}-{task['task_id']}-{profile}-{_utc()}"
-    with tempfile.TemporaryDirectory(prefix="second-brain-econ-") as temp:
-        worktree = Path(temp) / "repo"
-        run_dir = RAW_DIR / run_id
-        telemetry_home = run_dir / "brain"
-        added = subprocess.run(
-            ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
-            cwd=ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=60,
+    run_dir = RAW_DIR / run_id
+    worktree = run_dir / "repo"
+    telemetry_home = run_dir / "brain"
+    # Retain the executed checkout beside its observations. A host can leave
+    # handles open after returning; deleting it here loses provenance and races
+    # native cleanup, particularly on Windows.
+    run_dir.mkdir(parents=True, exist_ok=True)
+    added = subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=60,
+    )
+    if added.returncode != 0:
+        return None
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    env.update(profile_env(profile))
+    env["SECOND_BRAIN_HOME"] = str(telemetry_home)
+    env["SECOND_BRAIN_PYTHON"] = sys.executable
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    initialized = subprocess.run(
+        [sys.executable, "-m", "second_brain", "--home", str(telemetry_home), "init"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if initialized.returncode != 0:
+        raise RuntimeError(f"Economics Brain initialization failed: {telemetry_home}")
+    before = _telemetry_files(telemetry_home)
+    host_exit = _run_host(command, task["prompt"], worktree, env)
+    after = _telemetry_files(telemetry_home) - before
+    telemetry = aggregate_telemetry(after)
+    usage_capture = bool(
+        telemetry["model_turns"] and all(telemetry[field] is not None for field in _REQUIRED_USAGE)
+    )
+    config = economics.load_config(ROOT)
+    dollars = None
+    dollars_reason = None
+    if not usage_capture:
+        dollars_reason = "missing_usage"
+    elif telemetry["mixed_model"]:
+        dollars_reason = "mixed_or_unknown_model"
+    elif telemetry["model"]:
+        dollars = economics.cost_per_run(
+            {field: telemetry[field] for field in _REQUIRED_USAGE[:4]},
+            config.prices.get(telemetry["model"]),
+            multipliers={
+                "uncached_in": config.uncached_in,
+                "cache_read": config.cache_read,
+                "cache_write": config.cache_write,
+            },
         )
-        if added.returncode != 0:
-            return None
-        try:
-            env = os.environ.copy()
-            env.pop("PYTHONHOME", None)
-            env.pop("PYTHONPATH", None)
-            env.update(profile_env(profile))
-            env["SECOND_BRAIN_HOME"] = str(telemetry_home)
-            env["SECOND_BRAIN_PYTHON"] = sys.executable
-            env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-            initialized = subprocess.run(
-                [sys.executable, "-m", "second_brain", "--home", str(telemetry_home), "init"],
-                cwd=ROOT,
-                env=env,
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-            if initialized.returncode != 0:
-                raise RuntimeError(f"Economics Brain initialization failed: {telemetry_home}")
-            before = _telemetry_files(telemetry_home)
-            host_exit = _run_host(command, task["prompt"], worktree, env)
-            after = _telemetry_files(telemetry_home) - before
-            telemetry = aggregate_telemetry(after)
-            usage_capture = bool(
-                telemetry["model_turns"]
-                and all(telemetry[field] is not None for field in _REQUIRED_USAGE)
-            )
-            config = economics.load_config(ROOT)
-            dollars = None
-            dollars_reason = None
-            if not usage_capture:
-                dollars_reason = "missing_usage"
-            elif telemetry["mixed_model"]:
-                dollars_reason = "mixed_or_unknown_model"
-            elif telemetry["model"]:
-                dollars = economics.cost_per_run(
-                    {field: telemetry[field] for field in _REQUIRED_USAGE[:4]},
-                    config.prices.get(telemetry["model"]),
-                    multipliers={
-                        "uncached_in": config.uncached_in,
-                        "cache_read": config.cache_read,
-                        "cache_write": config.cache_write,
-                    },
-                )
-                if dollars is None:
-                    dollars_reason = "missing_or_null_price"
-            elif not telemetry["model"]:
-                dollars_reason = "unknown_model"
-            acceptance_pass = (
-                _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
-            )
-            return {
-                "classification": "observed",
-                "raw_directory": str(run_dir),
-                "run_id": run_id,
-                "harness": harness,
-                "task_id": task["task_id"],
-                "profile": profile,
-                "repo_fixture_commit": task["repo_fixture_commit"],
-                "host_exit": host_exit,
-                "dollars_reason": dollars_reason,
-                "acceptance_pass": acceptance_pass,
-                "usage_capture": usage_capture,
-                "telemetry": telemetry,
-                "dollars": dollars,
-            }
-        finally:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(worktree)],
-                cwd=ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=60,
-            )
+        if dollars is None:
+            dollars_reason = "missing_or_null_price"
+    elif not telemetry["model"]:
+        dollars_reason = "unknown_model"
+    acceptance_pass = (
+        _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
+    )
+    return {
+        "classification": "observed",
+        "raw_directory": str(run_dir),
+        "worktree": str(worktree),
+        "run_id": run_id,
+        "harness": harness,
+        "task_id": task["task_id"],
+        "profile": profile,
+        "repo_fixture_commit": task["repo_fixture_commit"],
+        "host_exit": host_exit,
+        "dollars_reason": dollars_reason,
+        "acceptance_pass": acceptance_pass,
+        "usage_capture": usage_capture,
+        "telemetry": telemetry,
+        "dollars": dollars,
+    }
 
 
 def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -355,6 +347,7 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
     if command is not None:
         for task in tasks:
             for profile in ("OFF", "ON"):
+                print(f"Running {harness} {task['task_id']} {profile}", file=sys.stderr, flush=True)
                 record = _run_one(harness, task, profile, command)
                 if record is not None:
                     RAW_DIR.mkdir(parents=True, exist_ok=True)

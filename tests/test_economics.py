@@ -318,6 +318,8 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
 
     from scripts import run_paired_economics as runner
 
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+
     def fake_git(*args, **kwargs):
         class Completed:
             returncode = 0
@@ -444,6 +446,8 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
 
     from scripts import run_paired_economics as runner
 
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+
     def fake_git(*args, **kwargs):
         class Completed:
             returncode = 0
@@ -543,6 +547,10 @@ def test_public_run_with_temporary_host_writes_real_shaped_artifacts(tmp_path, m
     for path in raw:
         record = json.loads(path.read_text(encoding="utf-8"))
         assert record["usage_capture"] is True
+        assert Path(record["worktree"], "src", "second_brain", "governor.py").is_file()
+        assert Path(
+            record["raw_directory"], "brain", "telemetry", "agent-performance", "host.jsonl"
+        ).is_file()
         assert record["telemetry"]["total_tokens"] == 15
         assert record["dollars"] == economics.cost_per_run(
             {
