@@ -29,10 +29,11 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, semantic
+from . import artifacts, db, semantic
 from .contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
@@ -84,6 +85,7 @@ LEDGER_ADAPTER_NAME = "second-brain"
 LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
 _OBJECT_DIR = "objects"
+_CHAIN_ORIGIN_KEY = "hash_chain_origin"
 _FTS_KEYS = ("title", "summary", "file", "symbol", "task", "task_sha256", "decision", "tool")
 
 
@@ -205,6 +207,47 @@ CREATE TABLE IF NOT EXISTS ledger_meta (
     value TEXT NOT NULL
 );
 """
+
+
+def _sql_name(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+@lru_cache(maxsize=1)
+def _ledger_table_shapes() -> dict[str, tuple[tuple, tuple]]:
+    """Derive validation from the one owned DDL, not a second schema definition."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(_SCHEMA)
+        names = [
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        ]
+        return {
+            name: (
+                tuple(conn.execute(f"PRAGMA table_info({_sql_name(name)})")),
+                tuple(conn.execute(f"PRAGMA foreign_key_list({_sql_name(name)})")),
+            )
+            for name in names
+        }
+    finally:
+        conn.close()
+
+
+def _legacy_history_fingerprint(conn: sqlite3.Connection) -> str:
+    """Bind original storage classes and bytes, excluding only the new chain column."""
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(events)") if row[1] != "prev_hash"]
+    digest = hashlib.sha256(json.dumps(columns, separators=(",", ":")).encode("utf-8"))
+    projection = ",".join(
+        f"typeof({_sql_name(name)}),CAST({_sql_name(name)} AS BLOB)" for name in columns
+    )
+    for row in conn.execute(f"SELECT {projection} FROM events ORDER BY seq"):
+        digest.update(b"row:")
+        for index in range(0, len(row), 2):
+            value = row[index + 1] or b""
+            digest.update(
+                row[index].encode("utf-8") + b":" + str(len(value)).encode() + b":" + value
+            )
+    return digest.hexdigest()
 
 
 def _now() -> str:
@@ -348,12 +391,17 @@ class LedgerStore:
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA foreign_keys=ON")
         self._conn = conn
-        if create:
-            self._init_schema()
-            self._write_manifest(self._init_host_artifacts)
-        else:
-            self._check_version()
-        return self
+        try:
+            if create:
+                self._init_schema()
+            else:
+                self._check_version()
+            if create or self._migration_manifest_pending():
+                self._write_manifest(self._init_host_artifacts)
+            return self
+        except BaseException:
+            self.close()
+            raise
 
     def close(self) -> None:
         if self._conn is not None:
@@ -371,22 +419,7 @@ class LedgerStore:
     _init_host_artifacts: list[dict[str, str]] | None = None
 
     def _init_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.executescript(_SCHEMA)
-        self._conn.executescript(_FTS_DDL)
-        header = {
-            "schema_version": str(LEDGER_SCHEMA_VERSION),
-            "brain_version": self._brain_version(),
-            "adapter_name": LEDGER_ADAPTER_NAME,
-            "adapter_version": LEDGER_ADAPTER_VERSION,
-            "created_at": _now(),
-        }
-        for key, value in header.items():
-            self._conn.execute(
-                "INSERT OR REPLACE INTO ledger_meta (key, value) VALUES (?, ?)",
-                (key, value),
-            )
-        self._conn.commit()
+        self._prepare_schema(create=True)
 
     @staticmethod
     def _brain_version() -> str:
@@ -403,28 +436,250 @@ class LedgerStore:
         return "0.0.0"
 
     def _check_version(self) -> None:
+        self._prepare_schema(create=False)
+
+    def _schema_state(self) -> str:
         assert self._conn is not None
-        try:
-            row = self._conn.execute(
-                "SELECT value FROM ledger_meta WHERE key = 'schema_version'"
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
-            # P3-E fix: under a spawn burst the ledger file may already exist
-            # (a concurrent init created it) while its schema is not yet
-            # committed. Surface that as the deterministic not-initialized
-            # BrainError (CLI prints it cleanly, exit 2) instead of an
-            # unhandled traceback — the extension's single retry then re-runs
-            # the init chain and the append lands.
-            raise BrainError(f"ledger not initialized (schema not ready): {exc}") from exc
-        if row is None:
-            raise BrainError("ledger missing schema_version header")
-        version = int(row["value"])
-        if version != LEDGER_SCHEMA_VERSION:
-            raise BrainError(
-                f"ledger schema version {version} unsupported (this runtime requires"
-                f" {LEDGER_SCHEMA_VERSION})"
+        tables = {
+            row[0]: row[1]
+            for row in self._conn.execute(
+                "SELECT name,type FROM sqlite_master WHERE type IN ('table','view')"
             )
-        # reading never rewrites: no DDL/DML executed on the open path
+        }
+        shapes = _ledger_table_shapes()
+        header = None
+        if tables.get("ledger_meta") == "table":
+            meta_columns = tuple(
+                tuple(row) for row in self._conn.execute("PRAGMA table_info(ledger_meta)")
+            )
+            if meta_columns != shapes["ledger_meta"][0]:
+                raise BrainError("ledger schema unsupported: malformed application metadata")
+            header = self._conn.execute(
+                "SELECT value FROM ledger_meta WHERE key='schema_version'"
+            ).fetchone()
+        if header is None:
+            unknown = set(tables) - set(shapes)
+            unknown = {name for name in unknown if not name.startswith(("sqlite_", "events_fts"))}
+            if unknown:
+                raise BrainError("ledger schema unsupported: unidentified existing tables")
+            for name in set(tables) & set(shapes):
+                if self._conn.execute(f"SELECT 1 FROM {_sql_name(name)} LIMIT 1").fetchone():
+                    raise BrainError("ledger missing schema_version header with existing data")
+            return "uninitialized"
+        try:
+            version = int(header[0])
+        except (TypeError, ValueError) as exc:
+            raise BrainError("ledger schema version is malformed") from exc
+        if version not in (1, LEDGER_SCHEMA_VERSION):
+            raise BrainError(
+                f"ledger schema {version} unsupported; runtime requires {LEDGER_SCHEMA_VERSION}"
+            )
+        current = legacy = True
+        for name, (columns, foreign_keys) in shapes.items():
+            actual = (
+                tuple(
+                    tuple(row)
+                    for row in self._conn.execute(f"PRAGMA table_info({_sql_name(name)})")
+                ),
+                tuple(
+                    tuple(row)
+                    for row in self._conn.execute(f"PRAGMA foreign_key_list({_sql_name(name)})")
+                ),
+            )
+            current = current and tables.get(name) == "table" and actual == (columns, foreign_keys)
+            prior_columns = tuple(
+                row for row in columns if not (name == "events" and row[1] == "prev_hash")
+            )
+            legacy = (
+                legacy and tables.get(name) == "table" and actual == (prior_columns, foreign_keys)
+            )
+        if current and version == LEDGER_SCHEMA_VERSION:
+            malformed = self._conn.execute(
+                "SELECT seq FROM events WHERE typeof(prev_hash) != 'text' "
+                "OR length(prev_hash) != 64 OR prev_hash GLOB '*[^0-9a-f]*' LIMIT 1"
+            ).fetchone()
+            if malformed is not None:
+                raise BrainError("ledger hash chain is missing or malformed; refusing repair")
+            self._chain_origin()
+            return "current"
+        if legacy:
+            recorded_integrity = self._conn.execute(
+                "SELECT key FROM ledger_meta WHERE key IN (?, 'last_verified_seq')",
+                (_CHAIN_ORIGIN_KEY,),
+            ).fetchone()
+            triggers = self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            ).fetchone()
+            if recorded_integrity is not None or triggers is not None:
+                raise BrainError(
+                    "ledger legacy transition unsupported: existing integrity state or triggers"
+                )
+            return "legacy"
+        raise BrainError(
+            f"ledger schema {version} has an unsupported layout; preserve it before maintenance"
+        )
+
+    @staticmethod
+    def _valid_chain_hash(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(ch in "0123456789abcdef" for ch in value)
+        )
+
+    def _prepare_schema(self, *, create: bool) -> None:
+        assert self._conn is not None
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Inspect one stable schema under the existing SQLite writer lock.
+            state = self._schema_state()
+            if state == "legacy":
+                self._migrate_legacy_chain()
+            elif state == "uninitialized":
+                if not create:
+                    raise BrainError("ledger not initialized (schema not ready)")
+                for statement in db.split_statements(_SCHEMA):
+                    self._conn.execute(statement)
+                self._conn.execute(_FTS_DDL)
+                header = {
+                    "schema_version": str(LEDGER_SCHEMA_VERSION),
+                    "brain_version": self._brain_version(),
+                    "adapter_name": LEDGER_ADAPTER_NAME,
+                    "adapter_version": LEDGER_ADAPTER_VERSION,
+                    "created_at": _now(),
+                }
+                self._conn.executemany(
+                    "INSERT INTO ledger_meta (key,value) VALUES (?,?)", header.items()
+                )
+                if self._schema_state() != "current":
+                    raise BrainError("ledger initialization did not produce the supported schema")
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+
+    def _preserve_legacy_snapshot(self) -> tuple[str, int]:
+        """Snapshot committed pre-transition state while our write reservation excludes writers."""
+        objects = self._contained_path(_OBJECT_DIR)
+        objects.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".legacy-snapshot-", suffix=".sqlite", dir=objects)
+        os.close(fd)
+        temporary = Path(name)
+        source = sqlite3.connect(self.dbfile.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        target = sqlite3.connect(temporary)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        payload = temporary.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        destination = _contained(self._dir, f"{_OBJECT_DIR}/{digest}")
+        if destination.exists():
+            if destination.read_bytes() != payload:
+                raise BrainError("legacy snapshot object conflicts with retained data")
+            temporary.unlink()
+        else:
+            os.replace(temporary, destination)
+        return digest, len(payload)
+
+    def _migrate_legacy_chain(self) -> None:
+        assert self._conn is not None and self._conn.in_transaction
+        count, first, last = self._conn.execute(
+            "SELECT COUNT(*),COALESCE(MIN(seq),0),COALESCE(MAX(seq),0) FROM events"
+        ).fetchone()
+        if count and (first != 1 or last != count):
+            raise BrainError("legacy ledger has noncontiguous history; refusing transition")
+        if self._conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise BrainError("legacy ledger has foreign-key violations; refusing transition")
+        objects_ok, _ = self._verify_object_digests()
+        if not objects_ok:
+            raise BrainError("legacy ledger object evidence is unavailable or corrupted")
+        before = _legacy_history_fingerprint(self._conn)
+        snapshot_hash, snapshot_size = self._preserve_legacy_snapshot()
+        derived_at = _now()
+        self._conn.execute("ALTER TABLE events ADD COLUMN prev_hash TEXT")
+        running = _GENESIS_HASH
+        for row in self._conn.execute("SELECT seq,payload_json FROM events ORDER BY seq"):
+            if not isinstance(row["payload_json"], str):
+                raise BrainError("legacy event payload is not text; refusing reinterpretation")
+            running = hashlib.sha256((running + row["payload_json"]).encode("utf-8")).hexdigest()
+            self._conn.execute("UPDATE events SET prev_hash=? WHERE seq=?", (running, row["seq"]))
+        if _legacy_history_fingerprint(self._conn) != before:
+            raise BrainError("legacy transition changed original event storage")
+        self._conn.execute(
+            "INSERT OR IGNORE INTO object_refs (sha256,size,mime,role,added_at) VALUES (?,?,?,?,?)",
+            (
+                snapshot_hash,
+                snapshot_size,
+                "application/vnd.sqlite3",
+                "legacy-ledger-snapshot",
+                derived_at,
+            ),
+        )
+        origin = {
+            "format_version": 1,
+            "origin": "derived_legacy_backfill",
+            "legacy_through_seq": last,
+            "legacy_history_sha256": before,
+            "source_snapshot_sha256": snapshot_hash,
+            "derived_at": derived_at,
+            "pre_migration_authenticity_verified": False,
+        }
+        self._conn.execute(
+            "INSERT INTO ledger_meta (key,value) VALUES (?,?)",
+            (_CHAIN_ORIGIN_KEY, canonical_json(origin)),
+        )
+        self._conn.execute(
+            "UPDATE ledger_meta SET value=? WHERE key='schema_version'",
+            (str(LEDGER_SCHEMA_VERSION),),
+        )
+
+    def _chain_origin(self) -> dict[str, Any] | None:
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM ledger_meta WHERE key=?", (_CHAIN_ORIGIN_KEY,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            origin = json.loads(row[0])
+        except (TypeError, ValueError) as exc:
+            raise BrainError("ledger hash-chain origin is malformed") from exc
+        if (
+            not isinstance(origin, dict)
+            or origin.get("format_version") != 1
+            or origin.get("origin") != "derived_legacy_backfill"
+            or type(origin.get("legacy_through_seq")) is not int
+            or origin["legacy_through_seq"] < 0
+            or not self._valid_chain_hash(origin.get("legacy_history_sha256"))
+            or not self._valid_chain_hash(origin.get("source_snapshot_sha256"))
+            or not isinstance(origin.get("derived_at"), str)
+            or origin.get("pre_migration_authenticity_verified") is not False
+        ):
+            raise BrainError(
+                "ledger hash-chain origin is unsupported; no historical authenticity inferred"
+            )
+        return origin
+
+    def _migration_manifest_pending(self) -> bool:
+        if self._chain_origin() is None:
+            return False
+        target = _contained(self._dir, _MANIFEST)
+        if not target.exists():
+            return True
+        try:
+            manifest = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BrainError(
+                "migrated ledger manifest is unreadable; preserve it before repair"
+            ) from exc
+        if not isinstance(manifest, dict) or manifest.get("schema_version") not in (
+            1,
+            LEDGER_SCHEMA_VERSION,
+        ):
+            raise BrainError("migrated ledger manifest has an unsupported schema")
+        return manifest["schema_version"] != LEDGER_SCHEMA_VERSION
 
     # -- session/agent registration -----------------------------------------
 
@@ -779,6 +1034,7 @@ class LedgerStore:
             "hash_chain_ok": hash_chain_ok,
             "hash_chain_verified_through_seq": verified_through,
             "hash_chain_break_seq": hash_chain_break_seq,
+            "hash_chain_origin": self._chain_origin(),
         }
 
     # -- segments ---------------------------------------------------------------
@@ -1058,11 +1314,17 @@ class LedgerStore:
     def _write_manifest(self, host_artifacts: list[dict[str, str]] | None = None) -> None:
         host = self._host
         target = _contained(self._dir, _MANIFEST)
-        if host is None and target.exists():
+        existing_manifest: dict[str, Any] = {}
+        if target.exists():
             try:
                 existing_manifest = json.loads(target.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                existing_manifest = {}
+            except (OSError, ValueError) as exc:
+                raise BrainError(
+                    "ledger manifest unreadable; preserve it before maintenance"
+                ) from exc
+            if not isinstance(existing_manifest, dict):
+                raise BrainError("ledger manifest must be an object")
+        if host is None:
             existing_host = existing_manifest.get("host")
             if isinstance(existing_host, str) and existing_host:
                 host = existing_host
@@ -1072,13 +1334,18 @@ class LedgerStore:
                 "host for first-time initialization"
             )
         manifest = {
+            **existing_manifest,
             "internal_id": self._internal,
             "host": host,
             "host_session_id": self._host_session_id,
-            "created_at": _now(),
+            "created_at": existing_manifest.get("created_at", _now()),
             "schema_version": LEDGER_SCHEMA_VERSION,
             "db": "ledger.sqlite",
-            "host_artifacts": host_artifacts or [],
+            "host_artifacts": (
+                host_artifacts
+                if host_artifacts is not None
+                else existing_manifest.get("host_artifacts", [])
+            ),
         }
         # P3-E fix: a FIXED tmp name collided under concurrent init of the
         # same fresh session. Readers can also briefly deny replacement on

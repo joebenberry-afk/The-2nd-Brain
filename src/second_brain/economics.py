@@ -203,7 +203,12 @@ def verdict(
     tau: float = 0.05,
     config: EconomicsConfig | None = None,
 ) -> dict[str, Any]:
-    """Compute paired CUPED/mSPRT verdict from normalized OFF/ON runs."""
+    """Compute paired CUPED/mSPRT verdict; retain overflowed finite ratios in log space.
+
+    ``lambda_status`` distinguishes missing data, finite values, finite values too
+    large for a float, and the zero-variance positive-infinity limit. A null
+    ``lambda`` is never an unexplained replacement for an infinite statistic.
+    """
     if config is not None:
         alpha, tau = config.alpha, config.tau
     pairs = _pairs(runs)
@@ -219,6 +224,8 @@ def verdict(
         "n": n,
         "r_bar": None,
         "lambda": None,
+        "log_lambda": None,
+        "lambda_status": "insufficient_data",
         "verdict": "INSUFFICIENT",
         "success_delta": None,
         "turns_delta": _mean_delta(pairs, "on_turns", "off_turns"),
@@ -233,20 +240,26 @@ def verdict(
         result["r_bar"] = r_bar
         if n >= 3:
             sigma2 = variance(relatives)
+            log_likelihood = None
             if sigma2 == 0:
-                likelihood = float("inf") if r_bar else 1.0
+                log_likelihood = math.inf if r_bar and tau > 0 else 0.0
+                result["lambda_status"] = (
+                    "positive_infinity" if math.isinf(log_likelihood) else "finite"
+                )
             elif sigma2 > 0 and tau >= 0 and alpha > 0:
                 denominator = sigma2 + n * tau * tau
                 exponent = n * n * tau * tau * r_bar * r_bar / (2 * sigma2 * denominator)
-                likelihood = (
-                    float("inf")
-                    if exponent > 709
-                    else math.sqrt(sigma2 / denominator) * math.exp(exponent)
-                )
+                log_likelihood = 0.5 * (math.log(sigma2) - math.log(denominator)) + exponent
+                result["lambda_status"] = "finite"
             else:
-                likelihood = None
-            result["lambda"] = likelihood
-            if likelihood is not None and likelihood >= 1 / alpha:
+                result["lambda_status"] = "undefined"
+            if log_likelihood is not None and math.isfinite(log_likelihood):
+                result["log_lambda"] = log_likelihood
+                try:
+                    result["lambda"] = math.exp(log_likelihood)
+                except OverflowError:
+                    result["lambda_status"] = "overflow"
+            if log_likelihood is not None and alpha > 0 and log_likelihood >= -math.log(alpha):
                 result["verdict"] = (
                     "POSITIVE" if r_bar < 0 else "NEGATIVE" if r_bar > 0 else "INSUFFICIENT"
                 )

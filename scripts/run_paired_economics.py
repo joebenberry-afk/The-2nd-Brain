@@ -314,13 +314,20 @@ def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pairs
 
 
+def _reject_nonfinite(value: str) -> None:
+    raise ValueError(f"non-standard JSON numeric constant: {value}")
+
+
 def _write_qualification(summary: dict[str, Any]) -> None:
     existing: dict[str, Any] = {}
     try:
-        loaded = json.loads(QUALIFICATION.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            existing = loaded
-    except (OSError, json.JSONDecodeError):
+        loaded = json.loads(
+            QUALIFICATION.read_text(encoding="utf-8"), parse_constant=_reject_nonfinite
+        )
+        if not isinstance(loaded, dict):
+            raise ValueError("qualification export must be a JSON object")
+        existing = loaded
+    except FileNotFoundError:
         pass
     economics_section = existing.get("economics")
     economics_section = dict(economics_section) if isinstance(economics_section, dict) else {}
@@ -337,7 +344,9 @@ def _write_qualification(summary: dict[str, Any]) -> None:
         existing["results"] = results
     existing["generated_at"] = datetime.now(UTC).isoformat()
     QUALIFICATION.parent.mkdir(parents=True, exist_ok=True)
-    QUALIFICATION.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
+    QUALIFICATION.write_text(
+        json.dumps(existing, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
+    )
 
 
 def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]:
@@ -352,7 +361,8 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
                 if record is not None:
                     RAW_DIR.mkdir(parents=True, exist_ok=True)
                     (RAW_DIR / f"{record['run_id']}.json").write_text(
-                        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
+                        json.dumps(record, indent=2, sort_keys=True, allow_nan=False),
+                        encoding="utf-8",
                     )
                     records.append(record)
     pairs = _paired(records)
@@ -386,7 +396,7 @@ def main() -> int:
     if args.out is not None:
         RAW_DIR = args.out.resolve() / "raw"
         QUALIFICATION = args.out.resolve() / "qualification.json"
-    print(json.dumps(run(args.harness, args.profile, args.pairs), sort_keys=True))
+    print(json.dumps(run(args.harness, args.profile, args.pairs), sort_keys=True, allow_nan=False))
     return 0
 
 

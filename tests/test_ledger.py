@@ -229,7 +229,8 @@ def test_like_fallback_when_fts_unavailable(store, monkeypatch) -> None:
     assert len(hits) == 1 and hits[0]["event_id"] == "e-2"
 
 
-def test_schema_versioning(tmp_path) -> None:
+@pytest.mark.parametrize("create", [False, True])
+def test_schema_versioning(tmp_path, create) -> None:
     with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True):
         pass
     internal = ledger_mod.internal_session_id(HOST)
@@ -239,13 +240,154 @@ def test_schema_versioning(tmp_path) -> None:
     conn.commit()
     conn.close()
     with pytest.raises(BrainError, match="unsupported"):
-        ledger_mod.LedgerStore(tmp_path, HOST).open()
+        ledger_mod.LedgerStore(tmp_path, HOST).open(create=create)
     conn = sqlite3.connect(dbfile)
     conn.execute("UPDATE ledger_meta SET value = '0' WHERE key = 'schema_version'")
     conn.commit()
     conn.close()
     with pytest.raises(BrainError, match="unsupported"):
-        ledger_mod.LedgerStore(tmp_path, HOST).open()
+        ledger_mod.LedgerStore(tmp_path, HOST).open(create=create)
+
+
+def _legacy_ledger(home, version="2"):
+    with ledger_mod.LedgerStore(home, HOST, host="test").open(create=True) as store:
+        _seed(store, 3)
+        dbfile = store.dbfile
+    with sqlite3.connect(dbfile) as conn:
+        conn.execute("ALTER TABLE events DROP COLUMN prev_hash")
+        conn.execute("UPDATE ledger_meta SET value=? WHERE key='schema_version'", (version,))
+        conn.execute("UPDATE events SET payload_json=? WHERE seq=2", ('{ "note": "雪 café" }',))
+        original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+    return dbfile, original
+
+
+@pytest.mark.parametrize("create,version", [(False, "1"), (True, "2")])
+def test_legacy_resume_preserves_history_and_labels_derived_chain(tmp_path, create, version):
+    import hashlib
+
+    dbfile, original = _legacy_ledger(tmp_path, version)
+    manifest_path = dbfile.parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(schema_version=1, host_artifacts=[{"kind": "transcript", "path": "old"}])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=create) as store:
+        integrity = store.integrity()
+        assert integrity["hash_chain_ok"] is True
+        origin = integrity["hash_chain_origin"]
+        assert origin["origin"] == "derived_legacy_backfill"
+        assert origin["pre_migration_authenticity_verified"] is False
+        assert origin["legacy_through_seq"] == 3
+        snapshot = store.read_object(origin["source_snapshot_sha256"])
+        assert hashlib.sha256(snapshot).hexdigest() == origin["source_snapshot_sha256"]
+        retained = tmp_path / "retained.sqlite"
+        retained.write_bytes(snapshot)
+        with sqlite3.connect(retained) as before:
+            assert before.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+            assert before.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        store.append_events([_ev(0, "stop-proof", LifecycleEventType.STOP_DECIDED)])
+    with ledger_mod.LedgerStore(tmp_path, HOST).open(create=True) as reopened:
+        assert reopened.integrity()["hash_chain_origin"] == origin
+        with pytest.raises(BrainError, match="duplicate event_id"):
+            reopened.append_events([_ev(0, "stop-proof", LifecycleEventType.STOP_DECIDED)])
+    with sqlite3.connect(dbfile) as conn:
+        rows = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+        assert [row[:-1] for row in rows[:3]] == original
+        assert [(row[0], row[1]) for row in rows[3:]] == [(4, "stop-proof")]
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert updated == {**manifest, "schema_version": 2}
+
+
+def test_legacy_migration_interruption_rolls_back_then_retries(tmp_path, monkeypatch):
+    dbfile, original = _legacy_ledger(tmp_path, "1")
+    migrate = ledger_mod.LedgerStore._migrate_legacy_chain
+
+    def interrupted(store):
+        migrate(store)
+        raise KeyboardInterrupt("interrupted before commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger_mod.LedgerStore, "_migrate_legacy_chain", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            ledger_mod.LedgerStore(tmp_path, HOST).open(create=True)
+    with sqlite3.connect(dbfile) as conn:
+        assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+        assert dict(conn.execute("SELECT key,value FROM ledger_meta"))["schema_version"] == "1"
+        assert (
+            conn.execute("SELECT value FROM ledger_meta WHERE key='hash_chain_origin'").fetchone()
+            is None
+        )
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as store:
+        assert store.integrity()["hash_chain_verified_through_seq"] == 3
+
+
+def test_legacy_concurrent_open_and_manifest_recovery(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    dbfile, original = _legacy_ledger(tmp_path)
+    manifest_path = dbfile.parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = 1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def denied(*args):
+        raise PermissionError("manifest temporarily locked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger_mod.LedgerStore, "_write_manifest", denied)
+        with pytest.raises(PermissionError):
+            ledger_mod.LedgerStore(tmp_path, HOST).open()
+
+    def reopen(create):
+        with ledger_mod.LedgerStore(tmp_path, HOST).open(create=create) as store:
+            return store.header()["hash_chain_origin"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        origins = list(pool.map(reopen, [False, True]))
+    assert origins[0] == origins[1]
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    with sqlite3.connect(dbfile) as conn:
+        assert [row[:-1] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
+
+
+def test_partial_chain_is_refused_without_overwriting_integrity(tmp_path):
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as store:
+        _seed(store, 3)
+        dbfile = store.dbfile
+    with sqlite3.connect(dbfile) as conn:
+        conn.execute("UPDATE events SET prev_hash=NULL WHERE seq=2")
+        original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+    for create in (False, True):
+        with pytest.raises(BrainError, match="hash chain is missing or malformed"):
+            ledger_mod.LedgerStore(tmp_path, HOST).open(create=create)
+    with sqlite3.connect(dbfile) as conn:
+        assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+
+
+def test_legacy_concurrent_migration_commits_one_origin(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    dbfile, original = _legacy_ledger(tmp_path)
+    barrier = Barrier(2)
+
+    def open_legacy(create):
+        barrier.wait(timeout=5)
+        with ledger_mod.LedgerStore(tmp_path, HOST).open(create=create) as store:
+            return store.header()["hash_chain_origin"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        origins = list(pool.map(open_legacy, [False, True]))
+    assert origins[0] == origins[1]
+    with sqlite3.connect(dbfile) as conn:
+        assert [row[:-1] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM object_refs WHERE role='legacy-ledger-snapshot'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_replay_projection_and_compare(tmp_path) -> None:
