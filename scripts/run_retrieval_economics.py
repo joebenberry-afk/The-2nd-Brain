@@ -8,18 +8,109 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
 from time import perf_counter_ns
 from typing import Any
 
-from second_brain import build_identity, contracts, db, hybrid_retrieval, semantic
+from second_brain import contracts, db, hybrid_retrieval, semantic
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "outputs" / "reports" / "v2" / "retrieval"
+
+
+def _qualification_identity(home: Path) -> dict[str, Any] | None:
+    try:
+        try:
+            from scripts.run_v1_p4_qualification import qualification_identity
+        except ModuleNotFoundError:
+            path = ROOT / "scripts" / "run_v1_p4_qualification.py"
+            spec = importlib.util.spec_from_file_location("canonical_qualification_producer", path)
+            if spec is None or spec.loader is None:
+                return None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            qualification_identity = module.qualification_identity
+        return qualification_identity(home)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError):
+        return None
+
+
+def _identity_stable(before: dict[str, Any] | None, after: dict[str, Any] | None) -> bool:
+    return bool(
+        before
+        and after
+        and all(
+            before.get(field) == after.get(field)
+            for field in ("source_commit", "source_tree_sha256", "config_sha256")
+        )
+    )
+
+
+def _export_local_retrieval_observation(
+    home: Path, output_path: Path, report: dict[str, Any], identity: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Export only the measured local scale/performance boundary."""
+    try:
+        output_path.resolve().relative_to(home.resolve())
+    except ValueError:
+        return None
+    try:
+        try:
+            from scripts.run_v1_p4_qualification import export_v2_observation
+        except ModuleNotFoundError:
+            path = ROOT / "scripts" / "run_v1_p4_qualification.py"
+            spec = importlib.util.spec_from_file_location("canonical_qualification_producer", path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("canonical qualification producer is unavailable") from None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            export_v2_observation = module.export_v2_observation
+        raw_ref = {
+            "path": str(output_path),
+            "sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "type": "raw",
+        }
+        return export_v2_observation(
+            home,
+            output_path.parent / "qualification",
+            phase="v2-i",
+            requirement="governed_self_improvement_proof",
+            evidence_type="economics",
+            feature="retrieval_local_scale_and_performance",
+            observed_data={
+                "scope": "local_retrieval_scale_and_performance",
+                "corpus": report["corpus"],
+                "database_bytes": report["database_bytes"],
+                "query_count": len(report["runs"]),
+                "repeats": report["repeats"],
+                "provider_usage": report["provider_usage"],
+                "economics_verdict": report["economics_verdict"],
+            },
+            gate_observations={
+                "representative_scale_and_performance": {
+                    "corpus": report["corpus"],
+                    "query_count": len(report["runs"]),
+                    "repeats": report["repeats"],
+                    "latency_measured": True,
+                    "provider_outcomes_unmeasured": True,
+                }
+            },
+            identity=identity,
+            producer=Path(__file__),
+            raw_refs=[raw_ref],
+        )
+    except (FileNotFoundError, OSError, RuntimeError, ValueError):
+        # A temporary/local corpus may not have the full qualification identity;
+        # its bounded report remains valid without becoming strict evidence.
+        return None
 
 
 def run_retrieval_economics(
@@ -29,6 +120,12 @@ def run_retrieval_economics(
     if repeats < 1:
         raise ValueError("repeats must be positive")
     home = Path(home or os.environ.get("SECOND_BRAIN_HOME") or ROOT).resolve()
+    identity_before = _qualification_identity(home)
+    identity_error = (
+        None
+        if identity_before is not None
+        else "qualification identity unavailable before profiling"
+    )
     database = db.db_path(home)
     conn = db.connect(database, readonly=True)
     try:
@@ -103,14 +200,22 @@ def run_retrieval_economics(
                 },
             }
         )
+    identity_after = _qualification_identity(home)
+    if not _identity_stable(identity_before, identity_after):
+        identity_error = identity_error or "source/config identity changed during profiling"
     report = {
         "schema_version": 1,
         "classification": "observed",
         "scope": "local_retrieval_scale_and_performance",
         "generated_at": now.isoformat(),
         "home": str(home),
-        "source_tree_sha256": build_identity.source_tree_fingerprint(ROOT),
-        "config_sha256": build_identity.configuration_fingerprint(home),
+        "source_tree_sha256": identity_before.get("source_tree_sha256")
+        if identity_before
+        else None,
+        "config_sha256": identity_before.get("config_sha256") if identity_before else None,
+        "identity": identity_before,
+        "identity_after": identity_after,
+        "identity_error": identity_error,
         "corpus": {"total": counts["total"], "current": counts["current"]},
         "database_bytes": database.stat().st_size,
         "query_selection": "up to sixteen current titles in memory-id order",
@@ -121,9 +226,10 @@ def run_retrieval_economics(
         "economics_verdict": "INSUFFICIENT",
         "conclusion": "Measured local retrieval only; no downstream success or savings claim.",
     }
-    target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("x", encoding="utf-8") as output:
-        json.dump(report, output, indent=2)
+        json.dump(report, output, indent=2, allow_nan=False)
+    if identity_error is None and identity_before is not None and identity_after is not None:
+        _export_local_retrieval_observation(home, target.resolve(), report, identity_after)
     return report
 
 

@@ -380,6 +380,32 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
     assert "private acceptance" not in json.dumps(record)
 
 
+def test_run_one_preserves_brain_initialization_failure(tmp_path, monkeypatch):
+    from scripts import run_paired_economics as runner
+
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+
+    def fake_subprocess(args, **kwargs):
+        class Completed:
+            returncode = 1 if "-m" in args else 0
+
+        return Completed()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_subprocess)
+    task = {
+        "task_id": "init-failure",
+        "prompt": "prompt",
+        "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+        "acceptance": {"command": "true", "expect_exit": 0},
+    }
+    record = runner._run_one("prime", task, "ON", ["host"])
+    assert record is not None
+    assert record["host_exit"] is None
+    assert record["acceptance_pass"] is None
+    assert record["usage_capture"] is False
+    assert record["initialization_error"]
+
+
 def test_run_executes_off_then_on_even_when_requested_on(tmp_path, monkeypatch):
     import json
 
@@ -618,3 +644,136 @@ def test_retrieval_profile_does_not_invent_provider_outcomes(brain_home, tmp_pat
     with pytest.raises(FileExistsError):
         runner.run_retrieval_economics(brain_home, output_path=output_path)
     assert output_path.read_bytes() == retained
+
+
+def test_native_study_protocol_is_bounded_to_three_pairs(tmp_path):
+    import json
+
+    from scripts import run_paired_economics as runner
+
+    protocol = {
+        "pairs": [{"pair": index, "order": ["baseline", "candidate"]} for index in range(1, 5)],
+        "same_postconditions": {},
+        "controller_model": "openai-codex/gpt-6-astra:low",
+        "worker_model": "openai-codex/gpt-5.6-luna:low",
+    }
+    path = tmp_path / "protocol.json"
+    path.write_text(json.dumps(protocol), encoding="utf-8")
+    import pytest
+
+    with pytest.raises(ValueError, match="exactly three"):
+        runner._protocol_study(path)
+
+
+def test_native_acceptance_uses_executed_result_and_session_bound_workers(tmp_path):
+    import json
+
+    from scripts import run_paired_economics as runner
+
+    settings = {
+        "autoinject_mode": "active",
+        "admission_stage": "SHADOW",
+        "learning_stage": "SHADOW",
+        "retrieval_token_budget": 1200,
+    }
+    command = "python /approved/read.py /approved/input.json"
+    names = ["CandidateP1One", "CandidateP1Two"]
+    parent = tmp_path / "controller.jsonl"
+    children = [tmp_path / f"{name}.jsonl" for name in names]
+
+    def call(name, args, identifier):
+        return {"type": "toolCall", "name": name, "arguments": args, "id": identifier}
+
+    def write_session(path, calls, results):
+        rows = [{"message": {"role": "assistant", "content": calls}}]
+        rows.extend({"message": result} for result in results)
+        path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+
+    macro = call("bash", {"command": command}, "macro")
+    dispatch = call(
+        "task",
+        {
+            "tasks": [
+                {"name": name, "agent": "scout", "access_intent": "read_only"} for name in names
+            ]
+        },
+        "dispatch",
+    )
+    reply = {
+        "role": "toolResult",
+        "toolCallId": "macro",
+        "isError": False,
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "observed_settings": settings,
+                        "engram_id": "approved",
+                        "version": 1,
+                        "macro_model_calls": 0,
+                        "cache_hit": True,
+                        "native_commands": [],
+                    }
+                ),
+            }
+        ],
+    }
+    for child in children:
+        write_session(
+            child,
+            [call("yield", {"data": settings}, "yield")],
+            [
+                {"role": "toolResult", "toolCallId": "yield", "isError": False},
+            ],
+        )
+    write_session(parent, [macro, dispatch], [reply])
+
+    def accepted():
+        return runner._native_acceptance(
+            parent, children, "candidate", 1, {"same_postconditions": settings}, command
+        )[0]
+
+    assert accepted()
+    # A successful macro plus a fabricated sidecar cannot repair a wrong native answer.
+    children[0].with_suffix(".json").write_text(json.dumps(settings), encoding="utf-8")
+    write_session(
+        children[0],
+        [
+            call(
+                "yield",
+                {
+                    "data": {
+                        **settings,
+                        "retrieval_token_budget": 999,
+                    }
+                },
+                "yield",
+            )
+        ],
+        [{"role": "toolResult", "toolCallId": "yield", "isError": False}],
+    )
+    assert not accepted()
+    write_session(
+        children[0],
+        [call("yield", {"data": settings}, "yield")],
+        [
+            {"role": "toolResult", "toolCallId": "yield", "isError": False},
+        ],
+    )
+    write_session(parent, [macro, dispatch], [{**reply, "isError": True}])
+    assert not accepted()
+    write_session(
+        parent,
+        [
+            macro,
+            dispatch,
+            call(
+                "bash",
+                {"command": "python read.py input.json"},
+                "alternate",
+            ),
+        ],
+        [reply],
+    )
+    assert not accepted()

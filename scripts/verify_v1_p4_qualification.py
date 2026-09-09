@@ -11,16 +11,19 @@ CLI:
         --out outputs/reports/v1-p4/independent-verifier.json
 """
 
-from __future__ import annotations
-
 import argparse
+import ast
 import hashlib
+import importlib.util
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import tomllib
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -867,6 +870,607 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     return 0 if result["ok"] else 1
+
+
+def _runner_module() -> Any:
+    loaded = sys.modules.get("run_v1_p4_qualification")
+    if loaded is not None:
+        return loaded
+    path = REPO_ROOT / "scripts" / "run_v1_p4_qualification.py"
+    spec = importlib.util.spec_from_file_location("run_v1_p4_qualification", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load canonical qualification producer: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _parse_junit_cases(path: Path) -> list[dict[str, Any]]:
+    root = ET.parse(path).getroot()
+    cases: list[dict[str, Any]] = []
+    for element in root.iter("testcase"):
+        attrs = {str(key): str(value) for key, value in element.attrib.items()}
+        if element.find("failure") is not None or element.find("error") is not None:
+            outcome = "failed"
+        elif element.find("skipped") is not None:
+            outcome = "skipped"
+        else:
+            outcome = "passed"
+        attrs["outcome"] = outcome
+        cases.append(
+            {
+                "classname": attrs.get("classname", ""),
+                "name": attrs.get("name", ""),
+                "file": attrs.get("file", "").replace("\\", "/"),
+                "outcome": outcome,
+                "detail": attrs,
+            }
+        )
+    return cases
+
+
+def _normalize_test_file(path_value: str, *, allow_absolute: bool = False) -> str | None:
+    if not path_value:
+        return None
+    raw = Path(path_value)
+    if (raw.is_absolute() and not allow_absolute) or ".." in raw.parts:
+        return None
+    try:
+        resolved = (raw if raw.is_absolute() else REPO_ROOT / raw).resolve()
+        relative = resolved.relative_to(REPO_ROOT)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if relative.parts[:1] != ("tests",) or relative.suffix != ".py":
+        return None
+    return relative.as_posix()
+
+
+def _validate_node_id(node_id: str) -> None:
+    path_part, separator, selectors = node_id.partition("::")
+    if not separator or not path_part or not selectors:
+        raise ValueError(f"pytest node ID must contain a file and non-empty selectors: {node_id!r}")
+    if _normalize_test_file(path_part) is None:
+        raise ValueError(f"pytest node ID must reference a contained tests/*.py path: {node_id!r}")
+    parts = selectors.split("::")
+    if any(not part.strip() for part in parts):
+        raise ValueError(f"pytest node ID selectors must be non-empty: {node_id!r}")
+
+
+def _node_parts(node_id: str) -> tuple[str, tuple[str, ...]]:
+    path_part, _, selectors = node_id.partition("::")
+    parts = tuple(selectors.split("::"))
+    return _normalize_test_file(path_part) or path_part.replace("\\", "/"), parts
+
+
+def _base_function_name(name: str) -> str:
+    return name.split("[", 1)[0]
+
+
+def _case_matches(node_id: str, case: dict[str, Any]) -> bool:
+    module, selectors = _node_parts(node_id)
+    function = selectors[-1]
+    case_file = _normalize_test_file(case.get("file", ""), allow_absolute=True)
+    if case_file != module:
+        return False
+    case_name = case.get("name", "")
+    if "[" in function:
+        if case_name != function:
+            return False
+    elif _base_function_name(case_name) != function:
+        return False
+    classname = str(case.get("classname", ""))
+    class_parts = selectors[:-1]
+    if class_parts:
+        return classname.split(".")[-len(class_parts) :] == list(class_parts)
+    module_parts = module[:-3].split("/")
+    module_names = {
+        ".".join(module_parts),
+        ".".join(module_parts[1:]),
+        module_parts[-1],
+    }
+    return classname in module_names
+
+
+def _junit_outcome(node_id: str, cases: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    matches = [case for case in cases if _case_matches(node_id, case)]
+    if not matches:
+        return "missing", []
+    if any(case["outcome"] == "failed" for case in matches):
+        return "failed", matches
+    if any(case["outcome"] == "skipped" for case in matches):
+        return "skipped", matches
+    return "passed", matches
+
+
+def run_v2_test_observations(home: Path, out_dir: Path, bindings: list[dict]) -> dict:
+    """Run reviewed pytest node IDs and export only explicitly testable Gates."""
+    home = Path(home).resolve()
+    out_dir = Path(out_dir).resolve()
+    out_dir.relative_to(home)
+    strict = _runner_module()._strict_verifier_module()
+    _, gate_errors = strict._authority_gate_hashes()
+    if gate_errors:
+        raise RuntimeError(f"canonical Gate authority is invalid: {gate_errors}")
+    identity = _runner_module().qualification_identity(home)
+    if not isinstance(bindings, list):
+        raise TypeError("bindings must be a list")
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    union: set[str] = set()
+    for row in bindings:
+        if not isinstance(row, dict):
+            raise TypeError("each binding must be an object")
+        phase, requirement, feature, gate = (
+            row.get("phase"),
+            row.get("requirement"),
+            row.get("feature"),
+            row.get("gate"),
+        )
+        if (
+            not isinstance(phase, str)
+            or not phase.strip()
+            or not isinstance(requirement, str)
+            or not requirement.strip()
+        ):
+            raise ValueError("binding phase and requirement must be non-empty strings")
+        key = (phase, requirement)
+        if key not in strict.EXPECTED_REQUIREMENTS:
+            raise ValueError(f"unknown canonical requirement: {key!r}")
+        if (
+            not isinstance(feature, str)
+            or not feature.strip()
+            or not isinstance(gate, str)
+            or not gate.strip()
+        ):
+            raise ValueError("binding feature and gate must be non-empty strings")
+        allowed = strict.REQUIRED_GATE_COVERAGE[key]
+        if gate not in allowed or "test" not in allowed[gate]:
+            raise ValueError(f"Gate does not explicitly permit test evidence: {gate!r}")
+        node_ids = row.get("node_ids")
+        if (
+            not isinstance(node_ids, list)
+            or not node_ids
+            or any(not isinstance(node, str) or not node.strip() for node in node_ids)
+            or len(set(node_ids)) != len(node_ids)
+        ):
+            raise ValueError("binding node_ids must be a non-empty unique list of strings")
+        for node_id in node_ids:
+            _validate_node_id(node_id)
+        group = grouped.setdefault(
+            (phase, requirement, feature),
+            {"phase": phase, "requirement": requirement, "feature": feature, "gates": {}},
+        )
+        if gate in group["gates"]:
+            raise ValueError(f"duplicate Gate binding: {(phase, requirement, feature, gate)!r}")
+        group["gates"][gate] = sorted(node_ids)
+        union.update(node_ids)
+    if not union:
+        return {"identity": identity, "evidence_refs": [], "unresolved": [], "capture": None}
+
+    raw_dir = out_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    junit_path = raw_dir / "pytest.junit.xml"
+    stdout_path = raw_dir / "pytest.stdout"
+    stderr_path = raw_dir / "pytest.stderr"
+    if any(path.exists() for path in (junit_path, stdout_path, stderr_path)):
+        raise FileExistsError("refusing to overwrite existing pytest captures")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("PYTHON") and key.upper() != "PYTEST_ADDOPTS"
+    }
+    env["SECOND_BRAIN_HOME"] = str(home)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    argv = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "--junitxml",
+        str(junit_path),
+        "-o",
+        "junit_family=xunit1",
+        "--",
+        *sorted(union),
+    ]
+    try:
+        process = subprocess.run(
+            argv,
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+        stdout = (
+            process.stdout
+            if isinstance(process.stdout, bytes)
+            else str(process.stdout or "").encode()
+        )
+        stderr = (
+            process.stderr
+            if isinstance(process.stderr, bytes)
+            else str(process.stderr or "").encode()
+        )
+        exit_code = process.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, bytes) else str(exc.stdout or "").encode()
+        stderr = exc.stderr if isinstance(exc.stderr, bytes) else str(exc.stderr or "").encode()
+        stderr += f"\n{exc}".encode("utf-8", "replace")
+        exit_code = -1
+    except OSError as exc:
+        stdout = b""
+        stderr = str(exc).encode("utf-8", "replace")
+        exit_code = -1
+    stdout_path.write_bytes(stdout)
+    stderr_path.write_bytes(stderr)
+    cases: list[dict[str, Any]] = []
+    junit_error: str | None = None
+    if junit_path.is_file():
+        try:
+            cases = _parse_junit_cases(junit_path)
+        except (ET.ParseError, OSError) as exc:
+            junit_error = f"{type(exc).__name__}: {exc}"
+    else:
+        junit_error = "JUnit capture is missing"
+
+    def outcome_for(node_id: str) -> tuple[str, list[dict[str, Any]], str | None]:
+        outcome, matches = _junit_outcome(node_id, cases)
+        if not matches:
+            return "missing", [], junit_error or "selected node ID absent from JUnit"
+        reason = None if outcome == "passed" else f"case outcome: {outcome}"
+        return outcome, matches, reason
+
+    capture_refs: list[dict[str, Any]] = []
+    for kind, path in (("stdout", stdout_path), ("stderr", stderr_path)):
+        capture_refs.append(
+            {
+                "path": path.relative_to(home).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "type": kind,
+            }
+        )
+    if junit_path.is_file():
+        capture_refs.append(
+            {
+                "path": junit_path.relative_to(home).as_posix(),
+                "sha256": hashlib.sha256(junit_path.read_bytes()).hexdigest(),
+                "type": "junit",
+            }
+        )
+    capture = {
+        "argv": [str(value) for value in argv],
+        "exit": exit_code,
+        "stdout_ref": capture_refs[0]["path"],
+        "stderr_ref": capture_refs[1]["path"],
+        "junit_ref": capture_refs[2]["path"] if len(capture_refs) == 3 else None,
+    }
+    evidence_refs: list[dict] = []
+    unresolved: list[dict[str, Any]] = []
+    for group in sorted(
+        grouped.values(), key=lambda item: (item["phase"], item["requirement"], item["feature"])
+    ):
+        group_cases: list[dict[str, Any]] = []
+        group_unresolved: list[dict[str, Any]] = []
+        gate_observations: dict[str, dict[str, Any]] = {}
+        for gate in sorted(group["gates"]):
+            node_ids = group["gates"][gate]
+            gate_cases = []
+            for node_id in node_ids:
+                outcome, matches, reason = outcome_for(node_id)
+                case = {
+                    "node_id": node_id,
+                    "outcome": outcome,
+                    "junit_cases": [match["detail"] for match in matches],
+                }
+                if reason:
+                    case["reason"] = reason
+                    group_unresolved.append({"gate": gate, **case})
+                gate_cases.append(case)
+                group_cases.append(case)
+            gate_observations[gate] = {
+                "node_ids": node_ids,
+                "outcomes": gate_cases,
+                "all_selected_cases_passed": all(row["outcome"] == "passed" for row in gate_cases),
+            }
+        if group_unresolved or exit_code != 0:
+            unresolved.extend(
+                {
+                    "phase": group["phase"],
+                    "requirement": group["requirement"],
+                    "feature": group["feature"],
+                    **row,
+                }
+                for row in group_unresolved
+            )
+            if not group_unresolved:
+                unresolved.append(
+                    {
+                        "phase": group["phase"],
+                        "requirement": group["requirement"],
+                        "feature": group["feature"],
+                        "gate": sorted(group["gates"])[0],
+                        "reason": f"pytest exited {exit_code}",
+                    }
+                )
+            continue
+        observed_data = {
+            "execution": "pytest",
+            "node_ids": sorted(union),
+            "case_outcomes": group_cases,
+            "capture_hashes": {ref["type"]: ref["sha256"] for ref in capture_refs},
+        }
+        artifact = _runner_module().export_v2_observation(
+            home,
+            out_dir
+            / "evidence"
+            / re.sub(
+                r"[^A-Za-z0-9_.-]+",
+                "-",
+                f"{group['phase']}-{group['requirement']}-{group['feature']}",
+            ),
+            phase=group["phase"],
+            requirement=group["requirement"],
+            evidence_type="test",
+            feature=group["feature"],
+            observed_data=observed_data,
+            gate_observations=gate_observations,
+            identity=identity,
+            producer=Path(__file__),
+            raw_refs=capture_refs,
+        )
+        evidence_refs.append(artifact)
+    return {
+        "identity": identity,
+        "evidence_refs": evidence_refs,
+        "unresolved": unresolved,
+        "capture": capture,
+    }
+
+
+_V2_CREATE_RE = re.compile(
+    r"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+[\"`\[]?(v2_[A-Za-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def _static_string(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        values = [part.value for part in node.values if isinstance(part, ast.Constant)]
+        return "".join(value for value in values if isinstance(value, str))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string(node.left)
+        right = _static_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _production_v2_definitions() -> list[dict[str, str | int]]:
+    definitions: list[dict[str, str | int]] = []
+    canonical_paths = {path.resolve() for path in db.migration_files()}
+    for path in sorted((REPO_ROOT / "src").rglob("*")):
+        if not path.is_file() or path.resolve() in canonical_paths:
+            continue
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if path.suffix.casefold() in {".sql", ".ddl"}:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for match in _V2_CREATE_RE.finditer(text):
+                definitions.append(
+                    {
+                        "path": relative,
+                        "line": text.count("\n", 0, match.start()) + 1,
+                        "table": match.group(1).lower(),
+                    }
+                )
+            continue
+        if path.suffix.casefold() != ".py":
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                values = [node.value]
+            elif isinstance(node, ast.Call):
+                values = node.args
+            else:
+                continue
+            for value in values:
+                sql = _static_string(value)
+                if sql is None:
+                    continue
+                for match in _V2_CREATE_RE.finditer(sql):
+                    definitions.append(
+                        {"path": relative, "line": node.lineno, "table": match.group(1).lower()}
+                    )
+    return definitions
+
+
+def _cli_ownership() -> dict[str, Any]:
+    cli_path = REPO_ROOT / "src" / "second_brain" / "cli.py"
+    metadata_path = REPO_ROOT / "pyproject.toml"
+    findings: dict[str, Any] = {
+        "path": cli_path.relative_to(REPO_ROOT).as_posix(),
+        "sha256": hashlib.sha256(cli_path.read_bytes()).hexdigest(),
+        "entrypoint": None,
+        "entrypoints": {},
+        "v2_parser_owned": False,
+        "v2_dispatch_owned": False,
+        "competing_modules": [],
+    }
+    try:
+        tree = ast.parse(cli_path.read_text(encoding="utf-8"), filename=str(cli_path))
+        functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+        findings["v2_parser_owned"] = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_parser"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "v2"
+            for node in ast.walk(tree)
+        )
+        findings["v2_dispatch_owned"] = "cmd_v2" in functions and any(
+            isinstance(node, ast.Dict)
+            and any(
+                isinstance(key, ast.Constant)
+                and key.value == "v2"
+                and isinstance(value, ast.Name)
+                and value.id == "cmd_v2"
+                for key, value in zip(node.keys, node.values, strict=True)
+            )
+            for node in ast.walk(tree)
+        )
+    except (OSError, SyntaxError) as exc:
+        findings["ast_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
+        entrypoints = metadata.get("project", {}).get("scripts", {})
+        if isinstance(entrypoints, dict):
+            findings["entrypoints"] = {
+                str(name): str(target) for name, target in entrypoints.items()
+            }
+            findings["entrypoint"] = findings["entrypoints"].get("brainctl")
+            findings["competing_modules"] = sorted(
+                f"{name}={target}"
+                for name, target in findings["entrypoints"].items()
+                if name != "brainctl" or target != "second_brain.cli:main"
+            )
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        findings["metadata_error"] = f"{type(exc).__name__}: {exc}"
+    ast_competing: list[str] = []
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        if path == cli_path:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        if any(
+            isinstance(node, ast.Call)
+            and (
+                (isinstance(node.func, ast.Name) and node.func.id == "ArgumentParser")
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"ArgumentParser", "add_parser"}
+                )
+            )
+            for node in ast.walk(tree)
+        ):
+            ast_competing.append(path.relative_to(REPO_ROOT).as_posix())
+    findings["competing_modules"] = sorted(set(findings["competing_modules"]) | set(ast_competing))
+    return findings
+
+
+def _canonical_sql_table_owners(migration_files: list[Path]) -> dict[str, list[str]]:
+    definitions: dict[str, list[str]] = {}
+    for path in migration_files:
+        text = path.read_text(encoding="utf-8")
+        for match in _V2_CREATE_RE.finditer(text):
+            table = match.group(1).lower()
+            if table.startswith("v2_"):
+                definitions.setdefault(table, []).append(path.relative_to(REPO_ROOT).as_posix())
+    return definitions
+
+
+def observe_v2_structure(home: Path, out_dir: Path) -> dict:
+    """Inspect migration and command ownership instead of probing presence only."""
+    home = Path(home).resolve()
+    out_dir = Path(out_dir).resolve()
+    runner = _runner_module()
+    identity = runner.qualification_identity(home)
+    strict = runner._strict_verifier_module()
+    _, gate_errors = strict._authority_gate_hashes()
+    if gate_errors:
+        raise RuntimeError(f"canonical Gate authority is invalid: {gate_errors}")
+    evidence_refs: list[dict] = []
+    unresolved: list[dict[str, Any]] = []
+
+    migration_files = db.migration_files()
+    definitions = _canonical_sql_table_owners(migration_files)
+    competing_definitions = _production_v2_definitions()
+    expected_tables = {
+        "v2_candidates",
+        "v2_interventions",
+        "v2_observations",
+        "v2_frontier_items",
+        "v2_rollout_events",
+        "v2_qualification",
+    }
+    duplicate_tables = {table: owners for table, owners in definitions.items() if len(owners) != 1}
+    missing_tables = sorted(expected_tables - set(definitions))
+    extra_tables = sorted(set(definitions) - expected_tables)
+    migration_data = {
+        "migration_files": [
+            {
+                "path": path.relative_to(REPO_ROOT).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for path in migration_files
+        ],
+        "table_owners": definitions,
+        "duplicate_tables": duplicate_tables,
+        "missing_tables": missing_tables,
+        "unexpected_v2_tables": extra_tables,
+        "competing_production_definitions": competing_definitions,
+    }
+    if duplicate_tables or missing_tables or extra_tables or competing_definitions:
+        unresolved.append({"gate": "single_table_and_migration_owner", "findings": migration_data})
+    else:
+        evidence_refs.append(
+            runner.export_v2_observation(
+                home,
+                out_dir / "evidence-single-table",
+                phase="v2-0",
+                requirement="baseline_identity_and_schema",
+                evidence_type="verification",
+                feature="migration-ownership",
+                observed_data=migration_data,
+                gate_observations={
+                    "single_table_and_migration_owner": {"table_owners": definitions}
+                },
+                identity=identity,
+                producer=Path(__file__),
+            )
+        )
+
+    cli_data = _cli_ownership()
+    cli_data["command_owner"] = {
+        "path": cli_data["path"],
+        "sha256": cli_data["sha256"],
+    }
+    if (
+        not cli_data["v2_parser_owned"]
+        or not cli_data["v2_dispatch_owned"]
+        or cli_data["entrypoint"] != "second_brain.cli:main"
+        or cli_data["competing_modules"]
+    ):
+        unresolved.append({"gate": "single_command_module", "findings": cli_data})
+    else:
+        evidence_refs.append(
+            runner.export_v2_observation(
+                home,
+                out_dir / "evidence-single-command",
+                phase="v2-b",
+                requirement="low_friction_io",
+                evidence_type="verification",
+                feature="single-command-module",
+                observed_data=cli_data,
+                gate_observations={
+                    "single_command_module": {"command_owner": cli_data["command_owner"]}
+                },
+                identity=identity,
+                producer=Path(__file__),
+            )
+        )
+    return {"identity": identity, "evidence_refs": evidence_refs, "unresolved": unresolved}
 
 
 if __name__ == "__main__":

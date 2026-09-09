@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,8 +32,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from second_brain import (  # noqa: E402
+    build_identity,
+    contracts,
+    telemetry,
+)
 from second_brain import paths as paths_module  # noqa: E402
-from second_brain import telemetry  # noqa: E402
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_STRICT_VERIFIER: Any = None
 
 SCENARIO_NAMES = (
     "fresh_session",
@@ -205,6 +214,266 @@ def write_evidence(ctx: Ctx, scenario: str, label: str, data: Any) -> str:
 
 def json_stdout(cr: CommandResult) -> Any:
     return json.loads(cr.stdout.decode("utf-8"))
+
+
+def _strict_verifier_module() -> Any:
+    """Load the unchanged strict consumer without making ``scripts`` a package."""
+    global _STRICT_VERIFIER
+    if _STRICT_VERIFIER is not None:
+        return _STRICT_VERIFIER
+    path = REPO_ROOT / "scripts" / "verify_qualification.py"
+    spec = importlib.util.spec_from_file_location("_strict_qualification_verifier", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load strict qualification verifier: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _STRICT_VERIFIER = module
+    return module
+
+
+def _strict_json_bytes(value: object) -> bytes:
+    """Serialize JSON with the strict no-NaN policy used by qualification."""
+    try:
+        text = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"qualification evidence is not strict JSON: {exc}") from exc
+    return text.encode("utf-8")
+
+
+def _home_relative_file(home: Path, path: Path, *, label: str) -> str:
+    root = home.resolve()
+    try:
+        resolved = path.resolve()
+        relative = resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a contained path relative to home") from exc
+    if not resolved.is_file():
+        raise ValueError(f"{label} does not name a file: {path}")
+    return relative.as_posix()
+
+
+def _validate_capture_refs(home: Path, raw_refs: list[dict] | None) -> list[dict]:
+    """Validate capture references while retaining streams only as metadata."""
+    if raw_refs is None:
+        return []
+    if not isinstance(raw_refs, list) or any(not isinstance(ref, dict) for ref in raw_refs):
+        raise TypeError("raw_refs must be a list of objects")
+    preserved: list[dict] = []
+    for ref in raw_refs:
+        item = dict(ref)
+        path_value = item.get("path")
+        if path_value is not None:
+            if not isinstance(path_value, str):
+                raise ValueError("raw capture path must be a string")
+            path = Path(path_value)
+            relative = _home_relative_file(
+                home, path if path.is_absolute() else home / path, label="raw capture"
+            )
+            item["path"] = relative
+            expected = item.get("sha256")
+            actual = hashlib.sha256((home / relative).read_bytes()).hexdigest()
+            if expected is not None and expected != actual:
+                raise ValueError(f"raw capture hash mismatch for {relative}")
+            if expected is None:
+                item["sha256"] = actual
+        preserved.append(item)
+    return preserved
+
+
+def _nonproduction_marker(value: object) -> bool:
+    """Reject fixture/simulation labels using the strict consumer's vocabulary."""
+    strict = _strict_verifier_module()
+    if isinstance(value, dict):
+        if strict._contains_nonproduction_marker(value):
+            return True
+        return any(_nonproduction_marker(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_nonproduction_marker(item) for item in value)
+    return False
+
+
+def qualification_identity(home: Path) -> dict:
+    """Capture the source/config identity an observation must retain."""
+    home = Path(home).resolve()
+    source_commit = build_identity.git_sha(REPO_ROOT)
+    source_tree_sha256 = build_identity.source_tree_fingerprint(REPO_ROOT)
+    config_sha256 = build_identity.configuration_fingerprint(home)
+    if (
+        not isinstance(source_commit, str)
+        or not _GIT_SHA_RE.fullmatch(source_commit)
+        or not isinstance(source_tree_sha256, str)
+        or not _SHA256_RE.fullmatch(source_tree_sha256)
+        or not isinstance(config_sha256, str)
+        or not _SHA256_RE.fullmatch(config_sha256)
+    ):
+        raise RuntimeError("current source/config identity is unavailable")
+    return {
+        "source_commit": source_commit,
+        "source_tree_sha256": source_tree_sha256,
+        "config_sha256": config_sha256,
+        "captured_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def export_v2_observation(
+    home: Path,
+    out_dir: Path,
+    *,
+    phase: str,
+    requirement: str,
+    evidence_type: str,
+    feature: str,
+    observed_data: dict,
+    gate_observations: dict[str, dict],
+    identity: dict,
+    producer: Path,
+    raw_refs: list[dict] | None = None,
+) -> dict:
+    """Write one strict evidence artifact plus a classified raw observation wrapper."""
+    home = Path(home).resolve()
+    out_dir = Path(out_dir).resolve()
+    out_dir.relative_to(home)
+    if out_dir.exists() and out_dir.is_symlink():
+        raise ValueError("observation output directory must not be a symlink")
+
+    strict = _strict_verifier_module()
+    gate_hashes, gate_errors = strict._authority_gate_hashes()
+    if gate_errors:
+        raise RuntimeError(f"canonical Gate authority is invalid: {gate_errors}")
+    key = (phase, requirement)
+    if key not in strict.EXPECTED_REQUIREMENTS:
+        raise ValueError(f"unknown canonical requirement: {key!r}")
+    gate_sha256 = gate_hashes.get(key)
+    if not gate_sha256:
+        raise RuntimeError("canonical Gate hash is unavailable")
+    if not isinstance(evidence_type, str) or not evidence_type.strip():
+        raise ValueError("evidence_type must be non-empty")
+    evidence_type = evidence_type.strip().lower()
+    if evidence_type not in strict.ALLOWED_EVIDENCE_TYPES:
+        raise ValueError(f"unsupported evidence type: {evidence_type!r}")
+    if not isinstance(feature, str) or not feature.strip():
+        raise ValueError("feature must be non-empty")
+    if not isinstance(observed_data, dict) or not observed_data:
+        raise ValueError("observed_data must be a non-empty object")
+    if not isinstance(gate_observations, dict) or not gate_observations:
+        raise ValueError("gate_observations must be a non-empty object")
+    coverage = sorted(gate_observations)
+    allowed_coverage = strict.REQUIRED_GATE_COVERAGE[key]
+    unknown = sorted(set(coverage) - set(allowed_coverage))
+    if unknown:
+        raise ValueError(f"unknown Gate coverage: {unknown}")
+    disallowed = [gate for gate in coverage if evidence_type not in allowed_coverage[gate]]
+    if disallowed:
+        raise ValueError(f"{evidence_type!r} evidence cannot prove Gate coverage {disallowed}")
+    if any(
+        not isinstance(gate_observations[gate], dict) or not gate_observations[gate]
+        for gate in coverage
+    ):
+        raise ValueError("each Gate observation must be a non-empty object")
+    if _nonproduction_marker(observed_data) or _nonproduction_marker(gate_observations):
+        raise ValueError("nonproduction classifications cannot be exported as observed evidence")
+
+    if not isinstance(identity, dict):
+        raise TypeError("identity must be an object")
+    expected_identity = qualification_identity(home)
+    for identity_key in ("source_commit", "source_tree_sha256", "config_sha256"):
+        if identity.get(identity_key) != expected_identity[identity_key]:
+            raise ValueError(f"{identity_key} changed since qualification identity was captured")
+    captured_at = identity.get("captured_at")
+    if not isinstance(captured_at, str):
+        raise ValueError("identity captured_at is missing")
+    try:
+        captured = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("identity captured_at is malformed") from exc
+    if captured.tzinfo is None:
+        raise ValueError("identity captured_at must include a timezone")
+    if captured.astimezone(UTC) > datetime.now(UTC):
+        raise ValueError("identity captured_at is in the future")
+
+    producer = Path(producer).resolve()
+    producer_rel = producer.relative_to(REPO_ROOT).as_posix()
+    allowed_producers = strict._CANONICAL_EVIDENCE_PRODUCERS[evidence_type]
+    if producer_rel not in allowed_producers or not producer.is_file():
+        raise ValueError(f"producer is not authoritative for {evidence_type!r}: {producer_rel!r}")
+    producer_sha256 = hashlib.sha256(producer.read_bytes()).hexdigest()
+    captures = _validate_capture_refs(home, raw_refs)
+
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{phase}-{requirement}-{feature}").strip("-")
+    raw_path = out_dir / f"{slug}.raw.json"
+    artifact_path = out_dir / f"{slug}.json"
+    raw_path.relative_to(home)
+    artifact_path.relative_to(home)
+    if raw_path.exists() or artifact_path.exists():
+        raise FileExistsError("refusing to overwrite existing qualification evidence")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    observed_at = datetime.now(UTC).isoformat()
+    identity_captured_at = captured_at
+
+    raw_record = {
+        "schema_version": strict.EVIDENCE_SCHEMA_VERSION,
+        "classification": "observed",
+        "qualification_eligible": True,
+        "phase": phase,
+        "requirement": requirement,
+        "feature": feature,
+        "source_commit": identity["source_commit"],
+        "source_tree_sha256": identity["source_tree_sha256"],
+        "config_sha256": identity["config_sha256"],
+        "identity_captured_at": identity_captured_at,
+        "observed_at": observed_at,
+        "observed_data": observed_data,
+        "capture_refs": captures,
+    }
+    raw_bytes = _strict_json_bytes(raw_record)
+    with raw_path.open("xb") as raw_file:
+        raw_file.write(raw_bytes)
+    raw_ref = {
+        "path": _home_relative_file(home, raw_path, label="raw observation"),
+        "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "type": "raw",
+    }
+    artifact = {
+        "schema_version": strict.EVIDENCE_SCHEMA_VERSION,
+        "classification": "observed",
+        "qualification_eligible": True,
+        "phase": phase,
+        "requirement": requirement,
+        "source_commit": identity["source_commit"],
+        "source_tree_sha256": identity["source_tree_sha256"],
+        "config_sha256": identity["config_sha256"],
+        "gate_sha256": gate_sha256,
+        "feature": feature,
+        "target_ref": f"policy:{feature}",
+        "evidence_type": evidence_type,
+        "coverage": coverage,
+        "observed_data": observed_data,
+        "gate_observations": gate_observations,
+        "provenance": {
+            "producer": producer_rel,
+            "producer_sha256": producer_sha256,
+            "observed_data_sha256": hashlib.sha256(
+                contracts.canonical_json(observed_data).encode("utf-8")
+            ).hexdigest(),
+            "raw_evidence_refs": [raw_ref],
+        },
+        "identity_captured_at": identity_captured_at,
+        "observed_at": observed_at,
+    }
+    artifact_bytes = _strict_json_bytes(artifact)
+    with artifact_path.open("xb") as artifact_file:
+        artifact_file.write(artifact_bytes)
+    return {
+        "path": _home_relative_file(home, artifact_path, label="evidence artifact"),
+        "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "type": evidence_type,
+    }
 
 
 def _q(value: str) -> str:
