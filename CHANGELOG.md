@@ -1,3 +1,11 @@
+## 2026-09-09 — Bounded retrieval repair (unreleased)
+
+- Correct FTS5 BM25 normalization to use the most-negative score as the best
+  match. Strong lexical matches no longer lose relevance before candidate
+  limits and MMR selection. Existing filters, weights, and budgets are unchanged.
+- Add real Hybrid retrieval regression protection with a neighboring-query
+  positive control. Full v1/v2 qualification remains HOLD; skill-v2 stays SHADOW.
+
 ## 2026-09-09 — Bounded qualification closure (unreleased)
 
 - Restore explicit `leave_unresolved` reconsolidation plans. Applying or

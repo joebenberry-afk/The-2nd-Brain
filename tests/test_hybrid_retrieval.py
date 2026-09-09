@@ -70,6 +70,45 @@ class TestCascadeShortCircuitAndTiers:
             in res.matches[0].body
         )
 
+    def test_fts_bm25_best_match_wins_over_common_neighbor(self, brain_home):
+        target = add_memory(
+            brain_home,
+            title="Telemetry canonical session",
+            summary="Verified telemetry session fact",
+            body="telemetry session concept0000 unique-case-0062 canonical",
+            project_id="bench",
+            grade="VERIFIED",
+        )
+        curate(brain_home, target, status="current")
+        neighbor = add_memory(
+            brain_home,
+            title="Telemetry neighboring note",
+            summary="Common telemetry session note",
+            body="telemetry session concept0000 neighboring",
+            project_id="bench",
+            grade="VERIFIED",
+        )
+        curate(brain_home, neighbor, status="current")
+
+        retriever = HybridCascadeRetriever()
+        exact = retriever.retrieve(
+            brain_home,
+            "telemetry session concept0000 unique-case-0062",
+            project_id="bench",
+            top_k=10,
+        )
+        assert exact.matches
+        assert exact.matches[0].memory_id == target
+
+        neighboring = retriever.retrieve(
+            brain_home,
+            "neighboring",
+            project_id="bench",
+            top_k=10,
+        )
+        assert neighboring.matches
+        assert neighboring.matches[0].memory_id == neighbor
+
     def test_negative_result_cache(self, brain_home):
         retriever = HybridCascadeRetriever()
         q = "nonexistent obscure quantum entanglement algorithm"

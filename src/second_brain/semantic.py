@@ -2143,19 +2143,20 @@ def _attach_contradictions(rows: list[dict], conflicts: dict[str, set[str]]) -> 
 
 
 def _relevance_score(
-    row: dict, query_tokens: set[str], bm25_max: float | None, weights: RetrievalWeights
+    row: dict, query_tokens: set[str], bm25_best: float | None, weights: RetrievalWeights
 ) -> float:
     """FTS path: raw bm25 normalized exponentially against the best match in
-    the result set — docs that score (nearly) equally on bm25 keep (nearly)
-    equal relevance, so the deterministic metadata terms decide among them;
-    genuinely less relevant docs decay fast (one bm25 unit -> ~0.37x).
+    the result set. SQLite's bm25 ranks lower (more-negative) values first,
+    so the reference must be the minimum raw value and the penalty grows as
+    a row moves above that best value.
+
     Linear path: token-overlap ratio. Title/body boosts are small and
     deterministic. Bounded [0, _RELEVANCE_CAP]."""
     title_tokens = _score_tokens(row.get("title") or "")
     body_tokens = _score_tokens(_body_text_for_dedupe(row))
     raw = row.get("_bm25")
-    if bm25_max is not None and raw is not None:
-        base = math.exp(-(bm25_max - float(raw)) / weights.bm25_relevance_scale)
+    if bm25_best is not None and raw is not None:
+        base = math.exp(-(float(raw) - bm25_best) / weights.bm25_relevance_scale)
     elif not query_tokens:
         base = 1.0
     else:
@@ -2238,14 +2239,14 @@ def _token_cost_penalty(
 def _score_row(
     row: dict,
     query_tokens: set[str],
-    bm25_max: float | None,
+    bm25_best: float | None,
     project_id: str | None,
     score_terms: frozenset[str],
     weights: RetrievalWeights | None = None,
     home: Path | str | None = None,
 ) -> float:
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
-    score = _relevance_score(row, query_tokens, bm25_max, w)
+    score = _relevance_score(row, query_tokens, bm25_best, w)
     if "trust" in score_terms:
         score *= _trust_score(row, w)
     if "scope" in score_terms:
@@ -2284,11 +2285,12 @@ def _rank_rows(
     weights: RetrievalWeights | None = None,
     home: Path | str | None = None,
 ) -> list[dict]:
-    """Score rows and attach the exact score components used for ordering."""
     query_tokens = _query_tokens(term)
     bm25_values = [r.get("_bm25") for r in rows]
-    bm25_max = (
-        max(float(v) for v in bm25_values if v is not None)
+    # SQLite FTS5's bm25() is ordered ascending: the strongest match is the
+    # most-negative value, not the numerically largest value.
+    bm25_best = (
+        min(float(v) for v in bm25_values if v is not None)
         if any(v is not None for v in bm25_values)
         else None
     )
@@ -2297,7 +2299,7 @@ def _rank_rows(
     for index, row in enumerate(rows):
         row["_bm25"] = row.get("_bm25")
         row["_score"] = _score_row(
-            row, query_tokens, bm25_max, project_id, score_terms, w, home=home
+            row, query_tokens, bm25_best, project_id, score_terms, w, home=home
         )
         scored.append((row, index))
     scored.sort(key=lambda item: (-item[0]["_score"], item[1], item[0].get("memory_id") or ""))
