@@ -46,8 +46,41 @@ def test_msprt_detects_known_effect():
 
     assert result["n"] == 3
     assert result["r_bar"] < 0
-    assert result["lambda"] >= 20
-    assert result["lambda"] == float("inf")
+    assert result["verdict"] == "POSITIVE"
+    assert result["lambda_status"] == "overflow"
+    assert result["lambda"] is None
+    assert result["log_lambda"] > 709
+
+
+def test_likelihood_export_distinguishes_overflow_limit_and_missing_data(tmp_path, monkeypatch):
+    import json
+    import math
+
+    import pytest
+    from scripts import run_paired_economics as runner
+
+    finite = economics.verdict([synthetic_pair(100, n) for n in (90, 100, 110)])
+    limit = economics.verdict([synthetic_pair(100, 50)] * 3)
+    missing = economics.verdict([])
+    assert finite["lambda_status"] == "finite"
+    assert math.isclose(math.log(finite["lambda"]), finite["log_lambda"])
+    assert limit["lambda_status"] == "positive_infinity"
+    assert limit["lambda"] is None and limit["log_lambda"] is None
+    assert limit["verdict"] == "POSITIVE"
+    assert missing["lambda_status"] == "insufficient_data"
+    assert missing["verdict"] == "INSUFFICIENT"
+    export = tmp_path / "qualification.json"
+    monkeypatch.setattr(runner, "QUALIFICATION", export)
+    summary = {"harness": "omp", "finite": finite, "limit": limit, "missing": missing}
+    runner._write_qualification(summary)
+    decoded = json.loads(export.read_text(), parse_constant=runner._reject_nonfinite)
+    assert decoded["economics"]["omp"] == summary
+    for invalid in ("Infinity", "NaN", "-Infinity", "1e999"):
+        original = '{"economics": {}, "old": ' + invalid + "}"
+        export.write_text(original, encoding="utf-8")
+        with pytest.raises(ValueError):
+            runner._write_qualification(summary)
+        assert export.read_text(encoding="utf-8") == original
 
 
 def test_cost_preserves_null_when_price_missing():

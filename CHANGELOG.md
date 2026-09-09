@@ -1,5 +1,14 @@
 ## 2026-09-08 — Recovery and native dispatch repairs (unreleased)
 
+- Validate session-ledger layouts on every open, including resumed `create=True`
+  calls. Transactionally backfill supported pre-chain ledgers while preserving
+  original event bytes and a consistent snapshot; label the chain origin as
+  derived, never as proof of pre-migration authenticity. Refuse partial chains
+  and preserve manifest timestamps and host-artifact references.
+- Export finite mSPRT likelihood overflow in log space and distinguish it from
+  the zero-variance infinity limit and unavailable evidence. Paired-economics
+  JSON rejects nonstandard numeric constants instead of overwriting malformed
+  historical exports.
 - Require public recovery to succeed before VMem coverage permits reclamation,
   including previously covered objects whose backing artifacts disappear.
 - Preserve UTF-8 input bytes and mixed line endings through VMem and firewall

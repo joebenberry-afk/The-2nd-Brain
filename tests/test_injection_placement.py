@@ -125,6 +125,9 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
             self.middleware: dict[str, Any] = {}
             self.tools: dict[str, Any] = {}
 
+        def get_config(self, key: str, default: Any = None) -> Any:
+            return self.settings.get(key, default)
+
         def register_hook(self, name: str, cb: Any) -> None:
             self.hooks[name] = cb
 
