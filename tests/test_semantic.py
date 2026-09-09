@@ -1,6 +1,7 @@
 """Tests for the semantic memory cortex (Phase 10)."""
 
 import re
+import sqlite3
 import uuid
 
 import pytest
@@ -321,3 +322,89 @@ def test_supersede_retired_version_keeps_original_time(brain_home):
     history = semantic.history(brain_home, mid)
     retired = next(v for v in history if v["version"] == 1)
     assert retired["created_at"] == v1_created
+
+
+def test_invalid_retrieval_numeric_config_preserves_search_results(brain_home):
+    mid = _add(
+        brain_home,
+        title="Normalization safety",
+        body="normalization safety marker",
+    )
+    baseline = semantic.search_memories(brain_home, "normalization safety marker")
+    config = brain_home / "config" / "retrieval.toml"
+    config.write_text(
+        "[scoring.weights]\n"
+        "bm25_relevance_scale = 0\n"
+        "title_boost_exact = nan\n"
+        "relevance_cap = inf\n",
+        encoding="utf-8",
+    )
+    invalid = semantic.search_memories(brain_home, "normalization safety marker")
+    assert mid in {row["memory_id"] for row in invalid}
+    assert [(row["memory_id"], row["_score"]) for row in invalid] == [
+        (row["memory_id"], row["_score"]) for row in baseline
+    ]
+
+
+def test_project_filter_exact_id_parity_between_fts_and_linear(brain_home, monkeypatch):
+    mid = _add(
+        brain_home,
+        title="Canonical project identity",
+        body="exact project authorization marker",
+        project_id="Project-Exact",
+    )
+    assert mid in {
+        row["memory_id"]
+        for row in semantic.search_memories(
+            brain_home, "exact project authorization", project_id="Project-Exact"
+        )
+    }
+    assert mid not in {
+        row["memory_id"]
+        for row in semantic.search_memories(
+            brain_home, "exact project authorization", project_id="project-exact"
+        )
+    }
+    monkeypatch.setattr(semantic, "_fts_available", lambda conn: False)
+    assert mid not in {
+        row["memory_id"]
+        for row in semantic.search_memories(
+            brain_home, "exact project authorization", project_id="project-exact"
+        )
+    }
+
+
+def test_failed_index_update_abstains_until_projection_rebuilt(brain_home, monkeypatch):
+    from second_brain.hybrid_retrieval import HybridCascadeRetriever
+
+    memory_id = _add(
+        brain_home, title="Projection recovery", body="projection recovery obsolete guidance"
+    )
+    semantic.curate(brain_home, memory_id, status="current")
+    retriever = HybridCascadeRetriever()
+    original = retriever.retrieve(brain_home, "projection recovery")
+    assert original.matches[0].body.strip() == "projection recovery obsolete guidance"
+
+    def failed_index(*_args, **_kwargs):
+        raise sqlite3.OperationalError("controlled derived-index failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(semantic, "_index_memory", failed_index)
+        semantic.supersede(
+            brain_home,
+            memory_id,
+            new_body="projection recovery current guidance",
+            change_note="verified replacement",
+        )
+    assert (
+        semantic._body_text(brain_home, semantic.show_memory(brain_home, memory_id)["row"]).strip()
+        == "projection recovery current guidance"
+    )
+    stale = retriever.retrieve(brain_home, "projection recovery")
+    assert stale.decision == "NO_INJECTION"
+    assert stale.matches == []
+
+    semantic.index_memory(brain_home, memory_id)
+    recovered = retriever.retrieve(brain_home, "projection recovery")
+    assert recovered.decision == "INJECT"
+    assert recovered.matches[0].body.strip() == "projection recovery current guidance"

@@ -20,6 +20,7 @@ Short-Circuiting & Negative Cache (§9.2, §9.3):
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import sqlite3
 import time
@@ -346,7 +347,40 @@ class HybridCascadeRetriever:
     def _number(value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
-        return float(value)
+        result = float(value)
+        return result if math.isfinite(result) else None
+
+    @classmethod
+    def _canonical_vector_row(
+        cls, home: Path, candidate: object, *, project_id: str | None
+    ) -> dict[str, Any] | None:
+        if not isinstance(candidate, dict):
+            return None
+        memory_id = candidate.get("memory_id")
+        if not isinstance(memory_id, str) or not memory_id:
+            return None
+        row = semantic._row(home, memory_id)
+        if row is None:
+            return None
+        if not semantic._row_passes_filters(row, project_id=project_id, include_history=False):
+            return None
+        version = candidate.get("current_version")
+        file_hash = candidate.get("file_hash")
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != row.get("current_version")
+            or not isinstance(file_hash, str)
+            or not file_hash
+            or file_hash != semantic._file_hash(home, row)
+        ):
+            return None
+        score = cls._number(candidate.get("score"))
+        if score is None:
+            return None
+        row["_score"] = score
+        row["_body"] = semantic._body_text(home, row)
+        return row
 
     def _gate_passes(
         self,
@@ -383,7 +417,7 @@ class HybridCascadeRetriever:
         clean_q = query.strip()
         lane = lane if lane in self._LANES else "semantic"
         self._last_home = home_path
-        if not clean_q or clean_q.lower() in _TRIVIAL_QUERIES:
+        if top_k <= 0 or not clean_q or clean_q.lower() in _TRIVIAL_QUERIES:
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
                 query=query,
@@ -393,21 +427,23 @@ class HybridCascadeRetriever:
                 latency_ms=lat,
                 short_circuited=True,
                 decision="NO_INJECTION",
-                reason="TRIVIAL_TASK",
+                reason="NO_RELEVANT_MEMORY" if top_k <= 0 else "TRIVIAL_TASK",
             )
-
         epoch = self._epoch(home_path)
         config = self._config(home_path)
         gate = config.gate
         q_hash = self._query_hash(clean_q)
         project_key = project_id or ""
+        # Callback projections have no stable generation in the lexical cache key.
+        cached = None
         try:
-            cache_conn = self._cache_conn(home_path)
-            cached = cache_conn.execute(
-                "SELECT 1 FROM negative_cache WHERE query_hash = ? AND project_id = ? "
-                "AND lane = ? AND retrieval_config_version = ? AND memory_epoch = ?",
-                (q_hash, project_key, lane, gate.config_version, epoch),
-            ).fetchone()
+            if vector_searcher is None:
+                cache_conn = self._cache_conn(home_path)
+                cached = cache_conn.execute(
+                    "SELECT 1 FROM negative_cache WHERE query_hash = ? AND project_id = ? "
+                    "AND lane = ? AND retrieval_config_version = ? AND memory_epoch = ?",
+                    (q_hash, project_key, lane, gate.config_version, epoch),
+                ).fetchone()
         except (OSError, sqlite3.Error):
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(
@@ -446,7 +482,7 @@ class HybridCascadeRetriever:
                     row = mem_data.get("row", mem_data)
                     # Authority safety check: policy lane cannot inject advisory memory
                     authority_ceiling = row.get("authority_ceiling") or "advisory"
-                    if lane == "policy" and authority_ceiling != "policy":
+                    if not semantic._lane_authorized(row, lane):
                         lat = (time.perf_counter() - t0) * 1000.0
                         return CascadeResult(
                             query=query,
@@ -459,7 +495,19 @@ class HybridCascadeRetriever:
                             decision="NO_INJECTION",
                             reason="AUTHORITY_VIOLATION",
                         )
-
+                    if not semantic._project_matches(row, project_id):
+                        lat = (time.perf_counter() - t0) * 1000.0
+                        return CascadeResult(
+                            query=query,
+                            project_id=project_id,
+                            tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
+                            matches=[],
+                            vector_invoked=False,
+                            latency_ms=lat,
+                            short_circuited=True,
+                            decision="NO_INJECTION",
+                            reason="PROJECT_MISMATCH",
+                        )
                     # Status safety check: rejected and archived memories excluded
                     if row.get("evidence_grade") == "REJECTED" or row.get("status") in (
                         "archived",
@@ -496,7 +544,6 @@ class HybridCascadeRetriever:
                         "authority": 1.0
                         if authority_ceiling in ("project_rule", "policy")
                         else 0.8,
-                        "scope": 1.0,
                         "freshness": 1.0,
                         "contradiction": 0.5 if has_contradiction else 1.0,
                         "activation_need": 1.0,
@@ -510,7 +557,7 @@ class HybridCascadeRetriever:
                         score=1.0,
                         tier_resolved=RetrievalTier.TIER_0_EXACT_REF,
                         summary=row.get("summary", ""),
-                        body=mem_data.get("body", ""),
+                        body=semantic._body_text(home_path, row),
                         confidence=1.0,
                         raw_row=dict(row),
                         score_components=components,
@@ -550,6 +597,8 @@ class HybridCascadeRetriever:
 
         matches: list[RetrievalMatch] = []
         contradictions_list: list[dict[str, Any]] = []
+        if fts_rows:
+            fts_rows = [m for m in fts_rows if semantic._lane_authorized(m, lane)]
         if fts_rows:
             query_tokens = set(re.findall(r"\b\w+\b", clean_q.lower()))
             for m in fts_rows:
@@ -606,56 +655,72 @@ class HybridCascadeRetriever:
             except Exception:
                 retrieval_error = True
                 vec_res = []
-            if vec_res:
-                matches = [
-                    RetrievalMatch(
-                        memory_id=m["memory_id"],
-                        title=m.get("title", ""),
-                        score=self._number(m.get("score")),
-                        tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                        summary=m.get("summary", ""),
-                        confidence=self._number(m.get("score")),
+            by_id: dict[str, dict[str, Any]] = {}
+            for candidate in vec_res:
+                row = self._canonical_vector_row(home_path, candidate, project_id=project_id)
+                if row is not None:
+                    previous = by_id.get(row["memory_id"])
+                    if previous is None or row["_score"] > previous["_score"]:
+                        by_id[row["memory_id"]] = row
+            canonical_rows = list(by_id.values())
+            semantic._attach_contradictions(
+                canonical_rows, semantic._contradiction_map(canonical_rows)
+            )
+            vector_rows = sorted(
+                (row for row in canonical_rows if semantic._lane_authorized(row, lane)),
+                key=lambda row: (
+                    -row["_score"],
+                    -{"advisory": 0, "project_rule": 1, "policy": 2}.get(
+                        str(row.get("authority_ceiling") or ""), -1
+                    ),
+                    row["memory_id"],
+                ),
+            )[:top_k]
+            if vector_rows:
+                vector_matches = []
+                vector_contradictions = []
+                vector_query_tokens: set[str] = set()
+                for row in vector_rows:
+                    components, has_c, details = _compute_score_components(
+                        home_path, row, vector_query_tokens, project_id
                     )
-                    for m in vec_res
-                ]
-                vec_scores = [m.score for m in matches]
-                if self._gate_passes(vec_scores, gate, lane, confidence_threshold):
-                    lat = (time.perf_counter() - t0) * 1000.0
-                    return CascadeResult(
-                        query=query,
-                        project_id=project_id,
-                        tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                        matches=matches,
-                        vector_invoked=True,
-                        latency_ms=lat,
-                        short_circuited=False,
-                        decision="INJECT",
-                        reason="VECTOR_FALLBACK_MATCH",
+                    vector_matches.append(
+                        RetrievalMatch(
+                            memory_id=row["memory_id"],
+                            title=row.get("title", ""),
+                            score=row["_score"],
+                            tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
+                            summary=row.get("summary", ""),
+                            body=row["_body"],
+                            confidence=row["_score"],
+                            raw_row=row,
+                            score_components=components,
+                            has_contradiction=has_c,
+                            contradiction_details=details,
+                        )
                     )
-                if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}:
-                    lat = (time.perf_counter() - t0) * 1000.0
-                    return CascadeResult(
-                        query=query,
-                        project_id=project_id,
-                        tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                        matches=matches,
-                        vector_invoked=True,
-                        latency_ms=lat,
-                        short_circuited=False,
-                        decision="INJECT",
-                        reason="VECTOR_FALLBACK_MATCH",
-                    )
-                lat = (time.perf_counter() - t0) * 1000.0
+                    if has_c:
+                        vector_contradictions.append(
+                            {
+                                "memory_id": row["memory_id"],
+                                "title": row.get("title", ""),
+                                "details": details,
+                            }
+                        )
+                inject = self._gate_passes(
+                    [match.score for match in vector_matches], gate, lane, confidence_threshold
+                ) or gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
                 return CascadeResult(
                     query=query,
                     project_id=project_id,
                     tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
-                    matches=matches,
+                    matches=vector_matches,
                     vector_invoked=True,
-                    latency_ms=lat,
+                    latency_ms=(time.perf_counter() - t0) * 1000.0,
                     short_circuited=False,
-                    decision="NO_INJECTION",
-                    reason="LOW_CONFIDENCE",
+                    decision="INJECT" if inject else "NO_INJECTION",
+                    reason="VECTOR_FALLBACK_MATCH" if inject else "LOW_CONFIDENCE",
+                    contradictions=vector_contradictions,
                 )
 
         if retrieval_error:
@@ -678,7 +743,7 @@ class HybridCascadeRetriever:
                 project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
                 matches=matches,
-                vector_invoked=False,
+                vector_invoked=vector_searcher is not None,
                 latency_ms=lat,
                 short_circuited=True,
                 decision="INJECT"
@@ -692,14 +757,16 @@ class HybridCascadeRetriever:
             )
             return result
         try:
-            cache_conn = self._cache_conn(home_path)
-            cache_conn.execute(
-                "INSERT OR IGNORE INTO negative_cache("
-                "query_hash, project_id, lane, retrieval_config_version, memory_epoch, created_at)"
-                " VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                (q_hash, project_key, lane, gate.config_version, epoch),
-            )
-            cache_conn.commit()
+            if vector_searcher is None:
+                cache_conn = self._cache_conn(home_path)
+                cache_conn.execute(
+                    "INSERT OR IGNORE INTO negative_cache("
+                    "query_hash, project_id, lane, retrieval_config_version, "
+                    "memory_epoch, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                    (q_hash, project_key, lane, gate.config_version, epoch),
+                )
+                cache_conn.commit()
         except (OSError, sqlite3.Error):
             lat = (time.perf_counter() - t0) * 1000.0
             return CascadeResult(

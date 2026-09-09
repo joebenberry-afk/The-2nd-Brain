@@ -611,6 +611,7 @@ def test_retrieval_profile_does_not_invent_provider_outcomes(brain_home, tmp_pat
     from scripts import run_retrieval_economics as runner
 
     from second_brain import semantic
+    from second_brain.hybrid_retrieval import HybridCascadeRetriever
 
     memory_id = semantic.add_memory(
         brain_home,
@@ -638,7 +639,22 @@ def test_retrieval_profile_does_not_invent_provider_outcomes(brain_home, tmp_pat
     row = report["runs"][0]
     assert row["baseline"]["selected_memory_ids"] == [memory_id]
     assert row["candidate"]["selected_memory_ids"] == [memory_id]
-    assert row["baseline"]["context_chars"] == row["candidate"]["context_chars"]
+    expected_body = "\n\nUse WAL and a bounded busy timeout for concurrent SQLite readers.\n"
+    baseline_matches = semantic.search_memories(
+        brain_home,
+        "SQLite concurrency",
+        project_id="retrieval-profile",
+        top_k=4,
+        include_duplicates=True,
+    )
+    candidate_matches = (
+        HybridCascadeRetriever()
+        .retrieve(brain_home, "SQLite concurrency", project_id="retrieval-profile", top_k=4)
+        .matches
+    )
+    assert baseline_matches[0]["_body"] == expected_body
+    assert candidate_matches[0].body == expected_body
+    assert row["baseline"]["context_chars"] == row["candidate"]["context_chars"] == 89
 
     retained = output_path.read_bytes()
     with pytest.raises(FileExistsError):

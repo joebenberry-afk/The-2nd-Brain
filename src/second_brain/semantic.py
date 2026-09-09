@@ -359,6 +359,11 @@ def _validate_origin(origin_class: str, origin_root_sha: str | None) -> tuple[st
     return origin_class, origin_root_sha, ceiling
 
 
+def _lane_authorized(row: dict, lane: str) -> bool:
+    """Policy permission comes only from explicit canonical authority metadata."""
+    return lane != "policy" or row.get("authority_ceiling") in {"project_rule", "policy"}
+
+
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
 
@@ -1184,6 +1189,7 @@ def _index_memory(home: Path, memory_id: str) -> bool:
     conn = db.connect(_dbfile(home))
     try:
         _index_memory_row(conn, home, row, file_hash=file_hash)
+        db.bump_memory_epoch(conn)
         conn.commit()
         return True
     finally:
@@ -1941,7 +1947,10 @@ _DEFAULT_RETRIEVAL_CONFIG = RetrievalConfig()
 
 
 def _coerce_float(value: object, fallback: float) -> float:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else fallback
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    result = float(value)
+    return result if math.isfinite(result) else fallback
 
 
 def _coerce_int(value: object, fallback: int) -> int:
@@ -1956,7 +1965,9 @@ def _coerce_scores(value: object, fallback: dict[str, float]) -> dict[str, float
     out = dict(fallback)
     for key, item in value.items():
         if isinstance(key, str) and isinstance(item, (int, float)) and not isinstance(item, bool):
-            out[key] = float(item)
+            score = float(item)
+            if math.isfinite(score):
+                out[key] = score
     return out
 
 
@@ -2155,8 +2166,21 @@ def _relevance_score(
     title_tokens = _score_tokens(row.get("title") or "")
     body_tokens = _score_tokens(_body_text_for_dedupe(row))
     raw = row.get("_bm25")
-    if bm25_best is not None and raw is not None:
-        base = math.exp(-(float(raw) - bm25_best) / weights.bm25_relevance_scale)
+    scale = weights.bm25_relevance_scale
+    if (
+        isinstance(scale, bool)
+        or not isinstance(scale, (int, float))
+        or not math.isfinite(float(scale))
+        or scale <= 0
+    ):
+        scale = _BM25_RELEVANCE_SCALE
+    if (
+        bm25_best is not None
+        and isinstance(raw, (int, float))
+        and not isinstance(raw, bool)
+        and math.isfinite(float(raw))
+    ):
+        base = math.exp(-(float(raw) - bm25_best) / scale)
     elif not query_tokens:
         base = 1.0
     else:
@@ -2429,6 +2453,18 @@ def _filter_sql(project_id: str | None, include_history: bool) -> tuple[str, lis
     return " AND ".join(clauses), params
 
 
+def _project_matches(row: dict, project_id: str | None) -> bool:
+    if project_id is None:
+        return True
+    raw_project = row.get("project_id")
+    sentinel = str(raw_project or "").strip().lower()
+    return bool(
+        raw_project == project_id
+        or row.get("scope") == "global"
+        or (row.get("scope") == "domain" and sentinel in {"", "default", "unknown"})
+    )
+
+
 def _row_passes_filters(row: dict, *, project_id: str | None, include_history: bool) -> bool:
     """Same Phase 7 filter semantics for the linear fallback path."""
     if row.get("evidence_grade") == "REJECTED":
@@ -2436,14 +2472,7 @@ def _row_passes_filters(row: dict, *, project_id: str | None, include_history: b
     status = row.get("status")
     if status in ("archived", "superseded") and not include_history:
         return False
-    if project_id is not None:
-        row_project = str(row.get("project_id") or "").strip().lower()
-        return bool(
-            row_project == str(project_id).strip().lower()
-            or row.get("scope") == "global"
-            or (row.get("scope") == "domain" and row_project in {"", "default", "unknown"})
-        )
-    return True
+    return _project_matches(row, project_id)
 
 
 def _search_fts(
@@ -2472,12 +2501,24 @@ def _search_fts(
     # _body is always selected: Phase 8 dedupe and Phase 10 contradiction
     # surfacing both need the clean body text (comparison path included).
     rows = conn.execute(
-        "SELECT m.*, f.body AS _body, bm25(memory_fts) AS _bm25 FROM memory_fts f "
+        "SELECT m.*, f.body AS _body, bm25(memory_fts) AS _bm25, "
+        "i.file_hash AS _indexed_file_hash FROM memory_fts f "
         "JOIN memories m ON m.memory_id = f.memory_id "
+        "JOIN memory_index i ON i.memory_id = m.memory_id "
+        "AND i.current_version = m.current_version "
         f"WHERE memory_fts MATCH ? AND {where} ORDER BY bm25(memory_fts), m.memory_id",
         [match_expr, *params],
     ).fetchall()
-    rows = [dict(row) for row in rows]
+    current_rows = []
+    canonical_home = Path(home) if home is not None else None
+    for indexed in rows:
+        row = dict(indexed)
+        indexed_hash = row.pop("_indexed_file_hash")
+        if canonical_home is None or (
+            indexed_hash and indexed_hash == _file_hash(canonical_home, row)
+        ):
+            current_rows.append(row)
+    rows = current_rows
     if query_terms:
         required = msm_required if msm_required is not None else math.ceil(0.5 * len(query_terms))
         rows = [row for row in rows if _query_term_hits(row, query_terms) >= required]
