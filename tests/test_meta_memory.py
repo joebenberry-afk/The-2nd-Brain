@@ -91,6 +91,61 @@ def test_reconsolidation_preserves_evidence(brain_home: Path) -> None:
     assert Path(show["path"]).is_file()
 
 
+def test_leave_unresolved_preserves_evidence_versions_and_lineage(brain_home: Path) -> None:
+    parent = semantic.add_memory(
+        brain_home,
+        "Unresolved rules",
+        "Two unresolved rules.",
+        sources=[{"ref": "test:original-observation"}],
+    )
+    split = reconsolidation.propose_plan(
+        brain_home,
+        "split",
+        parent,
+        parts=[
+            {"title": "First rule", "body": "First unresolved rule."},
+            {"title": "Second rule", "body": "Second unresolved rule."},
+        ],
+    )
+    created = reconsolidation.apply_plan(brain_home, split)["applied_result"]["created_memory_ids"]
+
+    def memory_snapshot() -> tuple:
+        conn = db.connect(db.db_path(brain_home), readonly=True)
+        try:
+            rows = tuple(
+                tuple(tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"))
+                for table in ("memories", "memory_sources", "memory_versions")
+            )
+        finally:
+            conn.close()
+        bodies = tuple(
+            Path(semantic.show_memory(brain_home, mid)["path"]).read_bytes()
+            for mid in (parent, *created)
+        )
+        return rows, bodies
+
+    before = memory_snapshot()
+    plan = reconsolidation.propose_plan(
+        brain_home,
+        "leave_unresolved",
+        created[0],
+        change_note="Independent evidence does not yet resolve this rule.",
+    )
+    applied = reconsolidation.apply_plan(brain_home, plan)
+    assert applied["status"] == "applied"
+    assert applied["applied_result"]["resolution"] == "unresolved"
+    assert memory_snapshot() == before
+    reverted = reconsolidation.revert_plan(brain_home, applied)
+    assert reverted["status"] == "reverted"
+    assert memory_snapshot() == before
+    choices = [
+        row["chosen"]
+        for row in decisions.list_decisions(brain_home, kind="reconsolidation")
+        if row["chosen"].get("plan_id") == plan["plan_id"]
+    ]
+    assert {"applied", "reverted"} <= {choice.get("status") for choice in choices}
+
+
 def test_contradiction_prevents_silent_strengthening(brain_home: Path) -> None:
     """Contradiction signals strictly block strengthening even with high ACT-R activation."""
     mid = semantic.add_memory(
@@ -192,16 +247,43 @@ def test_archive_plan_mutates_status_and_reverts(brain_home: Path) -> None:
         title="Archive candidate",
         body="Retain this history but exclude it from default retrieval.",
         grade="TESTED",
+        sources=[{"ref": "test:archived-observation", "path": "src/original.py"}],
+        origin_class="LOCAL_REPO",
+        origin_root_sha="a" * 64,
     )
     semantic.curate(brain_home, mid, status="current")
+    before = semantic.show_memory(brain_home, mid)
+    before_sources = semantic._sources(brain_home, mid)
     plan = reconsolidation.propose_plan(brain_home, "archive", mid)
     applied = reconsolidation.apply_plan(brain_home, plan)
     assert semantic.show_memory(brain_home, mid)["row"]["status"] == "archived"
     assert semantic.list_memories(brain_home, status="current") == []
+    archived = semantic.show_memory(brain_home, mid)
+    assert archived["path"] == before["path"]
+    assert archived["body"].split("---", 2)[-1] == before["body"].split("---", 2)[-1]
+    assert semantic._sources(brain_home, mid) == before_sources
+    changed_fields = {"status", "updated_at"}
+    assert {key: value for key, value in archived["row"].items() if key not in changed_fields} == {
+        key: value for key, value in before["row"].items() if key not in changed_fields
+    }
+    assert [(row["version"], row["body_path"]) for row in semantic.history(brain_home, mid)] == [
+        (before["row"]["current_version"], before["row"]["body_path"])
+    ]
+    assert semantic.search_memories(brain_home, "history") == []
+    assert [
+        row["memory_id"]
+        for row in semantic.search_memories(brain_home, "history", include_history=True)
+    ] == [mid]
 
     reverted = reconsolidation.revert_plan(brain_home, applied)
     assert reverted["status"] == "reverted"
     assert semantic.show_memory(brain_home, mid)["row"]["status"] == "current"
+    restored = semantic.show_memory(brain_home, mid)
+    assert restored["body"] == before["body"]
+    assert semantic._sources(brain_home, mid) == before_sources
+    assert {key: value for key, value in restored["row"].items() if key != "updated_at"} == {
+        key: value for key, value in before["row"].items() if key != "updated_at"
+    }
 
 
 @pytest.mark.parametrize("action", ["strengthen", "narrow", "update", "split", "merge"])
@@ -399,9 +481,12 @@ def test_merge_inherits_weakest_authority_and_guards_every_output(brain_home: Pa
     assert "Later edit." in semantic.show_memory(brain_home, next_merged)["body"]
 
 
-def test_plan_cannot_apply_after_evidence_or_version_changes(brain_home: Path) -> None:
+@pytest.mark.parametrize("action", ["update", "leave_unresolved"])
+def test_plan_cannot_apply_after_evidence_or_version_changes(brain_home: Path, action: str) -> None:
     mid = semantic.add_memory(brain_home, "Mutable fact", "Before.")
-    plan = reconsolidation.propose_plan(brain_home, "update", mid, new_body="Proposed.")
+    plan = reconsolidation.propose_plan(
+        brain_home, action, mid, new_body="Proposed." if action == "update" else None
+    )
     semantic.curate(brain_home, mid, sources=[{"ref": "test:intervening"}], verify=False)
     with pytest.raises(BrainError, match="Stale"):
         reconsolidation.apply_plan(brain_home, plan)

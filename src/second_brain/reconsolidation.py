@@ -34,6 +34,7 @@ RECONSOLIDATION_ACTIONS: tuple[str, ...] = (
     "supersede",
     "demote",
     "archive",
+    "leave_unresolved",
 )
 HOT_TTL_DAYS = 7
 WARM_TTL_DAYS = 30
@@ -921,6 +922,13 @@ def apply_plan(
             raise BrainError(f"Memory {memory_id} is protected and cannot be archived")
         archived = semantic.curate(home_p, memory_id, status="archived", verify=False)
         applied_result = {"status": archived["status"]}
+    elif action == "leave_unresolved":
+        # Deferral is an auditable decision, not a memory/evidence rewrite.
+        applied_result = {
+            "resolution": "unresolved",
+            "memory_id": memory_id,
+            "reason": params.get("change_note"),
+        }
     else:
         raise BrainError(f"Unsupported reconsolidation action: {action}")
 
@@ -1037,7 +1045,7 @@ def revert_plan(
             semantic.curate(home_p, mid, status="archived", verify=False)
         for mid, state in before_states.items():
             semantic.curate(home_p, mid, status=state["status"], verify=False)
-    else:
+    elif action != "leave_unresolved":
         raise BrainError(f"Unsupported reconsolidation action: {action}")
 
     updated = dict(plan)

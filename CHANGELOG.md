@@ -1,3 +1,16 @@
+## 2026-09-09 — Bounded qualification closure (unreleased)
+
+- Restore explicit `leave_unresolved` reconsolidation plans. Applying or
+  reverting a deferral preserves memory bodies, versions, sources and lineage;
+  stale-plan checks and decision-history records remain active.
+- Add source/config-bound observations to the existing qualification producers.
+  Only explicitly permitted Gate clauses can receive test evidence; failures,
+  skipped cases, unknown nodes and stale identities remain unresolved.
+- Capture current native read-reuse studies with complete controller/worker
+  accounting and session-bound acceptance. Reject extra commands and incomplete
+  runs; answer sidecars cannot authorize success. Local retrieval profiling never
+  invents provider usage, task success or savings.
+
 ## 2026-09-08 — Recovery and native dispatch repairs (unreleased)
 
 - Validate session-ledger layouts on every open, including resumed `create=True`

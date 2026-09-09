@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -698,3 +699,184 @@ def test_artifact_hash_integrity_rejects_evidence_ref_outside_output_dir(tmp_pat
     result = check_artifact_hash_integrity(manifest, out_dir)
     assert result["ok"] is False
     assert ref in result["detail"]["missing"]
+
+
+def test_v2_export_writes_strict_artifact_and_classified_raw_wrapper(brain_home):
+    from datetime import UTC, datetime, timedelta
+
+    identity = RUNNER.qualification_identity(brain_home)
+    identity["captured_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    capture = brain_home / "capture.stdout"
+    capture.write_bytes(b"selected test output\n")
+    capture_ref = {
+        "path": "capture.stdout",
+        "sha256": hashlib.sha256(capture.read_bytes()).hexdigest(),
+        "type": "stdout",
+    }
+    result = RUNNER.export_v2_observation(
+        brain_home,
+        brain_home / "outputs" / "reports" / "v2" / "v2-a",
+        phase="v2-a",
+        requirement="trusted_retrieval_freshness",
+        evidence_type="test",
+        feature="focused-tests",
+        observed_data={
+            "execution": "pytest",
+            "case_outcomes": [{"outcome": "passed", "note": "λ 日本語"}],
+        },
+        gate_observations={
+            "v1_safe_defaults_unchanged": {"selected_cases_passed": True},
+        },
+        identity=identity,
+        producer=REPO_ROOT / "scripts" / "verify_v1_p4_qualification.py",
+        raw_refs=[capture_ref],
+    )
+
+    strict = RUNNER._strict_verifier_module()
+    gate_hash = strict._authority_gate_hashes()[0][("v2-a", "trusted_retrieval_freshness")]
+    arguments = {
+        "key": ("v2-a", "trusted_retrieval_freshness"),
+        "source_commit": identity["source_commit"],
+        "source_tree_sha256": identity["source_tree_sha256"],
+        "config_sha256": identity["config_sha256"],
+        "gate_sha256": gate_hash,
+        "latest_observed_at": datetime.now(UTC),
+    }
+    errors, coverage, artifact = strict._validate_evidence_artifact(brain_home, result, **arguments)
+    assert errors == []
+    assert coverage == {"v1_safe_defaults_unchanged"}
+    assert datetime.fromisoformat(artifact["observed_at"]) > datetime.fromisoformat(
+        identity["captured_at"]
+    )
+    assert capture.read_bytes() == b"selected test output\n"
+    raw_ref = artifact["provenance"]["raw_evidence_refs"][0]
+    raw_path = brain_home / raw_ref["path"]
+    raw_path.write_text('{"observed_data":{"tampered":true}}', encoding="utf-8")
+    errors, _, _ = strict._validate_evidence_artifact(brain_home, result, **arguments)
+    assert errors
+
+
+def test_v2_export_refuses_overwrite_and_non_test_gate(brain_home):
+    identity = RUNNER.qualification_identity(brain_home)
+    kwargs = {
+        "phase": "v2-a",
+        "requirement": "trusted_retrieval_freshness",
+        "evidence_type": "test",
+        "feature": "focused-tests",
+        "observed_data": {"execution": "pytest"},
+        "gate_observations": {"v1_safe_defaults_unchanged": {"passed": True}},
+        "identity": identity,
+        "producer": REPO_ROOT / "scripts" / "verify_v1_p4_qualification.py",
+    }
+    out_dir = brain_home / "outputs" / "reports" / "v2" / "v2-a"
+    RUNNER.export_v2_observation(brain_home, out_dir, **kwargs)
+    with pytest.raises(FileExistsError):
+        RUNNER.export_v2_observation(brain_home, out_dir, **kwargs)
+
+    with pytest.raises(ValueError):
+        RUNNER.export_v2_observation(
+            brain_home,
+            brain_home / "outputs" / "reports" / "v2" / "bad",
+            **{
+                **kwargs,
+                "phase": "v2-b",
+                "requirement": "low_friction_io",
+                "gate_observations": {"real_supported_harness_paths": {"passed": True}},
+            },
+        )
+
+
+def test_junit_matching_real_parameterized_outcomes_and_missing(tmp_path, monkeypatch):
+    """A real pytest JUnit report keeps parameter outcomes and class scope exact."""
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_parameters.py").write_text(
+        """
+import pytest
+@pytest.mark.parametrize("value", ["pass", "fail", "skip"])
+def test_values(value):
+    if value == "skip":
+        pytest.skip("intentional")
+    assert value != "fail"
+
+
+@pytest.mark.parametrize("value", ["one", "two"])
+def test_all_pass(value):
+    assert value in {"one", "two"}
+
+
+class TestFirst:
+    def test_same(self):
+        assert True
+
+
+class TestSecond:
+    def test_same(self):
+        assert False
+""",
+        encoding="utf-8",
+    )
+    junit = tmp_path / "pytest.junit.xml"
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("PYTHON") and key.upper() != "PYTEST_ADDOPTS"
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml",
+            str(junit),
+            "-o",
+            "junit_family=xunit1",
+            "tests/test_parameters.py",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    monkeypatch.setattr(VERIFIER, "REPO_ROOT", tmp_path)
+    cases = VERIFIER._parse_junit_cases(junit)
+    assert VERIFIER._junit_outcome("tests/test_parameters.py::test_all_pass", cases)[0] == "passed"
+
+    outcome, matches = VERIFIER._junit_outcome("tests/test_parameters.py::test_values", cases)
+    assert outcome == "failed"
+    assert {case["name"] for case in matches} == {
+        "test_values[pass]",
+        "test_values[fail]",
+        "test_values[skip]",
+    }
+    assert (
+        VERIFIER._junit_outcome("tests/test_parameters.py::test_values[pass]", cases)[0] == "passed"
+    )
+    assert (
+        VERIFIER._junit_outcome("tests/test_parameters.py::test_values[fail]", cases)[0] == "failed"
+    )
+    assert (
+        VERIFIER._junit_outcome("tests/test_parameters.py::test_values[skip]", cases)[0]
+        == "skipped"
+    )
+    assert VERIFIER._junit_outcome("tests/test_parameters.py::test_missing", cases)[0] == "missing"
+    assert (
+        VERIFIER._junit_outcome("tests/test_parameters.py::TestFirst::test_same", cases)[0]
+        == "passed"
+    )
+    assert (
+        VERIFIER._junit_outcome("tests/test_parameters.py::TestSecond::test_same", cases)[0]
+        == "failed"
+    )
+
+
+def test_v2_structure_ownership_uses_ast_and_entrypoint_metadata():
+    cli = VERIFIER._cli_ownership()
+    assert cli["path"] == "src/second_brain/cli.py"
+    assert cli["entrypoint"] == "second_brain.cli:main"
+    assert cli["v2_parser_owned"] is True
+    assert cli["v2_dispatch_owned"] is True
+    assert cli["competing_modules"] == []
+    assert VERIFIER._production_v2_definitions() == []

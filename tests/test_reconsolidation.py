@@ -49,11 +49,14 @@ def _days_ago(days):
 
 def test_record_retrieval_bumps_count(brain_home):
     mid = _memory(brain_home)
+    before = _row(brain_home, mid)
     rid1 = reconsolidation.record_retrieval(brain_home, mid, session_id="s1")
     rid2 = reconsolidation.record_retrieval(brain_home, mid, session_id="s1")
     row = _row(brain_home, mid)
     assert row["retrieval_count"] == 2
     assert row["last_retrieved_at"]
+    for field in ("heat", "strength", "storage_strength", "successful_retrieval_count"):
+        assert row[field] == before[field]
     conn = db.connect(db.db_path(brain_home))
     try:
         retrievals = conn.execute("SELECT * FROM memory_retrievals").fetchall()
