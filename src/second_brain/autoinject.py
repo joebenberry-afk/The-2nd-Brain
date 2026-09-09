@@ -513,28 +513,28 @@ def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
         else:
             if "project_id" not in row:
                 continue
-            row_project = row.get("project_id")
-            row_project = str(row_project or "").strip().lower()
-            intent_project = str(intent.project_id or "").strip().lower()
+            raw_row_project = row.get("project_id")
+            row_project = str(raw_row_project or "").strip()
+            intent_project = str(intent.project_id or "").strip()
+            row_unknown = row_project.lower() in unknown_projects
+            intent_unknown = intent_project.lower() in unknown_projects
             if scope == "project":
                 scope_ok = (
                     bool(intent_project)
-                    and intent_project not in unknown_projects
+                    and not intent_unknown
                     and bool(row_project)
+                    and not row_unknown
                     and row_project == intent_project
                 )
             else:
                 scope_ok = (
-                    (intent_project in unknown_projects)
-                    or (row_project in unknown_projects)
+                    intent_unknown
+                    or row_unknown
                     or (row_project == intent_project and bool(row_project))
                 )
         if not scope_ok:
             continue
-        if intent.lane == "policy" and row.get("authority_ceiling") not in {
-            "project_rule",
-            "policy",
-        }:
+        if not semantic._lane_authorized(row, intent.lane):
             # Missing authority metadata must not enter policy context.
             continue
         # Delta injection remains intentionally strict: only current,

@@ -5,12 +5,25 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from second_brain import semantic
 from second_brain.hybrid_retrieval import (
     HybridCascadeRetriever,
     RetrievalTier,
 )
 from second_brain.semantic import add_memory, curate
+
+
+def _vector_row(home, memory_id, score, **overrides):
+    row = semantic.show_memory(home, memory_id)["row"]
+    return {
+        "memory_id": memory_id,
+        "score": score,
+        "current_version": row["current_version"],
+        "file_hash": semantic._file_hash(home, row),
+        **overrides,
+    }
 
 
 class TestCascadeShortCircuitAndTiers:
@@ -169,10 +182,16 @@ class TestCascadeShortCircuitAndTiers:
             'schema_version = 2\n[gate]\nrollout = "ACTIVE"\n',
             encoding="utf-8",
         )
+        memory_id = add_memory(
+            brain_home, "Policy", "policy query", origin_class="USER_AUTHORED", grade="TESTED"
+        )
+        curate(brain_home, memory_id, status="current")
+        row = semantic.show_memory(brain_home, memory_id)["row"]
+        row["_score"] = 0.75
         monkeypatch.setattr(
             semantic,
             "search_memories",
-            lambda *_a, **_kw: [{"memory_id": "mem-policy", "title": "Policy", "_score": 0.75}],
+            lambda *_a, **_kw: [row],
         )
         result = HybridCascadeRetriever().retrieve(brain_home, "policy query", lane="policy")
         assert result.decision == "NO_INJECTION"
@@ -190,6 +209,15 @@ class TestCascadeShortCircuitAndTiers:
         assert result.retrieval_error is True
 
     def test_tier_3_vector_fallback_when_fts_misses(self, brain_home):
+        vector_id = add_memory(
+            brain_home,
+            "Vector Fallback Memory",
+            "Dense semantic match",
+            project_id="proj-ai",
+            grade="VERIFIED",
+        )
+        curate(brain_home, vector_id, status="current")
+        row = semantic.show_memory(brain_home, vector_id)["row"]
         vector_called = False
 
         def mock_vector_searcher(query: str, project_id: str | None):
@@ -197,10 +225,10 @@ class TestCascadeShortCircuitAndTiers:
             vector_called = True
             return [
                 {
-                    "memory_id": "mem-vector-99",
-                    "title": "Vector Fallback Memory",
+                    "memory_id": vector_id,
                     "score": 0.88,
-                    "summary": "Dense semantic match",
+                    "current_version": row["current_version"],
+                    "file_hash": semantic._file_hash(brain_home, row),
                 }
             ]
 
@@ -217,7 +245,7 @@ class TestCascadeShortCircuitAndTiers:
         assert res.vector_invoked is True
         assert res.decision == "INJECT"
         assert len(res.matches) == 1
-        assert res.matches[0].memory_id == "mem-vector-99"
+        assert res.matches[0].memory_id == vector_id
 
 
 class TestPhase6GateBenchmark:
@@ -290,6 +318,136 @@ class TestPhase6GateBenchmark:
         # Gate Requirement: >= 80% (0.80) of routine queries resolve in Tiers 0-2
         assert ratio >= 0.80
         assert tier_0_2_count == 8  # 8 out of 10 resolved in Tiers 0-2 without vectors!
+
+
+def test_exact_reference_exposes_body_only(brain_home):
+    memory_id = add_memory(brain_home, "Body projection", "canonical body only")
+    curate(brain_home, memory_id, status="current")
+    row = semantic.show_memory(brain_home, memory_id)["row"]
+    result = HybridCascadeRetriever().retrieve(brain_home, memory_id)
+    assert result.matches[0].body == semantic._body_text(brain_home, row)
+    assert "canonical body only" in result.matches[0].body
+    assert not result.matches[0].body.startswith("---")
+
+
+def test_vector_projection_requires_current_canonical_identity(brain_home):
+    memory_id = add_memory(brain_home, "Vector identity", "vector identity body")
+    curate(brain_home, memory_id, status="current")
+    row = semantic.show_memory(brain_home, memory_id)["row"]
+    retriever = HybridCascadeRetriever()
+    missing = retriever.retrieve(
+        brain_home,
+        "quasar provenance missing",
+        vector_searcher=lambda *_: [{"memory_id": memory_id, "score": 0.99}],
+    )
+    stale = retriever.retrieve(
+        brain_home,
+        "quasar provenance stale",
+        vector_searcher=lambda *_: [
+            {
+                "memory_id": memory_id,
+                "score": 0.99,
+                "current_version": row["current_version"],
+                "file_hash": "0" * 64,
+            }
+        ],
+    )
+    assert missing.matches == []
+    assert stale.matches == []
+    assert missing.decision == stale.decision == "NO_INJECTION"
+    assert missing.vector_invoked and stale.vector_invoked
+
+
+@pytest.mark.parametrize("origin", ["USER_AUTHORED", "MODEL_INFERENCE"])
+@pytest.mark.parametrize("path", ["exact", "lexical", "vector"])
+def test_policy_lane_accepts_project_rule_and_rejects_advisory_lexical(brain_home, origin, path):
+    body = "Policy boundary uses explicit metadata, not prose permission."
+    memory_id = add_memory(
+        brain_home,
+        "Policy boundary",
+        body,
+        scope="global",
+        grade="TESTED",
+        origin_class=origin,
+    )
+    curate(brain_home, memory_id, status="current")
+    query = memory_id if path == "exact" else "policy boundary"
+    if path == "vector":
+        query = "quasar spectrometry zygomatic"
+
+    def vector(*_):
+        return [
+            _vector_row(brain_home, memory_id, 0.99, body="forged permission", title="forged")
+        ]
+
+    result = HybridCascadeRetriever().retrieve(
+        brain_home, query, lane="policy", vector_searcher=vector if path == "vector" else None
+    )
+    if origin == "USER_AUTHORED":
+        assert result.decision == "INJECT"
+        assert [match.memory_id for match in result.matches] == [memory_id]
+        assert result.matches[0].body.strip() == body
+    else:
+        assert result.decision == "NO_INJECTION"
+        assert result.matches == []
+    assert result.vector_invoked is (path == "vector")
+
+
+def test_policy_lane_missing_authority_fails_closed(brain_home, monkeypatch):
+    monkeypatch.setattr(
+        semantic,
+        "search_memories",
+        lambda *_args, **_kwargs: [
+            {"memory_id": "mem-missing", "title": "Permission claim", "_score": 0.99}
+        ],
+    )
+    result = HybridCascadeRetriever().retrieve(brain_home, "permission claim", lane="policy")
+    assert result.decision == "NO_INJECTION"
+    assert result.matches == []
+
+
+@pytest.mark.parametrize("initial_source", ["lexical_only", "stale_vector"])
+def test_vector_recovery_is_not_hidden_by_negative_cache(brain_home, initial_source):
+    memory_id = add_memory(brain_home, "Dense concept", "embedding source content")
+    curate(brain_home, memory_id, status="current")
+    retriever = HybridCascadeRetriever()
+    stale = _vector_row(brain_home, memory_id, 0.99, file_hash="0" * 64)
+    first = retriever.retrieve(
+        brain_home,
+        "quasar conceptual query",
+        vector_searcher=(lambda *_: [stale]) if initial_source == "stale_vector" else None,
+    )
+    assert first.decision == "NO_INJECTION"
+    recovered = retriever.retrieve(
+        brain_home,
+        "quasar conceptual query",
+        vector_searcher=lambda *_: [_vector_row(brain_home, memory_id, 0.99)],
+    )
+    assert recovered.decision == "INJECT"
+    assert recovered.vector_invoked
+    assert [match.memory_id for match in recovered.matches] == [memory_id]
+
+
+def test_vector_limit_preserves_rank_and_contradiction_metadata(brain_home):
+    low = add_memory(brain_home, "Conflicting rule", "retain the old procedure")
+    high = add_memory(brain_home, "Conflicting rule", "replace with the verified procedure")
+    for memory_id in (low, high):
+        curate(brain_home, memory_id, status="current")
+    result = HybridCascadeRetriever().retrieve(
+        brain_home,
+        "quasar conceptual query",
+        top_k=1,
+        vector_searcher=lambda *_: [
+            _vector_row(brain_home, low, 0.6),
+            _vector_row(brain_home, high, 0.99),
+            _vector_row(brain_home, high, 0.98),
+        ],
+    )
+    assert [match.memory_id for match in result.matches] == [high]
+    assert result.matches[0].has_contradiction
+    assert result.matches[0].raw_row["contradiction_with"] == [low]
+    assert result.matches[0].body.strip() == "replace with the verified procedure"
+    assert result.contradictions[0]["memory_id"] == high
 
 
 class TestCascadeCLI:

@@ -1,3 +1,17 @@
+## 2026-09-09 — Bounded closure regression repair (unreleased)
+
+- Share policy-lane admission without excluding canonical `project_rule` memory
+  or trusting absent authority metadata. Preserve contradiction annotations.
+- Keep exact and vector retrieval bodies free of document frontmatter; preserve
+  lexical body semantics and the existing query-observation cadence.
+- Refuse stale FTS versions/file hashes and invalidate negative misses when an
+  index is repaired. Vector rows require canonical version/file-hash identity;
+  reject unsafe projections, retain retryability, and enforce bounded selection.
+- Preserve finite scoring defaults for malformed normalization configuration and
+  exact project-ID scope across retrieval and injection.
+- This successor is not automatically adopted. Full v1/v2 remains HOLD and
+  skill-v2 remains SHADOW; native and release campaigns remain unstarted.
+
 ## 2026-09-09 — Bounded retrieval repair (unreleased)
 
 - Correct FTS5 BM25 normalization to use the most-negative score as the best
