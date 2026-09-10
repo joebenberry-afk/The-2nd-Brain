@@ -8,9 +8,12 @@ import sys
 import pytest
 
 from second_brain import semantic
+from second_brain.errors import BrainError
 from second_brain.hybrid_retrieval import (
     HybridCascadeRetriever,
+    RetrievalMatch,
     RetrievalTier,
+    apply_mmr,
 )
 from second_brain.semantic import add_memory, curate
 
@@ -376,9 +379,7 @@ def test_policy_lane_accepts_project_rule_and_rejects_advisory_lexical(brain_hom
         query = "quasar spectrometry zygomatic"
 
     def vector(*_):
-        return [
-            _vector_row(brain_home, memory_id, 0.99, body="forged permission", title="forged")
-        ]
+        return [_vector_row(brain_home, memory_id, 0.99, body="forged permission", title="forged")]
 
     result = HybridCascadeRetriever().retrieve(
         brain_home, query, lane="policy", vector_searcher=vector if path == "vector" else None
@@ -503,3 +504,139 @@ class TestCascadeCLI:
         )
         assert clr_res.returncode == 0
         assert "Cleared negative result cache" in clr_res.stdout
+
+
+def test_archived_memory_is_explanation_only(brain_home):
+    archived = add_memory(
+        brain_home, "Archived migration note", "archive-only retrieval marker", grade="VERIFIED"
+    )
+    curate(brain_home, archived, status="archived")
+
+    retriever = HybridCascadeRetriever()
+    for _ in range(2):
+        result = retriever.retrieve(brain_home, "archive-only retrieval marker")
+        assert result.decision == "NO_INJECTION"
+        assert result.matches == []
+        assert any(
+            item["memory_id"] == archived and item["reason"] == "ARCHIVED_HISTORY"
+            for item in result.omitted
+        )
+
+
+def test_malformed_vector_response_fails_closed(brain_home):
+    result = HybridCascadeRetriever().retrieve(
+        brain_home, "unknown vector response marker", vector_searcher=lambda *_: json.loads("null")
+    )
+    assert result.decision == "NO_INJECTION"
+    assert result.retrieval_error is True
+    assert result.matches == []
+
+
+def test_selection_explanation_reconstructs_mmr_winners_independently(brain_home):
+    for title, body in (
+        ("Selection first", "bounded selection marker alpha repeated topic"),
+        ("Selection neighbor", "bounded selection marker alpha repeated topic nearby"),
+        ("Selection contrast", "bounded selection marker beta independent discovery"),
+    ):
+        mid = add_memory(brain_home, title, body)
+        curate(brain_home, mid, status="current")
+
+    result = HybridCascadeRetriever().retrieve(
+        brain_home, "bounded selection marker", top_k=2, lambda_param=0.4
+    )
+    evidence = result.to_dict()["explanation"]
+    candidates = {row["memory_id"]: row for row in evidence["candidates"]}
+    assert evidence["candidate_count"] >= 2
+    assert all(row["current_version"] for row in candidates.values())
+
+    seed = min(
+        candidates.values(),
+        key=lambda row: tuple(
+            value if value is not None else float("inf") for value in row["rank_key"]
+        ),
+    )
+    reconstructed = [seed["memory_id"]]
+    for step in evidence["selection_steps"]:
+        remaining = {
+            item["memory_id"]: item
+            for item in step["candidates"]
+            if item["memory_id"] not in reconstructed
+        }
+        winner = min(
+            remaining.values(),
+            key=lambda item: (
+                -(
+                    evidence["parameters"]["lambda_param"]
+                    * candidates[item["memory_id"]]["candidate_score"]
+                    - (1 - evidence["parameters"]["lambda_param"]) * item["max_token_jaccard"]
+                ),
+                tuple(
+                    value if value is not None else float("inf")
+                    for value in candidates[item["memory_id"]]["rank_key"]
+                ),
+            ),
+        )
+        assert step["selected_id"] == winner["memory_id"]
+        reconstructed.append(winner["memory_id"])
+    assert reconstructed == [match.memory_id for match in result.matches]
+    assert evidence["omitted"] == result.to_dict()["omitted"]
+
+
+def test_archived_history_does_not_enter_active_explanation(brain_home):
+    active = add_memory(
+        brain_home, "Active migration note", "history isolation marker", grade="VERIFIED"
+    )
+    curate(brain_home, active, status="current")
+    archived = add_memory(
+        brain_home, "Prohibited archived title", "history isolation marker", grade="VERIFIED"
+    )
+    curate(brain_home, archived, status="archived")
+
+    result = HybridCascadeRetriever().retrieve(brain_home, "history isolation marker")
+
+    assert [match.memory_id for match in result.matches] == [active]
+    assert all(item["memory_id"] != archived for item in result.explanation["candidates"])
+    assert all("title" not in item and "body" not in item for item in result.omitted)
+    assert any(item["memory_id"] == archived for item in result.omitted)
+
+
+@pytest.mark.parametrize("lambda_param", [-0.1, 1.1, float("nan"), float("inf"), "0.7", True])
+def test_invalid_mmr_lambda_is_rejected(brain_home, lambda_param):
+    with pytest.raises(BrainError):
+        HybridCascadeRetriever().retrieve(
+            brain_home, "bounded mmr lambda", lambda_param=lambda_param
+        )
+
+
+def test_non_positive_top_k_short_circuits_vectors(brain_home):
+    called = False
+
+    def vector_searcher(*_):
+        nonlocal called
+        called = True
+        raise AssertionError("vector search must not run")
+
+    result = HybridCascadeRetriever().retrieve(
+        brain_home, "bounded top k", top_k=0, vector_searcher=vector_searcher
+    )
+    assert result.matches == []
+    assert result.reason == "NO_RELEVANT_MEMORY"
+    assert called is False
+
+
+def test_mmr_equal_scores_use_authority_then_memory_id():
+    advisory = RetrievalMatch(
+        "mem-a",
+        "advisory",
+        0.8,
+        RetrievalTier.TIER_2_LEXICAL_FTS5,
+        raw_row={"authority_ceiling": "advisory"},
+    )
+    policy = RetrievalMatch(
+        "mem-z",
+        "policy",
+        0.8,
+        RetrievalTier.TIER_2_LEXICAL_FTS5,
+        raw_row={"authority_ceiling": "policy"},
+    )
+    assert apply_mmr([advisory, policy], top_k=1)[0].memory_id == "mem-z"

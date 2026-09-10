@@ -1,3 +1,21 @@
+## 2026-09-10 — Completion candidate diagnostics (unreleased)
+
+- Explain cascade selection with bounded candidate identities, scores, MMR
+  steps, omission reasons, and explicit truncation. Keep archived history out
+  of active ranking and budgets while retaining diagnostics on repeated queries.
+- Preserve normalized relevance separately from raw BM25, reuse activation
+  evidence, honor configured decision utility, and refuse malformed vector
+  results and invalid token-penalty denominator settings safely.
+- Gate optional Brainstem work on current capability evidence and provider
+  quota without lowering risk-required model or verification floors. Retain
+  the capability snapshot in decision inputs for reproducible replay.
+- `brainctl v2 harness capabilities <id> --host-version <version>
+  --config-binding <binding> --json` distinguishes declared, observed,
+  unavailable, denied, and unknown support. An unversioned event or a static
+  declaration is not current observed support; replay cannot change host scope.
+- Candidate only: full v1/v2 remains HOLD and skill-v2 remains SHADOW.
+  Local diagnostics do not establish native qualification or runtime adoption.
+
 ## 2026-09-09 — Bounded closure regression repair (unreleased)
 
 - Share policy-lane admission without excluding canonical `project_rule` memory

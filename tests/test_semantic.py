@@ -346,6 +346,24 @@ def test_invalid_retrieval_numeric_config_preserves_search_results(brain_home):
     ]
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        "token_free_limit = 0",
+        "token_free_limit = 400\ntoken_penalty_saturation = 400",
+    ],
+)
+def test_invalid_token_penalty_domain_uses_safe_defaults(brain_home, config):
+    mid = _add(brain_home, title="Penalty boundary", body="penalty boundary marker " * 600)
+    baseline = semantic.search_memories(brain_home, "penalty boundary marker")
+    (brain_home / "config" / "retrieval.toml").write_text(
+        f"[scoring.weights]\n{config}\n", encoding="utf-8"
+    )
+    result = semantic.search_memories(brain_home, "penalty boundary marker")
+    assert result[0]["memory_id"] == mid
+    assert result[0]["_score"] == baseline[0]["_score"]
+
+
 def test_project_filter_exact_id_parity_between_fts_and_linear(brain_home, monkeypatch):
     mid = _add(
         brain_home,

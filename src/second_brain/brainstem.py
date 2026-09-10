@@ -9,12 +9,13 @@ can never bypass hard budget caps or authority floors.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import contracts, decisions
+from . import capabilities, contracts, decisions
 from .errors import BrainError
 
 _VERIFY_LEVEL_RANKS: dict[str, int] = {
@@ -96,7 +97,10 @@ class BrainstemSignals:
     retrieval_confidence: float | None = None
     worker_pressure: float | None = None
     recent_failures: int | None = None
-    provider_quota_remaining: float | None = None
+    provider_quota_remaining: float | None = None  # provider units; never token units
+    harness_id: str | None = None
+    host_version: str | None = None
+    host_config_binding: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,6 +138,105 @@ def _is_empty_signals(s: BrainstemSignals) -> bool:
     return all(getattr(s, f) is None for f in s.__annotations__)
 
 
+def _provider_quota(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BrainError("provider_quota_remaining must be a finite non-negative number or None")
+    quota = float(value)
+    if not math.isfinite(quota) or quota < 0:
+        raise BrainError("provider_quota_remaining must be a finite non-negative number or None")
+    return quota
+
+
+def _offline_capability_snapshot() -> dict[str, Any]:
+    return {
+        "harness_id": None,
+        "host_version": None,
+        "config_binding": None,
+        "capabilities": {
+            name: {
+                "supported": None,
+                "version": None,
+                "observed_at": None,
+                "evidence": None,
+                "status": "unknown",
+            }
+            for name in sorted(capabilities.KNOWN_CAPABILITIES)
+        },
+    }
+
+
+def _resolve_capability_snapshot(
+    home: Path,
+    signals: BrainstemSignals,
+    *,
+    host_context: Mapping[str, Any] | None,
+    supplied_snapshot: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(host_context or {})
+    harness_id = context.get("harness_id", signals.harness_id)
+    host_version = context.get("host_version", signals.host_version)
+    config_binding = context.get("config_binding", signals.host_config_binding)
+    if supplied_snapshot is not None:
+        if not isinstance(supplied_snapshot, Mapping):
+            raise BrainError("capability_snapshot must be an object")
+        for key, expected in (
+            ("harness_id", harness_id),
+            ("host_version", host_version),
+            ("config_binding", config_binding),
+        ):
+            value = supplied_snapshot.get(key)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise BrainError(f"capability_snapshot.{key} must be a non-empty string or None")
+            if expected is not None and value != expected:
+                raise BrainError(f"capability_snapshot.{key} does not match host context")
+        rows = supplied_snapshot.get("capabilities")
+        if not isinstance(rows, Mapping):
+            raise BrainError("capability_snapshot.capabilities must be an object")
+        result = {
+            key: supplied_snapshot.get(key)
+            for key in ("harness_id", "host_version", "config_binding")
+        }
+        normalized = {}
+        for name in sorted(capabilities.KNOWN_CAPABILITIES):
+            row = rows.get(name, {})
+            if not isinstance(row, dict):
+                raise BrainError(f"capability_snapshot.capabilities.{name} must be an object")
+            normalized[name] = {
+                **row,
+                "status": capabilities._capability_status(
+                    row,
+                    name,
+                    host_version=result["host_version"],
+                    config_binding=result["config_binding"],
+                ),
+            }
+        result["capabilities"] = normalized
+        return result
+    if harness_id is None:
+        return _offline_capability_snapshot()
+    if not isinstance(harness_id, str) or not harness_id:
+        raise BrainError("host_context.harness_id must be a non-empty string")
+    return capabilities.snapshot(
+        home,
+        harness_id,
+        host_version=host_version,
+        config_binding=config_binding,
+    )
+
+
+def _snapshot_status(snapshot: Mapping[str, Any], capability: str) -> str:
+    rows = snapshot.get("capabilities")
+    row = rows.get(capability) if isinstance(rows, Mapping) else None
+    status = row.get("status") if isinstance(row, Mapping) else None
+    return (
+        status
+        if status in {"declared", "observed", "unavailable", "denied", "unknown"}
+        else "unknown"
+    )
+
+
 def decide(
     home: Path | str,
     signals: BrainstemSignals | Mapping[str, Any],
@@ -141,6 +244,8 @@ def decide(
     task_id: str | None = None,
     session_id: str | None = None,
     learned_override: Mapping[str, Any] | None = None,
+    host_context: Mapping[str, Any] | None = None,
+    capability_snapshot: Mapping[str, Any] | None = None,
     rollout_stage: str = "SHADOW",
 ) -> BrainstemDecision:
     """Evaluate structured signals deterministically and output a BrainstemDecision."""
@@ -163,6 +268,9 @@ def decide(
             worker_pressure=signals.get("worker_pressure"),
             recent_failures=signals.get("recent_failures"),
             provider_quota_remaining=signals.get("provider_quota_remaining"),
+            harness_id=signals.get("harness_id"),
+            host_version=signals.get("host_version"),
+            host_config_binding=signals.get("host_config_binding"),
         )
     else:
         signals_obj = signals
@@ -182,6 +290,20 @@ def decide(
         and resident is not None
         and limit is not None
     )
+    quota = _provider_quota(signals_obj.provider_quota_remaining)
+    if host_context is not None and not isinstance(host_context, Mapping):
+        raise BrainError("host_context must be an object")
+    capability_evidence = _resolve_capability_snapshot(
+        home_p,
+        signals_obj,
+        host_context=host_context,
+        supplied_snapshot=capability_snapshot,
+    )
+    host_bound = isinstance(capability_evidence.get("harness_id"), str) and bool(
+        capability_evidence.get("harness_id")
+    )
+    injection_status = _snapshot_status(capability_evidence, "prompt_injection")
+    subagent_status = _snapshot_status(capability_evidence, "subagents")
 
     # Check for empty / all-missing signals
     if _is_empty_signals(signals_obj):
@@ -291,6 +413,28 @@ def decide(
             else:
                 reasons.append("OVERRIDE_SCOUT_REJECTED_FOR_LOW_RISK")
 
+    if host_bound:
+        if injection_status != "observed":
+            requested_budget = 0
+            reasons.append(f"INJECTION_ABSTAINED_CAPABILITY_{injection_status.upper()}")
+        if subagent_status != "observed":
+            scout_allowed = False
+            reasons.append(f"SCOUT_SUPPRESSED_CAPABILITY_{subagent_status.upper()}")
+    else:
+        if scout_allowed:
+            scout_allowed = False
+        reasons.append("HOST_CONTEXT_UNAVAILABLE_SCOUT_SUPPRESSED")
+        reasons.append("HOSTLESS_OFFLINE_RECOMMENDATION")
+
+    if quota is None:
+        if scout_allowed:
+            scout_allowed = False
+        reasons.append("PROVIDER_QUOTA_UNKNOWN_SCOUT_SUPPRESSED")
+    elif quota == 0:
+        requested_budget = 0
+        scout_allowed = False
+        reasons.append("PROVIDER_QUOTA_EXHAUSTED")
+
     if not complete_budget_context:
         requested_budget = min(
             requested_budget,
@@ -323,6 +467,7 @@ def decide(
     }
 
     signals_dict = signals_obj.to_dict()
+    signals_dict["capability_snapshot"] = capability_evidence
     inputs_hash = hashlib.sha256(contracts.canonical_json(signals_dict).encode("utf-8")).hexdigest()
 
     decision_id = decisions.record(

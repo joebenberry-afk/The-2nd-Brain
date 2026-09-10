@@ -38,6 +38,9 @@ _TRIVIAL_QUERIES = frozenset(
     {"hi", "hello", "hey", "thanks", "thank you", "ok", "okay", "yes", "no", "bye", "clear"}
 )
 _EXACT_REF_PATTERN = re.compile(r"^(?:mem-|obj-|ref:)?([0-9a-f]{8,32})$", re.IGNORECASE)
+_MAX_EXPLANATION_CANDIDATES = 256
+_MAX_EXPLANATION_OMISSIONS = 256
+_MAX_VECTOR_CALLBACK_ROWS = 4096
 
 
 class RetrievalTier(IntEnum):
@@ -98,6 +101,9 @@ class CascadeResult:
     reason: str = ""
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     multiview_invoked: bool = False
+    # Bounded, consumer-reconstructable evidence from the production selection.
+    explanation: dict[str, Any] = field(default_factory=dict)
+    omitted: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -113,9 +119,37 @@ class CascadeResult:
             "match_count": len(self.matches),
             "matches": [m.to_dict() for m in self.matches],
             "contradictions": self.contradictions,
+            "explanation": self.explanation,
+            "omitted": self.omitted,
             "multiview_invoked": self.multiview_invoked,
             "retrieval_error": self.retrieval_error,
         }
+
+
+def _authority_rank(row: dict[str, Any]) -> int:
+    return {"advisory": 0, "project_rule": 1, "policy": 2}.get(
+        str(row.get("authority_ceiling") or "advisory"), -1
+    )
+
+
+def _match_order_key(match: RetrievalMatch) -> tuple[float, int, str]:
+    score = match.score
+    return (
+        -(score if score is not None else float("-inf")),
+        -_authority_rank(match.raw_row),
+        match.memory_id,
+    )
+
+
+def _validate_mmr_params(lambda_param: object, top_k: object) -> tuple[float, int]:
+    if isinstance(top_k, bool) or not isinstance(top_k, int):
+        raise BrainError("top_k must be an integer")
+    if isinstance(lambda_param, bool) or not isinstance(lambda_param, (int, float)):
+        raise BrainError("lambda_param must be a finite number between 0 and 1")
+    value = float(lambda_param)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise BrainError("lambda_param must be a finite number between 0 and 1")
+    return value, top_k
 
 
 def _token_set(text: str) -> set[str]:
@@ -136,57 +170,93 @@ def apply_mmr(
     *,
     lambda_param: float = 0.7,
     top_k: int = 10,
+    selection_steps: list[dict[str, Any]] | None = None,
 ) -> list[RetrievalMatch]:
-    """Maximal Marginal Relevance over token Jaccard similarity.
-
-    Balances relevance with diversity:
-    MMR = lambda * relevance - (1 - lambda) * max_similarity(c, selected).
-    """
+    """Apply bounded MMR and retain full-precision selection evidence."""
+    lambda_value, limit = _validate_mmr_params(lambda_param, top_k)
+    if limit <= 0:
+        return []
+    for match in matches:
+        if match.score is not None:
+            try:
+                if isinstance(match.score, bool) or not math.isfinite(float(match.score)):
+                    match.score = None
+            except (TypeError, ValueError):
+                match.score = None
+        if match.score is not None:
+            match.score_components["rank_score"] = match.score
     if not matches or len(matches) <= 1:
-        for m in matches:
-            m.score_components["diversity"] = 1.0
-        return matches[:top_k]
+        for order, match in enumerate(matches[:limit], 1):
+            match.score_components["diversity"] = 1.0
+            match.score_components["selection_order"] = float(order)
+            if match.score is not None:
+                match.score_components["selection_score"] = match.score
+        return matches[:limit]
 
     token_cache = [_token_set(f"{m.title} {m.summary} {m.body}") for m in matches]
-
     selected_indices: list[int] = []
     remaining_indices = list(range(len(matches)))
-
-    best_first = max(remaining_indices, key=lambda idx: matches[idx].score or 0.0)
+    best_first = min(remaining_indices, key=lambda idx: _match_order_key(matches[idx]))
     selected_indices.append(best_first)
     remaining_indices.remove(best_first)
-    matches[best_first].score_components["diversity"] = 1.0
+    first = matches[best_first]
+    first.score_components["diversity"] = 1.0
+    first.score_components["selection_order"] = 1.0
+    if first.score is not None:
+        first.score_components["selection_score"] = first.score
 
-    while remaining_indices and len(selected_indices) < top_k:
+    while remaining_indices and len(selected_indices) < limit:
         best_idx = -1
         best_mmr_score = -float("inf")
         best_diversity = 1.0
-
+        evaluated: list[dict[str, Any]] | None = (
+            []
+            if selection_steps is not None and len(selection_steps) < _MAX_EXPLANATION_CANDIDATES
+            else None
+        )
         for idx in remaining_indices:
             cand = matches[idx]
             cand_score = cand.score or 0.0
-            cand_tokens = token_cache[idx]
-
             max_sim = max(
-                _jaccard_similarity(cand_tokens, token_cache[sel_idx])
+                _jaccard_similarity(token_cache[idx], token_cache[sel_idx])
                 for sel_idx in selected_indices
             )
             diversity = 1.0 - max_sim
-            mmr_score = lambda_param * cand_score - (1.0 - lambda_param) * max_sim
-
-            if mmr_score > best_mmr_score:
+            mmr_score = lambda_value * cand_score - (1.0 - lambda_value) * max_sim
+            if evaluated is not None and len(evaluated) < _MAX_EXPLANATION_CANDIDATES:
+                evaluated.append(
+                    {
+                        "memory_id": cand.memory_id,
+                        "max_token_jaccard": max_sim,
+                        "mmr_score": mmr_score,
+                    }
+                )
+            better = mmr_score > best_mmr_score
+            if best_idx >= 0 and mmr_score == best_mmr_score:
+                better = _match_order_key(cand) < _match_order_key(matches[best_idx])
+            if better:
                 best_mmr_score = mmr_score
                 best_idx = idx
                 best_diversity = diversity
-
-        if best_idx >= 0:
-            matches[best_idx].score_components["diversity"] = round(best_diversity, 4)
-            matches[best_idx].score = round(best_mmr_score, 4)
-            selected_indices.append(best_idx)
-            remaining_indices.remove(best_idx)
-        else:
+        if best_idx < 0:
             break
-
+        if evaluated is not None and selection_steps is not None:
+            selection_steps.append(
+                {
+                    "candidates": evaluated,
+                    "selected_id": matches[best_idx].memory_id,
+                    "candidates_truncated_count": len(remaining_indices) - len(evaluated),
+                }
+            )
+        chosen = matches[best_idx]
+        chosen.score_components["diversity"] = best_diversity
+        chosen.score_components["max_token_jaccard"] = 1.0 - best_diversity
+        chosen.score_components["mmr_score"] = best_mmr_score
+        chosen.score_components["selection_order"] = float(len(selected_indices) + 1)
+        chosen.score_components["selection_score"] = best_mmr_score
+        chosen.score = round(best_mmr_score, 4)
+        selected_indices.append(best_idx)
+        remaining_indices.remove(best_idx)
     return [matches[i] for i in selected_indices]
 
 
@@ -198,9 +268,7 @@ def _compute_score_components(
 ) -> tuple[dict[str, float], bool, list[str]]:
     bm25 = row.get("_bm25")
     score_val = row.get("_score")
-    relevance = (
-        float(bm25) if bm25 is not None else (float(score_val) if score_val is not None else 0.8)
-    )
+    relevance = float(row.get("_relevance", score_val if score_val is not None else 0.8))
 
     grade = row.get("evidence_grade") or "OBSERVED"
     authority_ceiling = row.get("authority_ceiling") or "advisory"
@@ -231,12 +299,14 @@ def _compute_score_components(
             f"Contradicts with: {', '.join(str(x) for x in contradiction_with)}"
         )
 
-    try:
-        from . import reconsolidation
+    p_need = row.get("_p_need")
+    if p_need is None:
+        try:
+            from . import reconsolidation
 
-        p_need = reconsolidation.compute_p_need(home, row.get("memory_id", ""))
-    except Exception:
-        p_need = 0.5
+            p_need = reconsolidation.compute_p_need(home, row.get("memory_id", ""))
+        except Exception:
+            p_need = 0.5
 
     components = {
         "relevance": round(relevance, 4),
@@ -248,7 +318,121 @@ def _compute_score_components(
         "diversity": 1.0,
         "final_score": round(float(score_val if score_val is not None else relevance), 4),
     }
+    if bm25 is not None:
+        components["bm25_raw"] = float(bm25)
     return components, has_contradiction, contradiction_details
+
+
+def _selection_explanation(
+    *,
+    query: str,
+    lane: str,
+    candidate_rows: list[dict[str, Any]],
+    matches: list[RetrievalMatch],
+    top_k: int,
+    lambda_param: float,
+    omitted: list[dict[str, Any]],
+    selection_steps: list[dict[str, Any]] | None = None,
+    algorithm: str = "mmr",
+) -> dict[str, Any]:
+    selected_ids = {match.memory_id for match in matches}
+    candidate_total = len(candidate_rows)
+    visible_rows = candidate_rows[:_MAX_EXPLANATION_CANDIDATES]
+    candidates = []
+    for order, row in enumerate(visible_rows, 1):
+        score = row.get("_score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+        ):
+            score = None
+        authority = _authority_rank(row)
+        memory_id = str(row.get("memory_id") or "")
+        candidates.append(
+            {
+                "memory_id": memory_id,
+                "current_version": row.get("current_version"),
+                "file_hash": row.get("file_hash"),
+                "candidate_score": score,
+                "authority_rank": authority,
+                "candidate_order": order,
+                "rank_key": [
+                    -float(score) if score is not None else None,
+                    -authority,
+                    memory_id,
+                ],
+            }
+        )
+    seen = {str(item.get("memory_id")) for item in omitted}
+    for row in visible_rows:
+        memory_id = str(row.get("memory_id") or "")
+        if memory_id and memory_id not in selected_ids and memory_id not in seen:
+            omitted.append(
+                {
+                    "memory_id": memory_id,
+                    "reason": "MMR_LIMIT" if algorithm == "mmr" else "VECTOR_TOP_K",
+                }
+            )
+            seen.add(memory_id)
+    if candidate_total > len(visible_rows):
+        omitted.append(
+            {
+                "memory_id": None,
+                "reason": "EXPLANATION_CANDIDATE_LIMIT",
+                "truncated_count": candidate_total - len(visible_rows),
+            }
+        )
+    step_total = max(0, len(matches) - 1) if algorithm == "mmr" else 0
+    visible_steps = (selection_steps or [])[:_MAX_EXPLANATION_CANDIDATES]
+    selected = [
+        {
+            "memory_id": match.memory_id,
+            "rank_score": match.score_components.get("rank_score"),
+            "selection_score": match.score_components.get("selection_score"),
+            "authority_rank": _authority_rank(match.raw_row),
+            "selection_order": match.score_components.get("selection_order"),
+        }
+        for match in matches[:_MAX_EXPLANATION_CANDIDATES]
+    ]
+    omitted_total = sum(item.get("truncated_count", 1) for item in omitted)
+    if len(omitted) > _MAX_EXPLANATION_OMISSIONS:
+        first_omitted = _MAX_EXPLANATION_OMISSIONS - 1
+        truncated = sum(item.get("truncated_count", 1) for item in omitted[first_omitted:])
+        omitted[first_omitted:] = [
+            {
+                "memory_id": None,
+                "reason": "OMISSIONS_TRUNCATED",
+                "truncated_count": truncated,
+            }
+        ]
+    return {
+        "algorithm": algorithm,
+        "query": query,
+        "lane": lane,
+        "parameters": {"top_k": top_k, "lambda_param": lambda_param},
+        "candidate_count": candidate_total,
+        "candidates": candidates,
+        "selected": selected,
+        "selected_truncated_count": len(matches) - len(selected),
+        "selection_steps": visible_steps,
+        "selection_steps_truncated_count": max(0, step_total - len(visible_steps)),
+        "replay_complete": (
+            candidate_total <= _MAX_EXPLANATION_CANDIDATES
+            and len(matches) <= _MAX_EXPLANATION_CANDIDATES
+            and step_total == len(visible_steps)
+            and all(step["candidates_truncated_count"] == 0 for step in visible_steps)
+        ),
+        "seed_rule": "candidate_score desc, authority_rank desc, memory_id asc",
+        "tie_break": "candidate_score desc, authority_rank desc, memory_id asc",
+        "omitted": omitted,
+        "omitted_count": omitted_total,
+        "formula": (
+            "lambda * candidate_score - (1 - lambda) * max_token_jaccard"
+            if algorithm == "mmr"
+            else "candidate_score desc, authority_rank desc, memory_id asc"
+        ),
+    }
 
 
 class HybridCascadeRetriever:
@@ -417,8 +601,10 @@ class HybridCascadeRetriever:
         clean_q = query.strip()
         lane = lane if lane in self._LANES else "semantic"
         self._last_home = home_path
+        lambda_value, top_k = _validate_mmr_params(lambda_param, top_k)
         if top_k <= 0 or not clean_q or clean_q.lower() in _TRIVIAL_QUERIES:
             lat = (time.perf_counter() - t0) * 1000.0
+            reason = "NO_RELEVANT_MEMORY" if top_k <= 0 else "TRIVIAL_TASK"
             return CascadeResult(
                 query=query,
                 project_id=project_id,
@@ -427,7 +613,18 @@ class HybridCascadeRetriever:
                 latency_ms=lat,
                 short_circuited=True,
                 decision="NO_INJECTION",
-                reason="NO_RELEVANT_MEMORY" if top_k <= 0 else "TRIVIAL_TASK",
+                reason=reason,
+                explanation={
+                    "algorithm": "mmr",
+                    "query": query,
+                    "lane": lane,
+                    "parameters": {"top_k": top_k, "lambda_param": lambda_value},
+                    "candidate_count": 0,
+                    "candidates": [],
+                    "selected": [],
+                    "selection_steps": [],
+                    "omitted": [],
+                },
             )
         epoch = self._epoch(home_path)
         config = self._config(home_path)
@@ -480,7 +677,6 @@ class HybridCascadeRetriever:
                 mem_data = semantic.show_memory(home_path, cand_id)
                 if mem_data:
                     row = mem_data.get("row", mem_data)
-                    # Authority safety check: policy lane cannot inject advisory memory
                     authority_ceiling = row.get("authority_ceiling") or "advisory"
                     if not semantic._lane_authorized(row, lane):
                         lat = (time.perf_counter() - t0) * 1000.0
@@ -494,6 +690,7 @@ class HybridCascadeRetriever:
                             short_circuited=True,
                             decision="NO_INJECTION",
                             reason="AUTHORITY_VIOLATION",
+                            omitted=[{"memory_id": cand_id, "reason": "AUTHORITY_VIOLATION"}],
                         )
                     if not semantic._project_matches(row, project_id):
                         lat = (time.perf_counter() - t0) * 1000.0
@@ -507,13 +704,18 @@ class HybridCascadeRetriever:
                             short_circuited=True,
                             decision="NO_INJECTION",
                             reason="PROJECT_MISMATCH",
+                            omitted=[{"memory_id": cand_id, "reason": "PROJECT_MISMATCH"}],
                         )
-                    # Status safety check: rejected and archived memories excluded
                     if row.get("evidence_grade") == "REJECTED" or row.get("status") in (
                         "archived",
                         "superseded",
                     ):
                         lat = (time.perf_counter() - t0) * 1000.0
+                        omitted = (
+                            [semantic._history_omission(row)]
+                            if row.get("status") in {"archived", "superseded"}
+                            else [{"memory_id": cand_id, "reason": "EXCLUDED_STATUS"}]
+                        )
                         return CascadeResult(
                             query=query,
                             project_id=project_id,
@@ -524,33 +726,48 @@ class HybridCascadeRetriever:
                             short_circuited=True,
                             decision="NO_INJECTION",
                             reason="EXCLUDED_STATUS",
+                            omitted=omitted,
+                            explanation={
+                                "algorithm": "exact_ref",
+                                "query": query,
+                                "lane": lane,
+                                "candidate_count": 0,
+                                "candidates": [],
+                                "selected": [],
+                                "selection_steps": [],
+                                "omitted": omitted,
+                            },
                         )
 
                     contradiction_count = int(row.get("contradiction_count") or 0)
                     has_contradiction = contradiction_count > 0
-                    contradictions_list = []
-                    if has_contradiction:
-                        contradictions_list.append(
+                    contradictions_list = (
+                        [
                             {
                                 "memory_id": cand_id,
                                 "title": row.get("title", ""),
                                 "contradiction_count": contradiction_count,
                                 "details": [f"Contradiction count: {contradiction_count}"],
                             }
-                        )
-
+                        ]
+                        if has_contradiction
+                        else []
+                    )
                     components = {
-                        "relevance": 1.0,  # Exact ref bypasses semantic uncertainty
+                        "relevance": 1.0,
                         "authority": 1.0
                         if authority_ceiling in ("project_rule", "policy")
                         else 0.8,
+                        "scope": 1.0,
                         "freshness": 1.0,
                         "contradiction": 0.5 if has_contradiction else 1.0,
                         "activation_need": 1.0,
                         "diversity": 1.0,
+                        "rank_score": 1.0,
+                        "selection_score": 1.0,
+                        "selection_order": 1.0,
                         "final_score": 1.0,
                     }
-
                     match = RetrievalMatch(
                         memory_id=row.get("memory_id") or cand_id,
                         title=row.get("title", ""),
@@ -562,9 +779,11 @@ class HybridCascadeRetriever:
                         raw_row=dict(row),
                         score_components=components,
                         has_contradiction=has_contradiction,
-                        contradiction_details=[f"Contradiction count: {contradiction_count}"]
-                        if has_contradiction
-                        else [],
+                        contradiction_details=(
+                            [f"Contradiction count: {contradiction_count}"]
+                            if has_contradiction
+                            else []
+                        ),
                     )
                     lat = (time.perf_counter() - t0) * 1000.0
                     return CascadeResult(
@@ -578,18 +797,47 @@ class HybridCascadeRetriever:
                         decision="INJECT",
                         reason="EXACT_REF_MATCH",
                         contradictions=contradictions_list,
+                        explanation={
+                            "algorithm": "exact_ref",
+                            "query": query,
+                            "lane": lane,
+                            "parameters": {"top_k": top_k, "lambda_param": lambda_value},
+                            "candidate_count": 1,
+                            "candidates": [
+                                {
+                                    "memory_id": match.memory_id,
+                                    "candidate_score": 1.0,
+                                    "current_version": row.get("current_version"),
+                                    "file_hash": semantic._file_hash(home_path, row),
+                                    "authority_rank": _authority_rank(row),
+                                    "candidate_order": 1,
+                                }
+                            ],
+                            "selected": [
+                                {
+                                    "memory_id": match.memory_id,
+                                    "rank_score": 1.0,
+                                    "selection_order": 1.0,
+                                }
+                            ],
+                            "selection_steps": [],
+                            "omitted": [],
+                        },
                     )
             except BrainError:
                 pass
 
         retrieval_error = False
+        omitted: list[dict[str, Any]] = []
         try:
             fts_rows = semantic.search_memories(
                 home_path,
                 clean_q,
                 project_id=project_id,
                 top_k=max(top_k * 2, 20),
+                include_history=False,
                 include_duplicates=True,
+                history_omissions=omitted,
             )
         except Exception:
             retrieval_error = True
@@ -597,92 +845,159 @@ class HybridCascadeRetriever:
 
         matches: list[RetrievalMatch] = []
         contradictions_list: list[dict[str, Any]] = []
-        if fts_rows:
-            fts_rows = [m for m in fts_rows if semantic._lane_authorized(m, lane)]
-        if fts_rows:
-            query_tokens = set(re.findall(r"\b\w+\b", clean_q.lower()))
-            for m in fts_rows:
-                components, has_c, c_details = _compute_score_components(
-                    home_path, m, query_tokens, project_id
-                )
-                body_val = m.get("_body", "")
-                match = RetrievalMatch(
-                    memory_id=m["memory_id"],
-                    title=m.get("title", ""),
-                    score=self._number(m.get("_score")),
-                    tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                    summary=m.get("summary", ""),
-                    body=body_val,
-                    confidence=self._number(m.get("_score")),
-                    raw_row=dict(m),
-                    score_components=components,
-                    has_contradiction=has_c,
-                    contradiction_details=c_details,
-                )
-                matches.append(match)
-                if has_c:
-                    contradictions_list.append(
-                        {
-                            "memory_id": match.memory_id,
-                            "title": match.title,
-                            "contradiction_count": m.get("contradiction_count", 0),
-                            "details": c_details,
-                        }
-                    )
+        canonical_rows: list[dict[str, Any]] = []
+        selection_steps: list[dict[str, Any]] = []
 
-            # Apply MMR for diversity over token Jaccard
-            matches = apply_mmr(matches, lambda_param=lambda_param, top_k=top_k)
-            scores = [m.score for m in matches]
-            if self._gate_passes(scores, gate, lane, confidence_threshold):
-                lat = (time.perf_counter() - t0) * 1000.0
-                return CascadeResult(
-                    query=query,
-                    project_id=project_id,
-                    tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
-                    matches=matches,
-                    vector_invoked=False,
-                    latency_ms=lat,
-                    short_circuited=True,
-                    decision="INJECT",
-                    reason="LEXICAL_HIGH_CONFIDENCE",
-                    contradictions=contradictions_list,
-                    multiview_invoked=multiview or self.multiview_enabled,
+        for candidate in fts_rows:
+            if not semantic._lane_authorized(candidate, lane):
+                omitted.append(
+                    {"memory_id": candidate.get("memory_id"), "reason": "AUTHORITY_VIOLATION"}
                 )
+                continue
+            canonical_rows.append(candidate)
+        query_tokens = set(re.findall(r"\b\w+\b", clean_q.lower()))
+        for row in canonical_rows:
+            components, has_c, c_details = _compute_score_components(
+                home_path, row, query_tokens, project_id
+            )
+            match = RetrievalMatch(
+                memory_id=row["memory_id"],
+                title=row.get("title", ""),
+                score=self._number(row.get("_score")),
+                tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
+                summary=row.get("summary", ""),
+                body=row.get("_body", ""),
+                confidence=self._number(row.get("_score")),
+                raw_row=dict(row),
+                score_components=components,
+                has_contradiction=has_c,
+                contradiction_details=c_details,
+            )
+            matches.append(match)
+            if has_c:
+                contradictions_list.append(
+                    {
+                        "memory_id": match.memory_id,
+                        "title": match.title,
+                        "contradiction_count": row.get("contradiction_count", 0),
+                        "details": c_details,
+                    }
+                )
+        matches = apply_mmr(
+            matches,
+            lambda_param=lambda_value,
+            top_k=top_k,
+            selection_steps=selection_steps,
+        )
+        explanation = _selection_explanation(
+            query=query,
+            lane=lane,
+            candidate_rows=canonical_rows,
+            matches=matches,
+            top_k=top_k,
+            lambda_param=lambda_value,
+            omitted=omitted,
+            selection_steps=selection_steps,
+        )
+        scores = [m.score for m in matches]
+        if canonical_rows and self._gate_passes(scores, gate, lane, confidence_threshold):
+            lat = (time.perf_counter() - t0) * 1000.0
+            return CascadeResult(
+                query=query,
+                project_id=project_id,
+                tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
+                matches=matches,
+                vector_invoked=False,
+                latency_ms=lat,
+                short_circuited=True,
+                decision="INJECT",
+                reason="LEXICAL_HIGH_CONFIDENCE",
+                contradictions=contradictions_list,
+                explanation=explanation,
+                omitted=omitted,
+                multiview_invoked=multiview or self.multiview_enabled,
+            )
 
         if vector_searcher is not None:
             try:
                 vec_res = vector_searcher(clean_q, project_id)
+                if not isinstance(vec_res, list):
+                    retrieval_error = True
+                    vec_res = []
             except Exception:
                 retrieval_error = True
                 vec_res = []
-            by_id: dict[str, dict[str, Any]] = {}
-            for candidate in vec_res:
-                row = self._canonical_vector_row(home_path, candidate, project_id=project_id)
-                if row is not None:
-                    previous = by_id.get(row["memory_id"])
-                    if previous is None or row["_score"] > previous["_score"]:
-                        by_id[row["memory_id"]] = row
-            canonical_rows = list(by_id.values())
+            vector_by_id: dict[str, dict[str, Any]] = {}
+            callback_limit = _MAX_VECTOR_CALLBACK_ROWS
+            callback_count = len(vec_res) if isinstance(vec_res, list) else None
+            for callback_index, raw_candidate in enumerate(vec_res):
+                if callback_index >= callback_limit:
+                    omitted.append(
+                        {
+                            "memory_id": None,
+                            "reason": "VECTOR_CALLBACK_LIMIT",
+                            "truncated_count": (
+                                max(0, callback_count - callback_limit)
+                                if callback_count is not None
+                                else None
+                            ),
+                        }
+                    )
+                    break
+                if not isinstance(raw_candidate, dict):
+                    omitted.append({"memory_id": None, "reason": "STALE_OR_UNSAFE_CANDIDATE"})
+                    continue
+                candidate = dict(raw_candidate)
+                candidate["_score"] = candidate.get("score")
+                canonical = self._canonical_vector_row(home_path, candidate, project_id=project_id)
+                if canonical is None:
+                    omitted.append(
+                        {
+                            "memory_id": candidate.get("memory_id"),
+                            "reason": "STALE_OR_UNSAFE_CANDIDATE",
+                        }
+                    )
+                    continue
+                if not semantic._lane_authorized(canonical, lane):
+                    omitted.append(
+                        {"memory_id": canonical["memory_id"], "reason": "AUTHORITY_VIOLATION"}
+                    )
+                    continue
+                mid = canonical["memory_id"]
+                previous = vector_by_id.get(mid)
+                if previous is not None:
+                    omitted.append({"memory_id": mid, "reason": "VECTOR_DUPLICATE"})
+                    if canonical["_score"] <= previous["_score"]:
+                        continue
+                vector_by_id[mid] = canonical
+            vector_canonical_rows = list(vector_by_id.values())
             semantic._attach_contradictions(
-                canonical_rows, semantic._contradiction_map(canonical_rows)
+                vector_canonical_rows, semantic._contradiction_map(vector_canonical_rows)
             )
-            vector_rows = sorted(
-                (row for row in canonical_rows if semantic._lane_authorized(row, lane)),
+            vector_candidates = sorted(
+                vector_canonical_rows,
                 key=lambda row: (
-                    -row["_score"],
-                    -{"advisory": 0, "project_rule": 1, "policy": 2}.get(
-                        str(row.get("authority_ceiling") or ""), -1
-                    ),
-                    row["memory_id"],
+                    -float(row["_score"]),
+                    -_authority_rank(row),
+                    str(row["memory_id"]),
                 ),
-            )[:top_k]
+            )
+            vector_rows = vector_candidates[:top_k]
+            for row in vector_candidates[top_k:]:
+                omitted.append({"memory_id": row["memory_id"], "reason": "VECTOR_TOP_K"})
             if vector_rows:
                 vector_matches = []
                 vector_contradictions = []
-                vector_query_tokens: set[str] = set()
-                for row in vector_rows:
+                for order, row in enumerate(vector_rows, 1):
                     components, has_c, details = _compute_score_components(
-                        home_path, row, vector_query_tokens, project_id
+                        home_path, row, set(), project_id
+                    )
+                    components.update(
+                        {
+                            "rank_score": row["_score"],
+                            "selection_score": row["_score"],
+                            "selection_order": float(order),
+                        }
                     )
                     vector_matches.append(
                         RetrievalMatch(
@@ -691,7 +1006,7 @@ class HybridCascadeRetriever:
                             score=row["_score"],
                             tier_resolved=RetrievalTier.TIER_3_VECTOR_SEMANTIC,
                             summary=row.get("summary", ""),
-                            body=row["_body"],
+                            body=row.get("_body", ""),
                             confidence=row["_score"],
                             raw_row=row,
                             score_components=components,
@@ -707,8 +1022,18 @@ class HybridCascadeRetriever:
                                 "details": details,
                             }
                         )
+                explanation = _selection_explanation(
+                    query=query,
+                    lane=lane,
+                    candidate_rows=vector_candidates,
+                    matches=vector_matches,
+                    top_k=top_k,
+                    lambda_param=lambda_value,
+                    omitted=omitted,
+                    algorithm="ranked",
+                )
                 inject = self._gate_passes(
-                    [match.score for match in vector_matches], gate, lane, confidence_threshold
+                    [m.score for m in vector_matches], gate, lane, confidence_threshold
                 ) or gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
                 return CascadeResult(
                     query=query,
@@ -721,6 +1046,8 @@ class HybridCascadeRetriever:
                     decision="INJECT" if inject else "NO_INJECTION",
                     reason="VECTOR_FALLBACK_MATCH" if inject else "LOW_CONFIDENCE",
                     contradictions=vector_contradictions,
+                    explanation=explanation,
+                    omitted=omitted,
                 )
 
         if retrieval_error:
@@ -736,9 +1063,9 @@ class HybridCascadeRetriever:
                 reason="BRAIN_UNAVAILABLE",
                 retrieval_error=True,
             )
-        if fts_rows:
+        if canonical_rows:
             lat = (time.perf_counter() - t0) * 1000.0
-            result = CascadeResult(
+            return CascadeResult(
                 query=query,
                 project_id=project_id,
                 tier_resolved=RetrievalTier.TIER_2_LEXICAL_FTS5,
@@ -746,18 +1073,21 @@ class HybridCascadeRetriever:
                 vector_invoked=vector_searcher is not None,
                 latency_ms=lat,
                 short_circuited=True,
-                decision="INJECT"
-                if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
-                else "NO_INJECTION",
-                reason="LEXICAL_HIGH_CONFIDENCE"
-                if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
-                else "LOW_CONFIDENCE",
+                decision=(
+                    "INJECT" if gate.rollout in {"SHADOW", "ADVISORY", "OFF"} else "NO_INJECTION"
+                ),
+                reason=(
+                    "LEXICAL_HIGH_CONFIDENCE"
+                    if gate.rollout in {"SHADOW", "ADVISORY", "OFF"}
+                    else "LOW_CONFIDENCE"
+                ),
                 contradictions=contradictions_list,
+                explanation=explanation,
+                omitted=omitted,
                 multiview_invoked=multiview or self.multiview_enabled,
             )
-            return result
         try:
-            if vector_searcher is None:
+            if vector_searcher is None and not omitted:
                 cache_conn = self._cache_conn(home_path)
                 cache_conn.execute(
                     "INSERT OR IGNORE INTO negative_cache("
@@ -790,4 +1120,6 @@ class HybridCascadeRetriever:
             short_circuited=True,
             decision="NO_INJECTION",
             reason="NO_RELEVANT_MEMORY",
+            explanation=explanation,
+            omitted=omitted,
         )
