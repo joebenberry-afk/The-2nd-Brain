@@ -3,6 +3,8 @@
 - Explain cascade selection with bounded candidate identities, scores, MMR
   steps, omission reasons, and explicit truncation. Keep archived history out
   of active ranking and budgets while retaining diagnostics on repeated queries.
+  Admit at most 256 ranked candidates per cascade so even wide provider results
+  retain a complete, bounded replay record; report candidates outside that pool.
 - Preserve normalized relevance separately from raw BM25, reuse activation
   evidence, honor configured decision utility, and refuse malformed vector
   results and invalid token-penalty denominator settings safely.

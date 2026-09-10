@@ -640,3 +640,20 @@ def test_mmr_equal_scores_use_authority_then_memory_id():
         raw_row={"authority_ceiling": "policy"},
     )
     assert apply_mmr([advisory, policy], top_k=1)[0].memory_id == "mem-z"
+
+
+def test_wide_vector_pool_keeps_selection_explanation_replayable(brain_home):
+    vectors = []
+    for index in range(300):
+        memory_id = add_memory(brain_home, f"Candidate {index}", f"Distinct value {index}")
+        vectors.append(_vector_row(brain_home, memory_id, 0.99 - index / 1000))
+    result = HybridCascadeRetriever().retrieve(
+        brain_home, "nonlexical qzv837 match", top_k=300, vector_searcher=lambda *_: vectors
+    )
+    evidence = result.explanation
+    assert evidence["replay_complete"] is True
+    reconstructed = sorted(evidence["candidates"], key=lambda row: tuple(row["rank_key"]))
+    assert [match.memory_id for match in result.matches] == [
+        row["memory_id"] for row in reconstructed[: evidence["parameters"]["top_k"]]
+    ]
+    assert len(result.matches) < len(vectors)

@@ -410,7 +410,11 @@ def _selection_explanation(
         "algorithm": algorithm,
         "query": query,
         "lane": lane,
-        "parameters": {"top_k": top_k, "lambda_param": lambda_param},
+        "parameters": {
+            "top_k": top_k,
+            "lambda_param": lambda_param,
+            "candidate_limit": _MAX_EXPLANATION_CANDIDATES,
+        },
         "candidate_count": candidate_total,
         "candidates": candidates,
         "selected": selected,
@@ -834,7 +838,7 @@ class HybridCascadeRetriever:
                 home_path,
                 clean_q,
                 project_id=project_id,
-                top_k=max(top_k * 2, 20),
+                top_k=min(max(top_k * 2, 20), _MAX_EXPLANATION_CANDIDATES),
                 include_history=False,
                 include_duplicates=True,
                 history_omissions=omitted,
@@ -982,6 +986,10 @@ class HybridCascadeRetriever:
                     str(row["memory_id"]),
                 ),
             )
+            # Bound the admitted pool, not just the evidence needed to replay it.
+            for row in vector_candidates[_MAX_EXPLANATION_CANDIDATES:]:
+                omitted.append({"memory_id": row["memory_id"], "reason": "CANDIDATE_POOL_LIMIT"})
+            vector_candidates = vector_candidates[:_MAX_EXPLANATION_CANDIDATES]
             vector_rows = vector_candidates[:top_k]
             for row in vector_candidates[top_k:]:
                 omitted.append({"memory_id": row["memory_id"], "reason": "VECTOR_TOP_K"})
