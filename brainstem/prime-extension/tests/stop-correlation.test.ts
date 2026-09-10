@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
@@ -32,6 +33,9 @@ afterEach(async () => {
   await Promise.all([...stores].map(store => store.flush()));
   stores.clear(); vi.unstubAllEnvs(); mirrors.length = 0;
 });
+function nativeIdForSession(session: string): string {
+  return `native-${createHash("sha256").update(session).digest("hex").slice(0, 24)}`;
+}
 function rig(id: string) {
   const base = process.env.STOP_CORRELATION_EVIDENCE || tmpdir();
   mkdirSync(base, { recursive: true });
@@ -39,7 +43,30 @@ function rig(id: string) {
   for (const [key, value] of Object.entries({ SECOND_BRAIN_HOME: home, SECOND_BRAIN_OBSERVABILITY: "on", SECOND_BRAIN_RTD: "off", SECOND_BRAIN_REREAD_AVOIDANCE: "OFF", SECOND_BRAIN_PYTHON: join(home, "absent.exe"), ORCHESTRATOR_MODELS: "", SECOND_BRAIN_RECALL: "off" })) vi.stubEnv(key, value);
   const handlers = new Map<string, Handler>();
   factory({ on: (name: string, handler: Handler) => handlers.set(name, handler) } as ExtensionAPI);
-  const ctx = (session: string): ExtensionContext => ({ cwd: home, model: { provider: "fixture", id: "fixture" }, sessionManager: { getSessionFile: () => join(home, `${session}.jsonl`) }, getContextUsage: () => undefined, getSystemPrompt: () => "", hasUI: false } as ExtensionContext);
+  const ctx = (session: string): ExtensionContext => {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    const nativeId = nativeIdForSession(session);
+    return {
+      cwd: home,
+      model: { provider: "fixture", id: "fixture" },
+      sessionManager: {
+        getSessionFile: () => join(home, `${session}.jsonl`),
+        getSessionId: () => nativeId,
+        getHeader: () => ({ type: "session", version: 1, id: nativeId, timestamp }),
+        getEntries: () => [{
+          type: "custom",
+          customType: "brain.active-state",
+          details: { session_id: session },
+          timestamp,
+        }],
+      },
+      getContextUsage: () => undefined,
+      getSystemPrompt: () => "",
+      signal: undefined,
+      hasUI: false,
+      ui: undefined,
+    };
+  };
   const call = async (session: string, id = "call", target = session, extra = "") => {
     const input = { command: `brainctl stop decide --session ${target} --task-id task-1 ${extra} --json` };
     const event = { toolName: "bash", toolCallId: id, input };
@@ -91,9 +118,43 @@ it("SC04 rejects absent blank malformed unknown and conflicting identities", asy
   expect(rejects.every(x => !JSON.stringify(x).includes("foreign"))).toBe(true);
 });
 it("SC05 parent acknowledgement stops only a verified native child", async () => {
-  const r = rig("SC05"); mkdirSync(join(r.home, "parent")); writeFileSync(join(r.home, "parent.jsonl"), ""); writeFileSync(join(r.home, "parent", "child.jsonl"), "");
+  const r = rig("SC05");
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  mkdirSync(join(r.home, "parent"));
+  const largeMessage = JSON.stringify({
+    type: "message", timestamp,
+    message: { role: "user", content: [{ type: "text", text: "x".repeat(70_000) }] },
+  });
+  writeFileSync(
+    join(r.home, "parent.jsonl"),
+    `${JSON.stringify({ type: "title", title: "Existing parent session" })}\n` +
+      `${JSON.stringify({ type: "session", version: 1, id: nativeIdForSession("parent"), timestamp })}\n` +
+      `${largeMessage}\n` +
+      `${JSON.stringify({ type: "custom", customType: "brain.session-identity", data: {
+        version: 1, native_session_id: nativeIdForSession("parent"),
+        header_timestamp: timestamp, host_session_id: "parent",
+      }, timestamp })}\n` +
+      `${largeMessage}\n`,
+  );
+  writeFileSync(
+    join(r.home, "parent", "child.jsonl"),
+    `${JSON.stringify({ type: "session", version: 1, id: nativeIdForSession("child"), timestamp })}\n`,
+  );
   execFileSync(resolve("../../.venv/Scripts/python.exe"), ["-m", "second_brain", "ledger", "init", "--session", "parent", "--host", "prime"], { cwd: r.home, env: { ...process.env, SECOND_BRAIN_HOME: r.home }, stdio: "pipe" });
-  const childCtx = { ...r.ctx("child"), sessionManager: { getSessionFile: () => join(r.home, "parent", "child.jsonl") } };
+  const childCtx = {
+    ...r.ctx("child"),
+    sessionManager: {
+      getSessionFile: () => join(r.home, "parent", "child.jsonl"),
+      getSessionId: () => nativeIdForSession("child"),
+      getHeader: () => ({ type: "session", version: 1, id: nativeIdForSession("child"), timestamp }),
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: "child" },
+        timestamp,
+      }],
+    },
+  };
   await r.handlers.get("tool_call")!({ toolName: "telemetry", toolCallId: "register", input: {} }, childCtx);
   await r.result("parent", await r.call("parent", "child-stop", "child", "--parent-session-id parent --worker-session-id child"), receipt("child", { parent_session_id: "parent", worker_session_id: "child" }));
   expect(await r.action("parent")).toBe(false); expect(await r.action("child")).toBe(true);

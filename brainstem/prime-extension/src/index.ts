@@ -44,8 +44,9 @@ import type {
 } from "../types/prime";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as scheduleObserverExpiry, clearTimeout as cancelObserverExpiry } from "node:timers";
+import { StringDecoder } from "node:string_decoder";
 import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
 import {
   buildPolicyBlockRecord,
@@ -187,13 +188,6 @@ import {
   type StopControlIdentity,
 } from "./stop-boundary";
 
-/** Random fallback session id (used only when no session file exists). */
-function anonSessionId(): string {
-  const rand = Math.floor(Math.random() * 0xffff)
-    .toString(16)
-    .padStart(4, "0");
-  return `anon-${Date.now()}-${rand}`;
-}
 
 /**
  * Sol minimal-orchestrator contract, injected as a systemPrompt addendum for
@@ -247,37 +241,341 @@ CORRECTION LOOP: all five pass -> accept. One fails -> send a narrow correction 
 
 FINAL RESPONSE: conclusion, important evidence, material caveats, next action if needed. No giant retelling of worker activity, raw logs, or unverified speculation. Keep your reasoning and output compact.`;
 
+interface NativeSessionIdentity {
+  id: string;
+  timestamp: string;
+}
+
+interface NativeSessionIdentityResult extends NativeSessionIdentity {
+  defaultSession: string;
+  boundSession?: string;
+}
+
+const SESSION_IDENTITY_CUSTOM_TYPE = "brain.session-identity";
+const SESSION_IDENTITY_VERSION = 1;
+const nativeIdentityCache = new WeakMap<object, Map<string, NativeSessionIdentityResult>>();
+
+function readNativeHeader(file: string): Record<string, unknown> {
+  const fd = openSync(file, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    const lines = buffer.subarray(0, bytes).toString("utf8").replace(/^\uFEFF/u, "").split(/\r?\n/u);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const parsed: unknown = JSON.parse(line);
+      if (parsed === null || typeof parsed !== "object") {
+        throw new Error("native session header is malformed");
+      }
+      const record = parsed as Record<string, unknown>;
+      if (record.type === "title") continue;
+      if (record.type !== "session") throw new Error("native session header is missing");
+      return record;
+    }
+    throw new Error("native session header is missing");
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("native session header is malformed or exceeds the prefix limit");
+    throw error;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function nativeIdentityFromHeader(header: Record<string, unknown>): NativeSessionIdentity {
+  const id = header.id;
+  const timestamp = header.timestamp;
+  if (header.type !== "session" || typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(id)) {
+    throw new Error("native session identity is malformed");
+  }
+  if (
+    typeof timestamp !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(timestamp) ||
+    !Number.isFinite(Date.parse(timestamp)) ||
+    new Date(timestamp).toISOString() !== timestamp
+  ) {
+    throw new Error("native session timestamp is malformed");
+  }
+  return { id, timestamp };
+}
+
+function nativeIdentityForContext(ctx: ExtensionContext): NativeSessionIdentity {
+  const manager = ctx?.sessionManager;
+  const file = manager?.getSessionFile?.();
+  const hasHeader = typeof manager?.getHeader === "function";
+  const hasSessionId = typeof manager?.getSessionId === "function";
+  if (hasHeader || hasSessionId) {
+    if (!hasHeader || !hasSessionId) {
+      throw new Error("native session identity surface is incomplete");
+    }
+    const header = manager.getHeader!();
+    if (header === null || typeof header !== "object") {
+      throw new Error("native session header is unavailable");
+    }
+    const identity = nativeIdentityFromHeader(header as Record<string, unknown>);
+    const sessionId = manager.getSessionId!();
+    if (typeof sessionId !== "string" || sessionId !== identity.id) {
+      throw new Error("native session id/header disagreement");
+    }
+    return identity;
+  }
+  if (typeof file !== "string" || file.length === 0) {
+    throw new Error("native session identity is unavailable");
+  }
+  return nativeIdentityFromHeader(readNativeHeader(file));
+}
+
+function defaultNativeSessionId(identity: NativeSessionIdentity): string {
+  const session = `${identity.timestamp.replace(/[:.]/gu, "-")}_${identity.id}`;
+  if (legacySessionId(session) === undefined) throw new Error("native session key exceeds the supported identity format");
+  return session;
+}
+
+function legacySessionId(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function entryIdentityDetails(entry: unknown): {
+  customType?: string;
+  details?: Record<string, unknown>;
+  timestamp?: string;
+} {
+  if (entry === null || typeof entry !== "object") return {};
+  const raw = entry as Record<string, unknown>;
+  const data = raw.data !== null && typeof raw.data === "object"
+    ? raw.data as Record<string, unknown>
+    : undefined;
+  const customType =
+    typeof raw.customType === "string"
+      ? raw.customType
+      : typeof data?.customType === "string"
+        ? data.customType
+        : undefined;
+  const details =
+    raw.details !== null && typeof raw.details === "object"
+      ? raw.details as Record<string, unknown>
+      : data?.details !== null && typeof data?.details === "object"
+        ? data.details as Record<string, unknown>
+        : data;
+  return {
+    customType,
+    details,
+    timestamp: typeof raw.timestamp === "string" ? raw.timestamp : undefined,
+  };
+}
+
+function sessionBindingFromEntries(
+  entries: Iterable<unknown>,
+  identity: NativeSessionIdentity,
+): string | undefined {
+  let explicit: string | undefined;
+  let legacy: string | undefined;
+  let legacyUnproven = false;
+  for (const entry of entries) {
+    const { customType, details, timestamp } = entryIdentityDetails(entry);
+    if (!details) continue;
+    if (customType === SESSION_IDENTITY_CUSTOM_TYPE) {
+      if (typeof details.native_session_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(details.native_session_id)) {
+        throw new Error("native session binding is malformed");
+      }
+      if (details.native_session_id !== identity.id) continue;
+      if (details.version !== SESSION_IDENTITY_VERSION) {
+        throw new Error("native session binding version is unsupported");
+      }
+      const candidate = legacySessionId(details.host_session_id);
+      if (candidate === undefined) throw new Error("native session binding is malformed");
+      if (details.header_timestamp !== identity.timestamp) {
+        throw new Error("native session binding contradicts current header");
+      }
+      if (explicit !== undefined && explicit !== candidate) {
+        throw new Error("native session has conflicting identity bindings");
+      }
+      explicit = candidate;
+      continue;
+    }
+    if (customType !== "brain.active-state" || details.session_id === undefined) continue;
+    const candidate = legacySessionId(details.session_id);
+    if (candidate === undefined) throw new Error("native legacy session assignment is malformed");
+    if (timestamp === undefined) {
+      legacyUnproven = true;
+      continue;
+    }
+    const entryTime = Date.parse(timestamp);
+    if (!Number.isFinite(entryTime)) {
+      legacyUnproven = true;
+      continue;
+    }
+    if (entryTime < Date.parse(identity.timestamp)) continue;
+    if (legacy !== undefined && legacy !== candidate) {
+      throw new Error("native session has conflicting legacy assignments");
+    }
+    legacy = candidate;
+  }
+  if (explicit === undefined && legacy === undefined && legacyUnproven) {
+    throw new Error("native legacy session assignment ownership is unproven");
+  }
+  return explicit ?? legacy;
+}
+
+
+function nativeIdentityForContextWithBinding(
+  ctx: ExtensionContext,
+  home: string | null,
+): NativeSessionIdentityResult {
+  const identity = nativeIdentityForContext(ctx);
+  const manager = ctx.sessionManager;
+  const cacheKey = `${home ?? ""}\u0000${identity.id}\u0000${identity.timestamp}`;
+  const cached = nativeIdentityCache.get(manager)?.get(cacheKey);
+  if (cached) return cached;
+  if (typeof manager.getEntries !== "function") {
+    throw new Error("native session entry history is unavailable");
+  }
+  const entries = manager.getEntries();
+  if (!Array.isArray(entries)) throw new Error("native session entries are malformed");
+  const resolved: NativeSessionIdentityResult = {
+    ...identity,
+    defaultSession: defaultNativeSessionId(identity),
+    boundSession: sessionBindingFromEntries(entries, identity),
+  };
+  const file = manager.getSessionFile?.();
+  if (resolved.boundSession === undefined && home && typeof file === "string") {
+    const stem = file.split(/[\\/]/u).pop()?.replace(/\.jsonl$/u, "") ?? "";
+    const legacy = sanitizeSessionStem(stem);
+    const headerTime = Date.parse(identity.timestamp);
+    const hasOwnWork = entries.some((entry: unknown) => {
+      if (entry === null || typeof entry !== "object") return false;
+      const record = entry as Record<string, unknown>;
+      if (record.type !== "message" || typeof record.timestamp !== "string" || Date.parse(record.timestamp) < headerTime) return false;
+      if (!Number.isFinite(Date.parse(record.timestamp)) || record.message === null || typeof record.message !== "object") return false;
+      const role = (record.message as Record<string, unknown>).role;
+      return role === "user" || role === "assistant" || role === "toolResult" || role === "bashExecution";
+    });
+    if (legacy !== resolved.defaultSession && hasOwnWork) {
+      const root = join(home, "state", "sessions");
+      const legacyHash = createHash("sha256").update(legacy).digest("hex");
+      if (existsSync(join(root, legacy)) || existsSync(join(root, legacyHash))) {
+        throw new Error("existing native session history has no verified canonical binding");
+      }
+    }
+  }
+  let managerCache = nativeIdentityCache.get(manager);
+  if (!managerCache) {
+    managerCache = new Map();
+    nativeIdentityCache.set(manager, managerCache);
+  }
+  managerCache.set(cacheKey, resolved);
+  return resolved;
+}
+
+function* nativeFileIdentityEntries(file: string, identity: NativeSessionIdentity): Generator<unknown> {
+  const fd = openSync(file, "r");
+  try {
+    const limit = statSync(file).size;
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const decoder = new StringDecoder("utf8");
+    let offset = 0;
+    let pending = "";
+    const metadata = (line: string): unknown => {
+      if (!/"customType"\s*:/u.test(line) && !/"type"\s*:\s*"session"/u.test(line)) return undefined;
+      const parsed: unknown = JSON.parse(line);
+      if (parsed !== null && typeof parsed === "object" && (parsed as Record<string, unknown>).type === "session") {
+        const header = nativeIdentityFromHeader(parsed as Record<string, unknown>);
+        if (header.id !== identity.id || header.timestamp !== identity.timestamp) {
+          throw new Error("native session changed during identity lookup");
+        }
+        return undefined;
+      }
+      return parsed;
+    };
+    while (offset < limit) {
+      const count = readSync(fd, buffer, 0, Math.min(buffer.length, limit - offset), offset);
+      if (count === 0) throw new Error("native session shortened during identity lookup");
+      offset += count;
+      pending += decoder.write(buffer.subarray(0, count));
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, newline).replace(/\r$/u, "");
+        pending = pending.slice(newline + 1);
+        if (line.trim()) {
+          const entry = metadata(line);
+          if (entry !== undefined) yield entry;
+        }
+      }
+    }
+    pending += decoder.end();
+    if (pending.trim()) {
+      JSON.parse(pending); // A snapshot ending inside a record is not complete metadata.
+      const entry = metadata(pending);
+      if (entry !== undefined) yield entry;
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Native identity assignments are immutable. Appends do not require rescanning
+// a resolved ancestor; replacement, truncation, or a new header invalidates it.
+const nativeFileBindingCache = new Map<string, {
+  id: string; timestamp: string; dev: number; ino: number; size: number; session: string;
+}>();
+
+function nativeFileBoundSession(file: string, identity: NativeSessionIdentity): string | undefined {
+  const path = resolve(file);
+  const stat = statSync(path);
+  const cached = nativeFileBindingCache.get(path);
+  if (
+    cached?.id === identity.id && cached.timestamp === identity.timestamp &&
+    cached.dev === stat.dev && cached.ino === stat.ino && stat.size >= cached.size
+  ) return cached.session;
+  const session = sessionBindingFromEntries(nativeFileIdentityEntries(path, identity), identity);
+  if (session !== undefined) {
+    if (nativeFileBindingCache.size >= 128) {
+      const oldest = nativeFileBindingCache.keys().next().value;
+      if (oldest !== undefined) nativeFileBindingCache.delete(oldest);
+    }
+    nativeFileBindingCache.set(path, { ...identity, dev: stat.dev, ino: stat.ino, size: stat.size, session });
+  }
+  return session;
+}
+
 /** Resolve one native transcript path with the same identity rules as ctx. */
 function sessionIdFromFile(file: string): string | undefined {
-  const base = file.split(/[\\/]/).pop() ?? file;
-  const stem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-  return stem.length > 0 ? sanitizeSessionStem(stem) : undefined;
-}
-
-/**
- * Resolve the session id for the current ctx. Prefers the persisted session
- * file stem (unchanged, always wins); falls back to `anonSession()` — the
- * anonymous identity cached for THIS extension lifecycle — so ephemeral
- * sessions get one stable in-process id instead of a new id per event.
- */
-function resolveSessionId(ctx: ExtensionContext, anonSession: () => string): string {
-  try {
-    const file = ctx?.sessionManager?.getSessionFile?.();
-    if (typeof file === "string" && file.length > 0) {
-      const session = sessionIdFromFile(file);
-      if (session !== undefined) return session;
-    }
-  } catch {
-    // fall through to anonymous id
+  if (!file.endsWith(".jsonl")) return undefined;
+  const identity = nativeIdentityFromHeader(readNativeHeader(file));
+  const defaultSession = defaultNativeSessionId(identity);
+  const boundSession = nativeFileBoundSession(file, identity);
+  const base = file.split(/[\\/]/u).pop()?.slice(0, -".jsonl".length);
+  if (boundSession === undefined && base !== defaultSession) {
+    throw new Error("native legacy session assignment ownership is unproven");
   }
-  return anonSession();
+  return boundSession ?? defaultSession;
+}
+
+/** Resolve the current native session; missing identity refuses safely. */
+function resolveSessionId(ctx: ExtensionContext, home: string | null): string {
+  const manager = ctx?.sessionManager;
+  if (!manager) throw new Error("native session identity is unavailable");
+  const file = manager.getSessionFile?.();
+  if (
+    (typeof file !== "string" || file.length === 0) &&
+    typeof manager.getHeader !== "function" &&
+    typeof manager.getSessionId !== "function"
+  ) {
+    throw new Error("native session identity is unavailable");
+  }
+  const identity = nativeIdentityForContextWithBinding(ctx, home);
+  return identity.boundSession ?? identity.defaultSession;
 }
 
 /**
- * Follow OMP's native transcript ancestry: a child at
- * `<parent-without-jsonl>/<agent>.jsonl` has the existing sibling
- * `<parent-without-jsonl>.jsonl`. This matches OMP 18.1.10's bounded
- * breadcrumb resolver without reading transcript content or trusting headers.
+ * Follow OMP's native transcript ancestry. Filesystem breadcrumbs remain the
+ * authority; header.parentSession is deliberately not used for this lookup.
  */
 function resolveNativeRootSessionId(ctx: ExtensionContext): string | undefined {
   const file = ctx?.sessionManager?.getSessionFile?.();
@@ -310,14 +608,14 @@ type Mapper<E extends PrimeEvent> = (
  */
 function safeHandler<E extends PrimeEvent>(
   getStore: (session: string) => TelemetryStore | null,
-  anonSession: () => string,
+  sessionIdentity: (ctx: ExtensionContext) => string,
   mapper: Mapper<E>,
   final = false,
 ): (event: E, ctx: ExtensionContext) => void {
   return (event: E, ctx: ExtensionContext): void => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = sessionIdentity(ctx);
       const record = mapper(event, ctx, session);
       if (!record) return;
       const store = getStore(session);
@@ -502,18 +800,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // is a factory-scoped test seam; defaults to a fresh ensurer per factory.
   const ensureTelemetryDir = options.ensureTelemetryDir ?? createTelemetryDirEnsurer();
 
-  // Phase 2 fix: the anonymous fallback identity is created once per
-  // extension lifecycle (this factory invocation) and reused for every event
-  // that lacks an explicit Prime session file. Closure state — not a
-  // module/process global — so separate lifecycles get separate identities
-  // and all anonymous events share one telemetry file.
-  let anonSessionIdValue: string | null = null;
-  const anonSession = (): string => {
-    if (anonSessionIdValue === null) {
-      anonSessionIdValue = anonSessionId();
-    }
-    return anonSessionIdValue;
-  };
 
   // Frozen-per-extension-lifecycle runtime identity (plan §10): resolved
   // exactly once from the SAME config object every handler already shares,
@@ -556,6 +842,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   }
 
   let store: TelemetryStore | null = null;
+  const pendingRereads = new Map<string, { path: string }>();
+  const readySessions = new Set<string>();
+  const activeStateTouchedSessions = new Set<string>();
+  const lastToolResultBytes = new Map<string, number>();
+  const lastContextProvider = new Map<string, string | null>();
+  const lastContextModel = new Map<string, string | null>();
+  const lastProvider = new Map<string, string | null>();
+  const lastModel = new Map<string, string | null>();
+  const lastCacheReadTokens = new Map<string, number | null>();
+  const sessionBeforeCompactOccurred = new Set<string>();
   const getStore = (session: string): TelemetryStore | null => {
     if (!store || store.sessionId !== session) {
       store = new TelemetryStore(telemetryDir, session, ensureTelemetryDir);
@@ -568,7 +864,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     mapper: Mapper<E>,
     final = false,
   ): void => {
-    pi.on(type, safeHandler<E>(getStore, anonSession, mapper, final));
+    pi.on(type, safeHandler<E>(getStore, resolveAndJournalSessionId, mapper, final));
   };
 
   // P2 host event mirror (Phase 2B): fire-and-forget, fail-open, privacy-safe
@@ -713,15 +1009,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return created;
   };
   const rereadRunner = options.rereadHintRunner ?? runRereadHint;
-  const pendingRereads = new Map<string, { path: string }>();
-  const readySessions = new Set<string>();
-  const lastToolResultBytes = new Map<string, number>();
-  const lastContextProvider = new Map<string, string | null>();
-  const lastContextModel = new Map<string, string | null>();
-  const lastProvider = new Map<string, string | null>();
-  const lastModel = new Map<string, string | null>();
-  const lastCacheReadTokens = new Map<string, number | null>();
-  const sessionBeforeCompactOccurred = new Set<string>();
   const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
@@ -1538,7 +1825,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       throw new Error("BRAIN_WORKER_RESULT_MALFORMED_ENVELOPE");
     }
     if (details.jobs.length > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
-    const session = resolveSessionId(ctx, anonSession);
+    const session = resolveAndJournalSessionId(ctx);
     await recoverWorkerResults(session, ctx);
     let summary = typeof message.content === "string" ? message.content.slice(0, 2048) : "";
     if (Array.isArray(message.content)) {
@@ -1826,6 +2113,37 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         return { ok: false, error: "vmem store failed" };
       });
+  };
+
+  const identityJournaled = new WeakMap<object, Set<string>>();
+  const journalNativeIdentity = (session: string, ctx: ExtensionContext): void => {
+    const manager = ctx.sessionManager as object;
+    if (typeof pi.appendEntry !== "function") return;
+    const identity = nativeIdentityForContextWithBinding(ctx, config.home);
+    const key = `${identity.id}\u0000${identity.timestamp}\u0000${session}`;
+    let journaled = identityJournaled.get(manager);
+    if (!journaled) {
+      journaled = new Set<string>();
+      identityJournaled.set(manager, journaled);
+    }
+    if (journaled.has(key)) return;
+    try {
+      pi.appendEntry(SESSION_IDENTITY_CUSTOM_TYPE, {
+        version: SESSION_IDENTITY_VERSION,
+        native_session_id: identity.id,
+        header_timestamp: identity.timestamp,
+        host_session_id: session,
+      });
+      journaled.add(key);
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    }
+  };
+
+  const resolveAndJournalSessionId = (ctx: ExtensionContext): string => {
+    const session = resolveSessionId(ctx, config.home);
+    journalNativeIdentity(session, ctx);
+    return session;
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
@@ -2119,7 +2437,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let activeMessage: unknown = undefined;
     let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       establishWorkerRootSession(session, ctx);
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
@@ -2177,6 +2495,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
           );
         } else if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
+          activeStateTouchedSessions.add(session);
           const rendered = await renderActiveState({
             home: config.home,
             hostSessionId: session,
@@ -2503,7 +2822,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("context", (event, ctx) => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       getStore(session)?.append(sensors.context(session, event.messages));
       // Phase A: privacy-safe structural telemetry (config-gated, default
       // OFF; see sensors.contextStructure). Additive to the unconditional
@@ -2666,7 +2985,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("before_provider_request", (event, ctx) => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       providerRequestSeq += 1;
       const original = event.payload;
       const identity = payloadIdentity(original, ctx);
@@ -2856,7 +3175,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("after_provider_response", (event, ctx) => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       const headers = event.headers ?? {};
       const provider = headers["x-provider"] ?? headers["provider"];
       const model = headers["x-model"] ?? headers["model"];
@@ -2906,7 +3225,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("message_end", (event, ctx) => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       const message = event.message;
       if (message != null && message.usage != null) {
         const u = message.usage as unknown as Record<string, unknown>;
@@ -2988,7 +3307,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("tool_call", (event, ctx): ToolCallEventResult | Promise<ToolCallEventResult | undefined> | undefined => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       establishWorkerRootSession(session, ctx);
       const rootSession = workerRootSessions.get(session) ?? session;
       if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
@@ -3047,7 +3366,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         const targetRoot = identity ? workerRootSessions.get(identity.session) ?? identity.session : session;
         const sessionFile = ctx?.sessionManager?.getSessionFile?.();
         const applicable = identity !== undefined && typeof sessionFile === "string" &&
-          sessionIdFromFile(sessionFile) === session &&
           (identity.session === session || workerRootSessions.get(identity.session) === session) &&
           (identity.parent === undefined || identity.parent === targetRoot) &&
           (identity.worker === undefined || identity.worker === identity.session);
@@ -3121,7 +3439,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   pi.on("tool_result", async (event, ctx) => {
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       let rereadPatch: { content: Array<{ type: "text"; text: string }> } | undefined;
       const rereadKey = `${session}\u0000${event.toolCallId}`;
       const pending = pendingRereads.get(rereadKey);
@@ -3382,7 +3700,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     const compactEvent = event as SessionBeforeCompactEvent;
     let session = "unknown";
     try {
-      session = resolveSessionId(ctx, anonSession);
+      session = resolveAndJournalSessionId(ctx);
       sessionBeforeCompactOccurred.add(session);
       mirror(
         session,
@@ -3412,6 +3730,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           );
           return { cancel: true };
         }
+        activeStateTouchedSessions.add(session);
       }
       const checkpoint = await runLedgerCheckpoint({
         home: config.home ?? "",
@@ -3543,7 +3862,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         }
       }
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
-      if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {
+      if (
+        activeStateTouchedSessions.has(session) &&
+        (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active")
+      ) {
         const activeState = runActiveStateUpdateSync({
           home: config.home ?? "",
           hostSessionId: session,

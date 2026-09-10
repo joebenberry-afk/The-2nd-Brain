@@ -34,7 +34,16 @@ async function setup(mode: "OFF" | "SHADOW" | "ACTIVE") {
   return { handlers, get runnerCalls() { return runnerCalls; } };
 }
 
-const context = { cwd: tmpdir(), model: { id: "test-model" }, sessionManager: undefined } as unknown as ExtensionContext;
+const context = {
+  cwd: tmpdir(),
+  model: { id: "test-model" },
+  sessionManager: {
+    getSessionFile: () => undefined,
+    getSessionId: () => "native-reread",
+    getHeader: () => ({ type: "session", id: "native-reread", timestamp: "2026-01-01T00:00:00.000Z" }),
+    getEntries: () => [],
+  },
+} as unknown as ExtensionContext;
 
 describe("Prime reread avoidance hook", () => {
   it("SHADOW retains the read result", async () => {

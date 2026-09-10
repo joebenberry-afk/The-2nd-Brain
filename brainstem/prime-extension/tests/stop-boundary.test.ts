@@ -121,10 +121,26 @@ it("blocks later OMP tool calls after a real STOP control result", async () => {
       handlers.set(name, handler);
     },
   } as unknown as ExtensionAPI;
+  const identityTimestamp = "2026-01-01T00:00:00.000Z";
   const context: ExtensionContext = {
     cwd: home,
     model: { provider: "openai-codex", id: "gpt-5.6-luna" },
-    sessionManager: { getSessionFile: () => `${home}/session.jsonl` },
+    sessionManager: {
+      getSessionFile: () => `${home}/session.jsonl`,
+      getSessionId: () => "native-stop-session",
+      getHeader: () => ({
+        type: "session",
+        version: 1,
+        id: "native-stop-session",
+        timestamp: identityTimestamp,
+      }),
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: "session" },
+        timestamp: identityTimestamp,
+      }],
+    },
     getContextUsage: () => undefined,
     getSystemPrompt: () => "base",
     signal: undefined,

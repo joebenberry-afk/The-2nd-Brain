@@ -42,10 +42,22 @@ afterEach(async () => {
 });
 
 function ctx(session = "test-session"): ExtensionContext {
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  const nativeId = `native-${session}`;
   return {
     cwd: "C:/test-project",
     model: { provider: "test-provider", id: "test-model" },
-    sessionManager: { getSessionFile: () => join(home, `${session}.jsonl`) },
+    sessionManager: {
+      getSessionFile: () => join(home, `${session}.jsonl`),
+      getSessionId: () => nativeId,
+      getHeader: () => ({ type: "session", version: 1, id: nativeId, timestamp }),
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: session },
+        timestamp,
+      }],
+    },
     getContextUsage: () => undefined,
     getSystemPrompt: () => "base system prompt",
     signal: undefined,

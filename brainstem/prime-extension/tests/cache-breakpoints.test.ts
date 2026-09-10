@@ -80,11 +80,15 @@ function assistantMsg(): unknown {
 }
 
 function makeCtx(overrides?: Partial<ExtensionContext>): ExtensionContext {
+  const timestamp = "2026-01-01T00:00:00.000Z";
   return {
     cwd: "C:/work",
     model: { id: "test-model", provider: "test-provider" },
     sessionManager: {
       getSessionFile: () => join(tempDir, "session.json"),
+      getSessionId: () => "native-cache-session",
+      getHeader: () => ({ type: "session", version: 1, id: "native-cache-session", timestamp }),
+      getEntries: () => [],
     },
     ...overrides,
   } as unknown as ExtensionContext;

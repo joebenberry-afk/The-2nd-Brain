@@ -233,7 +233,12 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
   const ctx = {
     cwd: "C:/work",
     model: { id: "deepseek/deepseek-v4-flash" },
-    sessionManager: undefined,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => "native-ledger-lifecycle",
+      getHeader: () => ({ type: "session", id: "native-ledger-lifecycle", timestamp: "2026-01-01T00:00:00.000Z" }),
+      getEntries: () => [],
+    },
   } as unknown as ExtensionContext;
 
   it("fires mirror records for session_started/user_task/tool_requested/tool_completed/turn_end/agent_ended/compaction/session_inactive", async () => {
@@ -340,7 +345,12 @@ describe("T-G4 compaction barrier + segment rollover wiring", () => {
   const ctx = {
     cwd: "C:/work",
     model: { id: "deepseek/deepseek-v4-flash" },
-    sessionManager: undefined,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => "native-ledger-compaction",
+      getHeader: () => ({ type: "session", id: "native-ledger-compaction", timestamp: "2026-01-01T00:00:00.000Z" }),
+      getEntries: () => [],
+    },
   } as unknown as ExtensionContext;
 
   it("session_before_compact awaits the checkpoint and returns {cancel:true} on failure", async () => {
@@ -501,7 +511,12 @@ describe("context event: direct registration (Phase R3 wire()-bypass fix)", () =
   const ctx = {
     cwd: "C:/work",
     model: { id: "deepseek/deepseek-v4-flash" },
-    sessionManager: undefined,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => "native-ledger-context",
+      getHeader: () => ({ type: "session", id: "native-ledger-context", timestamp: "2026-01-01T00:00:00.000Z" }),
+      getEntries: () => [],
+    },
   } as unknown as ExtensionContext;
 
   it("returns a real value (not void) to the host, proving it is NOT routed through wire()/safeHandler()", async () => {
