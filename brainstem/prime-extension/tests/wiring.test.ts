@@ -226,36 +226,90 @@ function loadFactory(options?: ExtensionOptions, journal?: unknown[], journalErr
   return handlers;
 }
 
-/** Fake ExtensionContext; session file lives inside the temp dir. */
+/** Native session-manager fixture: identity is independent of the filename. */
+function nativeManager(file: string): ExtensionContext["sessionManager"] {
+  const stem = file.split(/[\\/]/u).pop()?.replace(/\.jsonl$/u, "") ?? "unknown";
+  const id = `native-${sha256Hex(file).slice(0, 24)}`;
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  return {
+    getSessionFile: () => file,
+    getSessionId: () => id,
+    getHeader: () => ({ type: "session", version: 1, id, timestamp }),
+    getEntries: () =>
+      stem === "wiring-test"
+        ? [{
+            type: "custom",
+            customType: "brain.active-state",
+            details: { session_id: "wiring-test" },
+            timestamp,
+          }]
+        : [],
+  };
+}
+
+/** Fake ExtensionContext with the actual native identity surface. */
 function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
+  const defaultFile = () => join(tmp, "sessions", "wiring-test.jsonl");
+  const overrideManager = overrides.sessionManager;
+  const getSessionFile = overrideManager?.getSessionFile?.bind(overrideManager) ?? defaultFile;
+  const generated = () => nativeManager(getSessionFile() ?? defaultFile());
+  const manager = typeof overrideManager?.getHeader === "function" && typeof overrideManager?.getSessionId === "function"
+    ? overrideManager
+    : {
+        getSessionFile,
+        getSessionId: () => generated().getSessionId!(),
+        getHeader: () => generated().getHeader!(),
+        getEntries: () => generated().getEntries!(),
+        ...overrideManager,
+      };
   return {
     cwd: "C:/work",
     model: { id: "deepseek-v4-flash", provider: "deepseek" },
-    sessionManager: {
-      getSessionFile: () => join(tmp, "sessions", "wiring-test.jsonl"),
-    },
     getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
     getSystemPrompt: () => "BASE SYSTEM PROMPT",
     signal: undefined,
     hasUI: false,
     ui: undefined,
     ...overrides,
+    sessionManager: manager,
   };
 }
 
-/** Create OMP-native transcript ancestry without reading transcript content. */
+/** Create OMP-native transcript ancestry with real session headers. */
 function nativeSessionCtx(rootSession: string, ...agents: string[]): ExtensionContext {
   const sessionsDir = join(tmp, "native-sessions");
   mkdirSync(sessionsDir, { recursive: true });
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  const writeHeader = (file: string): void => {
+    const id = `native-${sha256Hex(file).slice(0, 24)}`;
+    const stem = file.split(/[\\/]/u).pop()?.replace(/\.jsonl$/u, "") ?? "unknown";
+    writeFileSync(
+      file,
+      `${JSON.stringify({ type: "session", version: 1, id, timestamp })}\n` +
+        `${JSON.stringify({ type: "custom", customType: "brain.active-state", details: { session_id: stem }, timestamp })}\n`,
+      "utf8",
+    );
+  };
   let transcript = join(sessionsDir, `${rootSession}.jsonl`);
-  writeFileSync(transcript, "", "utf8");
+  writeHeader(transcript);
   for (const agent of agents) {
     const artifactsDir = transcript.slice(0, -".jsonl".length);
     mkdirSync(artifactsDir, { recursive: true });
     transcript = join(artifactsDir, `${agent}.jsonl`);
-    writeFileSync(transcript, "", "utf8");
+    writeHeader(transcript);
   }
-  return makeCtx({ sessionManager: { getSessionFile: () => transcript } });
+  const stem = transcript.split(/[\\/]/u).pop()?.replace(/\.jsonl$/u, "") ?? "unknown";
+  return makeCtx({
+    sessionManager: {
+      getSessionFile: () => transcript,
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: stem },
+        timestamp,
+      }],
+    },
+  });
 }
 
 function telemetryFile(): string {
@@ -779,7 +833,7 @@ describe("factory wiring (src/index.ts)", () => {
     expect(rec.tool_results).toBe(1);
   });
 
-  it("swallows a throwing sessionManager and records under an anonymous session id", async () => {
+  it("swallows a throwing sessionManager without creating an anonymous identity", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx({
       sessionManager: {
@@ -796,8 +850,9 @@ describe("factory wiring (src/index.ts)", () => {
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l));
-    expect(rec.kind).toBe("turn_start");
-    expect(rec.session).toMatch(/^anon-/);
+    expect(rec.kind).toBe("extension_error");
+    expect(rec.session).toBe("unknown");
+    expect(rec.session).not.toMatch(/^anon-/);
   });
 
   it("swallows mapper exceptions and appends an extension_error record", async () => {
@@ -1038,96 +1093,145 @@ describe("factory wiring (src/index.ts)", () => {
 });
 
 // -------------------------------------------------------------------------
-// Phase 2: stable anonymous session identity (one id per extension lifecycle)
+// Native session identity (src/index.ts)
 // -------------------------------------------------------------------------
 
-describe("Phase 2 anonymous session identity (src/index.ts)", () => {
-  it("reuses ONE stable anonymous id for every event without a session file", async () => {
+describe("native session identity (src/index.ts)", () => {
+  const timestamp = "2026-01-01T00:00:00.000Z";
+
+  function identityCtx(
+    file: string,
+    id: string,
+    entries: unknown[] = [],
+    headerTimestamp = timestamp,
+  ): ExtensionContext {
+    return makeCtx({
+      sessionManager: {
+        getSessionFile: () => file,
+        getSessionId: () => id,
+        getHeader: () => ({
+          type: "session",
+          version: 1,
+          id,
+          timestamp: headerTimestamp,
+        }),
+        getEntries: () => entries,
+      },
+    });
+  }
+
+  it("refuses a missing native identity without creating an anonymous shared key", async () => {
     const handlers = loadFactory();
-    const ctx = anonCtx();
-
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
-    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }, ctx);
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-
-    const file = await waitForAnyTelemetryFile();
-    const records = await waitForFileLines(file, 4);
-    const sessions = new Set(records.map((r) => String(r.session)));
-    expect(sessions.size).toBe(1);
-    expect([...sessions][0]).toMatch(/^anon-/);
-  });
-
-  it("appends all anonymous lifecycle events to ONE telemetry file, not one per event", async () => {
-    const handlers = loadFactory();
-    const ctx = anonCtx();
-
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    await handlers.get("before_agent_start")!({ prompt: "hello" }, ctx);
-    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
-    handlers.get("tool_call")!({ toolName: "bash", toolCallId: "c1", input: { command: "echo hi" } }, ctx);
-    handlers.get("tool_result")!({ toolName: "bash", toolCallId: "c1", input: {}, content: [], details: {}, isError: false }, ctx);
-    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
-    handlers.get("agent_end")!({ messages: [] }, ctx);
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-
-    const file = await waitForAnyTelemetryFile();
-    // P3-D: before_agent_start adds lean_kernel + fail-open extension_error;
-    // P3.16: before_agent_start also adds one omp_visibility_plan record.
-    const records = await waitForFileLines(file, 11);
-    await settle();
-    const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
-    expect(names.length).toBe(1); // one session file for the whole anonymous lifecycle
-    expect(records.map((r) => r.kind).sort()).toEqual(
-      ["session_start", "before_agent_start", "lean_kernel", "extension_error", "omp_visibility_plan", "turn_start", "tool_call", "tool_result", "turn_end", "agent_end", "session_shutdown"].sort(),
-    );
-    expect(new Set(records.map((r) => String(r.session))).size).toBe(1);
-  });
-
-  it("separate extension lifecycles get distinct anonymous ids (deterministic)", async () => {
-    // Deterministic: two factories consume two different Math.random draws.
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValueOnce(0.5).mockReturnValueOnce(0.25);
-    try {
-      const handlersA = loadFactory();
-      const handlersB = loadFactory();
-      handlersA.get("turn_start")!({ turnIndex: 0 }, anonCtx());
-      handlersB.get("turn_start")!({ turnIndex: 0 }, anonCtx());
-
-      const fileA = await waitForAnyTelemetryFile();
-      await settle(250);
-      const names = (await readdir(telemetryDir())).filter((n) => n.endsWith(".jsonl"));
-      expect(names.length).toBe(2);
-      const fileB = names.map((n) => join(telemetryDir(), n)).find((f) => f !== fileA)!;
-      const [recA] = await waitForFileLines(fileA, 1);
-      const [recB] = await waitForFileLines(fileB, 1);
-      expect(recA.session).toMatch(/^anon-/);
-      expect(recB.session).toMatch(/^anon-/);
-      expect(recA.session).not.toBe(recB.session);
-    } finally {
-      randomSpy.mockRestore();
-    }
-  });
-
-  it("explicit Prime session file stem still overrides the fallback, byte-for-byte", async () => {
-    const handlers = loadFactory();
-    // First event has NO session file -> anonymous fallback caches one id.
     handlers.get("turn_start")!({ turnIndex: 0 }, anonCtx());
-    const anonFile = await waitForAnyTelemetryFile();
-    const [anonRec] = await waitForFileLines(anonFile, 1);
-    expect(anonRec.session).toMatch(/^anon-/);
+    const file = await waitForAnyTelemetryFile();
+    const [record] = await waitForFileLines(file, 1);
+    expect(record.kind).toBe("extension_error");
+    expect(record.session).toBe("unknown");
+    expect(record.session).not.toMatch(/^anon-/u);
+  });
 
-    // Later events WITH an explicit session file must still use the explicit
-    // stem (explicit identity always wins over the cached fallback).
-    const ctx = makeCtx(); // getSessionFile -> .../wiring-test.jsonl
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    handlers.get("turn_end")!({ turnIndex: 0, message: {}, toolResults: [] }, ctx);
+  it("keeps same-basename native sessions in distinct telemetry ledgers", async () => {
+    const handlers = loadFactory();
+    const left = identityCtx(join(tmp, "left", "shared-session.jsonl"), "native-left");
+    const right = identityCtx(join(tmp, "right", "shared-session.jsonl"), "native-right");
+    handlers.get("session_start")!({ reason: "startup" }, left);
+    handlers.get("session_start")!({ reason: "startup" }, right);
+    const rightFile = join(
+      telemetryDir(),
+      `${timestamp.replace(/[:.]/gu, "-")}_native-right.jsonl`,
+    );
+    await waitForFileLines(rightFile, 1);
+    const names = (await readdir(telemetryDir())).filter((name) => name.endsWith(".jsonl"));
+    expect(names).toEqual(expect.arrayContaining([
+      `${timestamp.replace(/[:.]/gu, "-")}_native-left.jsonl`,
+      `${timestamp.replace(/[:.]/gu, "-")}_native-right.jsonl`,
+    ]));
+  });
 
-    const records = await waitForLines(2); // wiring-test.jsonl
-    expect(records.map((r) => String(r.session))).toEqual(["wiring-test", "wiring-test"]);
-    await settle();
-    // anon file unchanged: still exactly the one anonymous record
-    const anonAfter = (await readFile(anonFile, "utf8")).trim().split("\n").filter(Boolean);
-    expect(anonAfter.map((l) => JSON.parse(l).kind)).toEqual(["turn_start"]);
+  it("preserves a verified timestamp-qualified legacy assignment", async () => {
+    const handlers = loadFactory();
+    const entries = [{
+      type: "custom",
+      customType: "brain.active-state",
+      details: { session_id: "EconomicsRuntimeBinding" },
+      timestamp,
+    }];
+    const file = join(tmp, "named", "native.jsonl");
+    handlers.get("turn_start")!({ turnIndex: 0 }, identityCtx(file, "native-named", entries));
+    const telemetry = await waitForAnyTelemetryFile();
+    const [record] = await waitForFileLines(telemetry, 1);
+    expect(record.session).toBe("EconomicsRuntimeBinding");
+  });
+
+  it("preserves the native session manager receiver when reading identity history", async () => {
+    const handlers = loadFactory();
+    const entries = [{
+      type: "custom_message", customType: "brain.active-state",
+      details: { session_id: "receiver-bound-history" }, timestamp,
+    }];
+    const ctx = identityCtx(join(tmp, "receiver.jsonl"), "native-receiver", entries);
+    ctx.sessionManager = {
+      ...ctx.sessionManager,
+      entries,
+      getEntries() { return this.entries; },
+    } as ExtensionContext["sessionManager"] & { entries: unknown[] };
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    const [record] = await waitForFileLines(await waitForAnyTelemetryFile(), 1);
+    expect(record.kind).toBe("turn_start");
+    expect(record.session).toBe("receiver-bound-history");
+  });
+
+  it("uses a fresh key for a fork with provably inherited active-state hints", async () => {
+    const handlers = loadFactory();
+    const entries = [{
+      type: "custom",
+      customType: "brain.active-state",
+      details: { session_id: "parent-ledger" },
+      timestamp: "2025-12-31T23:59:59.000Z",
+    }];
+    const id = "native-fork";
+    const file = join(tmp, "fork", "shared-session.jsonl");
+    const ctx = identityCtx(file, id, entries, timestamp);
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    const telemetry = await waitForAnyTelemetryFile();
+    const [record] = await waitForFileLines(telemetry, 1);
+    expect(record.session).toBe(`${timestamp.replace(/[:.]/gu, "-")}_${id}`);
+    expect(record.session).not.toBe("parent-ledger");
+  });
+
+  it("refuses an existing legacy hint whose ownership cannot be proven", async () => {
+    const handlers = loadFactory();
+    const file = join(tmp, "ambiguous", "native.jsonl");
+    const ctx = identityCtx(file, "native-ambiguous", [{
+      type: "custom",
+      customType: "brain.active-state",
+      details: { session_id: "ambiguous-ledger" },
+    }]);
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    const telemetry = await waitForAnyTelemetryFile();
+    const [record] = await waitForFileLines(telemetry, 1);
+    expect(record.kind).toBe("extension_error");
+    expect(record.session).toBe("unknown");
+    const names = (await readdir(telemetryDir())).filter((name) => name.endsWith(".jsonl"));
+    expect(names).not.toContain("ambiguous-ledger.jsonl");
+  });
+
+  it("refuses an unbound user-only transcript when its prior canonical state exists", async () => {
+    const journal: Array<{ type: string; customType: string; data: unknown }> = [];
+    const handlers = loadFactory({}, journal);
+    const oldState = join(tmp, "state", "sessions", "historical-name", "active-state.json");
+    mkdirSync(join(tmp, "state", "sessions", "historical-name"), { recursive: true });
+    writeFileSync(oldState, '{"objective":"preserve prior work"}');
+    const ctx = identityCtx(join(tmp, "historical-name.jsonl"), "native-old", [{
+      type: "message", timestamp: "2026-01-01T00:00:01.000Z",
+      message: { role: "user", content: [{ type: "text", text: "Prior task request." }] },
+    }]);
+    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+    const [record] = await waitForFileLines(await waitForAnyTelemetryFile(), 1);
+    expect(record.kind).toBe("extension_error");
+    expect(record.session).toBe("unknown");
+    expect(journal.some(entry => entry.customType === "brain.session-identity")).toBe(false);
+    expect(readFileSync(oldState, "utf8")).toBe('{"objective":"preserve prior work"}');
   });
 });
 
@@ -1603,11 +1707,13 @@ describe("Phase 4 shared directory readiness (src/index.ts)", () => {
     });
     const handlers = loadFactory({ ensureTelemetryDir });
 
-    // store A: anonymous session (no session file)
-    handlers.get("turn_start")!({ turnIndex: 0 }, anonCtx());
-    const anonFile = await waitForAnyTelemetryFile();
-    const [anonRec] = await waitForFileLines(anonFile, 1);
-    expect(anonRec.session).toMatch(/^anon-/);
+    // Store A has a distinct native identity; unavailable identity is tested separately.
+    const first = makeCtx({ sessionManager: nativeManager(join(tmp, "store-a.jsonl")) });
+    handlers.get("turn_start")!({ turnIndex: 0 }, first);
+    const firstFile = await waitForAnyTelemetryFile();
+    const [firstRecord] = await waitForFileLines(firstFile, 1);
+    expect(firstRecord.kind).toBe("turn_start");
+    expect(firstRecord.session).not.toBe("wiring-test");
 
     // store B: explicit session file -> a SECOND TelemetryStore, same factory
     const ctx = makeCtx();

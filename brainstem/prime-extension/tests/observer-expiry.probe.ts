@@ -58,7 +58,24 @@ const probeApi = { on(name: string, fn: Handler) { handlers.set(name, fn); }, ap
 // This in-process fixture implements only the extension hooks exercised below.
 factory(probeApi as unknown as ExtensionAPI);
 function context(cwd: string, session: string): ExtensionContext {
-  return { cwd, model: { provider: "openai-codex", id: "gpt-5.6-luna" }, sessionManager: { getSessionFile: () => join(fixture, session + ".jsonl") }, getContextUsage: () => undefined, getSystemPrompt: () => "offline probe", signal: undefined, hasUI: false, ui: undefined,
+  const file = join(fixture, session + ".jsonl");
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  const nativeId = `native-${session}`;
+  writeFileSync(file, `${JSON.stringify({ type: "session", version: 1, id: nativeId, timestamp })}\n`, "utf8");
+  return {
+    cwd,
+    model: { provider: "openai-codex", id: "gpt-5.6-luna" },
+    sessionManager: {
+      getSessionFile: () => file,
+      getSessionId: () => nativeId,
+      getHeader: () => ({ type: "session", version: 1, id: nativeId, timestamp }),
+      getEntries: () => [],
+    },
+    getContextUsage: () => undefined,
+    getSystemPrompt: () => "offline probe",
+    signal: undefined,
+    hasUI: false,
+    ui: undefined,
     observeAsyncJobLifecycle(observer, options) {
       const key = options?.sourceToolCallId ?? "";
       const unsubscribe = manager.observeJobLifecycle(observer, { ownerId: "Main", sourceToolCallId: key });

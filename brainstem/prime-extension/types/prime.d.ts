@@ -27,6 +27,10 @@ export interface ContextUsage {
 
 /** Read-only session manager surface used by this extension. */
 export interface SessionManagerSurface {
+  /** Native UUID-like identity, independent of transcript filename. */
+  getSessionId?(): string;
+  /** Native session header, including its authoritative timestamp/id. */
+  getHeader?(): unknown;
   getSessionFile(): string | undefined;
   getEntries?(): unknown[];
 }

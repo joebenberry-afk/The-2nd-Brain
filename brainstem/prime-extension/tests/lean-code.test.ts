@@ -125,13 +125,22 @@ function loadFactory(): Map<string, Handler> {
   return handlers;
 }
 
-/** Fake ExtensionContext; session file lives inside the temp dir. */
+/** Fake ExtensionContext with the actual native identity surface. */
 function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
+  const timestamp = "2026-01-01T00:00:00.000Z";
   return {
     cwd: "C:/work",
     model: { id: "deepseek-v4-flash", provider: "deepseek" },
     sessionManager: {
       getSessionFile: () => join(tmp, "sessions", "lean-test.jsonl"),
+      getSessionId: () => "native-lean-test",
+      getHeader: () => ({ type: "session", version: 1, id: "native-lean-test", timestamp }),
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: "lean-test" },
+        timestamp,
+      }],
     },
     getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
     getSystemPrompt: () => "BASE SYSTEM PROMPT",

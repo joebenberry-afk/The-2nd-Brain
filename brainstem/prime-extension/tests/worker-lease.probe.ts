@@ -192,20 +192,29 @@ async function main(): Promise<void> {
   if (!toolCall) throw new Error("Second Brain task admission handler unavailable");
   const toolResult = handlers.get("tool_result");
   if (!toolResult) throw new Error("Second Brain task result handler unavailable");
-  const makeContext = (cwd: string, session: string): ExtensionContext => ({
-    cwd,
-    model: { provider: driverProvider, id: driverModel },
-    sessionManager: { getSessionFile: () => join(cwd, `${session}.jsonl`) },
-    getContextUsage: () => undefined,
-    getSystemPrompt: () => "probe",
-    signal: undefined,
-    hasUI: false,
-    ui: undefined,
-    observeAsyncJobLifecycle: (observer, options) => manager.observeJobLifecycle(observer, {
-      ownerId: "Main",
-      sourceToolCallId: options?.sourceToolCallId ?? "",
-    }),
-  });
+  const makeContext = (cwd: string, session: string): ExtensionContext => {
+    const nativeId = `native-${session}`;
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    return {
+      cwd,
+      model: { provider: driverProvider, id: driverModel },
+      sessionManager: {
+        getSessionFile: () => join(cwd, `${session}.jsonl`),
+        getSessionId: () => nativeId,
+        getHeader: () => ({ type: "session", version: 1, id: nativeId, timestamp }),
+        getEntries: () => [],
+      },
+      getContextUsage: () => undefined,
+      getSystemPrompt: () => "probe",
+      signal: undefined,
+      hasUI: false,
+      ui: undefined,
+      observeAsyncJobLifecycle: (observer, options) => manager.observeJobLifecycle(observer, {
+        ownerId: "Main",
+        sourceToolCallId: options?.sourceToolCallId ?? "",
+      }),
+    };
+  };
   const ctxA = makeContext(worktreeA, `probe-a-${runId}`);
   const ctxB = makeContext(worktreeB, `probe-b-${runId}`);
   const admit = (ctx: ExtensionContext, toolCallId: string) => toolCall({

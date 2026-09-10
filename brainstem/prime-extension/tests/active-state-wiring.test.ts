@@ -86,15 +86,27 @@ function loadFactory(): Map<string, Handler> {
 }
 
 function context(): ExtensionContext {
+  const timestamp = "2026-01-01T00:00:00.000Z";
   return {
     cwd: "C:/work",
     model: { id: "gpt-5.6-luna", provider: "openai-codex" },
-    sessionManager: { getSessionFile: () => join(tmp, "session.jsonl") },
+    sessionManager: {
+      getSessionFile: () => join(tmp, "session.jsonl"),
+      getSessionId: () => "native-active-state",
+      getHeader: () => ({ type: "session", version: 1, id: "native-active-state", timestamp }),
+      getEntries: () => [{
+        type: "custom",
+        customType: "brain.active-state",
+        details: { session_id: "omp-session" },
+        timestamp,
+      }],
+    },
     getContextUsage: () => ({ tokens: 10, contextWindow: 1000, percent: 1 }),
     getSystemPrompt: () => "BASE",
     signal: undefined,
     hasUI: false,
-  } as unknown as ExtensionContext;
+    ui: undefined,
+  };
 }
 
 describe("P3.1 active-state OMP lifecycle", () => {

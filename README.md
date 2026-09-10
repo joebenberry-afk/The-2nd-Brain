@@ -131,6 +131,17 @@ Declarations, stale observations, and missing bindings remain visible for
 diagnosis but cannot authorize T1/T2 behavior. Matrix callers can supply
 per-harness `host_bindings`; declaration-only matrices are not native-host proof.
 
+## OMP session identity and continuity
+
+Fresh OMP sessions use their native header timestamp and session ID, not a
+transcript basename. Identically named files and newly created named workers
+therefore do not share a Brain ledger. Verified existing canonical assignments
+are retained and journaled with their native identity; malformed, conflicting,
+or unproven legacy state is refused rather than replaced with an empty ledger.
+Worker-root authority still follows native filesystem breadcrumbs, not prompt
+text or a claimed parent header. Identity is recorded before the first Brain
+operation, including extension-restart recovery without a new startup event.
+
 ## Paired economics answer review
 
 The general paired runner retains every requested host attempt, including

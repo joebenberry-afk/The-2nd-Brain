@@ -1,3 +1,14 @@
+## 2026-09-10 — Native OMP session identity (unreleased)
+
+- Use native session identity for fresh roots and named workers, eliminating
+  basename collisions while preserving verified existing ledger assignments.
+- Record identity before Brain operations and preserve bindings across
+  extension restart, session reopen, and transcript rename.
+- Read ancestor identity metadata consistently, including title-prefixed
+  transcripts and bindings outside a tail window; retain filesystem ancestry.
+- Refuse unproven legacy state without opening a replacement ledger. Avoid
+  shutdown capsule updates when no capsule was touched in that extension run.
+
 ## 2026-09-10 — Selected-runtime economics (unreleased)
 
 - Honor `SECOND_BRAIN_PYTHON` for fresh Brain initialization and host execution,

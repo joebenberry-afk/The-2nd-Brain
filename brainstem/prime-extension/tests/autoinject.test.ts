@@ -307,7 +307,12 @@ describe("index.ts wiring (real factory, fake ExtensionAPI)", () => {
   const ctx = {
     cwd: "C:/work",
     model: { id: "deepseek/deepseek-v4-flash" },
-    sessionManager: undefined,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => "native-autoinject-shadow",
+      getHeader: () => ({ type: "session", id: "native-autoinject-shadow", timestamp: "2026-01-01T00:00:00.000Z" }),
+      getEntries: () => [],
+    },
   } as unknown as ExtensionContext;
 
   it("before_agent_start schedules shadow run with event prompt, returns undefined", async () => {
@@ -439,7 +444,12 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
   const ctx = {
     cwd: "C:/work",
     model: { id: "deepseek/deepseek-v4-flash" },
-    sessionManager: undefined,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => "native-autoinject-advisory",
+      getHeader: () => ({ type: "session", id: "native-autoinject-advisory", timestamp: "2026-01-01T00:00:00.000Z" }),
+      getEntries: () => [],
+    },
   } as unknown as ExtensionContext;
 
   it("same session twice -> first call returns custom_message patch, second undefined (ALREADY_DELIVERED)", async () => {
@@ -564,7 +574,7 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     const solCtx = {
       cwd: "C:/work",
       model: { id: "openai-codex/gpt-5.6-sol" },
-      sessionManager: undefined,
+      sessionManager: ctx.sessionManager,
     } as unknown as ExtensionContext;
     const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, solCtx);
     expect(result).toBeDefined();
@@ -586,7 +596,7 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     const driverCtx = {
       cwd: "C:/work",
       model: { id: "deepseek/deepseek-v4-pro" },
-      sessionManager: undefined,
+      sessionManager: ctx.sessionManager,
       getSystemPrompt: () => "base prompt",
     } as unknown as ExtensionContext;
     const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, driverCtx);

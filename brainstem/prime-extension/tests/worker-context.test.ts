@@ -82,10 +82,16 @@ function contextResultForRequest(
 }
 
 function ctx(): ExtensionContext {
+  const timestamp = "2026-01-01T00:00:00.000Z";
   return {
     cwd: "C:/omp-project",
     model: { provider: "openai-codex", id: "gpt-5.6-luna" },
-    sessionManager: { getSessionFile: () => "C:/omp-project/omp-session.jsonl" },
+    sessionManager: {
+      getSessionFile: () => "C:/omp-project/omp-session.jsonl",
+      getSessionId: () => "native-omp-session",
+      getHeader: () => ({ type: "session", version: 1, id: "native-omp-session", timestamp }),
+      getEntries: () => [],
+    },
     getContextUsage: () => undefined,
     getSystemPrompt: () => "base",
     signal: undefined,
