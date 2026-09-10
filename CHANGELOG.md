@@ -1,3 +1,12 @@
+## 2026-09-10 — Hermes backend isolation (unreleased)
+
+- Resolve the Brain backend only from its configured interpreter or command,
+  never from the consumer repository's `src` directory or working directory.
+  Preserve consumer project context in the existing request payload.
+- Use Python safe-path startup and the trusted Brain home for backend execution;
+  a missing Brain home fails open instead of falling back to consumer code.
+- Keep prefix bookkeeping scoped to a real session identifier.
+
 ## 2026-09-10 — Completion candidate diagnostics (unreleased)
 
 - Explain cascade selection with bounded candidate identities, scores, MMR

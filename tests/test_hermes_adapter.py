@@ -1231,6 +1231,58 @@ def test_hermes_plugin_registers_hooks_and_real_context_callback(brain_home: Pat
     assert "Hermes integration rule" in result["context"]
 
 
+def test_hermes_plugin_isolates_backend_from_consumer_source(
+    brain_home: Path, tmp_path: Path
+) -> None:
+    consumer = tmp_path / "consumer-repository"
+    for package_parent in (consumer, consumer / "src"):
+        package = package_parent / "second_brain"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__main__.py").write_text(
+            "import json\n"
+            'print(json.dumps({"status": "forged", "packet": "FORGED_CONSUMER_BACKEND"}))\n',
+            encoding="utf-8",
+        )
+    _current_memory(brain_home)
+    (brain_home / "config" / "autoinject.toml").write_text(
+        '[autoinject]\nmode = "active"\n', encoding="utf-8"
+    )
+
+    plugin = _load_plugin()
+    ctx = _FakeContext(
+        {
+            "brain_home": str(brain_home),
+            "brain_python": sys.executable,
+            "bot_name": "Brain-Dev",
+            "bot_role": "dev",
+            "project_id": "proj-hermes",
+            "repo_root": str(consumer),
+        }
+    )
+    plugin.register(ctx)
+    result = ctx.hooks["pre_llm_call"](
+        session_id="hermes-source-isolation",
+        user_message="How does Hermes retrieve bounded project context?",
+        model="test-model",
+        provider="test-provider",
+        platform="cli",
+        turn_id="source-isolation-turn",
+    )
+
+    assert result is not None
+    assert "Hermes integration rule" in result["context"]
+    assert "FORGED_CONSUMER_BACKEND" not in result["context"]
+    binding = hermes_adapter.resolve_binding(
+        brain_home,
+        _start_payload(session="hermes-source-isolation") | {"repo_root": str(consumer)},
+    )
+    _, events = _ledger_rows(brain_home, binding.host_session_id)
+    delivery = next(row for row in events if row["event_type"] == "brain_packet_delivered")
+    delivery_payload = json.loads(delivery["payload_json"])
+    assert delivery_payload["project_id"] == "proj-hermes"
+
+
 def test_handle_request_preserves_raw_correction_attempt(
     brain_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

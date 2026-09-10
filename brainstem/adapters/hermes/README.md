@@ -60,6 +60,11 @@ Brain-Validator, and Brain-Integrator. The Hermes session ID is supplied by
 Hermes at runtime; reconnecting the same bot/session reuses the same Brain
 identity.
 
+`repo_root` identifies the consumer project for Brain project resolution and
+worker operations; it is not a Brain backend import root. Backend imports come
+only from the configured `brain_python` environment (or configured `brainctl`).
+
+
 ## Validation and install
 
 From the repository root, validate the plugin with the installed Hermes
@@ -72,5 +77,6 @@ hermes plugins doctor brainstem/adapters/hermes --ci
 Install the adapter from a published standalone plugin repository using
 Hermes' normal `hermes plugins install` flow, or copy this directory into the
 active Hermes profile's plugin directory for local development. Keep the Brain
-repository available at the configured `brain_home`; the plugin invokes its
-venv with `PYTHONHOME`/`PYTHONPATH` cleared for the Windows toolchain.
+repository available at the configured `brain_home`; Python module requests use
+the configured environment with `-P`, a trusted backend working directory, and
+`PYTHONHOME`/`PYTHONPATH` cleared for the Windows toolchain.
