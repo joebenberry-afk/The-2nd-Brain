@@ -7,10 +7,17 @@ not create Hermes-owned project memory, retrieval, telemetry, or ledger state.
 ## Runtime behavior
 
 - `on_session_start` maps the Hermes session, configured bot name/role,
-  provider/model, and repository to a canonical Brain session and agent.
+  provider/model, and repository to a canonical Brain session and agent. The
+  stable Brain PREFIX is registered through Hermes'
+  `register_system_prompt_section` API, so Hermes freezes and persists it in
+  the system prompt once per session.
 - `pre_llm_call` sends only the current user message and bounded configured
   model candidates as ephemeral routing metadata. Brain owns model policy; the
   hook returns only ephemeral context to Hermes.
+- Hermes' native `read_file` owns file reads and region/mtime deduplication.
+  Brain observes the resulting `post_tool_call` event but does not suppress or
+  transform `read`/`cat`/`grep` results; this adapter makes no Brain-specific
+  read-hash reuse or economics claim for the host.
 - `llm_request` middleware applies a cached Brain decision to the outgoing
   request. It rewrites the model and only provider fields already represented by
   the original request (including OpenRouter `extra_body.provider`); unsafe
@@ -26,8 +33,10 @@ not create Hermes-owned project memory, retrieval, telemetry, or ledger state.
   and does not break Hermes.
 
 Hermes injects `pre_llm_call` results into the ephemeral current user message,
-not its system prompt. This preserves the host prompt-cache prefix and keeps
-Brain context out of Hermes' canonical conversation history.
+not its system prompt. The stable PREFIX is separate host-frozen section
+content; Brain TAIL context remains out of Hermes' canonical conversation
+history. Native Hermes read behavior remains authoritative; Brain does not
+replace or avoid the underlying file-read call.
 
 ## Configuration
 

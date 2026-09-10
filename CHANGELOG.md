@@ -1,3 +1,28 @@
+## 2026-09-10 — Answer-grounded economics (unreleased)
+
+- Retain host answer/error streams outside Git repositories with immutable
+  capture files and hashed public references. Preserve failed attempts.
+- Separate repository regression checks from answer acceptance. Collect
+  independent, output-bound reviews without running the host again; reject
+  stale, tampered, duplicate, and mismatched evidence.
+- Keep whole-cohort token statistics separate from the quality gate. Missing
+  arms or failed host, regression, or answer checks cannot qualify economics.
+
+
+## 2026-09-10 — Economics evidence-integrity repair (unreleased)
+
+- Retain immutable raw records for every paired attempt, including setup
+  failures, missing arms, and appended telemetry accounting failures.
+- Pin collection to the current observed runner source and frozen task catalog,
+  require the preregistered `--reviewer-identity`, and reject all extra or
+  invalid reviews.
+- Keep answer quality separate from economics usage eligibility; unknown
+  prices remain null while token evidence follows existing statistical gates.
+- Add the primary OMP host explicitly with its supported `--print --no-title`
+  launch mode and public-safe executable/argv identity.
+- Mark malformed or missing usage unavailable rather than reporting partial
+  totals as complete. Retain host execution timestamps for end-to-end timing.
+
 ## 2026-09-10 — Hermes backend isolation (unreleased)
 
 - Resolve the Brain backend only from its configured interpreter or command,
@@ -5,7 +30,9 @@
   Preserve consumer project context in the existing request payload.
 - Use Python safe-path startup and the trusted Brain home for backend execution;
   a missing Brain home fails open instead of falling back to consumer code.
-- Keep prefix bookkeeping scoped to a real session identifier.
+- Deliver PREFIX through Hermes's native frozen system-prompt section API and
+  TAIL through supported ephemeral context. Preserve native read behavior;
+  remove the unsupported Brain read-replacement path, not Hermes's own dedup.
 
 ## 2026-09-10 — Completion candidate diagnostics (unreleased)
 

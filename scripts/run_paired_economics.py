@@ -11,18 +11,24 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from second_brain import economics, governor
+from second_brain import build_identity, contracts, economics, governor
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "proof" / "tasks" / "economics"
 RAW_DIR = ROOT / "outputs" / "reports" / "v2" / "economics" / "raw"
 QUALIFICATION = ROOT / "outputs" / "reports" / "v2" / "v2-0" / "qualification.json"
-HARNESS_EXECUTABLES = {"prime": "prime", "claude-code": "claude", "hermes": "hermes"}
+HARNESS_EXECUTABLES = {
+    "omp": "omp",
+    "prime": "prime",
+    "claude-code": "claude",
+    "hermes": "hermes",
+}
 PROFILE_TO_ABLATION = {"OFF": "A_BRAIN_OFF", "ON": "I_FULL_V1"}
 MAX_PAIRS = 100
 _REQUIRED_USAGE = (
@@ -65,6 +71,18 @@ def _write_json_once(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:
         stream.write(payload)
+
+
+def _stable_hash(value: object) -> str:
+    return contracts.stable_content_hash(value)
+
+
+def _source_identity() -> dict[str, str] | None:
+    source_commit = build_identity.git_sha(ROOT)
+    source_tree = build_identity.source_tree_fingerprint(ROOT)
+    if not isinstance(source_commit, str) or not isinstance(source_tree, str):
+        return None
+    return {"source_commit": source_commit, "source_tree_sha256": source_tree}
 
 
 def _canonical_exporter():
@@ -1028,6 +1046,34 @@ def load_tasks() -> list[dict[str, Any]]:
     return tasks
 
 
+def _task_catalog_identity(tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Return the identity of the authoritative frozen fixture catalog."""
+    if tasks is None:
+        tasks = load_tasks()
+    return {
+        "sha256": _stable_hash(tasks),
+        "task_count": len(tasks),
+        "task_ids": [task["task_id"] for task in tasks],
+    }
+
+
+def _telemetry_snapshot(home: Path) -> dict[Path, tuple[int, int, int, str]]:
+    snapshot: dict[Path, tuple[int, int, int, str]] = {}
+    for path in _telemetry_files(home):
+        try:
+            stat = path.stat()
+            data = path.read_bytes()
+        except OSError:
+            continue
+        snapshot[path.resolve()] = (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            hashlib.sha256(data).hexdigest(),
+        )
+    return snapshot
+
+
 def _telemetry_files(home: Path) -> set[Path]:
     path = home / "telemetry" / "agent-performance"
     return set(path.glob("*.jsonl")) if path.is_dir() else set()
@@ -1042,8 +1088,12 @@ def _parse_ts(value: Any) -> float | None:
         return None
 
 
-def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
-    """Aggregate all host telemetry files from one attempt, preserving nulls."""
+def aggregate_telemetry(
+    paths: Iterable[Path],
+    *,
+    offsets: dict[Path, tuple[int, int, int, str]] | None = None,
+) -> dict[str, Any]:
+    """Aggregate telemetry, optionally reading only bytes appended after a snapshot."""
     totals: dict[str, Any] = {field: 0 for field in _REQUIRED_USAGE}
     seen: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
     nulls: dict[str, bool] = {field: False for field in _REQUIRED_USAGE}
@@ -1054,18 +1104,46 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
     tool_calls = 0
     saw_event = False
     stamps: list[float] = []
-    for path in sorted(paths):
+    accounting_available = True
+    accounting_errors: list[str] = []
+    for raw_path in sorted(paths):
+        path = Path(raw_path).resolve()
+        start = 0
+        snapshot = offsets.get(path) if offsets else None
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+            stat = path.stat()
+            data = path.read_bytes()
+            if snapshot is not None:
+                device, inode, previous_size, previous_digest = snapshot
+                prefix = data[:previous_size]
+                if (
+                    (stat.st_dev, stat.st_ino) != (device, inode)
+                    or len(data) < previous_size
+                    or hashlib.sha256(prefix).hexdigest() != previous_digest
+                ):
+                    accounting_available = False
+                    accounting_errors.append(f"telemetry stream replaced or truncated: {path.name}")
+                    continue
+                start = previous_size
+            data = data[start:]
+            text = data.decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            accounting_available = False
+            accounting_errors.append(f"telemetry stream unavailable: {path.name}")
             continue
-        for line in lines:
+        for line in text.splitlines():
+            if not line.strip():
+                continue
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                accounting_available = False
+                accounting_errors.append(f"malformed telemetry stream: {path.name}")
+                break
             if not isinstance(record, dict):
-                continue
+                accounting_available = False
+                accounting_errors.append(f"invalid telemetry record: {path.name}")
+                break
             saw_event = True
             stamp = _parse_ts(record.get("ts"))
             if stamp is not None:
@@ -1076,9 +1154,11 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
             if kind not in {"assistant_usage", "model_invocation_completed"}:
                 continue
             usage = record if kind == "assistant_usage" else record.get("usage")
-            if not isinstance(usage, dict):
-                continue
             model_turns += 1
+            if not isinstance(usage, dict):
+                for field in _REQUIRED_USAGE:
+                    nulls[field] = True
+                continue
             raw_model = record.get("model")
             if isinstance(raw_model, str) and raw_model:
                 model = raw_model
@@ -1088,21 +1168,33 @@ def aggregate_telemetry(paths: Iterable[Path]) -> dict[str, Any]:
             for field in _REQUIRED_USAGE:
                 if field not in usage or usage[field] is None:
                     nulls[field] = True
-                elif isinstance(usage[field], int) and not isinstance(usage[field], bool):
+                elif (
+                    isinstance(usage[field], int)
+                    and not isinstance(usage[field], bool)
+                    and usage[field] >= 0
+                ):
                     seen[field] = True
                     totals[field] += usage[field]
                 else:
                     nulls[field] = True
     for field in _REQUIRED_USAGE:
-        totals[field] = None if nulls[field] or not seen[field] else totals[field]
+        totals[field] = (
+            None if not accounting_available or nulls[field] or not seen[field] else totals[field]
+        )
     totals.update(
         {
             "model": model,
             "models": sorted(models),
             "mixed_model": unknown_model or len(models) > 1,
-            "model_turns": model_turns if saw_event else None,
-            "tool_calls": tool_calls if saw_event else None,
-            "wall_ms": round(max(stamps) - min(stamps)) if len(stamps) >= 2 else None,
+            "model_turns": model_turns if saw_event and accounting_available else None,
+            "tool_calls": tool_calls if saw_event and accounting_available else None,
+            "wall_ms": (
+                round(max(stamps) - min(stamps))
+                if accounting_available and len(stamps) >= 2
+                else None
+            ),
+            "accounting_available": accounting_available,
+            "accounting_errors": accounting_errors,
         }
     )
     return totals
@@ -1116,25 +1208,93 @@ def _host_command(harness: str) -> list[str] | None:
     located = shutil.which(HARNESS_EXECUTABLES[harness])
     if not located:
         return None
-    return [located, "-p"] if harness == "claude-code" else [located]
+    if harness == "claude-code":
+        return [located, "-p"]
+    if harness == "omp":
+        return [located, "--print", "--no-title"]
+    return [located]
+
+
+def _inside_git_repository(path: Path) -> bool:
+    resolved = path.resolve()
+    return any((ancestor / ".git").exists() for ancestor in (resolved, *resolved.parents))
 
 
 def _run_host(command: list[str], prompt: str, worktree: Path, env: dict[str, str]) -> int | None:
+    """Run a host once, retaining answer streams in a private directory."""
+    capture_dir = Path(
+        env.get("SECOND_BRAIN_ECONOMICS_CAPTURE_DIR")
+        or tempfile.mkdtemp(prefix="second-brain-economics-")
+    ).resolve()
+    if _inside_git_repository(capture_dir):
+        raise ValueError("host output capture must be outside the repository")
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = capture_dir / "stdout.txt"
+    stderr_path = capture_dir / "stderr.txt"
+    status_path = capture_dir / "execution.json"
+    for path in (stdout_path, stderr_path):
+        try:
+            path.open("xb").close()
+        except FileExistsError as exc:
+            raise ValueError("capture directory already contains an attempt") from exc
+    if status_path.exists():
+        raise ValueError("capture directory already contains an attempt")
+    started_at = datetime.now(UTC).isoformat()
     try:
-        completed = subprocess.run(
-            command,
-            input=prompt,
-            text=True,
-            cwd=worktree,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=900,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=stdout,
+                stderr=stderr,
+                cwd=worktree,
+                env=env,
+            )
+            try:
+                process.communicate(input=prompt.encode("utf-8"), timeout=900)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                status = {"status": "timeout", "exit_code": None}
+                status.update(started_at=started_at, finished_at=datetime.now(UTC).isoformat())
+                _write_json_once(status_path, status)
+                return None
+    except OSError as exc:
+        status = {"status": "error", "exit_code": None, "error_type": type(exc).__name__}
+        status.update(started_at=started_at, finished_at=datetime.now(UTC).isoformat())
+        _write_json_once(status_path, status)
         return None
-    return completed.returncode
+    status = {"status": "completed", "exit_code": process.returncode}
+    status.update(started_at=started_at, finished_at=datetime.now(UTC).isoformat())
+    _write_json_once(status_path, status)
+    return process.returncode
+
+
+def _private_capture_dir(run_id: str) -> Path:
+    safe_id = run_id.replace("/", "_").replace("\\", "_")
+    configured = os.environ.get("SECOND_BRAIN_ECONOMICS_PRIVATE_OUTPUT_ROOT")
+    if configured:
+        root = Path(configured).resolve()
+        if _inside_git_repository(root):
+            raise ValueError("private economics output must be outside the repository")
+        root.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix=f"{safe_id}-", dir=root))
+    return Path(tempfile.mkdtemp(prefix=f"{safe_id}-second-brain-economics-"))
+
+
+def _artifact_metadata(path: Path) -> dict[str, Any] | None:
+    try:
+        return {"path": str(path), "sha256": _sha256_file(path), "bytes": path.stat().st_size}
+    except OSError:
+        return None
+
+
+def _execution_metadata(capture_dir: Path) -> dict[str, Any]:
+    try:
+        value = json.loads((capture_dir / "execution.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "unknown", "exit_code": None}
+    return value if isinstance(value, dict) else {"status": "unknown", "exit_code": None}
 
 
 def _acceptance(command: str, worktree: Path) -> bool | None:
@@ -1160,31 +1320,83 @@ def _acceptance(command: str, worktree: Path) -> bool | None:
 
 def _run_one(
     harness: str, task: dict[str, Any], profile: str, command: list[str]
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     run_id = f"{harness}-{task['task_id']}-{profile}-{_utc()}"
     run_dir = RAW_DIR / run_id
+    raw_record = RAW_DIR / f"{run_id}.json"
+    if run_dir.exists() or raw_record.exists():
+        raise FileExistsError(f"refusing to reuse raw run directory: {run_dir}")
+    run_dir.mkdir(parents=True)
     worktree = run_dir / "repo"
     telemetry_home = run_dir / "brain"
-    # Retain the executed checkout beside its observations. A host can leave
-    # handles open after returning; deleting it here loses provenance and races
-    # native cleanup, particularly on Windows.
-    run_dir.mkdir(parents=True, exist_ok=True)
-    added = subprocess.run(
-        ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=60,
-    )
+    capture_dir = _private_capture_dir(run_id)
+    try:
+        source_identity = _source_identity()
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        source_identity = None
+    try:
+        catalog_identity = _task_catalog_identity()
+    except (OSError, RuntimeError, ValueError):
+        catalog_identity = None
+    base = {
+        "schema_version": 2,
+        "classification": "observed",
+        "qualification_eligible": source_identity is not None and catalog_identity is not None,
+        "source_identity": source_identity,
+        "task_catalog_identity": catalog_identity,
+        "task_identity": _stable_hash(task),
+        "raw_directory": str(run_dir),
+        "worktree": str(worktree),
+        "run_id": run_id,
+        "harness": harness,
+        "task_id": task["task_id"],
+        "profile": profile,
+        "repo_fixture_commit": task["repo_fixture_commit"],
+        "host_command_identity": {
+            "executable": Path(command[0]).name if command else None,
+            "argv_sha256": _stable_hash(command),
+        },
+    }
+
+    def failed(status: str, error: str) -> dict[str, Any]:
+        return {
+            **base,
+            "host_exit": None,
+            "setup_error": error,
+            "host_execution": {"status": status, "exit_code": None},
+            "host_status": status,
+            "response_artifact": None,
+            "regression_pass": None,
+            "acceptance_pass": None,
+            "quality_status": "UNVERIFIED",
+            "review": None,
+            "dollars_reason": "missing_usage",
+            "usage_capture": False,
+            "telemetry": aggregate_telemetry(()),
+            "dollars": None,
+        }
+
+    try:
+        added = subprocess.run(
+            ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return failed("setup_error", f"{type(exc).__name__}: {exc}")
     if added.returncode != 0:
-        return None
+        return failed("setup_error", f"git worktree setup exited {added.returncode}")
+
     env = os.environ.copy()
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
     env.update(profile_env(profile))
     env["SECOND_BRAIN_HOME"] = str(telemetry_home)
     env["SECOND_BRAIN_PYTHON"] = sys.executable
+    env["SECOND_BRAIN_ECONOMICS_CAPTURE_DIR"] = str(capture_dir)
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     try:
         initialized = subprocess.run(
@@ -1205,33 +1417,25 @@ def _run_one(
         )
     if initialization_error is not None:
         return {
-            "classification": "observed",
-            "raw_directory": str(run_dir),
-            "worktree": str(worktree),
-            "run_id": run_id,
-            "harness": harness,
-            "task_id": task["task_id"],
-            "profile": profile,
-            "repo_fixture_commit": task["repo_fixture_commit"],
-            "host_exit": None,
+            **failed("not_started", initialization_error),
             "initialization_error": initialization_error,
-            "dollars_reason": "missing_usage",
-            "acceptance_pass": None,
-            "usage_capture": False,
-            "telemetry": aggregate_telemetry(()),
-            "dollars": None,
         }
-    before = _telemetry_files(telemetry_home)
+
+    before = _telemetry_snapshot(telemetry_home)
     host_exit = _run_host(command, task["prompt"], worktree, env)
-    after = _telemetry_files(telemetry_home) - before
-    telemetry = aggregate_telemetry(after)
+    after = _telemetry_files(telemetry_home)
+    telemetry = aggregate_telemetry(set(after) | set(before), offsets=before)
     usage_capture = bool(
-        telemetry["model_turns"] and all(telemetry[field] is not None for field in _REQUIRED_USAGE)
+        telemetry["accounting_available"]
+        and telemetry["model_turns"]
+        and all(telemetry[field] is not None for field in _REQUIRED_USAGE)
     )
     config = economics.load_config(ROOT)
     dollars = None
     dollars_reason = None
-    if not usage_capture:
+    if not telemetry["accounting_available"]:
+        dollars_reason = "telemetry_unavailable"
+    elif not usage_capture:
         dollars_reason = "missing_usage"
     elif telemetry["mixed_model"]:
         dollars_reason = "mixed_or_unknown_model"
@@ -1247,33 +1451,334 @@ def _run_one(
         )
         if dollars is None:
             dollars_reason = "missing_or_null_price"
-    elif not telemetry["model"]:
+    else:
         dollars_reason = "unknown_model"
-    acceptance_pass = (
+    response = _artifact_metadata(capture_dir / "stdout.txt")
+    stderr = _artifact_metadata(capture_dir / "stderr.txt")
+    execution = _execution_metadata(capture_dir)
+    regression_pass = (
         _acceptance(task["acceptance"]["command"], worktree) if host_exit == 0 else None
     )
     return {
-        "classification": "observed",
-        "raw_directory": str(run_dir),
-        "worktree": str(worktree),
-        "run_id": run_id,
-        "harness": harness,
-        "task_id": task["task_id"],
-        "profile": profile,
-        "repo_fixture_commit": task["repo_fixture_commit"],
+        **base,
         "host_exit": host_exit,
+        "host_execution": execution,
+        "host_status": execution.get("status"),
+        "host_stderr": stderr,
+        "response_artifact": response,
+        "regression_pass": regression_pass,
+        "acceptance_pass": None,
+        "quality_status": "UNVERIFIED",
+        "review": None,
         "dollars_reason": dollars_reason,
-        "acceptance_pass": acceptance_pass,
         "usage_capture": usage_capture,
         "telemetry": telemetry,
         "dollars": dollars,
     }
 
 
+_SHA256 = set("0123456789abcdef")
+
+
+def _load_record_input(source: object, label: str) -> list[dict[str, Any]]:
+    if isinstance(source, (str, Path)):
+        path = Path(source)
+        paths = sorted(path.glob("*.json")) if path.is_dir() else [path]
+        if not paths:
+            raise ValueError(f"{label} input contains no JSON records")
+        values: list[Any] = []
+        for item in paths:
+            try:
+                values.append(json.loads(item.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"invalid {label} record: {item}") from exc
+    elif isinstance(source, dict):
+        values = [source]
+    elif isinstance(source, Iterable):
+        values = list(source)
+    else:
+        values = [source]
+    records: list[dict[str, Any]] = []
+    for value in values:
+        if isinstance(value, list):
+            records.extend(value)
+        else:
+            records.append(value)
+    if not all(isinstance(value, dict) for value in records):
+        raise ValueError(f"{label} records must be JSON objects")
+    return records
+
+
+def _run_artifact(record: dict[str, Any]) -> tuple[Path, str, int] | None:
+    artifact = record.get("response_artifact")
+    if artifact is None:
+        return None
+    if not isinstance(artifact, dict):
+        raise ValueError("malformed response artifact metadata")
+    path, digest, size = artifact.get("path"), artifact.get("sha256"), artifact.get("bytes")
+    if path is None and digest is None and size is None:
+        return None
+    if (
+        not isinstance(path, str)
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or digest != digest.casefold()
+        or any(char not in _SHA256 for char in digest)
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+    ):
+        raise ValueError("malformed response artifact metadata")
+    artifact_path = Path(path).resolve()
+    if not artifact_path.is_file():
+        raise ValueError("response artifact is missing")
+    actual_size = artifact_path.stat().st_size
+    actual_digest = _sha256_file(artifact_path)
+    if actual_size != size or actual_digest != digest:
+        raise ValueError("response artifact hash or size mismatch")
+    return artifact_path, digest, size
+
+
+def _review_binding(
+    review: dict[str, Any],
+) -> tuple[str, str, str, str, str, bool, str, str]:
+    required = (
+        "run_id",
+        "task_id",
+        "fixture_commit",
+        "response_artifact_sha256",
+        "reviewer_identity",
+        "accepted",
+        "evidence",
+        "rationale",
+    )
+    if any(field not in review for field in required):
+        raise ValueError("review is missing required binding fields")
+    values = [review[field] for field in required]
+    run_id, task_id, fixture, digest, identity, accepted, evidence, rationale = values
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (run_id, task_id, fixture, identity, evidence, rationale)
+    ):
+        raise ValueError("review binding text fields must be non-empty strings")
+    if not isinstance(accepted, bool):
+        raise ValueError("review accepted must be boolean")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or digest != digest.casefold()
+        or any(char not in _SHA256 for char in digest)
+    ):
+        raise ValueError("review artifact hash is malformed")
+    return run_id, task_id, fixture, digest, identity, accepted, evidence, rationale
+
+
+def collect_reviews(
+    run_records: object,
+    review_records: object,
+    *,
+    output: Path | None = None,
+    reviewer_identity: str | None = None,
+) -> dict[str, Any]:
+    """Bind independent answer reviews to immutable runs without host execution."""
+    runs = _load_record_input(run_records, "run")
+    reviews = _load_record_input(review_records, "review")
+    by_run: dict[str, dict[str, Any]] = {}
+    review_by_run: dict[str, dict[str, Any]] = {}
+    rejected: list[dict[str, str]] = []
+    run_errors: dict[str, str] = {}
+    try:
+        current_catalog = _task_catalog_identity()
+    except (OSError, RuntimeError, ValueError) as exc:
+        current_catalog = None
+        catalog_error = f"current task catalog unavailable: {exc}"
+    else:
+        catalog_error = None
+    current_source = _source_identity()
+    if not isinstance(reviewer_identity, str) or not reviewer_identity.strip():
+        reviewer_error = "expected reviewer identity is required"
+    else:
+        reviewer_error = None
+        reviewer_identity = reviewer_identity.strip()
+    catalog_tasks = load_tasks() if current_catalog is not None else []
+    catalog_by_id = {task["task_id"]: task for task in catalog_tasks}
+    for record in runs:
+        run_id = record.get("run_id")
+        if not isinstance(run_id, str) or not run_id or run_id in by_run:
+            raise ValueError("run records require unique non-empty run_id")
+        by_run[run_id] = record
+        try:
+            _run_artifact(record)
+            if record.get("classification") != "observed":
+                raise ValueError("nonproduction run classification is ineligible")
+            if record.get("qualification_eligible") is not True:
+                raise ValueError("run is not qualification eligible")
+            if catalog_error:
+                raise ValueError(catalog_error)
+            if record.get("task_catalog_identity") != current_catalog:
+                raise ValueError("task catalog identity mismatch")
+            task = catalog_by_id.get(record.get("task_id"))
+            if task is None or record.get("task_identity") != _stable_hash(task):
+                raise ValueError("task identity mismatch")
+            if record.get("repo_fixture_commit") != task["repo_fixture_commit"]:
+                raise ValueError("task fixture binding mismatch")
+            observed_source = record.get("source_identity")
+            if (
+                not isinstance(observed_source, dict)
+                or current_source is None
+                or any(observed_source.get(key) != value for key, value in current_source.items())
+            ):
+                raise ValueError("runner source identity mismatch")
+        except (OSError, ValueError) as exc:
+            run_errors[run_id] = str(exc)
+    for review in reviews:
+        try:
+            if reviewer_error:
+                raise ValueError(reviewer_error)
+            run_id, task_id, fixture, digest, identity, accepted, evidence, rationale = (
+                _review_binding(review)
+            )
+            if run_id in review_by_run:
+                raise ValueError("review reused for a run")
+            run = by_run.get(run_id)
+            if run is None:
+                raise ValueError("review references unknown run")
+            if identity != reviewer_identity:
+                raise ValueError("reviewer identity mismatch")
+            expected_identity = run.get("reviewer_identity")
+            if isinstance(expected_identity, str) and identity != expected_identity:
+                raise ValueError("reviewer identity mismatch")
+            if task_id != run.get("task_id") or fixture != run.get(
+                "repo_fixture_commit", run.get("fixture_commit")
+            ):
+                raise ValueError("review task or fixture binding mismatch")
+            if type(run.get("host_exit")) is not int or run["host_exit"] != 0:
+                raise ValueError("review requires a successfully completed host run")
+            if run.get("regression_pass") is not True:
+                raise ValueError("review requires a passing regression acceptance")
+            artifact = _run_artifact(run)
+            if artifact is None or digest != artifact[1]:
+                raise ValueError("review response artifact binding mismatch")
+        except (OSError, ValueError) as exc:
+            rejected.append({"run_id": str(review.get("run_id", "")), "reason": str(exc)})
+            continue
+        review_by_run[run_id] = {
+            "run_id": run_id,
+            "task_id": task_id,
+            "fixture_commit": fixture,
+            "response_artifact_sha256": digest,
+            "reviewer_identity": identity,
+            "accepted": accepted,
+            "evidence": evidence,
+            "rationale": rationale,
+        }
+    records: list[dict[str, Any]] = []
+    rejected_by_run = {item["run_id"]: item["reason"] for item in rejected if item["run_id"]}
+    for original in runs:
+        record = dict(original)
+        run_id = record["run_id"]
+        review = review_by_run.get(run_id)
+        artifact_error = run_errors.get(run_id)
+        review_error = rejected_by_run.get(run_id)
+        record["review"] = review
+        record["acceptance_pass"] = (
+            review["accepted"] if review and not artifact_error and not review_error else None
+        )
+        record["quality_status"] = (
+            "FAILED"
+            if artifact_error or review_error
+            else "QUALIFIED"
+            if review and review["accepted"]
+            else "FAILED"
+            if review
+            else "UNVERIFIED"
+        )
+        if artifact_error or review_error:
+            record["quality_failure_reason"] = artifact_error or review_error
+        records.append(record)
+    pair_issues = _pair_issues(records)
+    pairs = _paired(records)
+    quality_pairs = [
+        pair
+        for pair in pairs
+        if pair["off"]["quality_status"] == "QUALIFIED"
+        and pair["on"]["quality_status"] == "QUALIFIED"
+    ]
+    config = economics.load_config(ROOT)
+    token_statistic = economics.verdict(pairs, config=config)
+    quality_status = (
+        "FAILED"
+        if rejected or any(record["quality_status"] == "FAILED" for record in records)
+        else "QUALIFIED"
+        if not pair_issues and pairs and len(quality_pairs) == len(pairs)
+        else "UNVERIFIED"
+    )
+    usage_complete = bool(pairs) and all(
+        pair["off_usage_capture"]
+        and pair["on_usage_capture"]
+        and pair["off"]["tokens"] is not None
+        and pair["on"]["tokens"] is not None
+        for pair in pairs
+    )
+    economics_eligible = quality_status == "QUALIFIED" and usage_complete
+    summary = {
+        "record_count": len(records),
+        "reviews_received": len(reviews),
+        "reviews_rejected": rejected,
+        "reviewer_identity": reviewer_identity,
+        "pairs_recorded": len(pairs),
+        "unpaired_records": pair_issues,
+        "quality_qualified_pairs": len(quality_pairs),
+        "quality_status": quality_status,
+        "quality_gate": {
+            "status": quality_status,
+            "pairs_recorded": len(pairs),
+            "pairs_qualified": len(quality_pairs),
+            "unpaired_records": pair_issues,
+        },
+        "token_statistic": token_statistic,
+        "economics_eligible": economics_eligible,
+        "economics_ineligibility_reason": (
+            None
+            if economics_eligible
+            else "missing_complete_paired_usage"
+            if quality_status == "QUALIFIED"
+            else "answer_quality_gate_not_qualified"
+        ),
+        "quality_qualified_economics": token_statistic if economics_eligible else None,
+        "records": records,
+    }
+    if output is not None:
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(summary, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
+        )
+    return summary
+
+
+def _pair_issues(records: list[dict[str, Any]]) -> list[str]:
+    grouped: dict[str, set[str]] = {}
+    for record in records:
+        task_id = record.get("task_id")
+        profile = record.get("profile")
+        if not isinstance(task_id, str) or profile not in {"OFF", "ON"}:
+            continue
+        grouped.setdefault(task_id, set()).add(profile)
+    return [task_id for task_id, profiles in grouped.items() if profiles != {"OFF", "ON"}]
+
+
 def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, dict[str, Any]]] = {}
     for record in records:
-        grouped.setdefault(record["task_id"], {})[record["profile"]] = record
+        task_id = record.get("task_id")
+        profile = record.get("profile")
+        if not isinstance(task_id, str) or profile not in {"OFF", "ON"}:
+            raise ValueError("paired records require task_id and OFF/ON profile")
+        arms = grouped.setdefault(task_id, {})
+        if profile in arms:
+            raise ValueError(f"duplicate {profile} arm for task {task_id}")
+        arms[profile] = record
     pairs = []
     for arms in grouped.values():
         if "OFF" not in arms or "ON" not in arms:
@@ -1285,8 +1790,9 @@ def _paired(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tokens": tel.get("total_tokens"),
                 "dollars": record.get("dollars"),
                 "turns": tel.get("model_turns"),
-                "wall_ms": tel.get("wall_ms"),
+                "wall_ms": _duration_ms(record.get("host_execution") or {}),
                 "pass": record.get("acceptance_pass"),
+                "quality_status": record.get("quality_status", "UNVERIFIED"),
             }
 
         pairs.append(
@@ -1339,29 +1845,98 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
     tasks = load_tasks()[:pair_count]
     command = _host_command(harness)
     records: list[dict[str, Any]] = []
-    if command is not None:
-        for task in tasks:
-            for profile in ("OFF", "ON"):
-                print(f"Running {harness} {task['task_id']} {profile}", file=sys.stderr, flush=True)
-                record = _run_one(harness, task, profile, command)
-                if record is not None:
-                    RAW_DIR.mkdir(parents=True, exist_ok=True)
-                    (RAW_DIR / f"{record['run_id']}.json").write_text(
-                        json.dumps(record, indent=2, sort_keys=True, allow_nan=False),
-                        encoding="utf-8",
-                    )
-                    records.append(record)
+    for task in tasks:
+        for profile in ("OFF", "ON"):
+            print(f"Running {harness} {task['task_id']} {profile}", file=sys.stderr, flush=True)
+            record = _run_one(harness, task, profile, command or [])
+            if record is None:
+                run_id = f"{harness}-{task['task_id']}-{profile}-{_utc()}"
+                record = {
+                    "schema_version": 2,
+                    "classification": "observed",
+                    "qualification_eligible": False,
+                    "source_identity": None,
+                    "task_catalog_identity": None,
+                    "task_identity": _stable_hash(task),
+                    "raw_directory": str(RAW_DIR / run_id),
+                    "run_id": run_id,
+                    "harness": harness,
+                    "task_id": task["task_id"],
+                    "profile": profile,
+                    "repo_fixture_commit": task["repo_fixture_commit"],
+                    "host_exit": None,
+                    "host_status": "setup_error",
+                    "setup_error": "runner returned no attempt record",
+                    "response_artifact": None,
+                    "regression_pass": None,
+                    "acceptance_pass": None,
+                    "quality_status": "UNVERIFIED",
+                    "review": None,
+                    "usage_capture": False,
+                    "telemetry": aggregate_telemetry(()),
+                    "dollars": None,
+                }
+            _write_json_once(RAW_DIR / f"{record['run_id']}.json", record)
+            records.append(record)
     pairs = _paired(records)
+    token_statistic = economics.verdict(pairs, config=economics.load_config(ROOT))
+    quality_pairs = [
+        pair
+        for pair in pairs
+        if pair["off"]["quality_status"] == "QUALIFIED"
+        and pair["on"]["quality_status"] == "QUALIFIED"
+    ]
+    observed_arms = {(record.get("task_id"), record.get("profile")) for record in records}
+    expected_arms = {(task["task_id"], profile) for task in tasks for profile in ("OFF", "ON")}
+    missing_arms = [
+        f"{task_id}:{profile}" for task_id, profile in sorted(expected_arms - observed_arms)
+    ]
+    failures = [
+        {
+            "run_id": record.get("run_id"),
+            "task_id": record.get("task_id"),
+            "profile": record.get("profile"),
+            "reason": record.get("setup_error") or record.get("host_status"),
+        }
+        for record in records
+        if record.get("host_exit") != 0 or record.get("setup_error")
+    ]
+    usage_capture = bool(pairs) and all(
+        pair["off_usage_capture"] and pair["on_usage_capture"] for pair in pairs
+    )
     summary = {
         "harness": harness,
         "requested_profile": requested_profile,
         "profile_mapping": PROFILE_TO_ABLATION,
+        "host_command_identity": (
+            {
+                "executable": Path(command[0]).name if command else None,
+                "argv_sha256": _stable_hash(command) if command else None,
+            }
+        ),
         "requested_pairs": pair_count,
+        "expected_arms": len(expected_arms),
         "host_available": command is not None,
-        "usage_capture": bool(pairs)
-        and all(pair["off_usage_capture"] and pair["on_usage_capture"] for pair in pairs),
+        "usage_capture": usage_capture,
         "pairs_recorded": len(pairs),
-        "verdict": economics.verdict(pairs, config=economics.load_config(ROOT)),
+        "unpaired_records": sorted({item.split(":", 1)[0] for item in missing_arms}),
+        "missing_arms": missing_arms,
+        "failures": failures,
+        "failure_count": len(failures),
+        "record_count": len(records),
+        "quality_qualified_pairs": len(quality_pairs),
+        "quality_status": "UNVERIFIED",
+        "quality_gate": {
+            "status": "UNVERIFIED",
+            "pairs_recorded": len(pairs),
+            "pairs_qualified": len(quality_pairs),
+            "unpaired_records": sorted({item.split(":", 1)[0] for item in missing_arms}),
+            "missing_arms": missing_arms,
+        },
+        "token_statistic": token_statistic,
+        "quality_qualified_economics": None,
+        "verdict": token_statistic,
+        "records": records,
     }
     _write_qualification(summary)
     return summary
@@ -1369,14 +1944,51 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run bounded paired economics from host telemetry."
+        description="Run bounded paired economics from host telemetry or collect reviews."
     )
-    parser.add_argument("--harness", choices=sorted(HARNESS_EXECUTABLES), required=True)
-    parser.add_argument("--profile", choices=("OFF", "ON"), required=True)
-    parser.add_argument("--pairs", type=int, required=True)
-    parser.add_argument("--out", type=Path, help="Preserve this campaign in a separate directory")
+    parser.add_argument("--harness", choices=sorted(HARNESS_EXECUTABLES))
+    parser.add_argument("--profile", choices=("OFF", "ON"))
+    parser.add_argument("--pairs", type=int)
+    parser.add_argument("--out", type=Path, help="Campaign directory or derived collection JSON")
+    parser.add_argument(
+        "--collect", action="store_true", help="Collect reviews without host reruns"
+    )
+    parser.add_argument(
+        "--runs",
+        "--run-records",
+        dest="runs",
+        type=Path,
+        help="Run JSON file or directory for --collect",
+    )
+    parser.add_argument(
+        "--reviews",
+        "--review-records",
+        dest="reviews",
+        type=Path,
+        help="Review JSON file or directory for --collect",
+    )
+    parser.add_argument(
+        "--reviewer-identity",
+        help="Required preregistered reviewer identity for --collect",
+    )
     args = parser.parse_args()
     global RAW_DIR, QUALIFICATION
+    if args.collect:
+        if args.runs is None or args.reviews is None or not args.reviewer_identity:
+            parser.error("--collect requires --runs, --reviews, and --reviewer-identity")
+        destination = args.out
+        if destination is not None and destination.suffix.casefold() != ".json":
+            destination = destination.resolve() / "qualification.json"
+        summary = collect_reviews(
+            args.runs,
+            args.reviews,
+            output=destination,
+            reviewer_identity=args.reviewer_identity,
+        )
+        print(json.dumps(summary, sort_keys=True, allow_nan=False))
+        return 0
+    if args.harness is None or args.profile is None or args.pairs is None:
+        parser.error("--harness, --profile, and --pairs are required for host execution")
     if not 1 <= args.pairs <= MAX_PAIRS:
         parser.error(f"--pairs must be between 1 and {MAX_PAIRS}")
     if args.out is not None:

@@ -376,6 +376,8 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
         {"input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 2, "cache_write_tokens": 0},
         {"base_in": 0.00000014, "base_out": 0.00000028},
     )
+    assert record["regression_pass"] is True
+    assert record["acceptance_pass"] is None
     assert "private prompt" not in json.dumps(record)
     assert "private acceptance" not in json.dumps(record)
 
@@ -793,3 +795,257 @@ def test_native_acceptance_uses_executed_result_and_session_bound_workers(tmp_pa
         [reply],
     )
     assert not accepted()
+
+
+def test_host_capture_preserves_answer_streams_on_nonzero_exit(tmp_path):
+    import sys
+
+    from scripts import run_paired_economics as runner
+
+    capture = tmp_path / "private"
+    env = {"SECOND_BRAIN_ECONOMICS_CAPTURE_DIR": str(capture)}
+    result = runner._run_host(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('ANSWER'); print('ERROR', file=sys.stderr); sys.exit(3)",
+        ],
+        "prompt",
+        tmp_path,
+        env,
+    )
+    assert result == 3
+    assert (capture / "stdout.txt").read_text(encoding="utf-8") == "ANSWER\n"
+    assert (capture / "stderr.txt").read_text(encoding="utf-8") == "ERROR\n"
+    assert runner._execution_metadata(capture)["status"] == "completed"
+
+
+def test_collect_reviews_qualifies_without_host_rerun_and_rejects_tampering(tmp_path, monkeypatch):
+    import hashlib
+
+    from scripts import run_paired_economics as runner
+
+    task = runner.load_tasks()[0]
+    source_identity = runner._source_identity()
+    catalog_identity = runner._task_catalog_identity()
+    answer = tmp_path / "answer.txt"
+    answer.write_text("actual answer\n", encoding="utf-8")
+    digest = hashlib.sha256(answer.read_bytes()).hexdigest()
+
+    def record(run_id, profile):
+        return {
+            "schema_version": 2,
+            "classification": "observed",
+            "qualification_eligible": True,
+            "source_identity": source_identity,
+            "task_catalog_identity": catalog_identity,
+            "task_identity": runner._stable_hash(task),
+            "run_id": run_id,
+            "task_id": task["task_id"],
+            "profile": profile,
+            "repo_fixture_commit": task["repo_fixture_commit"],
+            "host_exit": 0,
+            "regression_pass": True,
+            "response_artifact": {
+                "path": str(answer),
+                "sha256": digest,
+                "bytes": answer.stat().st_size,
+            },
+            "telemetry": {
+                "total_tokens": 10,
+                "model_turns": 1,
+                "wall_ms": 1,
+                "input_tokens": 5,
+                "output_tokens": 5,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+            },
+            "usage_capture": True,
+            "dollars": 1.0,
+            "acceptance_pass": True,
+        }
+
+    runs = [record("off", "OFF"), record("on", "ON")]
+    reviews = [
+        {
+            "run_id": run["run_id"],
+            "task_id": run["task_id"],
+            "fixture_commit": run["repo_fixture_commit"],
+            "response_artifact_sha256": digest,
+            "reviewer_identity": "independent-reviewer",
+            "accepted": True,
+            "evidence": "answer checked against frozen rubric",
+            "rationale": "all required labels present",
+        }
+        for run in runs
+    ]
+    monkeypatch.setattr(
+        runner,
+        "_run_host",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
+    )
+    summary = runner.collect_reviews(runs, reviews, reviewer_identity="independent-reviewer")
+    assert summary["quality_status"] == "QUALIFIED"
+    assert summary["quality_qualified_pairs"] == 1
+    assert summary["token_statistic"]["n"] == 1
+    assert summary["quality_qualified_economics"]["n"] == 1
+
+    missing_pin = runner.collect_reviews(runs, reviews)
+    assert missing_pin["quality_status"] == "FAILED"
+    extra = runner.collect_reviews(
+        runs,
+        [*reviews, {**reviews[0], "run_id": "unknown"}],
+        reviewer_identity="independent-reviewer",
+    )
+    assert extra["quality_status"] == "FAILED"
+    assert extra["quality_qualified_economics"] is None
+    synthetic = runner.collect_reviews(
+        [{**run, "classification": "simulation"} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert synthetic["quality_status"] == "FAILED"
+    no_usage = runner.collect_reviews(
+        [{**run, "usage_capture": False} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert no_usage["quality_status"] == "QUALIFIED"
+    assert no_usage["quality_qualified_economics"] is None
+
+    answer.write_text("tampered\n", encoding="utf-8")
+    rejected = runner.collect_reviews(runs, reviews, reviewer_identity="independent-reviewer")
+    assert rejected["quality_status"] == "FAILED"
+    assert rejected["quality_qualified_pairs"] == 0
+    assert rejected["records"][0]["acceptance_pass"] is None
+    answer.write_text("actual answer\n", encoding="utf-8")
+
+    failed_host = runner.collect_reviews(
+        [{**run, "host_exit": 1} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert failed_host["quality_status"] == "FAILED"
+    assert failed_host["quality_qualified_economics"] is None
+    assert failed_host["token_statistic"]["n"] == 1
+
+    invalid_exit = runner.collect_reviews(
+        [{**run, "host_exit": False} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert invalid_exit["quality_status"] == "FAILED"
+
+    failed_regression = runner.collect_reviews(
+        [{**run, "regression_pass": False} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert failed_regression["quality_status"] == "FAILED"
+    assert failed_regression["quality_qualified_economics"] is None
+
+
+def test_setup_failure_and_raw_collision_are_retained(tmp_path, monkeypatch):
+    import pytest
+    from scripts import run_paired_economics as runner
+
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(runner, "_utc", lambda: "fixed")
+    monkeypatch.setattr(
+        runner,
+        "_source_identity",
+        lambda: {"source_commit": "a", "source_tree_sha256": "b"},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_task_catalog_identity",
+        lambda: {"sha256": "c", "task_count": 14, "task_ids": []},
+    )
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Completed", (), {"returncode": 1})(),
+    )
+    task = {
+        "task_id": "micro-test",
+        "prompt": "prompt",
+        "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+    }
+    record = runner._run_one("omp", task, "OFF", ["omp", "--print", "--no-title"])
+    assert record["host_status"] == "setup_error"
+    assert record["setup_error"]
+    runner._write_json_once(
+        Path(record["raw_directory"]) / "record.json",
+        record,
+    )
+    with pytest.raises(FileExistsError):
+        runner._run_one("omp", task, "OFF", ["omp", "--print", "--no-title"])
+
+
+def test_appended_or_replaced_telemetry_is_accounting_aware(tmp_path):
+    import json
+
+    from scripts import run_paired_economics as runner
+
+    path = tmp_path / "telemetry" / "agent-performance" / "session.jsonl"
+    path.parent.mkdir(parents=True)
+    row = {
+        "kind": "assistant_usage",
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 2,
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    before = runner._telemetry_snapshot(tmp_path)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({**row, "input_tokens": 3, "total_tokens": 4}) + "\n")
+    appended = runner.aggregate_telemetry([path], offsets=before)
+    assert appended["input_tokens"] == 3
+    path.write_bytes(b"replaced")
+    replaced = runner.aggregate_telemetry([path], offsets=before)
+    assert replaced["accounting_available"] is False
+    assert replaced["input_tokens"] is None
+
+
+def test_malformed_or_missing_usage_cannot_become_complete_accounting(tmp_path):
+    import json
+
+    from scripts import run_paired_economics as runner
+
+    path = tmp_path / "usage.jsonl"
+    usage = {
+        "kind": "assistant_usage",
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 2,
+    }
+    path.write_text(json.dumps(usage) + "\n{broken\n", encoding="utf-8")
+    malformed = runner.aggregate_telemetry([path])
+    assert malformed["accounting_available"] is False
+    assert malformed["total_tokens"] is None
+    assert malformed["model_turns"] is None
+
+    missing = {"kind": "model_invocation_completed", "usage": None}
+    path.write_text(json.dumps(usage) + "\n" + json.dumps(missing), encoding="utf-8")
+    incomplete = runner.aggregate_telemetry([path])
+    assert incomplete["model_turns"] == 2
+    assert incomplete["total_tokens"] is None
+
+    path.write_text(json.dumps({**usage, "input_tokens": -1}), encoding="utf-8")
+    assert runner.aggregate_telemetry([path])["input_tokens"] is None
+
+
+def test_pair_collection_rejects_duplicate_and_reports_missing_arms():
+    import pytest
+    from scripts import run_paired_economics as runner
+
+    arm = {"run_id": "one", "task_id": "micro-01", "profile": "OFF"}
+    with pytest.raises(ValueError, match="duplicate"):
+        runner._paired([arm, {**arm, "run_id": "two"}])
+    summary = runner.collect_reviews([arm], [])
+    assert summary["unpaired_records"] == ["micro-01"]
+    assert summary["quality_status"] == "FAILED"

@@ -1,8 +1,8 @@
 """Standalone Hermes plugin for The Second Brain.
 
-The plugin is deliberately small: Hermes supplies lifecycle callbacks and
-ephemeral context injection; the Brain CLI owns identity, retrieval, durable
-writes, telemetry, and the session ledger.
+The plugin is deliberately small: Hermes supplies lifecycle callbacks,
+host-frozen prompt sections, and ephemeral context injection; the Brain CLI
+owns identity, retrieval, durable writes, telemetry, and the session ledger.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -600,7 +601,35 @@ def register(ctx: Any) -> None:
         while len(delegated_results) > 16:
             delegated_results.pop(next(iter(delegated_results)))
 
-    prefix_seen_sessions: set[str] = set()
+    session_start_responses: dict[str, dict[str, Any]] = {}
+
+    def session_start_response(
+        session_id: str | None, model: str | None, provider: str | None
+    ) -> dict[str, Any] | None:
+        active_session = session_id or current_session.get() or os.environ.get("HERMES_SESSION_ID")
+        cache_key = str(active_session or "hermes-anon")
+        cached = session_start_responses.get(cache_key)
+        if cached is not None:
+            return cached
+        response = client.request(
+            _common(settings, active_session, model, provider) | {"event": "session_start"}
+        )
+        if isinstance(response, dict) and isinstance(response.get("prefix"), str):
+            session_start_responses[cache_key] = dict(response)
+            while len(session_start_responses) > 16:
+                session_start_responses.pop(next(iter(session_start_responses)))
+        return response
+
+    def system_prompt_section(session_info: Any) -> str:
+        if not isinstance(session_info, Mapping):
+            return ""
+        response = session_start_response(
+            str(session_info.get("session_id") or "") or None,
+            str(session_info.get("model") or "") or None,
+            str(session_info.get("provider") or "") or None,
+        )
+        prefix = response.get("prefix") if response else None
+        return prefix.strip() if isinstance(prefix, str) else ""
 
     def on_session_start(
         session_id: str | None = None,
@@ -611,36 +640,17 @@ def register(ctx: Any) -> None:
         del platform
         active_session = session_id or os.environ.get("HERMES_SESSION_ID")
         current_session.set(active_session)
-        if active_session:
-            prefix_seen_sessions.discard(active_session)
-        client.request(
-            _common(settings, session_id, model, kwargs.get("provider"))
-            | {"event": "session_start"}
-        )
+        session_start_response(active_session, model, kwargs.get("provider"))
 
     def pre_tool_call(
         tool_name: str | None = None,
         args: Any = None,
         session_id: str | None = None,
-        tool_call_id: str | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any] | None:
+    ) -> None:
+        del tool_name, args, kwargs
         active_session = session_id or current_session.get() or os.environ.get("HERMES_SESSION_ID")
         current_session.set(active_session)
-        name = str(tool_name or "unknown")[:200]
-        if name.casefold() not in {"read", "cat", "grep"}:
-            return None
-        response = client.request(
-            _common(settings, active_session, kwargs.get("model"), kwargs.get("provider"))
-            | {
-                "event": "pre_tool_call",
-                "tool_name": name,
-                "args": args,
-                "tool_call_id": str(tool_call_id or "")[:200],
-            }
-        )
-        if isinstance(response, dict) and isinstance(response.get("replacement"), str):
-            return {"replacement": response["replacement"]}
         return None
 
     def pre_llm_call(
@@ -679,7 +689,6 @@ def register(ctx: Any) -> None:
                 host_provider=provider,
                 host_model=model,
             )
-        prefix = response.get("prefix") if response else None
         tail = response.get("tail") if response else None
         if not tail and response:
             packet = response.get("packet")
@@ -688,11 +697,6 @@ def register(ctx: Any) -> None:
             tail = "\n\n".join(blocks) if blocks else None
 
         result: dict[str, str] = {}
-        is_first_turn = active_session not in prefix_seen_sessions
-        if is_first_turn and active_session is not None:
-            prefix_seen_sessions.add(active_session)
-            if isinstance(prefix, str) and prefix:
-                result["system_prompt"] = prefix
         if isinstance(tail, str) and tail:
             result["context"] = tail
         return result if result else None
@@ -1096,6 +1100,13 @@ def register(ctx: Any) -> None:
             separators=(",", ":"),
         )
 
+    register_prompt_section = getattr(ctx, "register_system_prompt_section", None)
+    if callable(register_prompt_section):
+        register_prompt_section(
+            "second-brain-prefix",
+            system_prompt_section,
+            position="after_memory",
+        )
     ctx.register_hook("on_session_start", on_session_start)
     ctx.register_hook("pre_tool_call", pre_tool_call)
     ctx.register_hook("pre_llm_call", pre_llm_call)

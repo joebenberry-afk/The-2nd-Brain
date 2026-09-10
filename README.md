@@ -123,6 +123,39 @@ brainctl doctor
 `requirements add|evidence|status|show|check`, `read-ledger record|show`,
 `context compile`.
 
+## Paired economics answer review
+
+The general paired runner retains every requested host attempt, including
+setup failures and missing arms. Host stdout/stderr stays privately outside
+all Git repositories; public raw run records are immutable and contain only
+public-safe paths, hashes, sizes, usage, source/catalog identities, and the
+actual host executable/argv identity. `classification: observed` and
+`qualification_eligible: true` are required for economics evidence.
+
+After independently checking each answer against its frozen task, collect
+reviews without rerunning the host. The reviewer pin is mandatory and comes
+from the preregistered collection contract:
+
+```text
+python scripts/run_paired_economics.py --collect --runs <cohort>/raw --reviews <reviews.json> --reviewer-identity <expected-id> --out <reviewed.json>
+```
+
+Each review supplies `run_id`, `task_id`, `fixture_commit`,
+`response_artifact_sha256`, `reviewer_identity`, boolean `accepted`, `evidence`,
+and `rationale`. Reviews must match the expected identity, current frozen task
+catalog/source identity, and immutable response artifact. Any rejected,
+unknown, extra, duplicate, or missing review fails answer qualification.
+
+Every attempt remains in the cohort records. `token_statistic.n` counts only
+pairs with measurable token totals; missing or corrupt usage prevents economic
+qualification. `quality_qualified_economics` is null unless the answer gate and
+complete paired-usage checks pass. Dollar values are catalog estimates, not
+observed charges; unknown prices remain null and do not block token-only evidence.
+`host_execution` records command start and finish times; paired `wall_ms` uses
+that interval, not the narrower telemetry-event span.
+This workflow does not replace native provenance, preregistration, or the other
+release gates. The separate three-pair read-reuse study is unchanged.
+
 ## Tooling policy
 
 - **Python (stdlib-first)** for `brainctl`, SQLite control DB, curation,
