@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -463,50 +464,107 @@ def list_capabilities(home: Path | str, harness_id: str) -> dict[str, dict[str, 
     return result
 
 
-def harness_tier(home: Path | str, harness_id: str) -> str:
-    """T0/T1/T2 per the T4.3 brief's exact rule.
+def tier_from_snapshot(profile: dict[str, Any]) -> str:
+    """Derive the effective tier from one host-bound capability snapshot.
 
-    T2 when any of model_rewrite/tool_filter/subagents/budget_enforcement
-    is supported=true (wins over T1 and T0). Else T1 when any of
-    tool_events/usage_telemetry/cache_telemetry/compaction_events is
-    supported=true. Else T0 -- the floor, including a harness with zero
-    recorded capabilities at all (missing capability degrades to the
-    lower tier, never raises, never assumes support).
+    Only capabilities with ``status=observed`` can authorize governance.
+    Raw declarations and stale/unbound observations remain visible in the
+    snapshot for diagnosis but never raise the effective tier.
     """
-    state = list_capabilities(home, harness_id)
-    supported = {name for name, row in state.items() if row["supported"] is True}
-    if supported & _T2_TRIGGER_CAPABILITIES:
+    rows = profile.get("capabilities")
+    if not isinstance(rows, dict):
+        return "T0"
+    observed = {
+        name
+        for name, row in rows.items()
+        if isinstance(row, dict) and row.get("status") == "observed"
+    }
+    if observed & _T2_TRIGGER_CAPABILITIES:
         return "T2"
-    if supported & _T1_TRIGGER_CAPABILITIES:
+    if observed & _T1_TRIGGER_CAPABILITIES:
         return "T1"
     return "T0"
 
 
-def tier_behavior(home: Path | str, harness_id: str) -> str:
-    """`TIER_BEHAVIOR[harness_tier(home, harness_id)]` -- the one narrow,
-    genuinely tier-conditional read helper this task adds so the tier
-    computation is proven to actually gate caller-visible behavior (T4.3
-    tests), without wiring tier-gating into unrelated adapters."""
-    return TIER_BEHAVIOR[harness_tier(home, harness_id)]
+def harness_tier(
+    home: Path | str,
+    harness_id: str,
+    *,
+    host_version: str | None = None,
+    config_binding: str | None = None,
+) -> str:
+    """Return the effective tier for the current host binding.
+
+    Missing host binding is deliberately conservative: declarations and
+    historical observations remain below the current ``observed`` threshold.
+    """
+    return tier_from_snapshot(
+        snapshot(
+            home,
+            harness_id,
+            host_version=host_version,
+            config_binding=config_binding,
+        )
+    )
+
+
+def tier_behavior(
+    home: Path | str,
+    harness_id: str,
+    *,
+    host_version: str | None = None,
+    config_binding: str | None = None,
+) -> str:
+    """Return the behavior permitted by the effective host-bound tier."""
+    return TIER_BEHAVIOR[
+        harness_tier(
+            home,
+            harness_id,
+            host_version=host_version,
+            config_binding=config_binding,
+        )
+    ]
 
 
 def generate_capability_matrix(
     home: Path | str,
     harnesses: tuple[str, ...] = ("prime", "claude-code", "codex", "antigravity", "hermes"),
+    *,
+    host_bindings: Mapping[str, Mapping[str, str | None]] | None = None,
 ) -> dict[str, Any]:
-    """Generate a full capability matrix across all supported and available harnesses."""
+    """Generate a matrix from one snapshot per harness.
+
+    ``host_bindings`` maps harness IDs to the current ``host_version`` and
+    ``config_binding``. Missing bindings remain conservative and cannot
+    promote declarations or historical observations.
+    """
     home_p = Path(home)
     matrix: dict[str, Any] = {
         "harnesses": {},
         "generated_at": _now_iso(),
     }
     for h in harnesses:
-        state = list_capabilities(home_p, h)
-        tier = harness_tier(home_p, h)
-        behavior = tier_behavior(home_p, h)
-        supported = [name for name, row in state.items() if row["supported"] is True]
-        unsupported = [name for name, row in state.items() if row["supported"] is False]
-        unknown = [name for name, row in state.items() if row["supported"] is None]
+        binding = host_bindings.get(h) if host_bindings is not None else None
+        if binding is None:
+            binding = {}
+        if not isinstance(binding, Mapping):
+            raise TypeError(f"host_bindings[{h!r}] must be a mapping")
+        profile = snapshot(
+            home_p,
+            h,
+            host_version=binding.get("host_version"),
+            config_binding=binding.get("config_binding"),
+        )
+        tier = tier_from_snapshot(profile)
+        behavior = TIER_BEHAVIOR[tier]
+        state = profile["capabilities"]
+        supported = [name for name, row in state.items() if row.get("status") == "observed"]
+        unsupported = [name for name, row in state.items() if row.get("status") == "denied"]
+        unknown = [
+            name
+            for name, row in state.items()
+            if row.get("status") in {"unknown", "declared", "unavailable"}
+        ]
         matrix["harnesses"][h] = {
             "tier": tier,
             "behavior": behavior,

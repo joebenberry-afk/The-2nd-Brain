@@ -1727,13 +1727,13 @@ def cmd_v2(args) -> int:
     if args.v2_command == "harness" and args.v2_harness_command == "capabilities":
         home = _home(args)
         harness_id = args.harness_id
-        tier = capabilities.harness_tier(home, harness_id)
         profile = capabilities.snapshot(
             home,
             harness_id,
             host_version=args.host_version,
             config_binding=args.config_binding,
         )
+        tier = capabilities.tier_from_snapshot(profile)
         payload = {
             "harness_id": harness_id,
             "tier": tier,
@@ -2080,7 +2080,6 @@ def cmd_env(args) -> int:
 
 
 def cmd_processes(args) -> int:
-
     home = _home(args)
     if args.processes_command == "register":
         rec = envsteward.register_process(

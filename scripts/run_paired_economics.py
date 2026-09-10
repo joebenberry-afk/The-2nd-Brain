@@ -85,6 +85,88 @@ def _source_identity() -> dict[str, str] | None:
     return {"source_commit": source_commit, "source_tree_sha256": source_tree}
 
 
+def _runtime_python() -> str:
+    """Select the runtime explicitly requested by the host, else this interpreter."""
+    configured = os.environ.get("SECOND_BRAIN_PYTHON") or sys.executable
+    # Keep a venv interpreter's lexical path; resolving its symlink can leave the venv.
+    return os.path.abspath(shutil.which(configured) or configured)
+
+
+def _runtime_identity(python: str) -> dict[str, str] | None:
+    """Observe the package actually loaded by a selected Python executable."""
+    probe = (
+        "import json,os,sys\n"
+        "from pathlib import Path\n"
+        "import second_brain\n"
+        "module = Path(second_brain.__file__).resolve()\n"
+        "root = next((p for p in module.parents "
+        "if (p / 'pyproject.toml').is_file() and (p / 'src').is_dir()), None)\n"
+        "if root is None:\n"
+        "    raise RuntimeError('second_brain source root is unavailable')\n"
+        "print(json.dumps({'python': os.path.abspath(sys.executable), "
+        "'module': str(module), 'source_root': str(root)}))"
+    )
+    env = os.environ.copy()
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
+    try:
+        observed = subprocess.run(
+            [python, "-P", "-c", probe],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if (
+        observed.returncode != 0
+        or not isinstance(observed.stdout, str)
+        or len(observed.stdout) > 8192
+    ):
+        return None
+    try:
+        loaded = json.loads(observed.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    actual_python = loaded.get("python")
+    module = loaded.get("module")
+    source_root = loaded.get("source_root")
+    if not all(
+        isinstance(value, str) and value.strip() for value in (actual_python, module, source_root)
+    ):
+        return None
+    try:
+        actual_python_path = Path(os.path.abspath(actual_python))
+        selected_python_path = Path(os.path.abspath(python))
+        module_path = Path(module).resolve()
+        source_root_path = Path(source_root).resolve()
+    except OSError:
+        return None
+    if (
+        actual_python_path != selected_python_path
+        or not module_path.is_file()
+        or not source_root_path.is_dir()
+        or module_path != (source_root_path / "src" / "second_brain" / "__init__.py").resolve()
+    ):
+        return None
+    source_commit = build_identity.git_sha(source_root_path)
+    source_tree = build_identity.source_tree_fingerprint(source_root_path)
+    if not isinstance(source_commit, str) or not isinstance(source_tree, str):
+        return None
+    return {
+        "python": str(actual_python_path),
+        "module": str(module_path),
+        "source_root": str(source_root_path),
+        "source_commit": source_commit,
+        "source_tree_sha256": source_tree,
+    }
+
+
 def _canonical_exporter():
     # Lazy import keeps fixture-only CLI use independent of the producer package.
     try:
@@ -1334,15 +1416,25 @@ def _run_one(
         source_identity = _source_identity()
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         source_identity = None
+    runtime_python = _runtime_python()
+    try:
+        runtime_identity = _runtime_identity(runtime_python)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        runtime_identity = None
     try:
         catalog_identity = _task_catalog_identity()
     except (OSError, RuntimeError, ValueError):
         catalog_identity = None
     base = {
-        "schema_version": 2,
+        "schema_version": 3,
         "classification": "observed",
-        "qualification_eligible": source_identity is not None and catalog_identity is not None,
+        "qualification_eligible": (
+            source_identity is not None
+            and runtime_identity is not None
+            and catalog_identity is not None
+        ),
         "source_identity": source_identity,
+        "runtime_identity": runtime_identity,
         "task_catalog_identity": catalog_identity,
         "task_identity": _stable_hash(task),
         "raw_directory": str(run_dir),
@@ -1376,6 +1468,9 @@ def _run_one(
             "dollars": None,
         }
 
+    if runtime_identity is None:
+        return failed("setup_error", "selected Python runtime identity unavailable")
+
     try:
         added = subprocess.run(
             ["git", "worktree", "add", "--detach", str(worktree), task["repo_fixture_commit"]],
@@ -1391,16 +1486,16 @@ def _run_one(
         return failed("setup_error", f"git worktree setup exited {added.returncode}")
 
     env = os.environ.copy()
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
     env.update(profile_env(profile))
     env["SECOND_BRAIN_HOME"] = str(telemetry_home)
-    env["SECOND_BRAIN_PYTHON"] = sys.executable
+    env["SECOND_BRAIN_PYTHON"] = runtime_python
     env["SECOND_BRAIN_ECONOMICS_CAPTURE_DIR"] = str(capture_dir)
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = str(Path(runtime_python).parent) + os.pathsep + env.get("PATH", "")
     try:
         initialized = subprocess.run(
-            [sys.executable, "-m", "second_brain", "--home", str(telemetry_home), "init"],
+            [runtime_python, "-P", "-m", "second_brain", "--home", str(telemetry_home), "init"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -1595,6 +1690,14 @@ def collect_reviews(
     else:
         catalog_error = None
     current_source = _source_identity()
+    runtime_python = _runtime_python()
+    try:
+        current_runtime = _runtime_identity(runtime_python)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        current_runtime = None
+    runtime_error = (
+        "current selected Python runtime identity unavailable" if current_runtime is None else None
+    )
     if not isinstance(reviewer_identity, str) or not reviewer_identity.strip():
         reviewer_error = "expected reviewer identity is required"
     else:
@@ -1609,6 +1712,8 @@ def collect_reviews(
         by_run[run_id] = record
         try:
             _run_artifact(record)
+            if record.get("schema_version") != 3:
+                raise ValueError("unsupported economics run record schema")
             if record.get("classification") != "observed":
                 raise ValueError("nonproduction run classification is ineligible")
             if record.get("qualification_eligible") is not True:
@@ -1629,6 +1734,11 @@ def collect_reviews(
                 or any(observed_source.get(key) != value for key, value in current_source.items())
             ):
                 raise ValueError("runner source identity mismatch")
+            observed_runtime = record.get("runtime_identity")
+            if runtime_error:
+                raise ValueError(runtime_error)
+            if observed_runtime != current_runtime:
+                raise ValueError("selected runtime identity mismatch")
         except (OSError, ValueError) as exc:
             run_errors[run_id] = str(exc)
     for review in reviews:
@@ -1852,10 +1962,11 @@ def run(harness: str, requested_profile: str, pair_count: int) -> dict[str, Any]
             if record is None:
                 run_id = f"{harness}-{task['task_id']}-{profile}-{_utc()}"
                 record = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "classification": "observed",
                     "qualification_eligible": False,
                     "source_identity": None,
+                    "runtime_identity": None,
                     "task_catalog_identity": None,
                     "task_identity": _stable_hash(task),
                     "raw_directory": str(RAW_DIR / run_id),

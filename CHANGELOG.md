@@ -1,3 +1,21 @@
+## 2026-09-10 — Selected-runtime economics (unreleased)
+
+- Honor `SECOND_BRAIN_PYTHON` for fresh Brain initialization and host execution,
+  independently of the evidence producer's interpreter.
+- Bind schema-3 records and collection to the package actually loaded by that
+  runtime. Refuse unavailable runtimes and packages outside the bound source
+  checkout before accepting evidence; preserve interpreter paths across venvs.
+- Keep frozen tasks, OFF/ON profiles, and the separate native three-pair
+  read-reuse study unchanged.
+
+## 2026-09-10 — Host-bound capability tiers (unreleased)
+
+- Derive CLI and matrix governance tiers from the same host-bound capability
+  snapshot. Stale, declared, and unbound support no longer advertises safe
+  governance; current observed support and explicit denial retain their tiers.
+- Accept explicit per-harness matrix bindings and show declaration/unavailable
+  statuses instead of presenting them as verified support.
+
 ## 2026-09-10 — Answer-grounded economics (unreleased)
 
 - Retain host answer/error streams outside Git repositories with immutable

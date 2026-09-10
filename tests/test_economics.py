@@ -363,6 +363,11 @@ def test_run_one_normalizes_host_usage_pricing_and_privacy(tmp_path, monkeypatch
     monkeypatch.setattr(runner.subprocess, "run", fake_git)
     monkeypatch.setattr(runner, "_run_host", fake_host)
     monkeypatch.setattr(runner, "_acceptance", lambda command, worktree: True)
+    monkeypatch.setattr(
+        runner,
+        "_runtime_identity",
+        lambda _: {"python": "runtime", "module": "module", "source_root": "root"},
+    )
     task = {
         "task_id": "micro-test",
         "prompt": "private prompt",
@@ -394,6 +399,11 @@ def test_run_one_preserves_brain_initialization_failure(tmp_path, monkeypatch):
         return Completed()
 
     monkeypatch.setattr(runner.subprocess, "run", fake_subprocess)
+    monkeypatch.setattr(
+        runner,
+        "_runtime_identity",
+        lambda _: {"python": "runtime", "module": "module", "source_root": "root"},
+    )
     task = {
         "task_id": "init-failure",
         "prompt": "prompt",
@@ -520,6 +530,11 @@ def test_known_plus_missing_model_refuses_partial_pricing(tmp_path, monkeypatch)
     monkeypatch.setattr(runner.subprocess, "run", fake_git)
     monkeypatch.setattr(runner, "_run_host", fake_host)
     monkeypatch.setattr(runner, "_acceptance", lambda command, worktree: True)
+    monkeypatch.setattr(
+        runner,
+        "_runtime_identity",
+        lambda _: {"python": "runtime", "module": "module", "source_root": "root"},
+    )
     task = {
         "task_id": "model-test",
         "prompt": "private prompt",
@@ -828,14 +843,23 @@ def test_collect_reviews_qualifies_without_host_rerun_and_rejects_tampering(tmp_
     task = runner.load_tasks()[0]
     source_identity = runner._source_identity()
     catalog_identity = runner._task_catalog_identity()
+    runtime_identity = {
+        "python": "runtime",
+        "module": "module",
+        "source_root": "root",
+        "source_commit": "runtime-commit",
+        "source_tree_sha256": "runtime-tree",
+    }
+    monkeypatch.setattr(runner, "_runtime_identity", lambda _: runtime_identity)
     answer = tmp_path / "answer.txt"
     answer.write_text("actual answer\n", encoding="utf-8")
     digest = hashlib.sha256(answer.read_bytes()).hexdigest()
 
     def record(run_id, profile):
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "classification": "observed",
+            "runtime_identity": runtime_identity,
             "qualification_eligible": True,
             "source_identity": source_identity,
             "task_catalog_identity": catalog_identity,
@@ -912,6 +936,20 @@ def test_collect_reviews_qualifies_without_host_rerun_and_rejects_tampering(tmp_
     )
     assert no_usage["quality_status"] == "QUALIFIED"
     assert no_usage["quality_qualified_economics"] is None
+    missing_runtime = runner.collect_reviews(
+        [{**run, "runtime_identity": None} for run in runs],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert missing_runtime["quality_status"] == "FAILED"
+    assert missing_runtime["quality_qualified_economics"] is None
+    wrong_runtime = runner.collect_reviews(
+        [{**runs[0], "runtime_identity": {**runtime_identity, "source_commit": "wrong"}}, runs[1]],
+        reviews,
+        reviewer_identity="independent-reviewer",
+    )
+    assert wrong_runtime["quality_status"] == "FAILED"
+    assert wrong_runtime["quality_qualified_economics"] is None
 
     answer.write_text("tampered\n", encoding="utf-8")
     rejected = runner.collect_reviews(runs, reviews, reviewer_identity="independent-reviewer")
@@ -945,6 +983,72 @@ def test_collect_reviews_qualifies_without_host_rerun_and_rejects_tampering(tmp_
     assert failed_regression["quality_qualified_economics"] is None
 
 
+def test_run_one_fails_closed_without_runtime_identity(tmp_path, monkeypatch):
+    from scripts import run_paired_economics as runner
+
+    monkeypatch.setattr(runner, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(runner, "_runtime_identity", lambda _: None)
+    monkeypatch.setattr(
+        runner,
+        "_source_identity",
+        lambda: {"source_commit": "producer", "source_tree_sha256": "producer-tree"},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_task_catalog_identity",
+        lambda: {"sha256": "catalog", "task_count": 1, "task_ids": ["micro-test"]},
+    )
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("setup must not run")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_host",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("host must not run")),
+    )
+    record = runner._run_one(
+        "omp",
+        {
+            "task_id": "micro-test",
+            "prompt": "prompt",
+            "repo_fixture_commit": "e64aac8e0432a87bd899f52efcbaf928960925e4",
+        },
+        "OFF",
+        ["omp", "--print", "--no-title"],
+    )
+    assert record["host_status"] == "setup_error"
+    assert record["runtime_identity"] is None
+    assert record["qualification_eligible"] is False
+
+
+def test_runtime_identity_rejects_package_outside_bound_source(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    import sys
+
+    from scripts import run_paired_economics as runner
+
+    root = tmp_path / "checkout"
+    module = root / ".venv" / "Lib" / "site-packages" / "second_brain" / "__init__.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "pyproject.toml").write_text("", encoding="utf-8")
+    python = str(Path(sys.executable).resolve())
+    observed = {"python": python, "module": str(module), "source_root": str(root)}
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess([], 0, json.dumps(observed), ""),
+    )
+    monkeypatch.setattr(runner.build_identity, "git_sha", lambda _: "a" * 40)
+    monkeypatch.setattr(runner.build_identity, "source_tree_fingerprint", lambda _: "b" * 64)
+
+    assert runner._runtime_identity(python) is None
+
+
 def test_setup_failure_and_raw_collision_are_retained(tmp_path, monkeypatch):
     import pytest
     from scripts import run_paired_economics as runner
@@ -960,6 +1064,11 @@ def test_setup_failure_and_raw_collision_are_retained(tmp_path, monkeypatch):
         runner,
         "_task_catalog_identity",
         lambda: {"sha256": "c", "task_count": 14, "task_ids": []},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_runtime_identity",
+        lambda _: {"python": "runtime", "module": "module", "source_root": "root"},
     )
     monkeypatch.setattr(
         runner.subprocess,
