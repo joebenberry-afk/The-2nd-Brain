@@ -1471,6 +1471,8 @@ def _parser() -> argparse.ArgumentParser:
         help="show a harness's capability profile and tier (T4.3)",
     )
     v2_cap.add_argument("harness_id")
+    v2_cap.add_argument("--host-version", default=None, help="current host adapter version")
+    v2_cap.add_argument("--config-binding", default=None, help="current host config binding")
     v2_cap.add_argument("--json", action="store_true", help="output JSON")
 
     v2_learn = v2s.add_parser("learn", parents=[home_parent], help="policy learning and evaluation")
@@ -1726,11 +1728,19 @@ def cmd_v2(args) -> int:
         home = _home(args)
         harness_id = args.harness_id
         tier = capabilities.harness_tier(home, harness_id)
+        profile = capabilities.snapshot(
+            home,
+            harness_id,
+            host_version=args.host_version,
+            config_binding=args.config_binding,
+        )
         payload = {
             "harness_id": harness_id,
             "tier": tier,
             "tier_behavior": capabilities.TIER_BEHAVIOR[tier],
-            "capabilities": capabilities.list_capabilities(home, harness_id),
+            "capabilities": profile["capabilities"],
+            "host_version": profile["host_version"],
+            "config_binding": profile["config_binding"],
         }
         if args.json:
             print(contracts.canonical_json(payload))
@@ -1738,10 +1748,9 @@ def cmd_v2(args) -> int:
             print(f"{harness_id}: {tier} -- {payload['tier_behavior']}")
             for name in sorted(payload["capabilities"]):
                 row = payload["capabilities"][name]
-                supported = row["supported"]
-                state = "unknown" if supported is None else ("yes" if supported else "no")
+                state = row["status"]
                 print(
-                    f"  {name:20s} supported={state:7s} version={row['version']}"
+                    f"  {name:20s} status={state:11s} version={row['version']}"
                     f" observed_at={row['observed_at']}"
                 )
         return 0

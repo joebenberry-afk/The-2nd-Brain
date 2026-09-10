@@ -181,6 +181,7 @@ grade_scores = { VERIFIED = 0.2, TESTED = 1.0 }
 [scoring]
 max_results = 5
 [scoring.weights]
+grade_scores = { VERIFIED = 0.2, TESTED = 1.0 }
 decision_boost_per_hit = 10.0
 decision_boost_cap = 50.0
 """,

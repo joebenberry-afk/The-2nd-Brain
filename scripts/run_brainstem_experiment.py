@@ -117,7 +117,7 @@ def _build_telemetry_scenarios() -> list[dict[str, Any]]:
                 "evict": False,
                 "route_floor": "T1",
                 "verify_level": "targeted",
-                "scout_allowed": True,
+                "scout_allowed": False,
             },
         },
         {

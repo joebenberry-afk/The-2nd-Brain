@@ -1992,7 +1992,20 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
                 if isinstance(w, dict):
 
                     def _f(key: str, fallback: float) -> float:
-                        return _coerce_float(w.get(key), fallback)
+                        value = _coerce_float(w.get(key), fallback)
+                        if key == "freshness_half_life_days" and value <= 0:
+                            return fallback
+                        return value
+
+                    token_free_limit = _coerce_int(
+                        w.get("token_free_limit"), weights.token_free_limit
+                    )
+                    token_saturation = _coerce_int(
+                        w.get("token_penalty_saturation"), weights.token_penalty_saturation
+                    )
+                    if token_free_limit <= 0 or token_saturation <= token_free_limit:
+                        token_free_limit = weights.token_free_limit
+                        token_saturation = weights.token_penalty_saturation
 
                     weights = RetrievalWeights(
                         title_boost_exact=_f("title_boost_exact", weights.title_boost_exact),
@@ -2020,13 +2033,9 @@ def load_retrieval_config(home: Path) -> RetrievalConfig:
                         negative_penalty_cap=_f(
                             "negative_penalty_cap", weights.negative_penalty_cap
                         ),
-                        token_free_limit=_coerce_int(
-                            w.get("token_free_limit"), weights.token_free_limit
-                        ),
+                        token_free_limit=token_free_limit,
                         token_penalty_cap=_f("token_penalty_cap", weights.token_penalty_cap),
-                        token_penalty_saturation=_coerce_int(
-                            w.get("token_penalty_saturation"), weights.token_penalty_saturation
-                        ),
+                        token_penalty_saturation=token_saturation,
                     )
             raw_gate = raw.get("gate") or {}
             if isinstance(raw_gate, dict):
@@ -2271,10 +2280,13 @@ def _score_row(
 ) -> float:
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
     score = _relevance_score(row, query_tokens, bm25_best, w)
+    row["_relevance"] = score
     if "trust" in score_terms:
         score *= _trust_score(row, w)
     if "scope" in score_terms:
         score *= _scope_match_score(row, project_id)
+    if "decision" in score_terms:
+        score *= _decision_value_score(row, w)
     if "freshness" in score_terms or "decision" in score_terms:
         p_need = row.get("_p_need")
         if p_need is None and home is not None:
@@ -2292,6 +2304,7 @@ def _score_row(
                 p_need = 0.5
         if p_need is None:
             p_need = 0.5
+        row["_p_need"] = float(p_need)
         score *= 0.5 + float(p_need)
     if "negative" in score_terms:
         score *= _negative_transfer_score(row, w)
@@ -2340,8 +2353,12 @@ def search_memories(
     score_terms: frozenset[str] | None = None,
     top_k: int | None = None,
     max_tokens: int | None = None,
+    history_omissions: list[dict] | None = None,
 ) -> list[dict]:
     """Search semantic memories (plan Phase 6 + Phase 7 hard filters).
+
+    An optional bounded diagnostic sink receives withheld history identities
+    from this same search, before active ranking, contradictions, or budgets.
 
     Primary path: SQLite FTS5 (word/prefix tokens, bm25-ranked) over the
     derived memory_fts index. Falls back to the previous linear Markdown
@@ -2412,6 +2429,7 @@ def search_memories(
                     top_k=eff_top_k,
                     max_tokens=eff_max_tokens,
                     home=home,
+                    history_omissions=history_omissions,
                 )
             # Empty/small/non-ASCII queries and an unbuilt index use the
             # existing linear fallback.
@@ -2429,6 +2447,7 @@ def search_memories(
         weights=cfg.weights,
         top_k=eff_top_k,
         max_tokens=eff_max_tokens,
+        history_omissions=history_omissions,
     )
 
 
@@ -2475,6 +2494,36 @@ def _row_passes_filters(row: dict, *, project_id: str | None, include_history: b
     return _project_matches(row, project_id)
 
 
+_HISTORY_OMISSION_LIMIT = 256
+
+
+def _history_omission(row: dict) -> dict:
+    status = row.get("status")
+    return {
+        "memory_id": row.get("memory_id"),
+        "status": status,
+        "reason": "ARCHIVED_HISTORY" if status == "archived" else "SUPERSEDED_HISTORY",
+    }
+
+
+def _partition_history(
+    rows: list[dict], include_history: bool, omissions: list[dict] | None
+) -> list[dict]:
+    if include_history or omissions is None:
+        return rows
+    active = []
+    for row in rows:
+        if row.get("status") not in {"archived", "superseded"}:
+            active.append(row)
+        elif len(omissions) < _HISTORY_OMISSION_LIMIT - 1:
+            omissions.append(_history_omission(row))
+        elif omissions and omissions[-1].get("reason") == "HISTORY_DIAGNOSTICS_TRUNCATED":
+            omissions[-1]["truncated_count"] += 1
+        else:
+            omissions.append({"reason": "HISTORY_DIAGNOSTICS_TRUNCATED", "truncated_count": 1})
+    return active
+
+
 def _search_fts(
     conn: sqlite3.Connection,
     match_expr: str,
@@ -2490,6 +2539,7 @@ def _search_fts(
     top_k: int | None = None,
     max_tokens: int | None = None,
     home: Path | str | None = None,
+    history_omissions: list[dict] | None = None,
 ) -> list[dict]:
     """FTS5 query: quoted prefix tokens per word, hard filters (Phase 7),
     dedupe (Phase 8), then deterministic ranking (Phase 9) — post-filter,
@@ -2497,7 +2547,7 @@ def _search_fts(
 
     TODO(Phase 11): top_k / token budget trimming.
     """
-    where, params = _filter_sql(project_id, include_history)
+    where, params = _filter_sql(project_id, include_history or history_omissions is not None)
     # _body is always selected: Phase 8 dedupe and Phase 10 contradiction
     # surfacing both need the clean body text (comparison path included).
     rows = conn.execute(
@@ -2517,11 +2567,13 @@ def _search_fts(
         if canonical_home is None or (
             indexed_hash and indexed_hash == _file_hash(canonical_home, row)
         ):
+            row["file_hash"] = indexed_hash
             current_rows.append(row)
     rows = current_rows
     if query_terms:
         required = msm_required if msm_required is not None else math.ceil(0.5 * len(query_terms))
         rows = [row for row in rows if _query_term_hits(row, query_terms) >= required]
+    rows = _partition_history(rows, include_history, history_omissions)
     # Phase 10: conflict map BEFORE dedupe (family collapse must not hide a
     # conflicting sibling; the surviving row carries the marker).
     conflicts = _contradiction_map(rows)
@@ -2549,6 +2601,7 @@ def _search_linear(
     weights: RetrievalWeights | None = None,
     top_k: int | None = None,
     max_tokens: int | None = None,
+    history_omissions: list[dict] | None = None,
 ) -> list[dict]:
     """Previous linear Markdown scan — FALLBACK when FTS5/index unavailable.
 
@@ -2565,7 +2618,11 @@ def _search_linear(
     query_tokens = _query_tokens(term)
     out = []
     for row in list_memories(home):
-        if not _row_passes_filters(row, project_id=project_id, include_history=include_history):
+        if not _row_passes_filters(
+            row,
+            project_id=project_id,
+            include_history=include_history or history_omissions is not None,
+        ):
             continue
         title = (row.get("title") or "").lower()
         summary = (row.get("summary") or "").lower()
@@ -2583,7 +2640,10 @@ def _search_linear(
             continue
         row = dict(row)
         row["_body"] = body
+        if history_omissions is not None:
+            row["file_hash"] = _file_hash(home, row)
         out.append(row)
+    out = _partition_history(out, include_history, history_omissions)
     conflicts = _contradiction_map(out)
     rows = _dedupe_rows(out, project_id=project_id, include_duplicates=include_duplicates)
     ranked = _rank_rows(

@@ -9,7 +9,7 @@ from types import ModuleType
 
 import pytest
 
-from second_brain import brainstem, decisions
+from second_brain import brainstem, capabilities, decisions
 from second_brain.errors import BrainError
 
 
@@ -292,6 +292,159 @@ def test_override_budget_rejects_invalid_token_counts(
             brain_home,
             brainstem.BrainstemSignals(),
             learned_override={"inject_budget": value},
+        )
+
+
+@pytest.mark.parametrize("value", [math.inf, math.nan, True, "5", -1])
+def test_provider_quota_rejects_invalid_values(brain_home: Path, value: object) -> None:
+    with pytest.raises(BrainError):
+        brainstem.decide(
+            brain_home,
+            brainstem.BrainstemSignals(provider_quota_remaining=value),  # type: ignore[arg-type]
+        )
+
+
+def test_zero_or_unknown_quota_refuses_optional_actions(brain_home: Path) -> None:
+    unknown = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=None),
+    )
+    exhausted = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(
+            task_class="exploration",
+            risk_class="HIGH",
+            provider_quota_remaining=0,
+        ),
+        learned_override={"inject_budget": 50000, "scout_allowed": True},
+    )
+
+    assert unknown.scout_allowed is False
+    assert exhausted.inject_budget == 0
+    assert exhausted.scout_allowed is False
+    assert exhausted.route_floor == "T2"
+    assert exhausted.verify_level == "full"
+
+
+def _observed_host(brain_home: Path, *, harness_id: str = "host") -> dict[str, str]:
+    capabilities.observe(
+        brain_home,
+        harness_id,
+        "brain_packet_delivered",
+        version="v1",
+        config_binding="cfg-a",
+    )
+    capabilities.observe(
+        brain_home,
+        harness_id,
+        "omp_worker_context_handoff",
+        version="v1",
+        config_binding="cfg-a",
+    )
+    return {"harness_id": harness_id, "host_version": "v1", "config_binding": "cfg-a"}
+
+
+def test_current_observed_capabilities_authorize_optional_actions(brain_home: Path) -> None:
+    host = _observed_host(brain_home)
+    decision = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(
+            budget_tokens_used=0,
+            budget_tokens_cap=2000,
+            budget_hard_cap=3000,
+            resident_tokens=0,
+            context_token_limit=8000,
+            task_class="exploration",
+            provider_quota_remaining=1,
+        ),
+        host_context=host,
+    )
+    assert decision.inject_budget == 2000
+    assert decision.scout_allowed is True
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        {"harness_id": "declared", "host_version": "v1", "config_binding": "cfg-a"},
+        {"harness_id": "legacy", "host_version": "v1", "config_binding": "cfg-a"},
+        {"harness_id": "wrong-version", "host_version": "v2", "config_binding": "cfg-a"},
+        {"harness_id": "wrong-config", "host_version": "v1", "config_binding": "cfg-b"},
+        {"harness_id": "unknown", "host_version": "v1", "config_binding": "cfg-a"},
+    ],
+)
+def test_stale_declared_or_unknown_host_suppresses_optional_actions(
+    brain_home: Path, host: dict[str, str]
+) -> None:
+    if host["harness_id"] == "declared":
+        capabilities.declare(brain_home, host["harness_id"], "prompt_injection", True, version="v1")
+        capabilities.declare(brain_home, host["harness_id"], "subagents", True, version="v1")
+    elif host["harness_id"] == "legacy":
+        capabilities.observe(brain_home, host["harness_id"], "brain_packet_delivered")
+        capabilities.observe(brain_home, host["harness_id"], "omp_worker_context_handoff")
+    elif host["harness_id"] != "unknown":
+        _observed_host(brain_home, harness_id=host["harness_id"])
+
+    decision = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(
+            task_class="exploration",
+            provider_quota_remaining=1,
+        ),
+        host_context=host,
+    )
+    assert decision.inject_budget == 0
+    assert decision.scout_allowed is False
+
+
+def test_capability_snapshot_is_replay_input(brain_home: Path) -> None:
+    host = _observed_host(brain_home)
+    signals = brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=1)
+    first = brainstem.decide(brain_home, signals, host_context=host, session_id="snapshot")
+    logged = decisions.list_decisions(brain_home, kind="brainstem")[-1]
+    capabilities.declare(brain_home, "host", "prompt_injection", False)
+    replay = brainstem.decide(
+        brain_home,
+        signals,
+        capability_snapshot=logged["inputs"]["capability_snapshot"],
+        session_id="snapshot",
+    )
+    assert replay.to_dict() == first.to_dict()
+
+
+def test_capability_replay_rejects_label_only_support(brain_home: Path) -> None:
+    decision = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(
+            task_class="exploration", risk_class="HIGH", provider_quota_remaining=1
+        ),
+        capability_snapshot={
+            "harness_id": "unobserved",
+            "capabilities": {
+                "prompt_injection": {"status": "observed"},
+                "subagents": {"status": "observed"},
+            },
+        },
+    )
+    assert decision.inject_budget == 0
+    assert decision.scout_allowed is False
+    assert decision.route_floor == "T2"
+    assert decision.verify_level == "full"
+
+
+def test_capability_replay_cannot_change_host_scope(brain_home: Path) -> None:
+    host = _observed_host(brain_home)
+    prior = capabilities.snapshot(
+        brain_home,
+        **{key: value for key, value in host.items() if key != "harness_id"},
+        harness_id=host["harness_id"],
+    )
+    with pytest.raises(BrainError, match="does not match host context"):
+        brainstem.decide(
+            brain_home,
+            brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=1),
+            host_context={**host, "harness_id": "different-host"},
+            capability_snapshot=prior,
         )
 
 

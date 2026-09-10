@@ -236,44 +236,139 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def observe(home: Path | str, harness_id: str, event_kind: str) -> tuple[str, ...]:
-    """Map one known telemetry `event_kind` to the harness capability(ies)
-    it evidences and upsert each as `supported=true` with evidence.
+def observe(
+    home: Path | str,
+    harness_id: str,
+    event_kind: str,
+    *,
+    version: str | None = None,
+    config_binding: str | None = None,
+) -> tuple[str, ...]:
+    """Record observed capability evidence for a host harness.
 
-    Idempotent: re-observing the same evidence re-upserts `observed_at`/
-    `evidence_json` and keeps `supported=true` -- never errors on repeat.
-
-    `event_kind` is untrusted/evolving external telemetry input (unlike a
-    caller-supplied capability name): an event kind with no known mapping
-    is a deterministic NO-OP -- the capability table is left unchanged for
-    `harness_id`, and no capability is ever silently marked supported.
-    Returns the tuple of capabilities that were marked supported (empty
-    when the event kind is unmapped).
+    ``version`` and ``config_binding`` bind the observation to the host
+    instance that produced it.  Legacy callers may omit them, but such rows
+    remain historical evidence and are never current observed support in
+    :func:`snapshot`.
     """
     capabilities = _EVENT_KIND_CAPABILITIES.get(event_kind, ())
     if not capabilities:
         return ()
+    if version is not None and not isinstance(version, str):
+        raise TypeError(f"version must be str or None, got {type(version).__name__}")
+    if config_binding is not None and not isinstance(config_binding, str):
+        raise TypeError(f"config_binding must be str or None, got {type(config_binding).__name__}")
     dbfile = _capabilities_db(home)
     observed_at = _now_iso()
     conn = db.connect(dbfile)
     try:
         with conn:
             for capability in capabilities:
-                evidence_json = json.dumps(
-                    {"event_kind": event_kind, "observed_at": observed_at}, sort_keys=True
-                )
+                evidence: dict[str, Any] = {
+                    "event_kind": event_kind,
+                    "observed_at": observed_at,
+                    "source": "observed",
+                }
+                if version is not None:
+                    evidence["host_version"] = version
+                if config_binding is not None:
+                    evidence["config_binding"] = config_binding
+                evidence_json = json.dumps(evidence, sort_keys=True)
                 conn.execute(
                     "INSERT INTO harness_capabilities"
                     "(harness_id, capability, supported, version, observed_at, evidence_json) "
-                    "VALUES (?, ?, 1, NULL, ?, ?) "
+                    "VALUES (?, ?, 1, ?, ?, ?) "
                     "ON CONFLICT(harness_id, capability) DO UPDATE SET "
-                    "supported = 1, observed_at = excluded.observed_at, "
+                    "supported = 1, version = excluded.version, "
+                    "observed_at = excluded.observed_at, "
                     "evidence_json = excluded.evidence_json",
-                    (harness_id, capability, observed_at, evidence_json),
+                    (harness_id, capability, version, observed_at, evidence_json),
                 )
     finally:
         conn.close()
     return capabilities
+
+
+def _declared_evidence(evidence: Any) -> dict[str, Any]:
+    """Tag declaration provenance without changing caller-provided values."""
+    if isinstance(evidence, dict):
+        result = dict(evidence)
+        result["source"] = "declared"
+        return result
+    return {"source": "declared", "value": evidence}
+
+
+def _capability_status(
+    row: dict[str, Any],
+    capability: str,
+    *,
+    host_version: str | None,
+    config_binding: str | None,
+) -> str:
+    supported = row.get("supported")
+    if supported is not None and type(supported) is not bool:
+        return "unknown"
+    if supported is None:
+        return "unknown"
+    if supported is False:
+        return "denied"
+    evidence = row.get("evidence")
+    if not isinstance(evidence, dict) or evidence.get("source") != "observed":
+        return "declared"
+    event_kind = evidence.get("event_kind")
+    observed_version = row.get("version")
+    observed_binding = evidence.get("config_binding")
+    if (
+        not isinstance(host_version, str)
+        or not host_version
+        or observed_version != host_version
+        or not isinstance(config_binding, str)
+        or not config_binding
+        or observed_binding != config_binding
+        or evidence.get("host_version") != host_version
+        or not isinstance(event_kind, str)
+        or capability not in _EVENT_KIND_CAPABILITIES.get(event_kind, ())
+    ):
+        return "unavailable"
+    return "observed"
+
+
+def snapshot(
+    home: Path | str,
+    harness_id: str,
+    *,
+    host_version: str | None = None,
+    config_binding: str | None = None,
+) -> dict[str, Any]:
+    """Take one immutable, host-bound capability read for a decision.
+
+    Status is one of ``declared``, ``observed``, ``unavailable``, ``denied``,
+    or ``unknown``.  A declaration or an unbound/old observation is not
+    promoted to current observed support.
+    """
+    if not isinstance(harness_id, str) or not harness_id:
+        raise TypeError("harness_id must be a non-empty string")
+    if host_version is not None and not isinstance(host_version, str):
+        raise TypeError(f"host_version must be str or None, got {type(host_version).__name__}")
+    if config_binding is not None and not isinstance(config_binding, str):
+        raise TypeError(f"config_binding must be str or None, got {type(config_binding).__name__}")
+    state = list_capabilities(home, harness_id)
+    rows: dict[str, dict[str, Any]] = {}
+    for name, row in state.items():
+        enriched = dict(row)
+        enriched["status"] = _capability_status(
+            row,
+            name,
+            host_version=host_version,
+            config_binding=config_binding,
+        )
+        rows[name] = enriched
+    return {
+        "harness_id": harness_id,
+        "host_version": host_version,
+        "config_binding": config_binding,
+        "capabilities": rows,
+    }
 
 
 def declare(
@@ -308,7 +403,11 @@ def declare(
 
     dbfile = _capabilities_db(home)
     observed_at = _now_iso()
-    evidence_json = json.dumps(evidence, sort_keys=True) if evidence is not None else None
+    evidence_json = (
+        json.dumps(_declared_evidence(evidence), sort_keys=True)
+        if evidence is not None
+        else json.dumps({"source": "declared"}, sort_keys=True)
+    )
     conn = db.connect(dbfile)
     try:
         with conn:
