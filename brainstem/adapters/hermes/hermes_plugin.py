@@ -130,14 +130,15 @@ _HANDOFF_READ_SCHEMA = {
             "allow_stale": {
                 "type": "boolean",
                 "description": (
-                    "Accept and explicitly classify stale capsule state "
-                    "instead of rejecting."
+                    "Accept and explicitly classify stale capsule state instead of rejecting."
                 ),
             },
         },
         "required": ["envelope"],
     },
 }
+
+
 @dataclass(frozen=True)
 class _Settings:
     brain_home: Path
@@ -176,7 +177,6 @@ def _configured_candidates(value: Any) -> tuple[dict[str, Any], ...] | None:
                     candidate[key] = raw[:_MAX_LIFECYCLE_VALUE_CHARS]
         candidates.append(candidate)
     return tuple(candidates)
-
 
 
 def _config(ctx: Any, key: str, default: Any = None) -> Any:
@@ -255,10 +255,6 @@ class _BrainClient:
         for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
             env.pop(key, None)
         env["SECOND_BRAIN_HOME"] = str(self.settings.brain_home)
-        if self.settings.repo_root:
-            src_path = Path(self.settings.repo_root) / "src"
-            if src_path.is_dir():
-                env["PYTHONPATH"] = str(src_path)
         if Path(self.settings.brain_python).name.lower().startswith("brainctl"):
             command = [
                 self.settings.brain_python,
@@ -270,6 +266,7 @@ class _BrainClient:
         else:
             command = [
                 self.settings.brain_python,
+                "-P",
                 "-m",
                 "second_brain",
                 "--home",
@@ -283,7 +280,7 @@ class _BrainClient:
                 input=json.dumps(payload, sort_keys=True, separators=(",", ":")),
                 capture_output=True,
                 text=True,
-                cwd=self.settings.repo_root if Path(self.settings.repo_root).is_dir() else None,
+                cwd=self.settings.brain_home,
                 env=env,
                 timeout=self.settings.timeout_seconds,
                 check=False,
@@ -329,13 +326,22 @@ def _raw_result_transport(value: Any) -> Any:
         return {"__hermes_raw_text": str(value)}
     return value
 
+
 def _bounded_lifecycle_value(value: Any, limit: int = 2000) -> Any:
     """Keep observer metrics JSON-safe and free of response/task content."""
     if isinstance(value, dict):
         allowed = {
-            "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens",
-            "output_tokens", "cache_read_tokens", "cache_write_tokens", "amount",
-            "value", "currency", "unit",
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "amount",
+            "value",
+            "currency",
+            "unit",
         }
         return {
             str(key)[:64]: _bounded_lifecycle_value(item, 128)
@@ -505,19 +511,14 @@ def register(ctx: Any) -> None:
         while len(decision_cache) > _MAX_DECISION_CACHE:
             decision_cache.pop(next(iter(decision_cache)))
 
-
-    def cached_decision(
-        session_id: str | None, turn_id: Any
-    ) -> dict[str, Any] | None:
+    def cached_decision(session_id: str | None, turn_id: Any) -> dict[str, Any] | None:
         entry = decision_cache.get(cache_key(session_id, turn_id))
         return entry if isinstance(entry, dict) else None
 
     def bounded_text(value: Any, limit: int = _MAX_LIFECYCLE_VALUE_CHARS) -> str:
         return str(value or "")[:limit]
 
-    def model_identity(
-        provider: Any, model: Any, tier: Any = None
-    ) -> dict[str, str] | None:
+    def model_identity(provider: Any, model: Any, tier: Any = None) -> dict[str, str] | None:
         if not isinstance(provider, str) or not provider:
             return None
         if not isinstance(model, str) or not model:
@@ -549,12 +550,12 @@ def register(ctx: Any) -> None:
             decision.get("selected_model"),
             decision.get("selected_tier"),
         )
-        effective_provider = (
-            entry.get("effective_provider") if entry else None
-        ) or (provider if isinstance(provider, str) else None)
-        effective_model = (
-            entry.get("effective_model") if entry else None
-        ) or (model if isinstance(model, str) else None)
+        effective_provider = (entry.get("effective_provider") if entry else None) or (
+            provider if isinstance(provider, str) else None
+        )
+        effective_model = (entry.get("effective_model") if entry else None) or (
+            model if isinstance(model, str) else None
+        )
         actual_model = (
             response_model
             if isinstance(response_model, str) and response_model
@@ -590,11 +591,7 @@ def register(ctx: Any) -> None:
             payload["cost"] = _bounded_lifecycle_value(cost)
         if failure_code:
             payload["failure_code"] = bounded_text(failure_code)
-        client.request(
-            _common(settings, session_id, actual_model, effective_provider)
-            | payload
-        )
-
+        client.request(_common(settings, session_id, actual_model, effective_provider) | payload)
 
     def remember_result(result: dict[str, Any] | None) -> None:
         if not isinstance(result, dict) or not result.get("task_id"):
@@ -602,8 +599,8 @@ def register(ctx: Any) -> None:
         delegated_results[str(result["task_id"])] = dict(result)
         while len(delegated_results) > 16:
             delegated_results.pop(next(iter(delegated_results)))
-    prefix_seen_sessions: set[str] = set()
 
+    prefix_seen_sessions: set[str] = set()
 
     def on_session_start(
         session_id: str | None = None,
@@ -645,6 +642,7 @@ def register(ctx: Any) -> None:
         if isinstance(response, dict) and isinstance(response.get("replacement"), str):
             return {"replacement": response["replacement"]}
         return None
+
     def pre_llm_call(
         session_id: str | None = None,
         user_message: str | None = None,
@@ -691,7 +689,7 @@ def register(ctx: Any) -> None:
 
         result: dict[str, str] = {}
         is_first_turn = active_session not in prefix_seen_sessions
-        if is_first_turn:
+        if is_first_turn and active_session is not None:
             prefix_seen_sessions.add(active_session)
             if isinstance(prefix, str) and prefix:
                 result["system_prompt"] = prefix
@@ -903,9 +901,7 @@ def register(ctx: Any) -> None:
                 sort_keys=True,
                 separators=(",", ":"),
             )
-        result = _invoke_persistent_worker(
-            settings, packet, prepared.get("context_handoff", {})
-        )
+        result = _invoke_persistent_worker(settings, packet, prepared.get("context_handoff", {}))
         remember_result(result)
         response = client.request(
             _common(settings, active_session, kwargs.get("model"), kwargs.get("provider"))
@@ -921,7 +917,10 @@ def register(ctx: Any) -> None:
             for key in ("packet_sha256", "result_sha256"):
                 if response.get(key):
                     cached[key] = response[key]
-            if isinstance(response.get("result"), dict) and response["result"].get("evidence") is not None:
+            if (
+                isinstance(response.get("result"), dict)
+                and response["result"].get("evidence") is not None
+            ):
                 cached["evidence"] = response["result"]["evidence"]
             remember_result(cached)
         return json.dumps(
@@ -1016,7 +1015,10 @@ def register(ctx: Any) -> None:
             for key in ("packet_sha256", "result_sha256"):
                 if response.get(key):
                     cached[key] = response[key]
-            if isinstance(response.get("result"), dict) and response["result"].get("evidence") is not None:
+            if (
+                isinstance(response.get("result"), dict)
+                and response["result"].get("evidence") is not None
+            ):
                 cached["evidence"] = response["result"]["evidence"]
             remember_result(cached)
         return json.dumps(
