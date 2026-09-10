@@ -123,6 +123,14 @@ brainctl doctor
 `requirements add|evidence|status|show|check`, `read-ledger record|show`,
 `context compile`.
 
+## Host capability confidence
+
+`brainctl v2 harness capabilities <host> --host-version <version> --config-binding <binding> --json`
+reports governance tiers from current, bound `observed` capabilities only.
+Declarations, stale observations, and missing bindings remain visible for
+diagnosis but cannot authorize T1/T2 behavior. Matrix callers can supply
+per-harness `host_bindings`; declaration-only matrices are not native-host proof.
+
 ## Paired economics answer review
 
 The general paired runner retains every requested host attempt, including
@@ -131,6 +139,14 @@ all Git repositories; public raw run records are immutable and contain only
 public-safe paths, hashes, sizes, usage, source/catalog identities, and the
 actual host executable/argv identity. `classification: observed` and
 `qualification_eligible: true` are required for economics evidence.
+
+Set `SECOND_BRAIN_PYTHON` to the selected Brain interpreter for both execution
+and collection; otherwise the runner's interpreter is used. Schema-3 records
+bind the actually loaded source package in `runtime_identity`, separately from
+the producer's `source_identity`. Initialization and host execution use that
+same interpreter. Missing or mismatched runtime bindings cannot qualify.
+Pin the corresponding host adapter in the preregistered host command; selecting
+an interpreter does not automatically replace a host's installed adapter.
 
 After independently checking each answer against its frozen task, collect
 reviews without rerunning the host. The reviewer pin is mandatory and comes
@@ -143,7 +159,7 @@ python scripts/run_paired_economics.py --collect --runs <cohort>/raw --reviews <
 Each review supplies `run_id`, `task_id`, `fixture_commit`,
 `response_artifact_sha256`, `reviewer_identity`, boolean `accepted`, `evidence`,
 and `rationale`. Reviews must match the expected identity, current frozen task
-catalog/source identity, and immutable response artifact. Any rejected,
+catalog, producer/runtime identities, and immutable response artifact. Any rejected,
 unknown, extra, duplicate, or missing review fails answer qualification.
 
 Every attempt remains in the cohort records. `token_statistic.n` counts only

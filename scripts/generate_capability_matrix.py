@@ -132,13 +132,8 @@ def render_markdown(matrix: dict[str, Any]) -> str:
     for cap in capabilities.KNOWN_CAPABILITIES:
         row = [f"`{cap}`"]
         for h in ("prime", "claude-code", "codex", "antigravity", "hermes"):
-            supp = matrix["harnesses"][h]["capabilities"][cap]["supported"]
-            if supp is True:
-                cell = "YES"
-            elif supp is False:
-                cell = "NO"
-            else:
-                cell = "NULL"
+            status = matrix["harnesses"][h]["capabilities"][cap]["status"]
+            cell = {"observed": "YES", "denied": "NO"}.get(status, status.upper())
             row.append(cell)
         lines.append("| " + " | ".join(row) + " |")
 

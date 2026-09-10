@@ -102,9 +102,9 @@ def test_missing_capability_degrades_not_fakes_support(brain_home: Path) -> None
     tier = capabilities.harness_tier(brain_home, unobserved_harness)
     assert tier == "T0"
 
-    # Behavior degrades to injection-only
+    # Behavior stays at the conservative floor
     behavior = capabilities.tier_behavior(brain_home, unobserved_harness)
-    assert "prompt-injection visibility" in behavior
+    assert behavior == capabilities.TIER_BEHAVIOR["T0"]
 
     # Explicitly declare one unsupported capability
     capabilities.declare(brain_home, unobserved_harness, "subagents", False)
