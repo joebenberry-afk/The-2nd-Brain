@@ -29,7 +29,6 @@ from second_brain import (
     semantic,
     vmem,
     worker_protocol,
-    working_set,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -850,24 +849,6 @@ def test_pre_llm_soft_cap_never_writes_hard_budget_tail(brain_home: Path) -> Non
     assert "[SECOND_BRAIN_BUDGET]" not in (out["tail"] or "")
 
 
-def test_pre_tool_call_unaffected_by_hard_budget(brain_home: Path) -> None:
-    """Documented limitation: Hermes' pre_tool_call host contract only
-    understands {"replacement": str} (no deny/block field exists), so a HARD
-    budget state never changes pre_tool_call's read/cat/grep behavior."""
-    start_payload = _start_payload(session="budget-hard-tool", bot="Brain-Dev")
-    binding = hermes_adapter.resolve_binding(brain_home, start_payload)
-    _write_budget_telemetry(brain_home, binding.host_session_id, 500000)
-    target = brain_home / "stable.txt"
-    target.write_text("stable content", encoding="utf-8")
-
-    result = hermes_adapter.handle_request(
-        brain_home,
-        start_payload | {"event": "pre_tool_call", "tool_name": "read", "path": str(target)},
-    )
-    assert result["status"] == "ok"
-    assert "block" not in result
-
-
 def test_pre_llm_model_decision_records_unavailable_fallback(brain_home: Path) -> None:
     payload = {
         **_start_payload(session="routing-fallback", bot="Brain-Dev"),
@@ -1162,12 +1143,16 @@ class _FakeContext:
         self.hooks: dict[str, Any] = {}
         self.middleware: dict[str, Any] = {}
         self.tools: dict[str, dict[str, Any]] = {}
+        self.prompt_sections: dict[str, Any] = {}
 
     def get_config(self, key: str, default: Any = None) -> Any:
         return self.settings.get(key, default)
 
     def register_hook(self, name: str, callback: Any) -> None:
         self.hooks[name] = callback
+
+    def register_system_prompt_section(self, id: str, content: Any, **kwargs: Any) -> None:
+        self.prompt_sections[id] = {"content": content, **kwargs}
 
     def register_middleware(self, name: str, callback: Any) -> None:
         self.middleware[name] = callback
@@ -1217,11 +1202,18 @@ def test_hermes_plugin_registers_hooks_and_real_context_callback(brain_home: Pat
     assert set(ctx.hooks) >= {
         "on_session_start",
         "pre_llm_call",
+        "pre_tool_call",
         "post_tool_call",
         "post_api_request",
         "api_request_error",
         "on_session_finalize",
     }
+    assert "transform_tool_result" not in ctx.hooks
+    assert set(ctx.prompt_sections) == {"second-brain-prefix"}
+    section = ctx.prompt_sections["second-brain-prefix"]["content"]
+    assert "Project: proj-hermes" in section(
+        {"session_id": "hermes-plugin-session", "model": "test-model", "provider": "test-provider"}
+    )
     assert "llm_request" in ctx.middleware
     assert "second_brain_writeback" in ctx.tools
     assert "second_brain_delegate" in ctx.tools
@@ -1389,37 +1381,6 @@ def test_hermes_plugin_terminal_delegate_does_not_invoke_worker(
     )
     assert json.loads(output)["terminal_noop"] is True
     assert len(calls) == 1
-
-
-def test_hermes_plugin_forwards_pre_tool_call_to_brain(
-    brain_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    plugin = _load_plugin()
-    calls: list[dict[str, Any]] = []
-
-    def fake_request(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
-        calls.append(payload)
-        return {"replacement": "[SECOND_BRAIN_UNCHANGED marker]"}
-
-    monkeypatch.setattr(plugin._BrainClient, "request", fake_request)
-    ctx = _FakeContext(
-        {
-            "brain_home": str(brain_home),
-            "brain_python": sys.executable,
-            "bot_name": "Brain-Dev",
-            "bot_role": "dev",
-        }
-    )
-    plugin.register(ctx)
-    result = ctx.hooks["pre_tool_call"](
-        session_id="plugin-reread",
-        tool_name="read",
-        args={"path": "file.txt"},
-        tool_call_id="call-1",
-    )
-    assert result == {"replacement": "[SECOND_BRAIN_UNCHANGED marker]"}
-    assert calls[-1]["event"] == "pre_tool_call"
-    assert calls[-1]["tool_name"] == "read"
 
 
 def test_hermes_plugin_brain_decision_drives_safe_middleware_handoff(
@@ -1831,7 +1792,14 @@ def test_post_tool_and_vmem_fail_open(brain_home: Path, monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize(
-    "event", ["session_start", "pre_llm_call", "post_tool_call", "writeback", "session_end"]
+    "event",
+    [
+        "session_start",
+        "pre_llm_call",
+        "post_tool_call",
+        "writeback",
+        "session_end",
+    ],
 )
 def test_supported_events_are_explicit(brain_home: Path, event: str) -> None:
     payload = _start_payload() | {"event": event}
@@ -1888,106 +1856,6 @@ def test_session_end_records_activation_from_tool_args(brain_home: Path) -> None
             ).fetchone()[0]
             == 1
         )
-
-
-def test_pre_tool_call_active_replaces_only_unchanged_read(brain_home: Path) -> None:
-    payload = _start_payload(session="reread-active")
-    binding = hermes_adapter.resolve_binding(brain_home, payload)
-    target = brain_home / "stable.txt"
-    target.write_text("stable", encoding="utf-8")
-    working_set.record_read(
-        brain_home,
-        binding.brain_session_id,
-        str(target),
-        "read",
-        turn=4,
-        distilled_ref="sha256:distilled",
-    )
-    (brain_home / "config" / "context.toml").write_text(
-        '[rollout]\nreread_avoidance = "ACTIVE"\n', encoding="utf-8"
-    )
-    result = hermes_adapter.handle_request(
-        brain_home,
-        payload | {"event": "pre_tool_call", "tool_name": "read", "path": str(target)},
-    )
-    assert result["replacement"].startswith("[SECOND_BRAIN_UNCHANGED ")
-    assert "sha256:distilled" in result["replacement"]
-
-
-def test_pre_tool_call_active_does_not_replace_selected_read(brain_home: Path) -> None:
-    payload = _start_payload(session="reread-range")
-    binding = hermes_adapter.resolve_binding(brain_home, payload)
-    target = brain_home / "stable.txt"
-    target.write_text("stable", encoding="utf-8")
-    working_set.record_read(
-        brain_home,
-        binding.brain_session_id,
-        str(target),
-        "read",
-        turn=4,
-        distilled_ref="sha256:distilled",
-    )
-    (brain_home / "config" / "context.toml").write_text(
-        '[rollout]\nreread_avoidance = "ACTIVE"\n', encoding="utf-8"
-    )
-    result = hermes_adapter.handle_request(
-        brain_home,
-        payload
-        | {"event": "pre_tool_call", "tool_name": "read", "path": str(target), "range": "1-2"},
-    )
-    assert result["replacement"] is None
-
-
-def test_pre_tool_call_shadow_retains_read_and_records_decision(brain_home: Path) -> None:
-    payload = _start_payload(session="reread-shadow")
-    binding = hermes_adapter.resolve_binding(brain_home, payload)
-    target = brain_home / "stable.txt"
-    target.write_text("stable", encoding="utf-8")
-    working_set.record_read(brain_home, binding.brain_session_id, str(target), "read", turn=4)
-    (brain_home / "config" / "context.toml").write_text(
-        '[rollout]\nreread_avoidance = "SHADOW"\n', encoding="utf-8"
-    )
-    result = hermes_adapter.handle_request(
-        brain_home,
-        payload | {"event": "pre_tool_call", "tool_name": "cat", "path": str(target)},
-    )
-    assert result["replacement"] is None
-    with sqlite3.connect(brain_home / "db" / "brain.sqlite") as conn:
-        row = conn.execute(
-            "SELECT kind, propensity FROM decisions "
-            "WHERE kind = 'reread' ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-    assert row == ("reread", 1.0)
-
-
-def test_pre_tool_call_off_skips_lookup_and_telemetry(
-    brain_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    payload = _start_payload(session="reread-off")
-    target = brain_home / "stable.txt"
-    target.write_text("stable", encoding="utf-8")
-    (brain_home / "config" / "context.toml").write_text(
-        '[rollout]\nreread_avoidance = "OFF"\n', encoding="utf-8"
-    )
-    telemetry: list[str] = []
-
-    def capture(*args: Any, **kwargs: Any) -> None:
-        del kwargs
-        telemetry.append(str(args[2]) if len(args) > 2 else "")
-
-    def unexpected(*args: Any, **kwargs: Any) -> None:
-        pytest.fail("OFF mode performed reread lookup")
-
-    monkeypatch.setattr(working_set, "reread_hint", unexpected)
-    monkeypatch.setattr(hermes_adapter.autoinject, "_append_telemetry", capture)
-    monkeypatch.setattr(hermes_adapter.decisions, "record", unexpected)
-    result = hermes_adapter.handle_request(
-        brain_home,
-        payload | {"event": "pre_tool_call", "tool_name": "read", "path": str(target)},
-    )
-    assert result["status"] == "ok"
-    assert "replacement" not in result
-    assert "reread_avoidable" not in telemetry
 
 
 def test_hermes_plugin_correction_cache_preserves_result_identity(

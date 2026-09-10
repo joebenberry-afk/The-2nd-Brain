@@ -107,7 +107,6 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
     drift3 = injection_slots.record_and_check_prefix_drift(brain_home, session_id, p_drifted)
     assert drift3 is True, "Altered prefix must report prefix_drift=1"
 
-    # Verify Hermes plugin pre_llm_call maintains byte-identical prefix on turn 1 & 2
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("sb_hermes_plugin", HERMES_PLUGIN)
@@ -124,12 +123,16 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
             self.hooks: dict[str, Any] = {}
             self.middleware: dict[str, Any] = {}
             self.tools: dict[str, Any] = {}
+            self.prompt_sections: dict[str, Any] = {}
 
         def get_config(self, key: str, default: Any = None) -> Any:
             return self.settings.get(key, default)
 
         def register_hook(self, name: str, cb: Any) -> None:
             self.hooks[name] = cb
+
+        def register_system_prompt_section(self, id: str, content: Any, **kwargs: Any) -> None:
+            self.prompt_sections[id] = {"content": content, **kwargs}
 
         def register_middleware(self, name: str, cb: Any) -> None:
             self.middleware[name] = cb
@@ -148,28 +151,29 @@ def test_prefix_is_byte_identical_across_turns(brain_home: Path) -> None:
         }
     )
     plugin.register(ctx)
-    pre_llm = ctx.hooks["pre_llm_call"]
 
-    res_turn1 = pre_llm(
+    # Hermes consumes PREFIX through its host-frozen system-prompt section API.
+    section = ctx.prompt_sections["second-brain-prefix"]["content"]
+    frozen_prefix = section(
+        {
+            "session_id": "hermes-session-turns",
+            "model": "test-model",
+            "provider": "test-provider",
+        }
+    )
+    assert frozen_prefix == p1
+    assert hashlib.sha256(frozen_prefix.encode("utf-8")).hexdigest() == sha1
+
+    # pre_llm_call carries only the supported ephemeral TAIL context.
+    pre_llm = ctx.hooks["pre_llm_call"]
+    result = pre_llm(
         session_id="hermes-session-turns",
         user_message="Turn 1 user task",
         turn_id="turn-1",
     )
-    assert res_turn1 is not None
-    assert "system_prompt" in res_turn1, "Turn 1 must inject PREFIX into system_prompt"
-    sys_prompt1 = res_turn1["system_prompt"]
-    h1 = hashlib.sha256(sys_prompt1.encode("utf-8")).hexdigest()
-
-    res_turn2 = pre_llm(
-        session_id="hermes-session-turns",
-        user_message="Turn 2 user task",
-        turn_id="turn-2",
-    )
-    assert res_turn2 is not None
-    # Turn 2 should either omit system_prompt or provide identical system_prompt
-    if res_turn2.get("system_prompt"):
-        h2 = hashlib.sha256(res_turn2["system_prompt"].encode("utf-8")).hexdigest()
-        assert h1 == h2, "Hermes system prompt PREFIX must be byte-identical across turns"
+    assert result is not None
+    assert "context" in result
+    assert "system_prompt" not in result
 
 
 def test_delta_goes_to_tail(brain_home: Path) -> None:
