@@ -395,10 +395,10 @@ def test_replay_projection_and_compare(tmp_path) -> None:
         _seed(s, 3)
         proj = s.replay(["e-1", "e-2", "e-3"])
         assert [e.event_id for e in proj.events] == ["e-1", "e-2", "e-3"]
-        assert ledger_mod.compare_projection(proj, proj) is None
     # independent fresh replay
     replayed = ledger_mod.replay_session(tmp_path, HOST, ["e-1", "e-2", "e-3"])
     assert [e.event_id for e in replayed.events] == ["e-1", "e-2", "e-3"]
+    assert ledger_mod.compare_projection(proj, replayed) is None
 
 
 def test_replay_rejects_seq_gap(tmp_path) -> None:

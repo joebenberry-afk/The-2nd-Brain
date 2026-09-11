@@ -80,7 +80,14 @@ def test_shutdown_includes_radar_when_project_id_present(brain_home, tmp_path):
     assert result["candidate_count"] == 1
     assert result["candidates"][0]["candidate_type"] == "REPEATED_READ"
     assert len(result["fingerprints"]) == 1
-    assert result["fingerprints"][0]["fingerprint_id"]
+    fingerprint = result["fingerprints"][0]
+    emitted = next(
+        record
+        for _, _, record in telemetry.iter_records(brain_home)
+        if record.get("kind") == "bottleneck_fingerprint"
+    )
+    assert fingerprint["evidence_count"] == emitted["evidence_count"] == 3
+    assert fingerprint["evidence_hash"] == emitted["evidence_hash"]
     assert "bottleneck_fingerprint" in _kinds(brain_home, "s3")
 
 

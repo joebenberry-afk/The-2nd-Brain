@@ -199,6 +199,26 @@ def test_runner_maps_both_profiles_to_explicit_governor_profiles():
     assert runner.PROFILE_TO_ABLATION["OFF"] != runner.PROFILE_TO_ABLATION["ON"]
 
 
+def test_acceptance_isolated_cli_ignores_foreign_brain_environment(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    from scripts import run_paired_economics as runner
+
+    isolated_home = tmp_path / "isolated-brain"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(tmp_path / "foreign-parent-brain"))
+    monkeypatch.setenv("SECOND_BRAIN_RUNTIME_ROOT", str(tmp_path / "foreign-runtime-root"))
+    python = subprocess.list2cmdline([sys.executable])
+    home = subprocess.list2cmdline([str(isolated_home)])
+    command = (
+        f"{python} -m second_brain --home {home} init && "
+        f"{python} -m second_brain --home {home} doctor --json"
+    )
+
+    assert runner._acceptance(command, tmp_path) is True
+    assert (isolated_home / "db" / "brain.sqlite").is_file()
+
+
 def test_runner_aggregates_multiple_telemetry_files():
     import json
     from pathlib import Path

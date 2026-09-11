@@ -1,3 +1,16 @@
+## 2026-09-11 — OMP qualification boundary fixes (unreleased)
+
+- Require mutating worker outcomes to match the persisted native child,
+  attempt, manager job, and host generation before accepting a result.
+- Reject raw task progress/results from another dispatch or source slot.
+  Preserve known read-only child/job correlation across extension recovery.
+- Upgrade the OMP extension and Python runtime together; restart older OMP
+  sessions before dispatching work through the changed result protocol.
+- Isolate benchmark acceptance commands from inherited Brain home/runtime
+  bindings without weakening doctor identity checks.
+- Persist shutdown heartbeat, fingerprint, and error telemetry synchronously.
+  Include canonical evidence counts and hashes in P4 fingerprint output.
+
 ## 2026-09-10 — Native OMP session identity (unreleased)
 
 - Use native session identity for fresh roots and named workers, eliminating

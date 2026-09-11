@@ -1381,8 +1381,13 @@ def _execution_metadata(capture_dir: Path) -> dict[str, Any]:
 
 def _acceptance(command: str, worktree: Path) -> bool | None:
     env = os.environ.copy()
-    env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
+    for key in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "SECOND_BRAIN_HOME",
+        "SECOND_BRAIN_RUNTIME_ROOT",
+    ):
+        env.pop(key, None)
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     try:
         completed = subprocess.run(

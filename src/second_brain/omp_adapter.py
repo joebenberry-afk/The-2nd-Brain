@@ -267,7 +267,15 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
     if not task_id or not packet_sha256 or not attempt_id or not session_id:
         return {"status": "failed", "failure_code": "MALFORMED_RESULT"}
     binding_error = worker_protocol.verify_attempt_binding(
-        home, task_id, packet_sha256, attempt_id, session_id
+        home,
+        task_id,
+        packet_sha256,
+        attempt_id,
+        session_id,
+        host_generation=payload.get("host_generation"),
+        native_attempt_id=payload.get("native_attempt_id"),
+        native_job_id=payload.get("native_job_id"),
+        child_agent_id=payload.get("child_omp_agent_id"),
     )
     if binding_error is not None:
         return {"status": "failed", "failure_code": binding_error, "task_id": task_id}

@@ -340,6 +340,52 @@ describe("OMP worker Context Capsule bridge", () => {
     }));
     expect(disposeObserver).toHaveBeenCalledTimes(1);
   });
+
+  it("recovers a rejected blocking-worker result with its durable native binding", async () => {
+    const journal: Array<{ type: string; customType: string; data: unknown }> = [];
+    const context = ctx();
+    context.sessionManager.getEntries = () => journal;
+    let observer: ((value: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>) | undefined;
+    context.observeAsyncJobLifecycle = (callback) => {
+      observer = callback;
+      return () => {};
+    };
+    const load = (resultRunner: NonNullable<ExtensionOptions["ompWorkerResultRunner"]>) => {
+      const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+      factory({
+        on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
+        appendEntry: (customType: string, data: unknown) => journal.push({ type: "custom", customType, data }),
+      } as unknown as ExtensionAPI, {
+        ompWorkerContextRunner: async (options) => contextResultForRequest(options),
+        ompWorkerBindRunner: async () => ({ ok: true }),
+        ompWorkerLifecycleRunner: async () => ({ ok: true }),
+        ompWorkerResultRunner: resultRunner,
+      });
+      return handlers;
+    };
+    const first = load(async () => ({ ok: false, error: "UNAVAILABLE" }));
+    await first.get("tool_call")!({
+      toolName: "task", toolCallId: "blocking-recovery",
+      input: { task: "Persist the bounded result", access_intent: "mutating" },
+    }, context);
+    expect(observer).toBeDefined();
+    await observer!({
+      jobId: null, generation: 7, nativeAttemptId: "blocking-native-attempt",
+      type: "task", agentId: "BlockingWorker", sourceToolCallId: "blocking-recovery",
+      sourceIndex: 0, status: "completed", executorSettled: true, cleanupComplete: true, revision: 1,
+    });
+    expect(journal.some((entry) => entry.customType === "second-brain.worker-job-pending")).toBe(false);
+    expect(journal.some((entry) => entry.customType === "second-brain.worker-result-accepted")).toBe(false);
+    const resumed = load(async (options) => ({
+      ok: options.childOmpAgentId === "BlockingWorker" &&
+        options.hostGeneration === 7 &&
+        options.nativeAttemptId === "blocking-native-attempt" &&
+        options.nativeJobId === null,
+      error: "BINDING_MISMATCH",
+    }));
+    await resumed.get("before_agent_start")!({ prompt: "Recover the pending result", systemPrompt: "BASE" }, context);
+    expect(journal.filter((entry) => entry.customType === "second-brain.worker-result-accepted")).toHaveLength(1);
+  });
 });
 
 describe("OMP worker lifecycle callback bridge", () => {
