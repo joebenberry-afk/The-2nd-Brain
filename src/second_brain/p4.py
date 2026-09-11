@@ -11,6 +11,8 @@ verbatim from `ImprovementRadar.observe_session()` (Task 5).
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -55,13 +57,23 @@ def _collect_fingerprints(candidates: list[dict[str, Any]]) -> list[dict[str, An
             )
             if existing is None or score > existing_score:
                 by_id[fingerprint_id] = fingerprint
-    return sorted(
+    ranked = sorted(
         by_id.values(),
         key=lambda item: (
             -(float(item.get("impact_score", 0)) * int(item.get("occurrence_count", 0))),
             str(item.get("fingerprint_id", "")),
         ),
     )
+    for index, fingerprint in enumerate(ranked):
+        refs = fingerprint.get("evidence_refs") or []
+        ranked[index] = {
+            **fingerprint,
+            "evidence_count": len(refs),
+            "evidence_hash": hashlib.sha256(
+                json.dumps(refs, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        }
+    return ranked
 
 
 def pulse(

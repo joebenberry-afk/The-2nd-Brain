@@ -32,6 +32,9 @@ export interface OmpWorkerResultOptions {
   workerRole?: string;
   summary?: string;
   childOmpAgentId?: string;
+  hostGeneration?: number;
+  nativeAttemptId?: string;
+  nativeJobId?: string | null;
   python?: string;
   timeoutMs?: number;
 }
@@ -109,6 +112,9 @@ export function runOmpWorkerResult(
     worker_role: bounded(options.workerRole ?? "", 128),
     summary: bounded(options.summary ?? "", OMP_WORKER_RESULT_MAX_SUMMARY_CHARS),
     child_omp_agent_id: bounded(options.childOmpAgentId ?? "", 128),
+    host_generation: options.hostGeneration,
+    native_attempt_id: options.nativeAttemptId,
+    native_job_id: options.nativeJobId,
   };
   return new Promise((resolve) => {
     const child = execFile(

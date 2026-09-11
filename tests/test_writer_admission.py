@@ -497,7 +497,7 @@ def test_structured_task_outcome_never_releases_writer_without_cleanup(
     root, _ = _repo(tmp_path)
     _register(brain_home, root)
     context = _prepare(brain_home, root, "logical-result")
-    _bind(brain_home, context)
+    binding = _bind(brain_home, context)
     result = omp_adapter.handle_request(
         brain_home,
         {
@@ -506,6 +506,10 @@ def test_structured_task_outcome_never_releases_writer_without_cleanup(
             "task_id": "logical-result",
             "attempt_id": context["attempt_id"],
             "packet_sha256": context["packet_sha256"],
+            "child_omp_agent_id": binding["agent_id"],
+            "host_generation": binding["host_generation"],
+            "native_attempt_id": binding["native_attempt_id"],
+            "native_job_id": binding["native_job_id"],
             "status": "completed",
             "worker_agent": "agent-logical-result",
             "worker_model": "test",
@@ -520,6 +524,48 @@ def test_structured_task_outcome_never_releases_writer_without_cleanup(
     assert persisted is not None
     assert persisted["logical_outcome"] == "completed"
     assert persisted["writer_ownership"] == "held"
+
+
+def test_mutating_result_rejects_wrong_native_identity_without_poisoning_attempt(
+    brain_home, tmp_path
+) -> None:
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root)
+    context = _prepare(brain_home, root, "bound-result")
+    binding = _bind(brain_home, context)
+    payload = {
+        "operation": "worker_result",
+        "host_session_id": binding["host_session_id"],
+        "task_id": context["task_id"],
+        "attempt_id": context["attempt_id"],
+        "packet_sha256": context["packet_sha256"],
+        "child_omp_agent_id": binding["agent_id"],
+        "host_generation": binding["host_generation"],
+        "native_attempt_id": binding["native_attempt_id"],
+        "native_job_id": binding["native_job_id"],
+        "status": "completed",
+        "worker_agent": "task",
+        "worker_role": "worker",
+        "summary": "Accepted work from the bound native child",
+    }
+    for field, wrong in {
+        "child_omp_agent_id": "unrelated-child",
+        "native_job_id": "unrelated-job",
+        "native_attempt_id": "unrelated-attempt",
+        "host_generation": 2,
+    }.items():
+        refused = omp_adapter.handle_request(brain_home, {**payload, field: wrong})
+        assert refused["failure_code"] == "BINDING_MISMATCH", field
+        assert "result_sha256" not in refused
+    with db.connect(db.db_path(brain_home)) as conn:
+        assert conn.execute(
+            "SELECT state FROM worker_tasks WHERE task_id='bound-result'"
+        ).fetchone()[0] == "WORKING"
+        assert conn.execute("SELECT COUNT(*) FROM worker_attempt_results").fetchone()[0] == 0
+    accepted = omp_adapter.handle_request(brain_home, payload)
+    assert accepted["status"] == "completed"
+    with db.connect(db.db_path(brain_home)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM worker_attempt_results").fetchone()[0] == 1
 
 
 def test_cancellation_does_not_release_until_exact_executor_cleanup(brain_home, tmp_path) -> None:
@@ -601,6 +647,10 @@ def test_retry_mints_new_attempt_and_old_or_reused_native_identity_cannot_releas
             "task_id": "retry-task",
             "attempt_id": first["attempt_id"],
             "packet_sha256": first["packet_sha256"],
+            "child_omp_agent_id": old_binding["agent_id"],
+            "host_generation": old_binding["host_generation"],
+            "native_attempt_id": old_binding["native_attempt_id"],
+            "native_job_id": old_binding["native_job_id"],
             "status": "completed",
             "worker_agent": "agent-retry-task",
             "worker_model": "test",

@@ -1456,8 +1456,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     summaryText: string,
   ): Promise<void> => {
     const admission = workerAdmissionsByTask.get(fields.task_id);
-    if (!admission || admission.packetSha256 !== fields.packet_sha256) {
+    if (!admission || admission.packetSha256 !== fields.packet_sha256 || admission.parentSessionId !== session) {
       getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_ATTEMPT_BINDING_UNAVAILABLE"));
+      return;
+    }
+    if ((admission.agentId !== undefined && fields.child_omp_agent_id !== admission.agentId) ||
+        (admission.accessIntent === "mutating" && admission.agentId === undefined)) {
+      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
       return;
     }
     if (reportedWorkerTaskIds.has(fields.task_id) || workerCompletionsInFlight.has(fields.task_id)) return;
@@ -1485,6 +1490,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         workerModel: fields.worker_model ?? "",
         summary: summaryText.slice(0, 2048),
         childOmpAgentId: fields.child_omp_agent_id ?? "",
+        hostGeneration: admission.hostGeneration,
+        nativeAttemptId: admission.nativeAttemptId,
+        nativeJobId: admission.nativeJobId,
       });
       if (!outcome.ok) throw new Error(outcome.error ?? "BRAIN_WORKER_RESULT_NOT_ACCEPTED");
       rememberWorkerIdentity(reportedWorkerTaskIds, fields.task_id);
@@ -1556,12 +1564,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (
         entry.customType === "second-brain.worker-lifecycle-accepted" &&
         "taskId" in data && typeof data.taskId === "string" &&
-        "attemptId" in data && typeof data.attemptId === "string" &&
-        "executorSettled" in data && data.executorSettled === true &&
-        "cleanupComplete" in data && data.cleanupComplete === true
+        "attemptId" in data && typeof data.attemptId === "string"
       ) {
         const admission = workerAdmissionsByTask.get(data.taskId);
         if (!admission || admission.attemptId !== data.attemptId) continue;
+        if ("nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
+            data.nativeAttemptId.length > 0 && data.nativeAttemptId.length <= 512 &&
+            "nativeJobId" in data && (data.nativeJobId === null ||
+              (typeof data.nativeJobId === "string" && data.nativeJobId.length > 0 && data.nativeJobId.length <= 512)) &&
+            "agentId" in data && typeof data.agentId === "string" &&
+            data.agentId.length > 0 && data.agentId.length <= 512 &&
+            "hostGeneration" in data && typeof data.hostGeneration === "number" &&
+            Number.isInteger(data.hostGeneration) && data.hostGeneration >= 0) {
+          admission.nativeAttemptId = data.nativeAttemptId;
+          admission.nativeJobId = data.nativeJobId;
+          admission.agentId = data.agentId;
+          admission.hostGeneration = data.hostGeneration;
+        }
+        if (!("executorSettled" in data) || data.executorSettled !== true ||
+            !("cleanupComplete" in data) || data.cleanupComplete !== true) continue;
         admission.cleanupAccepted = true;
         pendingWorkerTaskIds.delete(admission.taskId);
         if (reportedWorkerTaskIds.has(admission.taskId)) {
@@ -1592,15 +1613,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         });
         const admission = workerAdmissionsByTask.get(data.taskId);
         if (
-          admission &&
-          "attemptId" in data && data.attemptId === admission.attemptId &&
-          "nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
-          "hostGeneration" in data && typeof data.hostGeneration === "number"
+          admission && admission.packetSha256 === data.packetSha256 &&
+          "attemptId" in data && data.attemptId === admission.attemptId
         ) {
           admission.nativeJobId = data.jobId;
-          admission.nativeAttemptId = data.nativeAttemptId;
           admission.agentId = data.agentId;
-          admission.hostGeneration = data.hostGeneration;
+          if ("nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
+              "hostGeneration" in data && typeof data.hostGeneration === "number") {
+            admission.nativeAttemptId = data.nativeAttemptId;
+            admission.hostGeneration = data.hostGeneration;
+          }
         }
         continue;
       }
@@ -1710,8 +1732,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
             jobId === undefined || jobId.length === 0 || jobId.length > 512 ||
             marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
-        if (workerAdmissionsByTask.get(marker[1])?.accessIntent === "mutating") continue;
+        const admission = workerAdmissionsByTask.get(marker[1]);
+        if (!admission || admission.parentSessionId !== session ||
+            admission.toolCallId !== event.toolCallId || admission.sourceIndex !== entry.index) {
+          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_SOURCE_MISMATCH"));
+          continue;
+        }
+        if (admission.accessIntent === "mutating") continue;
         if (reportedWorkerTaskIds.has(marker[1])) continue;
+        if ((admission.agentId !== undefined && admission.agentId !== agentId) ||
+            (admission.nativeJobId !== undefined && admission.nativeJobId !== jobId)) {
+          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
+          continue;
+        }
         const key = JSON.stringify([session, jobId]);
         if (pendingWorkerJobs.has(key)) continue;
         if (pendingWorkerJobs.size >= 1024 ||
@@ -1719,6 +1752,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_PENDING_LIMIT"));
           continue;
         }
+        admission.agentId = agentId;
+        admission.nativeJobId = jobId;
         pendingWorkerTaskIds.add(marker[1]);
         pendingWorkerJobs.set(key, {
           taskId: marker[1],
@@ -1727,7 +1762,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           agent: typeof entry.agent === "string" ? entry.agent : "unknown",
           agentId,
         });
-        journalWorkerEvent(session, "second-brain.worker-job-pending", { session, jobId, ...pendingWorkerJobs.get(key) });
+        journalWorkerEvent(session, "second-brain.worker-job-pending", {
+          session, jobId, attemptId: admission.attemptId, ...pendingWorkerJobs.get(key),
+        });
       }
     }
     const rawResults = details.results;
@@ -1738,6 +1775,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const taskText = typeof result.task === "string" ? result.task : "";
       const marker = taskText.match(WORKER_TASK_MARKER_RE);
       if (marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
+      const admission = workerAdmissionsByTask.get(marker[1]);
+      if (!admission || admission.parentSessionId !== session ||
+          admission.toolCallId !== event.toolCallId || admission.sourceIndex !== result.index) {
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_SOURCE_MISMATCH"));
+        continue;
+      }
       if (result.aborted !== true && typeof result.abortReason !== "string" && event.isError !== true &&
           (typeof result.exitCode !== "number" || !Number.isFinite(result.exitCode))) continue;
       const status =
@@ -3872,7 +3915,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           verification: { session_shutdown: event.reason ?? "normal" },
         });
         if (!activeState.ok) {
-          getStore(session)?.append(
+          getStore(session)?.appendFinal(
             sensors.extensionError(session, new Error(activeState.error ?? "active-state shutdown failed")),
           );
         }
@@ -3892,6 +3935,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // Task 7: one bounded P4 pulse — heartbeat always runs; Radar/
       // fingerprints run only when `projectId` is known (gated inside
       // p4.pulse() itself, mirrors the prior project_id-gated Radar call).
+      // No further event-loop turn is guaranteed for shutdown-derived telemetry.
       const p4Result = runP4PulseSync({
         home: config.home ?? "",
         hostSessionId: session,
@@ -3901,13 +3945,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
       if (p4Result.ok) {
         if (p4Result.heartbeat) {
-          getStore(session)?.append(sensors.heartbeatPulse(session, p4Result.heartbeat));
+          getStore(session)?.appendFinal(sensors.heartbeatPulse(session, p4Result.heartbeat));
         }
         for (const fingerprint of p4Result.fingerprints ?? []) {
-          getStore(session)?.append(sensors.bottleneckFingerprint(session, fingerprint));
+          getStore(session)?.appendFinal(sensors.bottleneckFingerprint(session, fingerprint));
         }
       } else {
-        getStore(session)?.append(
+        getStore(session)?.appendFinal(
           sensors.extensionError(session, new Error(p4Result.error ?? "P4 pulse failed")),
         );
       }

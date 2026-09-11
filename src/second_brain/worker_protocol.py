@@ -946,6 +946,11 @@ def verify_attempt_binding(
     packet_sha256: str,
     attempt_id: str,
     host_session_id: str,
+    *,
+    host_generation: Any = None,
+    native_attempt_id: Any = None,
+    native_job_id: Any = None,
+    child_agent_id: Any = None,
 ) -> str | None:
     """Authenticate host-attached logical outcome metadata for one attempt."""
     digest = _packet_hash(packet_sha256)
@@ -962,6 +967,18 @@ def verify_attempt_binding(
         return "STALE_ATTEMPT"
     if not host_session_id or row.get("host_session_id") != host_session_id:
         return "BINDING_MISMATCH"
+    if row.get("access_intent") == "mutating":
+        try:
+            native = _native_binding(
+                host_generation=host_generation,
+                native_attempt_id=native_attempt_id,
+                native_job_id=native_job_id,
+                agent_id=child_agent_id,
+            )
+        except WorkerPacketError as exc:
+            return exc.code
+        if not _binding_matches(row, *native):
+            return "BINDING_MISMATCH"
     return None
 
 

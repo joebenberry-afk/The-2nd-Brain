@@ -142,6 +142,12 @@ Worker-root authority still follows native filesystem breadcrumbs, not prompt
 text or a claimed parent header. Identity is recorded before the first Brain
 operation, including extension-restart recovery without a new startup event.
 
+Mutating worker results must also match the admitted native child, attempt,
+manager job, and host generation. Raw task results/progress must belong to the
+original dispatch and source slot; mismatches do not consume a valid result.
+Update the OMP extension and Python runtime together, with no active workers,
+and restart older OMP sessions before dispatching through the new protocol.
+
 ## Paired economics answer review
 
 The general paired runner retains every requested host attempt, including

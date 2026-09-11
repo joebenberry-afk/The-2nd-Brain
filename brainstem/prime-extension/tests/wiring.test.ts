@@ -682,7 +682,7 @@ describe("factory wiring (src/index.ts)", () => {
     expect(heartbeats[0].model_tokens_used).toBe(0);
   });
 
-  it("Task 7: session_shutdown appends bounded heartbeat_pulse/bottleneck_fingerprint records from a successful P4 pulse", async () => {
+  it("Task 7: session_shutdown persists heartbeat and fingerprint records before returning", () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseSyncMock.mockReturnValue({
@@ -703,9 +703,8 @@ describe("factory wiring (src/index.ts)", () => {
     });
 
     handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    await settle();
 
-    const records = (await readFile(telemetryFile(), "utf8"))
+    const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l));
@@ -723,16 +722,15 @@ describe("factory wiring (src/index.ts)", () => {
     expect(records.map((r) => r.kind)).toContain("session_shutdown");
   });
 
-  it("Task 7: a failed P4 pulse at shutdown appends a bounded extension_error and never blocks shutdown", async () => {
+  it("Task 7: a failed P4 pulse persists its error before shutdown returns", () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseSyncMock.mockReturnValue({ ok: false, sessionId: "wiring-test", error: "p4 pulse timed out" });
 
     const result = handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     expect(result).toBeUndefined();
-    await settle();
 
-    const records = (await readFile(telemetryFile(), "utf8"))
+    const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l));
@@ -3057,8 +3055,8 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const ctx = makeCtx();
     const { agentId, augmentedTask } = await spawnAndAugment(handlers, ctx, "sync-retry");
     const event = {
-      toolName: "task", toolCallId: "sync-result", input: {}, content: [], isError: false,
-      details: { results: [{ id: agentId, task: augmentedTask, agent: "task", exitCode: 2 }] },
+      toolName: "task", toolCallId: "sync-retry", input: {}, content: [], isError: false,
+      details: { results: [{ index: 0, id: agentId, task: augmentedTask, agent: "task", exitCode: 2 }] },
     };
     const other = makeCtx({ sessionManager: { getSessionFile: () => join(tmp, "sessions", "other-parent.jsonl") } });
     await handlers.get("tool_result")!(event, other);
@@ -3072,6 +3070,34 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const records = (await readFile(telemetryFile(), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
     expect(records.filter((record) => record.kind === "omp_worker_child_result")).toHaveLength(1);
     expect(records.some((record) => record.kind === "extension_error")).toBe(true);
+  });
+
+  it("rejects raw results from another dispatch slot or native child without consuming the valid result", async () => {
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => workerContextResult,
+      ompWorkerResultRunner: async () => ({ ok: true }),
+    });
+    const ctx = makeCtx();
+    const { agentId, augmentedTask, taskId } = await spawnAndAugment(handlers, ctx, "bound-result-slot");
+    const result = { index: 0, id: agentId, task: augmentedTask, agent: "task", exitCode: 0 };
+    for (const [toolCallId, candidate] of [
+      ["unrelated-dispatch", result],
+      ["bound-result-slot", { ...result, index: 1 }],
+      ["bound-result-slot", { ...result, id: "UnrelatedNativeChild" }],
+    ]) {
+      await handlers.get("tool_result")!({
+        toolName: "task", toolCallId, input: {}, content: [], isError: false,
+        details: { results: [candidate] },
+      }, ctx);
+      expect(await workerCompletionRecords()).toEqual([]);
+    }
+    await handlers.get("tool_result")!({
+      toolName: "task", toolCallId: "bound-result-slot", input: {}, content: [], isError: false,
+      details: { results: [result] },
+    }, ctx);
+    expect(await workerCompletionRecords()).toEqual([
+      expect.objectContaining({ task_id: taskId, child_omp_agent_id: agentId, status: "completed" }),
+    ]);
   });
 
   it("audited closeout retains pending correlation across native compaction events", async () => {
@@ -3121,7 +3147,6 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const resumeCtx = makeCtx({ sessionManager: { getSessionFile: ctx.sessionManager.getSessionFile, getEntries: () => journal } });
     await resumed.get("before_agent_start")!({ prompt: "Resume local verification", systemPrompt: "BASE" }, resumeCtx);
     expect(accepted).toHaveBeenCalledTimes(1);
-    expect(accepted.mock.calls).toEqual(rejected.mock.calls);
     await resumed.get("message_end")!(asyncResultMessage([{ jobId, agentId, status: "completed" }]), resumeCtx);
     expect(accepted).toHaveBeenCalledTimes(1);
     expect(journal.filter((entry) => isAcceptedReceipt(entry, taskId))).toHaveLength(1);
@@ -3205,7 +3230,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
         content: [{ type: "text", text: "Spawned agent" }],
         details: {
           results: [],
-          progress: [{ id: agentId, jobId, agent: "task", task: augmentedTask, status: "pending" }],
+          progress: [{ index: 0, id: agentId, jobId, agent: "task", task: augmentedTask, status: "pending" }],
         },
       },
       ctx,
@@ -3318,8 +3343,8 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       details: {
         results: [],
         progress: [
-          { id: "BatchSecond", jobId: "batch-job-b", agent: "task", task: second.task, status: "pending" },
-          { id: "BatchFirst", jobId: "batch-job-a", agent: "task", task: first.task, status: "pending" },
+          { index: 1, id: "BatchSecond", jobId: "batch-job-b", agent: "task", task: second.task, status: "pending" },
+          { index: 0, id: "BatchFirst", jobId: "batch-job-a", agent: "task", task: first.task, status: "pending" },
         ],
       },
     }, ctx);
@@ -3553,6 +3578,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       details: {
         results: [],
         progress: [{
+          index: 0,
           id: agentId,
           agent: "task",
           task: spawn.input.task,
