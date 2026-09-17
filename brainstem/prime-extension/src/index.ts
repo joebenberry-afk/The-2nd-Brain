@@ -981,6 +981,43 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (oldest !== undefined) set.delete(oldest);
     }
   };
+  // A child the harness dispatched outside the `task` tool (an eval-spawned
+  // agent, for example) never passes Brain admission, so no pending correlation
+  // exists for it. Surface each such job once instead of dropping it silently;
+  // this records the bypass, it does not block the dispatch.
+  //
+  // Absence of a pending correlation is not by itself proof of bypass: a worker
+  // that WAS admitted can still be delivered unattributed, for example when the
+  // async-result envelope names a job the spawn binding never registered. The
+  // signal therefore requires positive evidence — a session in which Brain
+  // admitted no worker at all can have no admitted child, so anything delivered
+  // there necessarily bypassed admission. Sessions that did admit workers
+  // under-report rather than accuse an admitted worker of bypassing.
+  const reportedBypassedWorkerJobs = new Set<string>();
+  const admittedWorkerSessions = new Set<string>();
+  const reportBypassedWorkerJob = (
+    session: string,
+    jobId: string,
+    agentId: unknown,
+    status: unknown,
+    detectedVia: string,
+  ): void => {
+    if (jobId === "" || jobId.length > 512) return;
+    if (admittedWorkerSessions.has(session)) return;
+    const key = JSON.stringify([session, jobId]);
+    if (reportedBypassedWorkerJobs.has(key)) return;
+    rememberWorkerIdentity(reportedBypassedWorkerJobs, key);
+    getStore(session)?.append(
+      ompRoutingRecord("omp_worker_admission_bypassed", session, {
+        session,
+        job_id: jobId,
+        agent_id:
+          typeof agentId === "string" && agentId.length > 0 && agentId.length <= 512 ? agentId : null,
+        status: typeof status === "string" ? status : null,
+        detected_via: detectedVia,
+      }),
+    );
+  };
   const establishWorkerRootSession = (session: string, ctx: ExtensionContext): void => {
     if (workerAncestrySessions.has(session)) return;
     rememberWorkerIdentity(workerAncestrySessions, session);
@@ -1030,6 +1067,54 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   const workerRoleForAgent = (agent: unknown): string =>
     typeof agent === "string" && agent.toLowerCase().includes("validator") ? "validator" : "worker";
+
+  // Tools a worker may hold without acquiring mutation capability.
+  const readOnlyNativeTools: Record<string, true> = {
+    read: true, grep: true, glob: true, web_search: true, ast_grep: true, yield: true,
+  };
+
+  // Trusted worker capability classification, mirroring the harness agent roster:
+  // scouts and reviewers cannot mutate, general workers can. Agents absent from
+  // both tables are unclassified and therefore fail closed.
+  const readOnlyWorkerAgents: Record<string, true> = {
+    scout: true, reviewer: true, "security-reviewer": true, validator: true,
+  };
+  const mutatingWorkerAgents: Record<string, true> = {
+    task: true, sonic: true,
+  };
+
+  // The OMP `task` schema has no `access_intent` field, so the harness can never
+  // transmit one. Intent is therefore derived from trusted classification, while
+  // an explicit declaration — when a caller can supply one — may only escalate:
+  // a mutating worker is never downgraded to read_only, and mutation capability
+  // evidence (tools outside the read-only set) escalates too.
+  const classifyWorkerAccessIntent = (
+    item: Record<string, unknown>,
+  ): { intent: "read_only" | "mutating"; source: "declared" | "derived" } | { block: string } => {
+    const agent =
+      typeof item.agent === "string" && item.agent.trim() !== ""
+        ? item.agent.trim().toLowerCase()
+        : "task";
+    const readOnlyAgent = Object.hasOwn(readOnlyWorkerAgents, agent);
+    if (!readOnlyAgent && !Object.hasOwn(mutatingWorkerAgents, agent)) {
+      return { block: "BRAIN_WORKER_AGENT_UNCLASSIFIED" };
+    }
+    const requested = item.access_intent;
+    if (requested !== undefined && requested !== "read_only" && requested !== "mutating") {
+      return { block: "BRAIN_WORKER_ACCESS_INTENT_INVALID" };
+    }
+    if (requested === "read_only" && !readOnlyAgent) {
+      return { block: "BRAIN_WORKER_ACCESS_INTENT_DOWNGRADE" };
+    }
+    const escalates =
+      Array.isArray(item.tools) &&
+      item.tools.some(
+        (name) => typeof name !== "string" || !Object.hasOwn(readOnlyNativeTools, name),
+      );
+    const intent: "read_only" | "mutating" =
+      !readOnlyAgent || requested === "mutating" || escalates ? "mutating" : "read_only";
+    return { intent, source: requested === undefined ? "derived" : "declared" };
+  };
 
   const releaseUndispatchedAdmission = async (
     admission: WorkerAdmission,
@@ -1268,14 +1353,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     if (items.some((item) => typeof item.task !== "string" || item.task.trim() === "")) {
       return { block: true, reason: "P3.2 worker context requires a non-empty task" };
     }
-    if (
-      items.some(
-        (item) => item.access_intent !== "read_only" && item.access_intent !== "mutating",
-      )
-    ) {
-      return { block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_REQUIRED" };
+    const workerAccess: Array<{ intent: "read_only" | "mutating"; source: "declared" | "derived" }> =
+      [];
+    for (const item of items) {
+      const classified = classifyWorkerAccessIntent(item);
+      if ("block" in classified) return { block: true, reason: classified.block };
+      workerAccess.push(classified);
     }
-    const hasMutating = items.some((item) => item.access_intent === "mutating");
+    const hasMutating = workerAccess.some((entry) => entry.intent === "mutating");
     if (hasMutating && typeof ctx.observeAsyncJobLifecycle !== "function") {
       return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
     }
@@ -1301,7 +1386,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const rawTask = item.task as string;
       const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
       const taskId = taskIds[index];
-      const accessIntent = item.access_intent as "read_only" | "mutating";
+      const accessIntent: "read_only" | "mutating" = workerAccess[index].intent;
       const result = await safeWorkerContextRunner({
         home: config.home ?? "",
         sessionId: session,
@@ -1381,6 +1466,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         sourceIndex: index,
       });
       workerAdmissionsByTask.set(taskId, admission);
+      rememberWorkerIdentity(admittedWorkerSessions, session);
       workerAdmissionsBySource.set(JSON.stringify([session, event.toolCallId, index]), admission);
       const metadata = result.contextMetadata;
       const metadataRecord = {
@@ -1391,6 +1477,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         parent_role: role,
         attempt_id: result.attemptId,
         access_intent: accessIntent,
+        access_intent_source: workerAccess[index].source,
         project_id: result.projectId,
         worktree_id: result.worktreeId,
         parent_session_id: session,
@@ -1828,7 +1915,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const jobId = typeof job.id === "string" ? job.id : undefined;
       if (jobId === undefined) continue;
       const pending = takePendingWorkerJob(jobId, session);
-      if (pending === undefined) continue;
+      if (pending === undefined) {
+        reportBypassedWorkerJob(session, jobId, job.agentId, job.status, "hub_job_snapshot");
+        continue;
+      }
       if (job.agentId !== undefined && job.agentId !== pending.agentId) {
         getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
         continue;
@@ -1883,7 +1973,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (job === null || typeof job !== "object" || job.type !== "task" ||
           typeof job.jobId !== "string" || job.jobId.length > 512) continue;
       const pending = takePendingWorkerJob(job.jobId, session);
-      if (pending === undefined || pending.parentSessionId !== session) continue;
+      if (pending === undefined) {
+        reportBypassedWorkerJob(session, job.jobId, job.agentId, job.status, "async_result_envelope");
+        continue;
+      }
+      if (pending.parentSessionId !== session) continue;
       if (typeof job.status !== "string" || typeof job.agentId !== "string" ||
           job.agentId.length === 0 || job.agentId.length > 512) {
         if (!structuredAsyncUnavailableReported) {

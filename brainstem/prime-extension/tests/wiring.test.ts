@@ -210,17 +210,7 @@ function loadFactory(options?: ExtensionOptions, journal?: unknown[], journalErr
         return toolCall(event, ctx);
       }
       const input = event.input;
-      const tasks =
-        "tasks" in input && Array.isArray(input.tasks)
-          ? input.tasks.map((item) =>
-              item && typeof item === "object" ? { ...item, access_intent: "read_only" } : item)
-          : undefined;
-      return toolCall({
-        ...event,
-        input: tasks === undefined
-          ? { ...input, access_intent: "read_only" }
-          : { ...input, tasks },
-      }, ctx);
+      return toolCall({ ...event, input }, ctx);
     });
   }
   return handlers;
@@ -2922,6 +2912,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const runner = vi.fn().mockImplementationOnce(() => preparation).mockResolvedValue(workerContextResult);
     const handlers = loadFactory({ ompWorkerContextRunner: runner });
     const ctx = makeCtx();
+    ctx.observeAsyncJobLifecycle = () => () => {};
     const first = handlers.get("tool_call")!({
       toolName: "task", toolCallId: "reserve-all",
       input: { tasks: Array.from({ length: 1024 }, () => ({ task: "bounded task" })) },
@@ -2936,6 +2927,70 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       toolName: "task", toolCallId: "released-reservation", input: { task: "retry after failure" },
     }, ctx);
     expect(recovered).toMatchObject({ input: { task: expect.stringContaining("retry after failure") } });
+  });
+
+  it("records a child dispatched outside Brain admission exactly once", async () => {
+    const handlers = loadFactory();
+    const ctx = makeCtx();
+    const poll = (status: string) => handlers.get("tool_result")!({
+      toolName: "hub", toolCallId: "bypass-poll", input: {}, content: [], isError: false,
+      details: { jobs: [{ id: "bypass-job", type: "task", status, agentId: "BypassWorker" }] },
+    }, ctx);
+
+    await poll("completed");
+    await poll("completed");
+    await settle();
+
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((record) => record.kind === "omp_worker_admission_bypassed");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      job_id: "bypass-job",
+      agent_id: "BypassWorker",
+      status: "completed",
+      detected_via: "hub_job_snapshot",
+    });
+  });
+
+  it("does not record an admitted worker as bypassing admission", async () => {
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => workerContextResult,
+      ompWorkerResultRunner: async () => ({ ok: true }),
+    });
+    const ctx = makeCtx();
+    const binding = await spawnAndAugment(handlers, ctx, "admitted-poll");
+
+    await handlers.get("tool_result")!({
+      toolName: "hub", toolCallId: "admitted-poll-hub", input: {}, content: [], isError: false,
+      details: { jobs: [{ id: binding.jobId, type: "task", status: "completed", agentId: binding.agentId }] },
+    }, ctx);
+    await settle();
+
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((record) => record.kind === "omp_worker_admission_bypassed");
+    expect(records).toEqual([]);
+  });
+
+  it("does not accuse an admitted worker when its delivery arrives unattributed", async () => {
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => workerContextResult,
+      ompWorkerResultRunner: async () => ({ ok: true }),
+    });
+    const ctx = makeCtx();
+    await spawnAndAugment(handlers, ctx, "unattributed-delivery");
+
+    await handlers.get("message_end")!(
+      asyncResultMessage([{ jobId: "unattributed-job", agentId: "SomeWorker", status: "completed" }]),
+      ctx,
+    );
+    await settle();
+
+    const records = (await readFile(telemetryFile(), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((record) => record.kind === "omp_worker_admission_bypassed");
+    expect(records).toEqual([]);
   });
 
   it("audited closeout persists despite supplementary host journal failure", async () => {
@@ -3212,7 +3267,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     jobId = `job-${toolCallId}`,
   ): Promise<{ agentId: string; jobId: string; augmentedTask: string; taskId: string }> {
     const spawnResult = (await handlers.get("tool_call")!(
-      { toolName: "task", toolCallId, input: { agent: "task", task } },
+      { toolName: "task", toolCallId, input: { agent: "scout", task } },
       ctx,
     )) as { input: { task: string } };
     const augmentedTask = spawnResult.input.task;
@@ -3230,7 +3285,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
         content: [{ type: "text", text: "Spawned agent" }],
         details: {
           results: [],
-          progress: [{ index: 0, id: agentId, jobId, agent: "task", task: augmentedTask, status: "pending" }],
+          progress: [{ index: 0, id: agentId, jobId, agent: "scout", task: augmentedTask, status: "pending" }],
         },
       },
       ctx,
@@ -3320,8 +3375,8 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       toolCallId: "reordered-batch",
       input: {
         tasks: [
-          { agent: "task", task: "First batch objective" },
-          { agent: "task", task: "Second batch objective" },
+          { agent: "scout", task: "First batch objective" },
+          { agent: "scout", task: "Second batch objective" },
         ],
       },
     }, ctx)) as { input: { tasks: Array<{ agent: string; task: string }> } };
@@ -3343,8 +3398,8 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       details: {
         results: [],
         progress: [
-          { index: 1, id: "BatchSecond", jobId: "batch-job-b", agent: "task", task: second.task, status: "pending" },
-          { index: 0, id: "BatchFirst", jobId: "batch-job-a", agent: "task", task: first.task, status: "pending" },
+          { index: 1, id: "BatchSecond", jobId: "batch-job-b", agent: "scout", task: second.task, status: "pending" },
+          { index: 0, id: "BatchFirst", jobId: "batch-job-a", agent: "scout", task: first.task, status: "pending" },
         ],
       },
     }, ctx);
@@ -3564,7 +3619,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     const spawn = (await handlers.get("tool_call")!({
       toolName: "task",
       toolCallId,
-      input: { agent: "task", task: "Missing native job id" },
+      input: { agent: "scout", task: "Missing native job id" },
     }, ctx)) as { input: { task: string } };
     const taskIdMatch = spawn.input.task.match(/\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+)/);
     if (taskIdMatch === null) throw new Error("augmented task missing marker");
@@ -3580,7 +3635,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
         progress: [{
           index: 0,
           id: agentId,
-          agent: "task",
+          agent: "scout",
           task: spawn.input.task,
           status: "pending",
         }],
