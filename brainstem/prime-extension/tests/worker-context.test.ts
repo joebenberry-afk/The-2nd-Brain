@@ -147,13 +147,13 @@ describe("OMP worker Context Capsule bridge", () => {
       {
         toolName: "task",
         toolCallId: "task-call-1",
-        input: { agent: "task", task: "Inspect the bounded seam", access_intent: "read_only" },
+        input: { agent: "scout", task: "Inspect the bounded seam", access_intent: "read_only" },
       },
       ctx(),
     );
 
     expect(runner).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ input: { agent: "task", access_intent: "read_only" } });
+    expect(result).toMatchObject({ input: { agent: "scout", access_intent: "read_only" } });
     expect(rewrittenTask(result)).toContain("Brain-owned child context");
   });
 
@@ -169,7 +169,7 @@ describe("OMP worker Context Capsule bridge", () => {
     const event = {
       toolName: "task",
       toolCallId: "task-call-modes",
-      input: { agent: "task", task: "Inspect the bounded seam", access_intent: "read_only" },
+      input: { agent: "scout", task: "Inspect the bounded seam", access_intent: "read_only" },
     };
 
     const full = await handlers.get("tool_call")!(event, ctx());
@@ -198,7 +198,7 @@ describe("OMP worker Context Capsule bridge", () => {
       {
         toolName: "task",
         toolCallId: "task-call-fail",
-        input: { task: "Needs Brain context", access_intent: "read_only" },
+        input: { agent: "scout", task: "Needs Brain context", access_intent: "read_only" },
       },
       ctx(),
     );
@@ -206,20 +206,96 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(result).toEqual({ block: true, reason: "CONTEXT_REF_UNRESOLVED" });
   });
 
-  it("requires an explicit access intent", async () => {
+  const dispatch = (input: unknown) => {
     const runner = vi.fn(async (options: OmpWorkerContextOptions) => contextResultForRequest(options));
     const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
     const pi = {
       on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
     } as unknown as ExtensionAPI;
     factory(pi, { ompWorkerContextRunner: runner });
+    const context = ctx();
+    context.observeAsyncJobLifecycle = () => () => {};
+    return {
+      runner,
+      call: handlers.get("tool_call")!(
+        { toolName: "task", toolCallId: "task-call-intent", input },
+        context,
+      ),
+    };
+  };
 
-    const result = await handlers.get("tool_call")!(
-      { toolName: "task", toolCallId: "task-call-no-intent", input: { task: "Ambiguous attempt" } },
-      ctx(),
-    );
+  it("derives a read-only intent for a read-only agent the harness cannot annotate", async () => {
+    const { runner, call } = dispatch({ agent: "scout", task: "Inspect the seam" });
+    const result = await call;
 
-    expect(result).toEqual({ block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_REQUIRED" });
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls[0][0].accessIntent).toBe("read_only");
+    expect(rewrittenTask(result)).toContain("Brain-owned child context");
+  });
+
+  it("derives a mutating intent for a mutating agent instead of demanding the absent field", async () => {
+    const { runner, call } = dispatch({ agent: "task", task: "Mutate the seam" });
+    const result = await call;
+
+    expect(runner.mock.calls[0][0].accessIntent).toBe("mutating");
+    expect(result).not.toEqual({ block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_REQUIRED" });
+    expect(rewrittenTask(result)).toContain("Brain-owned child context");
+  });
+
+  it("treats an omitted agent as the mutating spawn default", async () => {
+    const { runner, call } = dispatch({ task: "Ordinary dispatch" });
+    await call;
+
+    expect(runner.mock.calls[0][0].accessIntent).toBe("mutating");
+  });
+
+  it("fails closed for an agent Brain has not classified", async () => {
+    const { runner, call } = dispatch({ agent: "custom-worker", task: "Unknown surface" });
+
+    expect(await call).toEqual({ block: true, reason: "BRAIN_WORKER_AGENT_UNCLASSIFIED" });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit read-only claim on a mutating worker rather than downgrading it", async () => {
+    const { runner, call } = dispatch({
+      agent: "task", task: "Mutate", access_intent: "read_only",
+    });
+
+    expect(await call).toEqual({ block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_DOWNGRADE" });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("escalates an explicit mutating request from a read-only agent", async () => {
+    const { runner, call } = dispatch({
+      agent: "scout", task: "Escalate", access_intent: "mutating",
+    });
+    await call;
+
+    expect(runner.mock.calls[0][0].accessIntent).toBe("mutating");
+  });
+
+  it("escalates when a read-only agent is granted non-read-only capability", async () => {
+    const { runner, call } = dispatch({
+      agent: "scout", task: "Capability", tools: ["kernel_helper"],
+    });
+    await call;
+
+    expect(runner.mock.calls[0][0].accessIntent).toBe("mutating");
+  });
+
+  it("keeps a read-only agent holding only read-only tools read-only", async () => {
+    const { runner, call } = dispatch({ agent: "scout", task: "Inspect", tools: ["read", "grep"] });
+    await call;
+
+    expect(runner.mock.calls[0][0].accessIntent).toBe("read_only");
+  });
+
+  it("rejects an unrecognised explicit intent", async () => {
+    const { runner, call } = dispatch({
+      agent: "scout", task: "Invalid", access_intent: "write_only",
+    });
+
+    expect(await call).toEqual({ block: true, reason: "BRAIN_WORKER_ACCESS_INTENT_INVALID" });
     expect(runner).not.toHaveBeenCalled();
   });
 
