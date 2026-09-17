@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-17",
+  "scope": "OMP Second Brain extension: worker access-intent gate repair and bypass visibility",
+  "live_artifact": {
+    "installation_target": "C:/Users/assas/.omp/agent/extensions/second-brain/index.ts",
+    "candidate_source": ".worktrees/qualified-v2/brainstem/prime-extension/src/index.ts",
+    "deployed_sha256": "42ef28e2b6fafc6471773d022fb38a85970692f30cc5d57329cad91e3a9334b7",
+    "candidate_matches_deployed": true,
+    "rollback": "copy any backup below over the installation target",
+    "revision_chain": [
+      {
+        "state": "deployed_before_repair",
+        "sha256": "26cca5c6126c6a874e57fdc2e3bfb9f5c44a50f213c9c94c1796a99d95eafa79",
+        "backup": "state/backups/omp-extension-index-pregate-20260917.ts"
+      },
+      {
+        "state": "intent_gate_repair",
+        "sha256": "f163fe6bb34bf7dd1ccc4f19b922bef0a803ef1f5815f5ee8bf99702cf118bda",
+        "backup": "state/backups/omp-extension-index-prebypass-20260917.ts"
+      },
+      {
+        "state": "bypass_telemetry",
+        "sha256": "0003755b6cb15d17b7f04533ea49afb86b120cc354fde2fdbbc7978377e4b633",
+        "backup": "state/backups/omp-extension-index-prefpfix-20260917.ts"
+      },
+      {
+        "state": "bypass_positive_evidence",
+        "sha256": "42ef28e2b6fafc6471773d022fb38a85970692f30cc5d57329cad91e3a9334b7"
+      }
+    ]
+  },
+  "provenance": {
+    "deployed_revision_identified_as": ".worktrees/qualified-v2/brainstem/prime-extension/src/index.ts",
+    "identified_by": "sha256 equality with the deployed file before repair",
+    "not_deployed": ".worktrees/native-identity-settlement-20260911 requires the native invocation surface and fails closed with BRAIN_NATIVE_INVOCATION_REQUIRED on omp 18.2.4"
+  },
+  "verify": {
+    "tsc": "clean on the live line and on the native branch",
+    "vitest": {
+      "qualified_v2": "730/730",
+      "native_identity_settlement_20260911": "739/739"
+    },
+    "falsification": "the unattributed-delivery regression test fails with the positive-evidence guard disabled and passes with it enabled",
+    "live_probes": [
+      {
+        "case": "read-only task dispatch, agent scout",
+        "result": "admitted; child returned ADMIT-CHECK; no omp_worker_admission_bypassed row"
+      },
+      {
+        "case": "read-only task dispatch, agent reviewer",
+        "result": "admitted; worker_agent reviewer, access_intent read_only, access_intent_source derived"
+      },
+      {
+        "case": "mutating task dispatch, agent task",
+        "result": "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE, fail closed"
+      },
+      {
+        "case": "eval-spawned agent",
+        "result": "omp_worker_admission_bypassed recorded once: job VividRattlesnake, detected_via hub_job_snapshot, ts 2026-09-17T19:24:45.224Z"
+      },
+      {
+        "case": "worker-class model session",
+        "result": "UNAUTHORIZED_COORDINATOR, Brain anti-recursion rule, by design"
+      }
+    ]
+  },
+  "commits": {
+    "brain_live_line": "93892af",
+    "brain_native_branch": "495e356"
+  },
+  "open_limitation": {
+    "mutating_delegation": "awaits an OMP settlement/lifecycle capability; remains fail closed",
+    "upstream_request": "https://github.com/can1357/oh-my-pi/issues/12366"
+  }
+}
