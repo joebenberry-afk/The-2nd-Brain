@@ -11,7 +11,8 @@
     "mode": "observational-only",
     "rule": "OM_CANARY_BOOT-gated append-only traces; no new awaits, synchronization points, cleanup ordering, release eligibility, retries or timeout changes",
     "acceptance_rule": "Astra must be able to state: instrumentation adds observations but introduces no new authority or dependency",
-    "commits": ["9556524"],
+    "commits": ["9556524", "7484240", "49f0cc5"],
+    "compliance_note": "trace-only message construction moved inside non-throwing guards after review found error-message formatting could throw before the guarded helper ran (accompanying commit)",
     "implemented": [
       "cleanup:start / cleanup:stop:ok|error (memoized cleanup outcome)",
       "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
@@ -20,9 +21,12 @@
       "pre-quit:exitCode marker immediately before postmortem.quit"
     ],
     "pending": [
+      "drain outcome refinements (observation-only): counters on abandoned drains, unavailable-observer representation, account for work completed before the drain snapshot",
+      "carry the stable barrier tuple through physical cleanup traces as trace-only context (no decision use)",
       "launcher-side exit capture (process start, PID, exit timestamp/code, run id)",
       "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt",
-      "RUN-INDEX.json pointing at all raw evidence files"
+      "RUN-INDEX.json pointing at all raw evidence files",
+      "run_start_rehash populated immediately before launch"
     ]
   },
   "instrumented_identities": {

@@ -622,9 +622,13 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 		__traceRoute(`cleanup:stop:ok:backend=${handle.backend}`);
 	} catch (err) {
 		failure = err;
-		__traceRoute(
-			`cleanup:stop:error:backend=${handle.backend}:error=${err instanceof Error ? err.message : String(err)}`,
-		);
+		let errorText = "unprintable";
+		try {
+			errorText = err instanceof Error ? err.message : String(err);
+		} catch {
+			/* trace formatting must never affect cleanup */
+		}
+		__traceRoute(`cleanup:stop:error:backend=${handle.backend}:error=${errorText}`);
 		logger.warn("isolation backend stop failed during cleanup", {
 			backend: handle.backend,
 			mergedDir: handle.mergedDir,
@@ -643,11 +647,13 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 			__traceRoute(`cleanup:remove:ok:baseDir=${baseDir}`);
 		} catch (rmError) {
 			failure ??= rmError;
-			__traceRoute(
-				`cleanup:remove:error:baseDir=${baseDir}:error=${
-					rmError instanceof Error ? rmError.message : String(rmError)
-				}`,
-			);
+			let errorText = "unprintable";
+			try {
+				errorText = rmError instanceof Error ? rmError.message : String(rmError);
+			} catch {
+				/* trace formatting must never affect cleanup */
+			}
+			__traceRoute(`cleanup:remove:error:baseDir=${baseDir}:error=${errorText}`);
 			logger.warn("isolation directory removal failed during cleanup", {
 				backend: handle.backend,
 				baseDir,
