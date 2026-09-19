@@ -197,11 +197,16 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     package.write_text("{}", encoding="utf-8")
     python = tmp_path / "python.exe"
     python.write_bytes(b"python")
+    user_config = tmp_path / "user-config.yml"
+    user_config.write_text("# user settings\n", encoding="utf-8")
+    profile_dir = tmp_path / "profile"
+    profile_dir.mkdir(exist_ok=True)
 
     roles = {
         "executable-bun": bun,
         "executable-cli-entry": cli,
         "configuration-canary-package": package,
+        "configuration-user": user_config,
         "adapter-index": extension,
         "launcher": launcher,
         "watcher": watcher,
@@ -212,6 +217,14 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
         json.dumps(
             {
                 "required_roles": list(roles),
+                "configuration_contract": {
+                    "profile": "canary-settlement",
+                    "profile_dir": str(profile_dir),
+                    "user_config_file": str(user_config),
+                    "forbidden_env": ["PI_CONFIG_FILES"],
+                    "forbidden_argv_flags": ["--config"],
+                    "forbidden_project_overlays": [".omp/config.yml", ".claude/settings.yml"],
+                },
                 "identities": [
                     {"role": role, "path": str(path), "sha256": _sha256(path)}
                     for role, path in roles.items()
@@ -331,6 +344,49 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
     assert result["all_bound"] is False
     assert "env:SECOND_BRAIN_HOME" in result["mismatched"]
 
+    # Configuration contract: an unbound profile, an overlay env var, an
+    # overlay argv flag and a project-local settings file must each fail.
+    spec = _complete_binding_spec(tmp_path)
+    spec["profile"] = "unbound-profile"
+    spec["argv"] = [
+        "bun",
+        "cli",
+        "--profile",
+        "unbound-profile",
+        "-e",
+        spec["extension"][0],
+    ]
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "configuration:profile" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-forbidden-env"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+        "PI_CONFIG_FILES": str(tmp_path / "overlay.yml"),
+    }
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-env" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["argv"] = spec["argv"] + ["--config", str(tmp_path / "overlay.yml")]
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-argv" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    overlay = Path(spec["fixture"]) / ".omp"
+    overlay.mkdir()
+    (overlay / "config.yml").write_text("modelRoles: {}\n", encoding="utf-8")
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "configuration:project-overlays" in result["mismatched"]
+
     spec = _complete_binding_spec(tmp_path)
     spec["schema_expected"] = 25
     result = _bind(tmp_path, spec)
@@ -415,6 +471,13 @@ def test_tracked_identity_inventory_matches_live_files() -> None:
     for line in (docs / "HASHES.txt").read_text(encoding="utf-8").splitlines():
         digest, _, target = line.strip().partition(" ")
         assert _sha256(Path(target.strip())) == digest, f"stale HASHES entry: {target}"
+    contract = inventory.get("configuration_contract") or {}
+    assert contract.get("profile") == "canary-settlement"
+    assert contract.get("forbidden_env"), "configuration contract must guard overlays"
+    if contract.get("profile_dir") and not Path(contract["profile_dir"]).is_dir():
+        import pytest
+
+        pytest.skip(f"profile directory unavailable: {contract['profile_dir']}")
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:

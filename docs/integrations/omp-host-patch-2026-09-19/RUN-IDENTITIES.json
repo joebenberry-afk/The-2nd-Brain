@@ -1,7 +1,7 @@
 {
   "schema": "second-brain.omp-run-identities.v1",
   "generated_at": "2026-09-19",
-  "note": "Required identity inventory for the evidence-complete qualification rerun. The launcher validates every entry and every required role at the last setup boundary before spawn; the executed bun/CLI/extension/launcher/watcher/python paths must resolve to the bound files, and schema, preflight and fixture identities are validated from the run spec. Regenerate after any change to a bound file (scripts/omp-canary/refresh_identities.py); the campaign test suite validates this inventory against the live files.",
+  "note": "Required identity inventory for the evidence-complete qualification rerun. The launcher validates every entry and every required role at the last setup boundary before spawn; the executed bun/CLI/extension/launcher/watcher/python paths must resolve to the bound files, and schema, preflight and fixture identities are validated from the run spec. The configuration_contract binds the intended profile and user configuration file and forbids configuration overlays (PI_CONFIG_FILES, --config, project-local settings) so the effective configuration cannot drift silently. Regenerate after any change to a bound file (scripts/omp-canary/refresh_identities.py); the campaign test suite validates this inventory against the live files.",
   "required_roles": [
     "executable-bun",
     "executable-cli-entry",
@@ -27,8 +27,29 @@
     "launcher",
     "watcher",
     "preflight",
-    "post-exit-check"
+    "post-exit-check",
+    "configuration-user"
   ],
+  "configuration_contract": {
+    "profile": "canary-settlement",
+    "profile_dir": "C:\\Users\\assas\\.omp\\profiles\\canary-settlement",
+    "user_config_file": "C:\\Users\\assas\\.omp\\agent\\config.yml",
+    "forbidden_env": [
+      "PI_CONFIG_FILES",
+      "PI_CODING_AGENT_DIR",
+      "PI_PACKAGE_DIR",
+      "OMP_PROFILE"
+    ],
+    "forbidden_argv_flags": [
+      "--config"
+    ],
+    "forbidden_project_overlays": [
+      ".omp/config.yml",
+      ".omp/settings.json",
+      ".claude/settings.yml",
+      ".claude/settings.json"
+    ]
+  },
   "identities": [
     {
       "role": "executable-bun",
@@ -138,7 +159,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "9a2c53aaa6e01ee0ff78ceb8a0f10bf767ac19ce67442026fe75cce6ba3f54d1"
+      "sha256": "b97d67bc207ba457f32a317197454e7ba7dbe29069e28f3f1247815fbedd2721"
     },
     {
       "role": "watcher",
@@ -154,6 +175,11 @@
       "role": "post-exit-check",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\post_exit_check.py",
       "sha256": "4d34aa0d9e85b96fe57c29b39a3453ab1d7e98bf38f2be8d18b9cdbf47ab10db"
+    },
+    {
+      "role": "configuration-user",
+      "path": "C:\\Users\\assas\\.omp\\agent\\config.yml",
+      "sha256": "80085d18cdc5a9eb2e0c56c312eedaad20f9846242a1962416569a6e32f7a1e1"
     }
   ]
 }

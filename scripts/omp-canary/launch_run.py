@@ -234,6 +234,45 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     if not extension_flags_ok:
         mismatched.append("argv:extension")
 
+    # Tracked configuration contract: binds the intended profile and user
+    # configuration file and forbids configuration overlays, so the effective
+    # configuration cannot drift silently between candidate and run.
+    contract = inventory.get("configuration_contract") or {}
+    contract_checks: list[dict] = []
+
+    def contract_check(name: str, ok: bool, detail: object) -> None:
+        contract_checks.append({"name": name, "ok": ok, "detail": detail})
+        if not ok:
+            mismatched.append(f"configuration:{name}")
+
+    expected_profile = contract.get("profile")
+    contract_check(
+        "profile",
+        bool(expected_profile) and profile == expected_profile,
+        {"expected": expected_profile, "actual": profile},
+    )
+    profile_dir = contract.get("profile_dir")
+    contract_check("profile-dir", bool(profile_dir) and Path(profile_dir).is_dir(), profile_dir)
+    user_config_file = contract.get("user_config_file")
+    user_config_ok = bool(user_config_file) and any(
+        entry.get("role") == "configuration-user"
+        and Path(entry["path"]).resolve() == Path(str(user_config_file)).resolve()
+        for entry in inventory.get("identities", [])
+    )
+    contract_check("user-config-bound", user_config_ok, user_config_file)
+    forbidden_env_hits = [name for name in contract.get("forbidden_env", []) if env.get(name)]
+    contract_check("forbidden-env", not forbidden_env_hits, forbidden_env_hits)
+    forbidden_flag_hits = [
+        flag for flag in contract.get("forbidden_argv_flags", []) if flag in argv
+    ]
+    contract_check("forbidden-argv", not forbidden_flag_hits, forbidden_flag_hits)
+    overlay_hits = [
+        relative
+        for relative in contract.get("forbidden_project_overlays", [])
+        if (Path(spec["fixture"]) / relative).exists()
+    ]
+    contract_check("project-overlays", not overlay_hits, overlay_hits)
+
     schema_actual = read_schema_version(Path(spec["home"]) / "db" / "brain.sqlite")
     schema_ok = spec.get("schema_expected") is not None and schema_actual == spec.get(
         "schema_expected"
@@ -292,6 +331,7 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         "spawn_input_checks": executed_checks,
         "env_checks": env_checks,
         "argv_checks": argv_checks,
+        "configuration_contract_checks": contract_checks,
         "configuration": {
             "profile": profile,
             "argv": argv,
@@ -321,6 +361,7 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
                 "extensions": list(spec.get("extension", [])),
                 "env": payload["configuration"]["effective_env"],
                 "spawn_inputs": spawn_inputs,
+                "configuration_contract_checks": contract_checks,
                 "schema_expected": spec.get("schema_expected"),
                 "fixture": spec.get("fixture"),
             },
