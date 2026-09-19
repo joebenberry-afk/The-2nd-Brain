@@ -589,7 +589,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						if (!signal.isFile()) {
 							throw new Error(`isolation hold signal is not a regular file: ${holdFile}`);
 						}
-						if (performance.now() - startedAt > deadlineMs) {
+						if (performance.now() - startedAt >= deadlineMs) {
 							throw new Error(`isolation hold signal arrived after the deadline: ${holdFile}`);
 						}
 						__traceIsolation(`isolation:hold-release:${binding}`);
@@ -597,7 +597,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					} catch (error) {
 						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 					}
-					if (performance.now() - startedAt > deadlineMs) {
+					if (performance.now() - startedAt >= deadlineMs) {
 						throw new Error(`isolation hold timed out without the bound release signal: ${holdFile}`);
 					}
 					await new Promise(resolve => setTimeout(resolve, 200));

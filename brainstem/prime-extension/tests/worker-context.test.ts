@@ -411,7 +411,7 @@ describe("OMP worker Context Capsule bridge", () => {
     });
   });
 
-  const settlementHarness = () => {
+  const settlementHarness = (releaseLifecycle?: Promise<void>) => {
     const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) =>
       contextResultForRequest(options));
     const boundAttempts: Array<Parameters<NonNullable<ExtensionOptions["ompWorkerBindRunner"]>>[0]> = [];
@@ -430,6 +430,7 @@ describe("OMP worker Context Capsule bridge", () => {
       async options => {
         lifecycleCalls.push(options);
         lifecycleSettled.resolve();
+        if (releaseLifecycle) await releaseLifecycle;
         return {
           ok: true,
           status: "accepted" as const,
@@ -588,6 +589,152 @@ describe("OMP worker Context Capsule bridge", () => {
     );
     await Promise.resolve();
     expect(settled).toBe(false);
+  });
+
+  it("reconciles a single lost acknowledgement successfully", async () => {
+    const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) =>
+      contextResultForRequest(options));
+    const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async options => ({
+      ok: true,
+      status: "accepted" as const,
+      taskId: options.taskId,
+      attemptId: options.attemptId,
+    }));
+    const persisted = new Map<number, string>();
+    let sequenceTwoAttempts = 0;
+    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(
+      async options => {
+        const payload = JSON.stringify(options);
+        const prior = persisted.get(options.sequence);
+        if (prior !== undefined && prior !== payload) {
+          return { ok: false, error: "RECEIPT_CONFLICT" };
+        }
+        persisted.set(options.sequence, payload);
+        if (options.sequence === 2) {
+          sequenceTwoAttempts += 1;
+          if (sequenceTwoAttempts === 1) {
+            return { ok: false, error: "BRAIN_WORKER_CALLBACK_UNAVAILABLE" };
+          }
+        }
+        return {
+          ok: true,
+          status: "accepted" as const,
+          taskId: options.taskId,
+          attemptId: options.attemptId,
+          sequence: options.sequence,
+        };
+      },
+    );
+    let observer: ((observation: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>) | undefined;
+    const disposeObserver = vi.fn();
+    const context = ctx();
+    context.observeAsyncJobLifecycle = (callback) => {
+      observer = callback;
+      return disposeObserver;
+    };
+    const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    const pi = {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
+    } as unknown as ExtensionAPI;
+    factory(pi, {
+      ompWorkerContextRunner: contextRunner,
+      ompWorkerBindRunner: bindRunner,
+      ompWorkerLifecycleRunner: lifecycleRunner,
+      ompWorkerResultRunner: async () => ({ ok: true }),
+    });
+    const prepared = await handlers.get("tool_call")!({
+      toolName: "task",
+      toolCallId: "mutating-attempt",
+      input: { task: "Mutate", access_intent: "mutating" },
+    }, context);
+    expect(prepared).toMatchObject({ input: { access_intent: "mutating" } });
+    const base: AsyncJobLifecycleObservation = {
+      jobId: null,
+      generation: 7,
+      nativeAttemptId: "native-attempt-1",
+      type: "task",
+      agentId: "Worker",
+      sourceToolCallId: "mutating-attempt",
+      sourceIndex: 0,
+      status: "running",
+      executorSettled: false,
+      cleanupComplete: false,
+      revision: 1,
+    };
+    await expect(Promise.resolve(observer!(base))).resolves.toBe(true);
+    // The first sequence-2 acknowledgement is lost; the single identical-payload
+    // resend is accepted and the same receipt completes the writer.
+    await expect(Promise.resolve(observer!({
+      ...base,
+      status: "completed",
+      executorSettled: true,
+      revision: 2,
+    }))).resolves.toBe(true);
+    expect(sequenceTwoAttempts).toBe(2);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, context);
+    await expect(Promise.resolve(observer!({
+      ...base,
+      status: "completed",
+      executorSettled: true,
+      cleanupComplete: true,
+      revision: 3,
+    }))).resolves.toBe(true);
+    expect(lifecycleRunner).toHaveBeenCalledTimes(4);
+    expect([...persisted.keys()]).toEqual([1, 2, 3]);
+    expect(disposeObserver).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps host-visible work pending through a delayed lifecycle RPC", async () => {
+    const gate = deferred<void>();
+    const harness = settlementHarness(gate.promise);
+    await harness.handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-settlement",
+        input: { agent: "task", task: "Mutate the seam" },
+      },
+      harness.context,
+    );
+    expect(harness.observers.size).toBe(1);
+    let returned: unknown;
+    for (const observer of harness.observers) {
+      returned = observer(settlementSnapshot({}));
+    }
+    let settled = false;
+    void (returned as Promise<void>).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    gate.resolve();
+    await nextLifecycleCall(harness, 1);
+    await Promise.resolve();
+    await Promise.resolve();
+    // The RPC returned, but cleanup is not proven: host-owned work stays open.
+    expect(settled).toBe(false);
+  });
+
+  it("does not invent an observer obligation for a read-only-only call", async () => {
+    const harness = settlementHarness();
+    const prepared = await harness.handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-read-only",
+        input: { agent: "scout", task: "Inspect", access_intent: "read_only" },
+      },
+      harness.context,
+    );
+    expect(prepared).not.toEqual({
+      block: true,
+      reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE",
+    });
+    expect(harness.observers.size).toBe(0);
   });
 
   it("never treats a failed or pending cleanup as settlement", async () => {
