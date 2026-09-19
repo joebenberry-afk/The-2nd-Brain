@@ -117,8 +117,10 @@ def main() -> int:
         },
     ]
     user_config = Path(r"C:\Users\assas\.omp\agent\config.yml")
+    profile_dir = Path(r"C:\Users\assas\.omp\profiles\canary-settlement")
+    profile_agent_dir = profile_dir / "agent"
     if user_config.exists():
-        identities.append({"role": "configuration-user", "path": str(user_config)})
+        identities.append({"role": "configuration-default-profile-user", "path": str(user_config)})
     inventory = {
         "schema": "second-brain.omp-run-identities.v1",
         "generated_at": "2026-09-19",
@@ -128,23 +130,34 @@ def main() -> int:
             "setup boundary before spawn; the executed bun/CLI/extension/launcher/"
             "watcher/python paths must resolve to the bound files, and schema, "
             "preflight and fixture identities are validated from the run spec. The "
-            "configuration_contract binds the intended profile and user configuration "
-            "file and forbids configuration overlays (PI_CONFIG_FILES, --config, "
-            "project-local settings) so the effective configuration cannot drift "
-            "silently. Regenerate after any change to a bound file "
-            "(scripts/omp-canary/refresh_identities.py); the campaign test suite "
-            "validates this inventory against the live files."
+            "configuration_contract binds the intended profile, its resolved agent "
+            "directory and main-config files (enforced absent until deliberately "
+            "bound), the default-profile user config by hash, and forbids every "
+            "documented configuration-root/profile override (PI_CONFIG_DIR, "
+            "PI_CONFIG_FILES, PI_CODING_AGENT_DIR, PI_PACKAGE_DIR, OMP_PROFILE, "
+            "PI_PROFILE, --config, project-local settings). Regenerate after any "
+            "change to a bound file (scripts/omp-canary/refresh_identities.py); the "
+            "campaign test suite validates this inventory against the live files."
         ),
         "required_roles": [entry["role"] for entry in identities],
         "configuration_contract": {
             "profile": "canary-settlement",
-            "profile_dir": r"C:\Users\assas\.omp\profiles\canary-settlement",
-            "user_config_file": str(user_config) if user_config.exists() else None,
+            "home_dir": str(Path.home()),
+            "profile_dir": str(profile_dir),
+            "profile_agent_dir": str(profile_agent_dir),
+            "profile_config_files": [
+                {"name": "config.yml", "expects": "absent"},
+                {"name": "config.yaml", "expects": "absent"},
+                {"name": "settings.json", "expects": "absent"},
+            ],
+            "default_profile_user_config": str(user_config) if user_config.exists() else None,
             "forbidden_env": [
+                "PI_CONFIG_DIR",
                 "PI_CONFIG_FILES",
                 "PI_CODING_AGENT_DIR",
                 "PI_PACKAGE_DIR",
                 "OMP_PROFILE",
+                "PI_PROFILE",
             ],
             "forbidden_argv_flags": ["--config"],
             "forbidden_project_overlays": [
