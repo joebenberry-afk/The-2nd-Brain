@@ -418,6 +418,7 @@ def release_interrupted_attempt(
             a
             for a in attestations
             if (a.get("host_generation") or None) == (row.get("host_generation") or None)
+            or a.get("host_generation") in (None, "")
         ]
         attested = {a["resource"] for a in attestations if a.get("resource")}
         wanted = [r for r in (resources or sorted(attested)) if r and r.strip()]
@@ -428,7 +429,8 @@ def release_interrupted_attempt(
                 "changed": False,
                 "unresolved_conditions": ["no quiescence attestation recorded for any resource"],
                 "supported_actions": [
-                    "verify each resource is genuinely idle, then record it with worker-plane lease-quiesce",
+                    "verify each resource is genuinely idle, then record it with worker-plane"
+                    " lease-quiesce",
                 ],
             }
         missing = [r for r in wanted if r not in attested]
@@ -439,7 +441,8 @@ def release_interrupted_attempt(
                 "changed": False,
                 "unresolved_conditions": [f"no quiescence attestation for: {', '.join(missing)}"],
                 "supported_actions": [
-                    "verify the resource is genuinely idle, then record it with worker-plane lease-quiesce",
+                    "verify the resource is genuinely idle, then record it with worker-plane "
+                    "lease-quiesce",
                 ],
             }
 
@@ -461,6 +464,12 @@ def release_interrupted_attempt(
             "executor_settled": False,
             "logical_outcome": row.get("logical_outcome"),
             "outcome_rewritten": False,
+            "resource_coverage": "operator-asserted",
+            "note": "no host inventory exists for a dead host; coverage rests on the attestations "
+            "b"
+            "e"
+            "l"
+            "ow",
             "resources": wanted,
             "attestations": [
                 a["event_id"] for a in attestations if a.get("resource") in set(wanted)
