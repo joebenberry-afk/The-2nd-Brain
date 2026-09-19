@@ -106,3 +106,54 @@ Reviewer's explicit constraint on the interrupted row: if its `host_generation`
 is NULL, the strict contract **refuses** release; an independently preserved
 launch/binding record identifying that exact attempt and generation is required
 first. Neither an operator-selected generation nor `None == None` establishes it.
+
+## Accepted execution order (authoritative target for closure)
+
+The three invariants to satisfy: **complete resource knowledge → independently
+bound generation → proven cleanup completion.** The omp15 release must not be
+treated as proof of the hardened mechanism; it proved the path can work, not the
+stricter identity/completeness conditions.
+
+1. Land the resource-census contract first: independently recorded, evidence-backed,
+   immutable for the recovery attempt, with the release request allowed only to
+   select the entire census. Test an omitted resource, an attempted subset release,
+   a nonexistent census and a census lacking completeness evidence.
+2. Land generation/binding hardening with it: `NULL` generation fails closed,
+   generation `0` stays a legitimate generation rather than becoming falsey,
+   recovery requires a separately preserved launch/binding record, and
+   `None == None` never qualifies as identity.
+3. Run the recovery tests before touching the barrier, adding regressions for the
+   four review findings: omitted resource, missing-vs-missing generation,
+   generation `0`, and lifecycle sequence consumed by recovery.
+4. Then apply the cleanup barrier as a separate change with narrow semantics:
+   exactly one promise, resolved only by actual cleanup success, rejected on
+   cleanup failure, timeout, stale sentinel or duplicate/late settlement; the
+   barrier must not infer ownership or completeness.
+5. Run the A→B→C proof before broad regression testing, capturing all eight
+   required evidence objects as a mechanically inspectable artifact rather than a
+   prose summary — the proof that admission/ownership → cleanup → successor
+   release occurs in the intended order.
+6. Only after A→B→C passes, attack cancellation and concurrency: cancel during
+   each boundary, cleanup→cancel, cleanup-success→release, timeout, process
+   interruption, duplicate callback and stale callback.
+7. Then Brain ON/OFF and ordinary-workflow regression: read-only dispatch,
+   ordinary edit→capture→commit, parallel read-only work, session continuation and
+   the existing worker admission cases, proving the hardened path did not turn
+   normal operation into a serialization bottleneck.
+8. Instrumentation removal is the final functional mutation: rerun the small
+   qualification subset after removal to show ordering is unchanged, then seal
+   hashes/identities and hand the exact candidate to a fresh independent reviewer.
+
+Closure rule: do not stop at "tests pass". Stop only when the hardened census +
+generation + barrier contracts are implemented, the complete A→B→C evidence
+package exists, adversarial cancellation/concurrency cases pass, instrumentation
+is removed, identities are sealed, and a fresh independent reviewer accepts the
+exact sealed candidate — or that reviewer explicitly concludes closure is
+impossible under the available OMP interfaces.
+
+Architectural note carried forward (v3, not this campaign's scope): a resource
+census is an authoritative evidence object while "this worker owns these
+resources" is a derived claim; recovery must not reconstruct authoritative
+evidence from derived rows. Unknown is a distinct state, not a wildcard. Once
+something becomes a release/settlement boundary it should collapse into a narrow
+deterministic state machine with explicit terminal states.
