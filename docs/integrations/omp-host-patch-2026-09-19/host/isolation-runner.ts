@@ -393,9 +393,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	};
 	const cleanupHandle = (): Promise<void> => {
 		cleanupPromise ??= (async () => {
+			__traceIsolation(`cleanup:start:agent=${opts.agentId}:backend=${handle?.backend ?? "none"}`);
 			await releaseBase();
-			if (handle && !retainWorkspace) await cleanupIsolation(handle);
-			else if (handle && retainWorkspace) {
+			if (handle && !retainWorkspace) {
+				try {
+					await cleanupIsolation(handle);
+					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}`);
+				} catch (error) {
+					__traceIsolation(
+						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:error=${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					);
+					throw error;
+				}
+			} else if (handle && retainWorkspace) {
 				// The workspace was deliberately retained, so no isolation teardown was
 				// attempted. That is NOT a proven cleanup: this route owned a handle, so
 				// the barrier must reject rather than resolve on a skipped teardown. A
@@ -519,6 +531,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		throw new Error("isolation route must classify its cleanup obligation as required");
 	}
 	const cleanupBarrier = requirement.barrier;
+	const barrierIdentityText = `${barrierIdentity.attemptId}|${barrierIdentity.generation}|${barrierIdentity.cleanupOperationId}`;
+	__traceIsolation(`barrier:armed:${barrierIdentityText}`);
 	void (async () => {
 		try {
 			// The inner isolationRelease deferred resolves in a finally even when the
@@ -526,16 +540,17 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			// resolve over a failed teardown. cleanupHandle() is memoised and rejects
 			// on failure, so awaiting it after the release is the authoritative
 			// cleanup outcome.
+			__traceIsolation(`barrier:awaited:${barrierIdentityText}`);
 			await isolationRelease.promise;
 			await cleanupHandle();
 			settleBarrier(cleanupBarrier, { ok: true });
 			__traceIsolation(
-				`barrier:resolved:attempt=${barrierIdentity.attemptId}:state=${cleanupBarrier.state}:events=${cleanupBarrier.timeline.map(e => e.event).join(">")}`,
+				`barrier:settled:${barrierIdentityText}:state=${cleanupBarrier.state}:events=${cleanupBarrier.timeline.map(e => e.event).join(">")}`,
 			);
 		} catch (error) {
 			settleBarrier(cleanupBarrier, { ok: false, error });
 			__traceIsolation(
-				`barrier:rejected:attempt=${barrierIdentity.attemptId}:error=${
+				`barrier:settled:${barrierIdentityText}:state=rejected:error=${
 					error instanceof Error ? error.message : String(error)
 				}`,
 			);
