@@ -414,12 +414,15 @@ def release_interrupted_attempt(
         # An attestation only counts for the generation it was recorded against:
         # a stale attestation from an earlier incarnation of this attempt must
         # never authorise releasing the current one.
+        # Exact generation acceptance: an attestation authorises only the
+        # generation it was recorded against. A missing generation matches a
+        # missing generation and nothing else.
         attestations = [
             a
             for a in attestations
             if (a.get("host_generation") or None) == (row.get("host_generation") or None)
-            or a.get("host_generation") in (None, "")
         ]
+
         attested = {a["resource"] for a in attestations if a.get("resource")}
         wanted = [r for r in (resources or sorted(attested)) if r and r.strip()]
         if not wanted:
