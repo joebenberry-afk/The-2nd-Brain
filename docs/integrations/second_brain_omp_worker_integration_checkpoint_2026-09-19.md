@@ -669,3 +669,37 @@ protection; Brain ON/OFF; read-only worker behaviour; ordinary
 edit->capture->commit; session continuation; instrumentation removal with a
 decisive rerun; sealing and fresh acceptance. `check:types` remains
 UNAVAILABLE and the causal-evidence binding remains separately open.
+
+### Instrumentation rule and checklist for the qualification rerun (binding)
+
+The `OM_CANARY_BOOT` instrumentation must be **observational only**. It may
+record: `isoStop` result; retained-vs-removed decision; memoized cleanup
+result; barrier logical identity; drain boundaries; pre-quit; exit
+timestamp/code. It must not await anything production would not await,
+introduce a synchronization point, change cleanup ordering, change release
+eligibility, add retries, or alter timeouts. Astra must be able to state:
+"instrumentation adds observations but introduces no new authority or
+dependency" before the package is accepted.
+
+Planned trace points (test-only, removed before sealing):
+
+- `cleanupHandle`: `cleanup:start`, `cleanup:stop:ok|error:<msg>`,
+  `cleanup:remove:ok|error`, `cleanup:retained:<dir>` around
+  `cleanupIsolation(handle)` / the memoized result.
+- Barrier: `barrier:armed:<attemptId>|<generation>|<cleanupOperationId>` after
+  a `required` classification; `barrier:settled:<identity>:state=...` on both
+  resolve and reject; `barrier:awaited:<identity>` before the bridge awaits.
+- Drain boundaries: `observer-drain:start|end|abandoned` (host
+  `#drainSettlementObservers`, test-only) with the source tool-call id.
+- `pre-quit` marker at the final drain point. The actual exit timestamp/code
+  is captured by the launcher wrapper (no host edit needed).
+
+DB checkpoints are launcher-side and read-only: a watcher copies the
+disposable DB at the moment receipt seq 1 first appears and at terminal
+settlement, producing `state-1`/`state-2` snapshots with checksums. No
+candidate instrumentation is involved in the checkpoints.
+
+Acceptance ordering remains: instrumented rerun -> Astra eight-object review ->
+instrumentation removal -> decisive subset rerun -> robustness campaign ->
+sealing -> fresh acceptance. `check:types` and the causal-evidence binding
+stay separate throughout.
