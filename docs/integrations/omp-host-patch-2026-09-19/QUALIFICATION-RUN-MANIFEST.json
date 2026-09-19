@@ -1,0 +1,46 @@
+{
+  "schema": "second-brain.omp-qualification-run-manifest.v1",
+  "generated_at": "2026-09-19",
+  "purpose": "Run-specific identity binding for the evidence-complete qualification rerun. Overlays the frozen behavioral candidate with the instrumented, executed sources. Not a release claim.",
+  "behavior_candidate": {
+    "manifest": "docs/integrations/omp-host-patch-2026-09-19/CANDIDATE-MANIFEST.json",
+    "role": "frozen pre-instrumentation behavior reference",
+    "subject_commit": "2f0ae14a90531f6e6f51dd28984ab8d275347a3e"
+  },
+  "instrumentation": {
+    "mode": "observational-only",
+    "rule": "OM_CANARY_BOOT-gated append-only traces; no new awaits, synchronization points, cleanup ordering, release eligibility, retries or timeout changes",
+    "acceptance_rule": "Astra must be able to state: instrumentation adds observations but introduces no new authority or dependency",
+    "commits": ["9556524"],
+    "implemented": [
+      "cleanup:start / cleanup:stop:ok|error (memoized cleanup outcome)",
+      "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
+      "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown, retained decision covered by cleanup:skipped:retainedWorkspace)"
+    ],
+    "pending": [
+      "observer-drain:start|end|abandoned in the host session drain",
+      "pre-quit marker",
+      "launcher-side exit timestamp/code capture",
+      "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt"
+    ]
+  },
+  "instrumented_identities": {
+    "hashes_file": "docs/integrations/omp-host-patch-2026-09-19/HASHES.txt",
+    "rule": "re-hash the live canary files at rerun start and record the comparison before launching; any mismatch fails setup"
+  },
+  "run_start_rehash": null,
+  "canary": {
+    "package_root": "C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary",
+    "profile": "canary-settlement",
+    "extension": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-v2/brainstem/prime-extension/src/index.ts"
+  },
+  "environment_contract": {
+    "SECOND_BRAIN_HOME": "fresh disposable home per run",
+    "SECOND_BRAIN_PYTHON": "C:/Users/assas/Documents/The-Second-Brain/.venv/Scripts/python.exe",
+    "OM_CANARY_BOOT": "trace file per run",
+    "OM_CANARY_FORCE_ISOLATED": "1",
+    "OM_CANARY_ISOLATION": "1",
+    "OM_CANARY_HOLD_RELEASE_UNTIL": "identity-bound hold prefix (positive run only)"
+  },
+  "status": "INCOMPLETE - remaining instrumentation pending; not yet the evidence-run manifest"
+}
