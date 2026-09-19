@@ -328,3 +328,21 @@ Scope limit stated by the reviewer and carried here: this proves the ROOT sessio
 fence. A shared child manager needs an owner-scoped fence rather than a post-clear
 list lookup, and that is a separate qualification - not something the root proof
 implies.
+
+## Drain scope decision (reviewer, final for this repair)
+
+- Root session fence: `manager.dispose()` plus an immediate `manager.waitForAll()`
+  captured before the first await clears the job set - GROUNDED, and the basis of
+  the drain.
+- Shared/child manager: `waitForOwnerJobs()` called after the parent's ~3s dispose
+  clear is NOT grounded. The reviewer will not label it proven.
+- Minimal fail-closed behaviour instead: for sessions that registered observers,
+  report the shared-manager producer fence as UNAVAILABLE rather than reporting a
+  completed drain. An unavailable fence is an explicit incomplete outcome, never a
+  silent success - the same rule that applies to a rejected, timed-out or
+  never-entered chain.
+- A universal owner-scoped manager fence would require an additional job-manager
+  change. That is out of scope for this observer repair and is recorded as a
+  separate qualification, not as proven work.
+- Isolation cleanup does NOT need modification for this observer repair, so the
+  qualified cleanup/barrier layer stays frozen.
