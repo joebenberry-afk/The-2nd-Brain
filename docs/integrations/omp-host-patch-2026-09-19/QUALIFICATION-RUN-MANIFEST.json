@@ -1,7 +1,7 @@
 {
   "schema": "second-brain.omp-qualification-run-manifest.v1",
   "generated_at": "2026-09-19",
-  "revision": "2026-09-19.2 (post first Astra review)",
+  "revision": "2026-09-19.3 (post round-2 Astra review)",
   "purpose": "Run-specific identity binding for the evidence-complete qualification rerun. Overlays the frozen behavioral candidate with the instrumented, executed sources. Not a release claim.",
   "behavior_candidate": {
     "manifest": "docs/integrations/omp-host-patch-2026-09-19/CANDIDATE-MANIFEST.json",
@@ -19,19 +19,20 @@
       "c69e9d6",
       "d45b3ca",
       "fe22464",
-      "cd8b73a"
+      "cd8b73a",
+      "9a91ffa"
     ],
-    "repair_note": "cd8b73a closes the first Astra review (verdict NOT_READY): trace helpers resolve thunks inside the guarded boundary so a throwing diagnostic can no longer replace a cleanup error (I1); drain records producer-fence completion/unavailability, registration closure and final detach with post-detach cumulative counters, and flattens nested aggregate failures (D1-D3); retained-decision traces cover the patch-capture and nested-capture routes (P1); base-release outcomes are traced without changing propagation (P2). Tracked snapshots for the un-instrumented pre-instrumentation worktree.ts baseline do not exist; the review must treat the worktree physical-cleanup delta from source inspection of the trace-guarded additions.",
+    "repair_note": "cd8b73a closed the first Astra review (I1, D1, D3, P2, L1, L2, B1); 9a91ffa closes the round-2 blockers: the merge-failed fallback-capture route emits its tuple-bound retained-decision trace (P1); the drain records sync-only observer lifetimes alongside registrations, pending, completed and rejected (D2); supervision teardown runs in a finally path for every exit including early binding failure and interruption, and watcher health is required for success (L3/L4); the binding gate enforces required roles, executed-spec paths, schema, preflight and fixture identities (B2). I2 limitation recorded: no preserved pre-instrumentation worktree.ts bytes exist; the recorded frozen identity (36b3f3...) could not be reproduced from available sources, so the derived baseline plus the trace-only tracked diff is the strongest non-runtime argument and is labelled as derived (docs/integrations/omp-host-patch-2026-09-19/ is the tracked evidence home; the strip/search artifacts live with the campaign evidence and review packets).",
     "implemented": [
       "cleanup:start / cleanup:stop:ok|error (memoized cleanup outcome)",
       "cleanup:base-release:ok|error around releaseBase (propagation unchanged)",
-      "cleanup:skipped:retainedWorkspace on the cleanupHandle retained branch and on the patch-capture-failed and nested-capture-failed routes",
+      "cleanup:skipped:retainedWorkspace on the cleanupHandle retained branch and on the patch-capture-failed, nested-capture-failed and merge-failed-fallback-capture routes",
       "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
       "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown)",
-      "observer-drain:start with pending, registration count, cumulative completed/rejected and registration-closure state",
+      "observer-drain:start with pending, registration count, sync-only count, cumulative completed/rejected and registration-closure state",
       "observer-drain:producer-fence:complete / producer-fence:unavailable / registrations-closed boundaries",
       "observer-drain:end and observer-drain:abandoned with loop and cumulative counters and flattened nested failure text",
-      "observer-drain:detached with remainingAtDetach, post-detach map size and post-detach cumulative counters",
+      "observer-drain:detached with remainingAtDetach, post-detach map size, registration/sync-only accounting and post-detach cumulative counters",
       "pre-quit:exitCode marker immediately before postmortem.quit",
       "physical cleanup traces carry the exact barrier tuple as trace-only ctx= context (cleanup:start/stop, cleanup:stop/remove invoke|ok|error, retained), binding concurrent operations explicitly without affecting decisions",
       "host test trace-safety.test.ts proves a throwing diagnostic thunk and an unwritable trace target cannot escape the guarded helper, and an absent target leaves the thunk unevaluated"
