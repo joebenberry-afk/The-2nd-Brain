@@ -601,3 +601,34 @@ protection with a refused successor when the cleanup prerequisite is never
 satisfied. Astra's separate verdicts (positive-evidence acceptance; keepAlive
 release contract) are requested and pending; cancellation/concurrency and
 ordinary-workflow qualification follow.
+
+### Astra verdicts and corrections (2026-09-19, later)
+
+**Q1 evidence validity: REJECT for the full eight-object acceptance claim;**
+the narrower identity-consistent chain is supported. Gaps to capture before
+full acceptance: physical cleanup events (`isoStop` outcome, directory removal,
+retained decision, barrier object token); teardown chronology (drain
+start/end, pre-quit, actual exit timestamp/code); durable DB checkpoints after
+receipt 1 and after the terminal callback; manifest additions
+(attempt-settlement/observer-type identities, recorded run-start rehash). The
+originally cited successor was **not isolated** (`boot-c` records
+`isolated=null`). Corrected with a fresh isolated successor run
+(`boot-c2.txt`): `route:policy:enabled=true:isIsolated=true`,
+`begin:CanaryC2Pytest` -> `obligation:route=deferred:kind=required:
+attempt=38020:1:CanaryC2Pytest` -> `backend:started:candidate=7`; task
+`omp-cc1359b0...` COMPLETED. The disposable DB now holds 3 COMPLETED tasks and
+`production_unchanged` remains true. Accurate label: **isolated A -> refusals
+-> terminal receipt -> isolated successor admitted in a follow-up session.**
+The twin's successor refusal is ownership-level and route-independent, but its
+trace is likewise labeled non-isolated for accuracy.
+
+**Q2 keepAlive contract: lifecycle-scoped (Contract A), intended.** The
+release callback is adopted at task completion and invoked only at lifecycle
+release (parent teardown or explicit release); parking alone does not release
+(`registry/agent-lifecycle.ts`; `task/executor.ts:3060-3075`). The early
+hold-begin came from the post-run gate (`task/isolation-runner.ts:634-637`),
+not from `releaseIsolation`, so there was no eight-minute stall inside a
+running release body. Same-session successors are not expected under Contract
+A: demonstrations must end/release the owning session and wait for the
+accepted terminal receipt before dispatching the successor. No release-timing
+changes until a different contract is explicitly specified.
