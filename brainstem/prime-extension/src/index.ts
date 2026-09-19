@@ -1318,10 +1318,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         executorSettled: observation.executorSettled,
         cleanupComplete: observation.cleanupComplete,
       });
-    } catch {
+    } catch (error) {
+      getStore(admission.parentSessionId)?.append(
+        sensors.extensionError(admission.parentSessionId, error),
+      );
       return false;
     }
-    if (!lifecycle.ok) return false;
+    if (!lifecycle.ok) {
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rejected", {
+        session: admission.parentSessionId,
+        taskId: admission.taskId,
+        attemptId: admission.attemptId,
+        lifecycleSequence: sequence,
+        revision: observation.revision,
+        outcome: observation.status,
+        executorSettled: observation.executorSettled,
+        cleanupComplete: observation.cleanupComplete,
+        error: lifecycle.error ?? lifecycle.failureCode ?? "REJECTED",
+      });
+      return false;
+    }
     admission.lifecycleRevision = observation.revision;
     journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-accepted", {
       session: admission.parentSessionId,
@@ -1577,6 +1593,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (typeof observeSettlement === "function") {
           disposer = observeSettlement(
             (snapshot) => {
+              journalWorkerEvent(session, "second-brain.worker-settlement-observed", {
+                session,
+                capabilityVersion: snapshot.capabilityVersion,
+                attemptId: snapshot.attemptId,
+                agentId: snapshot.agentId,
+                sourceIndex: snapshot.sourceIndex,
+                revision: snapshot.revision,
+                cleanupState: snapshot.cleanupState,
+                releasePermitted: snapshot.releasePermitted,
+              });
               if (snapshot.capabilityVersion !== 1) return;
               const sourceIndex = snapshot.sourceIndex;
               if (sourceIndex === null) return;
