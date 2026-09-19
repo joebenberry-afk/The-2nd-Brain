@@ -541,3 +541,38 @@ ownership gap. The fixes below are applied to the canary candidate.
   (assumed `.worktrees/qualified-v2/brainstem/prime-extension/src/index.ts`)
   and initialize the disposable home (schema v24 + project registration) so
   A, B and C all run against it.
+
+### Isolated A->B->C demonstration — result (2026-09-19, later)
+
+Environment: disposable home `%TEMP%/omp-canary26-home` (schema v24, doctor
+20/20, `SECOND_BRAIN_PYTHON` = project venv), fixture repo
+`%TEMP%/omp-canary26/consumer-a` registered only there (`omp26-canary-a`),
+canary profile `canary-settlement`, qualified-v2 extension, manifest-bound
+candidate (re-hash PASS). Baselines:
+`outputs/reports/omp-canary26-demo-20260919/preflight.json`.
+
+| Step | Evidence |
+|---|---|
+| A admitted under the real settlement identity with a required obligation | `begin:WorkerA` -> `obligation:route=deferred:kind=required:attempt=39324:1:WorkerA:generation=1` |
+| A completed and merged its fix | task `omp-8d7ea2c2...` COMPLETED; pytest 1 passed; fixture calc.py corrected |
+| Successor refused while ownership held | B -> `WORKTREE_WRITER_BUSY` |
+| Identity-bound hold released by the coordinator, not the model | exact nonce-bound signal path created after the B-refusal marker; `isolation:hold-release` 0.4 s later |
+| Real cleanup completed, barrier resolved, ownership released | `isolation:released` + `barrier:resolved` 19:50:02Z; final receipt seq 4 has `executor_settled=true, cleanup_complete=true` |
+| Successor admitted after release and completed | follow-up session: `ActualAardwolf` admitted, pytest 1 passed; task `omp-5eae5c7f...` COMPLETED 19:51:23Z |
+| Production untouched | `production_unchanged: true` (before/after checksums equal); durable read from the disposable DB only |
+
+Open observation for the reviewer (not adjudicated): the release path finished
+~8 minutes after the signal, at parent-session teardown; the first supervisor
+had already stopped waiting, and its C dispatches were correctly refused at
+that time. The successor succeeded only in a follow-up session after the
+release. Question: is release-at-teardown the expected contract for kept-alive
+workers, or is a same-session release trigger missing? Raw traces:
+`%TEMP%/omp-canary26/boot.txt` (positive run), `boot-c.txt` (successor
+session); evidence JSON:
+`outputs/reports/omp-canary26-demo-20260919/post-exit.json`.
+
+Remaining: false-success twin in a fresh disposable home (hold active, no
+signal -> cleanup proof stays incomplete, ownership retained, successor
+refused), Astra review of the eight evidence objects, then the rest of the
+qualification sequence. `check:types` remains UNAVAILABLE; the causal binding
+remains separately open.
