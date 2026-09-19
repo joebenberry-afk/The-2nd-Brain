@@ -391,14 +391,16 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		baseReleasePromise ??= opts.baseOptions.onRelease?.() ?? Promise.resolve();
 		return baseReleasePromise;
 	};
+	let barrierTraceContext: string | undefined;
 	const cleanupHandle = (): Promise<void> => {
 		cleanupPromise ??= (async () => {
-			__traceIsolation(`cleanup:start:agent=${opts.agentId}:backend=${handle?.backend ?? "none"}`);
+			const ctx = barrierTraceContext ?? "unbound";
+			__traceIsolation(`cleanup:start:agent=${opts.agentId}:backend=${handle?.backend ?? "none"}:ctx=${ctx}`);
 			await releaseBase();
 			if (handle && !retainWorkspace) {
 				try {
-					await cleanupIsolation(handle);
-					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}`);
+					await cleanupIsolation(handle, barrierTraceContext);
+					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`);
 				} catch (error) {
 					let errorText = "unprintable";
 					try {
@@ -407,7 +409,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						/* trace formatting must never affect cleanup */
 					}
 					__traceIsolation(
-						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:error=${errorText}`,
+						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`,
 					);
 					throw error;
 				}
@@ -418,7 +420,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				// retained run needs its own obligation classification (a distinct
 				// terminal state), not a silent success here.
 				__traceIsolation(
-					`cleanup:skipped:retainedWorkspace:agent=${opts.agentId}:backend=${handle.backend}`,
+					`cleanup:skipped:retainedWorkspace:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`,
 				);
 				const retained = new Error("isolation cleanup not performed: workspace retained");
 				(retained as { retainedWorkspace?: boolean }).retainedWorkspace = true;
@@ -536,6 +538,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	}
 	const cleanupBarrier = requirement.barrier;
 	const barrierIdentityText = `${barrierIdentity.attemptId}|${barrierIdentity.generation}|${barrierIdentity.cleanupOperationId}`;
+	barrierTraceContext = barrierIdentityText;
 	__traceIsolation(`barrier:armed:${barrierIdentityText}`);
 	void (async () => {
 		try {

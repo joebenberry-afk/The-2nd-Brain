@@ -18,11 +18,11 @@
       "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
       "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown, retained decision covered by cleanup:skipped:retainedWorkspace)",
       "observer-drain:start:pending / observer-drain:end:completed:rejected:remaining / observer-drain:abandoned:reason:remaining in the host session drain",
-      "pre-quit:exitCode marker immediately before postmortem.quit"
+      "pre-quit:exitCode marker immediately before postmortem.quit",
+      "physical cleanup traces carry the exact barrier tuple as trace-only ctx= context (cleanup:start/stop, cleanup:stop/remove invoke|ok|error, retained), binding concurrent operations explicitly without affecting decisions"
     ],
     "pending": [
       "drain outcome refinements (observation-only): counters on abandoned drains, unavailable-observer representation, account for work completed before the drain snapshot",
-      "carry the stable barrier tuple through physical cleanup traces as trace-only context (no decision use)",
       "launcher-side exit capture (process start, PID, exit timestamp/code, run id)",
       "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt",
       "RUN-INDEX.json pointing at all raw evidence files",

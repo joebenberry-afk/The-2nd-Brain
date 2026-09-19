@@ -614,12 +614,13 @@ export async function ensureIsolation(
 }
 
 /** Tear down a handle returned by {@link ensureIsolation}. */
-export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
+export async function cleanupIsolation(handle: IsolationHandle, traceContext?: string): Promise<void> {
+	const ctx = traceContext ?? "unbound";
 	let failure: unknown;
-	__traceRoute(`cleanup:stop:invoke:backend=${handle.backend}:mergedDir=${handle.mergedDir}`);
+	__traceRoute(`cleanup:stop:invoke:backend=${handle.backend}:mergedDir=${handle.mergedDir}:ctx=${ctx}`);
 	try {
 		await natives.isoStop(handle.backend, handle.mergedDir);
-		__traceRoute(`cleanup:stop:ok:backend=${handle.backend}`);
+		__traceRoute(`cleanup:stop:ok:backend=${handle.backend}:ctx=${ctx}`);
 	} catch (err) {
 		failure = err;
 		let errorText = "unprintable";
@@ -628,7 +629,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 		} catch {
 			/* trace formatting must never affect cleanup */
 		}
-		__traceRoute(`cleanup:stop:error:backend=${handle.backend}:error=${errorText}`);
+		__traceRoute(`cleanup:stop:error:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`);
 		logger.warn("isolation backend stop failed during cleanup", {
 			backend: handle.backend,
 			mergedDir: handle.mergedDir,
@@ -641,10 +642,10 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 		// down, and a resolved cleanup would let settlement publish `settled` over
 		// resources that are still live.
 		const baseDir = path.dirname(handle.mergedDir);
-		__traceRoute(`cleanup:remove:invoke:baseDir=${baseDir}`);
+		__traceRoute(`cleanup:remove:invoke:baseDir=${baseDir}:ctx=${ctx}`);
 		try {
 			await fs.rm(baseDir, { recursive: true, force: true });
-			__traceRoute(`cleanup:remove:ok:baseDir=${baseDir}`);
+			__traceRoute(`cleanup:remove:ok:baseDir=${baseDir}:ctx=${ctx}`);
 		} catch (rmError) {
 			failure ??= rmError;
 			let errorText = "unprintable";
@@ -653,7 +654,7 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 			} catch {
 				/* trace formatting must never affect cleanup */
 			}
-			__traceRoute(`cleanup:remove:error:baseDir=${baseDir}:error=${errorText}`);
+			__traceRoute(`cleanup:remove:error:baseDir=${baseDir}:ctx=${ctx}:error=${errorText}`);
 			logger.warn("isolation directory removal failed during cleanup", {
 				backend: handle.backend,
 				baseDir,
