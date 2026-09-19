@@ -2292,6 +2292,7 @@ export class AgentSession {
 	#settlementObserverCompletedCount = 0;
 	#settlementObserverRejectedCount = 0;
 	#settlementObserverRegistrationCount = 0;
+	#settlementObserverSyncOnlyCount = 0;
 	readonly #settlementObserverDrains = new Map<Promise<void>, {
 		current: () => Record<string, unknown>;
 		detach: () => void;
@@ -2381,6 +2382,7 @@ export class AgentSession {
 			}
 			if (returned === undefined) {
 				// A synchronous observer/filter has no asynchronous receipt work to own.
+				this.#settlementObserverSyncOnlyCount += 1;
 				if (snapshots.has(key)) snapshots.set(key, snapshot);
 				finish();
 				return;
@@ -2416,7 +2418,7 @@ export class AgentSession {
 			}
 		};
 		traceDrain(
-			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
+			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
 		);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
@@ -2483,7 +2485,7 @@ export class AgentSession {
 			const remainingAtDetach = this.#settlementObserverDrains.size;
 			for (const entry of this.#settlementObserverDrains.values()) entry.detach();
 			traceDrain(
-				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
+				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
 			);
 		}
 	}

@@ -1,7 +1,33 @@
 {
   "schema": "second-brain.omp-run-identities.v1",
   "generated_at": "2026-09-19",
-  "note": "Required identity inventory for the evidence-complete qualification rerun. The launcher validates every entry at the last setup boundary before spawn; a missing or mismatched entry aborts the launch. Fixture identities are validated separately from the preflight record. HASHES.txt remains the authoritative loaded-host identity list for the instrumented candidate.",
+  "note": "Required identity inventory for the evidence-complete qualification rerun. The launcher validates every entry at the last setup boundary before spawn; a missing or mismatched entry aborts the launch. Every role in required_roles must be present with a non-null hash. The executed bun/CLI/extension/launcher/watcher paths must resolve to the same bound files. Schema, preflight and fixture identities are validated from the preflight record and spec. HASHES.txt remains the authoritative loaded-host identity list for the instrumented candidate.",
+  "required_roles": [
+    "executable-bun",
+    "executable-cli-entry",
+    "configuration-canary-package",
+    "host-job-manager",
+    "host-agent-session",
+    "host-isolation-runner",
+    "host-cleanup-barrier",
+    "host-worktree",
+    "host-main",
+    "observer-settlement-registry",
+    "observer-settlement-subagent",
+    "observer-settlement-runner",
+    "observer-settlement-types",
+    "adapter-index",
+    "adapter-bridge",
+    "adapter-types",
+    "brain-worker-protocol",
+    "brain-worker-recovery",
+    "brain-db",
+    "brain-cli",
+    "launcher",
+    "watcher",
+    "preflight",
+    "post-exit-check"
+  ],
   "identities": [
     {
       "role": "executable-bun",
@@ -26,12 +52,12 @@
     {
       "role": "host-agent-session",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\session\\agent-session.ts",
-      "sha256": "e84d7e007681fc18ef35d3bcec3329073b9025cb5d2e8b4bdb9939d6dd11f75f"
+      "sha256": "777f46350ccb3b1c93add1998211f63144117f1f6ccf611241c0c89576fdf8a9"
     },
     {
       "role": "host-isolation-runner",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\task\\isolation-runner.ts",
-      "sha256": "0b4ef788dae5d6bbaaf17dc27e229120dce80e17a10feae3a87e540ec3af13be"
+      "sha256": "b9897080a03f2c9d1f98f4fba52f14efea101c675d8bbdff065b9890f18ac332"
     },
     {
       "role": "host-cleanup-barrier",
@@ -106,12 +132,12 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "d51b2ab74a37d5096d7141aab5544a3fc2c76fabedc24511bb2e5ff967a41041"
+      "sha256": "d8f7a0870d999b4ae6097df52a36d7435c0ea79fc75ce27e029c6c634baef6d1"
     },
     {
       "role": "watcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\db_watch.py",
-      "sha256": "339a1eedc697b85b82cc06ea8ea87f403539d203d79aef2885a075f9e85e7cc3"
+      "sha256": "13b37d4ae36bd578f81132a55415237f09cdfd1c8b2a2cdf26d32abfbe0632a0"
     },
     {
       "role": "preflight",

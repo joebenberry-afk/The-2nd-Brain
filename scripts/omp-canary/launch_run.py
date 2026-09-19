@@ -5,9 +5,12 @@ starts the read-only DB watcher first and waits for its baseline
 acknowledgment, re-validates the run-start binding at the last boundary before
 spawn, spawns the real OMP process (bun + canary src entry) with the run
 environment, waits for the actual process exit, records exit code and
-timestamps, stops and reaps the watcher, and evaluates per-run expectations.
-It never repairs ownership, replays receipts, or supplies any shutdown
-guarantee the host is being tested for.
+timestamps, stops and reaps the watcher, evaluates per-run expectations and
+reports success only when the evidence is complete and health-checked.
+
+Supervision is exception-safe: teardown (child kill/reap, coordinator stop,
+watcher stop/reap, log closure, partial launch record) runs in a finally path
+for every exit, including early binding failure and operator interruption.
 
 Optionally it also runs the external coordinator: it watches the canary trace
 for the identity-bound ``isolation:hold-begin:`` record and creates the exact
@@ -24,12 +27,15 @@ Spec fields (all paths absolute unless noted):
     python, watcher_script, extra_env{}, hold_prefix|null,
     coordinator{marker}|null, timeout_seconds, watcher_timeout_seconds,
     watcher_ready_timeout_seconds, post_exit_grace_seconds,
-    sessions_root, session_glob,
-    expect{state_1, state_2, child_exit}
+    sessions_root, session_glob, schema_expected, preflight_file,
+    executed{bun, cli_entry, extension, launcher, watcher},
+    fixture_identity{path: sha256},
+    expect{state_1, state_2, child_exit, child_exit_nonzero}
 
 Exit codes: 2 = validation/binding failure (nothing launched or launch
 aborted before spawn); 4 = run completed but expectations unmet; 5 =
-supervision error; otherwise the child's exit code.
+supervision error or incomplete watcher evidence; otherwise the child's exit
+code.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ import contextlib
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -72,7 +79,7 @@ def parse_hashes_file(path: Path, base: Path) -> dict[str, str]:
 
 
 def validate_fresh_inputs(spec: dict) -> list[str]:
-    """Refuse to reuse a previous run's marker or trace by accident."""
+    """Refuse to reuse a previous run's artifacts by accident."""
     errors: list[str] = []
     if spec.get("coordinator") and Path(spec["coordinator"]["marker"]).exists():
         errors.append(f"refusal marker already exists: {spec['coordinator']['marker']}")
@@ -82,6 +89,10 @@ def validate_fresh_inputs(spec: dict) -> list[str]:
     run_dir = Path(spec["run_dir"])
     if (run_dir / "launch.json").exists():
         errors.append(f"run directory already contains a launch record: {run_dir}")
+    if (run_dir / "watcher" / "watcher-start.json").exists() or (run_dir / "watcher.stop").exists():
+        errors.append(
+            f"run directory contains watcher artifacts from a previous attempt: {run_dir}"
+        )
     return errors
 
 
@@ -111,14 +122,33 @@ def rehash_bound_files(spec: dict, run_dir: Path) -> dict:
     return payload
 
 
+def read_schema_version(db: Path) -> int | None:
+    if not db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=10)
+        try:
+            row = conn.execute(
+                "SELECT value FROM schema_version ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            return int(row[0]) if row else None
+        finally:
+            conn.close()
+    except (sqlite3.Error, ValueError):
+        return None
+
+
 def bind_required_identities(spec: dict, run_dir: Path) -> dict:
-    """Compare the required identity inventory (executable/adapter/observer/
-    launcher/watcher/configuration/schema/fixture) against the committed file."""
+    """Full binding gate: required roles, executed-spec paths, schema,
+    preflight record and fixture identities must all agree before spawn."""
     identities_file = Path(spec["identities_file"])
     inventory = json.loads(identities_file.read_text(encoding="utf-8"))
+    required_roles = list(inventory.get("required_roles", []))
+    present_roles = {entry.get("role"): entry for entry in inventory.get("identities", [])}
     records = []
-    missing = []
-    mismatched = []
+    missing: list[str] = []
+    mismatched: list[str] = []
+
     for entry in inventory.get("identities", []):
         path = Path(entry["path"])
         expected = entry.get("sha256")
@@ -137,19 +167,79 @@ def bind_required_identities(spec: dict, run_dir: Path) -> dict:
             missing.append(str(path))
         elif not ok:
             mismatched.append(str(path))
-    payload = {
-        "checked_at_unix": time.time(),
-        "checked_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-        "identities_file": str(identities_file),
-        "identities_file_sha256": sha256_file(identities_file),
-        "records": records,
-        "missing_or_null": missing,
-        "mismatched": mismatched,
-        "all_bound": not missing and not mismatched,
-        "boundary": "last-setup-boundary-before-spawn",
+
+    for role in required_roles:
+        entry = present_roles.get(role)
+        if entry is None or entry.get("sha256") is None:
+            missing.append(f"required-role:{role}")
+
+    executed = spec.get("executed") or {}
+    role_by_key = {
+        "bun": "executable-bun",
+        "cli_entry": "executable-cli-entry",
+        "extension": "adapter-index",
+        "launcher": "launcher",
+        "watcher": "watcher",
     }
+    executed_checks = []
+    for key, role in role_by_key.items():
+        expected_path = executed.get(key)
+        entry = present_roles.get(role)
+        bound_path = Path(entry["path"]).resolve() if entry and entry.get("path") else None
+        ok = (
+            bool(expected_path)
+            and entry is not None
+            and entry.get("sha256") is not None
+            and bound_path is not None
+            and Path(expected_path).resolve() == bound_path
+        )
+        executed_checks.append(
+            {
+                "key": key,
+                "role": role,
+                "executed_path": expected_path,
+                "bound_path": str(bound_path) if bound_path else None,
+                "ok": ok,
+            }
+        )
+        if not ok:
+            mismatched.append(f"executed:{key}")
+
+    schema_actual = read_schema_version(Path(spec["home"]) / "db" / "brain.sqlite")
+    schema_ok = spec.get("schema_expected") is not None and schema_actual == spec.get(
+        "schema_expected"
+    )
+    if not schema_ok:
+        mismatched.append(f"schema:{schema_actual}")
+
+    preflight_ok = False
+    preflight_summary = None
+    preflight_file = spec.get("preflight_file")
+    if preflight_file and Path(preflight_file).exists():
+        data = json.loads(Path(preflight_file).read_text(encoding="utf-8"))
+        preflight_summary = {
+            "home": data.get("home"),
+            "fixture": data.get("fixture"),
+            "project_id": data.get("project_id"),
+            "schema_version": data.get("schema_version"),
+            "home_counts": data.get("home_counts"),
+            "red": (data.get("fixture_starts_red") or {}).get("red"),
+        }
+        preflight_ok = (
+            data.get("home") == spec.get("home")
+            and data.get("fixture") == spec.get("fixture")
+            and data.get("schema_version") == spec.get("schema_expected")
+            and (data.get("home_counts") or {}).get("worker_tasks") == 0
+            and (data.get("home_counts") or {}).get("worker_lifecycle_receipts") == 0
+            and (data.get("fixture_starts_red") or {}).get("red") is True
+        )
+    if not preflight_ok:
+        mismatched.append("preflight")
+
     fixture_identity = spec.get("fixture_identity") or {}
     fixture_records = []
+    if not fixture_identity:
+        mismatched.append("fixture_identity:missing")
     for path_text, expected in fixture_identity.items():
         actual = sha256_file(Path(path_text))
         ok = expected is not None and actual is not None and actual.lower() == str(expected).lower()
@@ -157,12 +247,37 @@ def bind_required_identities(spec: dict, run_dir: Path) -> dict:
             {"path": str(path_text), "expected": expected, "actual": actual, "ok": ok}
         )
         if not ok:
-            payload["all_bound"] = False
             if actual is None:
-                payload["missing_or_null"].append(str(path_text))
+                missing.append(str(path_text))
             else:
-                payload["mismatched"].append(str(path_text))
-    payload["fixture_records"] = fixture_records
+                mismatched.append(str(path_text))
+
+    all_bound = not missing and not mismatched and bool(required_roles) and bool(executed_checks)
+    payload = {
+        "checked_at_unix": time.time(),
+        "checked_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+        "identities_file": str(identities_file),
+        "identities_file_sha256": sha256_file(identities_file),
+        "required_roles": required_roles,
+        "role_records": records,
+        "executed_checks": executed_checks,
+        "configuration": {
+            "profile": spec.get("profile"),
+            "argv": spec.get("argv"),
+            "environment_contract": spec.get("environment_contract"),
+        },
+        "schema": {
+            "expected": spec.get("schema_expected"),
+            "actual": schema_actual,
+            "ok": schema_ok,
+        },
+        "preflight": {"file": preflight_file, "ok": preflight_ok, "summary": preflight_summary},
+        "fixture_records": fixture_records,
+        "missing_or_null": missing,
+        "mismatched": mismatched,
+        "all_bound": all_bound,
+        "boundary": "last-setup-boundary-before-spawn",
+    }
     (run_dir / "identity-binding.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
 
@@ -321,13 +436,22 @@ def evaluate_expectations(spec: dict, child_exit: int, watcher_record: dict | No
     expect = spec.get("expect", {})
     checks = []
 
-    def add(name: str, expected, actual) -> None:
+    def add(name: str, expected: object, actual: object) -> None:
         checks.append(
             {"name": name, "expected": expected, "actual": actual, "met": actual == expected}
         )
 
     if "child_exit" in expect:
         add("child_exit", expect["child_exit"], child_exit)
+    if expect.get("child_exit_nonzero"):
+        checks.append(
+            {
+                "name": "child_exit_nonzero",
+                "expected": True,
+                "actual": child_exit != 0,
+                "met": child_exit != 0,
+            }
+        )
     if "state_1" in expect:
         actual = bool(watcher_record and watcher_record.get("state_1_captured"))
         add("state_1", bool(expect["state_1"]), actual)
@@ -337,11 +461,12 @@ def evaluate_expectations(spec: dict, child_exit: int, watcher_record: dict | No
     return {"checks": checks, "met": all(check["met"] for check in checks) and bool(checks)}
 
 
-def stop_watcher(process: subprocess.Popen, run_dir: Path, grace: float) -> int | str | None:
-    stop_file = run_dir / "watcher.stop"
+def stop_watcher(process: subprocess.Popen | None, run_dir: Path, grace: float) -> int | str | None:
+    if process is None:
+        return None
     if process.poll() is None:
         time.sleep(grace)
-        stop_file.write_text("stop", encoding="utf-8")
+        (run_dir / "watcher.stop").write_text("stop", encoding="utf-8")
     try:
         return process.wait(timeout=90)
     except subprocess.TimeoutExpired:
@@ -354,6 +479,16 @@ def stop_watcher(process: subprocess.Popen, run_dir: Path, grace: float) -> int 
                 return process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 return "unreaped"
+
+
+def launcher_outcome(evidence_complete: bool, expectations_met: bool, exit_code: int) -> int:
+    """Success is gated on complete evidence, satisfied expectations and a real
+    zero exit; an unhealthy watcher makes any run incomplete."""
+    if not evidence_complete:
+        return 5
+    if not expectations_met:
+        return 4
+    return 0 if exit_code == 0 else (exit_code if isinstance(exit_code, int) else 1)
 
 
 def main() -> int:
@@ -373,23 +508,61 @@ def main() -> int:
     identity = executable_identity(spec)
     env = dict(os.environ)
     env.update({k: str(v) for k, v in spec.get("extra_env", {}).items()})
-    hold_prefix = spec.get("hold_prefix")
-    if hold_prefix:
-        env["OM_CANARY_HOLD_RELEASE_UNTIL"] = hold_prefix
+    if spec.get("hold_prefix"):
+        env["OM_CANARY_HOLD_RELEASE_UNTIL"] = spec["hold_prefix"]
     env["OM_CANARY_BOOT"] = spec["trace_file"]
 
-    coordinator = None
-    watcher: subprocess.Popen | None = None
-    child: subprocess.Popen | None = None
-    watcher_log = watcher_err = None
-    exit_code: int | None = None
-    timed_out = False
-    launch_started = time.time()
-    binding: dict = {}
+    state: dict = {
+        "coordinator": None,
+        "watcher": None,
+        "child": None,
+        "watcher_log": None,
+        "watcher_err": None,
+        "watcher_started": None,
+        "exit_code": None,
+        "timed_out": False,
+        "launch_started": time.time(),
+        "spawn_observed": None,
+        "exit_at": None,
+        "rehash": None,
+        "binding": {},
+        "argv": None,
+        "supervision_error": None,
+        "record_written": False,
+    }
+
+    def teardown() -> None:
+        child = state["child"]
+        if child is not None and child.poll() is None:
+            child.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                child.wait(timeout=30)
+        coordinator = state["coordinator"]
+        if coordinator is not None:
+            coordinator.stop()
+            coordinator.join(timeout=10)
+        if state["watcher"] is not None:
+            state["watcher_exit"] = stop_watcher(
+                state["watcher"], run_dir, float(spec.get("post_exit_grace_seconds", 3))
+            )
+        if state["watcher_log"] is not None:
+            state["watcher_log"].close()
+        if state["watcher_err"] is not None:
+            state["watcher_err"].close()
+        if not state["record_written"] and state["supervision_error"] is not None:
+            failure = {
+                "name": spec.get("name"),
+                "error": state["supervision_error"],
+                "launch_started_at_unix": state["launch_started"],
+                "child_spawned": state["child"] is not None,
+                "child_exit_code": state["exit_code"],
+                "watcher_exit_code": state.get("watcher_exit"),
+                "supervision_error": True,
+            }
+            (run_dir / "launch.json").write_text(json.dumps(failure, indent=2), encoding="utf-8")
+            state["record_written"] = True
 
     try:
-        # Watcher first: the read-only observer must be running and have its
-        # baseline before the launch, and it must acknowledge readiness.
         watcher_cmd = [
             spec["python"],
             spec["watcher_script"],
@@ -404,49 +577,56 @@ def main() -> int:
             "--timeout",
             str(spec.get("watcher_timeout_seconds", 1800)),
         ]
-        watcher_log = (run_dir / "watcher.stdout.txt").open("w", encoding="utf-8")
-        watcher_err = (run_dir / "watcher.stderr.txt").open("w", encoding="utf-8")
-        watcher = subprocess.Popen(watcher_cmd, stdout=watcher_log, stderr=watcher_err)
+        state["watcher_log"] = (run_dir / "watcher.stdout.txt").open("w", encoding="utf-8")
+        state["watcher_err"] = (run_dir / "watcher.stderr.txt").open("w", encoding="utf-8")
+        state["watcher"] = subprocess.Popen(
+            watcher_cmd, stdout=state["watcher_log"], stderr=state["watcher_err"]
+        )
+        state["watcher_started"] = time.time()
         if not wait_for_watcher_ready(
             run_dir, float(spec.get("watcher_ready_timeout_seconds", 30))
         ):
             raise RuntimeError("watcher did not acknowledge baseline readiness before launch")
 
         if spec.get("coordinator"):
-            coordinator = Coordinator(
+            state["coordinator"] = Coordinator(
                 Path(spec["trace_file"]),
                 Path(spec["coordinator"]["marker"]),
                 run_dir,
-                deadline=launch_started + float(spec.get("timeout_seconds", 900)),
+                deadline=state["launch_started"] + float(spec.get("timeout_seconds", 900)),
             )
-            coordinator.start()
+            state["coordinator"].start()
 
-        argv = [
-            spec["bun"],
-            spec["cli"],
-            "--profile",
-            spec["profile"],
-            "-p",
-            "--auto-approve",
-        ]
+        argv = [spec["bun"], spec["cli"], "--profile", spec["profile"], "-p", "--auto-approve"]
         for extension in spec.get("extension", []):
             argv += ["-e", extension]
         argv.append(f"@{spec['prompt_file']}")
+        state["argv"] = argv
 
-        # Last setup boundary: the run-start rehash and the full identity binding
-        # are validated here, immediately before spawn. Any mismatch aborts the
-        # launch with no child.
-        rehash = rehash_bound_files(spec, run_dir)
-        binding = bind_required_identities(spec, run_dir)
-        binding["rehash_all_match"] = rehash["all_match"]
-        if not rehash["all_match"] or not binding["all_bound"]:
+        # Last setup boundary: rehash and full identity binding immediately
+        # before spawn. Any mismatch aborts with no child.
+        state["rehash"] = rehash_bound_files(spec, run_dir)
+        state["binding"] = bind_required_identities(spec, run_dir)
+        if not state["rehash"]["all_match"] or not state["binding"]["all_bound"]:
+            failure = {
+                "name": spec.get("name"),
+                "launched": False,
+                "binding_failed": True,
+                "launch_started_at_unix": state["launch_started"],
+                "rehash_all_match": state["rehash"]["all_match"],
+                "binding_all_bound": state["binding"]["all_bound"],
+                "binding_missing_or_null": state["binding"]["missing_or_null"],
+                "binding_mismatched": state["binding"]["mismatched"],
+            }
+            (run_dir / "launch.json").write_text(json.dumps(failure, indent=2), encoding="utf-8")
+            state["record_written"] = True
             print(
                 json.dumps(
                     {
                         "error": "run-start binding failed immediately before spawn",
-                        "rehash_mismatches": rehash["mismatches"],
-                        "identity_missing_or_null": binding["missing_or_null"],
-                        "identity_mismatched": binding["mismatched"],
+                        "rehash_mismatches": state["rehash"]["mismatches"],
+                        "binding_missing_or_null": state["binding"]["missing_or_null"],
+                        "binding_mismatched": state["binding"]["mismatched"],
                     }
                 )
             )
@@ -461,49 +641,23 @@ def main() -> int:
             child = subprocess.Popen(
                 argv, cwd=spec["fixture"], env=env, stdout=stdout, stderr=stderr
             )
-            spawn_observed = time.time()
+            state["child"] = child
+            state["spawn_observed"] = time.time()
             try:
-                exit_code = child.wait(timeout=float(spec.get("timeout_seconds", 900)))
+                state["exit_code"] = child.wait(timeout=float(spec.get("timeout_seconds", 900)))
             except subprocess.TimeoutExpired:
-                timed_out = True
+                state["timed_out"] = True
                 child.kill()
-                exit_code = child.wait(timeout=60)
-        exit_at = time.time()
-    except Exception as error:  # supervision must close out children and evidence
-        if child is not None and child.poll() is None:
-            child.kill()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                child.wait(timeout=30)
-        if coordinator is not None:
-            coordinator.stop()
-            coordinator.join(timeout=10)
-        watcher_exit = stop_watcher(watcher, run_dir, 0) if watcher is not None else None
-        if watcher_log:
-            watcher_log.close()
-        if watcher_err:
-            watcher_err.close()
-        failure = {
-            "name": spec.get("name"),
-            "error": f"{type(error).__name__}: {error}",
-            "launch_started_at_unix": launch_started,
-            "child_spawned": child is not None,
-            "timed_out": timed_out,
-            "watcher_exit_code": watcher_exit,
-            "binding": binding,
-            "supervision_error": True,
-        }
-        (run_dir / "launch.json").write_text(json.dumps(failure, indent=2), encoding="utf-8")
-        print(json.dumps({"error": "supervision failure", "detail": str(error)}))
+                state["exit_code"] = child.wait(timeout=60)
+        state["exit_at"] = time.time()
+    except BaseException as error:  # includes operator interruption; teardown still runs
+        state["supervision_error"] = f"{type(error).__name__}: {error}"
+    finally:
+        teardown()
+
+    if state["supervision_error"] is not None:
+        print(json.dumps({"error": "supervision failure", "detail": state["supervision_error"]}))
         return 5
-
-    if coordinator is not None:
-        coordinator.stop()
-        coordinator.join(timeout=10)
-
-    watcher_exit = stop_watcher(watcher, run_dir, float(spec.get("post_exit_grace_seconds", 3)))
-    assert watcher_log is not None and watcher_err is not None
-    watcher_log.close()
-    watcher_err.close()
 
     watcher_record_path = run_dir / "watcher" / "watcher.json"
     watcher_record = (
@@ -511,25 +665,32 @@ def main() -> int:
         if watcher_record_path.exists()
         else None
     )
-    sessions = collect_sessions(spec, launch_started, run_dir)
-    expectations = evaluate_expectations(
-        spec, exit_code if exit_code is not None else -1, watcher_record
-    )
+    watcher_exit = state.get("watcher_exit")
+    watcher_healthy = watcher_record is not None and watcher_exit == 0
+    sessions = collect_sessions(spec, state["launch_started"], run_dir)
+    exit_code = state["exit_code"] if state["exit_code"] is not None else -1
+    expectations = evaluate_expectations(spec, exit_code, watcher_record)
 
     record = {
         "name": spec["name"],
-        "launch_started_at_unix": launch_started,
-        "launch_started_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(launch_started)),
-        "spawn_observed_at_unix": spawn_observed,
-        "exit_at_unix": exit_at,
-        "exit_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(exit_at)),
-        "duration_seconds": round(exit_at - launch_started, 3),
-        "argv": argv,
+        "launch_started_at_unix": state["launch_started"],
+        "launch_started_at_iso": time.strftime(
+            "%Y-%m-%dT%H:%M:%S", time.localtime(state["launch_started"])
+        ),
+        "spawn_observed_at_unix": state["spawn_observed"],
+        "exit_at_unix": state["exit_at"],
+        "exit_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(state["exit_at"]))
+        if state["exit_at"]
+        else None,
+        "duration_seconds": (
+            round(state["exit_at"] - state["launch_started"], 3) if state["exit_at"] else None
+        ),
+        "argv": state["argv"],
         "cwd": spec["fixture"],
         "profile": spec["profile"],
-        "child_pid": child.pid if child else None,
-        "child_exit_code": exit_code,
-        "timed_out": timed_out,
+        "child_pid": state["child"].pid if state["child"] else None,
+        "child_exit_code": state["exit_code"],
+        "timed_out": state["timed_out"],
         "supervised_process_ownership": "launcher-spawned-and-reaped",
         "environment": {
             "SECOND_BRAIN_HOME": env.get("SECOND_BRAIN_HOME"),
@@ -541,49 +702,59 @@ def main() -> int:
         },
         "identity": identity,
         "run_start_binding": {
-            "rehash_all_match": rehash["all_match"],
+            "rehash_all_match": state["rehash"]["all_match"] if state["rehash"] else None,
             "rehash_file": str(run_dir / "run-start-rehash.json"),
-            "identity_all_bound": binding["all_bound"],
+            "identity_all_bound": state["binding"].get("all_bound"),
             "identity_file": str(run_dir / "identity-binding.json"),
             "validated_before_spawn": True,
         },
         "watcher": {
-            "pid": watcher.pid if watcher else None,
-            "started_at_unix": launch_started,
+            "pid": state["watcher"].pid if state["watcher"] else None,
+            "started_at_unix": state["watcher_started"],
             "exit_code": watcher_exit,
+            "healthy": watcher_healthy,
             "record": watcher_record,
         },
-        "coordinator": coordinator.record if coordinator else None,
+        "coordinator": state["coordinator"].record if state["coordinator"] else None,
         "sessions_copied": sessions,
         "expectations": expectations,
-        "qualification_complete": bool(
-            expectations["met"] and watcher_record is not None and exit_code == 0
-        ),
+        "evidence_complete": watcher_healthy,
+        "qualification_complete": bool(watcher_healthy and expectations["met"] and exit_code == 0),
     }
     (run_dir / "launch.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    state["record_written"] = True
     print(
         json.dumps(
             {
                 "name": spec["name"],
-                "child_exit_code": exit_code,
-                "timed_out": timed_out,
+                "child_exit_code": state["exit_code"],
+                "timed_out": state["timed_out"],
                 "duration_seconds": record["duration_seconds"],
+                "watcher_exit_code": watcher_exit,
+                "watcher_healthy": watcher_healthy,
                 "watcher_state_1": watcher_record.get("state_1_captured")
                 if watcher_record
                 else None,
                 "watcher_state_2": watcher_record.get("state_2_captured")
                 if watcher_record
                 else None,
-                "coordinator_state": coordinator.record.get("state") if coordinator else None,
+                "coordinator_state": state["coordinator"].record.get("state")
+                if state["coordinator"]
+                else None,
                 "expectations_met": expectations["met"],
+                "qualification_complete": record["qualification_complete"],
                 "launch_record": str(run_dir / "launch.json"),
             },
             indent=2,
         )
     )
+    if not watcher_healthy:
+        return launcher_outcome(
+            evidence_complete=False, expectations_met=expectations["met"], exit_code=exit_code
+        )
     if not expectations["met"]:
-        return 4
-    return 0 if exit_code == 0 else (exit_code if isinstance(exit_code, int) else 1)
+        return launcher_outcome(evidence_complete=True, expectations_met=False, exit_code=exit_code)
+    return launcher_outcome(evidence_complete=True, expectations_met=True, exit_code=exit_code)
 
 
 if __name__ == "__main__":
