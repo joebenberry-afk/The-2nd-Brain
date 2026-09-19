@@ -221,3 +221,71 @@ export async function releaseWhenProven(
 	await permit();
 	return "released";
 }
+
+/**
+ * Cleanup obligation: distinguishes "cleanup proven complete" from "cleanup not
+ * required for this execution". The second must never be inferred from a barrier
+ * that simply does not exist, and never manufactured as an already-resolved
+ * barrier - a missing barrier is not success.
+ */
+export type CleanupRequirement =
+	| {
+			kind: "none";
+			reason: "no-isolation-resources";
+			attemptId: string;
+			generation: number;
+	  }
+	| { kind: "required"; barrier: CleanupBarrier };
+
+export interface RouteEvidence {
+	/** Authoritative route facts, read from the route's own resource state. */
+	isolationResources: number;
+	registeredCleanupWork: number;
+}
+
+export function classifyCleanupRequirement(
+	route: CleanupRoute,
+	identity: CleanupIdentity,
+	evidence: RouteEvidence,
+	options: BarrierOptions = {},
+): CleanupRequirement {
+	if (evidence.isolationResources > 0 || evidence.registeredCleanupWork > 0) {
+		// This execution owns something; it cannot be classified as nothing.
+		return { kind: "required", barrier: barrierFor(identity, options) };
+	}
+	if (route === "one-shot" && evidence.isolationResources === 0 && evidence.registeredCleanupWork === 0) {
+		return {
+			kind: "none",
+			reason: "no-isolation-resources",
+			attemptId: identity.attemptId,
+			generation: Number(identity.generation),
+		};
+	}
+	// A route that can acquire isolation resources is never pre-classified as none.
+	return { kind: "required", barrier: barrierFor(identity, options) };
+}
+
+/** Downgrading a required obligation to none is not a legal transition. */
+export function assertNoDowngrade(previous: CleanupRequirement, next: CleanupRequirement): void {
+	if (previous.kind === "required" && next.kind === "none") {
+		throw new Error("cleanup requirement cannot be downgraded from required to none");
+	}
+}
+
+/**
+ * One release gate for both proof forms: authoritative CLEANUP_NOT_REQUIRED, or
+ * an exact resolved barrier. The revalidation runs after the proof and
+ * immediately before the caller's short atomic release transition.
+ */
+export async function releaseEligible(
+	requirement: CleanupRequirement,
+	revalidate: () => boolean | Promise<boolean>,
+	permit: () => void | Promise<void>,
+): Promise<ReleaseOutcome> {
+	if (requirement.kind === "required") {
+		return releaseWhenProven(requirement.barrier, revalidate, permit);
+	}
+	if (!(await revalidate())) return "blocked";
+	await permit();
+	return "released";
+}
