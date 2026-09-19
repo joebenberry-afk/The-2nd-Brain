@@ -703,3 +703,19 @@ Acceptance ordering remains: instrumented rerun -> Astra eight-object review ->
 instrumentation removal -> decisive subset rerun -> robustness campaign ->
 sealing -> fresh acceptance. `check:types` and the causal-evidence binding
 stay separate throughout.
+
+### Instrumentation implemented (2026-09-19, continuing)
+
+Runner trace points are in place: cleanup:start, cleanup:stop:ok|error, and
+arrier:armed|awaited|settled:<attemptId>|<generation>|<cleanupOperationId>
+(the stable tuple at all three points). Lint clean; host tests 36/36.
+Behavior unchanged: append-only observations, gated on OM_CANARY_BOOT.
+
+Remaining instrumentation for the evidence-complete rerun: per-step
+isoStop/directory-removal traces inside worktree.ts cleanupIsolation, drain
+boundaries (observer-drain:start|end|abandoned) in the host session drain,
+and the pre-quit marker. Exit code/timestamp and the DB checkpoints are
+launcher-side. For this rerun the instrumented runner identity in HASHES.txt
+supersedes the manifest's runner hash; CANDIDATE-MANIFEST.json remains the
+pre-instrumentation behavior reference and both identities are preserved in
+git history.
