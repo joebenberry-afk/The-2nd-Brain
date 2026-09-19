@@ -1694,7 +1694,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
                   session, nativeAttemptId: snapshot.attemptId, revision: snapshot.revision,
                   sourceIndex, reason: "not-mutating",
                 });
-                return;
+                // A read-only sibling is not a writer receipt, but it is still part of
+                // this call: returning the subscription lifetime keeps an incomplete
+                // writer group observable to the host drain instead of letting the
+                // adapter's standalone catch swallow the rejection. The host records
+                // this only as subscription work - it never releases ownership, and
+                // the read-only snapshot is never treated as a writer receipt.
+                return observerLifetime;
               }
               // No outcome may be reported before the host accepted a result: an
               // unaccepted snapshot is still running work, and claiming completion
