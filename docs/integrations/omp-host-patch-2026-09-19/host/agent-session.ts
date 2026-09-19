@@ -2293,6 +2293,7 @@ export class AgentSession {
 	#settlementObserverRejectedCount = 0;
 	#settlementObserverRegistrationCount = 0;
 	#settlementObserverSyncOnlyCount = 0;
+	#settlementObserverAsyncLifetimeCount = 0;
 	readonly #settlementObserverDrains = new Map<Promise<void>, {
 		current: () => Record<string, unknown>;
 		detach: () => void;
@@ -2318,10 +2319,19 @@ export class AgentSession {
 		let observed = 0;
 		let detached = false;
 		let finished = false;
+		let asyncLifetime = false;
 		let unsubscribe: (() => void) | undefined;
 		const finish = (): void => {
 			if (finished || !detached || pending.size > 0) return;
 			finished = true;
+			// Lifetime availability is per accepted subscription, never per callback:
+			// a subscription that ever returned asynchronous work owns that lifetime;
+			// one that never did is synchronous-only by contract.
+			if (asyncLifetime) {
+				this.#settlementObserverAsyncLifetimeCount += 1;
+			} else {
+				this.#settlementObserverSyncOnlyCount += 1;
+			}
 			if (observed === 0) failures.push(new Error("Observer detached before any settlement snapshot"));
 			// No per-snapshot releasePermitted re-validation here. This wrapper's
 			// guarantee is observer-work completion, not native cleanup by itself:
@@ -2357,6 +2367,7 @@ export class AgentSession {
 				sourceToolCallId: options?.sourceToolCallId,
 				observed,
 				detached,
+				lifetime: asyncLifetime ? "async-available" : "synchronous-only",
 				pendingCallbacks: pending.size,
 				failures: failures.map(value => describeCanaryFailure(value)),
 				snapshots: [...snapshots.values()],
@@ -2382,12 +2393,12 @@ export class AgentSession {
 			}
 			if (returned === undefined) {
 				// A synchronous observer/filter has no asynchronous receipt work to own.
-				this.#settlementObserverSyncOnlyCount += 1;
 				if (snapshots.has(key)) snapshots.set(key, snapshot);
 				finish();
 				return;
 			}
 			snapshots.set(key, snapshot);
+			asyncLifetime = true;
 			const work = Promise.resolve(returned);
 			pending.add(work);
 			void work.then(() => {
@@ -2418,7 +2429,7 @@ export class AgentSession {
 			}
 		};
 		traceDrain(
-			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
+			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:asyncLifetime=${this.#settlementObserverAsyncLifetimeCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
 		);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
@@ -2485,7 +2496,7 @@ export class AgentSession {
 			const remainingAtDetach = this.#settlementObserverDrains.size;
 			for (const entry of this.#settlementObserverDrains.values()) entry.detach();
 			traceDrain(
-				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
+				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:asyncLifetime=${this.#settlementObserverAsyncLifetimeCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
 			);
 		}
 	}
