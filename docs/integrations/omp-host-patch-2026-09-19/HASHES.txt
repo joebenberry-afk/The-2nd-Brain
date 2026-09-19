@@ -1,3 +1,7 @@
+796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8 C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/async/job-manager.ts
+32439d2c2b1cf244ed150acbe610074c98c57704a2b991c7a3024c727244483d C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/session/agent-session.ts
 a627d8df8eff16a196443ff9151696dce6160355caf14f0d07c9b75a9fcd453a C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/isolation-runner.ts
 9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/cleanup-barrier.ts
 36b3f3c9625ee1745e7f29b43ff025c1725523ec77282a490f5af4b8f6773d14 C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/worktree.ts
+599c5e21db868ce6e260d7f93d6d15b05dfb3c1e6e74db1e4db76dd3e43203f0 brainstem/prime-extension/src/index.ts
+95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3 brainstem/prime-extension/src/worker-lifecycle-bridge.ts

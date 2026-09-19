@@ -50,6 +50,8 @@ export interface OmpWorkerCallbackResult {
   sequence?: number;
   failureCode?: string;
   error?: string;
+  /** Request identity for a refusal; not a claim that Python echoed these fields. */
+  rejectedRequest?: { taskId: string; attemptId: string; sequence?: number };
 }
 
 function bounded(value: unknown, max: number): string {
@@ -78,6 +80,20 @@ export function parseOmpWorkerCallbackOutput(
   const attemptId = bounded(value.attempt_id, 128);
   const sequence = typeof value.lifecycle_sequence === "number" ? value.lifecycle_sequence : undefined;
   const failureCode = bounded(value.failure_code, 128);
+  // omp_adapter returns {status:"rejected", failure_code} without receipt
+  // identity. Preserve that refusal and identify the original request separately.
+  if (status === "rejected") {
+    return {
+      ok: false,
+      status,
+      ...(taskId ? { taskId } : {}),
+      ...(attemptId ? { attemptId } : {}),
+      ...(sequence !== undefined ? { sequence } : {}),
+      rejectedRequest: { ...expected },
+      failureCode,
+      error: failureCode || "BRAIN_WORKER_CALLBACK_REJECTED",
+    };
+  }
   if (
     status === undefined ||
     taskId !== expected.taskId ||
@@ -85,17 +101,6 @@ export function parseOmpWorkerCallbackOutput(
     (expected.sequence !== undefined && sequence !== expected.sequence)
   ) {
     return { ok: false, error: "BRAIN_WORKER_CALLBACK_RECEIPT_MISMATCH" };
-  }
-  if (status === "rejected") {
-    return {
-      ok: false,
-      status,
-      taskId,
-      attemptId,
-      ...(sequence !== undefined ? { sequence } : {}),
-      failureCode,
-      error: failureCode || "BRAIN_WORKER_CALLBACK_REJECTED",
-    };
   }
   return { ok: true, status, taskId, attemptId, ...(sequence !== undefined ? { sequence } : {}) };
 }

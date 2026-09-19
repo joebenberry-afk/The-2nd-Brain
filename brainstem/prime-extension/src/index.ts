@@ -984,8 +984,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     const expiry = workerObserverExpiry.get(key);
     if (expiry) cancelObserverExpiry(expiry);
     workerObserverExpiry.delete(key);
-    workerObservationDisposers.get(key)?.();
-    workerObservationDisposers.delete(key);
+    const disposer = workerObservationDisposers.get(key);
+    disposer?.();
+    if (workerObservationDisposers.get(key) === disposer) workerObservationDisposers.delete(key);
   };
   const pendingWorkerTaskIds = new Set<string>();
   const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
@@ -1228,13 +1229,27 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     observation: Readonly<AsyncJobLifecycleObservation>,
     ctx: ExtensionContext,
   ): Promise<boolean> => {
+    const dropped = (reason: string, detail?: unknown): false => {
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-dropped", {
+        session: admission.parentSessionId, taskId: admission.taskId,
+        attemptId: admission.attemptId, nativeAttemptId: observation.nativeAttemptId,
+        nativeJobId: observation.jobId, agentId: observation.agentId,
+        generation: observation.generation, revision: observation.revision,
+        lifecycleRevision: admission.lifecycleRevision,
+        boundNativeAttemptId: admission.nativeAttemptId,
+        boundNativeJobId: admission.nativeJobId,
+        boundAgentId: admission.agentId, boundGeneration: admission.hostGeneration,
+        reason, detail,
+      });
+      return false;
+    };
     if (
       observation.type !== "task" ||
       observation.sourceToolCallId !== admission.toolCallId ||
       observation.sourceIndex !== admission.sourceIndex ||
       !observation.agentId
     ) {
-      return false;
+      return dropped("source-binding-mismatch");
     }
     if (
       admission.nativeAttemptId !== undefined &&
@@ -1243,7 +1258,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         admission.agentId !== observation.agentId ||
         admission.hostGeneration !== observation.generation)
     ) {
-      return false;
+      return dropped("native-binding-mismatch");
     }
     const binding: OmpWorkerBindOptions = {
       home: config.home ?? "",
@@ -1263,10 +1278,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       let bound: OmpWorkerCallbackResult;
       try {
         bound = await workerBindRunner(binding);
-      } catch {
-        return false;
+      } catch (error) {
+        return dropped("bind-rpc-threw", error instanceof Error ? error.message : String(error));
       }
-      if (!bound.ok) return false;
+      if (!bound.ok) return dropped(bound.error ?? bound.failureCode ?? "bind-rejected", bound);
       admission.nativeAttemptId = observation.nativeAttemptId;
       admission.nativeJobId = observation.jobId;
       admission.agentId = observation.agentId;
@@ -1298,42 +1313,77 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         });
       }
     }
-    if (observation.revision <= admission.lifecycleRevision) return true;
-    // Native revisions identify immutable snapshots. A lost response must not
-    // cause a newer cleanup snapshot to reuse an already-persisted sequence.
+    if (observation.revision <= admission.lifecycleRevision) {
+      dropped("revision-already-accepted");
+      return true;
+    }
+    // Keep one immutable payload and sequence for both the original RPC and its
+    // sole reconciliation resend. Brain authenticates attempt + sequence and
+    // compares the canonical receipt SHA before acknowledging a duplicate.
     const sequence = observation.revision;
-    let lifecycle: OmpWorkerCallbackResult;
-    try {
-      lifecycle = await workerLifecycleRunner({
-        ...binding,
-        sequence,
-        outcome:
-          observation.status === "completed"
-            ? "completed"
-            : observation.status === "failed"
-              ? "failed"
-              : observation.status === "cancelled"
-                ? "cancelled"
-                : null,
-        executorSettled: observation.executorSettled,
-        cleanupComplete: observation.cleanupComplete,
+    const payload: OmpWorkerLifecycleOptions = {
+      ...binding,
+      sequence,
+      outcome:
+        observation.status === "completed"
+          ? "completed"
+          : observation.status === "failed"
+            ? "failed"
+            : observation.status === "cancelled"
+              ? "cancelled"
+              : null,
+      executorSettled: observation.executorSettled,
+      cleanupComplete: observation.cleanupComplete,
+    };
+    const evidence = {
+      session: admission.parentSessionId, taskId: admission.taskId,
+      attemptId: admission.attemptId, lifecycleSequence: sequence,
+      nativeAttemptId: observation.nativeAttemptId, nativeJobId: observation.jobId,
+      agentId: observation.agentId, generation: observation.generation,
+      sourceToolCallId: observation.sourceToolCallId, sourceIndex: observation.sourceIndex,
+      revision: observation.revision, outcome: payload.outcome,
+      executorSettled: payload.executorSettled, cleanupComplete: payload.cleanupComplete,
+      packetSha256: admission.packetSha256, projectId: admission.projectId,
+      worktreeId: admission.worktreeId,
+    };
+    const invoke = async (reconciliation: boolean): Promise<OmpWorkerCallbackResult> => {
+      const startedAt = Date.now();
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-started", {
+        ...evidence, reconciliation, startedAt,
       });
-    } catch (error) {
-      getStore(admission.parentSessionId)?.append(
-        sensors.extensionError(admission.parentSessionId, error),
-      );
-      return false;
+      try {
+        const result = await workerLifecycleRunner(payload);
+        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-returned", {
+          ...evidence, reconciliation, elapsedMs: Date.now() - startedAt, result,
+        });
+        return result;
+      } catch (error) {
+        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-threw", {
+          ...evidence, reconciliation, elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        getStore(admission.parentSessionId)?.append(sensors.extensionError(admission.parentSessionId, error));
+        return { ok: false, error: "BRAIN_WORKER_CALLBACK_UNAVAILABLE" };
+      }
+    };
+    let lifecycle = await invoke(false);
+    let acceptanceWasUnknown = false;
+    if (!lifecycle.ok && lifecycle.status !== "rejected") {
+      acceptanceWasUnknown = true;
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-ack-unknown", {
+        ...evidence, result: lifecycle,
+        reconciliation: "identical-payload-resend-with-server-receipt-sha-check",
+      });
+      lifecycle = await invoke(true);
+      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-reconciliation", {
+        ...evidence,
+        outcome: lifecycle.ok ? "unknown-then-reconciled" : "incomplete",
+        result: lifecycle,
+      });
     }
     if (!lifecycle.ok) {
       journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rejected", {
-        session: admission.parentSessionId,
-        taskId: admission.taskId,
-        attemptId: admission.attemptId,
-        lifecycleSequence: sequence,
-        revision: observation.revision,
-        outcome: observation.status,
-        executorSettled: observation.executorSettled,
-        cleanupComplete: observation.cleanupComplete,
+        ...evidence, acceptanceWasUnknown, result: lifecycle,
         error: lifecycle.error ?? lifecycle.failureCode ?? "REJECTED",
       });
       return false;
@@ -1372,7 +1422,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         admission.toolCallId,
         admission.sourceIndex,
       ]);
-      workerAdmissionsBySource.delete(sourceKey);
+      if (workerAdmissionsBySource.get(sourceKey) === admission) {
+        workerAdmissionsBySource.delete(sourceKey);
+      }
       if (reportedWorkerTaskIds.has(admission.taskId)) {
         workerAdmissionsByTask.delete(admission.taskId);
       }
@@ -1574,14 +1626,44 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
     }
     if (hasMutating) {
+      let resolveObserverLifetime: () => void;
+      let rejectObserverLifetime: (error: Error) => void;
+      const observerLifetime = new Promise<void>((resolve, reject) => {
+        resolveObserverLifetime = resolve;
+        rejectObserverLifetime = reject;
+      });
+      void observerLifetime.catch(() => undefined);
       const observe = (observation: Readonly<AsyncJobLifecycleObservation>) => {
         const admission = workerAdmissionsBySource.get(
           JSON.stringify([session, event.toolCallId, observation.sourceIndex]),
         );
-        if (!admission || admission.accessIntent !== "mutating") return false;
+        if (!admission || admission.accessIntent !== "mutating") {
+          journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
+            session, nativeAttemptId: observation.nativeAttemptId,
+            revision: observation.revision, sourceIndex: observation.sourceIndex,
+            reason: !admission ? "admission-missing" : "not-mutating",
+          });
+          return false;
+        }
         admission.callbackChain = admission.callbackChain
-          .catch(() => false)
-          .then(() => observeWorkerAttempt(admission, observation, ctx));
+          .catch((error: unknown) => {
+            journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-threw", {
+              session, taskId: admission.taskId, attemptId: admission.attemptId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          })
+          .then(() => {
+            journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-started", {
+              session, taskId: admission.taskId, attemptId: admission.attemptId,
+              nativeAttemptId: observation.nativeAttemptId, agentId: observation.agentId,
+              generation: observation.generation, sourceToolCallId: observation.sourceToolCallId,
+              sourceIndex: observation.sourceIndex, revision: observation.revision,
+              lifecycleRevision: admission.lifecycleRevision, status: observation.status,
+              executorSettled: observation.executorSettled, cleanupComplete: observation.cleanupComplete,
+            });
+            return observeWorkerAttempt(admission, observation, ctx);
+          });
         return admission.callbackChain;
       };
       const hostObserver = ctx.observeAsyncJobLifecycle;
@@ -1594,18 +1676,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           disposer = observeSettlement(
             (snapshot) => {
               journalWorkerEvent(session, "second-brain.worker-settlement-observed", {
-                session,
-                capabilityVersion: snapshot.capabilityVersion,
-                attemptId: snapshot.attemptId,
-                agentId: snapshot.agentId,
-                sourceIndex: snapshot.sourceIndex,
-                revision: snapshot.revision,
-                cleanupState: snapshot.cleanupState,
-                releasePermitted: snapshot.releasePermitted,
+                session, ...snapshot,
               });
-              if (snapshot.capabilityVersion !== 1) return;
+              if (snapshot.capabilityVersion !== 1 || snapshot.sourceIndex === null) {
+                const reason = snapshot.capabilityVersion !== 1 ? "unsupported-capability" : "source-index-missing";
+                journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
+                  session, nativeAttemptId: snapshot.attemptId, revision: snapshot.revision, reason,
+                });
+                return Promise.reject(new Error(`BRAIN_WORKER_OBSERVATION_INCOMPLETE:${reason}`));
+              }
               const sourceIndex = snapshot.sourceIndex;
-              if (sourceIndex === null) return;
+              const sourceAdmission = workerAdmissionsBySource.get(
+                JSON.stringify([session, event.toolCallId, sourceIndex]),
+              );
+              if (sourceAdmission?.accessIntent === "read_only") {
+                journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
+                  session, nativeAttemptId: snapshot.attemptId, revision: snapshot.revision,
+                  sourceIndex, reason: "not-mutating",
+                });
+                return;
+              }
               // No outcome may be reported before the host accepted a result: an
               // unaccepted snapshot is still running work, and claiming completion
               // there would mark the durable task COMPLETED ahead of acceptance.
@@ -1632,9 +1722,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
                 cleanupComplete: snapshot.releasePermitted,
                 revision: snapshot.revision,
               };
-              void Promise.resolve(observe(observation)).catch(() => {
-                // Durable rejection is journaled by the emit path; observation must not
-                // throw into the host's settlement dispatch.
+              return Promise.resolve(observe(observation)).then(result => {
+                journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-finished", {
+                  session, nativeAttemptId: observation.nativeAttemptId,
+                  revision: observation.revision, result,
+                });
+                if (!result) throw new Error("BRAIN_WORKER_LIFECYCLE_NOT_ACCEPTED");
+                // The RPC chain has returned; retain this subscription until every
+                // prepared writer is acknowledged, or expiry explicitly refuses it.
+                // observeWorkerAttempt itself never awaits this lifetime promise.
+                return observerLifetime;
+              }, (error: unknown) => {
+                journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-threw", {
+                  session, nativeAttemptId: observation.nativeAttemptId,
+                  revision: observation.revision,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                throw error;
               });
             },
             { sourceToolCallId: event.toolCallId },
@@ -1691,7 +1795,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
       }
-      workerObservationDisposers.set(JSON.stringify([session, event.toolCallId]), disposer);
+      const nativeDisposer = disposer;
+      workerObservationDisposers.set(JSON.stringify([session, event.toolCallId]), () => {
+        const incomplete = preparedAdmissions.filter(
+          admission => admission.accessIntent === "mutating" && !admission.cleanupAccepted,
+        );
+        if (incomplete.length > 0) {
+          journalWorkerEvent(session, "second-brain.worker-observer-incomplete", {
+            session, sourceToolCallId: event.toolCallId,
+            attempts: incomplete.map(admission => ({
+              taskId: admission.taskId, attemptId: admission.attemptId,
+              nativeAttemptId: admission.nativeAttemptId, sourceIndex: admission.sourceIndex,
+              lifecycleRevision: admission.lifecycleRevision,
+            })),
+          });
+          rejectObserverLifetime(new Error("BRAIN_WORKER_OBSERVER_DETACHED_BEFORE_ACCEPTANCE"));
+        } else {
+          journalWorkerEvent(session, "second-brain.worker-observer-complete", {
+            session, sourceToolCallId: event.toolCallId,
+          });
+          resolveObserverLifetime();
+        }
+        nativeDisposer();
+      });
     }
     if (batch) return { input: { ...input, tasks: augmented } };
     return { input: { ...input, task: String(augmented[0].task ?? "") } };
@@ -4161,7 +4287,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           // Shutdown precedes host cancellation/reaping. Keep receipt consumers
           // alive without awaiting them here (that would deadlock host disposal).
           // Expiry only detaches observers: it never releases an unproven lease.
-          const expiry = scheduleObserverExpiry(() => disposeWorkerObserver(key), 30_000);
+          const expiry = scheduleObserverExpiry(() => {
+            if (workerObserverExpiry.get(key) !== expiry) return;
+            journalWorkerEvent(session, "second-brain.worker-observer-expired", {
+              session, sourceToolCallId: toolCallId, at: Date.now(),
+            });
+            disposeWorkerObserver(key);
+          }, 30_000);
           expiry.unref();
           workerObserverExpiry.set(key, expiry);
         }
