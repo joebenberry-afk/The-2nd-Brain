@@ -95,3 +95,24 @@ describe("cleanup obligation", () => {
 		expect(() => assertNoDowngrade(none, required)).not.toThrow();
 	});
 });
+
+describe("classification idempotence (Astra finding 4)", () => {
+	test("O6 a second classification cannot downgrade a live obligation to none", () => {
+		const id = identity("one-shot");
+		const first = classifyCleanupRequirement("one-shot", id, {
+			isolationResources: 1,
+			registeredCleanupWork: 0,
+		});
+		expect(first.kind).toBe("required");
+		// A later evidence read that reports nothing must not downgrade the live
+		// obligation: the canonical barrier already exists for this identity.
+		const second = classifyCleanupRequirement("one-shot", id, {
+			isolationResources: 0,
+			registeredCleanupWork: 0,
+		});
+		expect(second.kind).toBe("required");
+		if (second.kind === "required" && first.kind === "required") {
+			expect(second.barrier).toBe(first.barrier);
+		}
+	});
+});

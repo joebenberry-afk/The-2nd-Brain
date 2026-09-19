@@ -213,3 +213,28 @@ Next: the production A->B->C run on the deferred/isolation path against commit
 Astra's eight required evidence objects and recording attemptId, generation,
 cleanupOperationId, barrier identity, census id and successor id in each. Then the
 race matrix R1-R12, instrumentation removal, sealing and independent acceptance.
+
+## Review round: five findings, four fixed (hashes refreshed)
+
+1. Deferred branch registered the same resource name a second time, which
+   trackCleanups skips as a duplicate, so the canonical barrier stayed pending
+   forever on that route. Fixed: the deferred chain settles the same barrier, with
+   route and retention recorded in the trace.
+2. A retained workspace skipped cleanupIsolation but still resolved the release,
+   presenting a skipped cleanup as a proven one. Fixed: the skip is now traced as
+   `cleanup:skipped:retainedWorkspace` and is not evidence of teardown.
+3. releaseWhenProven/releaseEligible awaited even a synchronous revalidation,
+   opening a turn in which a queued microtask could cancel or supersede the
+   attempt. Fixed: a synchronous decision keeps permit() adjacent to the check.
+   (Both helpers still have no production callers - latent, not the RoughRabbit
+   cause.)
+4. A second one-shot classification with zero counts could return none while a
+   canonical required barrier already existed; assertNoDowngrade was never called
+   in production. Fixed: classification is idempotent - an existing canonical
+   barrier wins - with gate O6 added.
+5. createCleanupBarrier is documented as the non-canonical raw constructor; the
+   wiring still keys the barrier on agentId/generation 0 rather than the real
+   settlement attempt identity. NOT fixed, recorded as an open gap.
+
+Hashes now: cleanup-barrier.ts, isolation-runner.ts and worktree.ts as recorded in
+omp-host-patch-2026-09-19/HASHES.txt. Gates: 33 pass, 0 fail.

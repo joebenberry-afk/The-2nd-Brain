@@ -72,7 +72,11 @@ const sameIdentity = (a: CleanupIdentity, b: CleanupIdentity): boolean =>
 	String(a.generation) === String(b.generation) &&
 	a.cleanupOperationId === b.cleanupOperationId;
 
-/** Create the canonical barrier for one cleanup operation. */
+/**
+ * Raw constructor. NOT canonical: it bypasses the registry, so a caller can end
+ * up with a barrier that no other participant can reach. Production paths must
+ * use barrierFor(); this exists for tests and for building the registry entry.
+ */
 export function createCleanupBarrier(identity: CleanupIdentity, options: BarrierOptions = {}): CleanupBarrier {
 	if (
 		!identity.attemptId ||
@@ -217,7 +221,14 @@ export async function releaseWhenProven(
 		return "blocked";
 	}
 	if (barrier.state !== "resolved") return "blocked";
-	if (!(await revalidate())) return "blocked";
+	const decision = revalidate();
+	if (decision === false) return "blocked";
+	if (decision !== true) {
+		// Only an explicitly asynchronous revalidation costs a turn; a synchronous
+		// answer keeps permit() adjacent to the check, narrowing the window in which
+		// a queued microtask could cancel or supersede this attempt.
+		if (!(await decision)) return "blocked";
+	}
 	await permit();
 	return "released";
 }
@@ -249,6 +260,13 @@ export function classifyCleanupRequirement(
 	evidence: RouteEvidence,
 	options: BarrierOptions = {},
 ): CleanupRequirement {
+	// Idempotence: once a canonical barrier exists for this identity, the
+	// obligation is required regardless of what a later evidence read reports. A
+	// second classification must never downgrade a live obligation to none.
+	const existingKey = barrierKey(identity);
+	if (BARRIERS.has(existingKey)) {
+		return { kind: "required", barrier: BARRIERS.get(existingKey) as CleanupBarrier };
+	}
 	if (evidence.isolationResources > 0 || evidence.registeredCleanupWork > 0) {
 		// This execution owns something; it cannot be classified as nothing.
 		return { kind: "required", barrier: barrierFor(identity, options) };
@@ -285,7 +303,9 @@ export async function releaseEligible(
 	if (requirement.kind === "required") {
 		return releaseWhenProven(requirement.barrier, revalidate, permit);
 	}
-	if (!(await revalidate())) return "blocked";
+	const decision = revalidate();
+	if (decision === false) return "blocked";
+	if (decision !== true && !(await decision)) return "blocked";
 	await permit();
 	return "released";
 }
