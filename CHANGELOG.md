@@ -1,3 +1,13 @@
+## 2026-09-13 — Legacy CLI compaction recovery (unreleased)
+
+- Recover v1 ledgers with a verified hash-chain prefix and an unhashed suffix.
+  Preserve existing hashes and a digest-verified SQLite snapshot; label new
+  hashes as derived, without claiming historical authenticity.
+- Continue rejecting broken chains, internal hash gaps, existing integrity
+  state, and malformed v2 ledgers. Compaction's durability guard is unchanged.
+- Keep global `brainctl` and OMP's selected Python bound to the same runtime;
+  a stale CLI can reset a newer ledger header and append unhashed events.
+
 ## 2026-09-11 — OMP qualification boundary fixes (unreleased)
 
 - Require mutating worker outcomes to match the persisted native child,

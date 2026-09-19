@@ -502,7 +502,7 @@ class LedgerStore:
                 raise BrainError("ledger hash chain is missing or malformed; refusing repair")
             self._chain_origin()
             return "current"
-        if legacy:
+        if legacy or (current and version == 1):
             recorded_integrity = self._conn.execute(
                 "SELECT key FROM ledger_meta WHERE key IN (?, 'last_verified_seq')",
                 (_CHAIN_ORIGIN_KEY,),
@@ -595,12 +595,40 @@ class LedgerStore:
         objects_ok, _ = self._verify_object_digests()
         if not objects_ok:
             raise BrainError("legacy ledger object evidence is unavailable or corrupted")
+        # A v1 writer can reset the header and append NULL hashes to a chained
+        # ledger. Preserve the verified prefix; only an unhashed suffix is recoverable.
+        has_chain = any(
+            row[1] == "prev_hash" for row in self._conn.execute("PRAGMA table_info(events)")
+        )
+        prefix = 0
+        running = _GENESIS_HASH
+        if has_chain:
+            unhashed = False
+            for row in self._conn.execute(
+                "SELECT seq,payload_json,prev_hash FROM events ORDER BY seq"
+            ):
+                if row["prev_hash"] is None:
+                    unhashed = True
+                    continue
+                if unhashed or not isinstance(row["payload_json"], str):
+                    raise BrainError(
+                        "legacy ledger has a non-prefix hash chain; refusing transition"
+                    )
+                expected = hashlib.sha256(
+                    (running + row["payload_json"]).encode("utf-8")
+                ).hexdigest()
+                if row["prev_hash"] != expected:
+                    raise BrainError("legacy ledger hash chain is broken; refusing transition")
+                running = expected
+                prefix = row["seq"]
         before = _legacy_history_fingerprint(self._conn)
         snapshot_hash, snapshot_size = self._preserve_legacy_snapshot()
         derived_at = _now()
-        self._conn.execute("ALTER TABLE events ADD COLUMN prev_hash TEXT")
-        running = _GENESIS_HASH
-        for row in self._conn.execute("SELECT seq,payload_json FROM events ORDER BY seq"):
+        if not has_chain:
+            self._conn.execute("ALTER TABLE events ADD COLUMN prev_hash TEXT")
+        for row in self._conn.execute(
+            "SELECT seq,payload_json FROM events WHERE seq > ? ORDER BY seq", (prefix,)
+        ):
             if not isinstance(row["payload_json"], str):
                 raise BrainError("legacy event payload is not text; refusing reinterpretation")
             running = hashlib.sha256((running + row["payload_json"]).encode("utf-8")).hexdigest()
@@ -625,6 +653,7 @@ class LedgerStore:
             "source_snapshot_sha256": snapshot_hash,
             "derived_at": derived_at,
             "pre_migration_authenticity_verified": False,
+            "preserved_chain_through_seq": prefix,
         }
         self._conn.execute(
             "INSERT INTO ledger_meta (key,value) VALUES (?,?)",

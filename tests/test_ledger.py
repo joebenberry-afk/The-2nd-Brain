@@ -299,6 +299,66 @@ def test_legacy_resume_preserves_history_and_labels_derived_chain(tmp_path, crea
     assert updated == {**manifest, "schema_version": 2}
 
 
+def _v1_chained_ledger(home):
+    with ledger_mod.LedgerStore(home, HOST, host="test").open(create=True) as store:
+        _seed(store, 3)
+        dbfile = store.dbfile
+    with sqlite3.connect(dbfile) as conn:
+        conn.execute("UPDATE ledger_meta SET value='1' WHERE key='schema_version'")
+        conn.execute("UPDATE events SET prev_hash=NULL WHERE seq=3")
+        original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+    return dbfile, original
+
+
+def test_v1_chained_resume_preserves_prefix_and_snapshots_unhashed_suffix(tmp_path):
+    dbfile, original = _v1_chained_ledger(tmp_path)
+    for create in (False, True):
+        with ledger_mod.LedgerStore(tmp_path, HOST).open(create=create) as store:
+            integrity = store.integrity()
+            assert integrity["hash_chain_ok"] is True
+            assert integrity["hash_chain_verified_through_seq"] == 3
+            origin = integrity["hash_chain_origin"]
+            assert origin["preserved_chain_through_seq"] == 2
+            assert origin["pre_migration_authenticity_verified"] is False
+            snapshot = store.read_object(origin["source_snapshot_sha256"])
+    with sqlite3.connect(dbfile) as conn:
+        rows = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+        assert rows[:2] == original[:2]
+        assert [row[:-1] for row in rows] == [row[:-1] for row in original]
+        assert rows[2][-1] is not None
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM object_refs WHERE role='legacy-ledger-snapshot'"
+            ).fetchone()[0]
+            == 1
+        )
+    restored = tmp_path / "restored.sqlite"
+    restored.write_bytes(snapshot)
+    with sqlite3.connect(restored) as conn:
+        assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+        assert dict(conn.execute("SELECT key,value FROM ledger_meta"))["schema_version"] == "1"
+
+
+@pytest.mark.parametrize("damage", ["prefix", "hole", "watermark"])
+def test_v1_chained_resume_refuses_unproven_history(tmp_path, damage):
+    dbfile, _ = _v1_chained_ledger(tmp_path)
+    with sqlite3.connect(dbfile) as conn:
+        if damage == "prefix":
+            conn.execute("""UPDATE events SET payload_json='{"tampered":true}' WHERE seq=1""")
+        elif damage == "hole":
+            conn.execute("UPDATE events SET prev_hash=NULL WHERE seq=1")
+        else:
+            conn.execute("INSERT INTO ledger_meta VALUES ('last_verified_seq','3')")
+        original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+    with pytest.raises(BrainError):
+        ledger_mod.LedgerStore(tmp_path, HOST).open()
+    with sqlite3.connect(dbfile) as conn:
+        assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+        assert dict(conn.execute("SELECT key,value FROM ledger_meta"))["schema_version"] == "1"
+
+
 def test_legacy_migration_interruption_rolls_back_then_retries(tmp_path, monkeypatch):
     dbfile, original = _legacy_ledger(tmp_path, "1")
     migrate = ledger_mod.LedgerStore._migrate_legacy_chain
