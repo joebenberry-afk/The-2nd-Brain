@@ -66,6 +66,15 @@ export interface NativeSettlementObserverOptions {
   /** Durable observer callback; return value mirrors the host callback contract. */
   emit(observation: Readonly<AsyncJobLifecycleObservation>): boolean | Promise<boolean>;
   source: NativeSettlementSource;
+  /**
+   * Whether a post-finalization frame also proves the attempt's cleanup finished.
+   *
+   * Stock hosts detach late cleanup (child session disposal, advisor drain,
+   * owner-job reaping) past their grace deadline and expose no completion signal, so
+   * `false` keeps the durable writer lease held/quarantined. `true` is the explicit
+   * attempt-scoped mode where the frame alone is treated as the settlement boundary.
+   */
+  cleanupProvenByFrame: boolean;
   /** Optional journal hook for an attempt that never produced a settlement frame. */
   onUnresolved?(detail: { sourceIndex: number; agentId: string; reason: string }): void;
 }
@@ -142,7 +151,7 @@ export function createNativeSettlementObserver(
       sourceIndex,
       status: outcome,
       executorSettled: true,
-      cleanupComplete: true,
+      cleanupComplete: options.cleanupProvenByFrame,
       revision,
     });
   };

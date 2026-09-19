@@ -1153,7 +1153,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    *  - `native_lifecycle`: stock hosts that publish `task:subagent:lifecycle`
    *    frames and a read-only async-job snapshot;
    *  - `null`: neither exists, so mutating dispatch must stay refused.
+   *
+   * Stock hosts detach late cleanup (child session disposal, advisor drain, owner-job
+   * reaping) past their grace deadline and expose no completion signal, so the native
+   * source records `cleanupComplete:false` (writer lease stays held/quarantined) unless
+   * the operator explicitly selects the attempt-scoped mode.
    */
+  const nativeCleanupProvenByFrame = process.env.SECOND_BRAIN_WORKER_CLEANUP === "attempt-scoped";
   const settlementSourceFor = (ctx: ExtensionContext): "host_api" | "native_lifecycle" | null => {
     if (typeof ctx.observeAsyncJobLifecycle === "function") return "host_api";
     if (typeof pi.events?.on === "function" && typeof ctx.getAsyncJobSnapshot === "function") {
@@ -1571,6 +1577,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (typeof events?.on === "function" && typeof snapshot === "function") {
           disposer = createNativeSettlementObserver({
             sourceToolCallId: event.toolCallId,
+            cleanupProvenByFrame: nativeCleanupProvenByFrame,
             source: {
               subscribe: (handler) => {
                 const bus = pi.events;
