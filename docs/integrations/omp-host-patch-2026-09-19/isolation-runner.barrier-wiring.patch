@@ -1,0 +1,38 @@
+--- /tmp/iso.bak	2026-09-19 11:52:59.375323300 -0400
++++ C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/isolation-runner.ts	2026-09-19 11:52:59.430884100 -0400
+@@ -19,6 +19,7 @@
+  * before mutation); steps 2 and 3 are per-spawn.
+  */
+ import * as fs from "node:fs/promises";
++import { barrierFor, cleanupOperationId, settleBarrier } from "./cleanup-barrier";
+ import { appendFileSync } from "node:fs";
+ const __traceIsolation = (step: string): void => {
+ 	const target = process.env.OM_CANARY_BOOT;
+@@ -464,8 +465,26 @@
+ 	// The isolation handle is an owned resource of this attempt: registering it before
+ 	// the run keeps the executor's no-deferral fast path from publishing a settled
+ 	// boundary while worktree capture/cleanup can still be outstanding.
++	// Release authority is the canonical cleanup barrier, not a raw promise: the
++	// dispatch path and the release path resolve the same barrier by identity, and
++	// it settles only from the real cleanup outcome. The test-only hold below
++	// delays when cleanup starts; it never settles or authorises anything.
++	const barrierIdentity = {
++		attemptId: opts.agentId,
++		generation: 0,
++		cleanupOperationId: cleanupOperationId("deferred", opts.agentId, 0),
++	};
++	const cleanupBarrier = barrierFor(barrierIdentity);
++	void (async () => {
++		try {
++			await isolationRelease.promise;
++			settleBarrier(cleanupBarrier, { ok: true });
++		} catch (error) {
++			settleBarrier(cleanupBarrier, { ok: false, error });
++		}
++	})();
+ 	opts.baseOptions.settlement?.trackCleanups([
+-		{ resource: "isolation-handle", work: isolationRelease.promise },
++		{ resource: "isolation-handle", work: cleanupBarrier.promise },
+ 	]);
+ 	__traceIsolation(`isolation:owned:agent=${opts.agentId}:resource=isolation-handle:pending`);
+ 	void isolationRelease.promise.then(

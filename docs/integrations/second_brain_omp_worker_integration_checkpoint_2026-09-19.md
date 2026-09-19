@@ -157,3 +157,29 @@ resources" is a derived claim; recovery must not reconstruct authoritative
 evidence from derived rows. Unknown is a distinct state, not a wildcard. Once
 something becomes a release/settlement boundary it should collapse into a narrow
 deterministic state machine with explicit terminal states.
+
+## Cleanup barrier increment (module + integration seam + host wiring)
+
+- `cleanup-barrier.ts`: one canonical promise per cleanup operation; narrow success
+  (only the authoritative completion resolves); aggressive fail-closed failure
+  (rejection, timeout, cancellation, identity mismatch, duplicates, late
+  settlement); duplicate and late settlement are explicit and observable.
+- `barrierFor()` makes identity continuity structural: dispatch and release ask
+  by identity and receive the same object, so a reconstructed barrier cannot
+  become an alternate release authority. `releaseWhenProven()` awaits the barrier,
+  revalidates immediately before permitting, and never merely reads a state.
+- Gates: B1-B12 (12) plus I1-I10 and the negative "cleanup function returned is
+  not cleanup completion" case. `bun test tests/host-patch` -> 27 pass, 0 fail.
+- Host wiring: `isolation-runner.ts` registers `cleanupBarrier.promise` with
+  `trackCleanups` and settles that same barrier from the real
+  `isolationRelease.promise` outcome, which now propagates a failed `isoStop`
+  thanks to the fail-closed cleanup. The test-only hold delays when cleanup
+  starts; it no longer authorises anything.
+
+Scope note (honest): the deferred route is wired. The one-shot route's release
+uses `releaseBase` and performs no isolation cleanup, so it currently has nothing
+to settle; when it does, it must go through the same gate. A→B→C has not been run
+against this wired candidate - that is the next step, and only then does it count.
+
+Patch artifacts for the sealed package live beside this file
+(`omp-host-patch-2026-09-19/`), with `HASHES.txt` recording the loaded identities.
