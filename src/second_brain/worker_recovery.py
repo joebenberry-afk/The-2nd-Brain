@@ -67,10 +67,15 @@ def _db(home: Path | str | None) -> Path:
     return _worker_db(home if home is not None else Path.cwd())
 
 
-def _connect(home: Path | str | None) -> sqlite3.Connection:
+def _connect(home: Path | str | None, *, write: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(_db(home))
     conn.row_factory = sqlite3.Row
+    conn.isolation_level = None
     conn.execute(RECOVERY_SCHEMA)
+    if write:
+        # Only short state transitions take the write lock: competing recovery
+        # writers are excluded, and nothing external runs inside the transaction.
+        conn.execute("BEGIN IMMEDIATE")
     return conn
 
 
@@ -179,6 +184,212 @@ def inspect_attempt(
         return {"attempts": out}
 
 
+def _generation(value: object) -> int:
+    """A known, non-negative host generation.
+
+    Unknown is a distinct state, never a wildcard: ``None`` is rejected, a
+    canonical numeric string is accepted for stored-schema compatibility, and a
+    generation of ``0`` stays a legitimate generation. Truthiness is never used
+    to decide whether a generation exists.
+    """
+    if type(value) is int and value >= 0:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    raise RecoveryError("GENERATION_MISMATCH", "a known, non-negative host generation is required")
+
+
+def _inventory_binding(row: dict[str, Any]) -> dict[str, Any]:
+    """The identity a recovery decision is bound to: this exact execution."""
+    binding = {
+        key: row.get(key)
+        for key in (
+            "task_id",
+            "attempt_id",
+            "packet_sha256",
+            "project_id",
+            "worktree_id",
+            "worktree_root",
+            "host_session_id",
+            "native_attempt_id",
+            "native_job_id",
+            "agent_id",
+        )
+    }
+    binding["host_generation"] = _generation(row.get("host_generation"))
+    return binding
+
+
+def _interrupted_row(
+    conn: sqlite3.Connection, attempt_id: str, host_generation: int
+) -> dict[str, Any]:
+    """The exact interrupted execution, or a refusal.
+
+    The generation must come from the attempt's own recorded binding: a caller
+    cannot substitute one, and two unknown generations are not a match.
+    """
+    generation = _generation(host_generation)
+    rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
+    if not rows:
+        raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
+    row = rows[0]
+    if _generation(row.get("host_generation")) != generation:
+        raise RecoveryError(
+            "GENERATION_MISMATCH",
+            "the supplied generation does not match this attempt's recorded binding",
+            detail={"recorded": row.get("host_generation"), "supplied": host_generation},
+        )
+    if row.get("access_intent") != "mutating":
+        raise RecoveryError("BINDING_MISMATCH", "this is not a mutating ownership attempt")
+    if (
+        row.get("logical_outcome") not in (None, "unresolved")
+        or int(row.get("executor_settled") or 0) != 0
+        or int(row.get("cleanup_complete") or 0) != 0
+        or int(row.get("lifecycle_sequence") or 0) != -1
+        or row.get("state") not in ("SUBMITTED", "WORKING", "UNRESOLVED")
+    ):
+        raise RecoveryError(
+            "USE_SETTLEMENT_RECONCILIATION",
+            "interrupted release requires an attempt with no accepted outcome and no host receipt",
+        )
+    if row.get("writer_ownership") not in ("held", "quarantined", "released"):
+        raise RecoveryError("BINDING_MISMATCH", "invalid writer ownership state")
+    return row
+
+
+def validate_census_observation(
+    observation: dict[str, Any],
+) -> dict[str, Any]:
+    """Prove an inspector's observation qualifies as a complete census.
+
+    Separate from recording on purpose: the inspector says what was found, this
+    proves the finding is complete, and the recorder persists it. Nothing here
+    inspects the world, and completeness is never inferred from what happens to
+    be present in the database.
+    """
+    resources = sorted({str(r).strip() for r in observation.get("resources", []) if str(r).strip()})
+    if not resources:
+        raise RecoveryError("INSUFFICIENT_EVIDENCE", "a census must name at least one resource")
+    method = str(observation.get("method") or "").strip()
+    evidence = str(observation.get("observation") or "").strip()
+    if not method or not evidence:
+        raise RecoveryError("INSUFFICIENT_EVIDENCE", "census method and observation are required")
+    if observation.get("resources_complete") is not True:
+        raise RecoveryError(
+            "INSUFFICIENT_EVIDENCE",
+            "a census without established completeness must not be recorded",
+        )
+    return {
+        "attempt_id": str(observation.get("attempt_id") or ""),
+        "host_generation": _generation(observation.get("host_generation")),
+        "resources": resources,
+        "resources_complete": True,
+        "method": method,
+        "observation": evidence,
+        "actor": str(observation.get("actor") or "operator"),
+    }
+
+
+def record_census(
+    home: Path | str | None = None,
+    *,
+    attempt_id: str,
+    host_generation: int,
+    resources: list[str],
+    method: str,
+    observation: str,
+    actor: str,
+    resources_complete: bool = False,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Persist a qualified census atomically, under a short write transaction."""
+    qualified = validate_census_observation(
+        {
+            "attempt_id": attempt_id,
+            "host_generation": host_generation,
+            "resources": resources,
+            "method": method,
+            "observation": observation,
+            "actor": actor,
+            "resources_complete": resources_complete,
+        }
+    )
+    recorded = _now(now)
+    conn = _connect(home, write=True)
+    try:
+        # Re-verify inside the transaction: the attempt must still be the same
+        # execution, and the generation must still be the one bound to it.
+        row = _interrupted_row(conn, attempt_id, qualified["host_generation"])
+        record = {**qualified, "kind": "census", "binding": _inventory_binding(row)}
+        result = _write_event(conn, record, attempt_id, qualified["host_generation"], recorded)
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
+def _write_event(
+    conn: sqlite3.Connection,
+    record: dict[str, Any],
+    attempt_id: str,
+    generation: int,
+    recorded: str,
+) -> dict[str, Any]:
+    blob = json.dumps(record, sort_keys=True)
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    event_id = f"r-{digest[:24]}"
+    conn.execute(
+        "INSERT OR IGNORE INTO worker_recovery_events("
+        "event_id,attempt_id,host_generation,kind,resource,method,actor,"
+        "payload_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (
+            event_id,
+            attempt_id,
+            generation,
+            record.get("kind"),
+            record.get("resource"),
+            record.get("method"),
+            record.get("actor"),
+            digest,
+            blob,
+            recorded,
+        ),
+    )
+    return {"event_id": event_id, "payload_sha256": digest, "recorded_at": recorded}
+
+
+def _census_for(
+    conn: sqlite3.Connection, attempt_id: str, generation: int, census_event_id: str
+) -> dict[str, Any]:
+    for event in _events_of_kind(conn, attempt_id, "census"):
+        if event["event_id"] != census_event_id:
+            continue
+        payload = json.loads(event["payload_json"])
+        if payload.get("resources_complete") is not True:
+            raise RecoveryError(
+                "INSUFFICIENT_EVIDENCE", "the selected census is not marked complete"
+            )
+        if _generation(payload.get("host_generation")) != generation:
+            raise RecoveryError(
+                "GENERATION_MISMATCH", "the selected census belongs to another generation"
+            )
+        return payload
+    raise RecoveryError(
+        "CENSUS_NOT_FOUND", "no census with that id is bound to this attempt and generation"
+    )
+
+
+def _events_of_kind(conn: sqlite3.Connection, attempt_id: str, kind: str) -> list[dict[str, Any]]:
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM worker_recovery_events WHERE attempt_id = ? AND kind = ?"
+            " ORDER BY recorded_at DESC",
+            (attempt_id, kind),
+        )
+    ]
+
+
 def record_quiescence(
     home: Path | str | None = None,
     *,
@@ -187,7 +398,7 @@ def record_quiescence(
     method: str,
     actor: str,
     observation: str,
-    host_generation: str | None = None,
+    host_generation: int,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
     """Record how a resource was observed to be quiescent. Recording alone releases nothing."""
@@ -241,6 +452,7 @@ def recover_attempt(
     host_generation: str | None = None,
     executor_settled_evidence: dict[str, Any] | None = None,
     cleanup_evidence: dict[str, Any] | None = None,
+    census_event_id: str | None = None,
     dry_run: bool = True,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
@@ -372,134 +584,97 @@ def release_interrupted_attempt(
     home: Path | str | None = None,
     *,
     attempt_id: str,
+    host_generation: int,
+    census_event_id: str,
     actor: str,
-    resources: list[str] | None = None,
-    host_generation: str | None = None,
     dry_run: bool = True,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
-    """Release ownership of an attempt whose host never reported anything.
+    """Release ownership of an interrupted execution, on authoritative evidence.
 
-    This is not settlement reconciliation and must never look like one. There is
-    no accepted outcome and no host callback, so the attempt's state,
-    ``logical_outcome``, ``executor_settled`` and ``cleanup_complete`` are all
-    preserved exactly as recorded - an interrupted task stays interrupted.
-    Ownership moves to ``released`` for service only when every resource the
-    operator names has a recorded quiescence attestation bound to this attempt
-    (and generation), because that is what makes the worktree safe to hand on.
+    There is no accepted outcome and no host callback here, so nothing produced by
+    this path may look like settlement: state, ``logical_outcome``,
+    ``executor_settled``, ``cleanup_complete`` and the host ``lifecycle_sequence``
+    are all preserved exactly as recorded. Release rests on two objects: a
+    persisted complete census (the authoritative evidence of what the execution
+    owned) and a bound quiescence attestation for *every* resource that census
+    lists. The request selects the census and cannot shrink it.
     """
-    with _connect(home) as conn:
-        rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
-        if not rows:
-            raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
-        row = rows[0]
+    generation = _generation(host_generation)
+    conn = _connect(home)
+    try:
+        row = _interrupted_row(conn, attempt_id, generation)
         if row.get("writer_ownership") == RELEASED:
             return {"attempt_id": attempt_id, "action": "already-released", "changed": False}
-        if host_generation is not None and row.get("host_generation") not in (
-            None,
-            host_generation,
-        ):
-            raise RecoveryError(
-                "GENERATION_MISMATCH",
-                "the supplied host generation does not match this attempt",
-                detail={"recorded": row.get("host_generation"), "supplied": host_generation},
-            )
-        if row.get("executor_settled") or row.get("logical_outcome") not in (None, "unresolved"):
-            raise RecoveryError(
-                "USE_SETTLEMENT_RECONCILIATION",
-                "this attempt recorded host activity; reconcile its settlement instead",
-            )
-
-        attestations = _attestations(conn, attempt_id)
-        # An attestation only counts for the generation it was recorded against:
-        # a stale attestation from an earlier incarnation of this attempt must
-        # never authorise releasing the current one.
-        # Exact generation acceptance: an attestation authorises only the
-        # generation it was recorded against. A missing generation matches a
-        # missing generation and nothing else.
+        census = _census_for(conn, attempt_id, generation, census_event_id)
+        wanted = sorted(str(r) for r in census.get("resources", []))
         attestations = [
             a
-            for a in attestations
-            if (a.get("host_generation") or None) == (row.get("host_generation") or None)
+            for a in _attestations(conn, attempt_id)
+            if _generation(a.get("host_generation")) == generation
         ]
-
         attested = {a["resource"] for a in attestations if a.get("resource")}
-        wanted = [r for r in (resources or sorted(attested)) if r and r.strip()]
-        if not wanted:
-            return {
-                "attempt_id": attempt_id,
-                "action": "protection-retained",
-                "changed": False,
-                "unresolved_conditions": ["no quiescence attestation recorded for any resource"],
-                "supported_actions": [
-                    "verify each resource is genuinely idle, then record it with worker-plane"
-                    " lease-quiesce",
-                ],
-            }
         missing = [r for r in wanted if r not in attested]
         if missing:
             return {
                 "attempt_id": attempt_id,
                 "action": "protection-retained",
                 "changed": False,
-                "unresolved_conditions": [f"no quiescence attestation for: {', '.join(missing)}"],
+                "unresolved_conditions": [
+                    f"no bound quiescence attestation for: {', '.join(missing)}"
+                ],
+                "acted_on": {"census": census_event_id, "resources": wanted},
                 "supported_actions": [
-                    "verify the resource is genuinely idle, then record it with worker-plane "
-                    "lease-quiesce",
+                    "verify each listed resource is genuinely idle, then record it with"
+                    " worker-plane lease-quiesce against this attempt and generation"
                 ],
             }
-
         if dry_run:
             return {
                 "attempt_id": attempt_id,
                 "action": "release-permitted",
                 "changed": False,
                 "dry_run": True,
+                "would_release_resources": wanted,
             }
 
-        sequence = int(row.get("lifecycle_sequence") or 0) + 1
         updated = _now(now)
         record = {
             "kind": "operator-recovery-interrupted",
             "attempt_id": attempt_id,
-            "host_generation": row.get("host_generation"),
+            "host_generation": generation,
             "actor": actor,
-            "executor_settled": False,
-            "logical_outcome": row.get("logical_outcome"),
-            "outcome_rewritten": False,
-            "resource_coverage": "operator-asserted",
-            "note": "no host inventory exists for a dead host; coverage rests on the attestations "
-            "b"
-            "e"
-            "l"
-            "ow",
+            "binding": _inventory_binding(row),
+            "census_event_id": census_event_id,
             "resources": wanted,
             "attestations": [
                 a["event_id"] for a in attestations if a.get("resource") in set(wanted)
             ],
+            # Truthful record: nothing here establishes settlement or completion.
+            "executor_settled": False,
+            "outcome_rewritten": False,
+            "lifecycle_sequence_advanced": False,
+            "resource_coverage": "census",
         }
-        blob = json.dumps(record, sort_keys=True)
-        digest = hashlib.sha256(blob.encode()).hexdigest()
+        conn.execute("BEGIN IMMEDIATE")
+        result = _write_event(conn, record, attempt_id, generation, updated)
         conn.execute(
-            "INSERT INTO worker_lifecycle_receipts("
-            "attempt_id,sequence,receipt_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?)",
-            (attempt_id, sequence, digest, blob, updated),
-        )
-        conn.execute(
-            "UPDATE worker_tasks SET writer_ownership=?,lifecycle_sequence=?,"
-            "ownership_updated_at=?,updated_at=? WHERE task_id=?",
-            (RELEASED, sequence, updated, updated, row["task_id"]),
+            "UPDATE worker_tasks SET writer_ownership=?,ownership_updated_at=?,updated_at=?"
+            " WHERE task_id=?",
+            (RELEASED, updated, updated, row["task_id"]),
         )
         conn.commit()
         return {
+            **result,
             "attempt_id": attempt_id,
             "action": "ownership-released-for-interrupted-attempt",
             "changed": True,
-            "lifecycle_sequence": sequence,
-            "receipt_sha256": digest,
             "state_preserved": row.get("state"),
             "logical_outcome_preserved": row.get("logical_outcome"),
+            "lifecycle_sequence_preserved": row.get("lifecycle_sequence"),
         }
+    finally:
+        conn.close()
 
 
 def recover(
@@ -510,6 +685,7 @@ def recover(
     host_generation: str | None = None,
     executor_settled_evidence: dict[str, Any] | None = None,
     cleanup_evidence: dict[str, Any] | None = None,
+    census_event_id: str | None = None,
     dry_run: bool = True,
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
@@ -535,11 +711,17 @@ def recover(
             dry_run=dry_run,
             now=now,
         )
+    if census_event_id is None:
+        raise RecoveryError(
+            "CENSUS_REQUIRED",
+            "interrupted release needs the id of a persisted complete census",
+        )
     return release_interrupted_attempt(
         home,
         attempt_id=attempt_id,
-        actor=actor,
         host_generation=host_generation,
+        census_event_id=census_event_id,
+        actor=actor,
         dry_run=dry_run,
         now=now,
     )

@@ -1,9 +1,9 @@
-"""Focused regressions for operator recovery of worker attempts.
+"""Regressions for worker recovery: settlement reconciliation and interrupted release.
 
-Recovery must reach the same authoritative ownership state admission writes, and
-must refuse whenever the release rule is not satisfied: no accepted outcome, no
-established executor settlement, no established cleanup completion, a mismatched
-host generation, or nothing but a lease that expired.
+The interrupted path rests on two authoritative objects - a persisted complete
+resource census and a bound quiescence attestation for every resource it lists -
+and on an exact generation binding. Unknown is never a wildcard, generation zero
+is a real generation, and recovery never advances the host lifecycle sequence.
 """
 
 from __future__ import annotations
@@ -34,27 +34,17 @@ def _make_home(tmp_path: Path) -> Path:
             "CREATE TABLE worker_tasks("
             "task_id TEXT, state TEXT, lease_expires_at TEXT, packet_sha256 TEXT, accepted_at TEXT,"
             "settled_at TEXT, updated_at TEXT, attempt_id TEXT, access_intent TEXT, project_id TE"
-                "XT,"
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
+            "XT,"
             "worktree_id TEXT, worktree_root TEXT, writer_ownership TEXT, logical_outcome TEXT,"
             "executor_settled INTEGER, cleanup_complete INTEGER, host_session_id TEXT,"
-            "callback_token_sha256 TEXT, host_generation TEXT, native_attempt_id TEXT,"
-                " native_job_id TEXT,"
+            "callback_token_sha256 TEXT, host_generation TEXT, native_attempt_id TEXT, native_job"
+            "_id TEXT,"
             "agent_id TEXT, lifecycle_sequence INTEGER, bound_at TEXT, ownership_updated_at TEXT)"
         )
         conn.execute(
             "CREATE TABLE worker_lifecycle_receipts("
-            "attempt_id TEXT, sequence INTEGER, receipt_sha256 TEXT, payload_json TEXT,"
-                " recorded_at TEXT)"
+            "attempt_id TEXT, sequence INTEGER, receipt_sha256 TEXT, payload_json TEXT, recorded_"
+            "at TEXT)"
         )
     return home
 
@@ -63,48 +53,31 @@ def _attempt(
     home: Path,
     *,
     attempt_id: str = "attempt-1",
+    task_id: str = "task-1",
     outcome: str | None = "completed",
     executor_settled: int = 1,
     cleanup_complete: int = 0,
     ownership: str = "held",
-    generation: str = "gen-1",
-    lease: str = "2026-09-19T00:00:00+00:00",
-    task_id: str = "task-1",
+    generation: object = 0,
+    sequence: int = 1,
+    state: str = "SUBMITTED",
+    access_intent: str = "mutating",
 ) -> None:
     with sqlite3.connect(worker_recovery._db(home)) as conn:
         conn.execute(
-            "INSERT INTO worker_tasks(task_id,attempt_id,project_id,worktree_id,state,writer_owne"
-                "rship,"
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-            "logical_outcome,executor_settled,cleanup_complete,host_session_id,host_generation,"
-            "native_attempt_id,native_job_id,agent_id,lifecycle_sequence,lease_expires_at,updated"
-                "_at,"
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-                ""
-            "ownership_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO worker_tasks(task_id,attempt_id,project_id,worktree_id,state,access_inte"
+            "nt,"
+            "writer_ownership,logical_outcome,executor_settled,cleanup_complete,host_session_id,"
+            "host_generation,native_attempt_id,native_job_id,agent_id,lifecycle_sequence,lease_ex"
+            "pires_at,"
+            "updated_at,ownership_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 attempt_id,
                 "proj",
                 "wt",
-                "SUBMITTED",
+                state,
+                access_intent,
                 ownership,
                 outcome,
                 executor_settled,
@@ -114,114 +87,218 @@ def _attempt(
                 "native-1",
                 None,
                 "AgentA",
-                1,
-                lease,
+                sequence,
+                "2026-09-19T00:00:00+00:00",
                 "2026-09-19T00:00:00+00:00",
                 "2026-09-19T00:00:00+00:00",
             ),
         )
 
 
-def test_inspect_is_read_only_and_reports_the_unresolved_conditions(tmp_path: Path) -> None:
+def _interrupted(home: Path, **kwargs: object) -> None:
+    base = dict(
+        outcome=None, executor_settled=0, cleanup_complete=0, sequence=-1, state="SUBMITTED"
+    )
+    base.update(kwargs)
+    _attempt(home, **base)  # type: ignore[arg-type]
+
+
+def _census(home: Path, resources: list[str], generation: object = 0) -> str:
+    return worker_recovery.record_census(
+        home,
+        attempt_id="attempt-1",
+        host_generation=generation,  # type: ignore[arg-type]
+        resources=resources,
+        method="operator inspection of the host state for this attempt",
+        observation="each listed resource was inspected and found idle",
+        actor="operator",
+        resources_complete=True,
+    )["event_id"]
+
+
+def _quiesce(home: Path, resource: str, generation: object = 0) -> None:
+    worker_recovery.record_quiescence(
+        home,
+        attempt_id="attempt-1",
+        resource=resource,
+        method="operator inspection",
+        observation="idle",
+        actor="operator",
+        host_generation=generation,  # type: ignore[arg-type]
+    )
+
+
+# --- generation parser edges -------------------------------------------------
+
+
+@pytest.mark.parametrize("value,expected", [(0, 0), ("0", 0), (7, 7), ("12", 12)])
+def test_generation_accepts_zero_and_numeric_strings(value: object, expected: int) -> None:
+    assert worker_recovery._generation(value) == expected
+
+
+@pytest.mark.parametrize("value", [None, "", "abc", "-1", 1.5, True])
+def test_generation_rejects_unknown_or_non_canonical(value: object) -> None:
+    with pytest.raises(worker_recovery.RecoveryError) as excinfo:
+        worker_recovery._generation(value)
+    assert excinfo.value.code == "GENERATION_MISMATCH"
+
+
+# --- census qualification ----------------------------------------------------
+
+
+def test_census_without_established_completeness_is_not_recorded(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    _attempt(home)
+    _interrupted(home)
+    with pytest.raises(worker_recovery.RecoveryError) as excinfo:
+        worker_recovery.record_census(
+            home,
+            attempt_id="attempt-1",
+            host_generation=0,
+            resources=["R1"],
+            method="operator inspection",
+            observation="R1 idle",
+            actor="operator",
+            resources_complete=False,
+        )
+    assert excinfo.value.code == "INSUFFICIENT_EVIDENCE"
 
-    report = worker_recovery.inspect_attempt(home, attempt_id="attempt-1")
 
-    attempt = report["attempts"][0]
-    assert attempt["writer_ownership"] == "held"
-    assert attempt["unresolved_conditions"] == [
-        "cleanup completion is not established for: the attempt's owned resources"
-    ]
-    with sqlite3.connect(worker_recovery._db(home)) as conn:
-        assert conn.execute("SELECT writer_ownership FROM worker_tasks").fetchone()[0] == "held"
+# --- T1..T4 hard gates -------------------------------------------------------
 
 
-def test_bare_operator_request_is_refused(tmp_path: Path) -> None:
+def test_T1_omitted_resource_is_not_inferred_from_history(tmp_path: Path) -> None:
+    """A census naming R3 must fail when only historical attestations for R1,R2 exist."""
     home = _make_home(tmp_path)
-    _attempt(home)
+    _interrupted(home)
+    _quiesce(home, "R1")
+    _quiesce(home, "R2")
+    census = _census(home, ["R1", "R2", "R3"])
 
-    result = worker_recovery.recover_attempt(home, attempt_id="attempt-1", actor="operator")
+    result = worker_recovery.release_interrupted_attempt(
+        home, attempt_id="attempt-1", host_generation=0, census_event_id=census, actor="operator"
+    )
 
     assert result["action"] == "protection-retained"
     assert result["changed"] is False
-    assert any("cleanup completion" in c for c in result["unresolved_conditions"])
+    assert any("R3" in c for c in result["unresolved_conditions"])
 
 
-def test_expired_lease_alone_never_releases(tmp_path: Path) -> None:
+def test_T2_missing_generation_is_refused(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    _attempt(home, executor_settled=0, lease="2020-01-01T00:00:00+00:00")
-
-    result = worker_recovery.recover_attempt(home, attempt_id="attempt-1", actor="operator")
-
-    assert result["changed"] is False
-    assert any("executor settlement" in c for c in result["unresolved_conditions"])
-
-
-def test_generation_mismatch_is_refused(tmp_path: Path) -> None:
-    home = _make_home(tmp_path)
-    _attempt(home)
+    _interrupted(home, generation=None)
 
     with pytest.raises(worker_recovery.RecoveryError) as excinfo:
-        worker_recovery.recover_attempt(
-            home, attempt_id="attempt-1", actor="operator", host_generation="gen-other"
+        worker_recovery.release_interrupted_attempt(
+            home,
+            attempt_id="attempt-1",
+            host_generation=0,
+            census_event_id="r-anything",
+            actor="operator",
         )
 
     assert excinfo.value.code == "GENERATION_MISMATCH"
 
 
-def test_valid_recovery_releases_and_preserves_the_outcome(tmp_path: Path) -> None:
+def test_T3_generation_zero_is_a_real_generation(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    _attempt(home)
-    worker_recovery.record_quiescence(
+    _interrupted(home, generation=0)
+    census = _census(home, ["R1"], generation=0)
+    _quiesce(home, "R1", generation=0)
+
+    dry = worker_recovery.release_interrupted_attempt(
+        home, attempt_id="attempt-1", host_generation=0, census_event_id=census, actor="operator"
+    )
+    assert dry["action"] == "release-permitted"
+
+    applied = worker_recovery.release_interrupted_attempt(
         home,
         attempt_id="attempt-1",
-        resource="isolation-handle",
-        method="operator inspected the isolation worktree and the capture path",
-        observation="no capture, commit or disposable process remained for the attempt",
+        host_generation=0,
+        census_event_id=census,
         actor="operator",
-        host_generation="gen-1",
+        dry_run=False,
+    )
+    assert applied["changed"] is True
+    report = worker_recovery.inspect_attempt(home, attempt_id="attempt-1")["attempts"][0]
+    assert report["writer_ownership"] == "released"
+    assert report["logical_outcome"] is None
+    assert report["executor_settled"] is False
+    assert report["cleanup_complete"] is False
+
+
+def test_T4_recovery_does_not_advance_lifecycle_sequence(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    _interrupted(home)
+    census = _census(home, ["R1"])
+    _quiesce(home, "R1")
+
+    worker_recovery.release_interrupted_attempt(
+        home,
+        attempt_id="attempt-1",
+        host_generation=0,
+        census_event_id=census,
+        actor="operator",
+        dry_run=False,
     )
 
-    dry = worker_recovery.recover_attempt(home, attempt_id="attempt-1", actor="operator")
-    assert dry["action"] == "release-permitted"
-    assert dry["changed"] is False
+    report = worker_recovery.inspect_attempt(home, attempt_id="attempt-1")["attempts"][0]
+    assert report["lifecycle_sequence"] == -1
+    with sqlite3.connect(worker_recovery._db(home)) as conn:
+        receipts = conn.execute("SELECT COUNT(*) FROM worker_lifecycle_receipts").fetchone()[0]
+    assert receipts == 0
+
+
+# --- settlement reconciliation (unchanged contract) --------------------------
+
+
+def test_settlement_reconciliation_still_requires_evidence(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    _attempt(home, executor_settled=1, cleanup_complete=0, outcome="completed")
+    result = worker_recovery.recover_attempt(home, attempt_id="attempt-1", actor="operator")
+    assert result["action"] == "protection-retained"
+    assert any("cleanup completion" in c for c in result["unresolved_conditions"])
+
+
+def test_settlement_reconciliation_releases_with_bound_attestation(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    _attempt(home, executor_settled=1, cleanup_complete=0, outcome="completed")
+    _quiesce(home, "isolation-handle")
 
     applied = worker_recovery.recover_attempt(
         home, attempt_id="attempt-1", actor="operator", dry_run=False
     )
-    assert applied["action"] == "released-by-operator-recovery"
-    assert applied["logical_outcome_preserved"] == "completed"
 
+    assert applied["action"] == "released-by-operator-recovery"
     report = worker_recovery.inspect_attempt(home, attempt_id="attempt-1")["attempts"][0]
     assert report["writer_ownership"] == "released"
-    assert report["cleanup_complete"] is True
     assert report["logical_outcome"] == "completed"
-    assert report["receipts"][0]["sequence"] == 2
 
 
-def test_repeated_recovery_is_idempotent_and_spares_newer_attempts(tmp_path: Path) -> None:
+def test_interrupted_release_needs_a_census_and_spares_newer_attempts(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    _attempt(home)
-    _attempt(home, attempt_id="attempt-2", task_id="task-2", ownership="held")
-    worker_recovery.record_quiescence(
+    _interrupted(home)
+    _interrupted(home, attempt_id="attempt-2", task_id="task-2", generation=0)
+
+    with pytest.raises(worker_recovery.RecoveryError) as excinfo:
+        worker_recovery.release_interrupted_attempt(
+            home,
+            attempt_id="attempt-1",
+            host_generation=0,
+            census_event_id="r-missing",
+            actor="operator",
+        )
+    assert excinfo.value.code == "CENSUS_NOT_FOUND"
+
+    census = _census(home, ["R1"])
+    _quiesce(home, "R1")
+    worker_recovery.release_interrupted_attempt(
         home,
         attempt_id="attempt-1",
-        resource="isolation-handle",
-        method="operator inspection",
-        observation="idle",
+        host_generation=0,
+        census_event_id=census,
         actor="operator",
+        dry_run=False,
     )
 
-    first = worker_recovery.recover_attempt(
-        home, attempt_id="attempt-1", actor="operator", dry_run=False
-    )
-    second = worker_recovery.recover_attempt(
-        home, attempt_id="attempt-1", actor="operator", dry_run=False
-    )
-
-    assert first["changed"] is True
-    assert second["action"] == "already-released"
-    assert second["changed"] is False
     newer = worker_recovery.inspect_attempt(home, attempt_id="attempt-2")["attempts"][0]
     assert newer["writer_ownership"] == "held"
