@@ -18,6 +18,7 @@
  * Step 1 happens once per top-level call (the baseline is cloned per spawn
  * before mutation); steps 2 and 3 are per-spawn.
  */
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { classifyCleanupRequirement, cleanupOperationId, settleBarrier, type CleanupRoute } from "./cleanup-barrier";
 import { AttemptSettlementRegistry } from "./attempt-settlement";
@@ -412,23 +413,14 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	};
 	const releaseIsolation = (): Promise<void> => {
 		releasePromise ??= (async () => {
-			// Deterministic deferred-cleanup fixture (test-only): when an attempt-specific
-			// hold file is configured, the REAL release work (capture, commit, cleanup) does
-			// not begin until that file appears. Nothing is faked and the timeout never
-			// stands in for settlement: on expiry the normal work still runs.
-			const holdFile = process.env.OM_CANARY_HOLD_RELEASE_UNTIL;
-			if (holdFile) {
-				const deadline = Date.now() + 600_000;
-				const { existsSync } = await import("node:fs");
-				if (!existsSync(holdFile)) {
-					while (Date.now() < deadline) {
-						if (existsSync(holdFile)) break;
-						await new Promise(resolve => setTimeout(resolve, 200));
-					}
-					__traceIsolation(
-						`isolation:hold-finish:agent=${opts.agentId}:held=${Date.now() < deadline}`,
-					);
-				}
+			// Deterministic deferred-cleanup fixture (test-only): the real release work
+			// does not begin until the coordinator creates the exact identity-bound
+			// signal emitted in hold-begin. See awaitReleaseSignal.
+			try {
+				await awaitReleaseSignal();
+			} catch (error) {
+				isolationRelease.reject(error);
+				throw error;
 			}
 			if (!handle || retainWorkspace) {
 				try {
@@ -557,6 +549,50 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		() => __traceIsolation(`isolation:released:agent=${opts.agentId}`),
 		() => __traceIsolation(`isolation:failed:agent=${opts.agentId}`),
 	);
+	// Deterministic deferred-cleanup fixture (test-only). When a hold prefix is
+	// configured, the REAL release work (capture, commit, cleanup) does not begin
+	// until the coordinator creates the exact identity-bound signal file emitted in
+	// hold-begin. The prefix itself must not exist: a pre-created prefix is a stale
+	// sentinel that would otherwise release an attempt by accident. A timeout
+	// rejects the original signal; neither a stale file nor expiry ever counts as
+	// release, and nothing is faked in place of real work.
+	const holdPrefix = process.env.OM_CANARY_HOLD_RELEASE_UNTIL;
+	const holdNonce = holdPrefix ? randomUUID() : undefined;
+	let holdPromise: Promise<void> | undefined;
+	const awaitReleaseSignal = (): Promise<void> => {
+		if (!holdPrefix) return Promise.resolve();
+		holdPromise ??= (async () => {
+			const holdIdentity = settlement.snapshot();
+			const holdFile = `${holdPrefix}.${encodeURIComponent(holdIdentity.attemptId)}.${holdIdentity.generation}.${holdNonce}`;
+			const binding = JSON.stringify({
+				agentId: opts.agentId,
+				attemptId: holdIdentity.attemptId,
+				generation: holdIdentity.generation,
+				cleanupOperationId: barrierIdentity.cleanupOperationId,
+				holdFile,
+			});
+			__traceIsolation(`isolation:hold-begin:${binding}`);
+			try {
+				await fs.stat(holdPrefix);
+				throw new Error(`stale isolation hold prefix exists: ${holdPrefix}`);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			const deadline = Date.now() + 600_000;
+			while (Date.now() < deadline) {
+				try {
+					await fs.stat(holdFile);
+					__traceIsolation(`isolation:hold-release:${binding}`);
+					return;
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				await new Promise(resolve => setTimeout(resolve, 200));
+			}
+			throw new Error(`isolation hold timed out without the bound release signal: ${holdFile}`);
+		})();
+		return holdPromise;
+	};
 	try {
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
 		const isolationDir = handle.mergedDir;
@@ -579,6 +615,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
 		});
 		opts.onSubprocessResult?.(result);
+		// The test-only hold gates post-run capture on every route; release and
+		// cleanup wait on the same memoised signal.
+		await awaitReleaseSignal();
 		// A successful result cannot be captured while deferred owner jobs or
 		// shutdown hooks may still write the worktree. Failed runs skip capture,
 		// so their cleanup remains asynchronous.
@@ -717,7 +756,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				// second time: trackCleanups skips duplicate pending resources, and a
 				// second settlement path would give release two authorities. The
 				// deferred chain only drives the release that the barrier observes.
-				const completion = deferredCleanup.then(cleanupHandle);
+				const completion = deferredCleanup.then(() => awaitReleaseSignal()).then(cleanupHandle);
 				void completion.then(
 					() => isolationRelease.resolve(),
 					error => isolationRelease.reject?.(error),
@@ -728,6 +767,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			} else {
 				try {
+					await awaitReleaseSignal();
 					await cleanupHandle();
 					isolationRelease.resolve();
 				} catch (error) {
