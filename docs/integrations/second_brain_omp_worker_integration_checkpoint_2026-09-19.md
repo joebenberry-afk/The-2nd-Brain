@@ -576,3 +576,28 @@ signal -> cleanup proof stays incomplete, ownership retained, successor
 refused), Astra review of the eight evidence objects, then the rest of the
 qualification sequence. `check:types` remains UNAVAILABLE; the causal binding
 remains separately open.
+
+### False-success twin (fresh disposable environment) — PASS (2026-09-19)
+
+Environment: fresh home `%TEMP%/omp-canary27-home` (schema v24, doctor 20/20,
+0 tasks / 0 receipts before), fresh fixture repo `omp27-canary-a`, same
+manifest-bound candidate, hold prefix set with **no coordinator and no signal**.
+
+| Assertion | Evidence |
+|---|---|
+| A ran and its logical outcome was accepted | task `omp-a8a33090...` COMPLETED |
+| No successful final settlement | receipts seq 1-3 all `cleanup_complete=false` (seq 2-3 `executor_settled=true`) |
+| Cleanup never progressed without the signal | `hold-begin` present; no `hold-release`, `barrier:resolved` or `isolation:released` |
+| No teardown shortcut or synthetic success | observer drain reported `timed out`; process exited nonzero |
+| Ownership protected past teardown | follow-up session successor -> `WORKTREE_WRITER_BUSY` |
+| Production untouched | `production_unchanged: true` after both sessions |
+
+Raw traces: `%TEMP%/omp-canary27/boot-twin.txt`, `boot-twin-c.txt`; evidence:
+`outputs/reports/omp-canary27-twin-20260919/{preflight,post-exit}.json`.
+
+Together with the positive run (`8384620`) this completes the paired core
+safety demonstration: eventual durable release on the happy path, and retained
+protection with a refused successor when the cleanup prerequisite is never
+satisfied. Astra's separate verdicts (positive-evidence acceptance; keepAlive
+release contract) are requested and pending; cancellation/concurrency and
+ordinary-workflow qualification follow.
