@@ -576,8 +576,10 @@ describe("OMP worker Context Capsule bridge", () => {
       attemptId: options.attemptId,
     }));
     const persisted = new Map<number, string>();
+    const payloads: string[] = [];
     const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => {
       const payload = JSON.stringify(options);
+      payloads.push(payload);
       const prior = persisted.get(options.sequence);
       if (prior !== undefined && prior !== payload) {
         return { ok: false, error: "RECEIPT_CONFLICT" };
@@ -653,7 +655,9 @@ describe("OMP worker Context Capsule bridge", () => {
     }))).resolves.toBe(true);
 
     expect(bindRunner).toHaveBeenCalledTimes(1);
-    expect(lifecycleRunner).toHaveBeenCalledTimes(3);
+    // A lost acknowledgement earns exactly one identical-payload reconciliation resend.
+    expect(payloads).toHaveLength(loseResponse ? 4 : 3);
+    if (loseResponse) expect(payloads[2]).toBe(payloads[1]);
     expect([...persisted.keys()]).toEqual([1, 2, 3]);
     expect(lifecycleRunner).toHaveBeenLastCalledWith(expect.objectContaining({
       hostGeneration: 7,
