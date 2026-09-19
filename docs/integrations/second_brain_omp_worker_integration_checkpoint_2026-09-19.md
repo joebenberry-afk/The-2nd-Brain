@@ -481,6 +481,13 @@ ownership gap. The fixes below are applied to the canary candidate.
   longer claimed before acquisition.
 - Gate results: host lint 0 errors; host tests 35/35; adapter gates unchanged
   (eslint, tsc, vitest 741/741).
+- Review round 2 (same day): the deadline is re-checked with a monotonic bound
+  after the signal lookup (a late signal still rejects); every hold failure
+  terminates the original signal regardless of which consumer awaits it;
+  retained workspaces reject even when a deferred-cleanup promise exists; the
+  deferred chain observes the hold without waiting for its producer; sentinel
+  checks use lstat and require a regular signal file; `releaseBase` is
+  documented as outside the gate.
 
 Still open before A->B->C: boundary qualification tests (retained producers
 after timed-out disposal, delayed RPC, refusal, successful reconciliation,
