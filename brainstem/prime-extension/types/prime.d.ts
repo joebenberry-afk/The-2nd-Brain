@@ -52,6 +52,30 @@ export interface AsyncJobLifecycleObservation {
   revision: number;
 }
 /** Context passed to every event handler. */
+export type AttemptOutcome = "running" | "completed" | "failed" | "cancelled";
+
+/** Versioned attempt settlement payload (capability version 1). */
+export interface AttemptSettlementSnapshot {
+  capabilityVersion: 1;
+  attemptId: string;
+  agentId: string;
+  jobId: string | null;
+  parentToolCallId: string | null;
+  sourceIndex: number | null;
+  /** Monotonic attempt generation inside the host process. */
+  generation: number;
+  /** The run's result is available to the caller. */
+  resultAccepted: boolean;
+  /** The run's own outcome, independent of cleanup state. */
+  outcome: AttemptOutcome;
+  cleanupState: "pending" | "settled" | "failed";
+  cleanupPendingResources: string[];
+  cleanupFailedResources: string[];
+  /** True only when the result is accepted and every owned resource settled. */
+  releasePermitted: boolean;
+  revision: number;
+}
+
 export interface ExtensionContext {
   cwd: string;
   model: ModelInfo | undefined;
@@ -64,6 +88,16 @@ export interface ExtensionContext {
    * rows and delivery state). Absent on hosts that do not implement it.
    */
   getAsyncJobSnapshot?(options?: { recentLimit?: number }): unknown;
+  /**
+   * Attempt-scoped settlement facts for spawned workers (capability version 1).
+   * Provided by hosts that expose the settlement registry; `releasePermitted` is
+   * true only after result acceptance and proven cleanup of every owned resource.
+   */
+  observeAttemptSettlement?(
+    observer: (snapshot: Readonly<AttemptSettlementSnapshot>) => void,
+    options?: { sourceToolCallId?: string },
+  ): (() => void) | undefined;
+  getAttemptSettlement?(attemptId: string): AttemptSettlementSnapshot | null;
   observeAsyncJobLifecycle?(
     observer: (observation: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>,
     options?: { sourceToolCallId?: string },

@@ -1154,14 +1154,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    *    frames and a read-only async-job snapshot;
    *  - `null`: neither exists, so mutating dispatch must stay refused.
    *
-   * Stock hosts detach late cleanup (child session disposal, advisor drain, owner-job
-   * reaping) past their grace deadline and expose no completion signal, so the native
-   * source records `cleanupComplete:false` (writer lease stays held/quarantined) unless
-   * the operator explicitly selects the attempt-scoped mode.
+   * Precedence: the patched 18.1.17 observer, then the versioned attempt-settlement
+   * capability (which reports `releasePermitted` only after proven cleanup), then the
+   * stock lifecycle frames. The frame-only source cannot prove cleanup, so it records
+   * `cleanupComplete:false` and the durable lease stays held/quarantined — it is a
+   * degraded diagnostic path, never a release.
    */
-  const nativeCleanupProvenByFrame = process.env.SECOND_BRAIN_WORKER_CLEANUP === "attempt-scoped";
-  const settlementSourceFor = (ctx: ExtensionContext): "host_api" | "native_lifecycle" | null => {
+  const settlementSourceFor = (
+    ctx: ExtensionContext,
+  ): "host_api" | "attempt_settlement" | "native_lifecycle" | null => {
     if (typeof ctx.observeAsyncJobLifecycle === "function") return "host_api";
+    if (typeof ctx.observeAttemptSettlement === "function") return "attempt_settlement";
     if (typeof pi.events?.on === "function" && typeof ctx.getAsyncJobSnapshot === "function") {
       return "native_lifecycle";
     }
@@ -1569,6 +1572,45 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       let disposer: (() => void) | undefined;
       if (settlementSource === "host_api" && typeof hostObserver === "function") {
         disposer = hostObserver(observe, { sourceToolCallId: event.toolCallId });
+      } else if (settlementSource === "attempt_settlement") {
+        const observeSettlement = ctx.observeAttemptSettlement;
+        if (typeof observeSettlement === "function") {
+          disposer = observeSettlement(
+            (snapshot) => {
+              if (snapshot.capabilityVersion !== 1) return;
+              const sourceIndex = snapshot.sourceIndex;
+              if (sourceIndex === null) return;
+              const outcome: "completed" | "failed" | "cancelled" =
+                snapshot.outcome === "failed"
+                  ? "failed"
+                  : snapshot.outcome === "cancelled"
+                    ? "cancelled"
+                    : snapshot.outcome === "completed"
+                      ? "completed"
+                      : "completed";
+              const observation: AsyncJobLifecycleObservation = {
+                jobId: snapshot.jobId ?? snapshot.agentId,
+                generation: snapshot.generation,
+                nativeAttemptId: snapshot.attemptId,
+                type: "task",
+                agentId: snapshot.agentId,
+                sourceToolCallId: snapshot.parentToolCallId ?? event.toolCallId,
+                sourceIndex,
+                status: outcome,
+                // Execution settled when the result is accepted; cleanup is proven only
+                // at the host's release boundary. A failed cleanup is never a release.
+                executorSettled: snapshot.resultAccepted,
+                cleanupComplete: snapshot.releasePermitted,
+                revision: snapshot.revision,
+              };
+              void Promise.resolve(observe(observation)).catch(() => {
+                // Durable rejection is journaled by the emit path; observation must not
+                // throw into the host's settlement dispatch.
+              });
+            },
+            { sourceToolCallId: event.toolCallId },
+          );
+        }
       } else if (settlementSource === "native_lifecycle") {
         // Stock hosts expose no attempt-scoped observer API; derive the same facts
         // from the supported lifecycle frames plus the read-only job snapshot.
@@ -1577,7 +1619,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (typeof events?.on === "function" && typeof snapshot === "function") {
           disposer = createNativeSettlementObserver({
             sourceToolCallId: event.toolCallId,
-            cleanupProvenByFrame: nativeCleanupProvenByFrame,
+            // Frame-only evidence never proves cleanup on stock hosts.
+            cleanupProvenByFrame: false,
             source: {
               subscribe: (handler) => {
                 const bus = pi.events;
@@ -4093,6 +4136,32 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           expiry.unref();
           workerObserverExpiry.set(key, expiry);
         }
+      }
+      // Worker (child) sessions are disposed as part of their parent's cleanup
+      // boundary. The Brain CLI calls below are optional telemetry and block the
+      // event loop while a Python process starts, which delays the host's own
+      // disposal and therefore the settlement boundary the writer lease waits on.
+      // The host marks child sessions with `parentSession` in the session header.
+      const shutdownHeader = (() => {
+        try {
+          const header = ctx.sessionManager?.getHeader?.();
+          return header !== null && typeof header === "object"
+            ? (header as Record<string, unknown>)
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const childSession = typeof shutdownHeader?.parentSession === "string" &&
+        shutdownHeader.parentSession.length > 0;
+      if (childSession) {
+        mirror(
+          session,
+          "worker_shutdown_telemetry_skipped",
+          { reason: event.reason ?? "normal" },
+          { ignorable: true, cwd: ctxCwd(ctx) },
+        );
+        return sensors.sessionShutdown(session, event.reason);
       }
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (

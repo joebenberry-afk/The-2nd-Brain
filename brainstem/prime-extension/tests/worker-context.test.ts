@@ -411,6 +411,162 @@ describe("OMP worker Context Capsule bridge", () => {
     });
   });
 
+  const settlementHarness = () => {
+    const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) =>
+      contextResultForRequest(options));
+    const boundAttempts: Array<Parameters<NonNullable<ExtensionOptions["ompWorkerBindRunner"]>>[0]> = [];
+    const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async options => {
+      boundAttempts.push(options);
+      return {
+        ok: true,
+        status: "accepted" as const,
+        taskId: options.taskId,
+        attemptId: options.attemptId,
+      };
+    });
+    const lifecycleCalls: Array<Parameters<NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]>>[0]> = [];
+    const lifecycleSettled = deferred<void>();
+    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(
+      async options => {
+        lifecycleCalls.push(options);
+        lifecycleSettled.resolve();
+        return {
+          ok: true,
+          status: "accepted" as const,
+          taskId: options.taskId,
+          attemptId: options.attemptId,
+          sequence: options.sequence,
+        };
+      },
+    );
+    const observers = new Set<(snapshot: unknown) => void>();
+    const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    const pi = {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) =>
+        handlers.set(name, handler),
+    } as unknown as ExtensionAPI;
+    factory(pi, {
+      ompWorkerContextRunner: contextRunner,
+      ompWorkerBindRunner: bindRunner,
+      ompWorkerLifecycleRunner: lifecycleRunner,
+      ompWorkerResultRunner: async () => ({ ok: true }),
+    });
+    const context = ctx();
+    context.observeAttemptSettlement = observer => {
+      observers.add(observer as (snapshot: unknown) => void);
+      return () => observers.delete(observer as (snapshot: unknown) => void);
+    };
+    return { handlers, context, boundAttempts, lifecycleCalls, observers, lifecycleSettled };
+  };
+
+  const settlementSnapshot = (overrides: Record<string, unknown>) => ({
+    capabilityVersion: 1,
+    attemptId: "host-generation:7",
+    agentId: "WorkerS",
+    jobId: "WorkerS",
+    parentToolCallId: "task-call-settlement",
+    sourceIndex: 0,
+    generation: 7,
+    resultAccepted: true,
+    outcome: "completed",
+    cleanupState: "pending",
+    cleanupPendingResources: ["owner-jobs"],
+    cleanupFailedResources: [],
+    releasePermitted: false,
+    revision: 1,
+    ...overrides,
+  });
+
+  const nextLifecycleCall = async (
+    harness: ReturnType<typeof settlementHarness>,
+    expected: number,
+  ) => {
+    for (let attempt = 0; attempt < 200 && harness.lifecycleCalls.length < expected; attempt += 1) {
+      const gate = deferred<void>();
+      harness.lifecycleSettled = gate;
+      await Promise.race([gate.promise, Promise.resolve()]);
+    }
+    return harness.lifecycleCalls[expected - 1];
+  };
+
+  it("releases only at the host's proven settlement boundary, not on result acceptance", async () => {
+    const harness = settlementHarness();
+    const admitted = await harness.handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-settlement",
+        input: { agent: "task", task: "Mutate the seam" },
+      },
+      harness.context,
+    );
+    expect(admitted).not.toEqual({ block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" });
+    expect(harness.observers.size).toBe(1);
+
+    for (const observer of harness.observers) {
+      observer(settlementSnapshot({}));
+    }
+    await nextLifecycleCall(harness, 1);
+    expect(harness.lifecycleCalls).toHaveLength(1);
+    expect(harness.lifecycleCalls[0]).toMatchObject({
+      outcome: "completed",
+      executorSettled: true,
+      cleanupComplete: false,
+      sequence: 1,
+    });
+
+    for (const observer of harness.observers) {
+      observer(
+        settlementSnapshot({
+          cleanupState: "settled",
+          cleanupPendingResources: [],
+          releasePermitted: true,
+          revision: 2,
+        }),
+      );
+    }
+    await nextLifecycleCall(harness, 2);
+    expect(harness.lifecycleCalls).toHaveLength(2);
+    expect(harness.lifecycleCalls[1]).toMatchObject({
+      executorSettled: true,
+      cleanupComplete: true,
+      sequence: 2,
+    });
+    expect(harness.boundAttempts[0]).toMatchObject({
+      nativeAttemptId: "host-generation:7",
+      nativeJobId: "WorkerS",
+      agentId: "WorkerS",
+      hostGeneration: 7,
+    });
+  });
+
+  it("never treats a failed or pending cleanup as settlement", async () => {
+    const harness = settlementHarness();
+    await harness.handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-settlement",
+        input: { agent: "task", task: "Mutate the seam" },
+      },
+      harness.context,
+    );
+    for (const observer of harness.observers) {
+      observer(
+        settlementSnapshot({
+          cleanupState: "failed",
+          cleanupPendingResources: [],
+          cleanupFailedResources: ["session-disposal"],
+          releasePermitted: false,
+          revision: 3,
+        }),
+      );
+    }
+    await nextLifecycleCall(harness, 1);
+    expect(harness.lifecycleCalls.at(-1)).toMatchObject({
+      executorSettled: true,
+      cleanupComplete: false,
+    });
+  });
+
   it.each([false, true])("preserves shutdown receipts and advances revisions after lost response=%s", async (loseResponse) => {
     const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) => contextResultForRequest(options));
     const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async (options) => ({
