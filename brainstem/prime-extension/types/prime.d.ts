@@ -59,6 +59,11 @@ export interface ExtensionContext {
   getContextUsage(): ContextUsage | undefined;
   /** Effective system prompt sections returned by the current OMP runtime. */
   getSystemPrompt(): string | string[];
+  /**
+   * Stock-host read-only async-job view for the current session (running + recent
+   * rows and delivery state). Absent on hosts that do not implement it.
+   */
+  getAsyncJobSnapshot?(options?: { recentLimit?: number }): unknown;
   observeAsyncJobLifecycle?(
     observer: (observation: Readonly<AsyncJobLifecycleObservation>) => boolean | Promise<boolean>,
     options?: { sourceToolCallId?: string },
@@ -344,6 +349,10 @@ export interface ExtensionAPI {
   /** Not used; modeled so callers can type-check `pi` fully. */
   exec?(command: string, args?: string[], options?: unknown): Promise<unknown>;
   appendEntry?(customType: string, data?: unknown): void;
+  /** Shared session event bus; `on` returns a detach handle (host EventBus contract). */
+  events?: {
+    on?(channel: string, handler: (payload: unknown) => void): (() => void) | void;
+  };
   /** P3-B tool-control API (types.ts:1435-1439) — modeled for Phase J measurement, not consumed today. */
   getActiveTools?(): string[];
   getAllTools?(): ToolInfo[];

@@ -10,6 +10,20 @@ import {
 import { parseOmpWorkerCallbackOutput } from "../src/worker-lifecycle-bridge";
 import type { AsyncJobLifecycleObservation, ExtensionAPI, ExtensionContext } from "../types/prime";
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+/** ES2022 lib has no `Promise.withResolvers`, so tests build the deferred locally. */
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 const contextHandoff: OmpWorkerContextHandoff = {
   mode: "full",
   resolved_context: [
@@ -299,7 +313,7 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("fails closed before mutating admission without lifecycle observation", async () => {
+  it("still fails closed when no settlement source exists at all", async () => {
     const runner = vi.fn(async (options: OmpWorkerContextOptions) => contextResultForRequest(options));
     const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
     const pi = {
@@ -318,6 +332,81 @@ describe("OMP worker Context Capsule bridge", () => {
 
     expect(result).toEqual({ block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" });
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("admits mutating dispatch on a stock host and releases only after a post-finalization frame", async () => {
+    const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) =>
+      contextResultForRequest(options));
+    let bindOptions: Parameters<NonNullable<ExtensionOptions["ompWorkerBindRunner"]>>[0] | undefined;
+    const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async (options) => {
+      bindOptions = options;
+      return {
+        ok: true,
+        status: "accepted" as const,
+        taskId: options.taskId,
+        attemptId: options.attemptId,
+      };
+    });
+    const lifecycleSeen = deferred<Parameters<NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]>>[0]>();
+    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => {
+      lifecycleSeen.resolve(options);
+      return {
+        ok: true,
+        status: "accepted" as const,
+        taskId: options.taskId,
+        attemptId: options.attemptId,
+        sequence: options.sequence,
+      };
+    });
+    const subscribers = new Set<(payload: unknown) => void>();
+    const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    const pi = {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
+      events: {
+        on: (_channel: string, handler: (payload: unknown) => void) => {
+          subscribers.add(handler);
+          return () => subscribers.delete(handler);
+        },
+      },
+    } as unknown as ExtensionAPI;
+    factory(pi, {
+      ompWorkerContextRunner: contextRunner,
+      ompWorkerBindRunner: bindRunner,
+      ompWorkerLifecycleRunner: lifecycleRunner,
+    });
+    const context = ctx();
+    context.getAsyncJobSnapshot = () => ({
+      running: [{ id: "WorkerA", type: "task", status: "running", agentId: "WorkerA" }],
+      recent: [],
+    });
+
+    const result = await handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-stock",
+        input: { agent: "task", task: "Mutate the seam" },
+      },
+      context,
+    );
+
+    expect(result).not.toEqual({ block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" });
+    expect(rewrittenTask(result)).toContain("Brain-owned child context");
+    expect(lifecycleRunner).not.toHaveBeenCalled();
+    expect(subscribers.size).toBe(1);
+
+    for (const handler of subscribers) {
+      handler({ id: "WorkerA", parentToolCallId: "task-call-stock", index: 0, status: "completed" });
+    }
+    const observed = await lifecycleSeen.promise;
+
+    expect(bindRunner).toHaveBeenCalledTimes(1);
+    expect(bindOptions).toMatchObject({ nativeJobId: "WorkerA", agentId: "WorkerA" });
+    expect(observed).toMatchObject({
+      outcome: "completed",
+      executorSettled: true,
+      cleanupComplete: true,
+      sequence: 1,
+    });
   });
 
   it.each([false, true])("preserves shutdown receipts and advances revisions after lost response=%s", async (loseResponse) => {

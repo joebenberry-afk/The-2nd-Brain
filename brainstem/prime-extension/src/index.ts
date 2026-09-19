@@ -43,6 +43,11 @@ import type {
   TurnStartEvent,
 } from "../types/prime";
 import { createHash } from "node:crypto";
+import {
+  createNativeSettlementObserver,
+  type NativeAsyncJobSnapshot,
+  type NativeSubagentLifecycleFrame,
+} from "./native-settlement";
 import { execFile } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as scheduleObserverExpiry, clearTimeout as cancelObserverExpiry } from "node:timers";
@@ -253,6 +258,8 @@ interface NativeSessionIdentityResult extends NativeSessionIdentity {
 
 const SESSION_IDENTITY_CUSTOM_TYPE = "brain.session-identity";
 const SESSION_IDENTITY_VERSION = 1;
+/** Stock-host channel carrying per-subagent lifecycle frames (task/executor.ts). */
+const NATIVE_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
 const nativeIdentityCache = new WeakMap<object, Map<string, NativeSessionIdentityResult>>();
 
 function readNativeHeader(file: string): Record<string, unknown> {
@@ -948,6 +955,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const workerAdmissionsByTask = new Map<string, WorkerAdmission>();
   const workerAdmissionsBySource = new Map<string, WorkerAdmission>();
   const workerObservationDisposers = new Map<string, () => void>();
+  // Native settlement identities for stock hosts: one per admitted spawn, minted once
+  // and reused across observations so durable bindings stay consistent. The epoch
+  // distinguishes host processes; the counter orders attempts inside this process.
+  const nativeExecutionEpoch = `${process.pid}-${Date.now().toString(36)}`;
+  const nativeAttemptIdentities = new Map<string, { nativeAttemptId: string; generation: number }>();
+  let nativeAttemptGeneration = 0;
+  const nativeAttemptIdentityFor = (
+    session: string,
+    toolCallId: string,
+    sourceIndex: number,
+  ): { nativeAttemptId: string; generation: number } | undefined => {
+    if (!Number.isInteger(sourceIndex) || sourceIndex < 0) return undefined;
+    const key = JSON.stringify([session, toolCallId, sourceIndex]);
+    let identity = nativeAttemptIdentities.get(key);
+    if (identity === undefined) {
+      nativeAttemptGeneration += 1;
+      identity = {
+        nativeAttemptId: `${nativeExecutionEpoch}:${nativeAttemptGeneration}`,
+        generation: nativeAttemptGeneration,
+      };
+      nativeAttemptIdentities.set(key, identity);
+    }
+    return identity;
+  };
   const workerObserverExpiry = new Map<string, NodeJS.Timeout>();
   const disposeWorkerObserver = (key: string): void => {
     const expiry = workerObserverExpiry.get(key);
@@ -1114,6 +1145,21 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     const intent: "read_only" | "mutating" =
       !readOnlyAgent || requested === "mutating" || escalates ? "mutating" : "read_only";
     return { intent, source: requested === undefined ? "derived" : "declared" };
+  };
+
+  /**
+   * Which settlement source can observe an admitted attempt:
+   *  - `host_api`: the patched host's `ctx.observeAsyncJobLifecycle` observer;
+   *  - `native_lifecycle`: stock hosts that publish `task:subagent:lifecycle`
+   *    frames and a read-only async-job snapshot;
+   *  - `null`: neither exists, so mutating dispatch must stay refused.
+   */
+  const settlementSourceFor = (ctx: ExtensionContext): "host_api" | "native_lifecycle" | null => {
+    if (typeof ctx.observeAsyncJobLifecycle === "function") return "host_api";
+    if (typeof pi.events?.on === "function" && typeof ctx.getAsyncJobSnapshot === "function") {
+      return "native_lifecycle";
+    }
+    return null;
   };
 
   const releaseUndispatchedAdmission = async (
@@ -1361,7 +1407,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       workerAccess.push(classified);
     }
     const hasMutating = workerAccess.some((entry) => entry.intent === "mutating");
-    if (hasMutating && typeof ctx.observeAsyncJobLifecycle !== "function") {
+    const settlementSource = hasMutating ? settlementSourceFor(ctx) : null;
+    if (hasMutating && settlementSource === null) {
       return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
     }
     const projectId = resolvedProjectIdForSession(session) ?? resolveProject();
@@ -1502,19 +1549,61 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
     }
     if (hasMutating) {
-      const disposer = ctx.observeAsyncJobLifecycle?.(
-        (observation) => {
-          const admission = workerAdmissionsBySource.get(
-            JSON.stringify([session, event.toolCallId, observation.sourceIndex]),
-          );
-          if (!admission || admission.accessIntent !== "mutating") return false;
-          admission.callbackChain = admission.callbackChain
-            .catch(() => false)
-            .then(() => observeWorkerAttempt(admission, observation, ctx));
-          return admission.callbackChain;
-        },
-        { sourceToolCallId: event.toolCallId },
-      );
+      const observe = (observation: Readonly<AsyncJobLifecycleObservation>) => {
+        const admission = workerAdmissionsBySource.get(
+          JSON.stringify([session, event.toolCallId, observation.sourceIndex]),
+        );
+        if (!admission || admission.accessIntent !== "mutating") return false;
+        admission.callbackChain = admission.callbackChain
+          .catch(() => false)
+          .then(() => observeWorkerAttempt(admission, observation, ctx));
+        return admission.callbackChain;
+      };
+      const hostObserver = ctx.observeAsyncJobLifecycle;
+      let disposer: (() => void) | undefined;
+      if (settlementSource === "host_api" && typeof hostObserver === "function") {
+        disposer = hostObserver(observe, { sourceToolCallId: event.toolCallId });
+      } else if (settlementSource === "native_lifecycle") {
+        // Stock hosts expose no attempt-scoped observer API; derive the same facts
+        // from the supported lifecycle frames plus the read-only job snapshot.
+        const events = pi.events;
+        const snapshot = ctx.getAsyncJobSnapshot;
+        if (typeof events?.on === "function" && typeof snapshot === "function") {
+          disposer = createNativeSettlementObserver({
+            sourceToolCallId: event.toolCallId,
+            source: {
+              subscribe: (handler) => {
+                const bus = pi.events;
+                if (typeof bus?.on !== "function") return () => {};
+                const detach = bus.on(NATIVE_SUBAGENT_LIFECYCLE_CHANNEL, (frame: unknown) =>
+                  handler((frame ?? {}) as NativeSubagentLifecycleFrame),
+                );
+                return typeof detach === "function" ? detach : () => {};
+              },
+              snapshot: () => {
+                try {
+                  return (snapshot.call(ctx, { recentLimit: 20 }) ?? null) as NativeAsyncJobSnapshot | null;
+                } catch {
+                  return null;
+                }
+              },
+            },
+            attemptIdentity: (sourceIndex) =>
+              nativeAttemptIdentityFor(session, event.toolCallId, sourceIndex),
+            emit: async (observation) => observe(observation),
+            onUnresolved: (detail) => {
+              getStore(session)?.append(
+                ompRoutingRecord("omp_worker_settlement_unresolved", session, {
+                  toolCallId: event.toolCallId,
+                  sourceIndex: detail.sourceIndex,
+                  agentId: detail.agentId,
+                  reason: detail.reason,
+                }),
+              );
+            },
+          });
+        }
+      }
       if (!disposer) {
         await Promise.all(
           preparedAdmissions.map((admission) =>
