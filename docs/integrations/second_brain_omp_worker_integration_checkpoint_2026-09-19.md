@@ -385,3 +385,20 @@ not left as an accident - before hashes are recorded as final.
 Rule carried forward: measure endings per file before applying reviewer patch text,
 apply with the file's own ending, and confirm the byte count changed as expected;
 never assume a string replace matched because the command exited zero.
+
+## Adapter requirement: per-subscription group lifetime (reviewer)
+
+Each task-tool subscription needs ONE lifetime promise covering every prepared
+mutating admission of that call. Every returned snapshot callback carries that
+promise, and the registered disposer resolves it only when all of those exact
+admissions have `cleanupAccepted`; otherwise it rejects, including on expiry.
+
+Why it is required: without it, a mixed batch - one accepted/observed writer plus
+one writer whose observations never arrived - can still look successfully drained.
+That is the partial-evidence-read-as-complete class again, this time at batch
+granularity.
+
+Boundary preserved: this is NOT isolation cleanup. `observeWorkerAttempt` still
+publishes and performs its RPC normally and does not await the group lifetime, so
+no cleanup/RPC cycle is introduced. The group lifetime is session-owned observer
+work, drained by the fence described above - never registered as native cleanup.
