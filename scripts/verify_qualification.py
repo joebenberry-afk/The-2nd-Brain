@@ -29,6 +29,7 @@ from second_brain import __version__, build_identity, contracts, db  # noqa: E40
 
 MANIFEST_SCHEMA_VERSION = 2
 EVIDENCE_SCHEMA_VERSION = 1
+RELEASE_SCOPE_SCHEMA_VERSION = 1
 QUALIFICATION_AUTHORITY = "docs/superpowers/plans/2026-09-02-second-brain-v2-implementation.md"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -458,6 +459,72 @@ def _authority_gate_hashes() -> tuple[dict[tuple[str, str], str], list[str]]:
     }, []
 
 
+def load_release_scope(path: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    """Load a versioned release-scope overlay that retires scope-specific Gate clauses.
+
+    The overlay never rewrites the canonical requirement authority: it names the Gate
+    clauses that the authorized release scope does not require, and the verifier then
+    adjudicates completeness against the remaining clauses only. Retired clauses are not
+    treated as proven.
+    """
+    errors: list[str] = []
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, [f"release scope is unavailable: {exc}"]
+    if not isinstance(value, dict):
+        return None, ["release scope root must be an object"]
+    if value.get("schema_version") != RELEASE_SCOPE_SCHEMA_VERSION:
+        errors.append(
+            f"release scope schema_version must be {RELEASE_SCOPE_SCHEMA_VERSION}, "
+            f"got {value.get('schema_version')!r}"
+        )
+    for field in ("scope_id", "supersedes", "authority", "authorized_by", "change_record"):
+        if not isinstance(value.get(field), str) or not value[field].strip():
+            errors.append(f"release scope {field} must be a non-empty string")
+    if value.get("authority") != QUALIFICATION_AUTHORITY:
+        errors.append("release scope must retain the canonical requirement authority")
+    retired = value.get("retired_gates")
+    if not isinstance(retired, dict) or not retired:
+        errors.append("release scope retired_gates must be a non-empty object")
+    else:
+        for key_text, gate_ids in retired.items():
+            key = tuple(str(key_text).split("/", 1))
+            if not (isinstance(key_text, str) and len(key) == 2 and key in _EXPECTED_SET):
+                errors.append(f"release scope names unknown requirement {key_text!r}")
+                continue
+            if not (
+                isinstance(gate_ids, list)
+                and gate_ids
+                and all(isinstance(item, str) and item for item in gate_ids)
+            ):
+                errors.append(
+                    f"release scope {key_text!r} retired gates must be a non-empty list of strings"
+                )
+                continue
+            known = set(REQUIRED_GATE_COVERAGE[key])  # type: ignore[index]
+            unknown = sorted(set(gate_ids) - known)
+            if unknown:
+                errors.append(f"release scope {key_text!r} retires unknown Gate clauses {unknown}")
+            if len(set(gate_ids)) != len(gate_ids):
+                errors.append(f"release scope {key_text!r} retires a Gate clause twice")
+            if not known - set(gate_ids):
+                errors.append(f"release scope {key_text!r} cannot retire every Gate clause")
+    return (value if not errors else None), errors
+
+
+def _scoped_required(scope: dict[str, Any] | None, key: tuple[str, str]) -> frozenset[str]:
+    """Return the Gate clauses the release scope still requires for one requirement."""
+    required = set(REQUIRED_GATE_COVERAGE[key])  # type: ignore[index]
+    if scope is not None:
+        retired = scope.get("retired_gates")
+        if isinstance(retired, dict):
+            clauses = retired.get(f"{key[0]}/{key[1]}", [])
+            if isinstance(clauses, list):
+                required -= {item for item in clauses if isinstance(item, str)}
+    return frozenset(required)
+
+
 def _load_json_artifact(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -828,7 +895,9 @@ def check_manifest(
     return check("qualification_manifest", not errors, details), manifest
 
 
-def check_qualification_ledger(home: Path, manifest: dict[str, Any] | None) -> dict[str, Any]:
+def check_qualification_ledger(
+    home: Path, manifest: dict[str, Any] | None, scope: dict[str, Any] | None = None
+) -> dict[str, Any]:
     try:
         conn = db.connect(db.db_path(home), readonly=True)
         try:
@@ -840,7 +909,7 @@ def check_qualification_ledger(home: Path, manifest: dict[str, Any] | None) -> d
             conn.close()
     except sqlite3.Error as exc:
         return check("qualification_ledger", False, {"errors": [str(exc)]})
-    return validate_qualification_rows(home, manifest, [dict(row) for row in rows])
+    return validate_qualification_rows(home, manifest, [dict(row) for row in rows], scope)
 
 
 def load_candidate_records(home: Path, records_path: Path) -> list[dict[str, Any]]:
@@ -875,7 +944,10 @@ def load_candidate_records(home: Path, records_path: Path) -> list[dict[str, Any
 
 
 def validate_qualification_rows(
-    home: Path, manifest: dict[str, Any] | None, records: list[dict[str, Any]]
+    home: Path,
+    manifest: dict[str, Any] | None,
+    records: list[dict[str, Any]],
+    scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate supplied rows using the same release requirements as the ledger."""
     errors: list[str] = []
@@ -928,6 +1000,8 @@ def validate_qualification_rows(
     errors.extend(gate_errors)
     proven_count = 0
     coverage_complete_count = 0
+    scoped_gate_total = 0
+    scoped_gate_covered = 0
     validated_bindings: list[dict[str, Any]] = []
 
     for key in EXPECTED_REQUIREMENTS:
@@ -1026,7 +1100,9 @@ def validate_qualification_rows(
                             in artifact_coverage
                         ):
                             governed_promotion_bound = True
-        missing_coverage = sorted(set(REQUIRED_GATE_COVERAGE[key]) - covered)
+        missing_coverage = sorted(_scoped_required(scope, key) - covered)
+        scoped_gate_total += len(_scoped_required(scope, key))
+        scoped_gate_covered += len(_scoped_required(scope, key) & covered)
         if missing_coverage:
             errors.append(
                 f"qualification {key!r} is missing authoritative Gate coverage: {missing_coverage}"
@@ -1063,6 +1139,16 @@ def validate_qualification_rows(
             "proven_count": proven_count,
             "coverage_complete_count": coverage_complete_count,
             "validated_evidence_bindings": list(unique_bindings.values()),
+            "release_scope_id": (scope or {}).get("scope_id"),
+            "retired_gates": (scope or {}).get("retired_gates") or {},
+            "retired_gate_count": sum(
+                len(items)
+                for items in ((scope or {}).get("retired_gates") or {}).values()
+                if isinstance(items, list)
+            ),
+            "retired_gates_counted_as_passed": False,
+            "scoped_gate_count": scoped_gate_total,
+            "scoped_gate_covered": scoped_gate_covered,
             "errors": errors,
         },
     )
@@ -1092,8 +1178,15 @@ def _safe_check(name: str, operation: Callable[[], dict[str, Any]]) -> dict[str,
 
 
 def verify_all(
-    home: Path, manifest_path: Path | None = None, records_path: Path | None = None
+    home: Path,
+    manifest_path: Path | None = None,
+    records_path: Path | None = None,
+    scope_path: Path | None = None,
 ) -> dict[str, Any]:
+    release_scope: dict[str, Any] | None = None
+    scope_errors: list[str] = []
+    if scope_path is not None:
+        release_scope, scope_errors = load_release_scope(scope_path)
     try:
         manifest_check, manifest = check_manifest(home, manifest_path)
     except Exception as exc:
@@ -1106,10 +1199,10 @@ def verify_all(
     ledger_check = _safe_check(
         "qualification_ledger",
         lambda: (
-            check_qualification_ledger(home, manifest)
+            check_qualification_ledger(home, manifest, release_scope)
             if records_path is None
             else validate_qualification_rows(
-                home, manifest, load_candidate_records(home, records_path)
+                home, manifest, load_candidate_records(home, records_path), release_scope
             )
         ),
     )
@@ -1121,6 +1214,8 @@ def verify_all(
         ledger_check,
         _safe_check("privacy_absence", check_privacy_absence),
     ]
+    if scope_path is not None:
+        results.append(check("release_scope", not scope_errors, {"errors": scope_errors}))
     ok = all(result["ok"] for result in results)
     remaining: list[str] = []
     for result in results:
@@ -1145,6 +1240,24 @@ def verify_all(
         "remaining_prerequisites": remaining,
         "verifier": "scripts/verify_qualification.py",
         "verifier_sha256": _sha256_file(Path(__file__)),
+        "release_scope": {
+            "path": str(scope_path.resolve()) if scope_path is not None else None,
+            "sha256": (
+                _sha256_file(scope_path)
+                if scope_path is not None and scope_path.is_file()
+                else None
+            ),
+            "scope_id": (release_scope or {}).get("scope_id"),
+            "supersedes": (release_scope or {}).get("supersedes"),
+            "retired_gates": (release_scope or {}).get("retired_gates") or {},
+            "retired_gate_count": sum(
+                len(items)
+                for items in ((release_scope or {}).get("retired_gates") or {}).values()
+                if isinstance(items, list)
+            ),
+            "retired_gates_counted_as_passed": False,
+            "errors": scope_errors,
+        },
         "source_commit": manifest_source,
         "current_source_commit": current_source,
         "source_tree_sha256": _source_tree_fingerprint(),
@@ -1196,9 +1309,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--out", type=Path, default=None, help="Output destination")
     parser.add_argument("--home", type=Path, default=REPO_ROOT, help="Brain home directory")
+    parser.add_argument(
+        "--scope",
+        type=Path,
+        default=None,
+        help="Versioned release-scope overlay that retires scope-specific Gate clauses",
+    )
     args = parser.parse_args(argv)
 
-    result = verify_all(Path(args.home).resolve(), args.manifest, args.records)
+    result = verify_all(Path(args.home).resolve(), args.manifest, args.records, args.scope)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")

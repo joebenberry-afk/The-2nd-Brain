@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "scope_id": "v2-omp-only",
+  "supersedes": "v2-universal-control-plane",
+  "authority": "docs/superpowers/plans/2026-09-02-second-brain-v2-implementation.md",
+  "authorized_by": "User authorization, 2026-09-19: the current v2 release supports and qualifies Oh My Pi only; other harnesses are out of scope for this release.",
+  "change_record": "docs/integrations/Second_Brain_v2_OMP_Only_Release_Contract_2026-09-19.md",
+  "historical_record": {
+    "contract": "v2-universal-control-plane (74 Gate clauses)",
+    "last_verdict": "outputs/reports/omp-qualification-assembly-20260919/strict-verdict.json",
+    "verdict_status": "HOLD",
+    "covered_at_revision": "67/74 Gate clauses"
+  },
+  "retired_gates": {
+    "control-plane/universal_control_plane": [
+      "limited_to_rich_preserves_decisions",
+      "limited_to_rich_preserves_evidence",
+      "limited_to_rich_preserves_unresolved_work",
+      "rich_to_limited_preserves_decisions",
+      "rich_to_limited_preserves_evidence",
+      "rich_to_limited_preserves_unresolved_work"
+    ]
+  },
+  "retained_gate_note": "control-plane retains adapter_owns_no_canonical_state, false_capabilities_rejected, no_mock_host_substitution and unavailable_hosts_reported_unavailable: these are OMP-installed-host obligations that never required a second harness.",
+  "retired_gate_note": "The six retired clauses are the rich-to-limited and limited-to-rich handoff clauses; each is satisfied only by exercising a second, differently-capable harness, which this release scope excludes. They are removed from the required set, never counted as proven.",
+  "preserved_obligations": [
+    "OMP restart/resume and session continuity",
+    "compaction and within-OMP handoff (including worker context handoff)",
+    "canonical state integrity and adapter/core separation",
+    "independent review of evidence",
+    "worker admission, ownership, cancellation, settlement and rollback",
+    "economics, recovery, security and burn-in evidence, with economics preserved as INSUFFICIENT at n=2",
+    "terminal release gate: no v2 tag without a complete scoped Gate"
+  ]
+}
