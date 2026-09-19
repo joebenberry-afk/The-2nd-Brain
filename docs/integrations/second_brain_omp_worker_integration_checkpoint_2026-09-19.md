@@ -463,3 +463,26 @@ ownership gap. The fixes below are applied to the canary candidate.
   identities the review listed, then run A->B->C and its false-success twin.
   Latent-only items: the async check/use gap in `releaseWhenProven` /
   `releaseEligible`, and freezing/copying the barrier identity.
+
+## Fixture and terminal paths landed (2026-09-19, driver run)
+
+- Identity-bound hold: `awaitReleaseSignal()` reads the settlement's real
+  attemptId/generation, emits `isolation:hold-begin:<binding>` (agentId,
+  attemptId, generation, cleanupOperationId, holdFile) to the trace, refuses a
+  pre-existing hold prefix as a stale sentinel, waits for the exact
+  nonce-bound signal file, and rejects the original signal on timeout. Expiry
+  never becomes release, and no work is faked in place of real capture/commit/
+  cleanup.
+- Route gating: the hold gates the deferred release path, the direct cleanup
+  branch, the deferred-cleanup chain, and post-run capture in the main flow.
+- Terminal paths: a retained workspace, an early failure with no release path,
+  and a failure before a handle existed all reject the original signal instead
+  of leaving the canonical barrier pending forever; `acquisitionComplete` is no
+  longer claimed before acquisition.
+- Gate results: host lint 0 errors; host tests 35/35; adapter gates unchanged
+  (eslint, tsc, vitest 741/741).
+
+Still open before A->B->C: boundary qualification tests (retained producers
+after timed-out disposal, delayed RPC, refusal, successful reconciliation,
+double-unknown, mixed/no-observation calls), the executed-candidate manifest,
+then the demonstration and its false-success twin.
