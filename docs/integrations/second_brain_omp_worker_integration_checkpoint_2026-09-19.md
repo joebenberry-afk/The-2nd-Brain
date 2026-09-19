@@ -274,3 +274,23 @@ cleanupHandle()` (done) and keep throwing on `handle && retainWorkspace` (done).
 **Still to apply:** prefer settling `isolationRelease` from the deferred chain
 rather than adding a second barrier-settlement path, and drop the duplicate
 `trackCleanups` registration.
+
+## Corrected obligation rule and single settlement path
+
+Classification now follows THIS execution's acquired resources and registered
+work, never the route's name: `none` requires affirmative evidence that no
+handle was allocated and no cleanup work was registered, AND that the acquisition
+boundary was actually passed. Incomplete resource knowledge fails closed to
+`required`. The historical O1 result is preserved but no longer qualifies the
+corrected behaviour; its fixture has been re-expressed with per-execution
+evidence, and O7/O8 were added for the acquisition boundary and for the retired
+one-shot exemption.
+
+The deferred branch now drives `isolationRelease` from the deferred chain
+(`completion.then(isolationRelease.resolve, isolationRelease.reject)`) and the
+parallel barrier-settlement path was removed, so one canonical barrier and one
+settlement path remain.
+
+Still to apply: the reviewer's observer-ownership/drain patch (session-owned
+observer work drained after native cleanup and before postmortem.quit), with the
+constraint that the receipt promise is never registered as isolation cleanup.

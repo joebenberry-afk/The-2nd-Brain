@@ -24,7 +24,8 @@ beforeEach(() => resetBarriers());
 describe("cleanup obligation", () => {
 	test("O1 one-shot with no owned resources is authoritatively none and may release", async () => {
 		const requirement = classifyCleanupRequirement("one-shot", identity("one-shot"), {
-			isolationResources: 0,
+			acquisitionComplete: true,
+			isolationHandleAllocated: false,
 			registeredCleanupWork: 0,
 		});
 		expect(requirement.kind).toBe("none");
@@ -42,7 +43,8 @@ describe("cleanup obligation", () => {
 
 	test("O2 one-shot owning an isolation resource cannot be classified none", () => {
 		const requirement = classifyCleanupRequirement("one-shot", identity("one-shot"), {
-			isolationResources: 1,
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
 			registeredCleanupWork: 0,
 		});
 		expect(requirement.kind).toBe("required");
@@ -50,7 +52,8 @@ describe("cleanup obligation", () => {
 
 	test("O3 a required obligation with an unfinished barrier fails closed", async () => {
 		const requirement = classifyCleanupRequirement("deferred", identity("deferred"), {
-			isolationResources: 1,
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
 			registeredCleanupWork: 0,
 		});
 		if (requirement.kind !== "required") throw new Error("expected required");
@@ -69,7 +72,8 @@ describe("cleanup obligation", () => {
 	test("O4 deferred releases only through the exact resolved barrier", async () => {
 		const id = identity("deferred");
 		const requirement = classifyCleanupRequirement("deferred", id, {
-			isolationResources: 0,
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
 			registeredCleanupWork: 0,
 		});
 		if (requirement.kind !== "required") throw new Error("expected required");
@@ -84,11 +88,13 @@ describe("cleanup obligation", () => {
 
 	test("O5 a required obligation can never be downgraded to none", () => {
 		const required = classifyCleanupRequirement("deferred", identity("deferred"), {
-			isolationResources: 1,
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
 			registeredCleanupWork: 0,
 		});
 		const none = classifyCleanupRequirement("one-shot", identity("one-shot"), {
-			isolationResources: 0,
+			acquisitionComplete: true,
+			isolationHandleAllocated: false,
 			registeredCleanupWork: 0,
 		});
 		expect(() => assertNoDowngrade(required, none)).toThrow();
@@ -100,19 +106,41 @@ describe("classification idempotence (Astra finding 4)", () => {
 	test("O6 a second classification cannot downgrade a live obligation to none", () => {
 		const id = identity("one-shot");
 		const first = classifyCleanupRequirement("one-shot", id, {
-			isolationResources: 1,
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
 			registeredCleanupWork: 0,
 		});
 		expect(first.kind).toBe("required");
 		// A later evidence read that reports nothing must not downgrade the live
 		// obligation: the canonical barrier already exists for this identity.
 		const second = classifyCleanupRequirement("one-shot", id, {
-			isolationResources: 0,
+			acquisitionComplete: true,
+			isolationHandleAllocated: false,
 			registeredCleanupWork: 0,
 		});
 		expect(second.kind).toBe("required");
 		if (second.kind === "required" && first.kind === "required") {
 			expect(second.barrier).toBe(first.barrier);
 		}
+	});
+});
+
+describe("acquisition boundary (corrected rule)", () => {
+	test("O7 an execution that has not passed its acquisition boundary cannot be none", () => {
+		const requirement = classifyCleanupRequirement("one-shot", identity("one-shot"), {
+			acquisitionComplete: false,
+			isolationHandleAllocated: false,
+			registeredCleanupWork: 0,
+		});
+		expect(requirement.kind).toBe("required");
+	});
+
+	test("O8 retired route exemption: one-shot with an allocated handle is required", () => {
+		const requirement = classifyCleanupRequirement("one-shot", identity("one-shot"), {
+			acquisitionComplete: true,
+			isolationHandleAllocated: true,
+			registeredCleanupWork: 0,
+		});
+		expect(requirement.kind).toBe("required");
 	});
 });

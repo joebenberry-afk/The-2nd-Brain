@@ -249,8 +249,15 @@ export type CleanupRequirement =
 	| { kind: "required"; barrier: CleanupBarrier };
 
 export interface RouteEvidence {
-	/** Authoritative route facts, read from the route's own resource state. */
-	isolationResources: number;
+	/**
+	 * Affirmative per-execution facts, read from this execution's own resource
+	 * state AFTER its acquisition boundary. The route's name never participates:
+	 * a route that does not normally allocate can still acquire a handle upstream,
+	 * so `none` requires evidence that nothing was acquired or registered - and
+	 * evidence that the acquisition boundary has actually been passed.
+	 */
+	acquisitionComplete: boolean;
+	isolationHandleAllocated: boolean;
 	registeredCleanupWork: number;
 }
 
@@ -267,20 +274,20 @@ export function classifyCleanupRequirement(
 	if (BARRIERS.has(existingKey)) {
 		return { kind: "required", barrier: BARRIERS.get(existingKey) as CleanupBarrier };
 	}
-	if (evidence.isolationResources > 0 || evidence.registeredCleanupWork > 0) {
-		// This execution owns something; it cannot be classified as nothing.
+	if (evidence.isolationHandleAllocated || evidence.registeredCleanupWork > 0) {
 		return { kind: "required", barrier: barrierFor(identity, options) };
 	}
-	if (route === "one-shot" && evidence.isolationResources === 0 && evidence.registeredCleanupWork === 0) {
-		return {
-			kind: "none",
-			reason: "no-isolation-resources",
-			attemptId: identity.attemptId,
-			generation: Number(identity.generation),
-		};
+	if (evidence.acquisitionComplete !== true) {
+		// Missing or incomplete resource knowledge cannot establish `none`. A route
+		// that has not passed its acquisition boundary may still acquire work.
+		return { kind: "required", barrier: barrierFor(identity, options) };
 	}
-	// A route that can acquire isolation resources is never pre-classified as none.
-	return { kind: "required", barrier: barrierFor(identity, options) };
+	return {
+		kind: "none",
+		reason: "no-isolation-resources",
+		attemptId: identity.attemptId,
+		generation: Number(identity.generation),
+	};
 }
 
 /** Downgrading a required obligation to none is not a legal transition. */
