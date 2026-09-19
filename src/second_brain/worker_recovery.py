@@ -584,7 +584,10 @@ def release_interrupted_attempt(
     home: Path | str | None = None,
     *,
     attempt_id: str,
-    host_generation: int,
+    # Accepts the same input domain as recover_attempt and validates it through
+    # `_generation`: None and malformed values are refused, never treated as a
+    # wildcard or as generation 0.
+    host_generation: int | str | None,
     census_event_id: str,
     actor: str,
     dry_run: bool = True,

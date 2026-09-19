@@ -1,11 +1,12 @@
 import { type NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
 import { appendFileSync } from "node:fs";
 
-const __traceRoute = (step: string): void => {
+const __traceRoute = (step: string | (() => string)): void => {
 	const target = process.env.OM_CANARY_BOOT;
 	if (!target) return;
 	try {
-		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${step}\n`);
+		const text = typeof step === "function" ? step() : step;
+		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
 	} catch {
 		/* tracing must never affect execution */
 	}
@@ -21,6 +22,7 @@ const __identityRoute = (label: string): void => {
 	}
 };
 __identityRoute("worktree");
+export { __traceRoute as __testTraceRoute };
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -623,13 +625,15 @@ export async function cleanupIsolation(handle: IsolationHandle, traceContext?: s
 		__traceRoute(`cleanup:stop:ok:backend=${handle.backend}:ctx=${ctx}`);
 	} catch (err) {
 		failure = err;
-		let errorText = "unprintable";
-		try {
-			errorText = err instanceof Error ? err.message : String(err);
-		} catch {
-			/* trace formatting must never affect cleanup */
-		}
-		__traceRoute(`cleanup:stop:error:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`);
+		__traceRoute(() => {
+			let errorText = "unprintable";
+			try {
+				errorText = err instanceof Error ? String(err.message) : String(err);
+			} catch {
+				/* trace formatting must never affect cleanup */
+			}
+			return `cleanup:stop:error:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`;
+		});
 		logger.warn("isolation backend stop failed during cleanup", {
 			backend: handle.backend,
 			mergedDir: handle.mergedDir,
@@ -648,13 +652,15 @@ export async function cleanupIsolation(handle: IsolationHandle, traceContext?: s
 			__traceRoute(`cleanup:remove:ok:baseDir=${baseDir}:ctx=${ctx}`);
 		} catch (rmError) {
 			failure ??= rmError;
-			let errorText = "unprintable";
-			try {
-				errorText = rmError instanceof Error ? rmError.message : String(rmError);
-			} catch {
-				/* trace formatting must never affect cleanup */
-			}
-			__traceRoute(`cleanup:remove:error:baseDir=${baseDir}:ctx=${ctx}:error=${errorText}`);
+			__traceRoute(() => {
+				let errorText = "unprintable";
+				try {
+					errorText = rmError instanceof Error ? String(rmError.message) : String(rmError);
+				} catch {
+					/* trace formatting must never affect cleanup */
+				}
+				return `cleanup:remove:error:baseDir=${baseDir}:ctx=${ctx}:error=${errorText}`;
+			});
 			logger.warn("isolation directory removal failed during cleanup", {
 				backend: handle.backend,
 				baseDir,

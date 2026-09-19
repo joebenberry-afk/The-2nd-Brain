@@ -96,7 +96,7 @@ def _attempt(
 
 
 def _interrupted(home: Path, **kwargs: object) -> None:
-    base = dict(
+    base: dict[str, object] = dict(
         outcome=None, executor_settled=0, cleanup_complete=0, sequence=-1, state="SUBMITTED"
     )
     base.update(kwargs)

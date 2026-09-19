@@ -4637,7 +4637,7 @@ def cmd_worker_plane(args) -> int:
             print(_json.dumps(payload, indent=2))
         else:
             print(_json.dumps(payload, indent=2))
-        return
+        return 0
 
     if args.worker_plane_command == "reap":
         error = None

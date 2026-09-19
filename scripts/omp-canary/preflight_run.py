@@ -69,6 +69,12 @@ def schema_version(db: Path) -> int | None:
         conn.close()
 
 
+def clean_env() -> dict[str, str]:
+    """Environment for child Python processes: the corrupted user-level
+    PYTHONHOME/PYTHONPATH must never leak into fixture or Brain calls."""
+    return {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
+
+
 def run_brainctl(python: str, workdir: Path, home: Path, argv: list[str]) -> dict:
     result = subprocess.run(
         [python, "-m", "second_brain", *argv, "--home", str(home)],
@@ -76,10 +82,7 @@ def run_brainctl(python: str, workdir: Path, home: Path, argv: list[str]) -> dic
         capture_output=True,
         text=True,
         timeout=600,
-        env={
-            **{k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")},
-            "SECOND_BRAIN_HOME": str(home),
-        },
+        env={**clean_env(), "SECOND_BRAIN_HOME": str(home)},
     )
     return {
         "argv": argv,
@@ -134,7 +137,14 @@ def main() -> int:
         capture_output=True,
         text=True,
         timeout=300,
+        env=clean_env(),
     )
+    pre_output = pre_test.stdout + pre_test.stderr
+    red_reason = "not-red"
+    if pre_test.returncode == 1 and "1 failed" in pre_output and "assert" in pre_output:
+        red_reason = "assertion-failure"
+    elif pre_test.returncode != 0:
+        red_reason = f"unexpected-exit-{pre_test.returncode}"
 
     db = home / "db" / "brain.sqlite"
     payload = {
@@ -162,7 +172,8 @@ def main() -> int:
             "exit_code": pre_test.returncode,
             "stdout_tail": pre_test.stdout[-800:],
             "stderr_tail": pre_test.stderr[-400:],
-            "red": pre_test.returncode != 0,
+            "red": red_reason == "assertion-failure",
+            "red_reason": red_reason,
         },
         "actions": actions,
     }
