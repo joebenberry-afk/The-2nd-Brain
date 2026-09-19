@@ -2443,10 +2443,14 @@ export class AgentSession {
 			});
 			return undefined;
 		} catch (error) {
+			let errorText = "unprintable";
+			try {
+				errorText = error instanceof Error ? error.message : String(error);
+			} catch {
+				/* trace formatting must never affect drain behavior */
+			}
 			traceDrain(
-				`observer-drain:abandoned:reason=${
-					error instanceof Error ? error.message : String(error)
-				}:remaining=${this.#settlementObserverDrains.size}`,
+				`observer-drain:abandoned:reason=${errorText}:remaining=${this.#settlementObserverDrains.size}`,
 			);
 			logger.warn("Attempt settlement observer drain incomplete", {
 				at: Date.now(), producersComplete, reason: String(error),

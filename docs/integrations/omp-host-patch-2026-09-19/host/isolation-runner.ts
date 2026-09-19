@@ -400,10 +400,14 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					await cleanupIsolation(handle);
 					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}`);
 				} catch (error) {
+					let errorText = "unprintable";
+					try {
+						errorText = error instanceof Error ? error.message : String(error);
+					} catch {
+						/* trace formatting must never affect cleanup */
+					}
 					__traceIsolation(
-						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:error=${
-							error instanceof Error ? error.message : String(error)
-						}`,
+						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:error=${errorText}`,
 					);
 					throw error;
 				}
@@ -549,10 +553,14 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			);
 		} catch (error) {
 			settleBarrier(cleanupBarrier, { ok: false, error });
+			let errorText = "unprintable";
+			try {
+				errorText = error instanceof Error ? error.message : String(error);
+			} catch {
+				/* trace formatting must never affect settlement */
+			}
 			__traceIsolation(
-				`barrier:settled:${barrierIdentityText}:state=rejected:error=${
-					error instanceof Error ? error.message : String(error)
-				}`,
+				`barrier:settled:${barrierIdentityText}:state=rejected:error=${errorText}`,
 			);
 		}
 	})();
