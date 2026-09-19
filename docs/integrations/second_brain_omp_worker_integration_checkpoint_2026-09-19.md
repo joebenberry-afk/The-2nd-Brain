@@ -75,3 +75,34 @@ false and ownership stays **protected**.
 - Item-only isolation normalization: upstream behaviour is correct; the earlier
   loss was local instrumentation, restored; regression 4 pass with no seam.
 - Production profile untouched; no push, tag or publication.
+
+## Independent review payload (preserved verbatim)
+
+`docs/integrations/astra_worker_integration_review_2026-09-19.json` — the
+independent reviewer's structured audit, preserved unedited so integration needs
+no re-derivation:
+
+- `q1_verdict`: `ONLY_ACCEPTED_OUTCOME_RECONCILIATION` — settlement reconciliation
+  is supported; the interrupted-ownership release path was judged not yet safe,
+  with four named defects: a resource list inferred from existing attestations
+  cannot detect an omitted resource; a missing generation can match a missing
+  generation; generation `0` is collapsed by truthiness; and the transition
+  consumes the host lifecycle sequence.
+- `q1_patch_text` (~20 KB): exact replacement text for `worker_recovery.py` —
+  `_generation`, `_interrupted_row`, `_inventory_binding`, `_write_recovery_event`,
+  a census recorder, and replacements for `release_interrupted_attempt()` and
+  `recover()`. The contract it enforces: a separately recorded **complete**
+  resource census (operator inspection with method and observation, never a
+  fabricated host inventory) whose resource set the release request cannot
+  shrink; a census without evidence of completeness must not be recorded; no new
+  table or dependency.
+- `q1_tests`: 3 focused cases.
+- `q2_patch_text` (~8 KB): the barrier patch bridging one promise from the actual
+  cleanup success/rejection, with timeout and a stale sentinel failing closed.
+- `required_evidence_for_abc`: 8 items the A→B→C run must capture.
+- `risks_or_false_success_paths`: 11 named risks.
+
+Reviewer's explicit constraint on the interrupted row: if its `host_generation`
+is NULL, the strict contract **refuses** release; an independently preserved
+launch/binding record identifying that exact attempt and generation is required
+first. Neither an operator-selected generation nor `None == None` establishes it.
