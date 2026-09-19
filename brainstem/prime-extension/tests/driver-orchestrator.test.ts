@@ -80,6 +80,9 @@ describe("resolveAgentRole — precedence and matching", () => {
     expect(resolveAgentRole(LUNA, cfg, HARD)).toBe("driver");
     expect(resolveAgentRole("openai-codex/GPT-5.6-LUNA", cfg, HARD)).toBe("driver"); // case-insensitive
     expect(resolveAgentRole("openai-codex/gpt-6-astra", cfg, HARD)).toBe("driver");
+    // Bare DeepSeek Flash (deployed driver model in the OMP host) — must not be
+    // confused with the worker-class "deepseek-v4-flash" substring.
+    expect(resolveAgentRole("deepseek/deepseek-flash", cfg, HARD)).toBe("driver");
   });
 
   it("keeps an explicit driver allowlist authoritative for Astra", () => {
