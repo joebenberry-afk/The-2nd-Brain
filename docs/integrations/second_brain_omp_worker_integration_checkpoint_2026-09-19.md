@@ -371,3 +371,17 @@ RPC while that RPC requires native cleanup to finish - stays closed.
 Status: design accepted; patch text still to be applied. Root fence
 (dispose + immediate waitForAll) remains grounded and is retained as the
 fallback ordering guarantee if the retained-map fence lands after it.
+
+## Line-ending constraint on patch application and sealing
+
+The reviewer verified that the target host files are CRLF in the working tree, so
+anchors and replacements must carry explicit `\r\n`; an LF-only verbatim replace
+would silently fail to match. This matters twice over: for faithful application of
+its change set, and for the seal, where the recorded identity must be the exact
+bytes that ship. The driver's own patches wrote LF-normalised content into some
+files, so a mixed-ending state is possible and must be normalised deliberately -
+not left as an accident - before hashes are recorded as final.
+
+Rule carried forward: measure endings per file before applying reviewer patch text,
+apply with the file's own ending, and confirm the byte count changed as expected;
+never assume a string replace matched because the command exited zero.
