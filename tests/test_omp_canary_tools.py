@@ -201,12 +201,14 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     user_config.write_text("# user settings\n", encoding="utf-8")
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir(exist_ok=True)
+    profile_agent_dir = profile_dir / "agent"
+    profile_agent_dir.mkdir(exist_ok=True)
 
     roles = {
         "executable-bun": bun,
         "executable-cli-entry": cli,
         "configuration-canary-package": package,
-        "configuration-user": user_config,
+        "configuration-default-profile-user": user_config,
         "adapter-index": extension,
         "launcher": launcher,
         "watcher": watcher,
@@ -219,9 +221,21 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                 "required_roles": list(roles),
                 "configuration_contract": {
                     "profile": "canary-settlement",
+                    "home_dir": str(Path.home()),
                     "profile_dir": str(profile_dir),
-                    "user_config_file": str(user_config),
-                    "forbidden_env": ["PI_CONFIG_FILES"],
+                    "profile_agent_dir": str(profile_agent_dir),
+                    "profile_config_files": [
+                        {"name": "config.yml", "expects": "absent"},
+                        {"name": "config.yaml", "expects": "absent"},
+                        {"name": "settings.json", "expects": "absent"},
+                    ],
+                    "default_profile_user_config": str(user_config),
+                    "forbidden_env": [
+                        "PI_CONFIG_DIR",
+                        "PI_CONFIG_FILES",
+                        "OMP_PROFILE",
+                        "PI_PROFILE",
+                    ],
                     "forbidden_argv_flags": ["--config"],
                     "forbidden_project_overlays": [".omp/config.yml", ".claude/settings.yml"],
                 },
@@ -277,6 +291,7 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
         "trace_file": str(tmp_path / "boot.txt"),
         "fixture_identity": {str(calc): _sha256(calc)},
         "argv": ["bun", "cli", "--profile", "canary-settlement", "-e", str(extension)],
+        "_profile_agent_dir": str(profile_agent_dir),
     }
 
 
@@ -372,6 +387,26 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
     assert result["all_bound"] is False
     assert "configuration:forbidden-env" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-forbidden-config-dir"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+        "PI_CONFIG_DIR": ".astra-round5-nonexistent-config-root",
+    }
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-env" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    agent_config = Path(spec["_profile_agent_dir"]) / "config.yml"
+    agent_config.write_text("modelRoles: {}\n", encoding="utf-8")
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "configuration:profile-config:config.yml" in result["mismatched"]
 
     spec = _complete_binding_spec(tmp_path)
     spec["argv"] = spec["argv"] + ["--config", str(tmp_path / "overlay.yml")]
@@ -478,6 +513,13 @@ def test_tracked_identity_inventory_matches_live_files() -> None:
         import pytest
 
         pytest.skip(f"profile directory unavailable: {contract['profile_dir']}")
+    if contract.get("profile_agent_dir") and Path(contract["profile_agent_dir"]).is_dir():
+        for item in contract.get("profile_config_files", []):
+            if item.get("expects") == "absent":
+                assert not (Path(contract["profile_agent_dir"]) / str(item["name"])).exists(), (
+                    "unbound profile config present; refresh the contract deliberately: "
+                    f"{item['name']}"
+                )
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:

@@ -251,15 +251,60 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         bool(expected_profile) and profile == expected_profile,
         {"expected": expected_profile, "actual": profile},
     )
+    # The config root is derived from the user home; a changed HOME/USERPROFILE
+    # moves every effective settings path even though absolute contract paths
+    # still exist.
+    expected_home = contract.get("home_dir")
+    home_dir_ok = (
+        bool(expected_home) and Path(str(expected_home)).resolve() == Path.home().resolve()
+    )
+    contract_check(
+        "home-dir",
+        home_dir_ok,
+        {
+            "expected": expected_home,
+            "python_home": str(Path.home()),
+            "USERPROFILE": env.get("USERPROFILE"),
+        },
+    )
     profile_dir = contract.get("profile_dir")
     contract_check("profile-dir", bool(profile_dir) and Path(profile_dir).is_dir(), profile_dir)
-    user_config_file = contract.get("user_config_file")
+
+    # The named profile resolves to <profile_dir>/agent; its main config files
+    # (config.yml, config.yaml, settings.json) alter effective settings, so each
+    # must be absent unless the contract deliberately binds it.
+    profile_agent_dir = contract.get("profile_agent_dir")
+    agent_dir_ok = (
+        bool(profile_agent_dir)
+        and bool(profile_dir)
+        and Path(str(profile_agent_dir)).resolve() == (Path(str(profile_dir)) / "agent").resolve()
+        and Path(str(profile_agent_dir)).is_dir()
+    )
+    contract_check("profile-agent-dir", agent_dir_ok, profile_agent_dir)
+    config_file_checks = []
+    for item in contract.get("profile_config_files", []):
+        name = item.get("name")
+        expects = item.get("expects")
+        path = Path(str(profile_agent_dir)) / str(name)
+        if expects == "absent":
+            ok = not path.exists()
+        else:
+            actual = sha256_file(path)
+            ok = actual is not None and actual.lower() == str(expects).lower()
+        config_file_checks.append({"file": str(path), "expects": expects, "ok": ok})
+        if not ok:
+            mismatched.append(f"configuration:profile-config:{name}")
+    contract_check(
+        "profile-config-files", all(item["ok"] for item in config_file_checks), config_file_checks
+    )
+
+    user_config_file = contract.get("default_profile_user_config")
     user_config_ok = bool(user_config_file) and any(
-        entry.get("role") == "configuration-user"
+        entry.get("role") == "configuration-default-profile-user"
         and Path(entry["path"]).resolve() == Path(str(user_config_file)).resolve()
         for entry in inventory.get("identities", [])
     )
-    contract_check("user-config-bound", user_config_ok, user_config_file)
+    contract_check("default-user-config-bound", user_config_ok, user_config_file)
     forbidden_env_hits = [name for name in contract.get("forbidden_env", []) if env.get(name)]
     contract_check("forbidden-env", not forbidden_env_hits, forbidden_env_hits)
     forbidden_flag_hits = [
