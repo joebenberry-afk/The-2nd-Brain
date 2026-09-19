@@ -1606,13 +1606,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               if (snapshot.capabilityVersion !== 1) return;
               const sourceIndex = snapshot.sourceIndex;
               if (sourceIndex === null) return;
-              const outcome: "completed" | "failed" | "cancelled" =
-                snapshot.outcome === "failed"
-                  ? "failed"
-                  : snapshot.outcome === "cancelled"
-                    ? "cancelled"
-                    : snapshot.outcome === "completed"
-                      ? "completed"
+              // No outcome may be reported before the host accepted a result: an
+              // unaccepted snapshot is still running work, and claiming completion
+              // there would mark the durable task COMPLETED ahead of acceptance.
+              const outcome: "completed" | "failed" | "cancelled" | "running" =
+                !snapshot.resultAccepted
+                  ? "running"
+                  : snapshot.outcome === "failed"
+                    ? "failed"
+                    : snapshot.outcome === "cancelled"
+                      ? "cancelled"
                       : "completed";
               const observation: AsyncJobLifecycleObservation = {
                 jobId: snapshot.jobId ?? snapshot.agentId,
