@@ -423,3 +423,43 @@ work, drained by the fence described above - never registered as native cleanup.
   each of the eight required evidence objects), plus the paired
   A->B-failure->not-C false-success twin. Then the R1-R12 race matrix,
   instrumentation removal, sealing, and fresh independent acceptance.
+
+## Readiness fixes after the live review (2026-09-19, driver run)
+
+The applied drain set passed the review as faithfully applied, but the review
+returned NOT READY for the A->B->C demonstration and named two blockers plus one
+ownership gap. The fixes below are applied to the canary candidate.
+
+- **Pre-acquisition obligation (blocker).** `isolation-runner.ts` classified
+  `{acquisitionComplete: true, isolationHandleAllocated: false,
+  registeredCleanupWork: 0}` before acquiring the handle, so a fresh identity
+  returned `none` and the route threw before isolation even started. It now
+  reuses the real settlement handle (`opts.baseOptions.settlement`), classifies
+  under that attempt's actual attemptId/generation, declares the cleanup
+  obligation it is registering (`registeredCleanupWork: 1`), and keeps the
+  required assertion. The barrier identity is no longer `agentId` + generation 0.
+- **Filtered-observation lifetime (P1).** A mixed call whose snapshots arrived
+  only for a read-only sibling returned `undefined`, so a rejected writer group
+  was invisible to the host drain. The filtered branch now returns the
+  subscription lifetime, which the host records as subscription work only -
+  never as a writer receipt and never as release authority.
+- **Host validation narrowed.** `observeAttemptSettlement` no longer re-checks
+  every tracked snapshot for `releasePermitted`. The returned subscription
+  promise already resolves only after every prepared writer's cleanup is proven
+  and rejects on incomplete detach/expiry; the removed loop mis-applied writer
+  validation to filtered read-only siblings and could false-fail a healthy
+  mixed call.
+- Gate results: adapter eslint clean, `tsc --noEmit` clean, vitest **741/741**
+  (new regression: "returns the subscription lifetime for a filtered read-only
+  sibling"); host `bun test tests/host-patch` 35/35. The canary `check:types`
+  script is unavailable here (`tsgo` not installed); oxlint on the edited host
+  files reports pre-existing warnings only.
+- Still open from the review, in order: finish the identity-bound cleanup
+  fixture (hold-begin/release-signal protocol, one-shot/fallback cleanup and
+  post-run capture gating, retained-path rejection of the original signal),
+  qualify the real host/adapter boundary (retained producers after timed-out
+  disposal, delayed RPC, refusal, successful reconciliation, double-unknown,
+  mixed/no-observation cases), refresh the executed-candidate manifest with the
+  identities the review listed, then run A->B->C and its false-success twin.
+  Latent-only items: the async check/use gap in `releaseWhenProven` /
+  `releaseEligible`, and freezing/copying the barrier identity.
