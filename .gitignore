@@ -68,4 +68,8 @@ Desktop.ini
 .repowise/
 .worktrees/
 
+# Campaign evidence (derived runtime captures, staged host copies, binaries and
+# archives). Canonical conclusions live under docs/; the raw tree stays on disk.
+outputs/reports/
+
 .coverage
