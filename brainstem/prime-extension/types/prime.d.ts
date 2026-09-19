@@ -94,7 +94,7 @@ export interface ExtensionContext {
    * true only after result acceptance and proven cleanup of every owned resource.
    */
   observeAttemptSettlement?(
-    observer: (snapshot: Readonly<AttemptSettlementSnapshot>) => void,
+    observer: (snapshot: Readonly<AttemptSettlementSnapshot>) => void | Promise<void>,
     options?: { sourceToolCallId?: string },
   ): (() => void) | undefined;
   getAttemptSettlement?(attemptId: string): AttemptSettlementSnapshot | null;
