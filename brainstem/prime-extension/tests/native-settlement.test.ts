@@ -72,6 +72,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     createNativeSettlementObserver({
       sourceToolCallId: "call-1",
       source: bus,
+      cleanupProvenByFrame: true,
       attemptIdentity: (index) =>
         index === 0 ? { nativeAttemptId: "epoch:1", generation: 1 } : undefined,
       emit: sink.emit,
@@ -104,6 +105,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     createNativeSettlementObserver({
       sourceToolCallId: "call-1",
       source: bus,
+      cleanupProvenByFrame: false,
       attemptIdentity: (index) =>
         index === 0 ? { nativeAttemptId: "epoch:1", generation: 1 } : undefined,
       emit: sink.emit,
@@ -124,6 +126,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     createNativeSettlementObserver({
       sourceToolCallId: "call-2",
       source: bus,
+      cleanupProvenByFrame: false,
       attemptIdentity: () => ({ nativeAttemptId: "epoch:2", generation: 2 }),
       emit: sink.emit,
     });
@@ -146,6 +149,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     createNativeSettlementObserver({
       sourceToolCallId: "call-3",
       source: bus,
+      cleanupProvenByFrame: false,
       attemptIdentity: () => ({ nativeAttemptId: "epoch:3", generation: 3 }),
       emit: sink.emit,
     });
@@ -163,6 +167,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     const dispose = createNativeSettlementObserver({
       sourceToolCallId: "call-4",
       source: bus,
+      cleanupProvenByFrame: false,
       attemptIdentity: () => ({ nativeAttemptId: "epoch:4", generation: 4 }),
       emit: sink.emit,
     });
@@ -197,6 +202,7 @@ describe("native settlement observer (stock OMP signals)", () => {
     createNativeSettlementObserver({
       sourceToolCallId: "call-5",
       source: bus,
+      cleanupProvenByFrame: false,
       attemptIdentity: () => ({ nativeAttemptId: "epoch:5", generation: 5 }),
       emit: async () => {
         failed.resolve();

@@ -404,7 +404,9 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(observed).toMatchObject({
       outcome: "completed",
       executorSettled: true,
-      cleanupComplete: true,
+      // Stock hosts detach late cleanup and expose no completion signal, so the
+      // default native path never claims cleanup it cannot prove.
+      cleanupComplete: false,
       sequence: 1,
     });
   });
