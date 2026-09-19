@@ -138,9 +138,10 @@ def read_schema_version(db: Path) -> int | None:
         return None
 
 
-def bind_required_identities(spec: dict, run_dir: Path) -> dict:
-    """Full binding gate: required roles, executed-spec paths, schema,
-    preflight record and fixture identities must all agree before spawn."""
+def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[str]) -> dict:
+    """Full binding gate derived from the ACTUAL spawn inputs: required roles,
+    executed paths, environment/profile consistency, schema, preflight record
+    and fixture identities must all agree before spawn."""
     identities_file = Path(spec["identities_file"])
     inventory = json.loads(identities_file.read_text(encoding="utf-8"))
     required_roles = list(inventory.get("required_roles", []))
@@ -173,37 +174,65 @@ def bind_required_identities(spec: dict, run_dir: Path) -> dict:
         if entry is None or entry.get("sha256") is None:
             missing.append(f"required-role:{role}")
 
-    executed = spec.get("executed") or {}
-    role_by_key = {
-        "bun": "executable-bun",
-        "cli_entry": "executable-cli-entry",
-        "extension": "adapter-index",
-        "launcher": "launcher",
-        "watcher": "watcher",
+    # Bindings are derived from the values the launcher will actually execute,
+    # never from a parallel declaration a spec could disagree with.
+    spawn_inputs = {
+        "executable-bun": [spec["bun"]],
+        "executable-cli-entry": [spec["cli"]],
+        "adapter-index": list(spec.get("extension", [])),
+        "launcher": [str(Path(__file__))],
+        "watcher": [spec["watcher_script"]],
+        "runtime-python": [spec["python"]],
     }
     executed_checks = []
-    for key, role in role_by_key.items():
-        expected_path = executed.get(key)
+    for role, actual_paths in spawn_inputs.items():
         entry = present_roles.get(role)
-        bound_path = Path(entry["path"]).resolve() if entry and entry.get("path") else None
+        bound = Path(entry["path"]).resolve() if entry and entry.get("path") else None
+        actual_resolved = [Path(item).resolve() for item in actual_paths]
         ok = (
-            bool(expected_path)
-            and entry is not None
+            entry is not None
             and entry.get("sha256") is not None
-            and bound_path is not None
-            and Path(expected_path).resolve() == bound_path
+            and len(actual_resolved) >= 1
+            and all(item == bound for item in actual_resolved)
         )
         executed_checks.append(
             {
-                "key": key,
                 "role": role,
-                "executed_path": expected_path,
-                "bound_path": str(bound_path) if bound_path else None,
+                "actual": [str(item) for item in actual_paths],
+                "bound": str(bound) if bound else None,
                 "ok": ok,
             }
         )
         if not ok:
-            mismatched.append(f"executed:{key}")
+            mismatched.append(f"spawn:{role}")
+
+    env_checks = []
+    for name, expected in (
+        ("SECOND_BRAIN_HOME", spec["home"]),
+        ("SECOND_BRAIN_PYTHON", spec["python"]),
+        ("OM_CANARY_BOOT", spec["trace_file"]),
+    ):
+        actual = env.get(name)
+        ok = actual == expected
+        env_checks.append({"name": name, "expected": expected, "actual": actual, "ok": ok})
+        if not ok:
+            mismatched.append(f"env:{name}")
+
+    profile = spec.get("profile")
+    profile_flag_ok = "--profile" in argv and argv[argv.index("--profile") + 1] == profile
+    extension_flags_ok = all(path in argv for path in spec.get("extension", []))
+    argv_checks = [
+        {"name": "profile-flag", "expected": profile, "ok": profile_flag_ok},
+        {
+            "name": "extension-flags",
+            "expected": list(spec.get("extension", [])),
+            "ok": extension_flags_ok,
+        },
+    ]
+    if not profile_flag_ok:
+        mismatched.append("argv:profile")
+    if not extension_flags_ok:
+        mismatched.append("argv:extension")
 
     schema_actual = read_schema_version(Path(spec["home"]) / "db" / "brain.sqlite")
     schema_ok = spec.get("schema_expected") is not None and schema_actual == spec.get(
@@ -260,11 +289,16 @@ def bind_required_identities(spec: dict, run_dir: Path) -> dict:
         "identities_file_sha256": sha256_file(identities_file),
         "required_roles": required_roles,
         "role_records": records,
-        "executed_checks": executed_checks,
+        "spawn_input_checks": executed_checks,
+        "env_checks": env_checks,
+        "argv_checks": argv_checks,
         "configuration": {
-            "profile": spec.get("profile"),
-            "argv": spec.get("argv"),
-            "environment_contract": spec.get("environment_contract"),
+            "profile": profile,
+            "argv": argv,
+            "effective_env": {
+                name: env.get(name)
+                for name in ("SECOND_BRAIN_HOME", "SECOND_BRAIN_PYTHON", "OM_CANARY_BOOT")
+            },
         },
         "schema": {
             "expected": spec.get("schema_expected"),
@@ -279,6 +313,21 @@ def bind_required_identities(spec: dict, run_dir: Path) -> dict:
         "boundary": "last-setup-boundary-before-spawn",
     }
     (run_dir / "identity-binding.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (run_dir / "effective-configuration.json").write_text(
+        json.dumps(
+            {
+                "profile": profile,
+                "argv": argv,
+                "extensions": list(spec.get("extension", [])),
+                "env": payload["configuration"]["effective_env"],
+                "spawn_inputs": spawn_inputs,
+                "schema_expected": spec.get("schema_expected"),
+                "fixture": spec.get("fixture"),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return payload
 
 
@@ -606,7 +655,7 @@ def main() -> int:
         # Last setup boundary: rehash and full identity binding immediately
         # before spawn. Any mismatch aborts with no child.
         state["rehash"] = rehash_bound_files(spec, run_dir)
-        state["binding"] = bind_required_identities(spec, run_dir)
+        state["binding"] = bind_required_identities(spec, run_dir, env, argv)
         if not state["rehash"]["all_match"] or not state["binding"]["all_bound"]:
             failure = {
                 "name": spec.get("name"),

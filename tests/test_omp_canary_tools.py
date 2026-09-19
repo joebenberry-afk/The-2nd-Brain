@@ -190,12 +190,13 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     cli.write_text("export {};", encoding="utf-8")
     extension = tmp_path / "index.ts"
     extension.write_text("export {};", encoding="utf-8")
-    launcher = tmp_path / "launch_run.py"
-    launcher.write_text("# launcher", encoding="utf-8")
+    launcher = TOOLS / "launch_run.py"  # the launcher binds its own executed file
     watcher = tmp_path / "db_watch.py"
     watcher.write_text("# watcher", encoding="utf-8")
     package = tmp_path / "package.json"
     package.write_text("{}", encoding="utf-8")
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"python")
 
     roles = {
         "executable-bun": bun,
@@ -204,6 +205,7 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
         "adapter-index": extension,
         "launcher": launcher,
         "watcher": watcher,
+        "runtime-python": python,
     }
     identities = tmp_path / "ids.json"
     identities.write_text(
@@ -254,16 +256,14 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
         "schema_expected": 24,
         "preflight_file": str(preflight),
         "profile": "canary-settlement",
-        "executed": {
-            "bun": str(bun),
-            "cli_entry": str(cli),
-            "extension": str(extension),
-            "launcher": str(launcher),
-            "watcher": str(watcher),
-        },
+        "bun": str(bun),
+        "cli": str(cli),
+        "extension": [str(extension)],
+        "watcher_script": str(watcher),
+        "python": str(python),
+        "trace_file": str(tmp_path / "boot.txt"),
         "fixture_identity": {str(calc): _sha256(calc)},
-        "argv": ["bun", "cli", "--profile", "canary-settlement"],
-        "environment_contract": {"HOME": "temp"},
+        "argv": ["bun", "cli", "--profile", "canary-settlement", "-e", str(extension)],
     }
 
 
@@ -271,7 +271,12 @@ def _bind(tmp_path: Path, spec: dict) -> dict:
     mod = _load("launch_run")
     run_dir = tmp_path / "run"
     run_dir.mkdir(exist_ok=True)
-    return mod.bind_required_identities(spec, run_dir)
+    env = {
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+    return mod.bind_required_identities(spec, run_dir, env, spec["argv"])
 
 
 def test_required_identity_binding_accepts_complete_spec(tmp_path: Path) -> None:
@@ -296,10 +301,35 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
     assert any(item.startswith("required-role:") for item in result["missing_or_null"])
 
     spec = _complete_binding_spec(tmp_path)
-    spec["executed"]["bun"] = str(tmp_path / "other-bun.exe")
+    spec["bun"] = str(tmp_path / "other-bun.exe")
     result = _bind(tmp_path, spec)
     assert result["all_bound"] is False
-    assert "executed:bun" in result["mismatched"]
+    assert "spawn:executable-bun" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["extension"] = [str(tmp_path / "other-extension.ts")]
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "spawn:adapter-index" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["argv"] = ["bun", "cli", "--profile", "other-profile", "-e", spec["extension"][0]]
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "argv:profile" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-env"
+    run_dir.mkdir(exist_ok=True)
+    mod = _load("launch_run")
+    env = {
+        "SECOND_BRAIN_HOME": str(tmp_path / "other-home"),
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "env:SECOND_BRAIN_HOME" in result["mismatched"]
 
     spec = _complete_binding_spec(tmp_path)
     spec["schema_expected"] = 25
@@ -361,6 +391,30 @@ def test_expectations_and_launcher_outcome_gate_evidence() -> None:
     assert mod.launcher_outcome(True, True, 3) == 3
     assert mod.launcher_outcome(False, True, 0) == 5
     assert mod.launcher_outcome(True, False, 0) == 4
+
+
+def test_tracked_identity_inventory_matches_live_files() -> None:
+    """The committed RUN-IDENTITIES.json must match the live bound files on this
+    machine; a stale inventory blocks the run by design (N1 class)."""
+    docs = (
+        Path(__file__).resolve().parents[1] / "docs" / "integrations" / "omp-host-patch-2026-09-19"
+    )
+    inventory = json.loads((docs / "RUN-IDENTITIES.json").read_text(encoding="utf-8"))
+    roles = [entry["role"] for entry in inventory["identities"]]
+    assert set(roles) == set(inventory["required_roles"]), "required roles must be listed exactly"
+    missing_on_disk = [
+        entry["path"] for entry in inventory["identities"] if not Path(entry["path"]).exists()
+    ]
+    if missing_on_disk:
+        import pytest
+
+        pytest.skip(f"canary/worktree bound paths unavailable: {missing_on_disk[:2]}")
+    for entry in inventory["identities"]:
+        assert entry["sha256"] is not None, entry["path"]
+        assert _sha256(Path(entry["path"])) == entry["sha256"], f"stale identity: {entry['path']}"
+    for line in (docs / "HASHES.txt").read_text(encoding="utf-8").splitlines():
+        digest, _, target = line.strip().partition(" ")
+        assert _sha256(Path(target.strip())) == digest, f"stale HASHES entry: {target}"
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:
