@@ -1,6 +1,7 @@
 {
   "schema": "second-brain.omp-qualification-run-manifest.v1",
   "generated_at": "2026-09-19",
+  "revision": "2026-09-19.2 (post first Astra review)",
   "purpose": "Run-specific identity binding for the evidence-complete qualification rerun. Overlays the frozen behavioral candidate with the instrumented, executed sources. Not a release claim.",
   "behavior_candidate": {
     "manifest": "docs/integrations/omp-host-patch-2026-09-19/CANDIDATE-MANIFEST.json",
@@ -9,29 +10,54 @@
   },
   "instrumentation": {
     "mode": "observational-only",
-    "rule": "OM_CANARY_BOOT-gated append-only traces; no new awaits, synchronization points, cleanup ordering, release eligibility, retries or timeout changes",
+    "rule": "OM_CANARY_BOOT-gated append-only traces; no new awaits, synchronization points, cleanup ordering, release eligibility, retries or timeout changes. Message construction, potentially throwing accessors, formatting and the append happen inside the guarded helper or inside a guarded thunk it resolves.",
     "acceptance_rule": "Astra must be able to state: instrumentation adds observations but introduces no new authority or dependency",
-    "commits": ["9556524", "7484240", "49f0cc5"],
-    "compliance_note": "trace-only message construction moved inside non-throwing guards after review found error-message formatting could throw before the guarded helper ran (accompanying commit)",
+    "commits": [
+      "9556524",
+      "7484240",
+      "49f0cc5",
+      "c69e9d6",
+      "d45b3ca",
+      "fe22464",
+      "cd8b73a"
+    ],
+    "repair_note": "cd8b73a closes the first Astra review (verdict NOT_READY): trace helpers resolve thunks inside the guarded boundary so a throwing diagnostic can no longer replace a cleanup error (I1); drain records producer-fence completion/unavailability, registration closure and final detach with post-detach cumulative counters, and flattens nested aggregate failures (D1-D3); retained-decision traces cover the patch-capture and nested-capture routes (P1); base-release outcomes are traced without changing propagation (P2). Tracked snapshots for the un-instrumented pre-instrumentation worktree.ts baseline do not exist; the review must treat the worktree physical-cleanup delta from source inspection of the trace-guarded additions.",
     "implemented": [
       "cleanup:start / cleanup:stop:ok|error (memoized cleanup outcome)",
+      "cleanup:base-release:ok|error around releaseBase (propagation unchanged)",
+      "cleanup:skipped:retainedWorkspace on the cleanupHandle retained branch and on the patch-capture-failed and nested-capture-failed routes",
       "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
-      "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown, retained decision covered by cleanup:skipped:retainedWorkspace)",
-      "observer-drain:start:pending / observer-drain:end:completed:rejected:remaining / observer-drain:abandoned:reason:remaining in the host session drain",
+      "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown)",
+      "observer-drain:start with pending, registration count, cumulative completed/rejected and registration-closure state",
+      "observer-drain:producer-fence:complete / producer-fence:unavailable / registrations-closed boundaries",
+      "observer-drain:end and observer-drain:abandoned with loop and cumulative counters and flattened nested failure text",
+      "observer-drain:detached with remainingAtDetach, post-detach map size and post-detach cumulative counters",
       "pre-quit:exitCode marker immediately before postmortem.quit",
-      "physical cleanup traces carry the exact barrier tuple as trace-only ctx= context (cleanup:start/stop, cleanup:stop/remove invoke|ok|error, retained), binding concurrent operations explicitly without affecting decisions"
+      "physical cleanup traces carry the exact barrier tuple as trace-only ctx= context (cleanup:start/stop, cleanup:stop/remove invoke|ok|error, retained), binding concurrent operations explicitly without affecting decisions",
+      "host test trace-safety.test.ts proves a throwing diagnostic thunk and an unwritable trace target cannot escape the guarded helper, and an absent target leaves the thunk unevaluated"
     ],
     "pending": [
-      "drain outcome refinements (observation-only): counters on abandoned drains, unavailable-observer representation, account for work completed before the drain snapshot",
-      "launcher-side exit capture (process start, PID, exit timestamp/code, run id)",
-      "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt",
-      "RUN-INDEX.json pointing at all raw evidence files",
-      "run_start_rehash populated immediately before launch"
+      "RUN-INDEX.json pointing at all raw evidence files (produced after the run)",
+      "executed run-start-rehash.json and identity-binding.json for the actual run (written by the launcher at the last boundary before spawn)",
+      "executed watcher snapshots, launch/exit record and session copies (produced by the run)"
     ]
   },
   "instrumented_identities": {
     "hashes_file": "docs/integrations/omp-host-patch-2026-09-19/HASHES.txt",
     "rule": "re-hash the live canary files at rerun start and record the comparison before launching; any mismatch fails setup"
+  },
+  "run_identity_inventory": {
+    "file": "docs/integrations/omp-host-patch-2026-09-19/RUN-IDENTITIES.json",
+    "rule": "the launcher validates every inventory entry (executable, observer/settlement-type, adapter, Brain, launcher/watcher, configuration) at the last setup boundary before spawn; missing/null/mismatched entries abort the launch. Fixture identities are validated from the preflight record; schema version and fixture hashes appear in preflight.json and the RUN-INDEX."
+  },
+  "launcher_watcher": {
+    "launcher": "scripts/omp-canary/launch_run.py",
+    "watcher": "scripts/omp-canary/db_watch.py",
+    "preflight": "scripts/omp-canary/preflight_run.py",
+    "post_exit_check": "scripts/omp-canary/post_exit_check.py",
+    "commit": "cd8b73a",
+    "ownership_rule": "the launcher spawns and reaps the real OMP child, captures pid/exit/timestamps, starts the watcher first and waits for its baseline acknowledgment, and stops and reaps the watcher after exit plus a bounded grace",
+    "watcher_rule": "read-only (URI mode=ro); state-1/state-2 are classified from the retained backup snapshot itself; a missed intermediate state is reported state_1_missing, never reconstructed"
   },
   "run_start_rehash": null,
   "canary": {
@@ -47,5 +73,5 @@
     "OM_CANARY_ISOLATION": "1",
     "OM_CANARY_HOLD_RELEASE_UNTIL": "identity-bound hold prefix (positive run only)"
   },
-  "status": "INCOMPLETE - remaining instrumentation pending; not yet the evidence-run manifest"
+  "status": "INCOMPLETE - evidence run not yet executed; binding artifacts must be produced and accepted before release"
 }
