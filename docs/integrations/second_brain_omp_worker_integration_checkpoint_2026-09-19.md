@@ -489,7 +489,27 @@ ownership gap. The fixes below are applied to the canary candidate.
   checks use lstat and require a regular signal file; `releaseBase` is
   documented as outside the gate.
 
-Still open before A->B->C: boundary qualification tests (retained producers
-after timed-out disposal, delayed RPC, refusal, successful reconciliation,
-double-unknown, mixed/no-observation calls), the executed-candidate manifest,
-then the demonstration and its false-success twin.
+### Boundary tests, delta verification and candidate manifest (same day)
+
+- Adapter boundary regressions added and green (vitest **744/744**): a single
+  lost acknowledgement reconciles successfully through the identical-payload
+  resend; host-owned work stays pending through a delayed lifecycle RPC and
+  after its return until cleanup is proven; a read-only-only call registers no
+  observer obligation.
+- Host producer-lifetime gate added and green (`bun test tests/host-patch`
+  **36/36**, 5 files): a producer retained by the manager survives a timed-out
+  dispose and `waitForProducers` still awaits it.
+- Fresh Astra verification of `ce40bb5`: deadline acceptance edge PASS (now
+  `>=` at the bound), hold rejection propagation PASS, retained+deferred
+  settlement PASS, previous counterexamples A and B closed, and no
+  false-success or healthy-run false-negative found in the reviewed delta.
+- Executed-candidate manifest:
+  `docs/integrations/omp-host-patch-2026-09-19/CANDIDATE-MANIFEST.json` binds
+  subject commit `2f0ae14`, host/adapter/Brain artifact hashes, the fixture
+  protocol, gate results and the explicit UNAVAILABLE host type check, plus
+  the fields that must be re-bound at run start.
+- Remaining: run the A->B->C demonstration and false-success twin against the
+  manifest candidate (re-hash at run start), then cancellation/concurrency,
+  Brain ON/OFF and ordinary-workflow regressions, instrumentation removal,
+  sealing and fresh acceptance. The release causal-evidence binding remains a
+  separately tracked open item.
