@@ -1,3 +1,3 @@
-4c0f503c92dd5a63bc572954e36062b0760034de1f878c0749cfaaf931ec95af docs/integrations/omp-host-patch-2026-09-19/cleanup-barrier.ts
-fa4d86a20af5eba34ea5c9f686b23c959b2376509814796feba41a2febf7e87f C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/isolation-runner.ts
+11131fec87bea1a802fe5294d1869c23aaac758e2e8300019000e91d7338c1d3 C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/isolation-runner.ts
+4c0f503c92dd5a63bc572954e36062b0760034de1f878c0749cfaaf931ec95af C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/cleanup-barrier.ts
 36b3f3c9625ee1745e7f29b43ff025c1725523ec77282a490f5af4b8f6773d14 C:/Users/assas/.bun/install/global/node_modules/@oh-my-pi/pi-coding-agent-canary/src/task/worktree.ts
