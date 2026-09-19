@@ -550,47 +550,64 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		() => __traceIsolation(`isolation:failed:agent=${opts.agentId}`),
 	);
 	// Deterministic deferred-cleanup fixture (test-only). When a hold prefix is
-	// configured, the REAL release work (capture, commit, cleanup) does not begin
-	// until the coordinator creates the exact identity-bound signal file emitted in
-	// hold-begin. The prefix itself must not exist: a pre-created prefix is a stale
-	// sentinel that would otherwise release an attempt by accident. A timeout
-	// rejects the original signal; neither a stale file nor expiry ever counts as
-	// release, and nothing is faked in place of real work.
+	// configured, the REAL post-run isolation release work (capture, commit,
+	// teardown) does not begin until the coordinator creates the exact
+	// identity-bound signal file emitted in hold-begin. `releaseBase` (the
+	// caller-requested base release) runs outside this gate. The prefix itself
+	// must not exist: a pre-existing entry is a stale sentinel that would
+	// otherwise release an attempt by accident. A timeout - including a signal
+	// observed only after the deadline - rejects the original signal; expiry
+	// never counts as release, and nothing is faked in place of real work.
 	const holdPrefix = process.env.OM_CANARY_HOLD_RELEASE_UNTIL;
 	const holdNonce = holdPrefix ? randomUUID() : undefined;
 	let holdPromise: Promise<void> | undefined;
 	const awaitReleaseSignal = (): Promise<void> => {
 		if (!holdPrefix) return Promise.resolve();
-		holdPromise ??= (async () => {
-			const holdIdentity = settlement.snapshot();
-			const holdFile = `${holdPrefix}.${encodeURIComponent(holdIdentity.attemptId)}.${holdIdentity.generation}.${holdNonce}`;
-			const binding = JSON.stringify({
-				agentId: opts.agentId,
-				attemptId: holdIdentity.attemptId,
-				generation: holdIdentity.generation,
-				cleanupOperationId: barrierIdentity.cleanupOperationId,
-				holdFile,
-			});
-			__traceIsolation(`isolation:hold-begin:${binding}`);
-			try {
-				await fs.stat(holdPrefix);
-				throw new Error(`stale isolation hold prefix exists: ${holdPrefix}`);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-			const deadline = Date.now() + 600_000;
-			while (Date.now() < deadline) {
+		if (!holdPromise) {
+			holdPromise = (async () => {
+				const holdIdentity = settlement.snapshot();
+				const holdFile = `${holdPrefix}.${encodeURIComponent(holdIdentity.attemptId)}.${holdIdentity.generation}.${holdNonce}`;
+				const binding = JSON.stringify({
+					agentId: opts.agentId,
+					attemptId: holdIdentity.attemptId,
+					generation: holdIdentity.generation,
+					cleanupOperationId: barrierIdentity.cleanupOperationId,
+					holdFile,
+				});
+				__traceIsolation(`isolation:hold-begin:${binding}`);
 				try {
-					await fs.stat(holdFile);
-					__traceIsolation(`isolation:hold-release:${binding}`);
-					return;
+					await fs.lstat(holdPrefix);
+					throw new Error(`stale isolation hold prefix exists: ${holdPrefix}`);
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				}
-				await new Promise(resolve => setTimeout(resolve, 200));
-			}
-			throw new Error(`isolation hold timed out without the bound release signal: ${holdFile}`);
-		})();
+				const startedAt = performance.now();
+				const deadlineMs = 600_000;
+				for (;;) {
+					try {
+						const signal = await fs.lstat(holdFile);
+						if (!signal.isFile()) {
+							throw new Error(`isolation hold signal is not a regular file: ${holdFile}`);
+						}
+						if (performance.now() - startedAt > deadlineMs) {
+							throw new Error(`isolation hold signal arrived after the deadline: ${holdFile}`);
+						}
+						__traceIsolation(`isolation:hold-release:${binding}`);
+						return;
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					}
+					if (performance.now() - startedAt > deadlineMs) {
+						throw new Error(`isolation hold timed out without the bound release signal: ${holdFile}`);
+					}
+					await new Promise(resolve => setTimeout(resolve, 200));
+				}
+			})();
+			// Whichever consumer awaits the hold first, a hold failure must terminate
+			// the original signal: no route may leave a canonical barrier pending
+			// after a known hold rejection (stale prefix, timeout, I/O error).
+			void holdPromise.catch(error => isolationRelease.reject(error));
+		}
 		return holdPromise;
 	};
 	try {
@@ -756,7 +773,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				// second time: trackCleanups skips duplicate pending resources, and a
 				// second settlement path would give release two authorities. The
 				// deferred chain only drives the release that the barrier observes.
-				const completion = deferredCleanup.then(() => awaitReleaseSignal()).then(cleanupHandle);
+				const completion = Promise.all([deferredCleanup, awaitReleaseSignal()]).then(cleanupHandle);
 				void completion.then(
 					() => isolationRelease.resolve(),
 					error => isolationRelease.reject?.(error),
@@ -775,9 +792,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					throw error;
 				}
 			}
-		} else if (!releasePromise && !deferredCleanup && retainWorkspace) {
+		} else if (!releasePromise && retainWorkspace) {
 			// A retained workspace with no later release path must terminate the
 			// original signal explicitly instead of leaving a barrier pending forever.
+			// This holds even when a deferred-cleanup promise exists: retention means
+			// no teardown will run on this route.
 			isolationRelease.reject(new Error("isolation cleanup not performed: workspace retained"));
 		}
 	}
