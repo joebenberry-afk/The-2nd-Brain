@@ -15,13 +15,14 @@
     "implemented": [
       "cleanup:start / cleanup:stop:ok|error (memoized cleanup outcome)",
       "barrier:armed / barrier:awaited / barrier:settled with the stable tuple attemptId|generation|cleanupOperationId",
-      "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown, retained decision covered by cleanup:skipped:retainedWorkspace)"
+      "cleanup:stop:invoke|ok|error and cleanup:remove:invoke|ok|error in worktree cleanupIsolation (physical teardown, retained decision covered by cleanup:skipped:retainedWorkspace)",
+      "observer-drain:start:pending / observer-drain:end:completed:rejected:remaining / observer-drain:abandoned:reason:remaining in the host session drain",
+      "pre-quit:exitCode marker immediately before postmortem.quit"
     ],
     "pending": [
-      "observer-drain:start|end|abandoned in the host session drain",
-      "pre-quit marker",
-      "launcher-side exit timestamp/code capture",
-      "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt"
+      "launcher-side exit capture (process start, PID, exit timestamp/code, run id)",
+      "read-only DB watcher snapshots: state-1 after receipt seq 1, state-2 after terminal receipt",
+      "RUN-INDEX.json pointing at all raw evidence files"
     ]
   },
   "instrumented_identities": {
