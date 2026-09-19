@@ -346,3 +346,28 @@ implies.
   separate qualification, not as proven work.
 - Isolation cleanup does NOT need modification for this observer repair, so the
   qualified cleanup/barrier layer stays frozen.
+
+## Universal producer fence (reviewer, supersedes the root-only capture)
+
+The reviewer found a small, universal fence that closes the clear-while-pending
+hole for root AND child sessions, so the "report unavailable" fallback is no
+longer the ceiling:
+
+- In `async/job-manager.ts`, retain `job.promise -> ownerId` in a SEPARATE map
+  until that exact promise settles, and never clear it during dispose or
+  diagnostic eviction. The existing set may still be cleared for its own reasons;
+  the retained map is what makes quiescence provable.
+- Expose `waitForProducers(ownerId?)` that loops the ACTUAL retained promises and
+  inspects `allSettled` results, so a rejected producer is a reported failure
+  rather than an omission.
+- Final session drain order: agent idle / in-flight handlers, then the
+  owner/all-native-producer fence, then the dynamic subscription and callback
+  drains.
+
+Explicit non-requirement preserved: receipt work is never a native-cleanup
+prerequisite. The forbidden circle - native cleanup waiting on the settled-receipt
+RPC while that RPC requires native cleanup to finish - stays closed.
+
+Status: design accepted; patch text still to be applied. Root fence
+(dispose + immediate waitForAll) remains grounded and is retained as the
+fallback ordering guarantee if the retained-map fence lands after it.
