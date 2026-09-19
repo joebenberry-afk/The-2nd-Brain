@@ -402,3 +402,24 @@ Boundary preserved: this is NOT isolation cleanup. `observeWorkerAttempt` still
 publishes and performs its RPC normally and does not await the group lifetime, so
 no cleanup/RPC cycle is introduced. The group lifetime is session-owned observer
 work, drained by the fence described above - never registered as native cleanup.
+
+## Applied and re-qualified (2026-09-19, driver run)
+
+- `8ccddd4` applied the reviewer's 23 CRLF-exact edits with zero drift: callback
+  contracts returned through the session, the retained producer map plus
+  `waitForProducers` in `job-manager.ts`, session-owned observer work drained
+  after native teardown, the adapter's per-subscription lifetime promise, the
+  bridge refusal diagnostics, and the pre-quit diagnostic. Receipt and
+  observer-lifetime promises are never registered as native cleanup.
+- Adapter gates on the applied subject: eslint clean, `tsc --noEmit` clean,
+  vitest **740/740** (33 files). The one stale case was the lost-acknowledgement
+  test; it now asserts the accepted contract - exactly one identical-payload
+  reconciliation resend (4 lifecycle invocations when the ack is lost, 3
+  otherwise) with the durable sequence keys unchanged at `[1, 2, 3]`
+  (`1264cd4`).
+- Next executable action: the A->B->C controlled deferred-cleanup run on the
+  deferred/isolation route against this subject (attemptId, generation,
+  cleanupOperationId, barrier identity, census id and successor id recorded in
+  each of the eight required evidence objects), plus the paired
+  A->B-failure->not-C false-success twin. Then the R1-R12 race matrix,
+  instrumentation removal, sealing, and fresh independent acceptance.
