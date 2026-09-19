@@ -539,6 +539,57 @@ describe("OMP worker Context Capsule bridge", () => {
     });
   });
 
+  it("returns the subscription lifetime for a filtered read-only sibling", async () => {
+    const harness = settlementHarness();
+    await harness.handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-settlement",
+        input: {
+          tasks: [
+            { agent: "scout", task: "Inspect the seam", access_intent: "read_only" },
+            { agent: "task", task: "Mutate the seam" },
+          ],
+        },
+      },
+      harness.context,
+    );
+    expect(harness.observers.size).toBe(1);
+    let returned: unknown;
+    for (const observer of harness.observers) {
+      returned = observer(
+        settlementSnapshot({
+          attemptId: "host-generation:9",
+          agentId: "Scout",
+          jobId: "Scout",
+          sourceIndex: 0,
+          generation: 9,
+          resultAccepted: false,
+          outcome: "running",
+          releasePermitted: false,
+          revision: 1,
+        }),
+      );
+    }
+    // A filtered read-only sibling is not a writer receipt, but it is still part of
+    // this call: the subscription lifetime must be returned so a rejected writer
+    // group reaches the host drain instead of dying in the adapter's standalone
+    // catch. The lifetime stays pending until the call's writers settle or the
+    // observer is disposed, so the host owns real work, not a resolved placeholder.
+    expect(returned).toBeInstanceOf(Promise);
+    let settled = false;
+    void (returned as Promise<void>).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  });
+
   it("never treats a failed or pending cleanup as settlement", async () => {
     const harness = settlementHarness();
     await harness.handlers.get("tool_call")!(
