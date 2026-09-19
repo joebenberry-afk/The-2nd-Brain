@@ -2305,15 +2305,17 @@ export class AgentSession {
 			if (finished || !detached || pending.size > 0) return;
 			finished = true;
 			if (observed === 0) failures.push(new Error("Observer detached before any settlement snapshot"));
-			// No per-snapshot releasePermitted re-validation here. The observer's
-			// returned work promise is the subscription-level ownership signal: it
-			// resolves only after every prepared writer's cleanup is proven and
-			// rejects on an incomplete detach or expiry, so the writer contract is
-			// already enforced. Snapshots from filtered siblings (for example a
-			// read-only attempt delivered through the same subscription) share that
-			// promise without being writer receipts and may legitimately still be
-			// pending when the writer group completes; failing the drain on them
-			// would turn host filtering into a false writer prerequisite.
+			// No per-snapshot releasePermitted re-validation here. This wrapper's
+			// guarantee is observer-work completion, not native cleanup by itself:
+			// observers that return subscription-owned work (the Brain adapter's
+			// group lifetime) already resolve only after every prepared writer's
+			// cleanup is proven and reject on an incomplete detach or expiry, so for
+			// those the writer contract is enforced by the returned promise.
+			// Snapshots from filtered siblings (for example a read-only attempt
+			// delivered through the same subscription) share that promise without
+			// being writer receipts and may legitimately still be pending when the
+			// writer group completes; failing the drain on them would turn host
+			// filtering into a false writer prerequisite.
 			if (failures.length > 0) {
 				done.reject(new AggregateError(failures, "Attempt settlement observation incomplete"));
 			} else {
