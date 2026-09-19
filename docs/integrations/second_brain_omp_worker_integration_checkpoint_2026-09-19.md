@@ -183,3 +183,33 @@ against this wired candidate - that is the next step, and only then does it coun
 
 Patch artifacts for the sealed package live beside this file
 (`omp-host-patch-2026-09-19/`), with `HASHES.txt` recording the loaded identities.
+
+## Cleanup-obligation classification (O1-O5) and the one-shot question
+
+The two facts stay distinct: **cleanup required and proven complete** versus
+**cleanup not required for this execution**. `kind: "none"` is only produced from
+authoritative route evidence, never inferred from a missing barrier, and never
+manufactured as an already-resolved barrier. The release gate accepts exactly two
+proof forms: authoritative CLEANUP_NOT_REQUIRED, or an exact resolved barrier;
+`assertNoDowngrade` forbids turning a required obligation into none later.
+
+One-shot classification is established from the route's own code, not by
+assumption: `onRelease: opts.baseOptions.keepAlive === false ? releaseBase :
+releaseIsolation`, and `releaseBase` is `opts.baseOptions.onRelease?.() ??
+Promise.resolve()` - it never touches the isolation handle. Only the deferred
+route reaches `cleanupIsolation(handle)` through `cleanupHandle()`. So a one-shot
+execution has no isolation cleanup obligation by construction; any other
+registered cleanup work still forces `required` through
+`registeredCleanupWork > 0`, and on that evidence the classifier requires a
+barrier rather than permitting release.
+
+Gates: O1 none-with-release, O2 one-shot owning a resource cannot be none,
+O3 unfinished required barrier fails closed, O4 deferred releases only through the
+exact resolved barrier, O5 no downgrade. `bun test tests/host-patch` -> 32 pass,
+0 fail.
+
+Next: the production A->B->C run on the deferred/isolation path against commit
+`5fec750` plus its paired A->B-failure->not-C false-success twin, capturing
+Astra's eight required evidence objects and recording attemptId, generation,
+cleanupOperationId, barrier identity, census id and successor id in each. Then the
+race matrix R1-R12, instrumentation removal, sealing and independent acceptance.
