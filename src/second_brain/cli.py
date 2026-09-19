@@ -1333,6 +1333,38 @@ def _parser() -> argparse.ArgumentParser:
     )
     wps = wp.add_subparsers(dest="worker_plane_command", required=True)
 
+    lease_inspect = wps.add_parser(
+        "lease-inspect", parents=[home_parent], help="worker lease inspection (read-only)"
+    )
+    lease_inspect.add_argument("--project", default=None)
+    lease_inspect.add_argument("--task-id", dest="task_id", default=None)
+    lease_inspect.add_argument("--attempt", dest="attempt_id", default=None)
+    lease_inspect.add_argument("--json", action="store_true", help="output JSON")
+
+    lease_quiesce = wps.add_parser(
+        "lease-quiesce", parents=[home_parent], help="record resource quiescence (never releases)"
+    )
+    lease_quiesce.add_argument("--attempt", dest="attempt_id", required=True)
+    lease_quiesce.add_argument("--resource", required=True)
+    lease_quiesce.add_argument("--method", required=True, help="how quiescence was established")
+    lease_quiesce.add_argument("--observation", required=True, help="what was observed")
+    lease_quiesce.add_argument("--actor", default="operator")
+    lease_quiesce.add_argument("--host-generation", dest="host_generation", default=None)
+    lease_quiesce.add_argument("--json", action="store_true")
+
+    lease_recover = wps.add_parser(
+        "lease-recover", parents=[home_parent], help="release only on authoritative evidence"
+    )
+    lease_recover.add_argument("--attempt", dest="attempt_id", required=True)
+    lease_recover.add_argument("--actor", default="operator")
+    lease_recover.add_argument("--host-generation", dest="host_generation", default=None)
+    lease_recover.add_argument("--executor-settled-evidence", dest="settled_evidence", default=None)
+    lease_recover.add_argument("--cleanup-evidence", dest="cleanup_evidence", default=None)
+    lease_recover.add_argument(
+        "--apply", action="store_true", help="perform the release (default: dry run)"
+    )
+    lease_recover.add_argument("--json", action="store_true")
+
     wp_spawn = wps.add_parser(
         "spawn", parents=[home_parent], help="spawn a worker if under the concurrency ceiling"
     )
@@ -4559,6 +4591,54 @@ def cmd_worker_plane(args) -> int:
     )
 
     home = _home(args)
+    if args.worker_plane_command in {"lease-inspect", "lease-quiesce", "lease-recover"}:
+        import json as _json
+
+        from . import worker_recovery
+
+        try:
+            if args.worker_plane_command == "lease-inspect":
+                payload = worker_recovery.inspect_attempt(
+                    home, project_id=args.project, task_id=args.task_id, attempt_id=args.attempt_id
+                )
+            elif args.worker_plane_command == "lease-quiesce":
+                payload = worker_recovery.record_quiescence(
+                    home,
+                    attempt_id=args.attempt_id,
+                    resource=args.resource,
+                    method=args.method,
+                    observation=args.observation,
+                    actor=args.actor,
+                    host_generation=args.host_generation,
+                )
+            else:
+                payload = worker_recovery.recover_attempt(
+                    home,
+                    attempt_id=args.attempt_id,
+                    actor=args.actor,
+                    host_generation=args.host_generation,
+                    executor_settled_evidence=_json.loads(args.settled_evidence)
+                    if args.settled_evidence
+                    else None,
+                    cleanup_evidence=_json.loads(args.cleanup_evidence)
+                    if args.cleanup_evidence
+                    else None,
+                    dry_run=not args.apply,
+                )
+        except Exception as exc:  # surfaced as a refusal, never as a release
+            name = getattr(exc, "code", type(exc).__name__)
+            payload = {
+                "refused": True,
+                "code": name,
+                "message": str(exc),
+                "detail": getattr(exc, "detail", {}),
+            }
+        if getattr(args, "json", False):
+            print(_json.dumps(payload, indent=2))
+        else:
+            print(_json.dumps(payload, indent=2))
+        return
+
     if args.worker_plane_command == "reap":
         error = None
         try:
