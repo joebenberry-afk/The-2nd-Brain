@@ -116,6 +116,9 @@ def main() -> int:
             "path": str(WORKTREE / "scripts/omp-canary/post_exit_check.py"),
         },
     ]
+    user_config = Path(r"C:\Users\assas\.omp\agent\config.yml")
+    if user_config.exists():
+        identities.append({"role": "configuration-user", "path": str(user_config)})
     inventory = {
         "schema": "second-brain.omp-run-identities.v1",
         "generated_at": "2026-09-19",
@@ -124,12 +127,33 @@ def main() -> int:
             "The launcher validates every entry and every required role at the last "
             "setup boundary before spawn; the executed bun/CLI/extension/launcher/"
             "watcher/python paths must resolve to the bound files, and schema, "
-            "preflight and fixture identities are validated from the run spec. "
-            "Regenerate after any change to a bound file (scripts/omp-canary/"
-            "refresh_identities.py); the campaign test suite validates this inventory "
-            "against the live files."
+            "preflight and fixture identities are validated from the run spec. The "
+            "configuration_contract binds the intended profile and user configuration "
+            "file and forbids configuration overlays (PI_CONFIG_FILES, --config, "
+            "project-local settings) so the effective configuration cannot drift "
+            "silently. Regenerate after any change to a bound file "
+            "(scripts/omp-canary/refresh_identities.py); the campaign test suite "
+            "validates this inventory against the live files."
         ),
         "required_roles": [entry["role"] for entry in identities],
+        "configuration_contract": {
+            "profile": "canary-settlement",
+            "profile_dir": r"C:\Users\assas\.omp\profiles\canary-settlement",
+            "user_config_file": str(user_config) if user_config.exists() else None,
+            "forbidden_env": [
+                "PI_CONFIG_FILES",
+                "PI_CODING_AGENT_DIR",
+                "PI_PACKAGE_DIR",
+                "OMP_PROFILE",
+            ],
+            "forbidden_argv_flags": ["--config"],
+            "forbidden_project_overlays": [
+                ".omp/config.yml",
+                ".omp/settings.json",
+                ".claude/settings.yml",
+                ".claude/settings.json",
+            ],
+        },
         "identities": [
             {"role": entry["role"], "path": entry["path"], "sha256": sha(Path(entry["path"]))}
             for entry in identities
