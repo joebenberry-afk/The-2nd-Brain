@@ -2385,10 +2385,22 @@ export class AgentSession {
 	}
 
 	async #drainSettlementObservers(): Promise<Error | undefined> {
+		const traceDrain = (step: string): void => {
+			const target = process.env.OM_CANARY_BOOT;
+			if (!target) return;
+			try {
+				fs.appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${step}\n`);
+			} catch {
+				/* tracing must never affect execution */
+			}
+		};
+		traceDrain(`observer-drain:start:pending=${this.#settlementObserverDrains.size}`);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
 		});
 		let producersComplete = false;
+		let drainedComplete = 0;
+		let drainedRejected = 0;
 		try {
 			await withTimeout((async () => {
 				// Neither an empty observer map nor AsyncJobManager's post-dispose #jobs
@@ -2410,7 +2422,12 @@ export class AgentSession {
 					const results = await Promise.allSettled(owned);
 					for (let index = 0; index < results.length; index += 1) {
 						const result = results[index];
-						if (result.status === "rejected") this.#settlementObserverErrors.push(result.reason);
+						if (result.status === "rejected") {
+							this.#settlementObserverErrors.push(result.reason);
+							drainedRejected += 1;
+						} else {
+							drainedComplete += 1;
+						}
 						this.#settlementObserverDrains.delete(owned[index]);
 					}
 				}
@@ -2418,11 +2435,19 @@ export class AgentSession {
 					throw new AggregateError(this.#settlementObserverErrors, "Attempt settlement observer drain incomplete");
 				}
 			})(), 30_000, "Attempt settlement observer drain timed out");
+			traceDrain(
+				`observer-drain:end:completed=${drainedComplete}:rejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}`,
+			);
 			logger.debug("Attempt settlement observer drain completed", {
 				producersComplete, at: Date.now(), receiptAcceptanceInferred: false,
 			});
 			return undefined;
 		} catch (error) {
+			traceDrain(
+				`observer-drain:abandoned:reason=${
+					error instanceof Error ? error.message : String(error)
+				}:remaining=${this.#settlementObserverDrains.size}`,
+			);
 			logger.warn("Attempt settlement observer drain incomplete", {
 				at: Date.now(), producersComplete, reason: String(error),
 				failures: this.#settlementObserverErrors.map(String),
