@@ -1134,3 +1134,164 @@ def test_candidate_success_label_cannot_authorize_active(
     )
     with pytest.raises(BrainError, match="exact credit evidence binding"):
         promotion._run_independent_qualification(brain_home, manifest, binding)
+
+
+# ---------------------------------------------------------------------------
+# Release-scope overlay (OMP-only successor contract, 2026-09-19)
+# ---------------------------------------------------------------------------
+
+_SCOPED_REQUIREMENT = ("control-plane", "universal_control_plane")
+_RETIRED_CLAUSES = [
+    "limited_to_rich_preserves_decisions",
+    "limited_to_rich_preserves_evidence",
+    "limited_to_rich_preserves_unresolved_work",
+    "rich_to_limited_preserves_decisions",
+    "rich_to_limited_preserves_evidence",
+    "rich_to_limited_preserves_unresolved_work",
+]
+
+
+def _scope_overlay(path: Path, **overrides: Any) -> Path:
+    overlay: dict[str, Any] = {
+        "schema_version": verifier.RELEASE_SCOPE_SCHEMA_VERSION,
+        "scope_id": "test-omp-only",
+        "supersedes": "test-universal",
+        "authority": verifier.QUALIFICATION_AUTHORITY,
+        "authorized_by": "unit test",
+        "change_record": "unit test",
+        "retired_gates": {f"{_SCOPED_REQUIREMENT[0]}/{_SCOPED_REQUIREMENT[1]}": _RETIRED_CLAUSES},
+    }
+    overlay.update(overrides)
+    path.write_text(json.dumps(overlay), encoding="utf-8")
+    return path
+
+
+def _strip_gate_coverage(home: Path, manifest: Path, clauses: list[str]) -> None:
+    """Remove coverage of the named clauses from the scoped requirement's artifacts."""
+
+    def rewrite(evidence: dict) -> None:
+        retained_refs = []
+        for ref in evidence["evidence_refs"]:
+            path = home / ref["path"]
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+            coverage = [item for item in artifact["coverage"] if item not in clauses]
+            if not coverage:
+                continue
+            artifact["coverage"] = coverage
+            for clause in clauses:
+                artifact["gate_observations"].pop(clause, None)
+            path.write_text(contracts.canonical_json(artifact), encoding="utf-8")
+            ref["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            retained_refs.append(ref)
+        evidence["evidence_refs"] = retained_refs
+
+    _rewrite_evidence(home, manifest, _SCOPED_REQUIREMENT[1], rewrite)
+
+
+def _ledger_with_scope(home: Path, manifest: Path, scope: Path | None = None) -> dict:
+    return next(
+        row
+        for row in verifier.verify_all(home, manifest, None, scope)["checks"]
+        if row["check"] == "qualification_ledger"
+    )
+
+
+def test_retired_clauses_are_required_without_scope_and_not_counted_with_scope(
+    brain_home: Path,
+) -> None:
+    manifest = _seed_complete_qualification(brain_home)
+    _strip_gate_coverage(brain_home, manifest, _RETIRED_CLAUSES)
+
+    universal = _ledger_with_scope(brain_home, manifest)
+    assert (
+        universal["details"]["coverage_complete_count"] == len(verifier.EXPECTED_REQUIREMENTS) - 1
+    )
+    assert any(
+        "missing authoritative Gate coverage" in error for error in universal["details"]["errors"]
+    )
+
+    scope = _scope_overlay(brain_home / "scope.json")
+    scoped = _ledger_with_scope(brain_home, manifest, scope)
+    assert scoped["details"]["coverage_complete_count"] == len(verifier.EXPECTED_REQUIREMENTS)
+    assert not any(
+        "missing authoritative Gate coverage" in error for error in scoped["details"]["errors"]
+    )
+    assert scoped["details"]["retired_gate_count"] == len(_RETIRED_CLAUSES)
+    assert scoped["details"]["retired_gates_counted_as_passed"] is False
+    assert scoped["details"]["scoped_gate_count"] == 74 - len(_RETIRED_CLAUSES)
+    assert scoped["details"]["scoped_gate_covered"] == 74 - len(_RETIRED_CLAUSES)
+
+
+def test_missing_retained_clause_still_fails_under_scope(brain_home: Path) -> None:
+    manifest = _seed_complete_qualification(brain_home)
+    retained = ["adapter_owns_no_canonical_state"]
+    _strip_gate_coverage(brain_home, manifest, [*_RETIRED_CLAUSES, *retained])
+    scope = _scope_overlay(brain_home / "scope.json")
+    scoped = _ledger_with_scope(brain_home, manifest, scope)
+    assert scoped["details"]["coverage_complete_count"] == len(verifier.EXPECTED_REQUIREMENTS) - 1
+    assert any(
+        "missing authoritative Gate coverage" in error and retained[0] in error
+        for error in scoped["details"]["errors"]
+    )
+
+
+def test_clause_coverage_of_retired_gates_cannot_substitute_for_retained_gate(
+    brain_home: Path,
+) -> None:
+    manifest = _seed_complete_qualification(brain_home)
+    retained = ["false_capabilities_rejected"]
+    _strip_gate_coverage(brain_home, manifest, retained)
+    scope = _scope_overlay(brain_home / "scope.json")
+    scoped = _ledger_with_scope(brain_home, manifest, scope)
+    assert scoped["details"]["coverage_complete_count"] == len(verifier.EXPECTED_REQUIREMENTS) - 1
+    assert scoped["details"]["scoped_gate_covered"] == 74 - len(_RETIRED_CLAUSES) - len(retained)
+    assert any(
+        "missing authoritative Gate coverage" in error and retained[0] in error
+        for error in scoped["details"]["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema_version": 99},
+        {"scope_id": ""},
+        {"authority": "docs/other.md"},
+        {"retired_gates": {}},
+        {"retired_gates": {"unknown/requirement": ["clause"]}},
+        {"retired_gates": {"control-plane/universal_control_plane": ["not_a_clause"]}},
+        {"retired_gates": {"control-plane/universal_control_plane": [*_RETIRED_CLAUSES] * 2}},
+        {
+            "retired_gates": {
+                "control-plane/universal_control_plane": sorted(
+                    set(verifier.REQUIRED_GATE_COVERAGE[_SCOPED_REQUIREMENT])
+                )
+            }
+        },
+    ],
+)
+def test_malformed_release_scope_fails_closed(brain_home: Path, overrides: dict) -> None:
+    del brain_home
+    overlay = _scope_overlay(Path(__file__).parent / "_scope_probe.json", **overrides)
+    try:
+        scope, errors = verifier.load_release_scope(overlay)
+        assert scope is None
+        assert errors
+    finally:
+        overlay.unlink(missing_ok=True)
+
+
+def test_scope_check_row_reports_retired_clauses_without_a_hardcoded_pass(
+    brain_home: Path,
+) -> None:
+    manifest = _seed_complete_qualification(brain_home)
+    scope = _scope_overlay(brain_home / "scope.json")
+    result = verifier.verify_all(brain_home, manifest, None, scope)
+    row = next(item for item in result["checks"] if item["check"] == "release_scope")
+    assert row["ok"] is True
+    assert result["release_scope"]["scope_id"] == "test-omp-only"
+    assert result["release_scope"]["retired_gates_counted_as_passed"] is False
+    assert result["release_scope"]["retired_gate_count"] == len(_RETIRED_CLAUSES)
+    assert result["release_scope"]["sha256"] == hashlib.sha256(scope.read_bytes()).hexdigest()
+    # The synthetic fixture is non-production evidence, so the release still holds.
+    assert result["ok"] is False
