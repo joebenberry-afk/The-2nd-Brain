@@ -632,3 +632,40 @@ running release body. Same-session successors are not expected under Contract
 A: demonstrations must end/release the owning session and wait for the
 accepted terminal receipt before dispatching the successor. No release-timing
 changes until a different contract is explicitly specified.
+
+### Qualification rerun runbook (next increment; evidence only)
+
+Goal: produce the acceptance-quality package Astra asked for, against the
+already-demonstrated behaviour. No candidate changes unless a real defect
+appears. Instrumentation additions are test-only, `OM_CANARY_BOOT`-gated, and
+removed before sealing.
+
+1. **Run-start rehash**: re-hash the manifest-listed host/adapter/Brain
+   artifacts before launch and record `run-start-rehash.json` with the
+   comparison result and timestamp (read-only).
+2. **Durable checkpoints**: read-only snapshots of the disposable DB taken
+   after receipt seq 1 and after the terminal callback, stored with row
+   contents and checksums.
+3. **Physical cleanup evidence**: trace `cleanup:start` / `cleanup:stop` /
+   `cleanup:remove` (with outcomes, including the retained decision) around
+   `cleanupIsolation(handle)` and the memoized `cleanupHandle` result.
+4. **Barrier diagnostic identity**: use the barrier's stable logical identity
+   (`attemptId`, `generation`, `cleanupOperationId`) as the token and trace it
+   at create (`barrier:armed:<identity>`), settle
+   (`barrier:settled:<identity>`) and await (`barrier:awaited:<identity>`).
+   Never a memory address or address-derived value.
+5. **Teardown chronology**: observer-drain start/end/abandoned, pre-quit
+   marker, and the actual process exit timestamp and code (zero and nonzero
+   both recorded deterministically).
+6. **Isolated successor**: same flags as the C2 run
+   (`OM_CANARY_FORCE_ISOLATED=1`, `OM_CANARY_ISOLATION=1`), with the recorded
+   admission and `route:policy:isIsolated=true` line.
+7. **Package** the raw artifacts under the existing evidence layout and submit
+   the eight-object acceptance question to Astra.
+
+Robustness campaign after acceptance: cancellation at the agreed boundaries;
+concurrent/repeated recovery attempts; stale-completion and cross-attempt
+protection; Brain ON/OFF; read-only worker behaviour; ordinary
+edit->capture->commit; session continuation; instrumentation removal with a
+decisive rerun; sealing and fresh acceptance. `check:types` remains
+UNAVAILABLE and the causal-evidence binding remains separately open.
