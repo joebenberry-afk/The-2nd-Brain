@@ -30,7 +30,12 @@
 export type AgentRole = "hard_orchestrator" | "driver" | "worker" | "normal";
 
 /** Default model-id substrings identifying the DRIVER role (campaign orchestrators). */
-export const DEFAULT_DRIVER_MODELS = ["deepseek-v4-pro", "gpt-5.6-luna", "gpt-6-astra"];
+export const DEFAULT_DRIVER_MODELS = [
+  "deepseek-v4-pro",
+  "gpt-5.6-luna",
+  "gpt-6-astra",
+  "deepseek-flash",
+];
 
 /** Default model-id substrings identifying the WORKER role (never get the driver contract). */
 export const DEFAULT_WORKER_MODELS = ["deepseek-v4-flash", "qwen3.5"];
