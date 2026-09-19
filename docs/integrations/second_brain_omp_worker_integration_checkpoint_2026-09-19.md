@@ -238,3 +238,39 @@ race matrix R1-R12, instrumentation removal, sealing and independent acceptance.
 
 Hashes now: cleanup-barrier.ts, isolation-runner.ts and worktree.ts as recorded in
 omp-host-patch-2026-09-19/HASHES.txt. Gates: 33 pass, 0 fail.
+
+## Review round 2 — cause localized, and a correction to my one-shot claim
+
+**RoughRabbit cause (reviewer, code-supported inference):** the adapter's
+post-shutdown lifecycle RPCs are unowned asynchronous work. The snapshot callback
+discards its promise (`void Promise.resolve(observe(...))`) and the registry's
+subscriber contract is `void`; `AgentSession.#doDispose` records `session_exit` at
+its start, `print-mode.ts:305` awaits that disposal, and `main.ts:2359` calls
+`postmortem.quit` -> `process.exit`. Being alive when a synchronous observer runs
+does not ensure survival through the later multi-second Python RPC (receipt 1 took
+~2.87s). Raw journal: rev1 at 15:57:29.424Z, receipt 1 accepted 32.558Z,
+session_exit 32.592Z, rev2 34.416Z, rev3/4 settled+releasePermitted 34.645/34.652Z.
+Ruled out: the running-status filter, the revision guard, a barrier deadlock, a
+Brain refusal, and "revisions map to running".
+
+**Proposed fix (not applied):** make the observer contract
+`void | Promise<void>`, have the session own returned observer work in a drain
+map, and drain AFTER native job/cleanup disposal but BEFORE `postmortem.quit`.
+Explicitly: never register the Brain receipt promise as isolation cleanup, or the
+settled receipt would depend on its own prerequisite.
+
+**Correction to my one-shot claim.** I recorded that a one-shot execution has no
+cleanup obligation, arguing from `releaseBase` never touching the isolation
+handle. The reviewer's verdict is `HAS_CLEANUP_OBLIGATION`, citing
+`structured-subagent.ts:487` forwarding `request.keepAlive`, `:657-663` creating
+the attempt settlement handle, and `:685-696` invoking the isolated subprocess.
+So the one-shot route is a supported execution path that can own cleanup work;
+`kind: none` must rest on per-execution evidence (no handle, no registered work),
+never on the route name. Gates O1/O6 encode the conservative direction but O1's
+scenario should be re-read in this light before the one-shot production proof.
+
+**Reviewer's interim notes already satisfied:** keep the extra `await
+cleanupHandle()` (done) and keep throwing on `handle && retainWorkspace` (done).
+**Still to apply:** prefer settling `isolationRelease` from the deferred chain
+rather than adding a second barrier-settlement path, and drop the duplicate
+`trackCleanups` registration.
