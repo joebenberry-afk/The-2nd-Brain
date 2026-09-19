@@ -552,6 +552,20 @@ function cloneMessageEndNotification(message: AgentMessage): AgentMessage {
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
 const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
 
+/** Bounded, non-throwing description of a diagnostic failure value. */
+function describeCanaryFailure(value: unknown, depth = 0): string {
+	try {
+		if (depth > 3) return "...";
+		if (value instanceof AggregateError) {
+			const nested = value.errors.map(inner => describeCanaryFailure(inner, depth + 1)).join(" | ");
+			return `${value.message ? String(value.message) : "AggregateError"}${nested ? ` [${nested}]` : ""}`;
+		}
+		return value instanceof Error ? String(value.message) : String(value);
+	} catch {
+		return "unprintable";
+	}
+}
+
 /**
  * Translate a `power.sleepPrevention` mode into `PowerAssertion.start` options,
  * or `undefined` when the mode asks for no assertion at all.
@@ -2277,6 +2291,7 @@ export class AgentSession {
 	readonly #settlementObserverErrors: unknown[] = [];
 	#settlementObserverCompletedCount = 0;
 	#settlementObserverRejectedCount = 0;
+	#settlementObserverRegistrationCount = 0;
 	readonly #settlementObserverDrains = new Map<Promise<void>, {
 		current: () => Record<string, unknown>;
 		detach: () => void;
@@ -2335,13 +2350,14 @@ export class AgentSession {
 			unsubscribe?.();
 			finish();
 		};
+		this.#settlementObserverRegistrationCount += 1;
 		this.#settlementObserverDrains.set(done.promise, {
 			current: () => ({
 				sourceToolCallId: options?.sourceToolCallId,
 				observed,
 				detached,
 				pendingCallbacks: pending.size,
-				failures: failures.map(String),
+				failures: failures.map(value => describeCanaryFailure(value)),
 				snapshots: [...snapshots.values()],
 			}),
 			detach,
@@ -2389,17 +2405,18 @@ export class AgentSession {
 	}
 
 	async #drainSettlementObservers(): Promise<Error | undefined> {
-		const traceDrain = (step: string): void => {
+		const traceDrain = (step: string | (() => string)): void => {
 			const target = process.env.OM_CANARY_BOOT;
 			if (!target) return;
 			try {
-				fs.appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${step}\n`);
+				const text = typeof step === "function" ? step() : step;
+				fs.appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
 			} catch {
 				/* tracing must never affect execution */
 			}
 		};
 		traceDrain(
-			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
+			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
 		);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
@@ -2416,13 +2433,16 @@ export class AgentSession {
 				const manager = this.#ownedAsyncJobManager ?? this.#asyncJobManager;
 				if (manager) {
 					if (!this.#ownedAsyncJobManager && !this.#agentId) {
+						traceDrain("observer-drain:producer-fence:unavailable:reason=unscoped-shared-native-job-manager");
 						throw new Error("Cannot fence unscoped shared native job producers");
 					}
 					await manager.waitForProducers(this.#ownedAsyncJobManager ? undefined : this.#agentId);
 				}
 				await this.#drainInFlightEventHandlers();
 				producersComplete = true;
+				traceDrain("observer-drain:producer-fence:complete");
 				this.#settlementObserverRegistrationsClosed = true;
+				traceDrain("observer-drain:registrations-closed");
 				while (this.#settlementObserverDrains.size > 0) {
 					const owned = [...this.#settlementObserverDrains.keys()];
 					const results = await Promise.allSettled(owned);
@@ -2449,15 +2469,9 @@ export class AgentSession {
 			});
 			return undefined;
 		} catch (error) {
-			let errorText = "unprintable";
-			try {
-				errorText = error instanceof Error ? error.message : String(error);
-			} catch {
-				/* trace formatting must never affect drain behavior */
-			}
-			traceDrain(
-				`observer-drain:abandoned:reason=${errorText}:loopCompleted=${drainedComplete}:loopRejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
-			);
+			traceDrain(() => {
+				return `observer-drain:abandoned:reason=${describeCanaryFailure(error)}:loopCompleted=${drainedComplete}:loopRejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`;
+			});
 			logger.warn("Attempt settlement observer drain incomplete", {
 				at: Date.now(), producersComplete, reason: String(error),
 				failures: this.#settlementObserverErrors.map(String),
@@ -2466,7 +2480,11 @@ export class AgentSession {
 			return error instanceof Error ? error : new Error(String(error));
 		} finally {
 			this.#settlementObserverRegistrationsClosed = true;
+			const remainingAtDetach = this.#settlementObserverDrains.size;
 			for (const entry of this.#settlementObserverDrains.values()) entry.detach();
+			traceDrain(
+				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
+			);
 		}
 	}
 

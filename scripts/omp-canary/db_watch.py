@@ -5,16 +5,20 @@ Purpose
 Observe, without writing to the database, the durable state transitions the
 qualification evidence requires:
 
-- *state-1*: the first poll at which a newly created worker attempt has at
-  least one lifecycle receipt and has NOT yet reached terminal settlement.
-- *state-2*: the first poll at which that attempt has a receipt with
-  ``cleanup_complete == true`` (terminal settlement for the attempt).
+- *state-1*: the first retained consistent snapshot in which a newly created
+  worker attempt has at least one lifecycle receipt and has NOT yet reached
+  terminal settlement.
+- *state-2*: the first retained consistent snapshot in which that attempt has a
+  receipt with ``cleanup_complete == true``.
 
-Snapshots are page-consistent copies produced with the SQLite backup API from
-a read-only source connection; task and receipt reads are taken from the copy
-inside a single transaction. The watcher never reconstructs a missed snapshot
-from later rows: if the first observation of an attempt is already terminal,
-it reports ``state_1_missing`` instead of fabricating state-1.
+Every snapshot is classified FROM THE SNAPSHOT ITSELF: the attempt is resolved,
+the task and receipt rows are read from the same backup-API copy, and the
+terminal condition is evaluated on those bytes. A snapshot whose own rows are
+already terminal is never labelled state-1; if the intermediate state was
+missed the watcher reports ``state_1_missing`` rather than fabricating it.
+
+The watcher never writes to the database, never reconstructs a missed snapshot
+from later rows, and never adds production waits.
 
 Usage
 -----
@@ -50,19 +54,36 @@ def connect_ro(db: Path) -> sqlite3.Connection:
     return conn
 
 
-def read_snapshot(db: Path, out_sqlite: Path) -> dict:
-    """Copy the DB read-only (backup API) and read one consistent snapshot."""
-    src = connect_ro(db)
+def read_rows(db: Path) -> list[dict]:
+    """Read all receipt rows in one consistent read transaction (no writes)."""
+    conn = connect_ro(db)
+    try:
+        conn.execute("BEGIN")
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM worker_lifecycle_receipts ORDER BY attempt_id, sequence",
+            )
+        ]
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    return rows
+
+
+def backup_and_read(db: Path, out_sqlite: Path) -> dict:
+    """Page-consistent copy via the backup API, then one transactional read."""
+    source = connect_ro(db)
     try:
         if out_sqlite.exists():
             out_sqlite.unlink()
-        dst = sqlite3.connect(out_sqlite)
+        destination = sqlite3.connect(out_sqlite)
         try:
-            src.backup(dst)
+            source.backup(destination)
         finally:
-            dst.close()
+            destination.close()
     finally:
-        src.close()
+        source.close()
     conn = connect_ro(out_sqlite)
     try:
         conn.execute("BEGIN")
@@ -79,13 +100,18 @@ def read_snapshot(db: Path, out_sqlite: Path) -> dict:
     return {"tasks": tasks, "receipts": receipts}
 
 
+def payload_of(row: dict) -> dict:
+    try:
+        value = json.loads(row.get("payload_json") or "{}")
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
 def receipt_summary(rows: list[dict]) -> list[dict]:
     summary = []
     for row in rows:
-        try:
-            payload = json.loads(row["payload_json"])
-        except (ValueError, TypeError):
-            payload = {}
+        payload = payload_of(row)
         summary.append(
             {
                 "attempt_id": row["attempt_id"],
@@ -95,9 +121,20 @@ def receipt_summary(rows: list[dict]) -> list[dict]:
                 "executor_settled": payload.get("executor_settled"),
                 "cleanup_complete": payload.get("cleanup_complete"),
                 "outcome": payload.get("outcome"),
+                "native_attempt_id": payload.get("native_attempt_id"),
+                "agent_id": payload.get("agent_id"),
             }
         )
     return summary
+
+
+def find_terminal(rows: list[dict], attempt_id: str) -> dict | None:
+    for row in rows:
+        if row["attempt_id"] != attempt_id:
+            continue
+        if payload_of(row).get("cleanup_complete") is True:
+            return row
+    return None
 
 
 class WatchState:
@@ -122,7 +159,7 @@ class WatchState:
         conn = connect_ro(self.db)
         try:
             rows = conn.execute(
-                "SELECT DISTINCT attempt_id FROM worker_lifecycle_receipts",
+                "SELECT DISTINCT attempt_id FROM worker_lifecycle_receipts"
             ).fetchall()
             self.baseline_attempts = {row[0] for row in rows}
         finally:
@@ -145,27 +182,27 @@ class WatchState:
             encoding="utf-8",
         )
 
-    def poll(self) -> None:
-        self.polls += 1
-        conn = connect_ro(self.db)
-        try:
-            conn.execute("BEGIN")
-            receipt_rows = [
-                dict(row)
-                for row in conn.execute(
-                    "SELECT * FROM worker_lifecycle_receipts ORDER BY attempt_id, sequence",
-                )
-            ]
-            conn.execute("COMMIT")
-        finally:
-            conn.close()
+    def _record_snapshot(self, snapshot: dict, out_sqlite: Path) -> dict:
+        return {
+            "captured_at_unix": time.time(),
+            "captured_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+            "attempt_id": self.attempt_id,
+            "sqlite": str(out_sqlite),
+            "tasks": snapshot["tasks"],
+            "receipts": receipt_summary(snapshot["receipts"]),
+        }
 
+    def observe_state(self) -> None:
+        if self.state2 is not None:
+            return
+        rows = read_rows(self.db)
         per_attempt: dict[str, list[dict]] = {}
-        for row in receipt_rows:
+        for row in rows:
             per_attempt.setdefault(row["attempt_id"], []).append(row)
-        for attempt, rows in per_attempt.items():
+        for attempt, attempt_rows in per_attempt.items():
             self.max_sequence_seen[attempt] = max(
-                self.max_sequence_seen.get(attempt, 0), max(r["sequence"] for r in rows)
+                self.max_sequence_seen.get(attempt, 0),
+                max(r["sequence"] for r in attempt_rows),
             )
 
         if self.attempt_id is None:
@@ -174,67 +211,60 @@ class WatchState:
             ]
             if not new_attempts:
                 return
-            # Choose the attempt with the earliest first receipt; ties by attempt id.
             self.attempt_id = min(
                 new_attempts,
                 key=lambda attempt: (per_attempt[attempt][0]["recorded_at"], attempt),
             )
 
-        rows = per_attempt.get(self.attempt_id, [])
-        if not rows:
-            return
-
-        terminal_row = next(
-            (
-                row
-                for row in rows
-                if json.loads(row["payload_json"] or "{}").get("cleanup_complete") is True
-            ),
-            None,
-        )
-
         if self.state1 is None and not self.state1_missing:
-            if terminal_row is not None:
-                # First observation is already terminal: the intermediate state was missed.
-                self.state1_missing = True
-            else:
-                snapshot = read_snapshot(self.db, self.outdir / "state-1.sqlite")
-                self.state1 = {
-                    "captured_at_unix": time.time(),
-                    "captured_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-                    "attempt_id": self.attempt_id,
-                    "sqlite": str(self.outdir / "state-1.sqlite"),
-                    "tasks": snapshot["tasks"],
-                    "receipts": receipt_summary(snapshot["receipts"]),
-                    "phase": "receipt-after-first-sequence-before-terminal",
-                }
+            snapshot = backup_and_read(self.db, self.outdir / "state-1.sqlite")
+            terminal = find_terminal(snapshot["receipts"], self.attempt_id)
+            if terminal is None:
+                self.state1 = self._record_snapshot(snapshot, self.outdir / "state-1.sqlite")
+                self.state1["phase"] = "receipt-after-first-sequence-before-terminal"
                 (self.outdir / "state-1.json").write_text(
                     json.dumps(self.state1, indent=2), encoding="utf-8"
                 )
+                return
+            # The retained bytes are already terminal: the intermediate state was
+            # missed. Report it missing and classify a fresh consistent snapshot
+            # as state-2 (the terminal condition holds in these bytes too).
+            self.state1_missing = True
+            if self.state2 is None:
+                terminal_snapshot = backup_and_read(self.db, self.outdir / "state-2.sqlite")
+                terminal_row = find_terminal(terminal_snapshot["receipts"], self.attempt_id)
+                if terminal_row is None:
+                    return
+                self.state2 = self._record_snapshot(
+                    terminal_snapshot, self.outdir / "state-2.sqlite"
+                )
+                self.state2["phase"] = "terminal-cleanup-complete"
+                self.state2["terminal_sequence"] = terminal_row["sequence"]
+                (self.outdir / "state-2.json").write_text(
+                    json.dumps(self.state2, indent=2), encoding="utf-8"
+                )
+            return
 
-        if terminal_row is not None and self.state2 is None:
-            snapshot = read_snapshot(self.db, self.outdir / "state-2.sqlite")
-            self.state2 = {
-                "captured_at_unix": time.time(),
-                "captured_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-                "attempt_id": self.attempt_id,
-                "terminal_sequence": terminal_row["sequence"],
-                "sqlite": str(self.outdir / "state-2.sqlite"),
-                "tasks": snapshot["tasks"],
-                "receipts": receipt_summary(snapshot["receipts"]),
-                "phase": "terminal-cleanup-complete",
-            }
+        if self.state2 is None:
+            snapshot = backup_and_read(self.db, self.outdir / "state-2.sqlite")
+            terminal = find_terminal(snapshot["receipts"], self.attempt_id)
+            if terminal is None:
+                return
+            self.state2 = self._record_snapshot(snapshot, self.outdir / "state-2.sqlite")
+            self.state2["phase"] = "terminal-cleanup-complete"
+            self.state2["terminal_sequence"] = terminal["sequence"]
             (self.outdir / "state-2.json").write_text(
                 json.dumps(self.state2, indent=2), encoding="utf-8"
             )
 
     def finish(self, reason: str) -> dict:
         self.stop_reason = reason
-        if self.attempt_id is not None:
-            if self.state1 is None:
-                self.state1_missing = True
-            if self.state2 is None:
-                self.state2_missing = True
+        # Missing flags are always explicit, including when no attempt was ever
+        # observed: an absent window attempt is incomplete evidence, not silence.
+        if self.state1 is None:
+            self.state1_missing = True
+        if self.state2 is None:
+            self.state2_missing = True
         stopped_at = time.time()
         record = {
             "label": self.label,
@@ -245,6 +275,7 @@ class WatchState:
             "stop_reason": reason,
             "polls": self.polls,
             "baseline_attempts": sorted(self.baseline_attempts),
+            "attempt_observed": self.attempt_id is not None,
             "watched_attempt": self.attempt_id,
             "state_1_captured": self.state1 is not None,
             "state_1_missing": self.state1_missing,
@@ -275,10 +306,8 @@ def main() -> int:
     deadline = time.time() + args.timeout
     state = WatchState(db, Path(args.outdir), args.label)
 
-    waited_for_db = 0.0
     while not db.exists() and time.time() < deadline:
         time.sleep(args.interval)
-        waited_for_db += args.interval
     if not db.exists():
         print(json.dumps({"error": "database never appeared", "db": str(db)}))
         return 3
@@ -287,7 +316,7 @@ def main() -> int:
 
     while time.time() < deadline:
         try:
-            state.poll()
+            state.observe_state()
         except sqlite3.OperationalError as error:
             # A busy/transient error is not a snapshot; retry after the interval.
             if "locked" not in str(error).lower() and "unable to open" not in str(error).lower():
@@ -311,6 +340,7 @@ def main() -> int:
                 )
             )
             return 0
+        state.polls += 1
         time.sleep(args.interval)
 
     state.finish("timeout")

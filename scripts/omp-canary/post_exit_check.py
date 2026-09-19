@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -124,6 +125,7 @@ def main() -> int:
         capture_output=True,
         text=True,
         timeout=300,
+        env={k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")},
     )
 
     traces = {}

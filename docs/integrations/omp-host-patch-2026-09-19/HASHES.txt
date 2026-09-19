@@ -1,8 +1,8 @@
 796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\async\job-manager.ts
-102009910de72f067dc7365492a6cd9d02d4b209423ff3eadc38f13bc0326cc9 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
-4547fb2bf9812d951e41b93c68448c9ff8ad9babb4bce9e608e3188e95b76b12 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
+e84d7e007681fc18ef35d3bcec3329073b9025cb5d2e8b4bdb9939d6dd11f75f C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
+0b4ef788dae5d6bbaaf17dc27e229120dce80e17a10feae3a87e540ec3af13be C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
 9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\cleanup-barrier.ts
-df4807a2c33641e1ca249b32a986977fad687435e66db065888c6bfffae397e4 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
+496edaff6165046992eaffe632ff8ebf705c2bb4b3ba67ae39808553eb1b05b8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
 b9f63239cd50b59b8e6556b39596c6d5129e968a22bb57f6f78dc86fc97a2d18 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\main.ts
-4ad0b27350fdf911290a49671eba82248385f49a36b70b6f107c01bdf96a3f1a brainstem/prime-extension/src/index.ts
-95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3 brainstem/prime-extension/src/worker-lifecycle-bridge.ts
+4ad0b27350fdf911290a49671eba82248385f49a36b70b6f107c01bdf96a3f1a C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\index.ts
+95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3 C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\worker-lifecycle-bridge.ts

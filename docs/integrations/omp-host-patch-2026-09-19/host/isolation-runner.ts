@@ -23,11 +23,12 @@ import * as fs from "node:fs/promises";
 import { classifyCleanupRequirement, cleanupOperationId, settleBarrier, type CleanupRoute } from "./cleanup-barrier";
 import { AttemptSettlementRegistry } from "./attempt-settlement";
 import { appendFileSync } from "node:fs";
-const __traceIsolation = (step: string): void => {
+const __traceIsolation = (step: string | (() => string)): void => {
 	const target = process.env.OM_CANARY_BOOT;
 	if (!target) return;
 	try {
-		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${step}\n`);
+		const text = typeof step === "function" ? step() : step;
+		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
 	} catch {
 		/* tracing must never affect execution */
 	}
@@ -396,21 +397,35 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		cleanupPromise ??= (async () => {
 			const ctx = barrierTraceContext ?? "unbound";
 			__traceIsolation(`cleanup:start:agent=${opts.agentId}:backend=${handle?.backend ?? "none"}:ctx=${ctx}`);
-			await releaseBase();
+			try {
+				await releaseBase();
+				__traceIsolation(`cleanup:base-release:ok:agent=${opts.agentId}:ctx=${ctx}`);
+			} catch (baseError) {
+				__traceIsolation(() => {
+					let errorText = "unprintable";
+					try {
+						errorText = baseError instanceof Error ? String(baseError.message) : String(baseError);
+					} catch {
+						/* trace formatting must never affect cleanup */
+					}
+					return `cleanup:base-release:error:agent=${opts.agentId}:ctx=${ctx}:error=${errorText}`;
+				});
+				throw baseError;
+			}
 			if (handle && !retainWorkspace) {
 				try {
 					await cleanupIsolation(handle, barrierTraceContext);
 					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`);
 				} catch (error) {
-					let errorText = "unprintable";
-					try {
-						errorText = error instanceof Error ? error.message : String(error);
-					} catch {
-						/* trace formatting must never affect cleanup */
-					}
-					__traceIsolation(
-						`cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`,
-					);
+					__traceIsolation(() => {
+						let errorText = "unprintable";
+						try {
+							errorText = error instanceof Error ? String(error.message) : String(error);
+						} catch {
+							/* trace formatting must never affect cleanup */
+						}
+						return `cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`;
+					});
 					throw error;
 				}
 			} else if (handle && retainWorkspace) {
@@ -552,19 +567,20 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			await cleanupHandle();
 			settleBarrier(cleanupBarrier, { ok: true });
 			__traceIsolation(
-				`barrier:settled:${barrierIdentityText}:state=${cleanupBarrier.state}:events=${cleanupBarrier.timeline.map(e => e.event).join(">")}`,
+				() =>
+					`barrier:settled:${barrierIdentityText}:state=${cleanupBarrier.state}:events=${cleanupBarrier.timeline.map(e => e.event).join(">")}`,
 			);
 		} catch (error) {
 			settleBarrier(cleanupBarrier, { ok: false, error });
-			let errorText = "unprintable";
-			try {
-				errorText = error instanceof Error ? error.message : String(error);
-			} catch {
-				/* trace formatting must never affect settlement */
-			}
-			__traceIsolation(
-				`barrier:settled:${barrierIdentityText}:state=rejected:error=${errorText}`,
-			);
+			__traceIsolation(() => {
+				let errorText = "unprintable";
+				try {
+					errorText = error instanceof Error ? String(error.message) : String(error);
+				} catch {
+					/* trace formatting must never affect settlement */
+				}
+				return `barrier:settled:${barrierIdentityText}:state=rejected:error=${errorText}`;
+			});
 		}
 	})();
 	opts.baseOptions.settlement?.trackCleanups([
@@ -737,6 +753,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			} catch (persistErr) {
 				retainWorkspace = true;
+				__traceIsolation(
+					`cleanup:skipped:retainedWorkspace:route=nested-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
+				);
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
@@ -758,6 +777,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				return rememberAgentArtifacts({ ...result, ...patchResult });
 			} catch (patchErr) {
 				retainWorkspace = true;
+				__traceIsolation(
+					`cleanup:skipped:retainedWorkspace:route=patch-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
+				);
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
