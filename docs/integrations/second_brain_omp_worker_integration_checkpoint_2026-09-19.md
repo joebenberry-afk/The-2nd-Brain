@@ -294,3 +294,37 @@ settlement path remain.
 Still to apply: the reviewer's observer-ownership/drain patch (session-owned
 observer work drained after native cleanup and before postmortem.quit), with the
 constraint that the receipt promise is never registered as isolation cleanup.
+
+## Drain repair: fence design, and two more false-signal hazards
+
+Reviewer findings after the preserved patch was judged unsafe verbatim:
+
+- The preserved drain (a) removed fulfilled terminal entries before producer
+  quiescence, (b) swallowed drain failure, (c) let the adapter's `result=false`
+  path fulfill, so a refusal would read as success, and (d) let a
+  `session_shutdown` timer unsubscribe at 30s, abandoning owned work. It is being
+  re-derived with exact stronger anchors rather than substituted.
+- `AsyncJobManager.dispose()` returns after ~3s and clears `#jobs` even when
+  `jobsSettled=false`, so a later `waitForAll`/`waitForOwnerJobs` can falsely see
+  empty. This is the same false-signal class as an empty `pendingJobIds` list: an
+  empty set must never be read as quiescence, and the manager's own clear must not
+  be usable as a fence.
+- The parser hides Python rejections as `RECEIPT_MISMATCH` with no echoed
+  identity, so a refusal is indistinguishable from a transport failure.
+  Reconciliation is feasible because ingest supports idempotent same-payload
+  resend keyed by attempt + sequence + receipt SHA - but identity must derive from
+  the existing receipt and a lost ack is recorded unknown-then-reconciled, never
+  assumed accepted or assumed failed.
+
+Fence mechanism (concrete, race-free by construction): call
+`manager.dispose(...)`, immediately capture `manager.waitForAll()` before dispose's
+first await resumes and clears `#jobs`, and await that captured completion during
+the final observer drain; `dispose` synchronously marks `#disposed`, so no new job
+can register after the capture. Also await `agent.waitForIdle` plus in-flight
+handlers. Native cleanup stays represented by retained observed
+attempts/subscriptions through their terminal callback or unsubscribe.
+
+Scope limit stated by the reviewer and carried here: this proves the ROOT session
+fence. A shared child manager needs an owner-scoped fence rather than a post-clear
+list lookup, and that is a separate qualification - not something the root proof
+implies.
