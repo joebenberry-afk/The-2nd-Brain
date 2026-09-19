@@ -513,3 +513,31 @@ ownership gap. The fixes below are applied to the canary candidate.
   Brain ON/OFF and ordinary-workflow regressions, instrumentation removal,
   sealing and fresh acceptance. The release causal-evidence binding remains a
   separately tracked open item.
+
+### Live-proof preparation and home-isolation requirement (same day, later)
+
+- Candidate re-hash against `CANDIDATE-MANIFEST.json`: **matches** (all five
+  host artifacts and both adapter artifacts byte-equal; recorded as
+  `manifest_matches_candidate: true`).
+- Launch recipe reconstructed from the preserved canary traces
+  (`%TEMP%/omp-canary25/boot.txt`, profile `canary-settlement`, fixture repo
+  `%TEMP%/omp-canary25/consumer-a`, session under
+  `~/.omp/profiles/canary-settlement/agent/sessions/`): supervisor session on
+  the canary package with `--profile canary-settlement` and the qualified-v2
+  extension, `OM_CANARY_BOOT` trace, `OM_CANARY_FORCE_ISOLATED=1` for the
+  explicit isolation request, and `OM_CANARY_HOLD_RELEASE_UNTIL` as the
+  identity-bound hold prefix. `boot.txt` shows the exact ordering the A->B->C
+  coordinator must observe (begin -> obligation -> isolation:owned ->
+  backend:started -> barrier:resolved -> isolation:released).
+- Compliance finding: the earlier canary runs wrote their worker rows into the
+  **live production home** (`worker_tasks` here contains the RoughRabbit task
+  `omp-2cb75c...`). The demonstration must not repeat that. Required before
+  launch: a disposable Brain home via `SECOND_BRAIN_HOME=<temp home>` plus
+  `SECOND_BRAIN_PYTHON=<project venv python>` (the lifecycle bridge otherwise
+  resolves `<home>/.venv/Scripts/python.exe`, which a fresh home lacks), the
+  fixture repo registered in that home, and the post-exit durable read from
+  that home's `db/brain.sqlite` - never the production database.
+- Open before launch: confirm the exact `-e` extension path used by the canary
+  (assumed `.worktrees/qualified-v2/brainstem/prime-extension/src/index.ts`)
+  and initialize the disposable home (schema v24 + project registration) so
+  A, B and C all run against it.
