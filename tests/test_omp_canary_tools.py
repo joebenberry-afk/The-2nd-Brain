@@ -1,15 +1,17 @@
 """Focused tests for the OMP qualification campaign tools (scripts/omp-canary).
 
-These cover the review findings that are deterministically testable without a
-live OMP process:
+Covered review findings, deterministically and without a live OMP process:
 
 - snapshot classification is taken from the retained snapshot itself, so
-  terminal bytes are never labelled state-1 (L1);
+  terminal bytes are never labelled state-1 and the rejected candidate is
+  removed (L1);
 - missing-state reporting is explicit even when no attempt window was observed
   (L2);
-- stale run inputs and null/mismatched identities fail the launch gate
-  (L4/B1/B2);
-- expectation gating turns an evidence-incomplete run into a non-success.
+- the full binding gate enforces required roles, executed-spec paths, schema,
+  preflight and fixture identities (B2);
+- a binding failure returns before spawn while still tearing the watcher down
+  and writing a launch record (L3 early-return path);
+- launcher success is gated on watcher health and expectations (L4).
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ import hashlib
 import importlib.util
 import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -94,6 +98,7 @@ def test_state1_not_fabricated_when_first_observation_is_terminal(tmp_path: Path
     assert state.state1_missing is True
     assert state.state2 is not None
     assert not (tmp_path / "out" / "state-1.json").exists()
+    assert not (tmp_path / "out" / "state-1.sqlite").exists()
     assert (tmp_path / "out" / "state-2.json").exists()
     record = state.finish("terminal-state-captured")
     assert record["state_1_missing"] is True
@@ -147,7 +152,7 @@ def test_missing_flags_are_explicit_without_any_attempt(tmp_path: Path) -> None:
     assert record["state_2_missing"] is True
 
 
-def test_fresh_inputs_reject_stale_marker_and_trace(tmp_path: Path) -> None:
+def test_fresh_inputs_reject_stale_artifacts(tmp_path: Path) -> None:
     mod = _load("launch_run")
     marker = tmp_path / "marker"
     trace = tmp_path / "boot.txt"
@@ -162,57 +167,164 @@ def test_fresh_inputs_reject_stale_marker_and_trace(tmp_path: Path) -> None:
 
     marker.write_text("stale", encoding="utf-8")
     trace.write_text("stale", encoding="utf-8")
-    errors = mod.validate_fresh_inputs(spec)
-    assert len(errors) == 2
+    assert len(mod.validate_fresh_inputs(spec)) == 2
 
-    (run_dir / "launch.json").write_text("{}", encoding="utf-8")
     marker.unlink()
     trace.unlink()
-    errors = mod.validate_fresh_inputs(spec)
-    assert len(errors) == 1
+    (run_dir / "watcher").mkdir()
+    (run_dir / "watcher" / "watcher-start.json").write_text("{}", encoding="utf-8")
+    assert len(mod.validate_fresh_inputs(spec)) == 1
+    (run_dir / "watcher" / "watcher-start.json").unlink()
+    (run_dir / "watcher.stop").write_text("stop", encoding="utf-8")
+    assert len(mod.validate_fresh_inputs(spec)) == 1
+
+    (run_dir / "watcher.stop").unlink()
+    (run_dir / "launch.json").write_text("{}", encoding="utf-8")
+    assert len(mod.validate_fresh_inputs(spec)) == 1
 
 
-def test_required_identity_binding_gates_null_and_mismatch(tmp_path: Path) -> None:
-    mod = _load("launch_run")
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    good = tmp_path / "good.ts"
-    good.write_text("export {};", encoding="utf-8")
-    missing = tmp_path / "missing.ts"
+def _complete_binding_spec(tmp_path: Path) -> dict:
+    bun = tmp_path / "bun.exe"
+    bun.write_bytes(b"bun")
+    cli = tmp_path / "cli.ts"
+    cli.write_text("export {};", encoding="utf-8")
+    extension = tmp_path / "index.ts"
+    extension.write_text("export {};", encoding="utf-8")
+    launcher = tmp_path / "launch_run.py"
+    launcher.write_text("# launcher", encoding="utf-8")
+    watcher = tmp_path / "db_watch.py"
+    watcher.write_text("# watcher", encoding="utf-8")
+    package = tmp_path / "package.json"
+    package.write_text("{}", encoding="utf-8")
 
+    roles = {
+        "executable-bun": bun,
+        "executable-cli-entry": cli,
+        "configuration-canary-package": package,
+        "adapter-index": extension,
+        "launcher": launcher,
+        "watcher": watcher,
+    }
     identities = tmp_path / "ids.json"
     identities.write_text(
         json.dumps(
             {
+                "required_roles": list(roles),
                 "identities": [
-                    {"role": "executable", "path": str(good), "sha256": _sha256(good)},
-                    {"role": "observer", "path": str(missing), "sha256": None},
-                ]
+                    {"role": role, "path": str(path), "sha256": _sha256(path)}
+                    for role, path in roles.items()
+                ],
             }
         ),
         encoding="utf-8",
     )
-    spec = {
-        "identities_file": str(identities),
-        "fixture_identity": {str(good): _sha256(good)},
-    }
-    result = mod.bind_required_identities(spec, run_dir)
-    assert result["all_bound"] is False
-    assert str(missing) in result["missing_or_null"]
 
-    identities.write_text(
+    home = tmp_path / "home"
+    (home / "db").mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(home / "db" / "brain.sqlite")
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (value INTEGER)")
+    conn.execute("DELETE FROM schema_version")
+    conn.execute("INSERT INTO schema_version VALUES (24)")
+    conn.commit()
+    conn.close()
+
+    fixture = tmp_path / "fixture"
+    fixture.mkdir(exist_ok=True)
+    calc = fixture / "calc.py"
+    calc.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    preflight = tmp_path / "preflight.json"
+    preflight.write_text(
         json.dumps(
-            {"identities": [{"role": "executable", "path": str(good), "sha256": _sha256(good)}]}
+            {
+                "home": str(home),
+                "fixture": str(fixture),
+                "project_id": "test-project",
+                "schema_version": 24,
+                "home_counts": {"worker_tasks": 0, "worker_lifecycle_receipts": 0},
+                "fixture_starts_red": {"red": True, "red_reason": "assertion-failure"},
+            }
         ),
         encoding="utf-8",
     )
-    result = mod.bind_required_identities(spec, run_dir)
-    assert result["all_bound"] is True
 
-    spec["fixture_identity"] = {str(good): "0" * 64}
-    result = mod.bind_required_identities(spec, run_dir)
+    return {
+        "identities_file": str(identities),
+        "home": str(home),
+        "fixture": str(fixture),
+        "schema_expected": 24,
+        "preflight_file": str(preflight),
+        "profile": "canary-settlement",
+        "executed": {
+            "bun": str(bun),
+            "cli_entry": str(cli),
+            "extension": str(extension),
+            "launcher": str(launcher),
+            "watcher": str(watcher),
+        },
+        "fixture_identity": {str(calc): _sha256(calc)},
+        "argv": ["bun", "cli", "--profile", "canary-settlement"],
+        "environment_contract": {"HOME": "temp"},
+    }
+
+
+def _bind(tmp_path: Path, spec: dict) -> dict:
+    mod = _load("launch_run")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(exist_ok=True)
+    return mod.bind_required_identities(spec, run_dir)
+
+
+def test_required_identity_binding_accepts_complete_spec(tmp_path: Path) -> None:
+    spec = _complete_binding_spec(tmp_path)
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is True
+    assert result["mismatched"] == []
+    assert result["missing_or_null"] == []
+    assert result["schema"]["ok"] is True
+    assert result["preflight"]["ok"] is True
+
+
+def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
+    spec = _complete_binding_spec(tmp_path)
+
+    # Null role hash
+    identities = json.loads(Path(spec["identities_file"]).read_text(encoding="utf-8"))
+    identities["identities"][0]["sha256"] = None
+    Path(spec["identities_file"]).write_text(json.dumps(identities), encoding="utf-8")
+    result = _bind(tmp_path, spec)
     assert result["all_bound"] is False
-    assert str(good) in result["mismatched"]
+    assert any(item.startswith("required-role:") for item in result["missing_or_null"])
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["executed"]["bun"] = str(tmp_path / "other-bun.exe")
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "executed:bun" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["schema_expected"] = 25
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert any(item.startswith("schema:") for item in result["mismatched"])
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["preflight_file"] = str(tmp_path / "missing-preflight.json")
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "preflight" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    spec["fixture_identity"] = {}
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert "fixture_identity:missing" in result["mismatched"]
+
+    spec = _complete_binding_spec(tmp_path)
+    calc = next(iter(spec["fixture_identity"]))
+    spec["fixture_identity"] = {calc: "0" * 64}
+    result = _bind(tmp_path, spec)
+    assert result["all_bound"] is False
+    assert calc in result["mismatched"]
 
 
 def test_rehash_gate_detects_mismatch(tmp_path: Path) -> None:
@@ -231,7 +343,7 @@ def test_rehash_gate_detects_mismatch(tmp_path: Path) -> None:
     assert result["boundary"] == "last-setup-boundary-before-spawn"
 
 
-def test_expectations_gate_evidence_incomplete_runs() -> None:
+def test_expectations_and_launcher_outcome_gate_evidence() -> None:
     mod = _load("launch_run")
     watcher = {"state_1_captured": True, "state_2_captured": False}
     spec = {"expect": {"state_1": True, "state_2": False, "child_exit": 0}}
@@ -240,3 +352,75 @@ def test_expectations_gate_evidence_incomplete_runs() -> None:
     strict = {"expect": {"state_2": True}}
     assert mod.evaluate_expectations(strict, 0, watcher)["met"] is False
     assert mod.evaluate_expectations(strict, 0, None)["met"] is False
+    twin = {"expect": {"state_1": True, "state_2": False, "child_exit_nonzero": True}}
+    assert mod.evaluate_expectations(twin, 1, watcher)["met"] is True
+    assert mod.evaluate_expectations(twin, 0, watcher)["met"] is False
+
+    # Watcher health gates success: incomplete evidence can never return 0.
+    assert mod.launcher_outcome(True, True, 0) == 0
+    assert mod.launcher_outcome(True, True, 3) == 3
+    assert mod.launcher_outcome(False, True, 0) == 5
+    assert mod.launcher_outcome(True, False, 0) == 4
+
+
+def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:
+    """The launcher must tear the watcher down and write a launch record even
+    when the binding fails before spawn (early-return teardown path)."""
+    db = tmp_path / "brain.sqlite"
+    conn = _make_db(db)
+    conn.close()
+    home = tmp_path / "home"
+    (home / "db").mkdir(parents=True)
+    (home / "db" / "brain.sqlite").write_bytes(db.read_bytes())
+
+    target = tmp_path / "file.ts"
+    target.write_text("content", encoding="utf-8")
+    hashes = tmp_path / "HASHES.txt"
+    hashes.write_text(f"{'deadbeef' * 8} {target}\n", encoding="utf-8")
+
+    run_dir = tmp_path / "run"
+    spec = {
+        "name": "binding-failure-test",
+        "run_dir": str(run_dir),
+        "home": str(home),
+        "fixture": str(tmp_path),
+        "prompt_file": str(tmp_path / "prompt.txt"),
+        "trace_file": str(tmp_path / "boot.txt"),
+        "profile": "canary-settlement",
+        "bun": str(tmp_path / "missing-bun.exe"),
+        "cli": str(tmp_path / "cli.ts"),
+        "extension": [],
+        "hashes_file": str(hashes),
+        "hashes_base": str(tmp_path),
+        "identities_file": str(tmp_path / "ids.json"),
+        "python": sys.executable,
+        "watcher_script": str(TOOLS / "db_watch.py"),
+        "watcher_ready_timeout_seconds": 30,
+        "post_exit_grace_seconds": 1,
+        "timeout_seconds": 30,
+        "expect": {},
+    }
+    (tmp_path / "ids.json").write_text(
+        json.dumps({"required_roles": [], "identities": []}), encoding="utf-8"
+    )
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(TOOLS / "launch_run.py"), "--spec", str(spec_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={
+            k: v
+            for k, v in __import__("os").environ.items()
+            if k not in ("PYTHONHOME", "PYTHONPATH")
+        },
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))
+    assert launch["binding_failed"] is True
+    assert launch["launched"] is False
+    watcher_record = json.loads((run_dir / "watcher" / "watcher.json").read_text(encoding="utf-8"))
+    assert watcher_record["stop_reason"] == "stop-file"
+    assert watcher_record["state_2_missing"] is True

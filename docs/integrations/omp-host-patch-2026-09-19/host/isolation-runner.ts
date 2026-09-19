@@ -722,6 +722,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					});
 				} catch (patchErr) {
 					retainWorkspace = true;
+					__traceIsolation(
+						`cleanup:skipped:retainedWorkspace:route=merge-failed-patch-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
+					);
 					const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 					return rememberAgentArtifacts({
 						...result,

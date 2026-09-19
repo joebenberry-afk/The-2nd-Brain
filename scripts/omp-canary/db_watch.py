@@ -230,6 +230,9 @@ class WatchState:
             # missed. Report it missing and classify a fresh consistent snapshot
             # as state-2 (the terminal condition holds in these bytes too).
             self.state1_missing = True
+            # Remove the rejected state-1 candidate so artifact collectors cannot
+            # mistake its filename for accepted evidence.
+            (self.outdir / "state-1.sqlite").unlink(missing_ok=True)
             if self.state2 is None:
                 terminal_snapshot = backup_and_read(self.db, self.outdir / "state-2.sqlite")
                 terminal_row = find_terminal(terminal_snapshot["receipts"], self.attempt_id)
