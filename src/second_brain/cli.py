@@ -4612,7 +4612,7 @@ def cmd_worker_plane(args) -> int:
                     host_generation=args.host_generation,
                 )
             else:
-                payload = worker_recovery.recover_attempt(
+                payload = worker_recovery.recover(
                     home,
                     attempt_id=args.attempt_id,
                     actor=args.actor,

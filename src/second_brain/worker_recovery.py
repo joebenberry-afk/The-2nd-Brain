@@ -211,7 +211,8 @@ def record_quiescence(
     with _connect(home) as conn:
         conn.execute(
             "INSERT OR IGNORE INTO worker_recovery_events("
-            "event_id,attempt_id,host_generation,kind,resource,method,actor,payload_sha256,payload_json,"
+            "event_id,attempt_id,host_generation,kind,resource,method,actor,payload_sha256,payloa"
+            "d_json,"
             "recorded_at) "
             ""
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -365,6 +366,171 @@ def recover_attempt(
             "receipt_sha256": digest,
             "logical_outcome_preserved": row.get("logical_outcome"),
         }
+
+
+def release_interrupted_attempt(
+    home: Path | str | None = None,
+    *,
+    attempt_id: str,
+    actor: str,
+    resources: list[str] | None = None,
+    host_generation: str | None = None,
+    dry_run: bool = True,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Release ownership of an attempt whose host never reported anything.
+
+    This is not settlement reconciliation and must never look like one. There is
+    no accepted outcome and no host callback, so the attempt's state,
+    ``logical_outcome``, ``executor_settled`` and ``cleanup_complete`` are all
+    preserved exactly as recorded - an interrupted task stays interrupted.
+    Ownership moves to ``released`` for service only when every resource the
+    operator names has a recorded quiescence attestation bound to this attempt
+    (and generation), because that is what makes the worktree safe to hand on.
+    """
+    with _connect(home) as conn:
+        rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
+        if not rows:
+            raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
+        row = rows[0]
+        if row.get("writer_ownership") == RELEASED:
+            return {"attempt_id": attempt_id, "action": "already-released", "changed": False}
+        if host_generation is not None and row.get("host_generation") not in (
+            None,
+            host_generation,
+        ):
+            raise RecoveryError(
+                "GENERATION_MISMATCH",
+                "the supplied host generation does not match this attempt",
+                detail={"recorded": row.get("host_generation"), "supplied": host_generation},
+            )
+        if row.get("executor_settled") or row.get("logical_outcome") not in (None, "unresolved"):
+            raise RecoveryError(
+                "USE_SETTLEMENT_RECONCILIATION",
+                "this attempt recorded host activity; reconcile its settlement instead",
+            )
+
+        attestations = _attestations(conn, attempt_id)
+        # An attestation only counts for the generation it was recorded against:
+        # a stale attestation from an earlier incarnation of this attempt must
+        # never authorise releasing the current one.
+        attestations = [
+            a
+            for a in attestations
+            if (a.get("host_generation") or None) == (row.get("host_generation") or None)
+        ]
+        attested = {a["resource"] for a in attestations if a.get("resource")}
+        wanted = [r for r in (resources or sorted(attested)) if r and r.strip()]
+        if not wanted:
+            return {
+                "attempt_id": attempt_id,
+                "action": "protection-retained",
+                "changed": False,
+                "unresolved_conditions": ["no quiescence attestation recorded for any resource"],
+                "supported_actions": [
+                    "verify each resource is genuinely idle, then record it with worker-plane lease-quiesce",
+                ],
+            }
+        missing = [r for r in wanted if r not in attested]
+        if missing:
+            return {
+                "attempt_id": attempt_id,
+                "action": "protection-retained",
+                "changed": False,
+                "unresolved_conditions": [f"no quiescence attestation for: {', '.join(missing)}"],
+                "supported_actions": [
+                    "verify the resource is genuinely idle, then record it with worker-plane lease-quiesce",
+                ],
+            }
+
+        if dry_run:
+            return {
+                "attempt_id": attempt_id,
+                "action": "release-permitted",
+                "changed": False,
+                "dry_run": True,
+            }
+
+        sequence = int(row.get("lifecycle_sequence") or 0) + 1
+        updated = _now(now)
+        record = {
+            "kind": "operator-recovery-interrupted",
+            "attempt_id": attempt_id,
+            "host_generation": row.get("host_generation"),
+            "actor": actor,
+            "executor_settled": False,
+            "logical_outcome": row.get("logical_outcome"),
+            "outcome_rewritten": False,
+            "resources": wanted,
+            "attestations": [
+                a["event_id"] for a in attestations if a.get("resource") in set(wanted)
+            ],
+        }
+        blob = json.dumps(record, sort_keys=True)
+        digest = hashlib.sha256(blob.encode()).hexdigest()
+        conn.execute(
+            "INSERT INTO worker_lifecycle_receipts("
+            "attempt_id,sequence,receipt_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?)",
+            (attempt_id, sequence, digest, blob, updated),
+        )
+        conn.execute(
+            "UPDATE worker_tasks SET writer_ownership=?,lifecycle_sequence=?,"
+            "ownership_updated_at=?,updated_at=? WHERE task_id=?",
+            (RELEASED, sequence, updated, updated, row["task_id"]),
+        )
+        conn.commit()
+        return {
+            "attempt_id": attempt_id,
+            "action": "ownership-released-for-interrupted-attempt",
+            "changed": True,
+            "lifecycle_sequence": sequence,
+            "receipt_sha256": digest,
+            "state_preserved": row.get("state"),
+            "logical_outcome_preserved": row.get("logical_outcome"),
+        }
+
+
+def recover(
+    home: Path | str | None = None,
+    *,
+    attempt_id: str,
+    actor: str,
+    host_generation: str | None = None,
+    executor_settled_evidence: dict[str, Any] | None = None,
+    cleanup_evidence: dict[str, Any] | None = None,
+    dry_run: bool = True,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Recover whichever way the recorded state supports.
+
+    An attempt that recorded host activity is reconciled from settlement evidence;
+    an attempt whose host never reported anything is released for service only
+    against recorded quiescence attestations, preserving its interrupted state.
+    """
+    with _connect(home) as conn:
+        rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
+        if not rows:
+            raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
+        row = rows[0]
+    if row.get("executor_settled") or row.get("logical_outcome") not in (None, "unresolved"):
+        return recover_attempt(
+            home,
+            attempt_id=attempt_id,
+            actor=actor,
+            host_generation=host_generation,
+            executor_settled_evidence=executor_settled_evidence,
+            cleanup_evidence=cleanup_evidence,
+            dry_run=dry_run,
+            now=now,
+        )
+    return release_interrupted_attempt(
+        home,
+        attempt_id=attempt_id,
+        actor=actor,
+        host_generation=host_generation,
+        dry_run=dry_run,
+        now=now,
+    )
 
 
 def reap_expired(
