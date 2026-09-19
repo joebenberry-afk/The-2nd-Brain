@@ -431,7 +431,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				}
 			}
 			if (!handle || retainWorkspace) {
-				await releaseBase();
+				try {
+					await releaseBase();
+				} catch (error) {
+					isolationRelease.reject(error);
+					throw error;
+				}
+				if (retainWorkspace) {
+					// A retained workspace is not a completed teardown: the original signal
+					// must reject rather than stay pending for consumers to await forever.
+					isolationRelease.reject(new Error("isolation cleanup not performed: workspace retained"));
+					return;
+				}
+				isolationRelease.resolve();
 				return;
 			}
 			try {
@@ -504,7 +516,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	// exists, so the evidence must say a cleanup obligation is being created. A
 	// zero pre-acquisition count is not evidence of no obligation.
 	const requirement = classifyCleanupRequirement(route, barrierIdentity, {
-		acquisitionComplete: true,
+		acquisitionComplete: false,
 		isolationHandleAllocated: handle !== undefined,
 		registeredCleanupWork: 1,
 	});
@@ -678,6 +690,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		}
 		return rememberAgentArtifacts(result);
 	} catch (err) {
+		// No release path will run after an early failure here: settle the original
+		// signal explicitly so a canonical barrier can never be left pending forever.
+		// A retained workspace or a failure before a handle existed is not proven
+		// teardown, so it rejects rather than resolving.
+		if (!releasePromise && !deferredCleanup) {
+			if (retainWorkspace) {
+				isolationRelease.reject(new Error("isolation cleanup not performed: workspace retained"));
+			} else if (!handle) {
+				isolationRelease.reject(
+					err instanceof Error ? err : new Error(`isolation acquisition failed: ${String(err)}`),
+				);
+			}
+		}
 		return rememberAgentArtifacts(opts.buildFailureResult(err));
 	} finally {
 		if (
@@ -704,10 +729,16 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} else {
 				try {
 					await cleanupHandle();
-				} finally {
 					isolationRelease.resolve();
+				} catch (error) {
+					isolationRelease.reject(error);
+					throw error;
 				}
 			}
+		} else if (!releasePromise && !deferredCleanup && retainWorkspace) {
+			// A retained workspace with no later release path must terminate the
+			// original signal explicitly instead of leaving a barrier pending forever.
+			isolationRelease.reject(new Error("isolation cleanup not performed: workspace retained"));
 		}
 	}
 }
