@@ -2275,6 +2275,8 @@ export class AgentSession {
 	 */
 	#settlementObserverRegistrationsClosed = false;
 	readonly #settlementObserverErrors: unknown[] = [];
+	#settlementObserverCompletedCount = 0;
+	#settlementObserverRejectedCount = 0;
 	readonly #settlementObserverDrains = new Map<Promise<void>, {
 		current: () => Record<string, unknown>;
 		detach: () => void;
@@ -2317,8 +2319,10 @@ export class AgentSession {
 			// writer group completes; failing the drain on them would turn host
 			// filtering into a false writer prerequisite.
 			if (failures.length > 0) {
+				this.#settlementObserverRejectedCount += 1;
 				done.reject(new AggregateError(failures, "Attempt settlement observation incomplete"));
 			} else {
+				this.#settlementObserverCompletedCount += 1;
 				done.resolve();
 				// The subscription is detached and every returned callback has finished.
 				// This unique promise cannot name a later registration under a reused key.
@@ -2394,7 +2398,9 @@ export class AgentSession {
 				/* tracing must never affect execution */
 			}
 		};
-		traceDrain(`observer-drain:start:pending=${this.#settlementObserverDrains.size}`);
+		traceDrain(
+			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
+		);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
 		});
@@ -2436,7 +2442,7 @@ export class AgentSession {
 				}
 			})(), 30_000, "Attempt settlement observer drain timed out");
 			traceDrain(
-				`observer-drain:end:completed=${drainedComplete}:rejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}`,
+				`observer-drain:end:completed=${drainedComplete}:rejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
 			);
 			logger.debug("Attempt settlement observer drain completed", {
 				producersComplete, at: Date.now(), receiptAcceptanceInferred: false,
@@ -2450,7 +2456,7 @@ export class AgentSession {
 				/* trace formatting must never affect drain behavior */
 			}
 			traceDrain(
-				`observer-drain:abandoned:reason=${errorText}:remaining=${this.#settlementObserverDrains.size}`,
+				`observer-drain:abandoned:reason=${errorText}:loopCompleted=${drainedComplete}:loopRejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
 			);
 			logger.warn("Attempt settlement observer drain incomplete", {
 				at: Date.now(), producersComplete, reason: String(error),
