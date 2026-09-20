@@ -988,6 +988,63 @@ def test_recovery_quarantines_undecodable_bytes(brain_home):
     assert archived == {b"\xff"}
 
 
+def test_stale_marker_level_is_not_authority(brain_home):
+    """A marker naming another level is reported, and never read as authority."""
+    skill_dir = brain_home / "skills" / "shadow" / "scout"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: scout\nstatus: shadow\nversion: 1\n---\n\n# scout\n", encoding="utf-8"
+    )
+    (skill_dir / promotion.AUTHORITY_MARKER).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skill_name": "scout",
+                "last_level": "active",
+                "last_active_version": 3,
+                "last_promotion_id": "promotion-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert promotion.stale_authority_markers(brain_home) == ["scout"]
+    marker = promotion._read_authority_marker(brain_home, "scout")
+    assert marker["stale_level"] == "active"
+    assert marker["last_level"] is None
+    # The version the marker carries still raises the baseline, but a marker
+    # claiming "active" no longer counts as release history for a shadow skill.
+    assert promotion._active_version_baseline(brain_home, "scout") == (3, True)
+
+    (skill_dir / promotion.AUTHORITY_MARKER).write_text(
+        json.dumps({"schema_version": 1, "skill_name": "scout", "last_level": "active"}),
+        encoding="utf-8",
+    )
+    assert promotion._active_version_baseline(brain_home, "scout") == (None, False)
+
+
+def test_doctor_reports_a_stale_marker(brain_home):
+    """Doctor surfaces the mismatch instead of reporting clean authority."""
+    from second_brain import doctor as doctor_mod
+
+    skill_dir = brain_home / "skills" / "shadow" / "scout"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: scout\nstatus: shadow\nversion: 1\n---\n\n# scout\n", encoding="utf-8"
+    )
+    (skill_dir / promotion.AUTHORITY_MARKER).write_text(
+        json.dumps({"schema_version": 1, "skill_name": "scout", "last_level": "active"}),
+        encoding="utf-8",
+    )
+    checks: list = []
+
+    doctor_mod.check_governance(brain_home, checks)
+
+    marker_checks = [c for c in checks if c.name == "governance marker"]
+    assert len(marker_checks) == 1
+    assert "scout" in marker_checks[0].detail
+
+
 def test_superseded_publication_leaves_no_stale_marker(brain_home, monkeypatch):
     """A later move of the artifact must not leave a marker claiming the old level."""
     _green_candidate(brain_home)

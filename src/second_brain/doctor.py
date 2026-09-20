@@ -314,6 +314,7 @@ def check_governance(home: Path, checks: list[Check]) -> None:
         gaps = promotion.authority_gaps(home)
         pending = promotion.pending_publications(home)
         unreadable = promotion.unreadable_publications(home)
+        stale = promotion.stale_authority_markers(home)
     except Exception as exc:
         checks.append(
             Check("governance authority", STATUS_FAIL, f"cannot read promotion authority: {exc}")
@@ -344,6 +345,14 @@ def check_governance(home: Path, checks: list[Check]) -> None:
                 STATUS_WARN,
                 f"{len(pending)} interrupted publication(s) pending; "
                 "run `brainctl promotions reconcile`",
+            )
+        )
+    if stale:
+        checks.append(
+            Check(
+                "governance marker",
+                STATUS_WARN,
+                "carried authority marker names another level: " + ", ".join(stale[:5]),
             )
         )
     if not (unreadable or gaps or pending):
