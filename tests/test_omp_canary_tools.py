@@ -199,6 +199,8 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     python.write_bytes(b"python")
     user_config = tmp_path / "user-config.yml"
     user_config.write_text("# user settings\n", encoding="utf-8")
+    provider_settings = tmp_path / "provider-settings.json"
+    provider_settings.write_text("{}\n", encoding="utf-8")
     home_root = tmp_path / "home-root"
     profile_dir = home_root / ".omp" / "profiles" / "canary-settlement"
     profile_agent_dir = profile_dir / "agent"
@@ -253,6 +255,11 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         ".env",
                         ".env.production",
                         "bunfig.toml",
+                    ],
+                    "fixture_allowed_entries": ["calc.py", "test_calc.py", "AGENTS.md"],
+                    "user_provider_files": [
+                        {"path": str(provider_settings), "sha256": _sha256(provider_settings)},
+                        {"path": str(tmp_path / "absent-provider.json"), "expects": "absent"},
                     ],
                 },
                 "identities": [
@@ -635,6 +642,57 @@ def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
     assert '"--no-env-file"' in mod_main
 
 
+def test_project_and_user_discovery_inputs_cannot_bypass_binding(tmp_path: Path) -> None:
+    """Project-level provider files live only in the fixture allowlist, and
+    user-level provider files are hash-bound or enforced absent."""
+    mod = _load("launch_run")
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-discovery"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+    assert mod.bind_required_identities(spec, run_dir, env, spec["argv"])["all_bound"] is True
+
+    # A project settings provider file in the fixture is not allowed.
+    opencode = Path(spec["fixture"]) / "opencode.json"
+    opencode.write_text('{"compaction": {"enabled": false}}\n', encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:fixture-tree" in result["mismatched"]
+    opencode.unlink()
+
+    # Changing a bound user provider file must fail.
+    contract = json.loads(Path(spec["identities_file"]).read_text(encoding="utf-8"))
+    bound_path = next(
+        item["path"]
+        for item in contract["configuration_contract"]["user_provider_files"]
+        if "sha256" in item
+    )
+    Path(bound_path).write_text('{"changed": true}\n', encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert any(item.startswith("configuration:user-provider") for item in result["mismatched"])
+
+    # Creating a file the contract requires absent must fail.
+    spec = _complete_binding_spec(tmp_path)
+    absent_path = next(
+        item["path"]
+        for item in json.loads(Path(spec["identities_file"]).read_text(encoding="utf-8"))[
+            "configuration_contract"
+        ]["user_provider_files"]
+        if item.get("expects") == "absent"
+    )
+    Path(absent_path).write_text("{}\n", encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert any(item.startswith("configuration:user-provider") for item in result["mismatched"])
+
+
 def test_tracked_identity_inventory_matches_live_files() -> None:
     """The committed RUN-IDENTITIES.json must match the live bound files on this
     machine; a stale inventory blocks the run by design (N1 class)."""
@@ -673,6 +731,16 @@ def test_tracked_identity_inventory_matches_live_files() -> None:
                 )
     for path in contract.get("env_files_must_be_absent", []):
         assert not Path(str(path)).exists(), f"unbound env file present: {path}"
+    for item in contract.get("user_provider_files", []):
+        path = Path(str(item["path"]))
+        if item.get("expects") == "absent":
+            assert not path.exists(), f"unbound user provider file present: {path}"
+        else:
+            assert path.exists(), f"bound user provider file missing: {path}"
+            assert _sha256(path) == item["sha256"], f"stale user provider identity: {path}"
+    fixture_entries = contract.get("fixture_allowed_entries", [])
+    for entry in ("calc.py", "test_calc.py", "AGENTS.md"):
+        assert entry in fixture_entries, f"fixture allowlist must include {entry}"
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:

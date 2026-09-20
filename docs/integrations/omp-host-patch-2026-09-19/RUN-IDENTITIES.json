@@ -88,6 +88,69 @@
       ".env.production",
       ".env.test",
       "bunfig.toml"
+    ],
+    "fixture_allowed_entries": [
+      ".git",
+      ".brain",
+      "AGENTS.md",
+      "calc.py",
+      "test_calc.py",
+      "__pycache__",
+      ".pytest_cache"
+    ],
+    "user_provider_files": [
+      {
+        "path": "C:\\Users\\assas\\.claude\\settings.json",
+        "sha256": "b84ee40aeeb9acb555752ac88384da800cfc4c88d52de0d1e163911ceb91a134"
+      },
+      {
+        "path": "C:\\Users\\assas\\.claude\\settings.local.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.claude\\mcp.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.gemini\\settings.json",
+        "sha256": "49d27761f7350b9a53272d9d5f76b11259d16e0c0f9c52fe932237db2cc534f1"
+      },
+      {
+        "path": "C:\\Users\\assas\\.codex\\config.toml",
+        "sha256": "6dc0798ea76ff97ded4d61017353bb87031e030fc31e3d13ebe08541dd6c0390"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cursor\\settings.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cursor\\mcp.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.config\\opencode\\opencode.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.config\\opencode\\opencode.jsonc",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cline\\settings.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.codeium\\windsurf\\mcp_config.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.mcp.json",
+        "expects": "absent"
+      },
+      {
+        "path": "C:\\Users\\assas\\.vscode\\mcp.json",
+        "expects": "absent"
+      }
     ]
   },
   "identities": [
@@ -199,7 +262,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "af3c6afe0c9d2f1c383b3394cd206718301f051b990c54e471240e49a6da897b"
+      "sha256": "3e999435be81a5e5e1d1fc6d8c01bdfe0cde01b455c43c7fa76c69f05efd6042"
     },
     {
       "role": "watcher",
