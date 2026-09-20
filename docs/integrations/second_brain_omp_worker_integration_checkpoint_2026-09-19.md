@@ -825,6 +825,50 @@ authorization:
   accounting and failed-to-cancelled terminal outcome arbitration.
 - Report: `outputs/reports/omp-activation-20260920/ACTIVATION-REPORT.md`.
 
+### Causal-evidence binding closed (2026-09-20, later)
+
+The separately tracked open item — `qualification_ledger: governed promotion
+evidence is not bound to a worker-independent causal observation` — is closed
+on the shipping subject.
+
+- **Rebind.** The accepted OMP-only ledger (subject `ae39910`, tree
+  `e08b2e3e…`) was re-bound onto the shipping subject (`7fcd995a…`, tree
+  `7edd3d64…`, config unchanged `f5da285e…`, gate hashes and producers
+  unchanged): 38 evidence artifacts copied byte-for-byte with only the
+  identity binding refreshed into
+  `outputs/reports/omp-shipping-ledger-20260920/artifacts/…`; the prior
+  artifacts are untouched; every transition is recorded in
+  `outputs/reports/omp-shipping-ledger-20260920/rebind-log.json`. The
+  candidate records (12 rows) and the manifest were re-issued against the
+  shipping identity.
+- **Live governed re-check.** The real promotion machinery (`promote`) was
+  re-run on the live Brain for `verified-config-read-reuse` (shadow →
+  candidate): the eight-guard map is identical to the accepted counterexample
+  (all true except `version`), the refusal reason is `version_not_incremented`,
+  and the skill level and promotion records are unchanged. The refusal path
+  never mutates state.
+- **Live observation.** `credit.record_intervention` /
+  `credit.record_observation` recorded
+  `intv-0cee29ee1df3b59d812cc2e9` /
+  `obs-e7bd9a8c6c1312bb7b4cb2da`; the observation's evidence binds the
+  promotion artifact
+  (`outputs/reports/omp-shipping-ledger-20260920/artifacts/omp-current-evidence-20260919/omp-only-rebind/artifacts/v2-i-integration/v2-i-governed_self_improvement_proof-governed-promotion-guards.json`,
+  sha256 `122071b2…`). Record:
+  `outputs/reports/omp-shipping-ledger-20260920/causal-binding.json`.
+- **Verifier.** `scripts/verify_qualification.py` (same pinned verifier,
+  sha256 `042ba98d…`) exits 0 against the shipping manifest/records and the
+  OMP-only scope: `READY_TO_RECORD` (the documented candidate-records outcome,
+  never QUALIFIED), 7/7 checks green, 12/12 requirements PROVEN, 12/12
+  coverage-complete, 68/68 scoped Gate clauses covered, six retired clauses
+  not counted as passed, and exactly one validated evidence binding.
+  Verdict: `outputs/reports/omp-shipping-ledger-20260920/strict-verdict.json`
+  (manifest sha `8bbf1fb2…`, records sha `ab56211e…`, records content sha
+  `6243bbf6…`).
+
+Remaining before the final label: fresh independent review of the closed
+ledger, then the final installed-outcome acceptance.
+
+
 
 ### check:types resolved (2026-09-20)
 
