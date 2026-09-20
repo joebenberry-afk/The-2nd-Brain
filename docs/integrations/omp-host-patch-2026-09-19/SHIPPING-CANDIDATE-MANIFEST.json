@@ -28,7 +28,8 @@
       "pre_existing_gated_markers": "retained where they predate the campaign: job-manager, attempt-settlement, structured-subagent and task/index module markers and route/owner-jobs traces; the worktree module marker was part of the removed helper block",
       "environment_seams": "OM_CANARY_FORCE_ISOLATED and OM_CANARY_ISOLATION remain env-gated test seams (inert unless set to 1); they grant no cleanup or release authority",
       "description_rule": "describe this candidate as campaign-instrumentation-removed, not entirely instrumentation-free"
-    }
+    },
+    "sealed_commit": "a2e49e4"
   },
   "campaigns": {
     "instrumented_acceptance": {
@@ -57,12 +58,13 @@
     "host_tests": "PASS 36/36 (bun test tests/host-patch; independently re-run by the reviewer)",
     "host_lint": "PASS 0 errors (bun x oxlint on the edited src files; executed from the host package directory so oxlint resolves)",
     "host_check_types": {
-      "toolchain": "@typescript/native-preview 7.0.0-dev.20260707.2 (tsgo) from the v18.2.6 catalog",
-      "method": "isolated environment with the v18.2.6 config chain (coding-agent tsconfig -> packages/tsconfig.workspace.json -> tsconfig.base.json -> types/assets), candidate src/tests/scripts over the pinned global install, node_modules junction; differential control from the unpatched published source",
-      "isolation_environment_result": "both candidate and unpatched control exit 1 with the same seven TS2748 dependency-resolution diagnostics; zero candidate-specific diagnostics",
-      "raw_results": "C:/Users/assas/Documents/The-Second-Brain/outputs/reports/omp-canary29-evidence-20260919/check-types/{candidate-after-fix.txt,upstream-unpatched.txt,environment.json}",
-      "pinned_workspace_run": "pending in this revision; a full v18.2.6 workspace checkout is being prepared to obtain a passing exact-candidate run or a documented exception decision",
-      "gate_status": "NOT PASSING until a zero-error run in a valid pinned environment or an explicit authorized baseline-error exception exists; the nonzero results are preserved and not relabelled"
+      "status": "PASS",
+      "toolchain": "@typescript/native-preview 7.0.0-dev.20260707.2 (tsgo), lockfile-pinned by the v18.2.6 catalog",
+      "method": "full v18.2.6 workspace tarball (codeload), bun install --ignore-scripts (400 packages), candidate src/tests spliced; bun run check:types (tsgo -p tsconfig.json --noEmit) from packages/coding-agent",
+      "alignment": "all six bound host files in the workspace are byte-identical to HASHES.txt entries",
+      "result": "exit 0, zero diagnostics",
+      "evidence": "outputs/reports/omp-canary29-evidence-20260919/check-types/{workspace-run.json,workspace-run-raw.txt}",
+      "superseded_attempt": "an earlier isolated single-package environment emitted seven TS2748 dependency-resolution artifacts (also present in unpatched upstream); those remain recorded for transparency and are explained by that environment, not the candidate"
     }
   },
   "known_limitations": [
