@@ -508,6 +508,48 @@ def test_expectations_and_launcher_outcome_gate_evidence() -> None:
     assert mod.launcher_outcome(True, False, 0) == 4
 
 
+def test_windows_case_folding_and_relative_home_cannot_bypass_binding(tmp_path: Path) -> None:
+    """Windows environment lookup is case-insensitive and child-relative paths
+    resolve from the child cwd; both must be modelled by the gate."""
+    mod = _load("launch_run")
+    spec = _complete_binding_spec(tmp_path)
+    redirect = tmp_path / "redirect-home"
+    (redirect / ".omp" / "profiles" / "canary-settlement" / "agent").mkdir(
+        parents=True, exist_ok=True
+    )
+    run_dir = tmp_path / "run-case"
+    run_dir.mkdir(exist_ok=True)
+
+    # A lower/mixed-case extra_env key must not evade the case-insensitive
+    # child lookup: the gate and the child must see the same variable.
+    base = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+    env = mod.merge_env(base, {"userprofile": str(redirect)})
+    assert sum(1 for key in env if key.upper() == "USERPROFILE") == 1
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-dir" in result["mismatched"]
+    assert "configuration:resolved-profile-dir" in result["mismatched"]
+
+    env = mod.merge_env(base, {"pi_config_dir": ".astra-redirect"})
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-env" in result["mismatched"]
+
+    # A relative home must fail: the gate runs from the launcher cwd while the
+    # child runs from the fixture cwd.
+    env = dict(base)
+    env["USERPROFILE"] = "..\\..\\..\\.."
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-dir" in result["mismatched"]
+
+
 def test_tracked_identity_inventory_matches_live_files() -> None:
     """The committed RUN-IDENTITIES.json must match the live bound files on this
     machine; a stale inventory blocks the run by design (N1 class)."""

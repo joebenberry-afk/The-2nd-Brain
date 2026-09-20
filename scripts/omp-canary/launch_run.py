@@ -78,6 +78,42 @@ def parse_hashes_file(path: Path, base: Path) -> dict[str, str]:
     return entries
 
 
+def env_get_ci(env: dict, name: str) -> str | None:
+    """Case-insensitive environment lookup (Windows process semantics).
+
+    The gate must model the child's lookup rules, not Python's case-sensitive
+    dict, or a differently-cased extra_env key can redirect the effective
+    configuration while a case-sensitive check passes.
+    """
+    hits = [key for key in env if key.upper() == name.upper()]
+    if not hits:
+        return None
+    key = name if name in env else hits[0]
+    value = env.get(key)
+    return None if value is None else str(value)
+
+
+def merge_env(base: dict, extra: dict) -> dict:
+    """Merge extra environment variables case-insensitively, keeping exactly one
+    spelling per name so validation and the spawned child see the same value."""
+    merged = dict(base)
+    index = {key.upper(): key for key in merged}
+    for key, value in extra.items():
+        upper = key.upper()
+        existing = index.get(upper)
+        if existing is not None and existing != key:
+            merged.pop(existing, None)
+        merged[key] = str(value)
+        index[upper] = key
+    return merged
+
+
+def env_set_ci(env: dict, name: str, value: str) -> None:
+    for key in [key for key in env if key.upper() == name.upper() and key != name]:
+        env.pop(key, None)
+    env[name] = value
+
+
 def validate_fresh_inputs(spec: dict) -> list[str]:
     """Refuse to reuse a previous run's artifacts by accident."""
     errors: list[str] = []
@@ -212,7 +248,7 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         ("SECOND_BRAIN_PYTHON", spec["python"]),
         ("OM_CANARY_BOOT", spec["trace_file"]),
     ):
-        actual = env.get(name)
+        actual = env_get_ci(env, name)
         ok = actual == expected
         env_checks.append({"name": name, "expected": expected, "actual": actual, "ok": ok})
         if not ok:
@@ -258,15 +294,20 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     # implies.
     expected_home = contract.get("home_dir")
     config_dir_name = contract.get("config_dir_name", ".omp")
-    child_userprofile = env.get("USERPROFILE")
-    child_home = env.get("HOME")
+    child_userprofile = env_get_ci(env, "USERPROFILE")
+    child_home = env_get_ci(env, "HOME")
     home_dir_ok = (
         bool(expected_home)
+        and Path(str(expected_home)).is_absolute()
         and child_userprofile is not None
+        and Path(str(child_userprofile)).is_absolute()
         and Path(str(child_userprofile)).resolve() == Path(str(expected_home)).resolve()
         and (
             child_home is None
-            or Path(str(child_home)).resolve() == Path(str(expected_home)).resolve()
+            or (
+                Path(str(child_home)).is_absolute()
+                and Path(str(child_home)).resolve() == Path(str(expected_home)).resolve()
+            )
         )
     )
     contract_check(
@@ -331,7 +372,9 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         for entry in inventory.get("identities", [])
     )
     contract_check("default-user-config-bound", user_config_ok, user_config_file)
-    forbidden_env_hits = [name for name in contract.get("forbidden_env", []) if env.get(name)]
+    forbidden_env_hits = [
+        name for name in contract.get("forbidden_env", []) if env_get_ci(env, name)
+    ]
     contract_check("forbidden-env", not forbidden_env_hits, forbidden_env_hits)
     forbidden_flag_hits = [
         flag for flag in contract.get("forbidden_argv_flags", []) if flag in argv
@@ -407,7 +450,7 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
             "profile": profile,
             "argv": argv,
             "effective_env": {
-                name: env.get(name)
+                name: env_get_ci(env, name)
                 for name in ("SECOND_BRAIN_HOME", "SECOND_BRAIN_PYTHON", "OM_CANARY_BOOT")
             },
         },
@@ -667,11 +710,10 @@ def main() -> int:
         return 2
 
     identity = executable_identity(spec)
-    env = dict(os.environ)
-    env.update({k: str(v) for k, v in spec.get("extra_env", {}).items()})
+    env = merge_env(dict(os.environ), spec.get("extra_env", {}))
     if spec.get("hold_prefix"):
-        env["OM_CANARY_HOLD_RELEASE_UNTIL"] = spec["hold_prefix"]
-    env["OM_CANARY_BOOT"] = spec["trace_file"]
+        env_set_ci(env, "OM_CANARY_HOLD_RELEASE_UNTIL", spec["hold_prefix"])
+    env_set_ci(env, "OM_CANARY_BOOT", spec["trace_file"])
 
     state: dict = {
         "coordinator": None,
@@ -854,12 +896,14 @@ def main() -> int:
         "timed_out": state["timed_out"],
         "supervised_process_ownership": "launcher-spawned-and-reaped",
         "environment": {
-            "SECOND_BRAIN_HOME": env.get("SECOND_BRAIN_HOME"),
-            "SECOND_BRAIN_PYTHON": env.get("SECOND_BRAIN_PYTHON"),
-            "OM_CANARY_BOOT": env.get("OM_CANARY_BOOT"),
-            "OM_CANARY_FORCE_ISOLATED": env.get("OM_CANARY_FORCE_ISOLATED"),
-            "OM_CANARY_ISOLATION": env.get("OM_CANARY_ISOLATION"),
-            "OM_CANARY_HOLD_RELEASE_UNTIL_set": bool(env.get("OM_CANARY_HOLD_RELEASE_UNTIL")),
+            "SECOND_BRAIN_HOME": env_get_ci(env, "SECOND_BRAIN_HOME"),
+            "SECOND_BRAIN_PYTHON": env_get_ci(env, "SECOND_BRAIN_PYTHON"),
+            "OM_CANARY_BOOT": env_get_ci(env, "OM_CANARY_BOOT"),
+            "OM_CANARY_FORCE_ISOLATED": env_get_ci(env, "OM_CANARY_FORCE_ISOLATED"),
+            "OM_CANARY_ISOLATION": env_get_ci(env, "OM_CANARY_ISOLATION"),
+            "OM_CANARY_HOLD_RELEASE_UNTIL_set": bool(
+                env_get_ci(env, "OM_CANARY_HOLD_RELEASE_UNTIL")
+            ),
         },
         "identity": identity,
         "run_start_binding": {
