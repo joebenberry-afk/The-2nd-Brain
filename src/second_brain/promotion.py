@@ -514,13 +514,18 @@ def _publish(
                     f"failed: {retry_exc}",
                     rollback_incomplete=True,
                 ) from exc
-    marker_written = _write_authority_marker(
-        home,
-        skill_name,
-        to_level,
-        _recovered_active_version(home, skill_name, record) if to_level == "active" else None,
-        record.get("promotion_id"),
-    )
+    marker_written = False
+    if _level_of(home, skill_name) == to_level:
+        marker_written = _write_authority_marker(
+            home,
+            skill_name,
+            to_level,
+            _recovered_active_version(home, skill_name, record) if to_level == "active" else None,
+            record.get("promotion_id"),
+        )
+    # An artifact that is no longer at this level was moved by a later
+    # publication for the same skill: that operation owns the marker, and this
+    # one must not leave the artifact claiming a level it is not in.
     if marker_written:
         _clear_journal(pending)
     # A marker that could not be written leaves the intent in place: a later
@@ -639,6 +644,15 @@ def _committed_record_path(home: Path, skill_name: str, promotion_id: object) ->
     return None
 
 
+def _payload_from_bytes(raw: bytes) -> dict | None:
+    """The record in already-read bytes, or None when they are not one."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _record_payload(path: Path) -> dict | None:
     """The record in one store file, or None when the file is not one.
 
@@ -648,21 +662,22 @@ def _record_payload(path: Path) -> dict | None:
     the same file or recovery would be blocked by an unrelated skill's damage.
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return _payload_from_bytes(path.read_bytes())
+    except OSError:
         return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _quarantine_corrupt_records(home: Path) -> list[str]:
     """Move unreadable committed records aside so recovery can continue.
 
     Damaged bytes are archived under ``state/promotions/corrupt/`` in a file
-    named for their own content, written with O_EXCL: two passes that quarantine
-    at once cannot collide or overwrite evidence, and identical damage is
-    archived once. The source is removed only while it still holds exactly the
-    archived bytes, so a pass that lost a race cannot move the healthy
-    replacement another pass just wrote.
+    named for their own content. The archive is written to a temporary file and
+    published with a single rename, so a partially written archive can never be
+    mistaken for a complete one; an archive that cannot be created or verified
+    leaves the damage in place. Bytes that turn out to be a valid record (a
+    concurrent pass replaced the damaged file while this one was reading it) are
+    left alone, and the source is removed only while it still holds exactly the
+    archived bytes.
     """
     directory = _promotions_dir(home)
     if not directory.is_dir():
@@ -676,25 +691,28 @@ def _quarantine_corrupt_records(home: Path) -> list[str]:
             raw = path.read_bytes()
         except OSError:
             continue
+        if _payload_from_bytes(raw) is not None:
+            # Another pass replaced the damage with a committed record.
+            continue
         digest = hashlib.sha256(raw).hexdigest()
         target = quarantine / f"{path.stem}.{digest[:12]}{path.suffix}"
         try:
             quarantine.mkdir(parents=True, exist_ok=True)
+            archived = (
+                target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == digest
+            )
         except OSError:
             # Without an archive the damaged bytes must stay where they are:
             # quarantine may never destroy evidence it could not preserve.
             continue
-        try:
-            handle = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            pass  # identical damaged bytes are already archived
-        except OSError:
-            continue
-        else:
+        if not archived:
+            partial = target.with_name(target.name + ".partial")
             try:
-                with os.fdopen(handle, "wb") as sink:
-                    sink.write(raw)
+                partial.write_bytes(raw)
+                os.replace(partial, target)
             except OSError:
+                with contextlib.suppress(OSError):
+                    partial.unlink(missing_ok=True)
                 continue
         with contextlib.suppress(OSError):
             if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
@@ -739,6 +757,10 @@ def _recover_journal(
             _write_record(home, recovered)
         except BrainError:
             return {**base, "action": "commit_failed"}, False
+    if _level_of(home, skill_name) != to_level:
+        # A later publication moved the artifact while this pass was working;
+        # its own marker is authoritative, so only the intent is cleared.
+        return {**base, "action": "already_committed" if committed else "committed"}, True
     marker_ok = _write_authority_marker(home, skill_name, to_level, version, promotion_id)
     if not marker_ok:
         # Keep the intent: a later pass retries the marker (and repairs a marker
