@@ -1,6 +1,6 @@
 {
   "schema": "second-brain.omp-run-identities.v1",
-  "generated_at": "2026-09-20T16:21:57.298158+00:00",
+  "generated_at": "2026-09-20T16:23:12.577638+00:00",
   "note": "Successor runtime inventory. Every path resolves to the staged qualification layout or to a repaired repository file; the predecessor inventory is unchanged and still describes the accepted campaign.",
   "lineage": {
     "predecessor_file": "docs/integrations/omp-host-patch-2026-09-19/RUN-IDENTITIES.json",

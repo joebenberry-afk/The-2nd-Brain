@@ -1,6 +1,6 @@
 {
   "schema": "second-brain.omp-successor-candidate.v1",
-  "generated_at": "2026-09-20T16:21:50.097797+00:00",
+  "generated_at": "2026-09-20T16:23:07.001646+00:00",
   "purpose": "Successor candidate record for the repaired OMP baseline. The predecessor pack is sealed history and is not modified; this record, its own HASHES.txt, RUN-IDENTITIES.json and shipping seal describe the repaired subject and the staged layout it was qualified in.",
   "authorization": "user mandate 2026-09-20: bounded successor re-issue campaign",
   "lineage": {
@@ -17,8 +17,8 @@
     "successor": {
       "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
       "branch": "brain/omp-native-6172a18-20260911",
-      "commit": "3aea51511727d9fbe493268d46103e8d76d6a418",
-      "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+      "commit": "4f7ee6801af034e9e8c00fa6d6ab8e9a626a7d56",
+      "source_tree_sha256": "d8a9c3c722fc0a7f9ea456bf0d11f194ec2a61f7719ec53e08c395918491cb95",
       "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
     }
   },
@@ -108,7 +108,7 @@
       "path": "scripts/stage_omp_successor.py",
       "kind": "added",
       "predecessor_sha256": null,
-      "successor_sha256": "b54a920500bed29b4c1c11ffa67667c8dddcf221e4baf8be9d900e2871670dc1",
+      "successor_sha256": "12457ed42b94666c583723f128eb19e9992cdaf62e649835cb730277c21034c0",
       "reason": "Added by this campaign: builds the disposable staged layout (sealed package copy overlaid with the eight repository host-patch sources, plus the flat extension) so the repaired candidate is qualified without installing anything into production.",
       "evidence": "%TEMP%/omp-successor-20260920/staged/STAGE-MANIFEST.json",
       "status": "explained"
@@ -117,7 +117,7 @@
       "path": "scripts/generate_successor_record.py",
       "kind": "added",
       "predecessor_sha256": null,
-      "successor_sha256": "15917c7d254f6e6a862ad9560d7f9f553e8b4557534f5c1b12d11af246dfbf6c",
+      "successor_sha256": "bb2790cc443f1dfdbecc8864f8e2d573f5a6b26df56eedc476edf4857270f4a2",
       "reason": "Added by this campaign: records the successor candidate with lineage, path-by-path differences, staged inventory and its own RUN-IDENTITIES/HASHES, and seals it separately from the predecessor.",
       "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json",
       "status": "explained"

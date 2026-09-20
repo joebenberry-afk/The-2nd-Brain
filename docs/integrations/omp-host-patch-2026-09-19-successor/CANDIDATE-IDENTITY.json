@@ -1,15 +1,15 @@
 {
   "schema": "second-brain.omp-successor-candidate-identity.v1",
-  "generated_at": "2026-09-20T16:21:57.343517+00:00",
+  "generated_at": "2026-09-20T16:23:12.607726+00:00",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "3aea51511727d9fbe493268d46103e8d76d6a418",
-    "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+    "commit": "4f7ee6801af034e9e8c00fa6d6ab8e9a626a7d56",
+    "source_tree_sha256": "d8a9c3c722fc0a7f9ea456bf0d11f194ec2a61f7719ec53e08c395918491cb95",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "fingerprints": {
-    "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+    "source_tree_sha256": "d8a9c3c722fc0a7f9ea456bf0d11f194ec2a61f7719ec53e08c395918491cb95",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "files": {
@@ -42,10 +42,10 @@
     "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64",
     "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts": "6beb1dc60563caa99780d8c742c7444fd240dabb8e751e081718ee75bf0f91f5",
     "scripts/generate_omp_deployment_manifest.py": "5b1f3eb886a52ba3513b62383a764a8a1bfb031078d5587d51e9056078a68fe4",
-    "scripts/generate_successor_record.py": "15917c7d254f6e6a862ad9560d7f9f553e8b4557534f5c1b12d11af246dfbf6c",
+    "scripts/generate_successor_record.py": "bb2790cc443f1dfdbecc8864f8e2d573f5a6b26df56eedc476edf4857270f4a2",
     "scripts/run-omp-patched.ps1": "79378ddb2b234824f40b8067765efe20c94e9269cc0d6a6b72cdfcb367c8b2dc",
     "scripts/run_host_settlement_tests.py": "2ae9401893b5d1049adfe199d6b76d89c62653618f8873e97b080daa3d59ef7b",
-    "scripts/stage_omp_successor.py": "b54a920500bed29b4c1c11ffa67667c8dddcf221e4baf8be9d900e2871670dc1",
+    "scripts/stage_omp_successor.py": "12457ed42b94666c583723f128eb19e9992cdaf62e649835cb730277c21034c0",
     "src/second_brain/backup.py": "4b3c695136504774ee203ff10730f3a5c029ae2b649e955ba96837d837cce973",
     "src/second_brain/cli.py": "e49b817311610f9215e751c67caa374976d0f93cccdddb8be32c0e6619e6998a",
     "src/second_brain/doctor.py": "d9524bfd1c5ba3f6f7cb37925cba18bcee9a00dfd7f59b950121a2108a8764b3",
