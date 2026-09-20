@@ -1,0 +1,8 @@
+796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\async\job-manager.ts
+24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\main.ts
+5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
+9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\cleanup-barrier.ts
+fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
+c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
+7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\index.ts
+95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3 C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\worker-lifecycle-bridge.ts

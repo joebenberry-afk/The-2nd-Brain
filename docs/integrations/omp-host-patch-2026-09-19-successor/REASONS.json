@@ -50,5 +50,17 @@
   "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts": {
     "reason": "F-06 (commit 4ae207b): the repaired settlement module. The sealed canary and the production installation carry the pre-repair bytes (5a96bced...), which mutate an accepted attempt outcome; the repaired module (78ba5ddd...) exports the same seven symbols and is the drop-in the staged campaign qualifies.",
     "evidence": "scripts/run_host_settlement_tests.py (sealed 1 / candidate 0); docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json host_delta section"
+  },
+  "scripts/export_successor_package.py": {
+    "reason": "Added by the successor campaign: builds and verifies the export package (tested subject, recipes, finding matrix and evidence digests) and derives the campaign index from the raw evidence.",
+    "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SHIPPING-CANDIDATE-MANIFEST.json"
+  },
+  "scripts/activate_omp_successor.py": {
+    "reason": "Added by the activation campaign: bounded three-file production activation with backups, hash verification, governed-surface delta check and production manifest write/check.",
+    "evidence": "outputs/reports/omp-activation-successor-20260920/activation-record.json"
+  },
+  "scripts/run_production_smoke.py": {
+    "reason": "Added by the activation campaign: the single bounded production run that proves the installed runtime executes the repaired settlement path.",
+    "evidence": "outputs/reports/omp-activation-successor-20260920/production-smoke.json"
   }
 }

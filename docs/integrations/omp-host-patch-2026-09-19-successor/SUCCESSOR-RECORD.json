@@ -1,6 +1,6 @@
 {
   "schema": "second-brain.omp-successor-candidate.v1",
-  "generated_at": "2026-09-20T16:37:12.571710+00:00",
+  "generated_at": "2026-09-20T17:15:31.815471+00:00",
   "purpose": "Successor candidate record for the repaired OMP baseline. The predecessor pack is sealed history and is not modified; this record, its own HASHES.txt, RUN-IDENTITIES.json and shipping seal describe the repaired subject and the staged layout it was qualified in.",
   "authorization": "user mandate 2026-09-20: bounded successor re-issue campaign",
   "lineage": {
@@ -17,8 +17,8 @@
     "successor": {
       "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
       "branch": "brain/omp-native-6172a18-20260911",
-      "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
-      "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
+      "commit": "db9d4acce8a0b2780de69c81e585e0242799240c",
+      "source_tree_sha256": "ec9516834c335c0eceaf687ab7d54c0be048dae379cdafd7f628b3c9552d8c2d",
       "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
     }
   },
@@ -117,9 +117,36 @@
       "path": "scripts/generate_successor_record.py",
       "kind": "added",
       "predecessor_sha256": null,
-      "successor_sha256": "b051599ea1b6955f522c85fa9f8e787724ba8128ddcc1b1a427e1ce20b8c07d8",
+      "successor_sha256": "588f4bf8c0ce8cb2087cc951a1b2e6a0978f1739242aa89ed02e48c6940cf9db",
       "reason": "Added by this campaign: records the successor candidate with lineage, path-by-path differences, staged inventory and its own RUN-IDENTITIES/HASHES, and seals it separately from the predecessor.",
       "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/export_successor_package.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "fc4ef66b56d9f168e6716aa98df53e2cd8325f13f5f9238312a824e0a3af51a2",
+      "reason": "Added by the successor campaign: builds and verifies the export package (tested subject, recipes, finding matrix and evidence digests) and derives the campaign index from the raw evidence.",
+      "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SHIPPING-CANDIDATE-MANIFEST.json",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/activate_omp_successor.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "7a7315ce2dda856098c57989e4316b15e7b757143bcd2c41e89a3f433ab7c8a2",
+      "reason": "Added by the activation campaign: bounded three-file production activation with backups, hash verification, governed-surface delta check and production manifest write/check.",
+      "evidence": "outputs/reports/omp-activation-successor-20260920/activation-record.json",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/run_production_smoke.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "2004a2cbcc008bc9169a10b3c5407e5aa9c1ee9c3e792ee2a194c5ed316d4c20",
+      "reason": "Added by the activation campaign: the single bounded production run that proves the installed runtime executes the repaired settlement path.",
+      "evidence": "outputs/reports/omp-activation-successor-20260920/production-smoke.json",
       "status": "explained"
     },
     {
@@ -145,19 +172,8 @@
     "extension": {
       "root": "C:\\Users\\assas\\.omp\\agent\\extensions\\second-brain",
       "file_count": 26,
-      "installed_matches_source": 24,
-      "mismatches": [
-        {
-          "path": "index.ts",
-          "source_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
-          "installed_sha256": "4ad0b27350fdf911290a49671eba82248385f49a36b70b6f107c01bdf96a3f1a"
-        },
-        {
-          "path": "recall-gate.ts",
-          "source_sha256": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
-          "installed_sha256": "bc0c9ca3745a1af789fc1aa77303dc5f830f4c070fd112252b7326173de5edd6"
-        }
-      ]
+      "installed_matches_source": 26,
+      "mismatches": []
     },
     "host_delta": {
       "canary": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
@@ -185,8 +201,8 @@
         {
           "path": "src/task/attempt-settlement.ts",
           "canary_sha256": "5a96bced749f8b16466a895e3f51e4b1651bc539bee0e6f552068b90e17a6567",
-          "retail_sha256": "5a96bced749f8b16466a895e3f51e4b1651bc539bee0e6f552068b90e17a6567",
-          "matches": true
+          "retail_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
+          "matches": false
         },
         {
           "path": "src/task/executor.ts",
@@ -2069,7 +2085,7 @@
   "checks": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
+      "sha256": "143fc62b119a8fb22a351dc155d39bab00489a4809e479e668d1be0ff9713db9"
     },
     "steps": {
       "preflight": {

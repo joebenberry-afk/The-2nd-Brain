@@ -1,15 +1,15 @@
 {
   "schema": "second-brain.omp-successor-candidate-identity.v1",
-  "generated_at": "2026-09-20T16:37:18.785629+00:00",
+  "generated_at": "2026-09-20T17:15:38.312094+00:00",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
-    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
+    "commit": "db9d4acce8a0b2780de69c81e585e0242799240c",
+    "source_tree_sha256": "ec9516834c335c0eceaf687ab7d54c0be048dae379cdafd7f628b3c9552d8c2d",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "fingerprints": {
-    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
+    "source_tree_sha256": "ec9516834c335c0eceaf687ab7d54c0be048dae379cdafd7f628b3c9552d8c2d",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "files": {
@@ -41,10 +41,13 @@
     "brainstem/prime-extension/types/prime.d.ts": "5befb1be81a0073bc0518d75c2b971985018b9b0788d8c3cdad074bfea45e23a",
     "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64",
     "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts": "6beb1dc60563caa99780d8c742c7444fd240dabb8e751e081718ee75bf0f91f5",
+    "scripts/activate_omp_successor.py": "7a7315ce2dda856098c57989e4316b15e7b757143bcd2c41e89a3f433ab7c8a2",
+    "scripts/export_successor_package.py": "fc4ef66b56d9f168e6716aa98df53e2cd8325f13f5f9238312a824e0a3af51a2",
     "scripts/generate_omp_deployment_manifest.py": "5b1f3eb886a52ba3513b62383a764a8a1bfb031078d5587d51e9056078a68fe4",
-    "scripts/generate_successor_record.py": "b051599ea1b6955f522c85fa9f8e787724ba8128ddcc1b1a427e1ce20b8c07d8",
+    "scripts/generate_successor_record.py": "588f4bf8c0ce8cb2087cc951a1b2e6a0978f1739242aa89ed02e48c6940cf9db",
     "scripts/run-omp-patched.ps1": "79378ddb2b234824f40b8067765efe20c94e9269cc0d6a6b72cdfcb367c8b2dc",
     "scripts/run_host_settlement_tests.py": "2ae9401893b5d1049adfe199d6b76d89c62653618f8873e97b080daa3d59ef7b",
+    "scripts/run_production_smoke.py": "2004a2cbcc008bc9169a10b3c5407e5aa9c1ee9c3e792ee2a194c5ed316d4c20",
     "scripts/stage_omp_successor.py": "12457ed42b94666c583723f128eb19e9992cdaf62e649835cb730277c21034c0",
     "src/second_brain/backup.py": "4b3c695136504774ee203ff10730f3a5c029ae2b649e955ba96837d837cce973",
     "src/second_brain/cli.py": "e49b817311610f9215e751c67caa374976d0f93cccdddb8be32c0e6619e6998a",
