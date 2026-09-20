@@ -780,11 +780,47 @@ Brain writes. Under this mandate those writes belong to the authorized
 activation phase (controlled installed-runtime operations in the actual Brain
 home), so the binding is scheduled after installation rather than bypassed.
 
-`check:types` is being resolved with the project's actual pinned toolchain:
+`check:types` was resolved with the project's actual pinned toolchain:
 `@typescript/native-preview 7.0.0-dev.20260707.2` (tsgo) from the v18.2.6
-catalog, in an isolated checkout of `github.com/can1357/oh-my-pi` at tag
-`v18.2.6` with the candidate `src`/`tests` spliced in; the published package
-omits `tsconfig.json`, so the live install cannot run the check by itself.
+catalog. A full v18.2.6 workspace with the lockfile-pinned toolchain and the
+candidate sources passes (`bun run check:types`, exit 0, zero diagnostics),
+with all six bound host files byte-identical to HASHES.txt; the earlier
+isolated single-package environment and its dependency-resolution artifacts
+remain recorded for transparency.
+
+### Local activation and installed smoke (2026-09-20, later)
+
+Astra pre-activation verdict `PRE_ACTIVATION_READY` for the sealed candidate
+(`cb2807c`, functional `40d2218`). Under the mandate's conditional local
+authorization:
+
+- Installed: extension (26 files, installer manifest
+  `381f3e75...`) into `~/.omp/agent/extensions/second-brain`; the complete
+  canary-vs-retail host source delta (7 additional files) into the retail
+  package, making the installed `src` tree byte-identical to the sealed
+  canary; `task.isolation.enabled: true` added to the default profile config
+  (backup preserved). No `OM_CANARY_*` variables persist.
+- Backups and rollback: `second_brain backup` exit 0; rollback copies of the
+  extension, host files and config; a disposable behavioral rollback rehearsal
+  restored the pre-activation extension and host into a throwaway tree (all
+  hashes match, the added file removed, restored host starts `omp/18.2.6`).
+- Installed smoke (normal launches, seams disabled): isolated mutating worker
+  settled with the patch applied (exit 0); read-only delegation returned a
+  useful result and an isolated successor was admitted with `1 passed`
+  (exit 0); `--continue` resume recalled the successor result (exit 0);
+  installed compaction demonstrated (seven compaction records, model-reported
+  `compacted: true` with continuity detail, exit 0); advisory/shadow states
+  captured read-only (no new promotions; `verified-config-read-reuse` stays
+  shadow). Production records are scoped to project `omp-smoke-20260920`.
+- Astra round-22 verdict: `INSTALLED_EVIDENCE_ACCEPTED_WITH_OPEN_COMPLETION_CHECKS`.
+  Open: targeted Brain recall at the model boundary (gate exercised but no
+  brief rows with the tested models; the underlying search returns the
+  intended memory), and the separately tracked causal-evidence binding plus
+  the shipping-subject ledger rebind; final `OMP_SECOND_BRAIN_READY` report
+  after both close. Non-blocking follow-ups: read-only task-row accounting and
+  failed-to-cancelled terminal outcome arbitration.
+- Report: `outputs/reports/omp-activation-20260920/ACTIVATION-REPORT.md`.
+
 
 ### check:types resolved (2026-09-20)
 
