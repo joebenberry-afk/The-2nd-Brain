@@ -813,12 +813,16 @@ authorization:
   captured read-only (no new promotions; `verified-config-read-reuse` stays
   shadow). Production records are scoped to project `omp-smoke-20260920`.
 - Astra round-22 verdict: `INSTALLED_EVIDENCE_ACCEPTED_WITH_OPEN_COMPLETION_CHECKS`.
-  Open: targeted Brain recall at the model boundary (gate exercised but no
-  brief rows with the tested models; the underlying search returns the
-  intended memory), and the separately tracked causal-evidence binding plus
-  the shipping-subject ledger rebind; final `OMP_SECOND_BRAIN_READY` report
-  after both close. Non-blocking follow-ups: read-only task-row accounting and
-  failed-to-cancelled terminal outcome arbitration.
+  Closed since: B1 (installed compaction demonstrated with seven compaction
+  records and model-reported continuity; advisory/shadow state captured
+  read-only; targeted Brain retrieval inside OMP demonstrated via the supported
+  CLI search with the durable memory cited at the model boundary; the
+  recall-brief gate's full-prompt FTS limitation is recorded) and B2 (disposable
+  behavioral rollback rehearsal executed with hash-verified restore and a
+  starting restored host). Open: the separately tracked causal-evidence binding
+  plus the shipping-subject ledger rebind; final `OMP_SECOND_BRAIN_READY`
+  report after it closes. Non-blocking follow-ups: read-only task-row
+  accounting and failed-to-cancelled terminal outcome arbitration.
 - Report: `outputs/reports/omp-activation-20260920/ACTIVATION-REPORT.md`.
 
 
