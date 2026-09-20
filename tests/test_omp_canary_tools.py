@@ -296,9 +296,9 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     (home / "config").mkdir(parents=True, exist_ok=True)
     (home / "config" / "context.toml").write_text("[rtd]\nenabled = true\n", encoding="utf-8")
     conn = sqlite3.connect(home / "db" / "brain.sqlite")
-    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (value INTEGER)")
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER, applied_at TEXT)")
     conn.execute("DELETE FROM schema_version")
-    conn.execute("INSERT INTO schema_version VALUES (24)")
+    conn.execute("INSERT INTO schema_version VALUES (24, '2026-01-01T00:00:00')")
     conn.commit()
     conn.close()
 
