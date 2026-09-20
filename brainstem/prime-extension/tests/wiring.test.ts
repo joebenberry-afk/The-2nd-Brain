@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import factory, { BUDGET_HARD_LINE, type ExtensionOptions } from "../src/index";
+import { RECALL_DEFAULT_MAX_TERMS } from "../src/recall-gate";
 import { createTelemetryDirEnsurer } from "../src/storage";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
@@ -2007,7 +2008,14 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
       { home: string; query: string; cfg: { maxRows: number } },
     ];
     expect(options.home).toBe(tmp);
-    expect(options.query).toBe(RECALL_PROMPT);
+    // The CLI needs bounded keywords, not the raw prompt: it keeps up to eight
+    // query terms by IDF and requires at least half of them to occur in one
+    // memory, so a prose prompt matches nothing.
+    expect(options.query).not.toBe(RECALL_PROMPT);
+    expect(options.query.split(" ")).toHaveLength(RECALL_DEFAULT_MAX_TERMS);
+    for (const term of options.query.split(" ")) {
+      expect(term).toMatch(/^[a-z0-9]{3,}$/);
+    }
     expect(options.cfg.maxRows).toBe(3);
     expect(result).toBeDefined();
     expect(result!.systemPrompt).toContain("Project: default"); // PREFIX still delivered

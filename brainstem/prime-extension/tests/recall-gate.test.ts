@@ -11,9 +11,11 @@ import {
   BRIEF_HEADER,
   BRIEF_MAX_WORDS,
   RECALL_DEFAULT_MAX_ROWS,
+  RECALL_DEFAULT_MAX_TERMS,
   RECALL_DEFAULT_MIN_CHARS,
   RECALL_DEFAULT_TIMEOUT_MS,
   buildBrainBrief,
+  buildRecallQuery,
   loadRecallGateConfig,
   parseRecallRows,
   runBrainRecall,
@@ -29,6 +31,7 @@ const ENV_KEYS = [
   "SECOND_BRAIN_RECALL_MAX_ROWS",
   "SECOND_BRAIN_RECALL_MIN_CHARS",
   "SECOND_BRAIN_RECALL_TIMEOUT_MS",
+  "SECOND_BRAIN_RECALL_MAX_TERMS",
 ] as const;
 const SAVED: Record<string, string | undefined> = {};
 
@@ -55,6 +58,7 @@ describe("loadRecallGateConfig", () => {
       maxRows: RECALL_DEFAULT_MAX_ROWS,
       minChars: RECALL_DEFAULT_MIN_CHARS,
       timeoutMs: RECALL_DEFAULT_TIMEOUT_MS,
+      maxQueryTerms: RECALL_DEFAULT_MAX_TERMS,
     });
   });
 
@@ -76,6 +80,66 @@ describe("loadRecallGateConfig", () => {
       expect(loadRecallGateConfig({ SECOND_BRAIN_RECALL_MIN_CHARS: bad }).minChars).toBe(RECALL_DEFAULT_MIN_CHARS);
       expect(loadRecallGateConfig({ SECOND_BRAIN_RECALL_TIMEOUT_MS: bad }).timeoutMs).toBe(RECALL_DEFAULT_TIMEOUT_MS);
     }
+  });
+});
+
+describe("buildRecallQuery (bounded keywords for the CLI)", () => {
+  const cfg = loadRecallGateConfig({ SECOND_BRAIN_RECALL: "1" });
+
+  it("selects content keywords instead of the raw prompt", () => {
+    const prompt =
+      "We keep hitting the writer admission problem: the previous worker left the lease held " +
+      "and the successor was refused with WORKTREE_WRITER_BUSY, so please explain what to do next";
+    const query = buildRecallQuery(prompt, cfg);
+
+    expect(query).toBeDefined();
+    expect(query).not.toContain("please");
+    expect(query?.split(" ")).toHaveLength(RECALL_DEFAULT_MAX_TERMS);
+    expect(query).toContain("writer");
+    expect(query).toContain("admission");
+    // The CLI tokenizes on ASCII alphanumerics; the query must match that shape.
+    for (const term of query?.split(" ") ?? []) {
+      expect(term).toMatch(/^[a-z0-9]{3,}$/);
+    }
+  });
+
+  it("drops fenced code, inline code and URLs", () => {
+    const prompt = [
+      "Explain why the retrieval budget behaves like this:",
+      "```sql",
+      "SELECT secretcolumn FROM memory_fts WHERE zebra = 1;",
+      "```",
+      "see https://example.invalid/zebra/documents for the background",
+      "and the `zebra_marker` inline snippet",
+      "the ranking of candidate memories is wrong",
+    ].join("\n");
+
+    const query = buildRecallQuery(prompt, cfg);
+
+    expect(query).toBeDefined();
+    expect(query).not.toContain("zebra");
+    expect(query).toContain("retrieval");
+  });
+
+  it("returns undefined when fewer than two usable terms remain", () => {
+    expect(buildRecallQuery("the and to of it", cfg)).toBeUndefined();
+    expect(buildRecallQuery("please fix", cfg)).toBeUndefined();
+    expect(buildRecallQuery("", cfg)).toBeUndefined();
+    expect(buildRecallQuery("```\nSELECT zebra FROM memory_fts\n```", cfg)).toBeUndefined();
+  });
+
+  it("honors maxQueryTerms and is deterministic", () => {
+    const prompt = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+
+    expect(buildRecallQuery(prompt, { ...cfg, maxQueryTerms: 2 })).toBe("alpha bravo");
+    expect(buildRecallQuery(prompt, cfg)).toBe(buildRecallQuery(prompt, cfg));
+    expect(buildRecallQuery(prompt, cfg)?.split(" ")).toHaveLength(RECALL_DEFAULT_MAX_TERMS);
+  });
+
+  it("skips repeated tokens", () => {
+    expect(buildRecallQuery("worktree worktree worktree lease lease budget", cfg)).toBe(
+      "worktree lease budget",
+    );
   });
 });
 

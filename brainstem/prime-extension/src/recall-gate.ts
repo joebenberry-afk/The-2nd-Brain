@@ -20,6 +20,11 @@
  *   SECOND_BRAIN_RECALL_MAX_ROWS   default 3
  *   SECOND_BRAIN_RECALL_MIN_CHARS  default 40
  *   SECOND_BRAIN_RECALL_TIMEOUT_MS default 5000
+ *   SECOND_BRAIN_RECALL_MAX_TERMS  default 4 (content terms per recall query)
+ *
+ * `buildRecallQuery` turns the prompt into that bounded keyword query. The CLI
+ * tokenizes its query, keeps up to eight terms by IDF and requires at least half
+ * of them to occur in one memory, so passing the raw prompt matches nothing.
  *
  * CLI contract (verified against the repo CLI, cli.py `cmd_memory` "search"):
  *   <home>/.venv/Scripts/python.exe -m second_brain memory search "<term>"
@@ -38,6 +43,7 @@ import { join } from "node:path";
 export const RECALL_DEFAULT_MAX_ROWS = 3;
 export const RECALL_DEFAULT_MIN_CHARS = 40;
 export const RECALL_DEFAULT_TIMEOUT_MS = 5000;
+export const RECALL_DEFAULT_MAX_TERMS = 4;
 export const RECALL_ENABLE_VALUES = new Set(["1", "true", "yes"]);
 
 export interface RecallGateConfig {
@@ -45,6 +51,8 @@ export interface RecallGateConfig {
   maxRows: number;
   minChars: number;
   timeoutMs: number;
+  /** Distinct content terms the recall query may carry (bounds retrieval). */
+  maxQueryTerms: number;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -64,6 +72,10 @@ export function loadRecallGateConfig(
     maxRows: parsePositiveInt(env.SECOND_BRAIN_RECALL_MAX_ROWS, RECALL_DEFAULT_MAX_ROWS),
     minChars: parsePositiveInt(env.SECOND_BRAIN_RECALL_MIN_CHARS, RECALL_DEFAULT_MIN_CHARS),
     timeoutMs: parsePositiveInt(env.SECOND_BRAIN_RECALL_TIMEOUT_MS, RECALL_DEFAULT_TIMEOUT_MS),
+    maxQueryTerms: parsePositiveInt(
+      env.SECOND_BRAIN_RECALL_MAX_TERMS,
+      RECALL_DEFAULT_MAX_TERMS,
+    ),
   };
 }
 
@@ -89,6 +101,71 @@ export function shouldAttemptRecall(userText: string | undefined, cfg: RecallGat
   if (GREETING_RE.test(text)) return false;
   if (CONTINUATION_RE.test(text)) return false;
   return true;
+}
+
+/**
+ * Words that carry no retrieval signal for a bounded recall query. The Brain
+ * CLI drops its own subset too; this list keeps the out-of-process query short
+ * so the CLI's "at least half the terms must match one memory" rule (see
+ * semantic._query_plan msm=0.5) can actually be satisfied by a stored memory.
+ */
+const RECALL_STOPWORDS: Record<string, true> = {
+  the: true, a: true, an: true, and: true, or: true, but: true, if: true, then: true,
+  than: true, that: true, this: true, these: true, those: true, there: true, here: true,
+  is: true, are: true, was: true, were: true, be: true, been: true, being: true, am: true,
+  do: true, does: true, did: true, done: true, have: true, has: true, had: true, having: true,
+  will: true, would: true, can: true, could: true, should: true, shall: true, may: true,
+  might: true, must: true, i: true, me: true, my: true, we: true, our: true, you: true,
+  your: true, it: true, its: true, they: true, them: true, their: true, to: true, of: true,
+  in: true, on: true, at: true, by: true, for: true, with: true, without: true, from: true,
+  into: true, over: true, under: true, about: true, as: true, so: true, not: true, no: true,
+  nor: true, too: true, very: true, just: true, also: true, only: true, again: true,
+  more: true, most: true, some: true, any: true, all: true, both: true, each: true, few: true,
+  other: true, such: true, same: true, own: true, because: true, while: true, when: true,
+  where: true, which: true, who: true, what: true, why: true, how: true, please: true,
+  help: true, need: true, needs: true, want: true, wants: true, make: true, makes: true,
+  get: true, gets: true, let: true, lets: true, use: true, uses: true, using: true,
+  used: true, run: true, runs: true, work: true, works: true, thing: true, things: true,
+  really: true, still: true, even: true, well: true, much: true, many: true, like: true,
+  back: true, out: true, up: true, down: true, off: true, now: true, new: true, dont: true,
+  doesnt: true, cant: true,
+};
+
+const RECALL_FENCE_RE = /```[\s\S]*?```/g;
+const RECALL_INLINE_CODE_RE = /`[^`]*`/g;
+const RECALL_URL_RE = /\bhttps?:\/\/\S+/gi;
+/** Same token shape the Brain CLI keeps: ASCII alphanumeric runs of 3+ after casefolding. */
+const RECALL_TOKEN_RE = /[a-z0-9]{3,}/g;
+
+/**
+ * Build the bounded keyword query for one recall attempt.
+ *
+ * The CLI must not receive the whole prompt: it tokenizes the query, keeps up
+ * to eight terms by IDF and requires at least half of them to occur in a single
+ * memory, so a prose prompt matches nothing. This selects a few distinct
+ * content terms instead (code fences, inline code and URLs are dropped, and
+ * stopwords and duplicated tokens are skipped). Returns undefined when fewer
+ * than two usable terms remain — the CLI would return no rows for those too,
+ * and "no query" is the honest outcome.
+ */
+export function buildRecallQuery(userText: string, cfg: RecallGateConfig): string | undefined {
+  if (typeof userText !== "string") return undefined;
+  const withoutNoise = userText
+    .replace(RECALL_FENCE_RE, " ")
+    .replace(RECALL_INLINE_CODE_RE, " ")
+    .replace(RECALL_URL_RE, " ")
+    .toLowerCase();
+  const limit = Math.max(1, cfg.maxQueryTerms);
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const token of withoutNoise.match(RECALL_TOKEN_RE) ?? []) {
+    if (RECALL_STOPWORDS[token] === true || seen.has(token)) continue;
+    seen.add(token);
+    selected.push(token);
+    if (selected.length >= limit) break;
+  }
+  if (selected.length < 2) return undefined;
+  return selected.join(" ");
 }
 
 /** Normalized brief row (fields optional except title). */
