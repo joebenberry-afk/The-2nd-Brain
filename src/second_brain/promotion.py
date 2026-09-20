@@ -454,13 +454,16 @@ def _heal_status(home: Path, skill_name: str, level: str | None) -> None:
 
 def _publish(
     home: Path, skill_name: str, from_level: str, to_level: str, record: dict
-) -> tuple[Path, Path, bool]:
+) -> tuple[Path, Path, bool, bool]:
     """Move the skill into the target level and commit its record.
 
     The publication is journaled first, so an interruption between the move
     and the record is recoverable instead of leaving active behavior without
-    committed authority. A reported failure rolls the move back. On success
-    the artifact also carries its active-version baseline.
+    committed authority. A reported failure rolls the move back when no
+    committed record exists for the publication; when one does (a concurrent
+    recovery pass committed it), the publication is completed instead. On
+    success the artifact also carries its active-version baseline. The last
+    element reports that the record was already committed by that recovery.
     """
     try:
         pending = _write_pending(home, record)
@@ -473,35 +476,44 @@ def _publish(
         _heal_status(home, skill_name, from_level)
         reason = "destination_exists" if "already exists" in str(exc) else "move_failed"
         raise _PublicationFailure(reason, str(exc)) from exc
+    recovered = False
     try:
         record_path = _write_record(home, record)
     except Exception as exc:
-        if _rollback_publication(home, skill_name, from_level, to_level):
-            # A concurrent recovery pass may have committed this publication's
-            # record while this caller was failing; reporting failure must not
-            # leave a record for state that was restored.
-            _discard_committed_record(home, skill_name, record.get("promotion_id"))
+        committed = _committed_record_path(home, skill_name, record.get("promotion_id"))
+        if committed is not None:
+            # A concurrent recovery pass committed this publication's record
+            # while this caller was failing. The artifact is published and the
+            # publication is authorized, so the consistent outcome is to finish
+            # it: promotion records are append-only, and a caller that reports
+            # failure must never delete authority another writer established.
+            record_path = committed
+            recovered = True
+        elif _rollback_publication(home, skill_name, from_level, to_level):
             pending.unlink(missing_ok=True)
             raise _PublicationFailure("record_failed", str(exc)) from exc
-        # The artifact is still published, so it must not stay without authority:
-        # retry the record immediately rather than waiting for reconciliation.
-        try:
-            record_path = _write_record(home, record)
-        except Exception as retry_exc:
-            raise _PublicationFailure(
-                "record_failed",
-                f"{exc}; committing the record after a failed rollback also failed: {retry_exc}",
-                rollback_incomplete=True,
-            ) from exc
+        else:
+            # The artifact is still published, so it must not stay without
+            # authority: retry the record immediately rather than waiting for
+            # reconciliation.
+            try:
+                record_path = _write_record(home, record)
+            except Exception as retry_exc:
+                raise _PublicationFailure(
+                    "record_failed",
+                    f"{exc}; committing the record after a failed rollback also "
+                    f"failed: {retry_exc}",
+                    rollback_incomplete=True,
+                ) from exc
     marker_written = _write_authority_marker(
         home,
         skill_name,
         to_level,
-        record.get("resulting_version") if to_level == "active" else None,
+        _recovered_active_version(home, skill_name, record) if to_level == "active" else None,
         record.get("promotion_id"),
     )
     pending.unlink(missing_ok=True)
-    return target, record_path, marker_written
+    return target, record_path, marker_written, recovered
 
 
 def _reconcile_pending(home: Path, *, min_age_seconds: float = 0.0) -> list[dict]:
@@ -594,53 +606,65 @@ def _recovered_active_version(home: Path, skill_name: str, record: dict) -> int 
     return claimed if isinstance(claimed, int) and claimed >= 1 else None
 
 
-def _discard_committed_record(home: Path, skill_name: str, promotion_id: object) -> list[str]:
-    """Remove a committed record for a publication that was rolled back.
+def _committed_record_path(home: Path, skill_name: str, promotion_id: object) -> Path | None:
+    """The committed record for one publication, if the store already holds it.
 
-    A concurrent recovery pass may commit this publication's record while the
-    original caller is still failing; the caller that reports failure must not
-    leave a record behind for state it restored.
+    A concurrent recovery pass may commit this caller's publication (it journals
+    before it moves, and the journal is the same one); the record store is
+    append-only, so a caller that finds the record there must complete the
+    publication rather than delete authority another writer established.
     """
     if not isinstance(promotion_id, str) or not promotion_id:
-        return []
+        return None
     directory = _promotions_dir(home)
     if not directory.is_dir():
-        return []
-    removed: list[str] = []
+        return None
     for path in sorted(directory.glob(f"{skill_name}-*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict) and payload.get("promotion_id") == promotion_id:
-            try:
-                path.unlink()
-            except OSError:
-                continue
-            removed.append(path.name)
-    return removed
+        record = _record_payload(path)
+        if record is not None and record.get("promotion_id") == promotion_id:
+            return path
+    return None
 
 
-def _quarantine_corrupt_records(home: Path, skill_name: str) -> list[str]:
+def _record_payload(path: Path) -> dict | None:
+    """The record in one store file, or None when the file is not one.
+
+    Damage handling (quarantine) and history reading share this predicate, and
+    both walk every top-level record file: the reader rejects the whole store as
+    corrupt when any of them is unreadable, so quarantine must be able to see
+    the same file or recovery would be blocked by an unrelated skill's damage.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _quarantine_corrupt_records(home: Path) -> list[str]:
     """Move unreadable committed records aside so recovery can continue.
 
     The damaged bytes are preserved under ``state/promotions/corrupt/`` for
-    inspection; otherwise the record store is append-only.
+    inspection, under a fresh name each time so later damage cannot overwrite
+    earlier evidence; otherwise the record store is append-only.
     """
     directory = _promotions_dir(home)
     if not directory.is_dir():
         return []
     quarantine = directory / "corrupt"
     moved: list[str] = []
-    for path in sorted(directory.glob(f"{skill_name}-*.json")):
-        try:
-            json.loads(path.read_text(encoding="utf-8"))
+    for path in sorted(directory.glob("*.json")):
+        if _record_payload(path) is not None:
             continue
-        except (OSError, json.JSONDecodeError):
-            pass
+        target = quarantine / path.name
+        if target.exists():
+            counter = 2
+            while (quarantine / f"{path.stem}.{counter}{path.suffix}").exists():
+                counter += 1
+            target = quarantine / f"{path.stem}.{counter}{path.suffix}"
         try:
             quarantine.mkdir(parents=True, exist_ok=True)
-            os.replace(path, quarantine / path.name)
+            os.replace(path, target)
         except OSError:
             continue
         moved.append(path.name)
@@ -664,7 +688,7 @@ def _recover_journal(
     try:
         records = _read_records(home, skill_name)
     except BrainError:
-        quarantined = _quarantine_corrupt_records(home, skill_name)
+        quarantined = _quarantine_corrupt_records(home)
         if not quarantined:
             return {"pending": path.name, "action": "records_unreadable"}, False
         try:
@@ -867,7 +891,7 @@ def promote(
         "reason": "demoted-via-promote" if demotion else None,
     }
     try:
-        target, record_path, marker_written = _publish(
+        target, record_path, marker_written, record_recovered = _publish(
             home, skill_name, from_level, to_level, record
         )
     except _PublicationFailure as exc:
@@ -888,6 +912,7 @@ def promote(
         "record_path": str(record_path),
         "target": str(target),
         "authority_marker": "written" if marker_written else "unavailable",
+        "record_recovered": record_recovered,
     }
 
 
@@ -923,7 +948,9 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         "reason": reason,
     }
     try:
-        target, record_path, marker_written = _publish(home, skill_name, actual, to_level, record)
+        target, record_path, marker_written, record_recovered = _publish(
+            home, skill_name, actual, to_level, record
+        )
     except _PublicationFailure as exc:
         result: dict[str, Any] = {
             "demoted": False,
@@ -942,6 +969,7 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         "record_path": str(record_path),
         "target": str(target),
         "authority_marker": "written" if marker_written else "unavailable",
+        "record_recovered": record_recovered,
     }
 
 
@@ -951,12 +979,9 @@ def _read_records(home: Path, skill_name: str | None = None) -> list[dict]:
         return []
     records = []
     for path in sorted(directory.glob("*.json")):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise BrainError(f"Corrupt promotion record {path}: {exc}") from exc
-        if not isinstance(record, dict):
-            raise BrainError(f"Corrupt promotion record {path}: not a JSON object")
+        record = _record_payload(path)
+        if record is None:
+            raise BrainError(f"Corrupt promotion record {path}: not a readable JSON object")
         if skill_name is None or record.get("skill_name") == skill_name:
             records.append(record)
     records.sort(key=lambda r: (r.get("ts", ""), r.get("skill_name", "")))
