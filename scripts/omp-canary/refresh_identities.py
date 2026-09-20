@@ -121,6 +121,28 @@ def main() -> int:
     profile_agent_dir = profile_dir / "agent"
     if user_config.exists():
         identities.append({"role": "configuration-default-profile-user", "path": str(user_config)})
+
+    def provider_entry(relative: Path) -> dict:
+        path = Path.home() / relative
+        if path.exists():
+            return {"path": str(path), "sha256": sha(path)}
+        return {"path": str(path), "expects": "absent"}
+
+    user_provider_files = [
+        provider_entry(Path(".claude/settings.json")),
+        provider_entry(Path(".claude/settings.local.json")),
+        provider_entry(Path(".claude/mcp.json")),
+        provider_entry(Path(".gemini/settings.json")),
+        provider_entry(Path(".codex/config.toml")),
+        provider_entry(Path(".cursor/settings.json")),
+        provider_entry(Path(".cursor/mcp.json")),
+        provider_entry(Path(".config/opencode/opencode.json")),
+        provider_entry(Path(".config/opencode/opencode.jsonc")),
+        provider_entry(Path(".cline/settings.json")),
+        provider_entry(Path(".codeium/windsurf/mcp_config.json")),
+        provider_entry(Path(".mcp.json")),
+        provider_entry(Path(".vscode/mcp.json")),
+    ]
     inventory = {
         "schema": "second-brain.omp-run-identities.v1",
         "generated_at": "2026-09-19",
@@ -182,6 +204,16 @@ def main() -> int:
                 ".env.test",
                 "bunfig.toml",
             ],
+            "fixture_allowed_entries": [
+                ".git",
+                ".brain",
+                "AGENTS.md",
+                "calc.py",
+                "test_calc.py",
+                "__pycache__",
+                ".pytest_cache",
+            ],
+            "user_provider_files": user_provider_files,
         },
         "identities": [
             {"role": entry["role"], "path": entry["path"], "sha256": sha(Path(entry["path"]))}

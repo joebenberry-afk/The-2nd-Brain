@@ -399,6 +399,41 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     ]
     contract_check("env-files-absent", not env_file_hits, env_file_hits)
 
+    # Project-level capability discovery can read many provider files from the
+    # fixture cwd; enforce that the fixture contains only its declared entries
+    # so no unbound project settings source can exist.
+    allowed_entries = set(contract.get("fixture_allowed_entries", []))
+    fixture_root = Path(spec["fixture"])
+    unexpected_entries: list[str] = []
+    if allowed_entries and fixture_root.is_dir():
+        unexpected_entries = sorted(
+            name
+            for name in (entry.name for entry in fixture_root.iterdir())
+            if name not in allowed_entries
+        )
+    contract_check("fixture-tree", not unexpected_entries, unexpected_entries)
+
+    # User-level provider files feed the same discovery; existing files are
+    # bound by hash and absent ones stay absent.
+    user_provider_records = []
+    for item in contract.get("user_provider_files", []):
+        path = Path(str(item.get("path")))
+        if item.get("expects") == "absent":
+            ok = not path.exists()
+            detail = "absent"
+        else:
+            actual = sha256_file(path)
+            ok = actual is not None and actual.lower() == str(item.get("sha256")).lower()
+            detail = actual
+        user_provider_records.append({"path": str(path), "ok": ok, "detail": detail})
+        if not ok:
+            mismatched.append(f"configuration:user-provider:{path.name}")
+    contract_check(
+        "user-provider-files",
+        not any(not item["ok"] for item in user_provider_records),
+        user_provider_records,
+    )
+
     schema_actual = read_schema_version(Path(spec["home"]) / "db" / "brain.sqlite")
     schema_ok = spec.get("schema_expected") is not None and schema_actual == spec.get(
         "schema_expected"
