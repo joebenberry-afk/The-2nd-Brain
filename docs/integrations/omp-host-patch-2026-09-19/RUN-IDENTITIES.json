@@ -109,6 +109,7 @@
     "fixture_allowed_entries": [
       ".git",
       ".brain",
+      ".gitignore",
       "AGENTS.md",
       "calc.py",
       "test_calc.py",
@@ -289,7 +290,7 @@
     {
       "role": "preflight",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\preflight_run.py",
-      "sha256": "db2a5db1d73f1270c56a19b3b2ea7870dca7f828875a109e5fa06c903c69031b"
+      "sha256": "6aa66d647dfd6d1f0cde4dcc3263def5d686adbe73f7a5c88702a6651856bcf9"
     },
     {
       "role": "post-exit-check",
