@@ -190,7 +190,17 @@ def main() -> int:
                 "BUN_OPTIONS",
                 "NODE_OPTIONS",
             ],
-            "forbidden_env_prefixes": ["BUN_", "NODE_"],
+            "forbidden_env_prefixes": ["BUN_", "NODE_", "PI_", "OMP_", "OM_CANARY_"],
+            "allowed_env_exceptions": [
+                "OM_CANARY_BOOT",
+                "OM_CANARY_FORCE_ISOLATED",
+                "OM_CANARY_ISOLATION",
+                "OM_CANARY_HOLD_RELEASE_UNTIL",
+            ],
+            "required_env_values": {
+                "OM_CANARY_FORCE_ISOLATED": "1",
+                "OM_CANARY_ISOLATION": "1",
+            },
             "forbidden_argv_flags": ["--config"],
             "forbidden_project_overlays": [
                 ".omp/config.yml",

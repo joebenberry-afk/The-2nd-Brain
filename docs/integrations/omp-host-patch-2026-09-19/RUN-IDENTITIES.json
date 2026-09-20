@@ -72,8 +72,21 @@
     ],
     "forbidden_env_prefixes": [
       "BUN_",
-      "NODE_"
+      "NODE_",
+      "PI_",
+      "OMP_",
+      "OM_CANARY_"
     ],
+    "allowed_env_exceptions": [
+      "OM_CANARY_BOOT",
+      "OM_CANARY_FORCE_ISOLATED",
+      "OM_CANARY_ISOLATION",
+      "OM_CANARY_HOLD_RELEASE_UNTIL"
+    ],
+    "required_env_values": {
+      "OM_CANARY_FORCE_ISOLATED": "1",
+      "OM_CANARY_ISOLATION": "1"
+    },
     "forbidden_argv_flags": [
       "--config"
     ],
@@ -262,7 +275,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "3e999435be81a5e5e1d1fc6d8c01bdfe0cde01b455c43c7fa76c69f05efd6042"
+      "sha256": "618762f01d4c38e42ab4386cda76530eaf275680982f6595e0928e0dc2b5dfd2"
     },
     {
       "role": "watcher",

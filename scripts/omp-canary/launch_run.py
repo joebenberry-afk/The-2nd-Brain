@@ -377,8 +377,19 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     ]
     contract_check("forbidden-env", not forbidden_env_hits, forbidden_env_hits)
     prefixes = [str(prefix).upper() for prefix in contract.get("forbidden_env_prefixes", [])]
-    prefix_hits = sorted(key for key in env if any(key.upper().startswith(p) for p in prefixes))
+    exceptions = {str(name).upper() for name in contract.get("allowed_env_exceptions", [])}
+    prefix_hits = sorted(
+        key
+        for key in env
+        if key.upper() not in exceptions and any(key.upper().startswith(p) for p in prefixes)
+    )
     contract_check("forbidden-env-prefixes", not prefix_hits, prefix_hits)
+    required_value_failures = []
+    for name, expected in (contract.get("required_env_values") or {}).items():
+        actual = env_get_ci(env, name)
+        if actual != expected:
+            required_value_failures.append({"name": name, "expected": expected, "actual": actual})
+    contract_check("required-env-values", not required_value_failures, required_value_failures)
     forbidden_flag_hits = [
         flag for flag in contract.get("forbidden_argv_flags", []) if flag in argv
     ]
