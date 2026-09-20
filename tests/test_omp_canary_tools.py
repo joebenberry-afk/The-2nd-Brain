@@ -124,6 +124,7 @@ def test_state1_captured_before_terminal_then_state2(tmp_path: Path) -> None:
     assert state.state1 is not None
     assert state.state1["phase"] == "receipt-after-first-sequence-before-terminal"
     assert state.state1["tasks"][-1]["state"] == "RUNNING"
+    assert not (tmp_path / "out" / "state-2.sqlite").exists()
 
     conn.execute(
         "UPDATE worker_tasks SET state='COMPLETED', writer_ownership='released', "

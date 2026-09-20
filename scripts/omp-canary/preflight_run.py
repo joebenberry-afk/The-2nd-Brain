@@ -131,6 +131,25 @@ def main() -> int:
         (fixture / "calc.py").write_text(BUGGY_CALC, encoding="utf-8")
         (fixture / "test_calc.py").write_text(TEST_CALC, encoding="utf-8")
         subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+        # The isolation backend performs `git worktree add`, which requires a
+        # valid HEAD; a fresh `git init` alone fails with "invalid reference:
+        # HEAD". Create the initial fixture commit before registering.
+        subprocess.run(["git", "add", "-A"], cwd=fixture, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Canary Fixture",
+                "-c",
+                "user.email=canary@example.invalid",
+                "commit",
+                "-q",
+                "-m",
+                "fixture: buggy calculator baseline",
+            ],
+            cwd=fixture,
+            check=True,
+        )
         actions.append({"action": "fixture-created", "path": str(fixture)})
     if not (fixture / ".brain" / "project.toml").exists():
         actions.append(
