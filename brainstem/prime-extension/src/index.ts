@@ -66,6 +66,7 @@ import {
 } from "./driver-orchestrator";
 import {
   buildBrainBrief,
+  buildRecallQuery,
   loadRecallGateConfig,
   runBrainRecall,
   shouldAttemptRecall,
@@ -3180,8 +3181,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // miss (no rows, spawn failure) never drops that patch.
       const recallCfg = loadRecallGateConfig();
       let turnMessage: unknown = mergeActiveStateMessage(aiMessage, activeMessage);
-      if (shouldAttemptRecall(event.prompt, recallCfg)) {
-        const brief = await recallBrief(event.prompt, session, recallCfg);
+      // The CLI needs keywords, not the prompt: it keeps up to eight query
+      // terms by IDF and requires at least half to occur in one memory.
+      const recallQuery = shouldAttemptRecall(event.prompt, recallCfg)
+        ? buildRecallQuery(event.prompt, recallCfg)
+        : undefined;
+      if (recallQuery !== undefined) {
+        const brief = await recallBrief(recallQuery, session, recallCfg);
         if (brief !== undefined) {
           turnMessage = mergeRecallBriefMessage(turnMessage, brief);
         }
