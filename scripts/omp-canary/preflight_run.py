@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -130,10 +131,13 @@ def main() -> int:
         fixture.mkdir(parents=True)
         (fixture / "calc.py").write_text(BUGGY_CALC, encoding="utf-8")
         (fixture / "test_calc.py").write_text(TEST_CALC, encoding="utf-8")
+        (fixture / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n", encoding="utf-8")
         subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
         # The isolation backend performs `git worktree add`, which requires a
         # valid HEAD; a fresh `git init` alone fails with "invalid reference:
-        # HEAD". Create the initial fixture commit before registering.
+        # HEAD". Create the initial fixture commit before registering. The
+        # committed .gitignore keeps interpreter caches out of the captured
+        # patch: binary .pyc deltas can make the whole patch unappliable.
         subprocess.run(["git", "add", "-A"], cwd=fixture, check=True)
         subprocess.run(
             [
@@ -176,6 +180,17 @@ def main() -> int:
     elif pre_test.returncode != 0:
         red_reason = f"unexpected-exit-{pre_test.returncode}"
 
+    # Leave no interpreter caches behind: a clean fixture keeps the captured
+    # patch free of binary .pyc deltas (which can make the whole patch fail to
+    # apply) and keeps the fixture tree identical to its prepared manifest.
+    cleanup_targets = [fixture / "__pycache__", fixture / ".pytest_cache"]
+    cleaned = []
+    for target in cleanup_targets:
+        if target.exists():
+            shutil.rmtree(target)
+            cleaned.append(str(target))
+
+    actions.append({"action": "fixture-red-check", "cleaned_caches": cleaned})
     db = home / "db" / "brain.sqlite"
     payload = {
         "home": str(home),

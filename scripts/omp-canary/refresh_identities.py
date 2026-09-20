@@ -227,6 +227,7 @@ def main() -> int:
             "fixture_allowed_entries": [
                 ".git",
                 ".brain",
+                ".gitignore",
                 "AGENTS.md",
                 "calc.py",
                 "test_calc.py",
