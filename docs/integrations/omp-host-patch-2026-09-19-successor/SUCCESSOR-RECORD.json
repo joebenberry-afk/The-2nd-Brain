@@ -1,0 +1,925 @@
+{
+  "schema": "second-brain.omp-successor-candidate.v1",
+  "generated_at": "2026-09-20T16:21:50.097797+00:00",
+  "purpose": "Successor candidate record for the repaired OMP baseline. The predecessor pack is sealed history and is not modified; this record, its own HASHES.txt, RUN-IDENTITIES.json and shipping seal describe the repaired subject and the staged layout it was qualified in.",
+  "authorization": "user mandate 2026-09-20: bounded successor re-issue campaign",
+  "lineage": {
+    "predecessor": {
+      "dir": "docs/integrations/omp-host-patch-2026-09-19",
+      "shipping_candidate_manifest_sha256": "10956335bd5db5fdc1405111a1b8a34ae81cc642db6664cac939485884b4c069",
+      "run_identities_sha256": "cd60bab4c58239128ac09bf0094100ec9a67db309904fd718cd96ae12217089d",
+      "hashes_file_sha256": "981a83e1ff7d7cc3da23ac026fba60d66038a99fc21389043df78b5f6524fd77",
+      "sealed_commit": "a2e49e4",
+      "functional_commit": "40d2218",
+      "candidate_head": "abf2ab9",
+      "status": "preserved byte-identical; its runs remain what executed"
+    },
+    "successor": {
+      "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
+      "branch": "brain/omp-native-6172a18-20260911",
+      "commit": "3aea51511727d9fbe493268d46103e8d76d6a418",
+      "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+      "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
+    }
+  },
+  "differences": [
+    {
+      "path": "src/second_brain/cli.py",
+      "kind": "changed",
+      "predecessor_sha256": "b95e1b176b820d676e2186cdbf6863d5e801abbb2496f30bfa0c1f9f3972eb26",
+      "successor_sha256": "e49b817311610f9215e751c67caa374976d0f93cccdddb8be32c0e6619e6998a",
+      "reason": "Repaired by F-01..F-05 (commit 5103f59): the promotion journal is written before any visibility change, interrupted publications are reconciled, the authority marker survives a record loss, restore takes a pre-attempt inventory, and journal paths are validated as identifiers before filesystem use.",
+      "evidence": "outputs/reports/omp-verification-hardening-20260920/CLOSURE-REPORT.md (F-01..F-05 rows); tests/test_promotion.py, tests/test_backup.py",
+      "status": "explained"
+    },
+    {
+      "path": "src/second_brain/promotion.py",
+      "kind": "changed",
+      "predecessor_sha256": "7ab7af7fabfad90e5f9a55f8de8078c12bcf85d66b530e08a27a7c7661f52708",
+      "successor_sha256": "f68c2edd215bb0e59d72f7b0bfdfe0df4bb34d92e1cb5b86d8491680c62ebf16",
+      "reason": "Promotion/restore integrity repairs plus the record-store hardening verified across review rounds 2-6: append-only records, per-pass quarantine staging, content-addressed damaged-evidence archives, marker level authority, and the publication failure paths.",
+      "evidence": "commits 5103f59, d79da7a, 246c6bf, a72a1c0, 86653c9, e888503, 478f906, 6563e41, 3aea515; verify-round3..7.json",
+      "status": "explained"
+    },
+    {
+      "path": "src/second_brain/backup.py",
+      "kind": "changed",
+      "predecessor_sha256": "ef7f2ab33c7b7f9b87a4ce33f8484f03cc15f445c00e23eb65523570c31e3784",
+      "successor_sha256": "4b3c695136504774ee203ff10730f3a5c029ae2b649e955ba96837d837cce973",
+      "reason": "Repaired by F-01..F-05 and the restore-boundary round: pre-attempt destination inventory, protected pre-existing layout ancestors, and hash verification of what was actually restored.",
+      "evidence": "commits 5103f59, d79da7a, 246c6bf; tests/test_backup.py",
+      "status": "explained"
+    },
+    {
+      "path": "src/second_brain/doctor.py",
+      "kind": "changed",
+      "predecessor_sha256": "25d9b1160758c7b5deeab394e8967ce09f70c09befb3a9cb6d4279c198952276",
+      "successor_sha256": "d9524bfd1c5ba3f6f7cb37925cba18bcee9a00dfd7f59b950121a2108a8764b3",
+      "reason": "Governance visibility repairs: unreadable journals and authority gaps are reported independently, and a carried marker that names another level is reported instead of hidden.",
+      "evidence": "commits d79da7a, 246c6bf, 6563e41; tests/test_doctor.py",
+      "status": "explained"
+    },
+    {
+      "path": "brainstem/prime-extension/src/index.ts",
+      "kind": "changed",
+      "predecessor_sha256": "c260f61a1961153a730871df5f97724e3429c6b73cc95f18e24315c2e45fe068",
+      "successor_sha256": "693c792950e23da2eeea03edd3f0657af172a645a1960a3c7a38bf8af5397b4d",
+      "reason": "F-08 (commit 9f9c642): the recall hook sends a bounded keyword query built by buildRecallQuery instead of the raw prompt, so the CLI's term-match rule can be satisfied. The production installation still carries the pre-repair bytes.",
+      "evidence": "scripts/generate_successor_record.py probe: buildRecallQuery(prompt) -> 'explain retrieval isolation contract'; docs/integrations/omp-host-patch-2026-09-19-successor/RUN-IDENTITIES.json (adapter-index)",
+      "status": "explained"
+    },
+    {
+      "path": "brainstem/prime-extension/src/recall-gate.ts",
+      "kind": "changed",
+      "predecessor_sha256": "cc59e27773b2a8f2279253b996b63c878436ab9302c725e55765de7ecf24aa91",
+      "successor_sha256": "819791689a9c8a6eb42e5dd28e4e6a4c15e7392095663b6eadf8d18da3be2dff",
+      "reason": "F-08 (commit 9f9c642): adds buildRecallQuery with stopword removal and SECOND_BRAIN_RECALL_MAX_TERMS (default 4), keeping recall default-off and abstaining when no content terms remain.",
+      "evidence": "brainstem/prime-extension/tests/recall-gate.test.ts, tests/wiring.test.ts; staged extension copy in RUN-IDENTITIES.json (extension-recall-gate)",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/run-omp-patched.ps1",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "79378ddb2b234824f40b8067765efe20c94e9269cc0d6a6b72cdfcb367c8b2dc",
+      "reason": "F-07 (commit 0226e94) introduced the supported launcher; this campaign added the -ManifestPath/OMP_DEPLOYMENT_MANIFEST override so a staged successor layout can be verified and launched without touching the sealed manifest or production.",
+      "evidence": "commit 3aea515 lineage; scripts/run-omp-patched.ps1 -ManifestPath",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/generate_omp_deployment_manifest.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "5b1f3eb886a52ba3513b62383a764a8a1bfb031078d5587d51e9056078a68fe4",
+      "reason": "F-07 (commit 0226e94) introduced the deployment manifest; this campaign parameterized it (--patch-dir, --out, --installed-host, --installed-extension, --sealed-host) so a successor records its own deployment while every default still describes the sealed candidate.",
+      "evidence": "scripts/generate_omp_deployment_manifest.py --check (successor stage)",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/run_host_settlement_tests.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "2ae9401893b5d1049adfe199d6b76d89c62653618f8873e97b080daa3d59ef7b",
+      "reason": "F-06 harness (commit 4ae207b): runs the attempt-settlement outcome test against the sealed and the candidate settlement module, preserving the sealed module's failure as negative-control evidence.",
+      "evidence": "scripts/run_host_settlement_tests.py -> {\"sealed\": 1, \"candidate\": 0}, PASS (candidate passes, sealed demonstrates the defect)",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/stage_omp_successor.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "b54a920500bed29b4c1c11ffa67667c8dddcf221e4baf8be9d900e2871670dc1",
+      "reason": "Added by this campaign: builds the disposable staged layout (sealed package copy overlaid with the eight repository host-patch sources, plus the flat extension) so the repaired candidate is qualified without installing anything into production.",
+      "evidence": "%TEMP%/omp-successor-20260920/staged/STAGE-MANIFEST.json",
+      "status": "explained"
+    },
+    {
+      "path": "scripts/generate_successor_record.py",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "15917c7d254f6e6a862ad9560d7f9f553e8b4557534f5c1b12d11af246dfbf6c",
+      "reason": "Added by this campaign: records the successor candidate with lineage, path-by-path differences, staged inventory and its own RUN-IDENTITIES/HASHES, and seals it separately from the predecessor.",
+      "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json",
+      "status": "explained"
+    },
+    {
+      "path": "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts",
+      "kind": "unchanged",
+      "predecessor_sha256": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64",
+      "successor_sha256": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64",
+      "reason": "Host-patch source snapshot for the session module; recorded here because it is the file the patch overlays at src/session/agent-session.ts.",
+      "evidence": "docs/integrations/omp-host-patch-2026-09-19/HASHES.txt entry (5b364240...), identical in the canary, retail and the stage",
+      "status": "explained"
+    },
+    {
+      "path": "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts",
+      "kind": "added",
+      "predecessor_sha256": null,
+      "successor_sha256": "6beb1dc60563caa99780d8c742c7444fd240dabb8e751e081718ee75bf0f91f5",
+      "reason": "F-06 (commit 4ae207b): the repaired settlement module. The sealed canary and the production installation carry the pre-repair bytes (5a96bced...), which mutate an accepted attempt outcome; the repaired module (78ba5ddd...) exports the same seven symbols and is the drop-in the staged campaign qualifies.",
+      "evidence": "scripts/run_host_settlement_tests.py (sealed 1 / candidate 0); docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json host_delta section",
+      "status": "explained"
+    }
+  ],
+  "production_state": {
+    "extension": {
+      "root": "C:\\Users\\assas\\.omp\\agent\\extensions\\second-brain",
+      "file_count": 26,
+      "installed_matches_source": 24,
+      "mismatches": [
+        {
+          "path": "index.ts",
+          "source_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+          "installed_sha256": "4ad0b27350fdf911290a49671eba82248385f49a36b70b6f107c01bdf96a3f1a"
+        },
+        {
+          "path": "recall-gate.ts",
+          "source_sha256": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
+          "installed_sha256": "bc0c9ca3745a1af789fc1aa77303dc5f830f4c070fd112252b7326173de5edd6"
+        }
+      ]
+    },
+    "host_delta": {
+      "canary": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+      "retail": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+      "delta_file": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-activation-20260920\\host-delta-applied.json",
+      "files": [
+        {
+          "path": "src/extensibility/extensions/runner.ts",
+          "canary_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
+          "retail_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
+          "matches": true
+        },
+        {
+          "path": "src/extensibility/extensions/types.ts",
+          "canary_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
+          "retail_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
+          "matches": true
+        },
+        {
+          "path": "src/sdk.ts",
+          "canary_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
+          "retail_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
+          "matches": true
+        },
+        {
+          "path": "src/task/attempt-settlement.ts",
+          "canary_sha256": "5a96bced749f8b16466a895e3f51e4b1651bc539bee0e6f552068b90e17a6567",
+          "retail_sha256": "5a96bced749f8b16466a895e3f51e4b1651bc539bee0e6f552068b90e17a6567",
+          "matches": true
+        },
+        {
+          "path": "src/task/executor.ts",
+          "canary_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
+          "retail_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
+          "matches": true
+        },
+        {
+          "path": "src/task/index.ts",
+          "canary_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
+          "retail_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
+          "matches": true
+        },
+        {
+          "path": "src/task/structured-subagent.ts",
+          "canary_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
+          "retail_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
+          "matches": true
+        }
+      ]
+    },
+    "user_config": {
+      "path": "C:\\Users\\assas\\.omp\\agent\\config.yml",
+      "predecessor_recorded_sha256": "80085d18cdc5a9eb2e0c56c312eedaad20f9846242a1962416569a6e32f7a1e1",
+      "live_sha256": "09ef69271a3bddb9de226e98de19c60cca0d59c19d41056d0f9aa3609c9957f1"
+    },
+    "configuration_contract": {
+      "profile": "canary-settlement",
+      "home_dir": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome",
+      "config_dir_name": ".omp",
+      "profile_dir": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.omp\\profiles\\canary-settlement",
+      "profile_agent_dir": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.omp\\profiles\\canary-settlement\\agent",
+      "profile_config_files": [
+        {
+          "name": "config.yml",
+          "expects": "absent"
+        },
+        {
+          "name": "config.yaml",
+          "expects": "absent"
+        },
+        {
+          "name": "settings.json",
+          "expects": "absent"
+        },
+        {
+          "name": ".env",
+          "expects": "absent"
+        }
+      ],
+      "env_files_must_be_absent": [
+        "C:\\Users\\assas\\.env",
+        "C:\\Users\\assas\\.omp\\.env",
+        "C:\\Users\\assas\\.bunfig.toml",
+        "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.env",
+        "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bunfig.toml",
+        "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.omp\\.env"
+      ],
+      "default_profile_user_config": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.omp\\agent\\config.yml",
+      "forbidden_env": [
+        "PI_CONFIG_DIR",
+        "PI_CONFIG_FILES",
+        "PI_CODING_AGENT_DIR",
+        "PI_PACKAGE_DIR",
+        "OMP_PROFILE",
+        "PI_PROFILE",
+        "BUN_OPTIONS",
+        "NODE_OPTIONS",
+        "SECOND_BRAIN_OBSERVABILITY"
+      ],
+      "forbidden_env_prefixes": [
+        "BUN_",
+        "NODE_",
+        "PI_",
+        "OMP_",
+        "OM_CANARY_",
+        "SECOND_BRAIN_"
+      ],
+      "allowed_env_exceptions": [
+        "OM_CANARY_BOOT",
+        "OM_CANARY_FORCE_ISOLATED",
+        "OM_CANARY_ISOLATION",
+        "OM_CANARY_HOLD_RELEASE_UNTIL",
+        "SECOND_BRAIN_HOME",
+        "SECOND_BRAIN_PYTHON"
+      ],
+      "required_env_values": {
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1"
+      },
+      "forbidden_argv_flags": [
+        "--config"
+      ],
+      "forbidden_project_overlays": [
+        ".omp/config.yml",
+        ".omp/settings.json",
+        ".claude/settings.yml",
+        ".claude/settings.json",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        ".env.test",
+        "bunfig.toml"
+      ],
+      "fixture_allowed_entries": [
+        ".git",
+        ".brain",
+        ".gitignore",
+        "AGENTS.md",
+        "calc.py",
+        "test_calc.py",
+        "__pycache__",
+        ".pytest_cache"
+      ],
+      "user_provider_files": [
+        {
+          "path": "C:\\Users\\assas\\.claude\\settings.json",
+          "sha256": "b84ee40aeeb9acb555752ac88384da800cfc4c88d52de0d1e163911ceb91a134"
+        },
+        {
+          "path": "C:\\Users\\assas\\.claude\\settings.local.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.claude\\mcp.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.gemini\\settings.json",
+          "sha256": "49d27761f7350b9a53272d9d5f76b11259d16e0c0f9c52fe932237db2cc534f1"
+        },
+        {
+          "path": "C:\\Users\\assas\\.codex\\config.toml",
+          "sha256": "516bb885b75ab57250ffe6d6d8d0864ee2df2a5511b116671779264164097e42",
+          "predecessor_sha256": "da45be6675ee55f32d0ec38e5cbed6768985715bb8b8e921c99da43473ab23fc",
+          "attribution": "live change after the predecessor inventory (file mtime 2026-09-20 07:10); the predecessor bytes were not preserved, so the change is recorded, not interpreted"
+        },
+        {
+          "path": "C:\\Users\\assas\\.cursor\\settings.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.cursor\\mcp.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.config\\opencode\\opencode.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.config\\opencode\\opencode.jsonc",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.cline\\settings.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.codeium\\windsurf\\mcp_config.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.mcp.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\.vscode\\mcp.json",
+          "expects": "absent"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\settings.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\settings.local.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\mcp.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\settings.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\config.toml",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\settings.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\mcp.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\opencode.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\opencode.jsonc",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\settings.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\mcp_config.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.mcp.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        },
+        {
+          "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\mcp.json",
+          "expects": "absent",
+          "note": "staged user root: no provider file may exist here"
+        }
+      ]
+    },
+    "user_provider_reconciliation": [
+      {
+        "path": "C:\\Users\\assas\\.claude\\settings.json",
+        "expects": "bound",
+        "recorded_sha256": "b84ee40aeeb9acb555752ac88384da800cfc4c88d52de0d1e163911ceb91a134",
+        "live_sha256": "b84ee40aeeb9acb555752ac88384da800cfc4c88d52de0d1e163911ceb91a134",
+        "match": true,
+        "attribution": null
+      },
+      {
+        "path": "C:\\Users\\assas\\.claude\\settings.local.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.claude\\mcp.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.gemini\\settings.json",
+        "expects": "bound",
+        "recorded_sha256": "49d27761f7350b9a53272d9d5f76b11259d16e0c0f9c52fe932237db2cc534f1",
+        "live_sha256": "49d27761f7350b9a53272d9d5f76b11259d16e0c0f9c52fe932237db2cc534f1",
+        "match": true,
+        "attribution": null
+      },
+      {
+        "path": "C:\\Users\\assas\\.codex\\config.toml",
+        "expects": "bound",
+        "recorded_sha256": "da45be6675ee55f32d0ec38e5cbed6768985715bb8b8e921c99da43473ab23fc",
+        "live_sha256": "516bb885b75ab57250ffe6d6d8d0864ee2df2a5511b116671779264164097e42",
+        "match": false,
+        "attribution": "live change after the predecessor inventory (file mtime 2026-09-20 07:10); the predecessor bytes were not preserved, so the change is recorded, not interpreted"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cursor\\settings.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cursor\\mcp.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.config\\opencode\\opencode.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.config\\opencode\\opencode.jsonc",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.cline\\settings.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.codeium\\windsurf\\mcp_config.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.mcp.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      },
+      {
+        "path": "C:\\Users\\assas\\.vscode\\mcp.json",
+        "expects": "absent",
+        "recorded_sha256": null,
+        "live_sha256": null,
+        "match": true,
+        "attribution": "absent as expected"
+      }
+    ]
+  },
+  "staged_layout": {
+    "root": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged",
+    "host_package": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+    "intended_tree": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\host-source",
+    "stage_manifest_sha256": "82846ee82074d55a382dd2146ec799a57fd715a349bc7cb26cc3a003ca987552",
+    "host_files": 2687,
+    "extension_files": 26,
+    "overlays": [
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/job-manager.ts",
+        "host_target": "src/async/job-manager.ts",
+        "sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/runner.ts",
+        "host_target": "src/extensibility/extensions/runner.ts",
+        "sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/types.ts",
+        "host_target": "src/extensibility/extensions/types.ts",
+        "sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/main.ts",
+        "host_target": "src/main.ts",
+        "sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca"
+      },
+      {
+        "intended_source": "<sealed-package>/src/sdk.ts",
+        "host_target": "src/sdk.ts",
+        "sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts",
+        "host_target": "src/session/agent-session.ts",
+        "sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts",
+        "host_target": "src/task/attempt-settlement.ts",
+        "sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917"
+      },
+      {
+        "intended_source": "<sealed-package>/src/task/cleanup-barrier.ts",
+        "host_target": "src/task/cleanup-barrier.ts",
+        "sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a"
+      },
+      {
+        "intended_source": "<sealed-package>/src/task/executor.ts",
+        "host_target": "src/task/executor.ts",
+        "sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9"
+      },
+      {
+        "intended_source": "<sealed-package>/src/task/index.ts",
+        "host_target": "src/task/index.ts",
+        "sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/isolation-runner.ts",
+        "host_target": "src/task/isolation-runner.ts",
+        "sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145"
+      },
+      {
+        "intended_source": "<sealed-package>/src/task/structured-subagent.ts",
+        "host_target": "src/task/structured-subagent.ts",
+        "sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7"
+      },
+      {
+        "intended_source": "docs/integrations/omp-host-patch-2026-09-19/host/worktree.ts",
+        "host_target": "src/task/worktree.ts",
+        "sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30"
+      }
+    ],
+    "settlement": {
+      "sealed_sha256": "5a96bced749f8b16466a895e3f51e4b1651bc539bee0e6f552068b90e17a6567",
+      "staged_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
+      "repaired": true
+    },
+    "runtime_cache": [
+      {
+        "package": "omp-stats@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\omp-stats@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\omp-stats@18.2.6@@@1",
+        "files": 150,
+        "bytes": 2619540,
+        "tree_sha256": "b40b57f204f8bd23b033d30048fb423a45103305ab8bfec0cf1e6068fe18a3e5"
+      },
+      {
+        "package": "omptype@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\omptype@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\omptype@18.2.6@@@1",
+        "files": 44,
+        "bytes": 1916782,
+        "tree_sha256": "86bbd2682c1692e5531bddfa88038f3ab779990cb2b2ece27424a20bb44ec7ca"
+      },
+      {
+        "package": "pi-agent-core@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-agent-core@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-agent-core@18.2.6@@@1",
+        "files": 81,
+        "bytes": 2116059,
+        "tree_sha256": "55f1b87b5b1f7ff6e18cd3d25bae61cf91e487b5f0e958954c5574db6e92c33c"
+      },
+      {
+        "package": "pi-ai@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-ai@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-ai@18.2.6@@@1",
+        "files": 571,
+        "bytes": 7409583,
+        "tree_sha256": "5ae4d8ee93907a73a7a28ceae5e27f37fa388811cb8a6339b746a41f4b308d9a"
+      },
+      {
+        "package": "pi-catalog@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-catalog@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-catalog@18.2.6@@@1",
+        "files": 361,
+        "bytes": 14595035,
+        "tree_sha256": "715056667405af78e066578d553883c1cad4909319a2d5b77fe509c6f512f5fe"
+      },
+      {
+        "package": "pi-coding-agent@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-coding-agent@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-coding-agent@18.2.6@@@1",
+        "files": 2676,
+        "bytes": 47330203,
+        "tree_sha256": "eae23be258e690ec7088b9cc9e30681dcefec21ccdea925a8dd8e045bd0fb759"
+      },
+      {
+        "package": "pi-mnemopi@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-mnemopi@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-mnemopi@18.2.6@@@1",
+        "files": 137,
+        "bytes": 1899620,
+        "tree_sha256": "7b12507d7ac2472863f47b0fdf5332cbdd7bee080858c766db1cbd393a072dfa"
+      },
+      {
+        "package": "pi-natives-win32-x64@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-natives-win32-x64@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-natives-win32-x64@18.2.6@@@1",
+        "files": 5,
+        "bytes": 180574498,
+        "tree_sha256": "11fad57a4443f6d3517096dff15b0867f064cc51607bb7558e4a73540bd94163"
+      },
+      {
+        "package": "pi-natives@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-natives@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-natives@18.2.6@@@1",
+        "files": 19,
+        "bytes": 1263306,
+        "tree_sha256": "325320f23d2746f0fe3a9340c90630598309048bcea0092ff14d2c8a82ccc149"
+      },
+      {
+        "package": "pi-tui@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-tui@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-tui@18.2.6@@@1",
+        "files": 830,
+        "bytes": 7421219,
+        "tree_sha256": "1c62f805ff5218ee02a9283443a5b5204b24f65b343343de2231553322b3bdaa"
+      },
+      {
+        "package": "pi-utils@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-utils@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-utils@18.2.6@@@1",
+        "files": 330,
+        "bytes": 3060961,
+        "tree_sha256": "097528e1afd74e16c9f288964d2d0d172a219617bfedb62ee92a679d8d49e08b"
+      },
+      {
+        "package": "pi-wire@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\pi-wire@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\pi-wire@18.2.6@@@1",
+        "files": 9,
+        "bytes": 1126524,
+        "tree_sha256": "d0710eab7380c6db08ca21b05c8d51e33f63c29f462b3157509b3bb3f19aad8f"
+      },
+      {
+        "package": "snapcompact@18.2.6@@@1",
+        "source": "C:\\Users\\assas\\.bun\\install\\cache\\@oh-my-pi\\snapcompact@18.2.6@@@1",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\userhome\\.bun\\install\\cache\\@oh-my-pi\\snapcompact@18.2.6@@@1",
+        "files": 11,
+        "bytes": 1227079,
+        "tree_sha256": "9ba4cc54095f1d7b67b033502bd4d6e70f1cff9c0bc5555624adcc81a7d19b1c"
+      }
+    ],
+    "global_dependencies": [
+      {
+        "package": "hashline",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\hashline",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\hashline",
+        "files": 47,
+        "bytes": 1474174,
+        "tree_sha256": "b9a167761206fa54d7772c0b87a7b4c080d1ca50aad20357d113dacfce17099b"
+      },
+      {
+        "package": "omp-stats",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\omp-stats",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\omp-stats",
+        "files": 150,
+        "bytes": 2619540,
+        "tree_sha256": "b40b57f204f8bd23b033d30048fb423a45103305ab8bfec0cf1e6068fe18a3e5"
+      },
+      {
+        "package": "omptype",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\omptype",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\omptype",
+        "files": 44,
+        "bytes": 1916782,
+        "tree_sha256": "86bbd2682c1692e5531bddfa88038f3ab779990cb2b2ece27424a20bb44ec7ca"
+      },
+      {
+        "package": "pi-agent-core",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-agent-core",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-agent-core",
+        "files": 81,
+        "bytes": 2116059,
+        "tree_sha256": "55f1b87b5b1f7ff6e18cd3d25bae61cf91e487b5f0e958954c5574db6e92c33c"
+      },
+      {
+        "package": "pi-ai",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-ai",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-ai",
+        "files": 571,
+        "bytes": 7409583,
+        "tree_sha256": "5ae4d8ee93907a73a7a28ceae5e27f37fa388811cb8a6339b746a41f4b308d9a"
+      },
+      {
+        "package": "pi-catalog",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-catalog",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-catalog",
+        "files": 361,
+        "bytes": 14595035,
+        "tree_sha256": "715056667405af78e066578d553883c1cad4909319a2d5b77fe509c6f512f5fe"
+      },
+      {
+        "package": "pi-coding-agent",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+        "files": 2678,
+        "bytes": 47354039,
+        "tree_sha256": "b144f2fa3214c408d82324446b4372ca9fd68a2f71874f885a474e38ddd9b2a7"
+      },
+      {
+        "package": "pi-mnemopi",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-mnemopi",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-mnemopi",
+        "files": 137,
+        "bytes": 1899620,
+        "tree_sha256": "7b12507d7ac2472863f47b0fdf5332cbdd7bee080858c766db1cbd393a072dfa"
+      },
+      {
+        "package": "pi-natives",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-natives",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-natives",
+        "files": 19,
+        "bytes": 1263306,
+        "tree_sha256": "325320f23d2746f0fe3a9340c90630598309048bcea0092ff14d2c8a82ccc149"
+      },
+      {
+        "package": "pi-natives-win32-x64",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-natives-win32-x64",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-natives-win32-x64",
+        "files": 5,
+        "bytes": 180574498,
+        "tree_sha256": "11fad57a4443f6d3517096dff15b0867f064cc51607bb7558e4a73540bd94163"
+      },
+      {
+        "package": "pi-tui",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-tui",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-tui",
+        "files": 830,
+        "bytes": 7421219,
+        "tree_sha256": "1c62f805ff5218ee02a9283443a5b5204b24f65b343343de2231553322b3bdaa"
+      },
+      {
+        "package": "pi-utils",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-utils",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-utils",
+        "files": 330,
+        "bytes": 3060961,
+        "tree_sha256": "097528e1afd74e16c9f288964d2d0d172a219617bfedb62ee92a679d8d49e08b"
+      },
+      {
+        "package": "pi-wire",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-wire",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-wire",
+        "files": 9,
+        "bytes": 1126524,
+        "tree_sha256": "d0710eab7380c6db08ca21b05c8d51e33f63c29f462b3157509b3bb3f19aad8f"
+      },
+      {
+        "package": "snapcompact",
+        "source": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\snapcompact",
+        "staged": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\snapcompact",
+        "files": 11,
+        "bytes": 1227079,
+        "tree_sha256": "9ba4cc54095f1d7b67b033502bd4d6e70f1cff9c0bc5555624adcc81a7d19b1c"
+      }
+    ],
+    "reproduce": "python scripts/stage_omp_successor.py --root <root>: copy the sealed canary package to <root>/host, overlay the eight repository host-patch sources at their target paths (writing the intended bytes to <root>/host-source), and copy brainstem/prime-extension/src/*.ts flat plus types/*.d.ts into <root>/extension."
+  },
+  "negative_control": {
+    "subject": "docs/integrations/omp-host-patch-2026-09-19/tests/attempt-settlement-outcome.test.ts",
+    "sealed_host_module": "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts",
+    "runner": "scripts/run_host_settlement_tests.py",
+    "expected": "sealed host fails (exit 1) and candidate passes (exit 0)"
+  },
+  "checks": {
+    "campaign_index": {
+      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
+      "sha256": "6b4a81c1a4604f63ecffa43d1cb21e31bab150e5a68b7befa3daa72a3595ebd0"
+    },
+    "steps": {
+      "preflight": {
+        "exit": 0,
+        "schema_version": 24,
+        "home_counts": {
+          "worker_tasks": 0,
+          "worker_lifecycle_receipts": 0
+        },
+        "fixture_starts_red": true,
+        "fixture_sha256": {
+          "calc.py": "71bdccb8f575f1049fa00f1fc2ab6ba89d655be178c869ac7c190839e4fe2330",
+          "test_calc.py": "50bc95b769d0c31bed5aba18ec046c0788a52b19d3bd581733b340e00b6bc931"
+        }
+      },
+      "session-1": {
+        "child_exit": 0,
+        "qualification_complete": true,
+        "expectations_met": true,
+        "terminal_sequence": 4,
+        "state_1": {
+          "attempt": "attempt-d0e34f61c3bc5ca95e09566a2a74b80e",
+          "task_state": "WORKING",
+          "writer_ownership": "held",
+          "executor_settled": 0,
+          "cleanup_complete": 0
+        },
+        "state_2": {
+          "task_state": "COMPLETED",
+          "writer_ownership": "released",
+          "executor_settled": 1,
+          "cleanup_complete": 1,
+          "receipts": 4
+        }
+      },
+      "post-exit-1": {
+        "receipt_sequences_contiguous": {
+          "attempt-d0e34f61c3bc5ca95e09566a2a74b80e": true
+        },
+        "fixture_green": true,
+        "post_patch_calc_sha256": "63098273a7aaa630762d6f145dfcf9c61c8c9b290c6ebeb2a05fea5854ccb476"
+      },
+      "session-2": {
+        "child_exit": 0,
+        "qualification_complete": true,
+        "expectations_met": true
+      },
+      "post-exit-2": {
+        "receipt_sequences_contiguous": {
+          "attempt-4ce35472f3b2ecb11c91ef53f199e296": true,
+          "attempt-d0e34f61c3bc5ca95e09566a2a74b80e": true
+        },
+        "fixture_green": true,
+        "production_unchanged": true
+      },
+      "negative-control": {
+        "exit": 0,
+        "expected": "candidate passes (0), sealed demonstrates the defect (1)"
+      },
+      "rollback-rehearsal": {
+        "restored_files": 6,
+        "all_restored_exactly": true,
+        "manifest_check_exit": 1,
+        "launcher_exit": 2
+      }
+    },
+    "staged_layout": {
+      "root": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged",
+      "host_package": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+      "stage_manifest_sha256": "82846ee82074d55a382dd2146ec799a57fd715a349bc7cb26cc3a003ca987552",
+      "settlement_repaired_in_stage": true,
+      "runtime_packages": 14,
+      "vendor_junctions": 0
+    }
+  },
+  "explicit_non_claims": [
+    "The predecessor pack, its seals and its runs are unchanged.",
+    "No production installation, configuration, database, lease or host replacement.",
+    "Universal qualification stays HOLD; economics stays INSUFFICIENT."
+  ]
+}

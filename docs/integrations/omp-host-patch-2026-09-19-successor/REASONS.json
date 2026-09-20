@@ -1,0 +1,54 @@
+{
+  "src/second_brain/cli.py": {
+    "reason": "Repaired by F-01..F-05 (commit 5103f59): the promotion journal is written before any visibility change, interrupted publications are reconciled, the authority marker survives a record loss, restore takes a pre-attempt inventory, and journal paths are validated as identifiers before filesystem use.",
+    "evidence": "outputs/reports/omp-verification-hardening-20260920/CLOSURE-REPORT.md (F-01..F-05 rows); tests/test_promotion.py, tests/test_backup.py"
+  },
+  "src/second_brain/promotion.py": {
+    "reason": "Promotion/restore integrity repairs plus the record-store hardening verified across review rounds 2-6: append-only records, per-pass quarantine staging, content-addressed damaged-evidence archives, marker level authority, and the publication failure paths.",
+    "evidence": "commits 5103f59, d79da7a, 246c6bf, a72a1c0, 86653c9, e888503, 478f906, 6563e41, 3aea515; verify-round3..7.json"
+  },
+  "src/second_brain/backup.py": {
+    "reason": "Repaired by F-01..F-05 and the restore-boundary round: pre-attempt destination inventory, protected pre-existing layout ancestors, and hash verification of what was actually restored.",
+    "evidence": "commits 5103f59, d79da7a, 246c6bf; tests/test_backup.py"
+  },
+  "src/second_brain/doctor.py": {
+    "reason": "Governance visibility repairs: unreadable journals and authority gaps are reported independently, and a carried marker that names another level is reported instead of hidden.",
+    "evidence": "commits d79da7a, 246c6bf, 6563e41; tests/test_doctor.py"
+  },
+  "brainstem/prime-extension/src/index.ts": {
+    "reason": "F-08 (commit 9f9c642): the recall hook sends a bounded keyword query built by buildRecallQuery instead of the raw prompt, so the CLI's term-match rule can be satisfied. The production installation still carries the pre-repair bytes.",
+    "evidence": "scripts/generate_successor_record.py probe: buildRecallQuery(prompt) -> 'explain retrieval isolation contract'; docs/integrations/omp-host-patch-2026-09-19-successor/RUN-IDENTITIES.json (adapter-index)"
+  },
+  "brainstem/prime-extension/src/recall-gate.ts": {
+    "reason": "F-08 (commit 9f9c642): adds buildRecallQuery with stopword removal and SECOND_BRAIN_RECALL_MAX_TERMS (default 4), keeping recall default-off and abstaining when no content terms remain.",
+    "evidence": "brainstem/prime-extension/tests/recall-gate.test.ts, tests/wiring.test.ts; staged extension copy in RUN-IDENTITIES.json (extension-recall-gate)"
+  },
+  "scripts/run-omp-patched.ps1": {
+    "reason": "F-07 (commit 0226e94) introduced the supported launcher; this campaign added the -ManifestPath/OMP_DEPLOYMENT_MANIFEST override so a staged successor layout can be verified and launched without touching the sealed manifest or production.",
+    "evidence": "commit 3aea515 lineage; scripts/run-omp-patched.ps1 -ManifestPath"
+  },
+  "scripts/generate_omp_deployment_manifest.py": {
+    "reason": "F-07 (commit 0226e94) introduced the deployment manifest; this campaign parameterized it (--patch-dir, --out, --installed-host, --installed-extension, --sealed-host) so a successor records its own deployment while every default still describes the sealed candidate.",
+    "evidence": "scripts/generate_omp_deployment_manifest.py --check (successor stage)"
+  },
+  "scripts/run_host_settlement_tests.py": {
+    "reason": "F-06 harness (commit 4ae207b): runs the attempt-settlement outcome test against the sealed and the candidate settlement module, preserving the sealed module's failure as negative-control evidence.",
+    "evidence": "scripts/run_host_settlement_tests.py -> {\"sealed\": 1, \"candidate\": 0}, PASS (candidate passes, sealed demonstrates the defect)"
+  },
+  "scripts/stage_omp_successor.py": {
+    "reason": "Added by this campaign: builds the disposable staged layout (sealed package copy overlaid with the eight repository host-patch sources, plus the flat extension) so the repaired candidate is qualified without installing anything into production.",
+    "evidence": "%TEMP%/omp-successor-20260920/staged/STAGE-MANIFEST.json"
+  },
+  "scripts/generate_successor_record.py": {
+    "reason": "Added by this campaign: records the successor candidate with lineage, path-by-path differences, staged inventory and its own RUN-IDENTITIES/HASHES, and seals it separately from the predecessor.",
+    "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json"
+  },
+  "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts": {
+    "reason": "Host-patch source snapshot for the session module; recorded here because it is the file the patch overlays at src/session/agent-session.ts.",
+    "evidence": "docs/integrations/omp-host-patch-2026-09-19/HASHES.txt entry (5b364240...), identical in the canary, retail and the stage"
+  },
+  "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts": {
+    "reason": "F-06 (commit 4ae207b): the repaired settlement module. The sealed canary and the production installation carry the pre-repair bytes (5a96bced...), which mutate an accepted attempt outcome; the repaired module (78ba5ddd...) exports the same seven symbols and is the drop-in the staged campaign qualifies.",
+    "evidence": "scripts/run_host_settlement_tests.py (sealed 1 / candidate 0); docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json host_delta section"
+  }
+}
