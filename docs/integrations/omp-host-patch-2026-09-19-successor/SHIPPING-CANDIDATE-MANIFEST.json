@@ -1,12 +1,12 @@
 {
   "schema": "second-brain.omp-successor-shipping-candidate.v1",
-  "generated_at": "2026-09-20T16:33:51.322341+00:00",
+  "generated_at": "2026-09-20T16:37:18.820913+00:00",
   "purpose": "Seal for the repaired successor candidate: the record files that describe it, the staged layout it was qualified in, and the campaign evidence it produced.",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "f985b9f52aa673ad84b487f45ba869b8ca7936e6",
-    "source_tree_sha256": "c4bb0c426d699bd72662943b3487210bb7a7b9fcf77f5a21b95ed569dd7e87c1",
+    "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
+    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "predecessor": {
@@ -20,26 +20,26 @@
     "status": "preserved byte-identical; its runs remain what executed"
   },
   "record_files": {
-    "SUCCESSOR-RECORD.json": "12792dc38920027678d07f0a2c12f6c32c8cb47431873c8f9e9bfc130a679e37",
+    "SUCCESSOR-RECORD.json": "ddeef0e769654ea8138049082026bd3f87df038ffc6dffeba9c0577a7fa9877f",
     "HASHES.txt": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
-    "RUN-IDENTITIES.json": "abe11486dc4811c086e5b0a8d635cbf6eda796c73bbd6f01fac84351576d74eb",
+    "RUN-IDENTITIES.json": "21b4d1b9e277d2682919744ba0cfd08ecb623f6e0c1d0503adaf566564b0c81f",
     "REASONS.json": "daf661d7e85cfb38d0507b4daf3668b83236074915b024cb75bf462b321a00fb",
-    "CANDIDATE-IDENTITY.json": "0112d4e25a5368a000edef077737eda334e8eb7ebdc03862ef8bf5f429fedd32"
+    "CANDIDATE-IDENTITY.json": "4ce17e3fbee59cf1ec3fffa7d6b52a3f36957f398eabc7f86789bf215f46cf23"
   },
   "evidence": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "61445dd274e4fcd1f8fc62066f483ad7b5f534938955a0fb0ea5b6b00ed187fa"
+      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
     },
     "review_verdict": {
-      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\successor-review-verdict.json",
-      "sha256": "a2f95c609709165c1276ba5b6fa0213489ab0be70e2535c61dbab17f5caa7e99"
+      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\successor-review-verdict-2.json",
+      "sha256": "94f41a28f83e855e11a5ca7a8fed9a7a78dac73e251642c1f5ac1de8e78c156f"
     }
   },
   "checks": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "61445dd274e4fcd1f8fc62066f483ad7b5f534938955a0fb0ea5b6b00ed187fa"
+      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
     },
     "steps": {
       "preflight": {
@@ -121,6 +121,8 @@
       "settlement_repaired_in_stage": true,
       "runtime_packages": 14,
       "vendor_junctions": 152,
+      "vendor_unavailable": 0,
+      "counts_source": "stage STAGE-MANIFEST.json (re-read at index build time)",
       "vendor_junction_mode": "shared production bun global node_modules paths"
     }
   },

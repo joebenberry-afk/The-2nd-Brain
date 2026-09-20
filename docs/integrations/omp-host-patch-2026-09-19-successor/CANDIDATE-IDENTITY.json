@@ -1,15 +1,15 @@
 {
   "schema": "second-brain.omp-successor-candidate-identity.v1",
-  "generated_at": "2026-09-20T16:33:51.273647+00:00",
+  "generated_at": "2026-09-20T16:37:18.785629+00:00",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "f985b9f52aa673ad84b487f45ba869b8ca7936e6",
-    "source_tree_sha256": "c4bb0c426d699bd72662943b3487210bb7a7b9fcf77f5a21b95ed569dd7e87c1",
+    "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
+    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "fingerprints": {
-    "source_tree_sha256": "c4bb0c426d699bd72662943b3487210bb7a7b9fcf77f5a21b95ed569dd7e87c1",
+    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "files": {
@@ -42,7 +42,7 @@
     "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64",
     "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts": "6beb1dc60563caa99780d8c742c7444fd240dabb8e751e081718ee75bf0f91f5",
     "scripts/generate_omp_deployment_manifest.py": "5b1f3eb886a52ba3513b62383a764a8a1bfb031078d5587d51e9056078a68fe4",
-    "scripts/generate_successor_record.py": "1ac79bd9ff177ed2483b0cc5f76f0c125c2dac46c5bbd204508df0078ba94ec0",
+    "scripts/generate_successor_record.py": "b051599ea1b6955f522c85fa9f8e787724ba8128ddcc1b1a427e1ce20b8c07d8",
     "scripts/run-omp-patched.ps1": "79378ddb2b234824f40b8067765efe20c94e9269cc0d6a6b72cdfcb367c8b2dc",
     "scripts/run_host_settlement_tests.py": "2ae9401893b5d1049adfe199d6b76d89c62653618f8873e97b080daa3d59ef7b",
     "scripts/stage_omp_successor.py": "12457ed42b94666c583723f128eb19e9992cdaf62e649835cb730277c21034c0",
