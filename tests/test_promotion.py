@@ -911,6 +911,82 @@ def test_record_name_claim_is_kept_after_the_commit(brain_home):
     assert json.loads(first.read_text(encoding="utf-8"))["promotion_id"] == "promotion-1"
 
 
+def test_marker_write_failure_keeps_the_intent_and_retries(brain_home, monkeypatch):
+    """A publication whose marker could not be written stays retryable."""
+    _green_candidate(brain_home)
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_authority_marker", lambda *a, **k: False)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is True
+    assert result["authority_marker"] == "unavailable"
+    # The intent survives, so the missing baseline is not silently accepted.
+    assert promotion.pending_publications(brain_home) == [
+        f"{result['record']['promotion_id']}.json"
+    ]
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["already_committed"]
+    assert promotion.pending_publications(brain_home) == []
+    records = promotion.promotion_status(brain_home, "scout")["records"]
+    assert len(records) == 1  # the retry wrote no second record
+
+
+def test_journal_cleanup_failure_does_not_fail_the_publication(brain_home, monkeypatch):
+    """A completed publication does not report failure because cleanup failed."""
+    _green_candidate(brain_home)
+    real_unlink = Path.unlink
+
+    def deny_journal(self, *args, **kwargs):
+        if self.suffix == ".json" and self.parent.name == "pending":
+            raise PermissionError("simulated journal cleanup failure")
+        return real_unlink(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", deny_journal)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is True
+    assert (brain_home / "skills" / "candidates" / "scout").is_dir()
+    assert len(promotion.promotion_status(brain_home, "scout")["records"]) == 1
+    # The leftover intent is reported, and reconciliation clears it.
+    actions = promotion.reconcile_publications(brain_home)
+    assert [a["action"] for a in actions] == ["already_committed"]
+    assert promotion.pending_publications(brain_home) == []
+
+
+def test_recovery_quarantines_undecodable_bytes(brain_home):
+    """Damage is not always valid UTF-8; it must be quarantined all the same."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "other-1.json").write_bytes(b"\xff")
+    pending = promotions / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert actions[0]["action"] == "committed"
+    assert actions[0]["records_quarantined"] == ["other-1.json"]
+    archived = {p.read_bytes() for p in (promotions / "corrupt").glob("other-1.*.json")}
+    assert archived == {b"\xff"}
+
+
 def test_recovery_quarantines_a_corrupt_record(brain_home):
     """A damaged record is preserved aside, and recovery still completes."""
     _skill(brain_home, name="scout")

@@ -163,7 +163,7 @@ def _read_authority_marker(home: Path, skill_name: str) -> dict:
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -313,7 +313,7 @@ def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
         evaluation_path = candidate_path.parent / "evaluation.json"
         try:
             evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             evaluation = {}
         evaluation_current = (
             binding.get("evaluation_state") == "passed"
@@ -449,6 +449,18 @@ def _heal_status(home: Path, skill_name: str, level: str | None) -> None:
             skillforge.set_status(path, level)
 
 
+def _clear_journal(pending: Path) -> None:
+    """Drop a publication journal once it has no work left.
+
+    A journal is an intent, not authority: if it cannot be removed, the
+    publication still stands (its record is committed) and a later
+    reconciliation reports ``already_committed`` and clears it. Letting a
+    cleanup error escape would misreport a completed publication as a failure.
+    """
+    with contextlib.suppress(OSError):
+        pending.unlink(missing_ok=True)
+
+
 def _publish(
     home: Path, skill_name: str, from_level: str, to_level: str, record: dict
 ) -> tuple[Path, Path, bool, bool]:
@@ -469,8 +481,8 @@ def _publish(
     try:
         target = _move_skill(home, skill_name, from_level, to_level)
     except Exception as exc:
-        pending.unlink(missing_ok=True)
         _heal_status(home, skill_name, from_level)
+        _clear_journal(pending)
         reason = "destination_exists" if "already exists" in str(exc) else "move_failed"
         raise _PublicationFailure(reason, str(exc)) from exc
     recovered = False
@@ -487,7 +499,7 @@ def _publish(
             record_path = committed
             recovered = True
         elif _rollback_publication(home, skill_name, from_level, to_level):
-            pending.unlink(missing_ok=True)
+            _clear_journal(pending)
             raise _PublicationFailure("record_failed", str(exc)) from exc
         else:
             # The artifact is still published, so it must not stay without
@@ -509,7 +521,11 @@ def _publish(
         _recovered_active_version(home, skill_name, record) if to_level == "active" else None,
         record.get("promotion_id"),
     )
-    pending.unlink(missing_ok=True)
+    if marker_written:
+        _clear_journal(pending)
+    # A marker that could not be written leaves the intent in place: a later
+    # reconciliation writes it (reporting already_committed) and clears the
+    # journal, exactly as it does for a recovered publication.
     return target, record_path, marker_written, recovered
 
 
@@ -544,7 +560,7 @@ def _reconcile_pending(home: Path, *, min_age_seconds: float = 0.0) -> list[dict
         payload: object
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             actions.append({"pending": path.name, "action": "unreadable"})
             continue
         record = payload.get("record") if isinstance(payload, dict) else None
@@ -633,7 +649,7 @@ def _record_payload(path: Path) -> dict | None:
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -762,7 +778,7 @@ def unreadable_publications(home: Path) -> list[str]:
     for path in sorted(directory.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             bad.append(path.name)
             continue
         record = payload.get("record") if isinstance(payload, dict) else None
