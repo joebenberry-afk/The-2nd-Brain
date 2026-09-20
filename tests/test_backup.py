@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from second_brain import backup as backup_mod
-from second_brain import db, doctor, paths, semantic
+from second_brain import db, doctor, frontier, immune, paths, promotion, semantic
 from second_brain.errors import BackupError
 
 
@@ -461,3 +461,215 @@ def test_restore_rejects_modified_canonical_file(brain_home, tmp_path):
         backup_mod.restore_backup(tmp_path / "restored", backup_dir)
 
 
+# ---------------------------------------------------------------------------
+# Audit F-02: closed restore inventory
+# ---------------------------------------------------------------------------
+
+
+def test_restore_rejects_file_missing_from_hash_inventory(brain_home, tmp_path, monkeypatch):
+    """A file added to a valid backup is refused; the manifest is untouched."""
+    (brain_home / "constitution" / "marker.md").write_text("declared", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    (bdir / "constitution" / "unlisted-review-marker.md").write_text("unlisted", encoding="utf-8")
+    target = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError, match="not covered by the manifest hash inventory"):
+        backup_mod.restore_backup(target, bdir)
+
+    assert not target.exists()  # refused before touching the destination
+
+
+def test_restore_rejects_file_outside_declared_roots(brain_home, tmp_path, monkeypatch):
+    (brain_home / "constitution" / "marker.md").write_text("declared", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    (bdir / "orphan.txt").write_text("not under any declared root", encoding="utf-8")
+    target = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError, match="outside the declared inventory"):
+        backup_mod.restore_backup(target, bdir)
+
+    assert not target.exists()
+
+
+def test_restore_rejects_noncanonical_root(brain_home, tmp_path):
+    """Normally excluded runtime state cannot be smuggled in as a root."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    shutil.copytree(brain_home / "state", bdir / "state", dirs_exist_ok=True)
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["copied"] = [*manifest["copied"], "state"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupError, match="not a canonical Brain root"):
+        backup_mod.restore_backup(tmp_path / "restored", bdir)
+
+
+def test_format_two_requires_database_hash(brain_home, tmp_path):
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["db"].pop("sha256")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupError, match="missing the database sha256"):
+        backup_mod.restore_backup(tmp_path / "restored", bdir)
+
+
+def test_legacy_format_one_restore_stays_possible_and_closed(brain_home, tmp_path, monkeypatch):
+    """Legacy backups still restore, and are still closed to additions."""
+    (brain_home / "constitution" / "marker.md").write_text("legacy", encoding="utf-8")
+    (brain_home / "config" / "brain.toml").write_text(
+        "schema_version = 1\nnote = 'legacy'\n", encoding="utf-8"
+    )
+    bdir = backup_mod.create_backup(brain_home)
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format"] = 1
+    manifest.pop("files", None)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    target = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+    backup_mod.restore_backup(target, bdir)
+    assert (target / "constitution" / "marker.md").read_text(encoding="utf-8") == "legacy"
+
+    (bdir / "orphan.txt").write_text("unlisted", encoding="utf-8")
+    with pytest.raises(BackupError, match="outside the declared inventory"):
+        backup_mod.restore_backup(tmp_path / "restored2", bdir)
+
+
+# ---------------------------------------------------------------------------
+# Audit F-03: governance authority survives backup and restore
+# ---------------------------------------------------------------------------
+
+
+def _promote_to_active(home, name="curator"):
+    from test_promotion import _approve, _bind, _evidence, _skill
+
+    _skill(home, name=name)
+    _evidence(home, name)
+    _approve(home, name)
+    _bind(home, name)
+    assert promotion.promote(home, name, "shadow", "candidate")["promoted"] is True
+    assert promotion.promote(home, name, "candidate", "active")["promoted"] is True
+
+
+def test_backup_declares_governance_roots(brain_home):
+    _promote_to_active(brain_home)
+    manifest = backup_mod.load_manifest(backup_mod.create_backup(brain_home))
+
+    assert set(backup_mod.GOVERNANCE_DIRS) <= set(manifest["canonical_paths"])
+    assert "state/promotions" in manifest["copied"]
+
+
+def test_backup_restore_preserves_promotion_authority(brain_home, tmp_path, monkeypatch):
+    _promote_to_active(brain_home)
+    bdir = backup_mod.create_backup(brain_home)
+    restored = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(restored))
+
+    backup_mod.restore_backup(restored, bdir)
+
+    assert promotion.is_active(restored, "curator") is True
+    assert promotion._last_active_version(restored, "curator") == 1
+    assert promotion.authority_gaps(restored) == []
+    assert promotion.demote(restored, "curator", "candidate", "round-trip check")["demoted"] is True
+    result = promotion.promote(restored, "curator", "candidate", "active")
+    assert result["promoted"] is False
+    assert result["reason"] == "version_not_incremented"
+
+
+def test_backup_restore_preserves_immune_history(brain_home, tmp_path, monkeypatch):
+    from test_promotion import _rollback_record
+
+    _promote_to_active(brain_home)
+    _rollback_record(brain_home, "curator")
+    bdir = backup_mod.create_backup(brain_home)
+    restored = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(restored))
+
+    backup_mod.restore_backup(restored, bdir)
+
+    assert [r["policy_id"] for r in immune.rollback_log(restored)] == ["skill-curator"]
+    guards, _details = promotion._guard_checks(restored, "curator")
+    assert guards["immune_clear"] is False
+
+
+def test_backup_restore_preserves_frontier_approval(brain_home, tmp_path, monkeypatch):
+    from test_promotion import _approve, _skill
+
+    _skill(brain_home, name="curator")
+    _approve(brain_home, "curator")
+    bdir = backup_mod.create_backup(brain_home)
+    restored = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(restored))
+
+    backup_mod.restore_backup(restored, bdir)
+
+    review = frontier.latest_review(restored, "skill-curator-promotion")
+    assert review is not None
+    assert review.get("verdict") == "approve"
+
+
+# ---------------------------------------------------------------------------
+# Audit F-04: a failed restore leaves no state it created
+# ---------------------------------------------------------------------------
+
+
+def test_failed_restore_removes_paths_created_from_absence(brain_home, tmp_path, monkeypatch):
+    (brain_home / "constitution" / "snapshot-only.md").write_text(
+        "only in snapshot", encoding="utf-8"
+    )
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    target.mkdir()
+    paths.ensure_layout(target)
+    db.migrate(db.db_path(target))
+    (target / "config" / "brain.toml").write_text(
+        "schema_version = 1\nnote = 'current'\n", encoding="utf-8"
+    )
+    shutil.rmtree(target / "constitution")  # the target has no constitution at all
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated late migration failure")
+
+    monkeypatch.setattr(db, "migrate", boom)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError, match="preserved in place"):
+        backup_mod.restore_backup(target, bdir, force=True)
+
+    assert not (target / "constitution").exists()
+    assert "current" in (target / "config" / "brain.toml").read_text(encoding="utf-8")
+    assert list((target / "backups").glob("pre-restore-*")) == []
+
+
+# ---------------------------------------------------------------------------
+# Audit F-05: the database destination is contained like every other path
+# ---------------------------------------------------------------------------
+
+
+def test_restore_rejects_symlinked_database_directory(brain_home, tmp_path, monkeypatch):
+    (brain_home / "constitution" / "marker.md").write_text("declared", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    target.mkdir()
+    paths.ensure_layout(target)
+    outside = tmp_path / "outside-db"
+    outside.mkdir()
+    db_dir = target / "db"
+    db_dir.mkdir(exist_ok=True)
+    db_dir.rmdir()
+    try:
+        os.symlink(outside, db_dir, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(BackupError, match="not contained"):
+        backup_mod.restore_backup(target, bdir)
+
+    assert list(outside.iterdir()) == []  # nothing was written through the link

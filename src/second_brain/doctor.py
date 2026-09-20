@@ -301,6 +301,44 @@ def check_environment(
     return evidence
 
 
+def check_governance(home: Path, checks: list[Check]) -> None:
+    """Promotion/version authority visibility (audit findings F-01/F-03).
+
+    Surfaces governance inconsistencies instead of hiding them: an active
+    skill whose committed history is missing, or a publication that was
+    interrupted before its record was committed.
+    """
+    from . import promotion
+
+    try:
+        gaps = promotion.authority_gaps(home)
+        pending = promotion.pending_publications(home)
+    except Exception as exc:
+        checks.append(
+            Check("governance authority", STATUS_FAIL, f"cannot read promotion authority: {exc}")
+        )
+        return
+    if gaps:
+        checks.append(
+            Check(
+                "governance authority",
+                STATUS_WARN,
+                "active skills without committed authority: " + ", ".join(gaps[:5]),
+            )
+        )
+    elif pending:
+        checks.append(
+            Check(
+                "governance authority",
+                STATUS_WARN,
+                f"{len(pending)} interrupted publication(s) pending; "
+                "run `brainctl promotions reconcile`",
+            )
+        )
+    else:
+        checks.append(Check("governance authority", STATUS_OK, "promotion authority current"))
+
+
 def run_doctor(
     home: Path | None = None,
     *,
@@ -322,6 +360,7 @@ def run_doctor(
         check_build_identity(home, checks)
         check_tools(checks)
         check_environment(home, repo, session_id, checks)
+        check_governance(home, checks)
     return DoctorResult(home=home, checks=checks)
 
 
