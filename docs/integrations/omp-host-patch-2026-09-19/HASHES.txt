@@ -1,6 +1,6 @@
 796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\async\job-manager.ts
-2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
-e458bee5db9967bc61a82c389ac4c2159876f7522116c94b4fd970c2ae2ae107 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
+5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
+fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
 9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\cleanup-barrier.ts
 c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
 24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\main.ts
