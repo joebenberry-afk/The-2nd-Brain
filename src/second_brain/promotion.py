@@ -341,9 +341,12 @@ def _guard_checks(home: Path, skill_name: str) -> tuple[dict, dict]:
 def _write_record(home: Path, record: dict) -> Path:
     """Write one committed promotion record atomically.
 
-    The name is reserved with an O_EXCL sidecar and the payload lands through a
-    temporary file plus rename, so an interruption can never leave a half-written
-    ``*.json`` record that would block every later promotion.
+    A record name is claimed with an O_EXCL sidecar that is *kept* once the
+    record is committed: a claim that was released could be re-acquired by a
+    writer that had already checked the name as free, and replacing a committed
+    record would break the append-only history. The payload lands through a
+    temporary file plus rename, so an interruption can never leave a
+    half-written ``*.json`` record that would block every later promotion.
     """
     directory = _promotions_dir(home)
     try:
@@ -377,13 +380,7 @@ def _write_record(home: Path, record: dict) -> Path:
     except OSError as exc:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
-        with contextlib.suppress(OSError):
-            reserve.unlink(missing_ok=True)
         raise BrainError(f"Could not write promotion record {target}: {exc}") from exc
-    # The record is committed. Failing to remove the reservation sidecar must not
-    # turn a committed publication into a reported failure.
-    with contextlib.suppress(OSError):
-        reserve.unlink(missing_ok=True)
     return target
 
 
@@ -644,9 +641,12 @@ def _record_payload(path: Path) -> dict | None:
 def _quarantine_corrupt_records(home: Path) -> list[str]:
     """Move unreadable committed records aside so recovery can continue.
 
-    The damaged bytes are preserved under ``state/promotions/corrupt/`` for
-    inspection, under a fresh name each time so later damage cannot overwrite
-    earlier evidence; otherwise the record store is append-only.
+    Damaged bytes are archived under ``state/promotions/corrupt/`` in a file
+    named for their own content, written with O_EXCL: two passes that quarantine
+    at once cannot collide or overwrite evidence, and identical damage is
+    archived once. The source is removed only while it still holds exactly the
+    archived bytes, so a pass that lost a race cannot move the healthy
+    replacement another pass just wrote.
     """
     directory = _promotions_dir(home)
     if not directory.is_dir():
@@ -656,17 +656,33 @@ def _quarantine_corrupt_records(home: Path) -> list[str]:
     for path in sorted(directory.glob("*.json")):
         if _record_payload(path) is not None:
             continue
-        target = quarantine / path.name
-        if target.exists():
-            counter = 2
-            while (quarantine / f"{path.stem}.{counter}{path.suffix}").exists():
-                counter += 1
-            target = quarantine / f"{path.stem}.{counter}{path.suffix}"
         try:
-            quarantine.mkdir(parents=True, exist_ok=True)
-            os.replace(path, target)
+            raw = path.read_bytes()
         except OSError:
             continue
+        digest = hashlib.sha256(raw).hexdigest()
+        target = quarantine / f"{path.stem}.{digest[:12]}{path.suffix}"
+        try:
+            quarantine.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Without an archive the damaged bytes must stay where they are:
+            # quarantine may never destroy evidence it could not preserve.
+            continue
+        try:
+            handle = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            pass  # identical damaged bytes are already archived
+        except OSError:
+            continue
+        else:
+            try:
+                with os.fdopen(handle, "wb") as sink:
+                    sink.write(raw)
+            except OSError:
+                continue
+        with contextlib.suppress(OSError):
+            if hashlib.sha256(path.read_bytes()).hexdigest() == digest:
+                path.unlink()
         moved.append(path.name)
     return moved
 

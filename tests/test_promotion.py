@@ -828,7 +828,10 @@ def test_recovery_quarantines_another_skills_damaged_record(brain_home):
 
     assert actions[0]["action"] == "committed"
     assert actions[0]["records_quarantined"] == ["other-1.json"]
-    assert (promotions / "corrupt" / "other-1.json").read_text(encoding="utf-8") == "{"
+    archived = {
+        p.read_text(encoding="utf-8") for p in (promotions / "corrupt").glob("other-1.*.json")
+    }
+    assert archived == {"{"}
 
 
 def test_recovery_quarantines_a_non_object_record(brain_home):
@@ -858,37 +861,54 @@ def test_recovery_quarantines_a_non_object_record(brain_home):
 
     assert actions[0]["action"] == "committed"
     assert actions[0]["records_quarantined"] == ["scout-1.json"]
+    archived = {
+        p.read_text(encoding="utf-8") for p in (promotions / "corrupt").glob("scout-1.*.json")
+    }
+    assert archived == {"[]"}
 
 
-def test_quarantine_does_not_overwrite_earlier_evidence(brain_home):
+def test_quarantine_archives_every_damaged_payload(brain_home):
     """Repeated damage under one record name keeps every payload."""
     _skill(brain_home, name="scout")
     promotions = brain_home / "state" / "promotions"
-    (promotions / "corrupt").mkdir(parents=True, exist_ok=True)
-    (promotions / "corrupt" / "scout-1.json").write_text("{first", encoding="utf-8")
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "scout-1.json").write_text("{first", encoding="utf-8")
+    assert promotion._quarantine_corrupt_records(brain_home) == ["scout-1.json"]
+    # The store reuses the name for a new record, which is damaged in turn.
     (promotions / "scout-1.json").write_text("{second", encoding="utf-8")
-    pending = promotions / "pending"
-    pending.mkdir(parents=True, exist_ok=True)
-    (pending / "p1.json").write_text(
-        json.dumps(
-            {
-                "record": {
-                    "promotion_id": "promotion-1",
-                    "skill_name": "scout",
-                    "from_level": "shadow",
-                    "to_level": "shadow",
-                    "ts": "2026-01-01T00:00:00+00:00",
-                }
-            }
-        ),
-        encoding="utf-8",
+    assert promotion._quarantine_corrupt_records(brain_home) == ["scout-1.json"]
+
+    archived = {p.read_text(encoding="utf-8") for p in (promotions / "corrupt").glob("*.json")}
+    assert archived == {"{first", "{second"}
+
+
+def test_record_name_claim_is_kept_after_the_commit(brain_home):
+    """A committed name is never handed out again, and its record survives."""
+    _skill(brain_home, name="scout")
+    first = promotion._write_record(
+        brain_home,
+        {
+            "promotion_id": "promotion-1",
+            "skill_name": "scout",
+            "from_level": "shadow",
+            "to_level": "shadow",
+            "ts": "2026-01-01T00:00:00+00:00",
+        },
+    )
+    second = promotion._write_record(
+        brain_home,
+        {
+            "promotion_id": "promotion-2",
+            "skill_name": "scout",
+            "from_level": "shadow",
+            "to_level": "shadow",
+            "ts": "2026-01-02T00:00:00+00:00",
+        },
     )
 
-    actions = promotion.reconcile_publications(brain_home)
-
-    assert actions[0]["records_quarantined"] == ["scout-1.json"]
-    assert (promotions / "corrupt" / "scout-1.json").read_text(encoding="utf-8") == "{first"
-    assert (promotions / "corrupt" / "scout-1.2.json").read_text(encoding="utf-8") == "{second"
+    assert first.name == "scout-1.json"
+    assert second.name == "scout-2.json"
+    assert json.loads(first.read_text(encoding="utf-8"))["promotion_id"] == "promotion-1"
 
 
 def test_recovery_quarantines_a_corrupt_record(brain_home):
@@ -918,7 +938,10 @@ def test_recovery_quarantines_a_corrupt_record(brain_home):
 
     assert actions[0]["action"] == "committed"
     assert actions[0]["records_quarantined"] == ["scout-1.json"]
-    assert (promotions / "corrupt" / "scout-1.json").read_text(encoding="utf-8") == "{"
+    archived = {
+        p.read_text(encoding="utf-8") for p in (promotions / "corrupt").glob("scout-1.*.json")
+    }
+    assert archived == {"{"}
     assert promotion.pending_publications(brain_home) == []
 
 
