@@ -417,6 +417,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					await cleanupIsolation(handle, barrierTraceContext);
 					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`);
 				} catch (error) {
+					// Narrowing is not preserved inside the thunk; capture the backend
+					// here (type-only: the traced text is identical).
+					const backend = handle.backend;
 					__traceIsolation(() => {
 						let errorText = "unprintable";
 						try {
@@ -424,7 +427,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						} catch {
 							/* trace formatting must never affect cleanup */
 						}
-						return `cleanup:stop:error:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`;
+						return `cleanup:stop:error:agent=${opts.agentId}:backend=${backend}:ctx=${ctx}:error=${errorText}`;
 					});
 					throw error;
 				}

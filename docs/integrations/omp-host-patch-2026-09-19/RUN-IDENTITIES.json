@@ -205,7 +205,7 @@
     {
       "role": "host-isolation-runner",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\task\\isolation-runner.ts",
-      "sha256": "b9897080a03f2c9d1f98f4fba52f14efea101c675d8bbdff065b9890f18ac332"
+      "sha256": "de7344f6f7931f19bb399e2a82d2c9e4f9768c98d178cafdcea64552d0358614"
     },
     {
       "role": "host-cleanup-barrier",
