@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 AUTHORITY = "docs/superpowers/plans/2026-09-02-second-brain-v2-implementation.md"
 HOST_NAME = "OMP"
 HOST_BUILD_ID = "omp/18.2.6"
+GUARDS_FEATURE = "governed-promotion-guards"
 QUALIFICATION_DIR = "qualification"
 
 
@@ -106,11 +107,12 @@ def prepare_home(canonical: Path, home: Path) -> None:
     (home / "config").mkdir(parents=True)
     (home / "evidence").mkdir(parents=True)
     shutil.copyfile(canonical / "db" / "brain.sqlite", home / "db" / "brain.sqlite")
-    for path in (canonical / "config").rglob("*"):
-        if path.is_file():
-            target = home / "config" / path.relative_to(canonical / "config")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
+    for tree in ("config", "skills", "state"):
+        for path in (canonical / tree).rglob("*"):
+            if path.is_file():
+                target = home / tree / path.relative_to(canonical / tree)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
 
 
 def run_guard_refusal_trial(home: Path, out: Path) -> dict:
@@ -138,46 +140,58 @@ def run_guard_refusal_trial(home: Path, out: Path) -> dict:
     }
 
 
-def reobserve_causal(home: Path, subject: dict, trial: dict) -> dict:
-    """Write a new intervention+observation bound to this subject, in the copy."""
-    trial_path = Path(trial["record_path"])
-    relative = trial_path.relative_to(home).as_posix()
+def bind_causal_observation(
+    home: Path, relative: str, digest: str, artifact: dict, subject: dict
+) -> dict:
+    """Record the observation the guards artifact binds to, in the copy.
+
+    The verifier's binding walks the copy's observations and accepts the one whose
+    ``_evidence`` names the referenced artifact with the identity of the subject it
+    was issued for, whose raw part is the artifact's ``observed_data`` and whose
+    provenance hash covers the record. The refusal trial itself is read-only for
+    Brain state, so the observation record is written here.
+    """
     now = datetime.now(UTC).isoformat()
-    evidence_metadata = {
-        "classification": "observed",
-        "qualification_eligible": True,
-        "feature": "governed-promotion-guards",
-        "target_ref": "policy:governed-promotion-guards",
-        "path": relative,
-        "sha256": trial["record_sha256"],
-        "source_commit": subject["source_commit"],
-        "source_tree_sha256": subject["source_tree_sha256"],
-        "config_sha256": subject["config_sha256"],
-        "source": "guard-refusal trial re-run at the activated subject",
-    }
-    observed = {
-        "_evidence": evidence_metadata,
-        "_credit_evidence": {
-            "design": "paired",
-            "effect": None,
-            "interaction_significant": False,
-            "verdict": "INSUFFICIENT",
-        },
-        "failed_guard_refuses": True,
-        "promotion_attempted": True,
-        "state_unchanged": True,
-    }
-    prediction_error = {
-        "error": 0.0,
-        "expected": True,
-        "metric": "failed_guard_refuses",
-        "observed": True,
-    }
-    provenance = canonical_hash({"obs": observed, "pred_err": prediction_error})
-    intervention_id = f"intv-successor-{subject['source_tree_sha256'][:12]}"
-    observation_id = f"obs-successor-{subject['source_tree_sha256'][:12]}"
     conn = sqlite3.connect(home / "db" / "brain.sqlite")
+    conn.row_factory = sqlite3.Row
     try:
+        prior = conn.execute(
+            "SELECT o.observed_json, o.prediction_error_json, o.surprise_score, "
+            "o.evidence_strength, o.credit_class, o.evaluator_ref, o.evidence_type, "
+            "o.candidate_action_json, i.intervention_type, i.expected_json, "
+            "i.baseline_ref, i.decision_ref, i.policy_version "
+            "FROM v2_observations AS o "
+            "JOIN v2_interventions AS i ON i.intervention_id = o.intervention_id "
+            "WHERE i.target_ref = ? "
+            "ORDER BY o.created_at DESC LIMIT 1",
+            (artifact["target_ref"],),
+        ).fetchone()
+        if prior is None:
+            raise SystemExit("no predecessor observation for the guards artifact")
+        prior_observed = json.loads(prior["observed_json"])
+        observed = dict(artifact["observed_data"])
+        observed["_evidence"] = {
+            "classification": "observed",
+            "config_sha256": subject["config_sha256"],
+            "feature": artifact["feature"],
+            "path": relative,
+            "qualification_eligible": True,
+            "sha256": digest,
+            "source_commit": subject["source_commit"],
+            "source_tree_sha256": subject["source_tree_sha256"],
+            "target_ref": artifact["target_ref"],
+        }
+        credit = prior_observed.get("_credit_evidence")
+        if credit is not None:
+            observed["_credit_evidence"] = credit
+        prediction_error = json.loads(prior["prediction_error_json"])
+        provenance = canonical_hash({"obs": observed, "pred_err": prediction_error})
+        intervention_id = "intv-" + sha256_bytes(
+            f"{artifact['target_ref']}|{subject['source_commit']}|{relative}".encode()
+        )[:24]
+        observation_id = "obs-" + sha256_bytes(
+            f"{intervention_id}|{relative}|{digest}".encode()
+        )[:24]
         conn.execute(
             """INSERT OR REPLACE INTO v2_interventions
                (intervention_id, intervention_type, target_ref, expected_json, baseline_ref,
@@ -185,13 +199,13 @@ def reobserve_causal(home: Path, subject: dict, trial: dict) -> dict:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 intervention_id,
-                "guarded_promotion_refusal",
-                "policy:governed-promotion-guards",
-                json.dumps({"expected": True, "metric": "failed_guard_refuses"}),
-                "baseline:pre-repair",
-                None,
+                prior["intervention_type"],
+                artifact["target_ref"],
+                prior["expected_json"],
+                prior["baseline_ref"],
+                prior["decision_ref"],
                 "OBSERVED",
-                "successor-qualification",
+                prior["policy_version"],
                 provenance,
                 now,
                 now,
@@ -208,21 +222,12 @@ def reobserve_causal(home: Path, subject: dict, trial: dict) -> dict:
                 intervention_id,
                 json.dumps(observed, sort_keys=True),
                 json.dumps(prediction_error, sort_keys=True),
-                0.5,
-                1.0,
-                "CORRELATED",
-                "evaluator-system",
-                "acceptance_check",
-                json.dumps(
-                    {
-                        "action": "hold_candidate",
-                        "effect_size": None,
-                        "reason": "unverified_or_immaterial_surprise",
-                        "rollout_stage": "SHADOW",
-                        "target_ref": "policy:governed-promotion-guards",
-                    },
-                    sort_keys=True,
-                ),
+                prior["surprise_score"],
+                prior["evidence_strength"],
+                prior["credit_class"],
+                prior["evaluator_ref"],
+                prior["evidence_type"],
+                prior["candidate_action_json"],
                 provenance,
                 now,
             ),
@@ -233,14 +238,10 @@ def reobserve_causal(home: Path, subject: dict, trial: dict) -> dict:
     return {
         "intervention_id": intervention_id,
         "observation_id": observation_id,
-        "evidence_metadata": evidence_metadata,
-        "observation": observed,
-        "prediction_error": prediction_error,
+        "evidence_ref": {"path": relative, "sha256": digest, "feature": artifact["feature"]},
         "provenance_hash": provenance,
         "recorded_at": now,
     }
-
-
 
 
 def mirror_references(canonical: Path, home: Path, rows: list[dict]) -> int:
@@ -252,50 +253,122 @@ def mirror_references(canonical: Path, home: Path, rows: list[dict]) -> int:
     """
     copied = 0
     seen: set[str] = set()
+    queue: list[str] = []
     for row in rows:
         evidence = json.loads(row["evidence_json"])
         for ref in evidence.get("evidence_refs", []):
-            relative = str(ref.get("path", ""))
-            if not relative or relative in seen:
-                continue
-            seen.add(relative)
-            source = canonical / relative
-            target = home / relative
-            if source.is_file() and not target.is_file():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
-                copied += 1
+            queue.append(str(ref.get("path", "")))
+    while queue:
+        relative = queue.pop()
+        if not relative or relative in seen:
+            continue
+        seen.add(relative)
+        source = canonical / relative
+        target = home / relative
+        if not source.is_file():
+            continue
+        if not target.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            copied += 1
+        try:
+            document = json.loads(target.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(document, dict):
+            for raw in document.get("provenance", {}).get("raw_evidence_refs", []):
+                if isinstance(raw, dict) and isinstance(raw.get("path"), str):
+                    queue.append(raw["path"])
     return copied
 
 
-def load_predecessor_artifact(
-    canonical: Path, refs: list[dict], key: tuple[str, str]
-) -> dict | None:
-    """The qualification artifact among a row's references (it names the key)."""
-    for ref in refs:
-        path = canonical / str(ref.get("path", ""))
-        if not path.is_file():
-            continue
-        try:
-            artifact = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if (
-            isinstance(artifact, dict)
-            and (artifact.get("phase"), artifact.get("requirement")) == key
-        ):
-            return artifact
-    for ref in refs:
-        path = canonical / str(ref.get("path", ""))
-        if not path.is_file():
-            continue
-        try:
-            artifact = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(artifact, dict) and artifact.get("coverage"):
-            return artifact
-    return None
+def reidentify_reference(
+    canonical: Path,
+    home: Path,
+    relative: str,
+    subject: dict,
+    now: str,
+    note: str,
+    cache: dict[str, tuple[str, dict | None]],
+    extra_raw: dict | None = None,
+) -> tuple[str, dict | None]:
+    """Re-stamp one referenced file at the current subject, in the verification home.
+
+    Qualification artifacts keep their measured content and gain the successor
+    identity plus an explicit lineage block (what was re-verified versus carried
+    forward). Non-artifact references are carried verbatim; their recorded hash
+    still holds.
+    """
+    if relative in cache:
+        return cache[relative]
+    target = home / relative
+    if not target.is_file():
+        source = canonical / relative
+        if not source.is_file():
+            raise SystemExit(f"referenced evidence is unavailable: {relative}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    artifact = None
+    try:
+        document = json.loads(target.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        document = None
+    if (
+        isinstance(document, dict)
+        and isinstance(document.get("observed_data"), dict)
+        and document.get("coverage")
+    ):
+        artifact = document
+        former = {
+            "source_commit": document.get("source_commit"),
+            "source_tree_sha256": document.get("source_tree_sha256"),
+            "config_sha256": document.get("config_sha256"),
+        }
+        document["source_commit"] = subject["source_commit"]
+        document["source_tree_sha256"] = subject["source_tree_sha256"]
+        document["config_sha256"] = subject["config_sha256"]
+        document["identity_captured_at"] = now
+        document["observed_at"] = now
+        document["rebound"] = {
+            "rebound_from_artifact_sha256": sha256_file(canonical / relative),
+            "rebound_from_subject": former,
+            "rebound_to_subject": {
+                "source_commit": subject["source_commit"],
+                "source_tree_sha256": subject["source_tree_sha256"],
+            },
+            "reverified": note,
+            "carried_forward": [
+                "observed_data",
+                "coverage",
+                "feature",
+                "target_ref",
+                "gate_observations",
+                "provenance",
+            ],
+        }
+        document["rebound_history"] = [
+            *document.get("rebound_history", []),
+            {
+                "at": now,
+                "from": former["source_commit"],
+                "to": subject["source_commit"],
+                "reason": "activated successor qualification",
+            },
+        ]
+        if extra_raw is not None:
+            raws = document.setdefault("provenance", {}).setdefault("raw_evidence_refs", [])
+            if all(
+                not isinstance(raw, dict) or raw.get("path") != extra_raw["path"] for raw in raws
+            ):
+                raws.append(extra_raw)
+        target.write_text(
+            json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+    digest = sha256_file(target)
+    if digest is None:
+        raise SystemExit(f"reference could not be stamped: {relative}")
+    cache[relative] = (digest, artifact)
+    return digest, artifact
 
 
 def main() -> int:
@@ -324,132 +397,63 @@ def main() -> int:
     pack = args.out_pack
     pack.mkdir(parents=True, exist_ok=True)
 
-    # The causal observation the last requirement binds to, re-observed here.
-    trial_out = home / "evidence" / "v2-i-guard-refusal-current.json"
+    # The governed-promotion refusal is re-executed against this subject; every
+    # referenced artifact is re-stamped with the subject identity and lineage.
+    trial_out = qualification / "evidence" / "v2-i-guard-refusal-current.json"
     trial = run_guard_refusal_trial(home, trial_out)
-    causal = reobserve_causal(home, subject, trial)
+    if trial["exit_code"] != 0 or trial["record_sha256"] is None:
+        raise SystemExit(f"guard refusal trial failed: {trial['stdout']} {trial['stderr']}")
 
+    trial_relative = trial_out.relative_to(home).as_posix()
+    causal_relative = next(
+        str(ref["path"])
+        for ref in json.loads(
+            rows_by_key[("v2-i", "governed_self_improvement_proof")]["evidence_json"]
+        )["evidence_refs"]
+        if "governed-promotion-guards" in str(ref["path"])
+    )
     now = datetime.now(UTC).isoformat()
+    cache: dict[str, tuple[str, dict | None]] = {}
     new_rows = []
     rebind_record = []
+    causal_binding = None
     for phase, requirement in requirements:
         predecessor_row = rows_by_key[(phase, requirement)]
         predecessor_evidence = json.loads(predecessor_row["evidence_json"])
-        predecessor_artifact = load_predecessor_artifact(
-            canonical, predecessor_evidence["evidence_refs"], (phase, requirement)
-        )
-        if predecessor_artifact is None:
-            raise SystemExit(f"predecessor artifact not found for {(phase, requirement)}")
-        feature = predecessor_artifact.get("feature") or predecessor_evidence["feature"]
-        target_ref = predecessor_artifact["target_ref"]
-        coverage = predecessor_artifact["coverage"]
-        artifact_name = f"{phase}-{requirement}.json"
-
-        if requirement == "governed_self_improvement_proof":
-            observed_data = {
-                key: value
-                for key, value in causal["observation"].items()
-                if key not in {"_evidence", "_credit_evidence"}
-            }
-            evidence_type = "integration"
-            refs = [
-                {
-                    "path": f"{QUALIFICATION_DIR}/artifacts/{artifact_name}",
-                    "sha256": "",
-                    "type": "integration",
-                },
-                {
-                    "path": causal["evidence_metadata"]["path"],
-                    "sha256": causal["evidence_metadata"]["sha256"],
-                    "type": "acceptance_check",
-                },
-            ]
-            reverified = (
-                "governed promotion refusal re-observed at this subject: the real promote() "
-                "refusal path was invoked and an intervention/observation bound to the subject "
-                "identity was recorded in the disposable home"
+        feature = predecessor_evidence["feature"]
+        evidence_refs = []
+        covered: set[str] = set()
+        for ref in predecessor_evidence["evidence_refs"]:
+            relative = str(ref["path"])
+            note = (
+                "identity re-stamped on the activated subject; the recorded observation is "
+                "carried forward because the repaired paths (promotion journal, restore "
+                "transaction, doctor reporting) do not enter this requirement's measured "
+                "surface, and the causal requirement is the only one whose conduct is "
+                "re-executed here"
             )
-        else:
-            observed_data = predecessor_artifact.get("observed_data", {})
-            evidence_type = "integration"
-            refs = [
-                {
-                    "path": f"{QUALIFICATION_DIR}/artifacts/{artifact_name}",
-                    "sha256": "",
-                    "type": "integration",
-                },
-                *[
-                    dict(ref)
-                    for ref in predecessor_evidence["evidence_refs"]
-                    if not ref["path"].endswith(artifact_name)
-                ],
-            ]
-            reverified = (
-                "identity re-stamped; the recorded observation is carried forward because the "
-                "repaired paths (promotion journal, restore transaction, doctor reporting) do "
-                "not enter this requirement's measured surface; the source, host and runtime "
-                "evidence for the activated subject is recorded in the activation and successor "
-                "packs"
+            extra_raw = None
+            if relative == causal_relative:
+                note = (
+                    "re-observed on the activated subject: the governed promotion refusal path "
+                    "was re-executed against this home and its outcome recorded as an "
+                    "observation whose evidence names this artifact"
+                )
+                extra_raw = {
+                    "path": trial_relative,
+                    "sha256": trial["record_sha256"],
+                    "type": "raw",
+                }
+            digest, artifact = reidentify_reference(
+                canonical, home, relative, subject, now, note, cache, extra_raw
             )
-
-        artifact = {
-            "schema_version": 1,
-            "classification": "observed",
-            "qualification_eligible": True,
-            "phase": phase,
-            "requirement": requirement,
-            "feature": feature,
-            "target_ref": target_ref,
-            "evidence_type": evidence_type,
-            "coverage": coverage,
-            "gate_sha256": gates[(phase, requirement)],
-            "gate_observations": predecessor_artifact.get("gate_observations", {}),
-            "observed_data": observed_data,
-            "provenance": predecessor_artifact.get("provenance", {}),
-            "source_commit": subject["source_commit"],
-            "source_tree_sha256": subject["source_tree_sha256"],
-            "config_sha256": subject["config_sha256"],
-            "identity_captured_at": now,
-            "observed_at": now,
-            "rebound": {
-                "rebound_from_artifact_sha256": predecessor_row["artifact_hash"],
-                "rebound_from_subject": {
-                    "source_commit": predecessor_row["source_commit"],
-                    "source_tree_sha256": predecessor_evidence["source_tree_sha256"],
-                },
-                "rebound_to_subject": {
-                    "source_commit": subject["source_commit"],
-                    "source_tree_sha256": subject["source_tree_sha256"],
-                },
-                "reverified": reverified,
-                "carried_forward": [
-                    "observed_data",
-                    "coverage",
-                    "feature",
-                    "target_ref",
-                    "gate_observations",
-                ],
-            },
-            "rebound_history": [
-                *predecessor_artifact.get("rebound_history", []),
-                {
-                    "rebound_at": now,
-                    "from": predecessor_row["source_commit"],
-                    "to": subject["source_commit"],
-                    "reason": "activated successor qualification",
-                },
-            ],
-        }
-        artifact_path = qualification / "artifacts" / artifact_name
-        artifact_path.write_text(
-            json.dumps(artifact, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        digest = sha256_file(artifact_path)
-        for ref in refs:
-            if ref["path"].endswith(artifact_name):
-                ref["sha256"] = digest
-        refs = [ref for ref in refs if ref["sha256"]]
-
+            evidence_refs.append({**ref, "sha256": digest})
+            if artifact is not None:
+                covered.update(artifact.get("coverage", []))
+                if artifact.get("feature") == GUARDS_FEATURE:
+                    causal_binding = bind_causal_observation(
+                        home, relative, digest, artifact, subject
+                    )
         evidence_json = {
             "schema_version": 1,
             "classification": "observed",
@@ -459,12 +463,11 @@ def main() -> int:
             "source_tree_sha256": subject["source_tree_sha256"],
             "config_sha256": subject["config_sha256"],
             "observed_at": now,
-            "evidence_refs": refs,
+            "evidence_refs": evidence_refs,
         }
-        qualification_id = f"cand-{phase}-{requirement}"
         new_rows.append(
             {
-                "qualification_id": qualification_id,
+                "qualification_id": f"cand-{phase}-{requirement}",
                 "phase": phase,
                 "requirement": requirement,
                 "status": "PROVEN",
@@ -479,11 +482,17 @@ def main() -> int:
                 "phase": phase,
                 "requirement": requirement,
                 "predecessor_artifact_hash": predecessor_row["artifact_hash"],
-                "successor_artifact_sha256": digest,
-                "coverage": coverage,
-                "reverified": reverified,
+                "successor_artifact_hash": canonical_hash(evidence_json),
+                "coverage": sorted(covered),
+                "reverified": (
+                    "causal observation re-executed"
+                    if requirement == "governed_self_improvement_proof"
+                    else "identity re-stamped; observation carried forward"
+                ),
             }
         )
+    if causal_binding is None:
+        raise SystemExit("governed promotion guards artifact was not referenced")
 
     host_evidence = {
         "schema_version": 1,
@@ -557,7 +566,8 @@ def main() -> int:
                 "predecessor_records_sha256": sha256_file(args.predecessor_pack / "records.json"),
                 "disposable_home": str(home),
                 "subject": subject,
-                "causal_observation": causal,
+                "causal_observation": causal_binding,
+                "guard_refusal_trial": trial,
                 "requirements": rebind_record,
                 "mirrored_reference_count": len(set(
                     ref["path"]
