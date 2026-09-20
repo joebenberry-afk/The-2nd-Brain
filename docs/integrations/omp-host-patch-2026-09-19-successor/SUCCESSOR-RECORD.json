@@ -1,6 +1,6 @@
 {
   "schema": "second-brain.omp-successor-candidate.v1",
-  "generated_at": "2026-09-20T16:33:44.719364+00:00",
+  "generated_at": "2026-09-20T16:37:12.571710+00:00",
   "purpose": "Successor candidate record for the repaired OMP baseline. The predecessor pack is sealed history and is not modified; this record, its own HASHES.txt, RUN-IDENTITIES.json and shipping seal describe the repaired subject and the staged layout it was qualified in.",
   "authorization": "user mandate 2026-09-20: bounded successor re-issue campaign",
   "lineage": {
@@ -17,8 +17,8 @@
     "successor": {
       "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
       "branch": "brain/omp-native-6172a18-20260911",
-      "commit": "f985b9f52aa673ad84b487f45ba869b8ca7936e6",
-      "source_tree_sha256": "c4bb0c426d699bd72662943b3487210bb7a7b9fcf77f5a21b95ed569dd7e87c1",
+      "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
+      "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
       "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
     }
   },
@@ -117,7 +117,7 @@
       "path": "scripts/generate_successor_record.py",
       "kind": "added",
       "predecessor_sha256": null,
-      "successor_sha256": "1ac79bd9ff177ed2483b0cc5f76f0c125c2dac46c5bbd204508df0078ba94ec0",
+      "successor_sha256": "b051599ea1b6955f522c85fa9f8e787724ba8128ddcc1b1a427e1ce20b8c07d8",
       "reason": "Added by this campaign: records the successor candidate with lineage, path-by-path differences, staged inventory and its own RUN-IDENTITIES/HASHES, and seals it separately from the predecessor.",
       "evidence": "docs/integrations/omp-host-patch-2026-09-19-successor/SUCCESSOR-RECORD.json",
       "status": "explained"
@@ -2055,7 +2055,7 @@
         "mode": "directory junctions into the production bun global node_modules",
         "note": "third-party packages are unmodified inputs and are referenced in place; a junction is not read-only enforcement, so the staged runtime shares production dependency paths"
       },
-      "writes_scope": "All campaign writes are confined to the stage root, the evidence pack and the staged Brain home; the launcher's child runs with a relocated USERPROFILE/HOME. Production files were not inventoried before and after, so no filesystem-wide no-write proof is claimed: the measured evidence is equality of the selected production tables recorded in preflight.json and post-exit-session-2-f.json."
+      "writes_scope": "The launcher configures campaign state destinations under the stage and evidence roots, and the child runs with a relocated USERPROFILE/HOME. Production files were not inventoried before and after, so no filesystem-wide no-write proof is claimed: the measured evidence is equality of the selected production tables recorded in preflight.json and post-exit-session-2-f.json."
     },
     "reproduce": "python scripts/stage_omp_successor.py --root <root>: copy the sealed canary package to <root>/host, overlay the eight repository host-patch sources at their target paths (writing the intended bytes to <root>/host-source), and copy brainstem/prime-extension/src/*.ts flat plus types/*.d.ts into <root>/extension."
   },
@@ -2069,7 +2069,7 @@
   "checks": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "61445dd274e4fcd1f8fc62066f483ad7b5f534938955a0fb0ea5b6b00ed187fa"
+      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
     },
     "steps": {
       "preflight": {
@@ -2151,6 +2151,8 @@
       "settlement_repaired_in_stage": true,
       "runtime_packages": 14,
       "vendor_junctions": 152,
+      "vendor_unavailable": 0,
+      "counts_source": "stage STAGE-MANIFEST.json (re-read at index build time)",
       "vendor_junction_mode": "shared production bun global node_modules paths"
     }
   },

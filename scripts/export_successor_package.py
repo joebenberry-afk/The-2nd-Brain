@@ -341,6 +341,9 @@ def build_index(pack: Path, record: dict) -> dict:
     s1st = load("session-1-f/watcher/state-1.json")
     s1st2 = load("session-1-f/watcher/state-2.json")
     staged = record["staged_layout"]
+    stage_manifest = json.loads(
+        (Path(staged["root"]) / "STAGE-MANIFEST.json").read_text(encoding="utf-8")
+    )
     negative = (pack / "negative-control-settlement.txt").read_text(encoding="utf-8")
     return {
         "schema": "second-brain.omp-successor-campaign-index.v1",
@@ -352,8 +355,14 @@ def build_index(pack: Path, record: dict) -> dict:
             "host_package": staged["host_package"],
             "stage_manifest_sha256": staged["stage_manifest_sha256"],
             "settlement_repaired_in_stage": staged["settlement"].get("repaired"),
-            "runtime_packages": len(staged["global_dependencies"]),
-            "vendor_junctions": len(staged["vendor_packages"]),
+            "runtime_packages": len(stage_manifest["global_dependencies"]),
+            "vendor_junctions": sum(
+                1 for entry in stage_manifest["vendor_packages"] if entry["mode"] == "junction"
+            ),
+            "vendor_unavailable": sum(
+                1 for entry in stage_manifest["vendor_packages"] if entry["mode"] != "junction"
+            ),
+            "counts_source": "stage STAGE-MANIFEST.json (re-read at index build time)",
             "vendor_junction_mode": "shared production bun global node_modules paths",
         },
         "steps": {

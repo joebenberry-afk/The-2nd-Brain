@@ -296,6 +296,7 @@ def staged_inventory(staged_root: Path) -> dict:
         "user_root": stage.get("user_root", {}),
         "runtime_cache": stage.get("runtime_cache", []),
         "global_dependencies": stage.get("global_dependencies", []),
+        "vendor_packages": stage.get("vendor_packages", []),
     }
 
 
@@ -352,6 +353,27 @@ def build_record(args: argparse.Namespace) -> dict:
             "settlement": staged["settlement"],
             "runtime_cache": staged["runtime_cache"],
             "global_dependencies": staged["global_dependencies"],
+            "vendor_packages": staged["vendor_packages"],
+            "isolation": {
+                "candidate_runtime_materialized": len(staged["global_dependencies"]),
+                "third_party_shared": {
+                    "count": len(staged["vendor_packages"]),
+                    "mode": "directory junctions into the production bun global node_modules",
+                    "note": (
+                        "third-party packages are unmodified inputs and are referenced in place; "
+                        "a junction is not read-only enforcement, so the staged runtime shares "
+                        "production dependency paths"
+                    ),
+                },
+                "writes_scope": (
+                    "The launcher configures campaign state destinations under the stage and "
+                    "evidence roots, and the child runs with a relocated USERPROFILE/HOME. "
+                    "Production files were not inventoried before and after, so no "
+                    "filesystem-wide no-write proof is claimed: the measured evidence is "
+                    "equality of the selected production tables recorded in preflight.json and "
+                    "post-exit-session-2-f.json."
+                ),
+            },
             "reproduce": (
                 "python scripts/stage_omp_successor.py --root <root>: copy the sealed canary "
                 "package to <root>/host, overlay the eight repository host-patch sources at their "
@@ -360,20 +382,30 @@ def build_record(args: argparse.Namespace) -> dict:
             ),
         },
         "negative_control": {
-            "subject": (
+            "test": (
                 "docs/integrations/omp-host-patch-2026-09-19/tests/"
                 "attempt-settlement-outcome.test.ts"
             ),
-            "sealed_host_module": (
-                "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts"
+            "candidate_module": (
+                "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts "
+                "(78ba5ddd...)"
+            ),
+            "sealed_module": (
+                "the installed attempt-settlement module the harness finds first under the OMP "
+                "packages (pi-coding-agent, then pi-coding-agent-canary): "
+                "src/task/attempt-settlement.ts (5a96bced...)"
             ),
             "runner": "scripts/run_host_settlement_tests.py",
-            "expected": "sealed host fails (exit 1) and candidate passes (exit 0)",
+            "expected": (
+                "sealed module fails (exit 1), candidate module passes (exit 0), wrapper exit 0"
+            ),
         },
         "checks": campaign_checks(args.campaign_index),
         "explicit_non_claims": [
             "The predecessor pack, its seals and its runs are unchanged.",
             "No production installation, configuration, database, lease or host replacement.",
+            "No filesystem-wide no-write proof: production evidence is equality of the "
+            "selected tables in preflight.json and post-exit-session-2-f.json.",
             "Universal qualification stays HOLD; economics stays INSUFFICIENT.",
         ],
     }
