@@ -840,10 +840,10 @@ on the shipping subject.
 - **Rebind.** The accepted OMP-only ledger (subject `ae39910`, tree
   `e08b2e3e…`) was re-bound onto the shipping subject (`7fcd995a…`, tree
   `7edd3d64…`, config unchanged `f5da285e…`, gate hashes and producers
-  unchanged): 38 evidence artifacts copied byte-for-byte with only the
-  identity binding refreshed into
-  `outputs/reports/omp-shipping-ledger-20260920/artifacts/…`; the prior
-  artifacts are untouched; every transition is recorded in
+  unchanged): 38 evidence artifacts with measured content preserved and their
+  identity/provenance fields updated (whole-file hashes therefore differ from
+  the prior artifacts, as the reviewer noted); the prior artifacts are
+  untouched; every transition is recorded in
   `outputs/reports/omp-shipping-ledger-20260920/rebind-log.json`. The
   candidate records (12 rows) and the manifest were re-issued against the
   shipping identity.
@@ -883,6 +883,15 @@ usage are recorded in
 stale-evidence signal is carried as recorded uncertainty (the bound artifact's
 measured content predates the shipping revision while the live re-check
 reproduced it) and does not override the deterministic verifier.
+
+### Final package acceptance (round 23)
+
+Astra's round-23 verdict is `ACCEPTED` (`astra-final-verdict.json`): B1 closed
+with stated limitations, B2 closed with the operative correction, B3 closed,
+no blockers, and the exact local installed patched-host package satisfies the
+release conditions. The corrected stock-refusal statement was accepted as the
+operative correction, and the release contract's limitation 1 was synchronized
+to it. Publication and tagging remain unauthorized.
 
 
 

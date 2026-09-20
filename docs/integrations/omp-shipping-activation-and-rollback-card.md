@@ -1,15 +1,18 @@
 # OMP shipping candidate — activation and rollback card
 
-Status: pre-activation draft for independent review. No installation has been
-performed. Authority: the current OMP autonomous completion mandate's
-conditional local installation clause, effective only after this exact
-candidate receives pre-activation acceptance.
+Status: executed for the accepted candidate. Pre-activation acceptance
+(round 21) and the local installation under the mandate's conditional
+authorization are complete; the installed smoke suite, the executed rollback
+rehearsal (2026-09-20,
+`outputs/reports/omp-activation-20260920/rollback-rehearsal-executed.json`) and
+the causal-evidence binding closure are recorded. Publication and tagging are
+not authorized.
 
 ## Candidate identity
 
 - Worktree: `.worktrees/qualified-v2`, branch
-  `brain/omp-native-6172a18-20260911`, sealed commit `5baa2a6` (functional
-  commit `40d2218`).
+  `brain/omp-native-6172a18-20260911`, sealing commit `787b3d6` (functional
+  commit `40d2218`; ledger subject `7fcd995a`).
 - Host: `@oh-my-pi/pi-coding-agent-canary` (`omp/18.2.6`), six bound host files
   per `docs/integrations/omp-host-patch-2026-09-19/HASHES.txt`; 26-role
   identity inventory in `RUN-IDENTITIES.json`; sealing record in
@@ -81,15 +84,16 @@ Scratch project, normal APIs, target profile:
 - Durable state checked read-only; clean shutdown; no manual lease repair,
   emergency eval bypass, or external receipt helper used.
 
-## Causal-evidence binding (separately open item)
+## Causal-evidence binding (closed 2026-09-20)
 
-After activation, in the now-authorized actual Brain home, run the missing
-governed trial for `governed_improvement_promotes_only_with_all_guards` so the
-live ledger records a worker-independent causal observation binding the
-current-subject promotion artifact (or apply a separately authorized re-point
-of the two existing observations). Re-run
-`scripts/verify_qualification.py --scope <omp-only overlay>` and record the
-verdict.
+The missing governed trial ran against the live Brain: the accepted ledger was
+re-bound onto the shipping subject (measured content preserved; identity and
+provenance fields updated), the real promotion refusal path was re-run and
+reproduced the accepted counterexample, and the live observation
+`intv-0cee29ee1df3b59d812cc2e9` / `obs-e7bd9a8c6c1312bb7b4cb2da` binds the
+current-subject promotion artifact. `scripts/verify_qualification.py` exits 0
+against the shipping manifest/records and the OMP-only scope
+(`outputs/reports/omp-shipping-ledger-20260920/strict-verdict-final.json`).
 
 ## Rollback
 

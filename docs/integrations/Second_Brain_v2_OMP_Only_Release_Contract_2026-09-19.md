@@ -90,11 +90,19 @@ handoff; canonical-state ownership at the adapter boundary; guarded promotion ma
 
 Limitations that remain operational, not qualification clauses:
 
-1. **Mutating worker dispatch is refused** in the installed stock OMP
-   (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`) because the host does not expose the
-   optional `observeAsyncJobLifecycle` capability. Read-only workers and controller-side
-   edits are unaffected. Closing this is an installation decision (accepted patched host) or
-   upstream support — not authorized here.
+1. **Stock-host mutating worker dispatch does not settle or release.** On stock
+   OMP runtimes that publish native lifecycle frames (including the v18.2.6
+   source and binary), mutating isolated dispatch is admitted on the extension's
+   documented degraded `native_lifecycle` path: cleanup can never be proven, the
+   receipt records `cleanupComplete:false`, and the durable writer lease stays
+   held/quarantined — never a release. Hosts with none of the three settlement
+   sources refuse with `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`.
+   Read-only workers and controller-side edits are unaffected. The qualified
+   release path is the accepted patched host. (Corrected 2026-09-20 per the
+   executed rollback rehearsal; the prior wording claimed universal stock
+   refusal and is false for stock v18.2.6. See
+   `outputs/reports/omp-activation-20260920/rollback-rehearsal-executed.json`
+   and the corrected activation card.)
 2. **Economics stays INSUFFICIENT at n=2** (paired `r_bar = -0.119`, `success_delta = 0.0`).
    No savings verdict is claimed, and no dollar attribution exists for a subscription route.
 3. **No cross-harness claim** of any kind is made by this release.
