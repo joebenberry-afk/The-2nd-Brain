@@ -200,12 +200,12 @@
     {
       "role": "host-agent-session",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\session\\agent-session.ts",
-      "sha256": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64"
+      "sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e"
     },
     {
       "role": "host-isolation-runner",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\task\\isolation-runner.ts",
-      "sha256": "e458bee5db9967bc61a82c389ac4c2159876f7522116c94b4fd970c2ae2ae107"
+      "sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145"
     },
     {
       "role": "host-cleanup-barrier",

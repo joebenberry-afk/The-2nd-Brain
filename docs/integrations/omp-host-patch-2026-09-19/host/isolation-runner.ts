@@ -18,7 +18,6 @@
  * Step 1 happens once per top-level call (the baseline is cloned per spawn
  * before mutation); steps 2 and 3 are per-spawn.
  */
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { classifyCleanupRequirement, cleanupOperationId, settleBarrier, type CleanupRoute } from "./cleanup-barrier";
 import { AttemptSettlementRegistry } from "./attempt-settlement";
@@ -411,15 +410,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	};
 	const releaseIsolation = (): Promise<void> => {
 		releasePromise ??= (async () => {
-			// Deterministic deferred-cleanup fixture (test-only): the real release work
-			// does not begin until the coordinator creates the exact identity-bound
-			// signal emitted in hold-begin. See awaitReleaseSignal.
-			try {
-				await awaitReleaseSignal();
-			} catch (error) {
-				isolationRelease.reject(error);
-				throw error;
-			}
 			if (!handle || retainWorkspace) {
 				try {
 					await releaseBase();
@@ -531,65 +521,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	opts.baseOptions.settlement?.trackCleanups([
 		{ resource: "isolation-handle", work: cleanupBarrier.promise },
 	]);
-	// Deterministic deferred-cleanup fixture (test-only). When a hold prefix is
-	// configured, the REAL post-run isolation release work (capture, commit,
-	// teardown) does not begin until the coordinator creates the exact
-	// identity-bound signal file emitted in hold-begin. `releaseBase` (the
-	// caller-requested base release) runs outside this gate. The prefix itself
-	// must not exist: a pre-existing entry is a stale sentinel that would
-	// otherwise release an attempt by accident. A timeout - including a signal
-	// observed only after the deadline - rejects the original signal; expiry
-	// never counts as release, and nothing is faked in place of real work.
-	const holdPrefix = process.env.OM_CANARY_HOLD_RELEASE_UNTIL;
-	const holdNonce = holdPrefix ? randomUUID() : undefined;
-	let holdPromise: Promise<void> | undefined;
-	const awaitReleaseSignal = (): Promise<void> => {
-		if (!holdPrefix) return Promise.resolve();
-		if (!holdPromise) {
-			holdPromise = (async () => {
-				const holdIdentity = settlement.snapshot();
-				const holdFile = `${holdPrefix}.${encodeURIComponent(holdIdentity.attemptId)}.${holdIdentity.generation}.${holdNonce}`;
-				const binding = JSON.stringify({
-					agentId: opts.agentId,
-					attemptId: holdIdentity.attemptId,
-					generation: holdIdentity.generation,
-					cleanupOperationId: barrierIdentity.cleanupOperationId,
-					holdFile,
-				});
-				try {
-					await fs.lstat(holdPrefix);
-					throw new Error(`stale isolation hold prefix exists: ${holdPrefix}`);
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				}
-				const startedAt = performance.now();
-				const deadlineMs = 600_000;
-				for (;;) {
-					try {
-						const signal = await fs.lstat(holdFile);
-						if (!signal.isFile()) {
-							throw new Error(`isolation hold signal is not a regular file: ${holdFile}`);
-						}
-						if (performance.now() - startedAt >= deadlineMs) {
-							throw new Error(`isolation hold signal arrived after the deadline: ${holdFile}`);
-						}
-						return;
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-					}
-					if (performance.now() - startedAt >= deadlineMs) {
-						throw new Error(`isolation hold timed out without the bound release signal: ${holdFile}`);
-					}
-					await new Promise(resolve => setTimeout(resolve, 200));
-				}
-			})();
-			// Whichever consumer awaits the hold first, a hold failure must terminate
-			// the original signal: no route may leave a canonical barrier pending
-			// after a known hold rejection (stale prefix, timeout, I/O error).
-			void holdPromise.catch(error => isolationRelease.reject(error));
-		}
-		return holdPromise;
-	};
 	try {
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
 		const isolationDir = handle.mergedDir;
@@ -612,9 +543,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
 		});
 		opts.onSubprocessResult?.(result);
-		// The test-only hold gates post-run capture on every route; release and
-		// cleanup wait on the same memoised signal.
-		await awaitReleaseSignal();
 		// A successful result cannot be captured while deferred owner jobs or
 		// shutdown hooks may still write the worktree. Failed runs skip capture,
 		// so their cleanup remains asynchronous.
@@ -753,7 +681,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				// second time: trackCleanups skips duplicate pending resources, and a
 				// second settlement path would give release two authorities. The
 				// deferred chain only drives the release that the barrier observes.
-				const completion = Promise.all([deferredCleanup, awaitReleaseSignal()]).then(cleanupHandle);
+				const completion = deferredCleanup.then(cleanupHandle);
 				void completion.then(
 					() => isolationRelease.resolve(),
 					error => isolationRelease.reject?.(error),
@@ -764,7 +692,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			} else {
 				try {
-					await awaitReleaseSignal();
 					await cleanupHandle();
 					isolationRelease.resolve();
 				} catch (error) {
