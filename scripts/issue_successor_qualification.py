@@ -524,12 +524,103 @@ def reobserve_recovery(home: Path) -> dict:
     }
 
 
+
+REMARKS = {
+    "re-measured": (
+        "re-measured on the activated subject: this artifact was produced by the "
+        "campaign's own producer at the current commit, in a throwaway home, and is "
+        "carried into the successor ledger with its measured content"
+    ),
+    "carried": (
+        "identity re-stamped on the activated subject: this artifact's observation was "
+        "measured at the predecessor subject and is carried forward as such, without "
+        "re-measurement here"
+    ),
+}
+
+
+def collect_remeasured(root: Path) -> dict[tuple, dict]:
+    """Index freshly produced artifacts by the identity the ledger keys on.
+
+    Re-measurement replaces an artifact whose (phase, requirement, feature,
+    evidence_type) matches; the fresh file and its raw wrappers are copied into the
+    verification home at their recorded home-relative paths so every reference
+    resolves inside the home.
+    """
+    index: dict[tuple, dict] = {}
+    if not root.is_dir():
+        return index
+    for path in sorted(root.rglob("*.json")):
+        if path.name.endswith(".raw.json"):
+            continue
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(document, dict) or not isinstance(document.get("observed_data"), dict):
+            continue
+        key = (
+            document.get("phase"),
+            document.get("requirement"),
+            document.get("feature"),
+            document.get("evidence_type"),
+        )
+        if not all(isinstance(part, str) and part for part in key):
+            continue
+        index[key] = {
+            "path": path,
+            "relative": path.relative_to(REPO_ROOT.parent.parent).as_posix(),
+            "sha256": sha256_file(path),
+            "coverage": document.get("coverage"),
+        }
+    return index
+
+
+def install_remeasured(
+    home: Path, relative: str, fresh: Path, subject: dict, note: str, now: str
+) -> dict | None:
+    """Replace a carried artifact with its freshly produced counterpart."""
+    target = home / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(fresh, target)
+    document = json.loads(target.read_text(encoding="utf-8"))
+    for raw in document.get("provenance", {}).get("raw_evidence_refs", []):
+        raw_relative = str(raw.get("path", ""))
+        source = REPO_ROOT.parent.parent / raw_relative
+        destination = home / raw_relative
+        if source.is_file() and not destination.is_file():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+    former = {
+        "source_commit": document.get("source_commit"),
+        "source_tree_sha256": document.get("source_tree_sha256"),
+        "config_sha256": document.get("config_sha256"),
+    }
+    document["source_commit"] = subject["source_commit"]
+    document["source_tree_sha256"] = subject["source_tree_sha256"]
+    document["config_sha256"] = subject["config_sha256"]
+    document["observed_at"] = now
+    document["identity_captured_at"] = now
+    document["rebound"] = {
+        "rebound_from_subject": former,
+        "rebound_to_subject": {
+            "source_commit": subject["source_commit"],
+            "source_tree_sha256": subject["source_tree_sha256"],
+        },
+        "reverified": note,
+        "carried_forward": ["observer_identity"],
+    }
+    target.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return document
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canonical-home", type=Path, required=True)
     parser.add_argument("--home", type=Path, required=True)
     parser.add_argument("--predecessor-pack", type=Path, required=True)
     parser.add_argument("--out-pack", type=Path, required=True)
+    parser.add_argument("--remeasure-root", type=Path, default=None)
     args = parser.parse_args()
 
     canonical = args.canonical_home.resolve()
@@ -544,6 +635,7 @@ def main() -> int:
     )
     rows_by_key = {(row["phase"], row["requirement"]): row for row in predecessor_rows}
     mirror_references(canonical, home, predecessor_rows)
+    remeasured = collect_remeasured(args.remeasure_root) if args.remeasure_root else {}
 
     qualification = home / QUALIFICATION_DIR
     (qualification / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -581,12 +673,17 @@ def main() -> int:
         covered: set[str] = set()
         for ref in predecessor_evidence["evidence_refs"]:
             relative = str(ref["path"])
-            note = (
-                "identity re-stamped on the activated subject: this artifact's observation was "
-                "measured at the predecessor subject and is carried forward as such, without "
-                "re-measurement here"
-            )
+            note = REMARKS["carried"]
             extra_raw = None
+            carried_artifact = json.loads((canonical / relative).read_text(encoding="utf-8"))
+            fresh = remeasured.get(
+                (
+                    carried_artifact.get("phase"),
+                    carried_artifact.get("requirement"),
+                    carried_artifact.get("feature"),
+                    carried_artifact.get("evidence_type"),
+                )
+            )
             if relative == RECOVERY_ARTIFACT:
                 note = (
                     "re-measured on the activated subject: the P4 driver rebuilt a scenario "
@@ -613,9 +710,17 @@ def main() -> int:
                     "sha256": trial["record_sha256"],
                     "type": "raw",
                 }
-            digest, artifact = reidentify_reference(
-                canonical, home, relative, subject, now, note, cache, extra_raw
-            )
+            if fresh is not None and relative != RECOVERY_ARTIFACT:
+                install_remeasured(
+                    home, relative, fresh["path"], subject, REMARKS["re-measured"], now
+                )
+                digest = sha256_file(home / relative)
+                artifact = json.loads((home / relative).read_text(encoding="utf-8"))
+                cache[relative] = (digest, artifact)
+            else:
+                digest, artifact = reidentify_reference(
+                    canonical, home, relative, subject, now, note, cache, extra_raw
+                )
             evidence_refs.append({**ref, "sha256": digest})
             if artifact is not None:
                 covered.update(artifact.get("coverage", []))
@@ -740,6 +845,18 @@ def main() -> int:
                 "guard_refusal_trial": trial,
                 "requirements": rebind_record,
                 "recovery_reobservation": recovery,
+                "remeasured_artifacts": [
+                    {
+                        "phase": key[0],
+                        "requirement": key[1],
+                        "feature": key[2],
+                        "evidence_type": key[3],
+                        "fresh_path": value["relative"],
+                        "fresh_sha256": value["sha256"],
+                        "coverage": value["coverage"],
+                    }
+                    for key, value in sorted(remeasured.items())
+                ],
                 "mirrored_reference_count": len(set(
                     ref["path"]
                     for row in predecessor_rows
