@@ -51,8 +51,16 @@ candidate receives pre-activation acceptance.
      launch loads the qualified bytes; verify each file hash equals
      `HASHES.txt`.
    - the stock `omp.exe` binary cannot load patched source and remains
-     unmodified; mutating isolated dispatch through it stays refused. This
-     limitation is documented, not worked around.
+     unmodified. Observed stock behaviour (rehearsed 2026-09-20,
+     `outputs/reports/omp-activation-20260920/rollback-rehearsal-executed.json`):
+     on stock v18.2.6 runtimes the extension takes its documented degraded
+     `native_lifecycle` path — the Brain admits the mutating admission and holds
+     the writer lease, cleanup is never proven, and no release is ever
+     performed. The restored stock source refused the host dispatch with
+     `WORKTREE_WRITER_BUSY`; the stock binary spawned the worker and the lease
+     stayed held. The clean `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`
+     refusal applies only to hosts with none of the three settlement sources.
+     The qualified release path remains the accepted patched source host.
 3. **Configuration**: enable `task.isolation.enabled` for the target profile
    only if normal mutating delegation is desired; write it through the
    supported settings surface with a backup, never by hand-editing derived
@@ -89,8 +97,11 @@ verdict.
   regression.
 - Steps: stop further production experimentation; restore the previous
   extension directory and the pre-activation host files (hash-verified);
-  revert any configuration edit from its backup; confirm the stock refusal
-  behaviour and a normal session start.
+  revert any configuration edit from its backup; confirm the qualified
+  capability is absent (a stock route with the installed extension leaves the
+  writer lease held, never a release; a stock host with no settlement source
+  refuses with `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`) and a normal
+  session start.
 - Database: no migration occurred; do **not** restore an old database over
   subsequent live writes. If data restoration is ever required, use a coherent
   project-supported backup and state the exact point in time.

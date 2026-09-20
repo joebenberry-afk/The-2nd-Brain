@@ -817,12 +817,18 @@ authorization:
   records and model-reported continuity; advisory/shadow state captured
   read-only; targeted Brain retrieval inside OMP demonstrated via the supported
   CLI search with the durable memory cited at the model boundary; the
-  recall-brief gate's full-prompt FTS limitation is recorded) and B2 (disposable
-  behavioral rollback rehearsal executed with hash-verified restore and a
-  starting restored host). Open: the separately tracked causal-evidence binding
-  plus the shipping-subject ledger rebind; final `OMP_SECOND_BRAIN_READY`
-  report after it closes. Non-blocking follow-ups: read-only task-row
-  accounting and failed-to-cancelled terminal outcome arbitration.
+  recall-brief gate's full-prompt FTS limitation is recorded); B2 (the full
+  disposable behavioral rollback rehearsal was executed — the complete
+  activation delta reverted and hash-verified, the prior extension restored and
+  started, and the stock-route dispatch behaviour observed; a finding against
+  the card's stock-refusal wording is recorded and the card corrected:
+  v18.2.6 stock runtimes use the documented degraded `native_lifecycle` path,
+  so mutating admission is held-without-release rather than refused with
+  `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`, which applies only to hosts
+  with none of the three settlement sources); and B3 (rebind + live governed
+  re-check + live observation binding + verifier verdict below). Non-blocking
+  follow-ups: read-only task-row accounting and failed-to-cancelled terminal
+  outcome arbitration.
 - Report: `outputs/reports/omp-activation-20260920/ACTIVATION-REPORT.md`.
 
 ### Causal-evidence binding closed (2026-09-20, later)
@@ -866,7 +872,8 @@ on the shipping subject.
   `6243bbf6…`).
 
 Remaining before the final label: fresh independent review of the closed
-ledger, then the final installed-outcome acceptance.
+ledger and of the executed rollback rehearsal (including the corrected
+stock-refusal limitation), then the final installed-outcome acceptance.
 
 
 
