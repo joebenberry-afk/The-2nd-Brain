@@ -37,7 +37,6 @@ def main() -> int:
         CANARY / "src/task/isolation-runner.ts": DOCS / "host/isolation-runner.ts",
         CANARY / "src/task/worktree.ts": DOCS / "host/worktree.ts",
         CANARY / "src/main.ts": DOCS / "host/main.ts",
-        CANARY / "tests/host-patch/trace-safety.test.ts": DOCS / "tests/trace-safety.test.ts",
     }
     for source, target in snapshots.items():
         target.write_bytes(source.read_bytes())
