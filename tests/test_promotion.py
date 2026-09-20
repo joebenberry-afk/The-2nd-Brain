@@ -547,3 +547,181 @@ def test_authority_gaps_reports_active_skill_without_history(brain_home):
     assert promotion.authority_gaps(brain_home) == ["orphan"]
     assert promotion.promotion_status(brain_home)["authority_gaps"] == ["orphan"]
     assert promotion.promotion_status(brain_home, "orphan")["authority_gaps"] == ["orphan"]
+
+
+# ---------------------------------------------------------------------------
+# Audit follow-up: failure boundaries found by the independent verification
+# ---------------------------------------------------------------------------
+
+
+def test_record_directory_failure_rolls_back_publication(brain_home):
+    """A record-write failure of any kind must not leave usable active state."""
+    _green_candidate(brain_home)
+    # Make the record directory unusable: a file where the directory belongs.
+    (brain_home / "state" / "promotions").write_text("not a directory", encoding="utf-8")
+
+    result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] in {"journal_failed", "record_failed"}
+    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
+    assert not (brain_home / "skills" / "candidates" / "scout").exists()
+    assert promotion.pending_publications(brain_home) == []
+
+
+def test_unexpected_record_error_rolls_back_publication(brain_home, monkeypatch):
+    """An error that is not a BrainError must still roll the move back."""
+    _green_candidate(brain_home)
+
+    def boom(*args, **kwargs):
+        raise PermissionError("simulated permission failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", boom)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "record_failed"
+    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
+    assert promotion.pending_publications(brain_home) == []
+
+
+def test_reconcile_skips_in_flight_publication(brain_home, monkeypatch):
+    """Automatic recovery must not commit a publication a caller is finishing."""
+    _green_candidate(brain_home)
+
+    def boom(*args, **kwargs):
+        raise PermissionError("simulated permission failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", boom)
+        patch.setattr(promotion, "_rollback_publication", lambda *a, **k: False)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["rollback"] == "incomplete"
+    assert len(promotion.pending_publications(brain_home)) == 1
+    # A fresh journal is in flight: automatic recovery leaves it alone.
+    actions = promotion.reconcile_publications(
+        brain_home, min_age_seconds=promotion.RECONCILE_GRACE_SECONDS
+    )
+    assert [a["action"] for a in actions] == ["in_flight"]
+    assert promotion.promotion_status(brain_home, "scout")["records"] == []
+
+    # An operator pass reconciles it, record and authority marker together.
+    actions = promotion.reconcile_publications(brain_home)
+    assert [a["action"] for a in actions] == ["committed"]
+    assert len(promotion.promotion_status(brain_home, "scout")["records"]) == 1
+    marker = brain_home / "skills" / "candidates" / "scout" / promotion.AUTHORITY_MARKER
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] is None
+
+
+def test_reconcile_rejects_hostile_journal(brain_home):
+    """A journal is data: it may not name a path outside the skill tree."""
+    _skill(brain_home, name="scout")
+    outside = brain_home.parent / "outside-hostile"
+    pending = brain_home / "state" / "promotions" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "hostile.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-hostile",
+                    "skill_name": str(outside),
+                    "from_level": "shadow",
+                    "to_level": "candidate",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["invalid"]
+    assert not outside.exists()
+    assert not list(brain_home.parent.glob("outside-hostile*"))
+    assert promotion.pending_publications(brain_home) == ["hostile.json"]
+
+
+def test_reconcile_survives_corrupt_record_store(brain_home):
+    """A corrupt record must not cascade into an unrecoverable reconcile."""
+    _skill(brain_home, name="scout")
+    (brain_home / "state" / "promotions").mkdir(parents=True, exist_ok=True)
+    (brain_home / "state" / "promotions" / "scout-1.json").write_text("{", encoding="utf-8")
+    pending = brain_home / "state" / "promotions" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["records_unreadable"]
+    assert promotion.pending_publications(brain_home) == ["p1.json"]
+    assert promotion.unreadable_publications(brain_home) == []
+
+
+def test_reconcile_heals_status_of_unpublished_skill(brain_home):
+    """A status change without the move is repaired, not left mismatched."""
+    _skill(brain_home, name="scout")
+    skill_file = brain_home / "skills" / "shadow" / "scout" / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace("status: shadow", "status: candidate"),
+        encoding="utf-8",
+    )
+    pending = brain_home / "state" / "promotions" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "candidate",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["discarded"]
+    assert "status: shadow" in skill_file.read_text(encoding="utf-8")
+
+
+def test_demote_seeds_marker_from_committed_history(brain_home):
+    """A demotion reconstructs the active version from committed records."""
+    _skill(brain_home, name="scout", level="active")
+    promotion._write_record(
+        brain_home,
+        {
+            "promotion_id": "promotion-historic",
+            "skill_name": "scout",
+            "from_level": "candidate",
+            "to_level": "active",
+            "ts": "2026-01-01T00:00:00+00:00",
+            "session_id": "",
+            "resulting_version": 5,
+        },
+    )
+
+    result = promotion.demote(brain_home, "scout", "candidate", "planned demotion")
+
+    assert result["demoted"] is True
+    marker = brain_home / "skills" / "candidates" / "scout" / promotion.AUTHORITY_MARKER
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 5

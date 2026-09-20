@@ -221,11 +221,27 @@ def _validate_db_file_name(file_name: object) -> str:
     return file_name
 
 
+def _db_source_path(backup_dir: Path, manifest: dict) -> Path:
+    """The snapshot database inside the backup, proven safe to read.
+
+    The source chain is validated exactly like a destination: a database file
+    that is a symlink (or reached through one, or outside the backup root) is
+    refused instead of being restored (audit F-05, source half).
+    """
+    name = _validate_db_file_name((manifest.get("db") or {}).get("file", "brain.sqlite"))
+    try:
+        return resolve_under(backup_dir, name, allow_missing=False)
+    except ValueError as exc:
+        raise BackupError(
+            f"Backup restore rejected: database source {name!r} is not a safe file inside the "
+            f"backup ({exc})."
+        ) from exc
+
+
 def _verify_db_hash(backup_dir: Path, manifest: dict) -> None:
     dbinfo = manifest.get("db") or {}
-    db_file_name = _validate_db_file_name(dbinfo.get("file", "brain.sqlite"))
-    dbfile = backup_dir / db_file_name
-    if not dbfile.exists():
+    dbfile = _db_source_path(backup_dir, manifest)
+    if not dbfile.is_file():
         raise BackupError(f"Backup database file missing: {dbfile}")
     actual = sha256_file(dbfile)
     expected = dbinfo.get("sha256")
@@ -335,6 +351,12 @@ def _verify_closed_inventory(backup_dir: Path, manifest: dict, copied: list[str]
     if not isinstance(files, dict):
         raise BackupError("Backup manifest files must be an object")
     declared_hashes = {str(key).replace("\\", "/") for key in files}
+    surplus = sorted(declared_hashes & known_extras)
+    if surplus:
+        raise BackupError(
+            "Backup restore rejected: manifest hashes files that are not part of the declared "
+            "inventory: " + ", ".join(surplus)
+        )
     unhashed = sorted(declared - declared_hashes)
     if unhashed:
         preview = ", ".join(unhashed[:5]) + ("..." if len(unhashed) > 5 else "")
@@ -405,17 +427,50 @@ def _db_destination_paths(home: Path) -> dict[str, Path]:
 
 def _restore_destination_state(
     home: Path, plan: list[tuple[str, Path, Path]], db_paths: dict[str, Path]
-) -> tuple[list[str], dict[str, bool]]:
-    """What the restore would create from nothing (needed for an exact rollback)."""
-    absent = [rel for rel, _src, _dest in plan if not _dest.exists()]
+) -> tuple[dict[str, str], dict[str, bool], set[Path]]:
+    """What each destination looked like before the attempt.
+
+    Returns (per-entry state, database presence, directories that already
+    existed). ``absent`` entries are removed on rollback, ``empty_dir`` entries
+    are restored to an empty directory, ``present`` entries are moved aside and
+    put back. The directory set is what makes parent pruning exact: only
+    directories the attempt itself created may be pruned.
+    """
+    state: dict[str, str] = {}
+    for rel, _src, dest in plan:
+        if dest.exists() and dest.is_dir() and not any(dest.iterdir()):
+            state[rel] = "empty_dir"
+        elif dest.exists() or dest.is_symlink():
+            state[rel] = "present"
+        else:
+            state[rel] = "absent"
     db_state = {rel: path.exists() for rel, path in db_paths.items()}
-    return absent, db_state
+    protected: set[Path] = set()
+    for _rel, _src, dest in plan:
+        current = dest.parent
+        while current != home and home in current.parents:
+            if current.exists():
+                protected.add(current)
+            current = current.parent
+    for path in db_paths.values():
+        current = path.parent
+        while current != home and home in current.parents:
+            if current.exists():
+                protected.add(current)
+            current = current.parent
+    return state, db_state, protected
 
 
-def _prune_empty_parents(home: Path, start: Path) -> None:
-    """Remove directories the failed restore left empty, up to the Brain home."""
+def _prune_empty_parents(home: Path, start: Path, protected: set[Path]) -> None:
+    """Remove directories the failed restore created, up to the Brain home.
+
+    Only directories that did not exist before the attempt are removed, so an
+    originally empty parent (for example ``db/``) survives a failed restore.
+    """
     current = start
-    while current != home and current.is_dir() and not any(current.iterdir()):
+    while current != home and current not in protected:
+        if not current.is_dir() or any(current.iterdir()):
+            return
         try:
             current.rmdir()
         except OSError:
@@ -425,36 +480,56 @@ def _prune_empty_parents(home: Path, start: Path) -> None:
 
 def _remove_created_paths(
     home: Path,
-    absent: list[str],
+    state: dict[str, str],
     db_paths: dict[str, Path],
     db_state: dict[str, bool],
+    protected: set[Path],
 ) -> None:
-    """Undo exactly the paths a failed restore created where nothing existed."""
-    for rel in absent:
+    """Undo exactly what a failed restore created or overwrote from nothing."""
+    for rel, before in state.items():
         target = home / rel
+        if before == "present":
+            continue  # the moved-aside rollback puts it back
+        if before == "empty_dir":
+            if target.exists() and not target.is_symlink():
+                shutil.rmtree(target, ignore_errors=True)
+            target.mkdir(parents=True, exist_ok=True)
+            continue
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target, ignore_errors=True)
         elif target.exists() or target.is_symlink():
             target.unlink()
-        _prune_empty_parents(home, target.parent)
+        _prune_empty_parents(home, target.parent, protected)
     for rel, path in db_paths.items():
         if db_state.get(rel):
             continue  # existed before; the moved-aside rollback restored it
         if path.exists() or path.is_symlink():
             path.unlink()
-        _prune_empty_parents(home, path.parent)
+        _prune_empty_parents(home, path.parent, protected)
+
+
+def _remove_created_layout(home: Path, protected: set[Path], layout_before: set[str]) -> None:
+    """Remove the layout directories this attempt created, deepest first.
+
+    ``MAJOR_DIRS`` entries are nested, so their top-level parents are created
+    implicitly by ``mkdir(parents=True)``; pruning walks back up to the Brain
+    home and stops at any directory that existed before the attempt.
+    """
+    created = [rel for rel in paths.MAJOR_DIRS if rel not in layout_before]
+    for rel in sorted(created, key=lambda item: item.count("/"), reverse=True):
+        _prune_empty_parents(home, home / rel, protected)
 
 
 def _residual_state(
     home: Path,
-    absent: list[str],
+    state: dict[str, str],
     db_paths: dict[str, Path],
     db_state: dict[str, bool],
 ) -> list[str]:
     """Paths a failed restore created and could not remove."""
     if not home.exists():
         return []
-    residue = [rel for rel in absent if (home / rel).exists()]
+    residue = [rel for rel, before in state.items() if before == "absent" and (home / rel).exists()]
     for rel, path in db_paths.items():
         if not db_state.get(rel) and path.exists():
             residue.append(rel)
@@ -487,15 +562,32 @@ def _targets_exist(
 
 
 def _move_aside(home: Path, items: list[str]) -> Path:
+    """Move existing state into a pre-restore directory, or put it all back.
+
+    A failure part-way through must not leave the target missing data, so the
+    items already moved are restored before the error is raised.
+    """
     stamps = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     aside = paths.backups_dir(home) / f"pre-restore-{stamps}"
     aside.mkdir(parents=True)
+    moved: list[str] = []
     for rel in items:
         src = home / rel
-        if src.exists():
-            dst = aside / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
+        if not src.exists():
+            continue
+        dst = aside / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
             shutil.move(str(src), str(dst))
+        except OSError as exc:
+            _rollback_aside(home, aside, moved)
+            if moved and not all((home / rel).exists() for rel in moved):
+                raise BackupError(
+                    f"Could not move {rel} aside ({exc}) and the partial move could not be "
+                    f"undone; the moved state is preserved under {aside}."
+                ) from exc
+            raise
+        moved.append(rel)
     return aside
 
 
@@ -526,6 +618,60 @@ def _drop_stale_db_sidecars(db_paths: dict[str, Path]) -> None:
         stale = db_paths.get(rel)
         if stale is not None and stale.exists():
             stale.unlink()
+
+
+def _install_verified_file(destination: Path, source: Path, rel: str, expected: str | None) -> None:
+    """Copy one declared file and prove the installed bytes match the manifest."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    if expected is not None and sha256_file(destination) != expected:
+        raise BackupError(
+            f"Restored file {rel} does not match the manifest hash "
+            "(the backup changed while it was being restored)."
+        )
+
+
+def _install_tree(
+    backup_dir: Path, destination: Path, source: Path, rel: str, manifest: dict
+) -> None:
+    """Install exactly the declared files below one root, verifying each copy.
+
+    The inventory was verified before any mutation; this walks the source tree
+    again as it copies, so a file that appears in the backup between those two
+    moments is refused instead of being installed unverified, and every
+    installed file is proved byte-identical to its declared hash.
+    """
+    files = manifest.get("files")
+    if destination.exists():
+        shutil.rmtree(destination)
+    if not isinstance(files, dict):
+        # Legacy format 1 has no hash inventory: root closure only (documented).
+        shutil.copytree(source, destination)
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    prefix = rel.rstrip("/") + "/"
+    installed = 0
+    for item in sorted(source.rglob("*")):
+        if item.is_symlink():
+            raise BackupError(f"Backup restore rejected: symlink inside {rel}: {item.name}")
+        if item.is_dir():
+            (destination / item.relative_to(source)).mkdir(parents=True, exist_ok=True)
+            continue
+        rel_key = item.relative_to(backup_dir).as_posix()
+        expected = files.get(rel_key)
+        if expected is None:
+            raise BackupError(
+                f"Backup restore rejected: {rel_key} appeared in the backup after it was "
+                "verified (the backup changed during the restore)."
+            )
+        _install_verified_file(destination / item.relative_to(source), item, rel_key, expected)
+        installed += 1
+    declared = sum(1 for key in files if key.startswith(prefix))
+    if installed != declared:
+        raise BackupError(
+            f"Backup restore rejected: {rel} installed {installed} files but the manifest "
+            f"declares {declared}."
+        )
 
 
 def _restore_plan(home: Path, backup_dir: Path, manifest: dict) -> list[tuple[str, Path, Path]]:
@@ -586,12 +732,10 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         raise BackupError(f"Backup directory not found: {backup_dir}")
     manifest = load_manifest(backup_dir)
     _verify_db_hash(backup_dir, manifest)
+    src_db = _db_source_path(backup_dir, manifest)
     _verify_file_hashes(backup_dir, manifest)
     if manifest["format"] >= 2:
-        _verify_memory_references(
-            backup_dir,
-            database_file=backup_dir / _validate_db_file_name(manifest["db"]["file"]),
-        )
+        _verify_memory_references(backup_dir, database_file=src_db)
 
     # Preflight the complete restore plan before mutating anything.
     plan = _restore_plan(home, backup_dir, manifest)
@@ -602,7 +746,7 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
 
     home_existed = home.exists()
     home.mkdir(parents=True, exist_ok=True)
-    absent, db_state = _restore_destination_state(home, plan, db_paths)
+    state, db_state, protected = _restore_destination_state(home, plan, db_paths)
     existing = _targets_exist(home, copied, db_paths)
     if existing and not force:
         raise BackupError(
@@ -610,25 +754,24 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
             + ", ".join(existing)
             + ". Re-run with --force to move the current state aside first."
         )
+    layout_before = {rel for rel in paths.MAJOR_DIRS if (home / rel).exists()}
+    git_before = (home / ".git").exists()
     moved = None
     try:
         moved = _move_aside(home, existing) if existing else None
-        src_db = backup_dir / _validate_db_file_name(
-            manifest.get("db", {}).get("file", "brain.sqlite")
-        )
         dst_db = db_paths[DB_RELATIVE]
         dst_db.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_db, dst_db)
+        _install_verified_file(dst_db, src_db, DB_RELATIVE, manifest.get("db", {}).get("sha256"))
         _drop_stale_db_sidecars(db_paths)
         for rel, src, destination in plan:
             if not src.exists():
                 raise BackupError(f"Backup is incomplete (missing {rel})")
             if src.is_dir():
-                if destination.exists():
-                    shutil.rmtree(destination)
-                shutil.copytree(src, destination)
+                _install_tree(backup_dir, destination, src, rel, manifest)
             else:
-                shutil.copy2(src, destination)
+                _install_verified_file(
+                    destination, src, rel, (manifest.get("files") or {}).get(rel)
+                )
         # Verify the restored copy is byte-identical to the snapshot.
         expected_hash = manifest.get("db", {}).get("sha256")
         if expected_hash and sha256_file(dst_db) != expected_hash:
@@ -639,15 +782,19 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         _drop_stale_db_sidecars(db_paths)
         paths.ensure_layout(home)
         # The Brain root must be a Git repository (doctor requires it).
-        if not (home / ".git").exists():
+        if not git_before:
             subprocess.run(["git", "init", "-q"], cwd=home, check=False)
     except Exception as exc:
         if moved is not None:
             _rollback_aside(home, moved, existing)
-        _remove_created_paths(home, absent, db_paths, db_state)
+        _remove_created_paths(home, state, db_paths, db_state, protected)
+        # Remove the layout this attempt created (and the Git repo, if it created one).
+        _remove_created_layout(home, protected, layout_before)
+        if not git_before and (home / ".git").is_dir():
+            shutil.rmtree(home / ".git", ignore_errors=True)
         if not home_existed and home.is_dir() and not any(home.iterdir()):
             home.rmdir()
-        residue = _residual_state(home, absent, db_paths, db_state)
+        residue = _residual_state(home, state, db_paths, db_state)
         if residue:
             preview = ", ".join(residue[:5]) + ("..." if len(residue) > 5 else "")
             raise BackupError(
