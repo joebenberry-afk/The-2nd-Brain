@@ -761,3 +761,28 @@ qualification instrumentation/hold controls through the accepted change
 process and bind the release bytes; seal the campaign artifacts and resolve
 stale pre-run manifest fields; activation remains subject to its own gate.
 
+### Scoped ledger state and the causal-evidence binding (2026-09-20)
+
+`scripts/verify_qualification.py --scope docs/superpowers/plans/2026-09-19-second-brain-v2-omp-only-scope.json`
+against the OMP-only assembly records (`outputs/reports/omp-only-release-assembly-20260919/`)
+reports **68/68 scoped gates and 12/12 requirements covered**, with exactly one
+failing check: `qualification_ledger: governed promotion evidence is not bound
+to a worker-independent causal observation`. The verifier requires the
+promotion-gate artifact to be referenced by exactly one causal observation in
+the live Brain (`v2_observations` joined to `v2_interventions`) whose
+`_evidence` matches path/sha256/feature/source_commit/source_tree/config and
+whose `target_ref` matches. The live ledger's two real-trial observations
+(`intv-ddda44bd233a4d5fa35f73c2`) reference the 2026-09-08/09 artifacts, not
+the current-subject rebind. The 2026-09-19 receipt records that closing it
+requires either a renewed governed trial recording its own causal observation
+(a live-ledger write) or re-pointing the recorded observations — both live
+Brain writes. Under this mandate those writes belong to the authorized
+activation phase (controlled installed-runtime operations in the actual Brain
+home), so the binding is scheduled after installation rather than bypassed.
+
+`check:types` is being resolved with the project's actual pinned toolchain:
+`@typescript/native-preview 7.0.0-dev.20260707.2` (tsgo) from the v18.2.6
+catalog, in an isolated checkout of `github.com/can1357/oh-my-pi` at tag
+`v18.2.6` with the candidate `src`/`tests` spliced in; the published package
+omits `tsconfig.json`, so the live install cannot run the check by itself.
+
