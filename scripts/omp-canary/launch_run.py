@@ -268,6 +268,20 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     if not hold_ok:
         mismatched.append("configuration:hold-prefix")
 
+    # The adapter silently disables itself when its home does not exist.
+    brain_home = env_get_ci(env, "SECOND_BRAIN_HOME")
+    brain_home_ok = bool(brain_home) and Path(str(brain_home)).is_dir()
+    env_checks.append(
+        {
+            "name": "brain-home-exists",
+            "expected": spec["home"],
+            "actual": brain_home,
+            "ok": brain_home_ok,
+        }
+    )
+    if not brain_home_ok:
+        mismatched.append("configuration:brain-home-exists")
+
     profile = spec.get("profile")
     profile_flag_ok = "--profile" in argv and argv[argv.index("--profile") + 1] == profile
     extension_flags_ok = all(path in argv for path in spec.get("extension", []))

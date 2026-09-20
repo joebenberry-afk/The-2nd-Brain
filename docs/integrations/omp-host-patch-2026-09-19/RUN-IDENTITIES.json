@@ -68,20 +68,24 @@
       "OMP_PROFILE",
       "PI_PROFILE",
       "BUN_OPTIONS",
-      "NODE_OPTIONS"
+      "NODE_OPTIONS",
+      "SECOND_BRAIN_OBSERVABILITY"
     ],
     "forbidden_env_prefixes": [
       "BUN_",
       "NODE_",
       "PI_",
       "OMP_",
-      "OM_CANARY_"
+      "OM_CANARY_",
+      "SECOND_BRAIN_"
     ],
     "allowed_env_exceptions": [
       "OM_CANARY_BOOT",
       "OM_CANARY_FORCE_ISOLATED",
       "OM_CANARY_ISOLATION",
-      "OM_CANARY_HOLD_RELEASE_UNTIL"
+      "OM_CANARY_HOLD_RELEASE_UNTIL",
+      "SECOND_BRAIN_HOME",
+      "SECOND_BRAIN_PYTHON"
     ],
     "required_env_values": {
       "OM_CANARY_FORCE_ISOLATED": "1",
@@ -275,7 +279,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "631c9af04d315089ddd159a1b341199f480e9218d9783fbdda15e817d6aeb634"
+      "sha256": "0f325b74871ee79046562574e073b81c39d287411f12df0e710ce28b7985dc73"
     },
     {
       "role": "watcher",

@@ -246,13 +246,23 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         "PI_PROFILE",
                         "BUN_OPTIONS",
                         "NODE_OPTIONS",
+                        "SECOND_BRAIN_OBSERVABILITY",
                     ],
-                    "forbidden_env_prefixes": ["BUN_", "NODE_", "PI_", "OMP_", "OM_CANARY_"],
+                    "forbidden_env_prefixes": [
+                        "BUN_",
+                        "NODE_",
+                        "PI_",
+                        "OMP_",
+                        "OM_CANARY_",
+                        "SECOND_BRAIN_",
+                    ],
                     "allowed_env_exceptions": [
                         "OM_CANARY_BOOT",
                         "OM_CANARY_FORCE_ISOLATED",
                         "OM_CANARY_ISOLATION",
                         "OM_CANARY_HOLD_RELEASE_UNTIL",
+                        "SECOND_BRAIN_HOME",
+                        "SECOND_BRAIN_PYTHON",
                     ],
                     "required_env_values": {
                         "OM_CANARY_FORCE_ISOLATED": "1",
@@ -652,6 +662,24 @@ def test_unbound_omp_environment_overrides_rejected(tmp_path: Path) -> None:
     result = mod.bind_required_identities(spec_hold, run_dir, env_bad, spec_hold["argv"])
     assert result["all_bound"] is False
     assert "configuration:hold-prefix" in result["mismatched"]
+
+    # The adapter must not be silently disabled and its home must exist.
+    for override in (
+        {"SECOND_BRAIN_OBSERVABILITY": "off"},
+        {"second_brain_observability": "0"},
+        {"SECOND_BRAIN_TELEMETRY": "0"},
+    ):
+        env_disabled = dict(base)
+        env_disabled.update(override)
+        result = mod.bind_required_identities(spec, run_dir, env_disabled, spec["argv"])
+        assert result["all_bound"] is False, override
+        assert "configuration:forbidden-env-prefixes" in result["mismatched"], override
+
+    env_missing_home = dict(base)
+    env_missing_home["SECOND_BRAIN_HOME"] = str(tmp_path / "no-such-home")
+    result = mod.bind_required_identities(spec, run_dir, env_missing_home, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:brain-home-exists" in result["mismatched"]
 
 
 def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
