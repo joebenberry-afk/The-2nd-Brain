@@ -591,8 +591,32 @@ def collect_remeasured(root: Path, subject_commit: str | None = None) -> dict[tu
     return index
 
 
+def resolve_raw_source(root: Path, raw_relative: str) -> Path | None:
+    """Find a raw wrapper by its recorded home-relative tail.
+
+    Producers write raw wrappers relative to *their own* home (the rebind home, a
+    structural home, or the repository root), so a re-measured artifact's raw
+    reference has to be resolved by tail against the re-measurement tree before it
+    can be installed at the recorded path inside the verification home.
+    """
+    tail = raw_relative.replace("\\", "/").lstrip("/")
+    direct = REPO_ROOT.parent.parent / tail
+    if direct.is_file():
+        return direct
+    for candidate in root.rglob(Path(tail).name):
+        if candidate.is_file() and candidate.as_posix().endswith(tail):
+            return candidate
+    return None
+
+
 def install_remeasured(
-    home: Path, relative: str, fresh: Path, subject: dict, note: str, now: str
+    home: Path,
+    relative: str,
+    fresh: Path,
+    subject: dict,
+    note: str,
+    now: str,
+    remeasure_root: Path | None = None,
 ) -> dict | None:
     """Replace a carried artifact with its freshly produced counterpart."""
     target = home / relative
@@ -601,11 +625,18 @@ def install_remeasured(
     document = json.loads(target.read_text(encoding="utf-8"))
     for raw in document.get("provenance", {}).get("raw_evidence_refs", []):
         raw_relative = str(raw.get("path", ""))
-        source = REPO_ROOT.parent.parent / raw_relative
         destination = home / raw_relative
-        if source.is_file() and not destination.is_file():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
+        if destination.is_file():
+            continue
+        source = (
+            resolve_raw_source(remeasure_root, raw_relative)
+            if remeasure_root is not None
+            else None
+        )
+        if source is None:
+            raise SystemExit(f"re-measured raw evidence is unavailable: {raw_relative}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
     former = {
         "source_commit": document.get("source_commit"),
         "source_tree_sha256": document.get("source_tree_sha256"),
@@ -764,7 +795,13 @@ def main() -> int:
                 }
             if fresh is not None and relative != RECOVERY_ARTIFACT:
                 install_remeasured(
-                    home, relative, fresh["path"], subject, REMARKS["re-measured"], now
+                    home,
+                    relative,
+                    fresh["path"],
+                    subject,
+                    REMARKS["re-measured"],
+                    now,
+                    args.remeasure_root,
                 )
                 digest = sha256_file(home / relative)
                 artifact = json.loads((home / relative).read_text(encoding="utf-8"))
