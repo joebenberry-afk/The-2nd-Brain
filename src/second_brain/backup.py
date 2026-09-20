@@ -458,6 +458,15 @@ def _restore_destination_state(
             if current.exists():
                 protected.add(current)
             current = current.parent
+    # Every layout ancestor that already exists is off limits too: a failed
+    # restore may not delete a directory the target already had (including an
+    # implicitly created parent such as `brainstem/`).
+    for rel in paths.MAJOR_DIRS:
+        current = home / rel
+        while current != home and home in current.parents:
+            if current.exists():
+                protected.add(current)
+            current = current.parent
     return state, db_state, protected
 
 

@@ -645,11 +645,13 @@ def test_reconcile_rejects_hostile_journal(brain_home):
 
 
 def test_reconcile_survives_corrupt_record_store(brain_home):
-    """A corrupt record must not cascade into an unrecoverable reconcile."""
+    """When a damaged record cannot even be set aside, recovery reports it."""
     _skill(brain_home, name="scout")
-    (brain_home / "state" / "promotions").mkdir(parents=True, exist_ok=True)
-    (brain_home / "state" / "promotions" / "scout-1.json").write_text("{", encoding="utf-8")
-    pending = brain_home / "state" / "promotions" / "pending"
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "scout-1.json").write_text("{", encoding="utf-8")
+    (promotions / "corrupt").write_text("blocked", encoding="utf-8")  # quarantine unavailable
+    pending = promotions / "pending"
     pending.mkdir(parents=True, exist_ok=True)
     (pending / "p1.json").write_text(
         json.dumps(
@@ -725,3 +727,149 @@ def test_demote_seeds_marker_from_committed_history(brain_home):
     assert result["demoted"] is True
     marker = brain_home / "skills" / "candidates" / "scout" / promotion.AUTHORITY_MARKER
     assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 5
+
+
+def test_recovery_ignores_an_inflated_journal_version(brain_home):
+    """A journal cannot raise the recorded baseline above the artifact's own."""
+    skill_dir = brain_home / "skills" / "active" / "scout"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: scout\nstatus: active\nversion: 1\n---\n\n# scout\n", encoding="utf-8"
+    )
+    pending = brain_home / "state" / "promotions" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "candidate",
+                    "to_level": "active",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                    "resulting_version": 999,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["committed"]
+    records = promotion.promotion_status(brain_home, "scout")["records"]
+    assert records[0]["resulting_version"] == 1
+    marker = skill_dir / promotion.AUTHORITY_MARKER
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 1
+
+
+def test_recovery_keeps_intent_when_marker_write_fails(brain_home, monkeypatch):
+    """The intent survives until authority really is carried by the artifact."""
+    skill_dir = brain_home / "skills" / "active" / "scout"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: scout\nstatus: active\nversion: 1\n---\n\n# scout\n", encoding="utf-8"
+    )
+    pending = brain_home / "state" / "promotions" / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "candidate",
+                    "to_level": "active",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                    "resulting_version": 1,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_authority_marker", lambda *a, **k: False)
+        actions = promotion.reconcile_publications(brain_home)
+
+    assert [a["action"] for a in actions] == ["marker_failed"]
+    assert promotion.pending_publications(brain_home) == ["p1.json"]
+
+    # A later pass repairs the marker instead of reporting nothing to do.
+    actions = promotion.reconcile_publications(brain_home)
+    assert [a["action"] for a in actions] == ["already_committed"]
+    marker = skill_dir / promotion.AUTHORITY_MARKER
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 1
+
+
+def test_recovery_quarantines_a_corrupt_record(brain_home):
+    """A damaged record is preserved aside, and recovery still completes."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "scout-1.json").write_text("{", encoding="utf-8")
+    pending = promotions / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert actions[0]["action"] == "committed"
+    assert actions[0]["records_quarantined"] == ["scout-1.json"]
+    assert (promotions / "corrupt" / "scout-1.json").read_text(encoding="utf-8") == "{"
+    assert promotion.pending_publications(brain_home) == []
+
+
+def test_rollback_discards_a_concurrently_committed_record(brain_home, monkeypatch):
+    """A reported failure leaves neither active state nor a record for it."""
+    _green_candidate(brain_home)
+    original_write_record = promotion._write_record
+
+    def commit_then_fail(home, record):
+        # Model a recovery pass committing this publication's record first.
+        original_write_record(home, record)
+        raise PermissionError("simulated record failure after commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", commit_then_fail)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "record_failed"
+    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
+    assert promotion.promotion_status(brain_home, "scout")["records"] == []
+    assert promotion.pending_publications(brain_home) == []
+
+
+def test_move_failure_keeps_status_consistent(brain_home):
+    """A destination conflict must not leave the artifact claiming the target level."""
+    _green_candidate(brain_home)
+    # Block the candidate parent directory so the move cannot happen.
+    candidates = brain_home / "skills" / "candidates"
+    for child in sorted(candidates.iterdir()):
+        if child.is_dir():
+            import shutil as _shutil
+
+            _shutil.rmtree(child)
+    candidates.rmdir()
+    candidates.write_text("blocked", encoding="utf-8")
+
+    result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] in {"move_failed", "destination_exists"}
+    skill_file = brain_home / "skills" / "shadow" / "scout" / "SKILL.md"
+    assert "status: shadow" in skill_file.read_text(encoding="utf-8")
+    assert promotion.pending_publications(brain_home) == []
