@@ -376,6 +376,9 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         name for name in contract.get("forbidden_env", []) if env_get_ci(env, name)
     ]
     contract_check("forbidden-env", not forbidden_env_hits, forbidden_env_hits)
+    prefixes = [str(prefix).upper() for prefix in contract.get("forbidden_env_prefixes", [])]
+    prefix_hits = sorted(key for key in env if any(key.upper().startswith(p) for p in prefixes))
+    contract_check("forbidden-env-prefixes", not prefix_hits, prefix_hits)
     forbidden_flag_hits = [
         flag for flag in contract.get("forbidden_argv_flags", []) if flag in argv
     ]

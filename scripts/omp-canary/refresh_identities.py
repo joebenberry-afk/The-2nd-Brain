@@ -155,6 +155,7 @@ def main() -> int:
             "env_files_must_be_absent": [
                 str(Path.home() / ".env"),
                 str(Path.home() / ".omp" / ".env"),
+                str(Path.home() / ".bunfig.toml"),
             ],
             "default_profile_user_config": str(user_config) if user_config.exists() else None,
             "forbidden_env": [
@@ -164,7 +165,10 @@ def main() -> int:
                 "PI_PACKAGE_DIR",
                 "OMP_PROFILE",
                 "PI_PROFILE",
+                "BUN_OPTIONS",
+                "NODE_OPTIONS",
             ],
+            "forbidden_env_prefixes": ["BUN_", "NODE_"],
             "forbidden_argv_flags": ["--config"],
             "forbidden_project_overlays": [
                 ".omp/config.yml",
@@ -176,6 +180,7 @@ def main() -> int:
                 ".env.development",
                 ".env.production",
                 ".env.test",
+                "bunfig.toml",
             ],
         },
         "identities": [
