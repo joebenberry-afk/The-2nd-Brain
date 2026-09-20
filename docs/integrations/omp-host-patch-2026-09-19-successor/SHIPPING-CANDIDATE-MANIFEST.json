@@ -1,12 +1,12 @@
 {
   "schema": "second-brain.omp-successor-shipping-candidate.v1",
-  "generated_at": "2026-09-20T16:21:57.378552+00:00",
+  "generated_at": "2026-09-20T16:23:12.636395+00:00",
   "purpose": "Seal for the repaired successor candidate: the record files that describe it, the staged layout it was qualified in, and the campaign evidence it produced.",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "3aea51511727d9fbe493268d46103e8d76d6a418",
-    "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+    "commit": "4f7ee6801af034e9e8c00fa6d6ab8e9a626a7d56",
+    "source_tree_sha256": "d8a9c3c722fc0a7f9ea456bf0d11f194ec2a61f7719ec53e08c395918491cb95",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "predecessor": {
@@ -20,11 +20,11 @@
     "status": "preserved byte-identical; its runs remain what executed"
   },
   "record_files": {
-    "SUCCESSOR-RECORD.json": "6e418f262bd8aa2e9fa4497c2dfd8e9294dc544cd9873df450ab43637a52fec4",
+    "SUCCESSOR-RECORD.json": "927b08a5177fedb0614571804f421faf65eb8f7c259692b1187fb783191a5399",
     "HASHES.txt": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
-    "RUN-IDENTITIES.json": "362fdf5520e4b80b651d9de79a32ef5525295e2965fb246e96dbcd5f6f21f20d",
+    "RUN-IDENTITIES.json": "359b427204ededee126cfe553bb4b19ab1a6ff0b007916f8c2299102520836d6",
     "REASONS.json": "daf661d7e85cfb38d0507b4daf3668b83236074915b024cb75bf462b321a00fb",
-    "CANDIDATE-IDENTITY.json": "42ceae4881378d098e3d7eb761d89bc3f46040660ecef39490f2b423ac89da24"
+    "CANDIDATE-IDENTITY.json": "ea4fba277f614eef0b2e4735ace742db82e752c6b196e0cd8c564633518717d6"
   },
   "evidence": {
     "campaign_index": {

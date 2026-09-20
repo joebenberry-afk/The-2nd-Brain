@@ -1,11 +1,11 @@
 {
   "schema": "second-brain.omp-approved-successor.v1",
-  "approved_at": "2026-09-20T16:21:57.379231+00:00",
+  "approved_at": "2026-09-20T16:23:12.636996+00:00",
   "successor_dir": "docs/integrations/omp-host-patch-2026-09-19-successor",
   "record": "SUCCESSOR-RECORD.json",
-  "record_sha256": "6e418f262bd8aa2e9fa4497c2dfd8e9294dc544cd9873df450ab43637a52fec4",
-  "shipping_candidate_manifest_sha256": "443262f02971a0a75370ab26ebcc36ef2d21e709dbb4ce4001a82beefe0b89bb",
-  "identities_file_sha256": "362fdf5520e4b80b651d9de79a32ef5525295e2965fb246e96dbcd5f6f21f20d",
+  "record_sha256": "927b08a5177fedb0614571804f421faf65eb8f7c259692b1187fb783191a5399",
+  "shipping_candidate_manifest_sha256": "bdc3f9b99b77ef831e7036ec3b3859ffac905feadfbbc87270fef678e8f76a7f",
+  "identities_file_sha256": "359b427204ededee126cfe553bb4b19ab1a6ff0b007916f8c2299102520836d6",
   "hashes_file_sha256": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
   "predecessor_dir": "docs/integrations/omp-host-patch-2026-09-19",
   "rule": "Identity checks validate this successor. The predecessor remains sealed history and is never re-validated against live bytes."
