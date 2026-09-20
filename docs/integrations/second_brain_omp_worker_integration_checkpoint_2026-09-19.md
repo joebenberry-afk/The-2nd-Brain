@@ -719,3 +719,45 @@ launcher-side. For this rerun the instrumented runner identity in HASHES.txt
 supersedes the manifest's runner hash; CANDIDATE-MANIFEST.json remains the
 pre-instrumentation behavior reference and both identities are preserved in
 git history.
+
+## Evidence-complete isolated campaign — ACCEPTED (2026-09-20)
+
+Candidate: HEAD `ed96ca5` (instrumented), worktree `.worktrees/qualified-v2`.
+Evidence root:
+`outputs/reports/omp-canary29-evidence-20260919/` (`RUN-INDEX.json`,
+`preflight.json`, `twin-preflight.json`, four run directories).
+
+Three interrupted/rescinded attempts are preserved as diagnostic history and
+are NOT qualification evidence: `attempt-1-setup-failed` (fresh fixture had no
+commit; `git worktree add: invalid reference: HEAD`), `attempt-2-positive-
+patch-not-applied` and `attempt-3-positive-native-crlf-refusal` (captured
+patch refused by the native applier). Each attempt's durable state was
+truthful (no unearned settlement) and each prompted a scoped repair, reviewed
+by Astra: fixture baseline commit + watcher snapshot discipline (`7b6eea7`),
+cache hygiene (`95aabce`), and LF fixture creation with the proven native
+CRLF cause (`ed96ca5`).
+
+Accepted positive run: session-1 (isolated A `41108:1:WorkerA` admitted,
+required deferred obligation, B refused `WORKTREE_WRITER_BUSY`, identity-bound
+hold observed by the external coordinator, coordinator signal created,
+physical cleanup with the exact tuple, barrier resolved, Contract A release,
+terminal receipt seq 4 `executor_settled=true cleanup_complete=true`, drains
+and pre-quit, exit 0, `Applied patches: yes`, fixture repaired and green) and
+session-2 (isolated successor `45024:1:CourageousHarrier` admitted after
+release, pytest 1 passed, terminal receipt seq 4, exit 0).
+
+Accepted false-success twin: twin-1 (no signal; hold timed out at 600 s,
+barrier rejected, no cleanup events, ownership `quarantined`,
+`cleanup_complete=0`, nonzero exit) and twin-2 (successor refused
+`WORKTREE_WRITER_BUSY`, no new task, exit 0). Production selected-column
+checksums unchanged across both campaigns.
+
+Independent acceptance: Astra `ACCEPTED` — all eight required objects accepted
+with raw citations, `campaign_contract_satisfied: true`, no blockers
+(verdict at `%TEMP%/omp-canary29-review/astra-eight-object-verdict.json`).
+
+Residual conditions for final qualification (from the acceptance): remove
+qualification instrumentation/hold controls through the accepted change
+process and bind the release bytes; seal the campaign artifacts and resolve
+stale pre-run manifest fields; activation remains subject to its own gate.
+
