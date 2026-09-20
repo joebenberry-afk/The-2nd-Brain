@@ -851,6 +851,17 @@ def test_home_config_manifest_binds_run_home_configuration(tmp_path: Path) -> No
     changed.write_text("[rtd]\nenabled = true\n", encoding="utf-8")
 
 
+def test_fixture_files_are_lf_for_native_patch_application(tmp_path: Path) -> None:
+    """The pinned host's native canApplyPatch refuses a CRLF worktree whose
+    patch context is LF; fixture sources must be written LF."""
+    mod = _load("preflight_run")
+    target = tmp_path / "calc.py"
+    mod.write_lf(target, "def add(a, b):\r\n    return a - b\n")
+    raw = target.read_bytes()
+    assert b"\r" not in raw
+    assert raw == b"def add(a, b):\n    return a - b\n"
+
+
 def test_tracked_identity_inventory_matches_live_files() -> None:
     """The committed RUN-IDENTITIES.json must match the live bound files on this
     machine; a stale inventory blocks the run by design (N1 class)."""
