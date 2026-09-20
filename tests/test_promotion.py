@@ -801,6 +801,96 @@ def test_recovery_keeps_intent_when_marker_write_fails(brain_home, monkeypatch):
     assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 1
 
 
+def test_recovery_quarantines_another_skills_damaged_record(brain_home):
+    """Damage blocks the store as a whole, so quarantine must scan it as a whole."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "other-1.json").write_text("{", encoding="utf-8")
+    pending = promotions / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert actions[0]["action"] == "committed"
+    assert actions[0]["records_quarantined"] == ["other-1.json"]
+    assert (promotions / "corrupt" / "other-1.json").read_text(encoding="utf-8") == "{"
+
+
+def test_recovery_quarantines_a_non_object_record(brain_home):
+    """The reader rejects non-object JSON, so quarantine must treat it as damage."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / "scout-1.json").write_text("[]", encoding="utf-8")
+    pending = promotions / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert actions[0]["action"] == "committed"
+    assert actions[0]["records_quarantined"] == ["scout-1.json"]
+
+
+def test_quarantine_does_not_overwrite_earlier_evidence(brain_home):
+    """Repeated damage under one record name keeps every payload."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    (promotions / "corrupt").mkdir(parents=True, exist_ok=True)
+    (promotions / "corrupt" / "scout-1.json").write_text("{first", encoding="utf-8")
+    (promotions / "scout-1.json").write_text("{second", encoding="utf-8")
+    pending = promotions / "pending"
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "p1.json").write_text(
+        json.dumps(
+            {
+                "record": {
+                    "promotion_id": "promotion-1",
+                    "skill_name": "scout",
+                    "from_level": "shadow",
+                    "to_level": "shadow",
+                    "ts": "2026-01-01T00:00:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert actions[0]["records_quarantined"] == ["scout-1.json"]
+    assert (promotions / "corrupt" / "scout-1.json").read_text(encoding="utf-8") == "{first"
+    assert (promotions / "corrupt" / "scout-1.2.json").read_text(encoding="utf-8") == "{second"
+
+
 def test_recovery_quarantines_a_corrupt_record(brain_home):
     """A damaged record is preserved aside, and recovery still completes."""
     _skill(brain_home, name="scout")
@@ -832,8 +922,13 @@ def test_recovery_quarantines_a_corrupt_record(brain_home):
     assert promotion.pending_publications(brain_home) == []
 
 
-def test_rollback_discards_a_concurrently_committed_record(brain_home, monkeypatch):
-    """A reported failure leaves neither active state nor a record for it."""
+def test_concurrent_commit_completes_the_publication(brain_home, monkeypatch):
+    """A record another writer committed for this publication is never deleted.
+
+    Recovery can commit the journal while the original writer is failing; the
+    store is append-only, so the consistent outcome is a completed publication
+    whose authority marker matches the committed record.
+    """
     _green_candidate(brain_home)
     original_write_record = promotion._write_record
 
@@ -846,11 +941,21 @@ def test_rollback_discards_a_concurrently_committed_record(brain_home, monkeypat
         patch.setattr(promotion, "_write_record", commit_then_fail)
         result = promotion.promote(brain_home, "scout", "shadow", "candidate")
 
-    assert result["promoted"] is False
-    assert result["reason"] == "record_failed"
-    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
-    assert promotion.promotion_status(brain_home, "scout")["records"] == []
+    assert result["promoted"] is True
+    assert result["record_recovered"] is True
+    assert (brain_home / "skills" / "candidates" / "scout").is_dir()
+    records = promotion.promotion_status(brain_home, "scout")["records"]
+    assert [r["promotion_id"] for r in records] == [result["record"]["promotion_id"]]
+    assert result["record_path"] == str(brain_home / "state" / "promotions" / "scout-1.json")
+    marker = json.loads(
+        (brain_home / "skills" / "candidates" / "scout" / promotion.AUTHORITY_MARKER).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["last_level"] == "candidate"
     assert promotion.pending_publications(brain_home) == []
+    # The authority the concurrent writer committed is still there and usable.
+    assert promotion._active_version_baseline(brain_home, "scout")[0] is None
 
 
 def test_move_failure_keeps_status_consistent(brain_home):
