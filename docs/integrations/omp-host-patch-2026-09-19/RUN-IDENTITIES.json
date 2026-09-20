@@ -56,7 +56,8 @@
     ],
     "env_files_must_be_absent": [
       "C:\\Users\\assas\\.env",
-      "C:\\Users\\assas\\.omp\\.env"
+      "C:\\Users\\assas\\.omp\\.env",
+      "C:\\Users\\assas\\.bunfig.toml"
     ],
     "default_profile_user_config": "C:\\Users\\assas\\.omp\\agent\\config.yml",
     "forbidden_env": [
@@ -65,7 +66,13 @@
       "PI_CODING_AGENT_DIR",
       "PI_PACKAGE_DIR",
       "OMP_PROFILE",
-      "PI_PROFILE"
+      "PI_PROFILE",
+      "BUN_OPTIONS",
+      "NODE_OPTIONS"
+    ],
+    "forbidden_env_prefixes": [
+      "BUN_",
+      "NODE_"
     ],
     "forbidden_argv_flags": [
       "--config"
@@ -79,7 +86,8 @@
       ".env.local",
       ".env.development",
       ".env.production",
-      ".env.test"
+      ".env.test",
+      "bunfig.toml"
     ]
   },
   "identities": [
@@ -191,7 +199,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "8d6794cc0847a8b67790b793364e0caaa87882d7c16fa12492c70e8b86cf8701"
+      "sha256": "af3c6afe0c9d2f1c383b3394cd206718301f051b990c54e471240e49a6da897b"
     },
     {
       "role": "watcher",

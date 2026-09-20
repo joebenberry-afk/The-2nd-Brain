@@ -234,6 +234,7 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                     "env_files_must_be_absent": [
                         str(home_root / ".env"),
                         str(home_root / ".omp" / ".env"),
+                        str(home_root / ".bunfig.toml"),
                     ],
                     "default_profile_user_config": str(user_config),
                     "forbidden_env": [
@@ -241,13 +242,17 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         "PI_CONFIG_FILES",
                         "OMP_PROFILE",
                         "PI_PROFILE",
+                        "BUN_OPTIONS",
+                        "NODE_OPTIONS",
                     ],
+                    "forbidden_env_prefixes": ["BUN_", "NODE_"],
                     "forbidden_argv_flags": ["--config"],
                     "forbidden_project_overlays": [
                         ".omp/config.yml",
                         ".claude/settings.yml",
                         ".env",
                         ".env.production",
+                        "bunfig.toml",
                     ],
                 },
                 "identities": [
@@ -595,6 +600,35 @@ def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
     assert result["all_bound"] is False
     assert "configuration:env-files-absent" in result["mismatched"]
     home_env.unlink()
+
+    # Bun startup inputs: BUN_OPTIONS/NODE_OPTIONS (and any BUN_/NODE_ prefix)
+    # can preload code or inject env files despite --no-env-file.
+    env_opt = dict(env)
+    env_opt["BUN_OPTIONS"] = "--preload C:/tmp/preload.cjs"
+    result = mod.bind_required_identities(spec, run_dir, env_opt, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-env" in result["mismatched"]
+
+    env_cf = {k.upper(): v for k, v in env.items()}
+    env_cf["BUN_INSTALL"] = "C:/tmp/bun"
+    result = mod.bind_required_identities(spec, run_dir, env_cf, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:forbidden-env-prefixes" in result["mismatched"]
+
+    # Bun also reads bunfig.toml from the fixture cwd and the home directory.
+    bunfig = Path(spec["fixture"]) / "bunfig.toml"
+    bunfig.write_text('preload = ["C:/tmp/preload.cjs"]\n', encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:project-overlays" in result["mismatched"]
+    bunfig.unlink()
+
+    home_bunfig = Path(spec["_home_root"]) / ".bunfig.toml"
+    home_bunfig.write_text('preload = ["C:/tmp/preload.cjs"]\n', encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:env-files-absent" in result["mismatched"]
+    home_bunfig.unlink()
 
     # bun autoload must also be disabled for the actual child.
     mod_main = (TOOLS / "launch_run.py").read_text(encoding="utf-8")
