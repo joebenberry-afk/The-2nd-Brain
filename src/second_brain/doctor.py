@@ -313,12 +313,23 @@ def check_governance(home: Path, checks: list[Check]) -> None:
     try:
         gaps = promotion.authority_gaps(home)
         pending = promotion.pending_publications(home)
+        unreadable = promotion.unreadable_publications(home)
     except Exception as exc:
         checks.append(
             Check("governance authority", STATUS_FAIL, f"cannot read promotion authority: {exc}")
         )
         return
-    if gaps:
+    if unreadable:
+        checks.append(
+            Check(
+                "governance authority",
+                STATUS_FAIL,
+                f"{len(unreadable)} unreadable publication journal(s): "
+                + ", ".join(unreadable[:3])
+                + "; inspect state/promotions/pending/",
+            )
+        )
+    elif gaps:
         checks.append(
             Check(
                 "governance authority",

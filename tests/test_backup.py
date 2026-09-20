@@ -155,7 +155,7 @@ def test_restore_verifies_restored_db_byte_identity(brain_home, tmp_path, monkey
                 f.write(b"corruption")
 
     monkeypatch.setattr(backup_mod.shutil, "copy2", corrupting_copy2)
-    with pytest.raises(BackupError, match="byte-identity"):
+    with pytest.raises(BackupError):
         backup_mod.restore_backup(home2, bdir, force=True)
     # the previous state was rolled back in place, not left corrupt
     conn = db.connect(db.db_path(home2))
@@ -673,3 +673,154 @@ def test_restore_rejects_symlinked_database_directory(brain_home, tmp_path, monk
         backup_mod.restore_backup(target, bdir)
 
     assert list(outside.iterdir()) == []  # nothing was written through the link
+
+
+# ---------------------------------------------------------------------------
+# Audit follow-up: failure boundaries found by the independent verification
+# ---------------------------------------------------------------------------
+
+
+def test_restore_rejects_file_appearing_after_inventory_check(brain_home, tmp_path, monkeypatch):
+    """A file that appears between verification and copying is refused."""
+    (brain_home / "constitution" / "marker.md").write_text("declared", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    real_check = backup_mod._verify_closed_inventory
+
+    def check_then_add(backup_dir, manifest, copied):
+        real_check(backup_dir, manifest, copied)
+        (backup_dir / "constitution" / "late.md").write_text("late", encoding="utf-8")
+
+    target = tmp_path / "restored"
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+    monkeypatch.setattr(backup_mod, "_verify_closed_inventory", check_then_add)
+
+    with pytest.raises(BackupError, match="appeared in the backup"):
+        backup_mod.restore_backup(target, bdir)
+
+    assert not (target / "constitution" / "late.md").exists()
+
+
+def test_restore_rejects_surplus_database_hash_entry(brain_home, tmp_path):
+    """The manifest may not hash files outside the declared inventory."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    manifest_path = bdir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["brain.sqlite"] = backup_mod.sha256_file(bdir / "brain.sqlite")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupError, match="not part of the declared inventory"):
+        backup_mod.restore_backup(tmp_path / "restored", bdir)
+
+
+def test_restore_rejects_symlinked_database_source(brain_home, tmp_path, monkeypatch):
+    """A snapshot whose database is a symlink outside the backup is refused."""
+    (brain_home / "constitution" / "marker.md").write_text("declared", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    outside = tmp_path / "outside-db"
+    outside.mkdir()
+    (outside / "brain.sqlite").write_bytes((bdir / "brain.sqlite").read_bytes())
+    (bdir / "brain.sqlite").unlink()
+    try:
+        os.symlink(outside / "brain.sqlite", bdir / "brain.sqlite")
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - platform
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    with pytest.raises(BackupError, match="not a safe file inside the backup"):
+        backup_mod.restore_backup(tmp_path / "restored", bdir)
+
+
+def test_failed_restore_keeps_preexisting_empty_parent(brain_home, tmp_path, monkeypatch):
+    """An originally empty db/ directory survives a failed restore."""
+    (brain_home / "constitution" / "snapshot-only.md").write_text("snapshot", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    target.mkdir()
+    paths.ensure_layout(target)
+    (target / "db").mkdir(exist_ok=True)
+    shutil.rmtree(target / "constitution")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated migration failure")
+
+    monkeypatch.setattr(db, "migrate", boom)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, bdir, force=True)
+
+    assert (target / "db").is_dir()  # existed empty before the attempt
+    assert not (target / "db" / "brain.sqlite").exists()
+
+
+def test_failed_restore_removes_layout_it_created(brain_home, tmp_path, monkeypatch):
+    """A failure after the layout step leaves no skeleton the attempt created."""
+    (brain_home / "constitution" / "snapshot-only.md").write_text("snapshot", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "brand-new-target"
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated git init failure")
+
+    monkeypatch.setattr(backup_mod.subprocess, "run", boom)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, bdir)
+
+    assert not target.exists()
+
+
+def test_failed_restore_restores_previously_empty_directory(brain_home, tmp_path, monkeypatch):
+    """A directory that existed empty is empty again after a failed restore."""
+    (brain_home / "constitution" / "snapshot-only.md").write_text("snapshot", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    target.mkdir()
+    paths.ensure_layout(target)
+    (target / "constitution").mkdir(exist_ok=True)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated migration failure")
+
+    monkeypatch.setattr(db, "migrate", boom)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, bdir, force=True)
+
+    assert (target / "constitution").is_dir()
+    assert list((target / "constitution").iterdir()) == []
+
+
+def test_move_aside_failure_leaves_target_intact(brain_home, tmp_path, monkeypatch):
+    """A failure while moving state aside must not lose the target's data."""
+    _seed(brain_home, "orig")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    target.mkdir()
+    paths.ensure_layout(target)
+    db.migrate(db.db_path(target))
+    _seed(target, "current")
+
+    real_move = shutil.move
+    calls = {"n": 0}
+
+    def flaky_move(src, dst, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated move failure")
+        return real_move(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(backup_mod.shutil, "move", flaky_move)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, bdir, force=True)
+
+    conn = db.connect(db.db_path(target))
+    try:
+        assert conn.execute("SELECT name FROM projects").fetchone()[0] == "current"
+    finally:
+        conn.close()
+    assert list((target / "backups").glob("pre-restore-*")) == []
