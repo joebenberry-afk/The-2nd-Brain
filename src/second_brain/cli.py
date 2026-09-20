@@ -955,7 +955,14 @@ def _parser() -> argparse.ArgumentParser:
     pd.add_argument("skill_name")
     pd.add_argument("to_level", choices=["shadow", "candidate"])
     pd.add_argument("--reason", required=True)
-    sub.add_parser("promotions", parents=[home_parent], help="promotion status + history")
+    promo = sub.add_parser("promotions", parents=[home_parent], help="promotion status + history")
+    promo_subs = promo.add_subparsers(dest="promotions_command")
+    promo_rec = promo_subs.add_parser(
+        "reconcile",
+        parents=[home_parent],
+        help="finish or discard interrupted publications (idempotent)",
+    )
+    promo_rec.add_argument("--json", action="store_true")
 
     ims = im.add_subparsers(dest="immune_command", required=True)
     imp = ims.add_parser("policy", parents=[home_parent], help="register a guarded policy")
@@ -2790,6 +2797,16 @@ def cmd_demote(args) -> int:
 
 def cmd_promotions(args) -> int:
     home = _home(args)
+    if getattr(args, "promotions_command", None) == "reconcile":
+        actions = promotion.reconcile_publications(home)
+        if getattr(args, "json", False):
+            print(json.dumps(actions, sort_keys=True))
+        elif actions:
+            for action in actions:
+                print(f"{action.get('action')}: {action.get('pending')}")
+        else:
+            print("nothing to reconcile")
+        return 0
     status = promotion.promotion_status(home)
     print(status)
     return 0

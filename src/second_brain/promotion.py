@@ -45,6 +45,21 @@ def _promotions_dir(home: Path) -> Path:
     return Path(home) / "state" / "promotions"
 
 
+def _pending_dir(home: Path) -> Path:
+    """Durable intent for publication attempts that are still in flight."""
+    return _promotions_dir(home) / "pending"
+
+
+class _PublicationFailure(BrainError):
+    """A publication attempt that could not be completed (never silent)."""
+
+    def __init__(self, reason: str, detail: str, *, rollback_incomplete: bool = False) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+        self.rollback_incomplete = rollback_incomplete
+
+
 def _level_of(home: Path, skill_name: str) -> str | None:
     for level in LEVELS:
         if (_skill_dir(home, level) / skill_name).is_dir():
@@ -123,10 +138,110 @@ def _last_active_version(home: Path, skill_name: str) -> int | None:
     return records[-1]["resulting_version"]
 
 
+AUTHORITY_MARKER = "promotion-authority.json"
+
+
+def _authority_marker_path(home: Path, skill_name: str) -> Path | None:
+    path = skillforge.skill_path(home, skill_name)
+    if path is None:
+        return None
+    return path.parent / AUTHORITY_MARKER
+
+
+def _read_authority_marker(home: Path, skill_name: str) -> dict:
+    """Authority the artifact carries itself (survives record loss)."""
+    path = _authority_marker_path(home, skill_name)
+    if path is None or not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_authority_marker(
+    home: Path, skill_name: str, level: str, version: int | None, promotion_id: str | None
+) -> bool:
+    """Carry the highest active version with the artifact itself.
+
+    ``state/promotions`` stays the authority; this marker is what lets a
+    restore that lost governance records reconstruct the baseline instead of
+    treating the skill as a first-ever candidate (audit F-03). It never
+    lowers a previously recorded version, and the SKILL.md content hash
+    ignores sibling files, so bindings and evaluations stay valid.
+    """
+    path = _authority_marker_path(home, skill_name)
+    if path is None:
+        return False
+    existing = _read_authority_marker(home, skill_name)
+    previous = existing.get("last_active_version")
+    highest = max(
+        [v for v in (previous, version) if isinstance(v, int) and v >= 1],
+        default=None,
+    )
+    payload = {
+        "schema_version": 1,
+        "skill_name": skill_name,
+        "last_level": level,
+        "last_active_version": highest,
+        "last_promotion_id": (
+            promotion_id if promotion_id is not None else existing.get("last_promotion_id")
+        ),
+        "updated_at": _utcnow(),
+    }
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _active_version_baseline(home: Path, skill_name: str) -> tuple[int | None, bool]:
+    """(highest active version that can be established, active history exists).
+
+    Committed records are authority; the artifact marker is the conservative
+    reconstruction used when a restore dropped the records.
+    """
+    records = _read_records(home, skill_name)
+    recorded = [
+        r["resulting_version"]
+        for r in records
+        if r.get("to_level") == "active" and isinstance(r.get("resulting_version"), int)
+    ]
+    history_in_records = bool(recorded) or any(r.get("from_level") == "active" for r in records)
+    carried = _read_authority_marker(home, skill_name).get("last_active_version")
+    carried = carried if isinstance(carried, int) and carried >= 1 else None
+    if carried is not None:
+        return max([*recorded, carried]), True
+    if recorded:
+        return max(recorded), True
+    return None, history_in_records
+
+
+def authority_gaps(home: Path) -> list[str]:
+    """Skills sitting in skills/active/ with no committed active version.
+
+    Read-only visibility for operators and doctor: an entry here means the
+    artifact is published but its promotion authority cannot be reconstructed.
+    """
+    active_dir = _skill_dir(home, "active")
+    if not active_dir.is_dir():
+        return []
+    gaps = []
+    for entry in sorted(active_dir.iterdir()):
+        if entry.is_dir() and _last_active_version(home, entry.name) is None:
+            gaps.append(entry.name)
+    return gaps
+
+
 def _version_check(home: Path, skill_name: str) -> tuple[bool, str | None, int | None]:
     """§119 version gate: the artifact must carry a valid positive integer
     version, and it must strictly exceed any version this skill previously
-    reached active with."""
+    reached active with. Missing history fails closed, never open."""
     binding_artifact = skillforge.artifact_binding(home, skill_name)
     raw = binding_artifact.get("artifact_version", "unversioned")
     if raw == "unversioned":
@@ -137,8 +252,13 @@ def _version_check(home: Path, skill_name: str) -> tuple[bool, str | None, int |
         return False, "version_invalid", None
     if candidate_version < 1:
         return False, "version_invalid", None
-    previous = _last_active_version(home, skill_name)
-    if previous is not None and candidate_version <= previous:
+    previous, had_history = _active_version_baseline(home, skill_name)
+    if previous is None:
+        if had_history:
+            # The skill was active before but no version survived; first-release
+            # authority must not be granted silently.
+            return False, "history_unavailable", candidate_version
+    elif candidate_version <= previous:
         return False, "version_not_incremented", candidate_version
     return True, None, candidate_version
 
@@ -219,6 +339,147 @@ def _write_record(home: Path, record: dict) -> Path:
     return target
 
 
+def _write_pending(home: Path, record: dict) -> Path:
+    """Persist the intent before any visibility change (audit F-01)."""
+    directory = _pending_dir(home)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{record['promotion_id']}.json"
+    payload = {
+        "schema_version": 1,
+        "skill_name": record["skill_name"],
+        "from_level": record["from_level"],
+        "to_level": record["to_level"],
+        "promotion_id": record["promotion_id"],
+        "record": record,
+    }
+    tmp = target.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise BrainError(f"Could not journal promotion {record['promotion_id']}: {exc}") from exc
+    return target
+
+
+def _rollback_publication(home: Path, skill_name: str, from_level: str, to_level: str) -> bool:
+    """Move a published skill back after a failed record write.
+
+    Returns True when the original location is restored, False when the
+    caller must keep the journal for reconciliation.
+    """
+    source = _skill_dir(home, from_level) / skill_name
+    target = _skill_dir(home, to_level) / skill_name
+    if source.exists() or not target.is_dir():
+        return True  # nothing was published, or it is already back
+    skill_file = target / "SKILL.md"
+    if skill_file.exists():
+        skillforge.set_status(skill_file, from_level)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.rename(source)
+    except OSError:
+        return False
+    return True
+
+
+def _publish(
+    home: Path, skill_name: str, from_level: str, to_level: str, record: dict
+) -> tuple[Path, Path, bool]:
+    """Move the skill into the target level and commit its record.
+
+    The publication is journaled first, so an interruption between the move
+    and the record is recoverable instead of leaving active behavior without
+    committed authority. A reported failure rolls the move back. On success
+    the artifact also carries its active-version baseline.
+    """
+    pending = _write_pending(home, record)
+    try:
+        target = _move_skill(home, skill_name, from_level, to_level)
+    except BrainError as exc:
+        pending.unlink(missing_ok=True)
+        reason = "destination_exists" if "already exists" in str(exc) else "move_failed"
+        raise _PublicationFailure(reason, str(exc)) from exc
+    try:
+        record_path = _write_record(home, record)
+    except BrainError as exc:
+        restored = _rollback_publication(home, skill_name, from_level, to_level)
+        if restored:
+            pending.unlink(missing_ok=True)
+        raise _PublicationFailure(
+            "record_failed", str(exc), rollback_incomplete=not restored
+        ) from exc
+    marker_written = _write_authority_marker(
+        home,
+        skill_name,
+        to_level,
+        record.get("resulting_version") if to_level == "active" else None,
+        record.get("promotion_id"),
+    )
+    pending.unlink(missing_ok=True)
+    return target, record_path, marker_written
+
+
+def _reconcile_pending(home: Path) -> list[dict]:
+    """Finish or discard interrupted publication attempts (idempotent).
+
+    - target level holds the skill and no committed record exists -> commit it
+      (the move was authorized and journaled before it happened);
+    - the skill never reached the target level -> discard the intent;
+    - the record is already committed -> discard the intent.
+    """
+    directory = _pending_dir(home)
+    if not directory.is_dir():
+        return []
+    actions: list[dict] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            actions.append({"pending": path.name, "action": "unreadable"})
+            continue
+        record = payload.get("record") if isinstance(payload, dict) else None
+        if not isinstance(record, dict):
+            actions.append({"pending": path.name, "action": "unreadable"})
+            continue
+        skill_name = str(record.get("skill_name") or "")
+        to_level = record.get("to_level")
+        promotion_id = record.get("promotion_id")
+        if to_level not in LEVELS or not skill_name:
+            actions.append({"pending": path.name, "action": "unreadable"})
+            continue
+        if _level_of(home, skill_name) == to_level:
+            committed = any(
+                r.get("promotion_id") == promotion_id for r in _read_records(home, skill_name)
+            )
+            if not committed:
+                _write_record(home, record)
+                actions.append({"pending": path.name, "action": "committed"})
+            else:
+                actions.append({"pending": path.name, "action": "already_committed"})
+        else:
+            actions.append({"pending": path.name, "action": "discarded"})
+        path.unlink(missing_ok=True)
+    return actions
+
+
+def reconcile_publications(home: Path) -> list[dict]:
+    """Finish or discard interrupted publication attempts (idempotent).
+
+    Operator-facing entry point for the same recovery the promotion path runs
+    automatically; safe to call repeatedly.
+    """
+    return _reconcile_pending(home)
+
+
+def pending_publications(home: Path) -> list[str]:
+    """Unreconciled journal entries (read-only visibility)."""
+    directory = _pending_dir(home)
+    if not directory.is_dir():
+        return []
+    return sorted(p.name for p in directory.glob("*.json"))
+
+
 def _move_skill(home: Path, skill_name: str, from_level: str, to_level: str) -> Path:
     # SEC-03: skill names reach filesystem moves; only validated identifiers.
     skill_name = validate_skill_name(skill_name)
@@ -261,6 +522,7 @@ def promote(
     if not isinstance(session_id, str):
         raise BrainError("session_id must be a string")
     _validate_levels(from_level, to_level)
+    _reconcile_pending(home)
     actual = _level_of(home, skill_name)
     if actual is None:
         raise BrainError(f"No skill {skill_name!r} found under skills/")
@@ -320,15 +582,6 @@ def promote(
                     **details,
                 }
 
-    try:
-        target = _move_skill(home, skill_name, from_level, to_level)
-    except BrainError as exc:
-        return (
-            {"promoted": False, "reason": "destination_exists", "detail": str(exc)}
-            if "already exists" in str(exc)
-            else {"promoted": False, "reason": "move_failed", "detail": str(exc)}
-        )
-
     ts = _utcnow()
     promotion_id = (
         "promotion-" + hashlib.sha256(f"{skill_name}|{ts}|{session_id}".encode()).hexdigest()[:16]
@@ -350,7 +603,20 @@ def promote(
         "resulting_version": details.get("version") if not demotion else None,
         "reason": "demoted-via-promote" if demotion else None,
     }
-    record_path = _write_record(home, record)
+    try:
+        target, record_path, marker_written = _publish(
+            home, skill_name, from_level, to_level, record
+        )
+    except _PublicationFailure as exc:
+        result: dict[str, Any] = {
+            "promoted": False,
+            "reason": exc.reason,
+            "detail": exc.detail,
+        }
+        if exc.rollback_incomplete:
+            result["rollback"] = "incomplete"
+            result["pending_record"] = str(_pending_dir(home))
+        return result
     return {
         "promoted": True,
         "from_level": from_level,
@@ -358,6 +624,7 @@ def promote(
         "record": record,
         "record_path": str(record_path),
         "target": str(target),
+        "authority_marker": "written" if marker_written else "unavailable",
     }
 
 
@@ -373,15 +640,15 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         raise BrainError(f"No skill {skill_name!r} found under skills/")
     if LEVEL_RANK[to_level] >= LEVEL_RANK[actual]:
         return {"demoted": False, "reason": "not_a_demote", "actual_level": actual}
-    try:
-        target = _move_skill(home, skill_name, actual, to_level)
-    except BrainError as exc:
-        return {"demoted": False, "reason": "destination_exists", "detail": str(exc)}
+    _reconcile_pending(home)
+    ts = _utcnow()
     record = {
+        "promotion_id": "demotion-"
+        + hashlib.sha256(f"{skill_name}|{actual}|{to_level}|{ts}".encode()).hexdigest()[:16],
         "skill_name": skill_name,
         "from_level": actual,
         "to_level": to_level,
-        "ts": _utcnow(),
+        "ts": ts,
         "session_id": "",
         "guards": None,
         "frontier_verdict": None,
@@ -392,7 +659,18 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         },
         "reason": reason,
     }
-    record_path = _write_record(home, record)
+    try:
+        target, record_path, marker_written = _publish(home, skill_name, actual, to_level, record)
+    except _PublicationFailure as exc:
+        result: dict[str, Any] = {
+            "demoted": False,
+            "reason": exc.reason,
+            "detail": exc.detail,
+        }
+        if exc.rollback_incomplete:
+            result["rollback"] = "incomplete"
+            result["pending_record"] = str(_pending_dir(home))
+        return result
     return {
         "demoted": True,
         "from_level": actual,
@@ -400,6 +678,7 @@ def demote(home: Path, skill_name: str, to_level: str, reason: str) -> dict:
         "record": record,
         "record_path": str(record_path),
         "target": str(target),
+        "authority_marker": "written" if marker_written else "unavailable",
     }
 
 
@@ -422,7 +701,12 @@ def _read_records(home: Path, skill_name: str | None = None) -> list[dict]:
 
 
 def promotion_status(home: Path, skill_name: str | None = None) -> dict:
-    """Current level per skill + promotion history records."""
+    """Current level per skill + promotion history records.
+
+    Also reports governance visibility (read-only): skills published to
+    active without committed authority, and unreconciled publication
+    journal entries.
+    """
     levels: dict[str, str] = {}
     for level in LEVELS:
         directory = _skill_dir(home, level)
@@ -430,13 +714,22 @@ def promotion_status(home: Path, skill_name: str | None = None) -> dict:
             for entry in sorted(directory.iterdir()):
                 if entry.is_dir():
                     levels[entry.name] = level
+    gaps = authority_gaps(home)
+    pending = pending_publications(home)
     if skill_name is not None:
         return {
             "skill_name": skill_name,
             "level": levels.get(skill_name),
             "records": [r for r in _read_records(home, skill_name)],
+            "authority_gaps": [name for name in gaps if name == skill_name],
+            "pending_publications": pending,
         }
-    return {"skills": levels, "records": _read_records(home)}
+    return {
+        "skills": levels,
+        "records": _read_records(home),
+        "authority_gaps": gaps,
+        "pending_publications": pending,
+    }
 
 
 def is_active(home: Path, skill_name: str) -> bool:

@@ -386,3 +386,164 @@ def test_promotion_record_names_contained(brain_home):
     assert result["promoted"] is True
     record_path = Path(result["record_path"])
     assert record_path.parent == brain_home / "state" / "promotions"
+
+
+# ---------------------------------------------------------------------------
+# Audit F-01: publication and its record are one recoverable transaction
+# ---------------------------------------------------------------------------
+
+
+def _green_candidate(home, name="scout"):
+    _skill(home, name=name)
+    _evidence(home, name)
+    _approve(home, name)
+    _bind(home, name)
+
+
+def test_promote_record_failure_rolls_back_publication(brain_home, monkeypatch):
+    """A failed record write must not leave uncommitted active behaviour."""
+    _green_candidate(brain_home)
+
+    def boom(home, record):
+        raise BrainError("simulated record write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", boom)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "record_failed"
+    # Publication was rolled back: the skill is still a shadow skill.
+    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
+    assert not (brain_home / "skills" / "candidates" / "scout").exists()
+    assert promotion.promotion_status(brain_home, "scout")["records"] == []
+    assert promotion.pending_publications(brain_home) == []
+    # The rollback also restored the artifact's own status metadata.
+    text = (brain_home / "skills" / "shadow" / "scout" / "SKILL.md").read_text(encoding="utf-8")
+    assert "status: shadow" in text
+
+
+def test_interrupted_publication_is_reconciled(brain_home, monkeypatch):
+    """A crash between the move and the record is completed, not lost."""
+    _green_candidate(brain_home)
+
+    def boom(home, record):
+        raise BrainError("simulated record write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", boom)
+        patch.setattr(promotion, "_rollback_publication", lambda *a, **k: False)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "record_failed"
+    assert result["rollback"] == "incomplete"
+    assert (brain_home / "skills" / "candidates" / "scout").is_dir()
+    assert len(promotion.pending_publications(brain_home)) == 1  # durable intent
+
+    actions = promotion.reconcile_publications(brain_home)
+
+    assert [action["action"] for action in actions] == ["committed"]
+    assert promotion.pending_publications(brain_home) == []
+    records = promotion.promotion_status(brain_home, "scout")["records"]
+    assert len(records) == 1
+    assert records[0]["to_level"] == "candidate"
+    # Reconciling twice is a no-op.
+    assert promotion.reconcile_publications(brain_home) == []
+
+
+def test_reconcile_discards_publication_that_never_happened(brain_home, monkeypatch):
+    """A journal entry for a move that never ran must not invent authority."""
+    _green_candidate(brain_home)
+
+    def boom(*args, **kwargs):
+        raise BrainError("simulated move failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_move_skill", boom)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "move_failed"
+    assert promotion.pending_publications(brain_home) == []
+    assert (brain_home / "skills" / "shadow" / "scout").is_dir()
+    assert promotion.promotion_status(brain_home, "scout")["records"] == []
+
+
+def test_demote_record_failure_rolls_back(brain_home, monkeypatch):
+    _skill(brain_home, name="scout", level="active")
+
+    def boom(home, record):
+        raise BrainError("simulated record write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", boom)
+        result = promotion.demote(brain_home, "scout", "shadow", "underperformed")
+
+    assert result["demoted"] is False
+    assert result["reason"] == "record_failed"
+    assert promotion.is_active(brain_home, "scout") is True
+    assert promotion.pending_publications(brain_home) == []
+
+
+# ---------------------------------------------------------------------------
+# Audit F-03: missing authority history fails closed
+# ---------------------------------------------------------------------------
+
+
+def test_promote_after_demote_requires_version_bump(brain_home):
+    """The version gate still binds after a legitimate demotion."""
+    _green_candidate(brain_home)
+    assert promotion.promote(brain_home, "scout", "shadow", "candidate")["promoted"] is True
+    assert promotion.promote(brain_home, "scout", "candidate", "active")["promoted"] is True
+    assert promotion.demote(brain_home, "scout", "candidate", "incident")["demoted"] is True
+
+    result = promotion.promote(brain_home, "scout", "candidate", "active")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "version_not_incremented"
+
+
+def test_version_baseline_survives_record_loss(brain_home):
+    """The artifact-carried baseline stops a silent reset to first release."""
+    _green_candidate(brain_home)
+    assert promotion.promote(brain_home, "scout", "shadow", "candidate")["promoted"] is True
+    assert promotion.promote(brain_home, "scout", "candidate", "active")["promoted"] is True
+    marker = brain_home / "skills" / "active" / "scout" / promotion.AUTHORITY_MARKER
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 1
+    # Simulate a restore that carried the artifact but not its governance records.
+    for record in (brain_home / "state" / "promotions").glob("*.json"):
+        record.unlink()
+    assert promotion.demote(brain_home, "scout", "candidate", "lossy restore check")["demoted"]
+
+    result = promotion.promote(brain_home, "scout", "candidate", "active")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "version_not_incremented"
+
+
+def test_promote_fails_closed_when_no_version_history_survives(brain_home):
+    """No records and no carried baseline: refuse, never grant first release."""
+    _green_candidate(brain_home)
+    assert promotion.promote(brain_home, "scout", "shadow", "candidate")["promoted"] is True
+    assert promotion.promote(brain_home, "scout", "candidate", "active")["promoted"] is True
+    assert promotion.demote(brain_home, "scout", "candidate", "incident")["demoted"] is True
+    for record in (brain_home / "state" / "promotions").glob("*.json"):
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        if payload.get("to_level") == "active":
+            record.unlink()
+    (brain_home / "skills" / "candidates" / "scout" / promotion.AUTHORITY_MARKER).unlink()
+
+    result = promotion.promote(brain_home, "scout", "candidate", "active")
+
+    assert result["promoted"] is False
+    assert result["reason"] == "history_unavailable"
+    assert (brain_home / "skills" / "candidates" / "scout").is_dir()
+
+
+def test_authority_gaps_reports_active_skill_without_history(brain_home):
+    _skill(brain_home, name="orphan", level="active")
+
+    assert promotion.authority_gaps(brain_home) == ["orphan"]
+    assert promotion.promotion_status(brain_home)["authority_gaps"] == ["orphan"]
+    assert promotion.promotion_status(brain_home, "orphan")["authority_gaps"] == ["orphan"]
