@@ -111,3 +111,31 @@ against the shipping manifest/records and the OMP-only scope
   project-supported backup and state the exact point in time.
 - Report the actual rollback state, including any files or records that could
   not be restored.
+
+## Successor corrections (2026-09-20, independent audit follow-up)
+
+The text above is the activation record as executed and is not rewritten. These corrections
+supersede its file lists and references; the installed package is unchanged and nothing here
+re-activates or re-installs anything.
+
+1. **The host delta is thirteen files, not six.** Section "Installation" step 2 says six sealed
+   host files; the actual applied delta is 6 bound + 1 added + 6 changed =
+   `docs/integrations/omp-host-patch-2026-09-19/DEPLOYMENT-MANIFEST.json`. That manifest is now the
+   single source for installation, verification and rollback; read it instead of a hand-maintained
+   list (`python scripts/generate_omp_deployment_manifest.py --check` reports whether the installed
+   bytes still match it).
+2. **The pre-install extension backup lives under the extension source root**, not the Brain home:
+   `.worktrees/qualified-v2/backups/20260920-014215-831-prime-extension-pre-install` (26 files,
+   `install.json` + the prior extension). The earlier reference to a same-named directory under the
+   Brain home `backups/` does not resolve; the prior extension bytes are also preserved at
+   `outputs/reports/omp-activation-20260920/rollback/installed-extension/` (25 files).
+3. **The qualified launch route is explicit.** The package's own `omp` command maps to
+   `dist/cli.js`, a bundle without the worker-cleanup patch, so a bare `omp` is not the qualified
+   route. Use `powershell -NoProfile -File scripts/run-omp-patched.ps1 <args>`: it verifies all
+   thirteen host files and all twenty-six extension files against the deployment manifest and
+   refuses to start on any mismatch before running `bun <package>/src/cli.ts`.
+4. **Known open gates after this audit** (see `docs/integrations/second-brain-omp-audit-review/`
+   for the findings, evidence and the Brain-side reconciliation): the successor host module
+   `docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts` (audit F-06) is a
+   candidate and is **not** installed; production-path lifecycle behaviour on the launcher and
+   automatic prose recall still require their own qualification runs.
