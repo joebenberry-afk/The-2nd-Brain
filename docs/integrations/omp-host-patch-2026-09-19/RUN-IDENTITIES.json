@@ -200,12 +200,12 @@
     {
       "role": "host-agent-session",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\session\\agent-session.ts",
-      "sha256": "a8e3b6721557ddb09e83655bfb187f2de8fa884b49c4df17df5124739560a55e"
+      "sha256": "2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64"
     },
     {
       "role": "host-isolation-runner",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\task\\isolation-runner.ts",
-      "sha256": "de7344f6f7931f19bb399e2a82d2c9e4f9768c98d178cafdcea64552d0358614"
+      "sha256": "e458bee5db9967bc61a82c389ac4c2159876f7522116c94b4fd970c2ae2ae107"
     },
     {
       "role": "host-cleanup-barrier",
@@ -215,12 +215,12 @@
     {
       "role": "host-worktree",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\task\\worktree.ts",
-      "sha256": "496edaff6165046992eaffe632ff8ebf705c2bb4b3ba67ae39808553eb1b05b8"
+      "sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30"
     },
     {
       "role": "host-main",
       "path": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary\\src\\main.ts",
-      "sha256": "b9f63239cd50b59b8e6556b39596c6d5129e968a22bb57f6f78dc86fc97a2d18"
+      "sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca"
     },
     {
       "role": "observer-settlement-registry",

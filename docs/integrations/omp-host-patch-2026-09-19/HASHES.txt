@@ -1,8 +1,8 @@
 796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\async\job-manager.ts
-a8e3b6721557ddb09e83655bfb187f2de8fa884b49c4df17df5124739560a55e C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
-de7344f6f7931f19bb399e2a82d2c9e4f9768c98d178cafdcea64552d0358614 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
+2d48f85907465fcaf970493c7ff73c2d86b31f4f72bb02cd8bc22d68d6f27c64 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\session\agent-session.ts
+e458bee5db9967bc61a82c389ac4c2159876f7522116c94b4fd970c2ae2ae107 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\isolation-runner.ts
 9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\cleanup-barrier.ts
-496edaff6165046992eaffe632ff8ebf705c2bb4b3ba67ae39808553eb1b05b8 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
-b9f63239cd50b59b8e6556b39596c6d5129e968a22bb57f6f78dc86fc97a2d18 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\main.ts
+c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30 C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\task\worktree.ts
+24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent-canary\src\main.ts
 4ad0b27350fdf911290a49671eba82248385f49a36b70b6f107c01bdf96a3f1a C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\index.ts
 95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3 C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-v2\brainstem\prime-extension\src\worker-lifecycle-bridge.ts
