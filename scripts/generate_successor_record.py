@@ -124,6 +124,9 @@ def tracked_subject_paths() -> dict[str, str]:
         "scripts/run_host_settlement_tests.py",
         "scripts/stage_omp_successor.py",
         "scripts/generate_successor_record.py",
+        "scripts/export_successor_package.py",
+        "scripts/activate_omp_successor.py",
+        "scripts/run_production_smoke.py",
         "docs/integrations/omp-host-patch-2026-09-19/host/agent-session.ts",
         "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts",
     ):

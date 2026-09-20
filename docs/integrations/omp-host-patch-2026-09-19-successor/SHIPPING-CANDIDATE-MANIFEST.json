@@ -1,12 +1,12 @@
 {
   "schema": "second-brain.omp-successor-shipping-candidate.v1",
-  "generated_at": "2026-09-20T16:37:18.820913+00:00",
+  "generated_at": "2026-09-20T17:15:38.338874+00:00",
   "purpose": "Seal for the repaired successor candidate: the record files that describe it, the staged layout it was qualified in, and the campaign evidence it produced.",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "7d93860f7dee01d3b5b6e9556360dad6c853d6db",
-    "source_tree_sha256": "93ffa4d4e7dfd3994393312857874562ad318deb0d884f2136dfb088612e0f75",
+    "commit": "db9d4acce8a0b2780de69c81e585e0242799240c",
+    "source_tree_sha256": "ec9516834c335c0eceaf687ab7d54c0be048dae379cdafd7f628b3c9552d8c2d",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "predecessor": {
@@ -20,16 +20,16 @@
     "status": "preserved byte-identical; its runs remain what executed"
   },
   "record_files": {
-    "SUCCESSOR-RECORD.json": "ddeef0e769654ea8138049082026bd3f87df038ffc6dffeba9c0577a7fa9877f",
+    "SUCCESSOR-RECORD.json": "6eccc1b6899d9a3025eb8d817daae63c5e226fdecdf7eb74fe874afef779169c",
     "HASHES.txt": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
-    "RUN-IDENTITIES.json": "21b4d1b9e277d2682919744ba0cfd08ecb623f6e0c1d0503adaf566564b0c81f",
-    "REASONS.json": "daf661d7e85cfb38d0507b4daf3668b83236074915b024cb75bf462b321a00fb",
-    "CANDIDATE-IDENTITY.json": "4ce17e3fbee59cf1ec3fffa7d6b52a3f36957f398eabc7f86789bf215f46cf23"
+    "RUN-IDENTITIES.json": "acd4c12b6ae73986653c78ebe6b1e11436416fcbdc26e59d3ee3e6fb90531bf8",
+    "REASONS.json": "2ebd8d6e6bcc6c4d35eade406338488608678535eb2f1bbef142d98227ffeb61",
+    "CANDIDATE-IDENTITY.json": "9804717b54524620085c37934b22d9c39120c29cabb13e06be74f4e666f0e304"
   },
   "evidence": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
+      "sha256": "143fc62b119a8fb22a351dc155d39bab00489a4809e479e668d1be0ff9713db9"
     },
     "review_verdict": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\successor-review-verdict-2.json",
@@ -39,7 +39,7 @@
   "checks": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "1d0ba343e73e2e1d269fe28d066b9b23f0fd182494a0739a8838c562a16e5c07"
+      "sha256": "143fc62b119a8fb22a351dc155d39bab00489a4809e479e668d1be0ff9713db9"
     },
     "steps": {
       "preflight": {

@@ -1,0 +1,374 @@
+{
+  "schema": "second-brain.omp-host-deployment-manifest.v1",
+  "generated_at": "2026-09-20T17:09:52.784182+00:00",
+  "purpose": "Single machine-readable deployment record for the patched OMP host and the Second Brain extension: every file that must match, its rollback action, and the qualified launch entrypoint. Verification (scripts/run-omp-patched.ps1) and the activation card read this manifest instead of a hand-maintained file list.",
+  "host": {
+    "name": "OMP",
+    "version": "omp/18.2.6",
+    "sealed_package": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+    "installed_package": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
+    "entrypoint": "src/cli.ts",
+    "bundled_entrypoint": "dist/cli.js",
+    "bundled_entrypoint_note": "The package's own bin maps `omp` to dist/cli.js, a bundle that does not carry the worker-cleanup patch. The qualified route is the source entrypoint below, started by scripts/run-omp-patched.ps1.",
+    "file_count": 13,
+    "files": [
+      {
+        "path": "src/async/job-manager.ts",
+        "role": "bound",
+        "sealed_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
+        "installed_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
+        "rollback": {
+          "action": "restore",
+          "sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/main.ts",
+        "role": "bound",
+        "sealed_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
+        "installed_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
+        "rollback": {
+          "action": "restore",
+          "sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/session/agent-session.ts",
+        "role": "bound",
+        "sealed_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
+        "installed_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
+        "rollback": {
+          "action": "restore",
+          "sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/task/cleanup-barrier.ts",
+        "role": "bound",
+        "sealed_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
+        "installed_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
+        "rollback": {
+          "action": "restore",
+          "sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/task/isolation-runner.ts",
+        "role": "bound",
+        "sealed_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
+        "installed_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
+        "rollback": {
+          "action": "restore",
+          "sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/task/worktree.ts",
+        "role": "bound",
+        "sealed_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
+        "installed_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
+        "rollback": {
+          "action": "restore",
+          "sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30"
+        },
+        "installed_matches_sealed": true,
+        "bound_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "src/task/attempt-settlement.ts",
+        "role": "added",
+        "sealed_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
+        "installed_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
+        "rollback": {
+          "action": "delete"
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/extensibility/extensions/runner.ts",
+        "role": "changed",
+        "sealed_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
+        "installed_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/extensibility/extensions/types.ts",
+        "role": "changed",
+        "sealed_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
+        "installed_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/sdk.ts",
+        "role": "changed",
+        "sealed_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
+        "installed_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/task/executor.ts",
+        "role": "changed",
+        "sealed_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
+        "installed_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/task/index.ts",
+        "role": "changed",
+        "sealed_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
+        "installed_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "src/task/structured-subagent.ts",
+        "role": "changed",
+        "sealed_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
+        "installed_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
+        "rollback": {
+          "action": "restore",
+          "sha256": null
+        },
+        "installed_matches_sealed": true
+      }
+    ]
+  },
+  "extension": {
+    "installed_root": "C:\\Users\\assas\\.omp\\agent\\extensions\\second-brain",
+    "sealed_sources": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\brainstem\\prime-extension\\src",
+    "file_count": 26,
+    "files": [
+      {
+        "path": "active-state-mirror.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/active-state-mirror.ts",
+        "sealed_sha256": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08",
+        "installed_sha256": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "autoinject.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/autoinject.ts",
+        "sealed_sha256": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b",
+        "installed_sha256": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "budget-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/budget-bridge.ts",
+        "sealed_sha256": "02e8b8ec14978e805ecbd3ef49c4b8755e97ca929f71d5d6d20a62183e90ef3d",
+        "installed_sha256": "02e8b8ec14978e805ecbd3ef49c4b8755e97ca929f71d5d6d20a62183e90ef3d",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "config.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/config.ts",
+        "sealed_sha256": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d",
+        "installed_sha256": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "context-paging.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/context-paging.ts",
+        "sealed_sha256": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94",
+        "installed_sha256": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "driver-orchestrator.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/driver-orchestrator.ts",
+        "sealed_sha256": "1a70e04229efc98e88cee42f40ecb1c579d98fe48bf88d7127a636476cbfed15",
+        "installed_sha256": "1a70e04229efc98e88cee42f40ecb1c579d98fe48bf88d7127a636476cbfed15",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "environment-mirror.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/environment-mirror.ts",
+        "sealed_sha256": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda",
+        "installed_sha256": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "index.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/index.ts",
+        "sealed_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+        "installed_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+        "installed_matches_sealed": true,
+        "bound_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "injection-slots.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/injection-slots.ts",
+        "sealed_sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35",
+        "installed_sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "lean-code.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/lean-code.ts",
+        "sealed_sha256": "ae91d081d014d77fb4d678cc4b0f175a3bf21d367dde72b1652387bcf6679a74",
+        "installed_sha256": "ae91d081d014d77fb4d678cc4b0f175a3bf21d367dde72b1652387bcf6679a74",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "ledger-mirror.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/ledger-mirror.ts",
+        "sealed_sha256": "d09428e0b144f34e1a5edcf8a4b02fe25c64009325a79fb05bacd5a996bfb844",
+        "installed_sha256": "d09428e0b144f34e1a5edcf8a4b02fe25c64009325a79fb05bacd5a996bfb844",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "native-settlement.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/native-settlement.ts",
+        "sealed_sha256": "333ecef26a9d37c3f9bdc793df453c589b8000239b4254310cf072c37226eb67",
+        "installed_sha256": "333ecef26a9d37c3f9bdc793df453c589b8000239b4254310cf072c37226eb67",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "orchestrator-guard.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/orchestrator-guard.ts",
+        "sealed_sha256": "98f2166215541074f9571c171c345e99aca51a80915c744cbf56889114fc0d13",
+        "installed_sha256": "98f2166215541074f9571c171c345e99aca51a80915c744cbf56889114fc0d13",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "p4-mirror.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/p4-mirror.ts",
+        "sealed_sha256": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff",
+        "installed_sha256": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "recall-gate.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/recall-gate.ts",
+        "sealed_sha256": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
+        "installed_sha256": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "routing-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/routing-bridge.ts",
+        "sealed_sha256": "0df72d0ebc73a10ded6e28bc43cb562ff95c9fa63f6a2354fcf572b582627fbe",
+        "installed_sha256": "0df72d0ebc73a10ded6e28bc43cb562ff95c9fa63f6a2354fcf572b582627fbe",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "rtd.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/rtd.ts",
+        "sealed_sha256": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab",
+        "installed_sha256": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "sensors.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/sensors.ts",
+        "sealed_sha256": "b4a96ad63f921207f32798d18ca2f26d7e68566d93605e733710e6696d4a9cb7",
+        "installed_sha256": "b4a96ad63f921207f32798d18ca2f26d7e68566d93605e733710e6696d4a9cb7",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "stop-boundary.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/stop-boundary.ts",
+        "sealed_sha256": "c98f4ce748fe0363e486f1249269225b7b44a1a9dccd6b08297288c8203ce373",
+        "installed_sha256": "c98f4ce748fe0363e486f1249269225b7b44a1a9dccd6b08297288c8203ce373",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "storage.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/storage.ts",
+        "sealed_sha256": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18",
+        "installed_sha256": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "types/prime.d.ts",
+        "sealed_source_path": "brainstem/prime-extension/types/prime.d.ts",
+        "sealed_sha256": "6fb91aab7a857447d12b0d8a42b694a598b616b8d87270beffaaaf4ca0eb5d0b",
+        "installed_sha256": "6fb91aab7a857447d12b0d8a42b694a598b616b8d87270beffaaaf4ca0eb5d0b",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "visibility-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/visibility-bridge.ts",
+        "sealed_sha256": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0",
+        "installed_sha256": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "vmem.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/vmem.ts",
+        "sealed_sha256": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7",
+        "installed_sha256": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "worker-context-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/worker-context-bridge.ts",
+        "sealed_sha256": "ed1a2ef8faba378c99c2fe61c8ec0754547d6fd064da90d6af957aa94552375a",
+        "installed_sha256": "ed1a2ef8faba378c99c2fe61c8ec0754547d6fd064da90d6af957aa94552375a",
+        "installed_matches_sealed": true
+      },
+      {
+        "path": "worker-lifecycle-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/worker-lifecycle-bridge.ts",
+        "sealed_sha256": "95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3",
+        "installed_sha256": "95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3",
+        "installed_matches_sealed": true,
+        "bound_sha256": "95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3",
+        "installed_matches_bound": true
+      },
+      {
+        "path": "worker-result-bridge.ts",
+        "sealed_source_path": "brainstem/prime-extension/src/worker-result-bridge.ts",
+        "sealed_sha256": "6688ee75c8da1c3e0574b2243c8cd76eec45b2b742906d596f2eee43e0de2701",
+        "installed_sha256": "6688ee75c8da1c3e0574b2243c8cd76eec45b2b742906d596f2eee43e0de2701",
+        "installed_matches_sealed": true
+      }
+    ]
+  },
+  "launcher": {
+    "script": "scripts/run-omp-patched.ps1",
+    "bun": "C:\\Users\\assas\\.bun\\bin\\bun.exe",
+    "command": "bun <installed_package>/src/cli.ts <args>",
+    "behaviour": "Verify every host and extension hash against this manifest; refuse on any mismatch, then exec the qualified source entrypoint. Never installs or repairs."
+  },
+  "known_limitations": [
+    "Type checking this exact candidate requires the pinned v18.2.6 workspace toolchain (check:types).",
+    "Production-path lifecycle behaviour on the launcher (worker spawn, settlement, cancellation) is not covered by the manifest; it remains a separate gate."
+  ]
+}

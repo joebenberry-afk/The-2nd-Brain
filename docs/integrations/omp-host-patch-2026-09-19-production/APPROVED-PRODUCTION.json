@@ -1,0 +1,12 @@
+{
+  "schema": "second-brain.omp-approved-production.v1",
+  "approved_at": "2026-09-20T17:09:52.945452+00:00",
+  "production_dir": "docs/integrations/omp-host-patch-2026-09-19-production",
+  "record_sha256": "41b3333e03d12570f127c59943eb4e3b407acfcac910ff2f7a369916c0cf478a",
+  "deployment_manifest_sha256": "309f4091f4c94f8e4c9cd92366fced58a6b61d5909923d932801a444e9520226",
+  "identities_file_sha256": "7e6fe22b2131573bb5ab5db996710c212fecd08a0524bb62d563f803612f53f7",
+  "hashes_file_sha256": "ade80026f39de369a325f74a98f0ecfdf277e7d817e36904d7407b8c3b6a2739",
+  "successor_dir": "docs/integrations/omp-host-patch-2026-09-19-successor",
+  "predecessor_dir": "docs/integrations/omp-host-patch-2026-09-19",
+  "rule": "The production deployment manifest is the installed-runtime identity; activation evidence is bound in PRODUCTION-RECORD.json."
+}
