@@ -33,6 +33,7 @@
   "configuration_contract": {
     "profile": "canary-settlement",
     "home_dir": "C:\\Users\\assas",
+    "config_dir_name": ".omp",
     "profile_dir": "C:\\Users\\assas\\.omp\\profiles\\canary-settlement",
     "profile_agent_dir": "C:\\Users\\assas\\.omp\\profiles\\canary-settlement\\agent",
     "profile_config_files": [
@@ -177,7 +178,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "0d0e06092ab5867384a107f76a0f1c00b174c16a8f94ab633cad6b26e590ab95"
+      "sha256": "a34b9a0f4b2b48ffb41ac9b63d84d9a4da035971208cc1f8b1c199b0672e3793"
     },
     {
       "role": "watcher",
