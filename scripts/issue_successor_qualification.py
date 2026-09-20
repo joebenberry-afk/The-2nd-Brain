@@ -527,9 +527,10 @@ def reobserve_recovery(home: Path) -> dict:
 
 REMARKS = {
     "re-measured": (
-        "re-measured on the activated subject: this artifact was produced by the "
-        "campaign's own producer at the current commit, in a throwaway home, and is "
-        "carried into the successor ledger with its measured content"
+        "re-measured for this ledger: the campaign's own producer ran in a throwaway home "
+        "at the commit recorded in rebound_from_subject.source_commit and the artifact is "
+        "bound to the ledger subject; the delta between the two trees is recorded in this "
+        "record's subject_delta"
     ),
     "carried": (
         "identity re-stamped on the activated subject: this artifact's observation was "
@@ -614,6 +615,26 @@ def install_remeasured(
     return document
 
 
+
+def subject_delta(measured_commits: set[str], subject_commit: str) -> dict:
+    """Prove what separates the commits the producers ran at from the ledger subject."""
+    delta = {}
+    for measured in sorted(measured_commits):
+        if not measured or measured == subject_commit:
+            continue
+        changed = git("diff", "--name-only", measured, subject_commit).split()
+        delta[measured] = {
+            "subject": subject_commit,
+            "changed_files": changed,
+            "touches_measured_surface": sorted(
+                path
+                for path in changed
+                if path.startswith(("src/", "tests/", "brainstem/", "constitution/"))
+            ),
+        }
+    return delta
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canonical-home", type=Path, required=True)
@@ -636,6 +657,10 @@ def main() -> int:
     rows_by_key = {(row["phase"], row["requirement"]): row for row in predecessor_rows}
     mirror_references(canonical, home, predecessor_rows)
     remeasured = collect_remeasured(args.remeasure_root) if args.remeasure_root else {}
+    measured_commits: set[str] = {
+        str(json.loads(entry["path"].read_text(encoding="utf-8")).get("source_commit"))
+        for entry in remeasured.values()
+    }
 
     qualification = home / QUALIFICATION_DIR
     (qualification / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -845,6 +870,7 @@ def main() -> int:
                 "guard_refusal_trial": trial,
                 "requirements": rebind_record,
                 "recovery_reobservation": recovery,
+                "subject_delta": subject_delta(measured_commits, subject["source_commit"]),
                 "remeasured_artifacts": [
                     {
                         "phase": key[0],
