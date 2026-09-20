@@ -632,6 +632,67 @@ def test_cancellation_does_not_release_until_exact_executor_cleanup(brain_home, 
     assert _prepare(brain_home, root, "writer-after-cleanup")["status"] == "prepared"
 
 
+def test_accepted_terminal_outcome_cannot_be_rewritten_by_cleanup(brain_home, tmp_path) -> None:
+    """Audit F-06: an accepted terminal outcome is immutable, so the host must
+    never report a different one during cleanup.
+
+    The core refuses a changed terminal outcome (OUTCOME_CONFLICT) and keeps the
+    writer quarantined; the paired host-module regression proving that the host
+    no longer produces that change lives in
+    docs/integrations/omp-host-patch-2026-09-19/tests/attempt-settlement-outcome.test.ts.
+    """
+    root, _ = _repo(tmp_path)
+    _register(brain_home, root)
+    context = _prepare(brain_home, root, "terminal-outcome")
+    binding = _bind(brain_home, context)
+
+    accepted = omp_adapter.handle_request(
+        brain_home,
+        _lifecycle_payload(
+            binding,
+            sequence=1,
+            outcome="failed",
+            executor_settled=True,
+            cleanup_complete=False,
+        ),
+    )
+    assert accepted["logical_outcome"] == "failed"
+    assert accepted["writer_ownership"] == "quarantined"
+
+    conflict = omp_adapter.handle_request(
+        brain_home,
+        _lifecycle_payload(
+            binding,
+            sequence=2,
+            outcome="cancelled",
+            executor_settled=True,
+            cleanup_complete=True,
+        ),
+    )
+    assert conflict["failure_code"] == "OUTCOME_CONFLICT"
+    assert (
+        omp_adapter.handle_request(brain_home, _payload(root, "blocked-after-conflict"))[
+            "failure_code"
+        ]
+        == "WORKTREE_WRITER_BUSY"
+    )
+
+    # Settling with the accepted outcome still releases, which is the path the
+    # repaired host produces.
+    resolved = omp_adapter.handle_request(
+        brain_home,
+        _lifecycle_payload(
+            binding,
+            sequence=2,
+            outcome="failed",
+            executor_settled=True,
+            cleanup_complete=True,
+        ),
+    )
+    assert resolved["writer_ownership"] == "released"
+    assert _prepare(brain_home, root, "writer-after-terminal-cleanup")["status"] == "prepared"
+
+
 def test_retry_mints_new_attempt_and_old_or_reused_native_identity_cannot_release_it(
     brain_home, tmp_path
 ) -> None:
