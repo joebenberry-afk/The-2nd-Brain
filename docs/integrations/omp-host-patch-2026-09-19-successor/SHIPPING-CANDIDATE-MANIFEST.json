@@ -1,12 +1,12 @@
 {
   "schema": "second-brain.omp-successor-shipping-candidate.v1",
-  "generated_at": "2026-09-20T16:23:12.636395+00:00",
+  "generated_at": "2026-09-20T16:33:51.322341+00:00",
   "purpose": "Seal for the repaired successor candidate: the record files that describe it, the staged layout it was qualified in, and the campaign evidence it produced.",
   "subject": {
     "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
     "branch": "brain/omp-native-6172a18-20260911",
-    "commit": "4f7ee6801af034e9e8c00fa6d6ab8e9a626a7d56",
-    "source_tree_sha256": "d8a9c3c722fc0a7f9ea456bf0d11f194ec2a61f7719ec53e08c395918491cb95",
+    "commit": "f985b9f52aa673ad84b487f45ba869b8ca7936e6",
+    "source_tree_sha256": "c4bb0c426d699bd72662943b3487210bb7a7b9fcf77f5a21b95ed569dd7e87c1",
     "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
   },
   "predecessor": {
@@ -20,22 +20,26 @@
     "status": "preserved byte-identical; its runs remain what executed"
   },
   "record_files": {
-    "SUCCESSOR-RECORD.json": "927b08a5177fedb0614571804f421faf65eb8f7c259692b1187fb783191a5399",
+    "SUCCESSOR-RECORD.json": "12792dc38920027678d07f0a2c12f6c32c8cb47431873c8f9e9bfc130a679e37",
     "HASHES.txt": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
-    "RUN-IDENTITIES.json": "359b427204ededee126cfe553bb4b19ab1a6ff0b007916f8c2299102520836d6",
+    "RUN-IDENTITIES.json": "abe11486dc4811c086e5b0a8d635cbf6eda796c73bbd6f01fac84351576d74eb",
     "REASONS.json": "daf661d7e85cfb38d0507b4daf3668b83236074915b024cb75bf462b321a00fb",
-    "CANDIDATE-IDENTITY.json": "ea4fba277f614eef0b2e4735ace742db82e752c6b196e0cd8c564633518717d6"
+    "CANDIDATE-IDENTITY.json": "0112d4e25a5368a000edef077737eda334e8eb7ebdc03862ef8bf5f429fedd32"
   },
   "evidence": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "6b4a81c1a4604f63ecffa43d1cb21e31bab150e5a68b7befa3daa72a3595ebd0"
+      "sha256": "61445dd274e4fcd1f8fc62066f483ad7b5f534938955a0fb0ea5b6b00ed187fa"
+    },
+    "review_verdict": {
+      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\successor-review-verdict.json",
+      "sha256": "a2f95c609709165c1276ba5b6fa0213489ab0be70e2535c61dbab17f5caa7e99"
     }
   },
   "checks": {
     "campaign_index": {
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
-      "sha256": "6b4a81c1a4604f63ecffa43d1cb21e31bab150e5a68b7befa3daa72a3595ebd0"
+      "sha256": "61445dd274e4fcd1f8fc62066f483ad7b5f534938955a0fb0ea5b6b00ed187fa"
     },
     "steps": {
       "preflight": {
@@ -89,11 +93,19 @@
           "attempt-d0e34f61c3bc5ca95e09566a2a74b80e": true
         },
         "fixture_green": true,
-        "production_unchanged": true
+        "production_tables_unchanged": true,
+        "production_scope": "selected columns of worker_tasks and worker_lifecycle_receipts only; no filesystem-wide no-write proof is claimed"
       },
       "negative-control": {
         "exit": 0,
-        "expected": "candidate passes (0), sealed demonstrates the defect (1)"
+        "subject": {
+          "test": "docs/integrations/omp-host-patch-2026-09-19/tests/attempt-settlement-outcome.test.ts",
+          "candidate_module": "docs/integrations/omp-host-patch-2026-09-19/host/attempt-settlement.ts (78ba5ddd...)",
+          "sealed_module": "the installed attempt-settlement module the harness finds first under the OMP packages (pi-coding-agent, then pi-coding-agent-canary): src/task/attempt-settlement.ts (5a96bced...)",
+          "runner": "scripts/run_host_settlement_tests.py",
+          "expected": "sealed module fails (exit 1), candidate module passes (exit 0), wrapper exit 0"
+        },
+        "expected": "sealed module fails, candidate module passes, wrapper exit 0"
       },
       "rollback-rehearsal": {
         "restored_files": 6,
@@ -108,12 +120,14 @@
       "stage_manifest_sha256": "82846ee82074d55a382dd2146ec799a57fd715a349bc7cb26cc3a003ca987552",
       "settlement_repaired_in_stage": true,
       "runtime_packages": 14,
-      "vendor_junctions": 0
+      "vendor_junctions": 152,
+      "vendor_junction_mode": "shared production bun global node_modules paths"
     }
   },
   "explicit_non_claims": [
     "The predecessor pack, its seals and its runs are unchanged.",
     "No production installation, configuration, database, lease or host replacement.",
+    "No filesystem-wide no-write proof: production evidence is equality of the selected tables in preflight.json and post-exit-session-2-f.json.",
     "Universal qualification stays HOLD; economics stays INSUFFICIENT."
   ]
 }

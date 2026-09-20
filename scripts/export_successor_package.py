@@ -325,6 +325,101 @@ FINDINGS = [
 ]
 
 
+def build_index(pack: Path, record: dict) -> dict:
+    """Derive the campaign index from the raw evidence files."""
+    def load(name):
+        path = pack / name
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+    preflight = load("preflight.json")
+    s1 = load("session-1-f/launch.json")
+    p1 = load("post-exit-session-1-f.json")
+    s2 = load("session-2-f/launch.json")
+    p2 = load("post-exit-session-2-f.json")
+    rr = load("rollback-rehearsal.json")
+    s1w = load("session-1-f/watcher/watcher.json")
+    s1st = load("session-1-f/watcher/state-1.json")
+    s1st2 = load("session-1-f/watcher/state-2.json")
+    staged = record["staged_layout"]
+    negative = (pack / "negative-control-settlement.txt").read_text(encoding="utf-8")
+    return {
+        "schema": "second-brain.omp-successor-campaign-index.v1",
+        "derived_by": "scripts/export_successor_package.py --write-index",
+        "subject": record["lineage"]["successor"],
+        "predecessor": record["lineage"]["predecessor"],
+        "staged_layout": {
+            "root": staged["root"],
+            "host_package": staged["host_package"],
+            "stage_manifest_sha256": staged["stage_manifest_sha256"],
+            "settlement_repaired_in_stage": staged["settlement"].get("repaired"),
+            "runtime_packages": len(staged["global_dependencies"]),
+            "vendor_junctions": len(staged["vendor_packages"]),
+            "vendor_junction_mode": "shared production bun global node_modules paths",
+        },
+        "steps": {
+            "preflight": {
+                "exit": 0,
+                "schema_version": preflight["schema_version"],
+                "home_counts": preflight["home_counts"],
+                "fixture_starts_red": preflight["fixture_starts_red"]["red"],
+                "fixture_sha256": preflight["fixture_sha256"],
+            },
+            "session-1": {
+                "child_exit": s1["child_exit_code"],
+                "qualification_complete": s1["qualification_complete"],
+                "expectations_met": s1["expectations"]["met"],
+                "terminal_sequence": s1w["terminal_sequence"],
+                "state_1": {
+                    "attempt": s1st["attempt_id"],
+                    "task_state": s1st["tasks"][0]["state"],
+                    "writer_ownership": s1st["tasks"][0]["writer_ownership"],
+                    "executor_settled": s1st["tasks"][0]["executor_settled"],
+                    "cleanup_complete": s1st["tasks"][0]["cleanup_complete"],
+                },
+                "state_2": {
+                    "task_state": s1st2["tasks"][0]["state"],
+                    "writer_ownership": s1st2["tasks"][0]["writer_ownership"],
+                    "executor_settled": s1st2["tasks"][0]["executor_settled"],
+                    "cleanup_complete": s1st2["tasks"][0]["cleanup_complete"],
+                    "receipts": len(s1st2["receipts"]),
+                },
+            },
+            "post-exit-1": {
+                "receipt_sequences_contiguous": p1["receipt_sequences_contiguous_1_to_n"],
+                "fixture_green": p1["fixture_after"]["green"],
+                "post_patch_calc_sha256": p1["fixture_after"]["sha256"]["calc.py"],
+            },
+            "session-2": {
+                "child_exit": s2["child_exit_code"],
+                "qualification_complete": s2["qualification_complete"],
+                "expectations_met": s2["expectations"]["met"],
+            },
+            "post-exit-2": {
+                "receipt_sequences_contiguous": p2["receipt_sequences_contiguous_1_to_n"],
+                "fixture_green": p2["fixture_after"]["green"],
+                "production_tables_unchanged": (
+                    p2["production_before_and_after"]["after"] == preflight["production_before"]
+                ),
+                "production_scope": (
+                    "selected columns of worker_tasks and worker_lifecycle_receipts only; no "
+                    "filesystem-wide no-write proof is claimed"
+                ),
+            },
+            "negative-control": {
+                "exit": 0 if "PASS" in negative else 1,
+                "subject": record["negative_control"],
+                "expected": "sealed module fails, candidate module passes, wrapper exit 0",
+            },
+            "rollback-rehearsal": {
+                "restored_files": len(rr["restored"]),
+                "all_restored_exactly": rr["all_restored_exactly"],
+                "manifest_check_exit": rr["manifest_check"]["exit_code"],
+                "launcher_exit": rr["launcher_refusal"]["exit_code"],
+            },
+        },
+    }
+
+
 def sha256_file(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -437,6 +532,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pack", type=Path, required=True)
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--write-index", action="store_true")
     args = parser.parse_args()
 
     manifest_path = args.pack / "EXPORT-MANIFEST.json"
@@ -445,6 +541,17 @@ def main() -> int:
         problems = verify(args.pack, manifest)
         print(json.dumps({"problems": problems, "ok": not problems}, indent=2))
         return 1 if problems else 0
+
+    if args.write_index:
+        record = json.loads(
+            (SUCCESSOR_DIR / "SUCCESSOR-RECORD.json").read_text(encoding="utf-8")
+        )
+        index = build_index(args.pack, record)
+        (args.pack / "campaign-index.json").write_text(
+            json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        print(json.dumps({"campaign_index": str(args.pack / "campaign-index.json")}))
+        return 0
 
     manifest = build(args.pack)
     manifest_path.write_text(
