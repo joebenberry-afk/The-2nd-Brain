@@ -247,7 +247,17 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         "BUN_OPTIONS",
                         "NODE_OPTIONS",
                     ],
-                    "forbidden_env_prefixes": ["BUN_", "NODE_"],
+                    "forbidden_env_prefixes": ["BUN_", "NODE_", "PI_", "OMP_", "OM_CANARY_"],
+                    "allowed_env_exceptions": [
+                        "OM_CANARY_BOOT",
+                        "OM_CANARY_FORCE_ISOLATED",
+                        "OM_CANARY_ISOLATION",
+                        "OM_CANARY_HOLD_RELEASE_UNTIL",
+                    ],
+                    "required_env_values": {
+                        "OM_CANARY_FORCE_ISOLATED": "1",
+                        "OM_CANARY_ISOLATION": "1",
+                    },
                     "forbidden_argv_flags": ["--config"],
                     "forbidden_project_overlays": [
                         ".omp/config.yml",
@@ -329,6 +339,8 @@ def _bind(tmp_path: Path, spec: dict) -> dict:
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
     return mod.bind_required_identities(spec, run_dir, env, spec["argv"])
 
@@ -380,6 +392,8 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
         "SECOND_BRAIN_HOME": str(tmp_path / "other-home"),
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
     assert result["all_bound"] is False
@@ -408,6 +422,8 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
         "PI_CONFIG_FILES": str(tmp_path / "overlay.yml"),
     }
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
@@ -421,6 +437,8 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
         "PI_CONFIG_DIR": ".astra-round5-nonexistent-config-root",
     }
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
@@ -448,6 +466,8 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
     assert result["all_bound"] is False
@@ -550,6 +570,8 @@ def test_windows_case_folding_and_relative_home_cannot_bypass_binding(tmp_path: 
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
     env = mod.merge_env(base, {"userprofile": str(redirect)})
     assert sum(1 for key in env if key.upper() == "USERPROFILE") == 1
@@ -572,6 +594,45 @@ def test_windows_case_folding_and_relative_home_cannot_bypass_binding(tmp_path: 
     assert "configuration:home-dir" in result["mismatched"]
 
 
+def test_unbound_omp_environment_overrides_rejected(tmp_path: Path) -> None:
+    """Every PI_/OMP_/OM_CANARY_ variable except the run contract set must be
+    rejected, and the contract set must carry its expected values."""
+    mod = _load("launch_run")
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-omp-env"
+    run_dir.mkdir(exist_ok=True)
+    base = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
+    }
+    assert (
+        mod.bind_required_identities(spec, run_dir, dict(base), spec["argv"])["all_bound"] is True
+    )
+
+    for override in (
+        {"OM_CANARY_AGENT_IDLE_TTL_MS": "12345"},
+        {"PI_SMOL_MODEL": "some-model"},
+        {"OMP_THREADS": "2"},
+        {"om_canary_agent_idle_ttl_ms": "0"},
+    ):
+        env = dict(base)
+        env.update(override)
+        result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+        assert result["all_bound"] is False, override
+        assert "configuration:forbidden-env-prefixes" in result["mismatched"], override
+
+    env = dict(base)
+    env["OM_CANARY_FORCE_ISOLATED"] = "0"
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:required-env-values" in result["mismatched"]
+
+
 def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
     """OMP eagerly loads .env from the home, config root, profile agent dir and
     project cwd even when bun autoload is disabled; each path must fail closed."""
@@ -585,6 +646,8 @@ def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
 
     project_env = Path(spec["fixture"]) / ".env"
@@ -655,6 +718,8 @@ def test_project_and_user_discovery_inputs_cannot_bypass_binding(tmp_path: Path)
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
     }
     assert mod.bind_required_identities(spec, run_dir, env, spec["argv"])["all_bound"] is True
 
