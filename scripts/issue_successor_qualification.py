@@ -116,17 +116,32 @@ def prepare_home(canonical: Path, home: Path) -> None:
 
 
 def canonical_fingerprints(home: Path) -> dict:
-    """Fingerprints of the live Brain state the refusal trial must not change."""
-    skills = hashlib.sha256()
-    for path in sorted((home / "skills").rglob("*")):
-        if path.is_file():
-            skills.update(path.relative_to(home).as_posix().encode("utf-8"))
-            skills.update(path.read_bytes())
+    """Recursive content fingerprints of every state the refusal trial could touch.
+
+    ``promote`` calls ``_reconcile_pending`` before it evaluates guards, and that
+    reconciliation can commit records, carry authority markers or discard pending
+    journals. Record names cannot see a discard, so every promotion-owned file and
+    the whole skills tree are hashed by content, and the pending directory's
+    presence is recorded on its own.
+    """
+
+    def tree(root: Path) -> dict[str, str]:
+        if not root.exists():
+            return {}
+        return {
+            path.relative_to(root).as_posix(): sha256_file(path)
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+
+    pending = home / "state" / "promotions" / "pending"
     return {
         "database_sha256": sha256_file(home / "db" / "brain.sqlite"),
-        "skills_tree_sha256": skills.hexdigest(),
-        "promotion_records": sorted(
-            path.name for path in (home / "state" / "promotions").glob("*.json")
+        "promotion_state": tree(home / "state" / "promotions"),
+        "skills_tree": tree(home / "skills"),
+        "pending_present": pending.is_dir(),
+        "pending_journals": (
+            sorted(p.name for p in pending.glob("*.json")) if pending.is_dir() else []
         ),
     }
 
@@ -138,6 +153,11 @@ def run_guard_refusal_trial(live_home: Path, out: Path) -> dict:
         / "outputs/reports/omp-current-evidence-20260919/guard_refusal_trial.py"
     )
     before = canonical_fingerprints(live_home)
+    if before["pending_journals"]:
+        raise SystemExit(
+            "refusing to execute promotion machinery against the live home while pending "
+            f"publication journals exist: {before['pending_journals']}"
+        )
     result = subprocess.run(
         [
             sys.executable, str(trial),
@@ -431,6 +451,79 @@ def reidentify_reference(
     return digest, artifact
 
 
+
+RECOVERY_ARTIFACT = (
+    "outputs/reports/omp-shipping-ledger-20260920/artifacts/omp-current-evidence-20260919/"
+    "omp-only-rebind/qualification/v2-i-governed_self_improvement_proof-backup-recovery.json"
+)
+
+
+def reobserve_recovery(home: Path) -> dict:
+    """Re-measure the recovery requirement instead of carrying a stale observation.
+
+    The restore implementation changed between the predecessor subject and this
+    one, so the carried ``backup_restore_preservation`` observation no longer
+    describes this code. The P4 driver builds a scenario home, the campaign's
+    authoritative check performs a real backup/restore round-trip inside it, and
+    the campaign's own export API writes the successor artifact and its raw
+    wrapper — the same producer the requirement's evidence type allows.
+    """
+    repo_scripts = REPO_ROOT / "scripts"
+    if str(repo_scripts) not in sys.path:
+        sys.path.insert(0, str(repo_scripts))
+    import run_v1_p4_qualification as p4_driver  # type: ignore[import-not-found]
+    import verify_v1_p4_qualification as p4_checks  # type: ignore[import-not-found]
+
+    out_dir = home / "qualification" / "evidence" / "p4-successor"
+    result = subprocess.run(
+        [
+            sys.executable, str(repo_scripts / "run_v1_p4_qualification.py"),
+            "--repo", str(REPO_ROOT),
+            "--out", str(out_dir),
+        ],
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")},
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"P4 scenario run failed: {result.stdout[-400:]} {result.stderr[-400:]}")
+    scenario_home = json.loads(
+        (out_dir / "qualification-manifest.json").read_text(encoding="utf-8")
+    )["home"]
+    check = p4_checks.check_backup_restore_preservation(
+        {"home": scenario_home, "scenarios": []}
+    )
+    if not check.get("ok"):
+        raise SystemExit(f"recovery re-observation failed: {json.dumps(check)[:400]}")
+    observed_data = {"independent_checks": {"backup_restore_preservation": check}}
+    artifact_path = home / RECOVERY_ARTIFACT
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    # The mirrored predecessor artifact and its raw wrapper are replaced by this
+    # re-measurement; the export API refuses to overwrite them in place.
+    for stale in (artifact_path, artifact_path.with_name(artifact_path.stem + ".raw.json")):
+        stale.unlink(missing_ok=True)
+    exported = p4_driver.export_v2_observation(
+        home,
+        artifact_path.parent,
+        phase="v2-i",
+        requirement="governed_self_improvement_proof",
+        evidence_type="recovery",
+        feature="backup-recovery",
+        observed_data=observed_data,
+        gate_observations={"recovery_check": check},
+        identity=p4_driver.qualification_identity(home),
+        producer=Path("scripts/run_v1_p4_qualification.py"),
+    )
+    if not artifact_path.is_file():
+        raise SystemExit(f"recovery artifact was not exported: {json.dumps(exported)[:300]}")
+    return {
+        "artifact": RECOVERY_ARTIFACT,
+        "sha256": sha256_file(artifact_path),
+        "scenario_home": scenario_home,
+        "check": check,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canonical-home", type=Path, required=True)
@@ -466,6 +559,7 @@ def main() -> int:
     if not trial["live_state_unchanged"]:
         raise SystemExit("guard refusal trial changed live Brain state")
 
+    recovery = reobserve_recovery(home)
     trial_relative = trial_out.relative_to(home).as_posix()
     causal_relative = next(
         str(ref["path"])
@@ -488,14 +582,19 @@ def main() -> int:
         for ref in predecessor_evidence["evidence_refs"]:
             relative = str(ref["path"])
             note = (
-                "identity re-stamped on the activated subject; the recorded observation is "
-                "carried forward because the repaired paths (promotion journal, restore "
-                "transaction, doctor reporting) do not enter this requirement's measured "
-                "surface, and the causal requirement is the only one whose conduct is "
-                "re-executed here"
+                "identity re-stamped on the activated subject: this artifact's observation was "
+                "measured at the predecessor subject and is carried forward as such, without "
+                "re-measurement here"
             )
             extra_raw = None
-            if relative == causal_relative:
+            if relative == RECOVERY_ARTIFACT:
+                note = (
+                    "re-measured on the activated subject: the P4 driver rebuilt a scenario "
+                    "home and the authoritative recovery check performed a real backup/restore "
+                    "round-trip inside it, because the restore implementation changed between "
+                    "the predecessor subject and this one"
+                )
+            elif relative == causal_relative:
                 carried_artifact = json.loads(
                     (canonical / relative).read_text(encoding="utf-8")
                 )
@@ -505,10 +604,9 @@ def main() -> int:
                 note = (
                     "carried observation re-verified on the activated subject: the governed "
                     "promotion refusal path was re-executed against the live Brain "
-                    f"(refusal reason {comparison['live_refusal_reason']!r}, state unchanged, "
-                    "no live state change) and reproduces this observation exactly; the "
-                    "observation record is re-stamped for this subject and the live trial is "
-                    "recorded as raw evidence beside it"
+                    f"(refusal reason {comparison['live_refusal_reason']!r}, state unchanged) and "
+                    "reproduces this observation exactly; the observation record is re-stamped "
+                    "for this subject and the live trial is recorded as raw evidence beside it"
                 )
                 extra_raw = {
                     "path": trial_relative,
@@ -641,6 +739,7 @@ def main() -> int:
                 "causal_observation": causal_binding,
                 "guard_refusal_trial": trial,
                 "requirements": rebind_record,
+                "recovery_reobservation": recovery,
                 "mirrored_reference_count": len(set(
                     ref["path"]
                     for row in predecessor_rows
@@ -653,14 +752,33 @@ def main() -> int:
                 ],
                 "new_evidence": [
                     "the governed promotion refusal re-observed at this subject",
+                    "the recovery requirement re-measured at this subject (real backup/restore "
+                    "round-trip through the repaired restore implementation)",
                     "the host identity record for the activated runtime",
                 ],
+                "canonical_interaction": {
+                    "disposable_home": str(home),
+                    "live_execution": (
+                        "the governed promotion refusal is executed against the live home so "
+                        "that the observation describes the live subject; promote() reconciles "
+                        "pending publication journals before it evaluates guards, so the live "
+                        "execution is gated: it refuses to run while any pending journal "
+                        "exists, and recursive content fingerprints of the promotion state, "
+                        "the skills tree and the database are recorded before and after"
+                    ),
+                    "observed_no_change": trial["live_state_unchanged"],
+                    "observed_fingerprints": {
+                        "before": trial["live_state_before"],
+                        "after": trial["live_state_after"],
+                    },
+                },
                 "non_claims": [
-                    "No canonical write: qualification runs against a disposable copy of the "
-                    "database, configuration, skills and state; the only interaction with the "
-                    "live home is the read-only refusal trial, whose refusal path returns "
-                    "before any mutation, and whose before/after fingerprints are recorded "
-                    "unchanged in this record.",
+                    "Observed non-mutation, not an intrinsic read-only guarantee: promote() "
+                    "can reconcile pending publication journals before refusing, so the "
+                    "successor run refuses to execute against the live home while such a "
+                    "journal exists. For this run none existed and every promotion-owned path "
+                    "was byte-identical before and after; that is a measurement of this run, "
+                    "not a property of the code path.",
                     "Universal qualification is claimed only for what this verifier covers.",
                     "Economics remains INSUFFICIENT (n=2).",
                 ],
