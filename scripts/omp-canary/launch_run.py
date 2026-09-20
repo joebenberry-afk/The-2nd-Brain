@@ -63,6 +63,17 @@ def sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def manifest_dir(root: Path) -> dict[str, str]:
+    """Relative-path -> content hash for every file under root (bounded)."""
+    manifest: dict[str, str] = {}
+    if not root.is_dir():
+        return manifest
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            manifest[path.relative_to(root).as_posix()] = sha256_file(path) or ""
+    return manifest
+
+
 def parse_hashes_file(path: Path, base: Path) -> dict[str, str]:
     entries: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -503,6 +514,37 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         )
     if not preflight_ok:
         mismatched.append("preflight")
+
+    # The run home's canonical configuration is a snapshot manifest captured by
+    # preflight; any added, removed or changed config file fails the gate.
+    expected_manifest = (
+        data.get("home_config_manifest")
+        if preflight_file and Path(preflight_file).exists()
+        else None
+    )
+    actual_manifest = manifest_dir(Path(spec["home"]) / "config")
+    if expected_manifest is None:
+        home_config_ok = False
+        home_config_check = {"ok": False, "reason": "preflight home_config_manifest missing"}
+    else:
+        added = sorted(set(actual_manifest) - set(expected_manifest))
+        removed = sorted(set(expected_manifest) - set(actual_manifest))
+        changed = sorted(
+            key
+            for key in set(actual_manifest) & set(expected_manifest)
+            if actual_manifest[key] != expected_manifest[key]
+        )
+        home_config_ok = not (added or removed or changed)
+        home_config_check = {
+            "ok": home_config_ok,
+            "files": len(actual_manifest),
+            "added": added,
+            "removed": removed,
+            "changed": changed,
+        }
+    if not home_config_ok:
+        mismatched.append("configuration:home-config-manifest")
+    contract_check("home-config-manifest", home_config_ok, home_config_check)
 
     fixture_identity = spec.get("fixture_identity") or {}
     fixture_records = []

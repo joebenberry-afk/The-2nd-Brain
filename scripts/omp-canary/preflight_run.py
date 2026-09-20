@@ -36,6 +36,17 @@ def sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def manifest_dir(root: Path) -> dict[str, str]:
+    """Relative-path -> content hash for every file under root (bounded)."""
+    manifest: dict[str, str] = {}
+    if not root.is_dir():
+        return manifest
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            manifest[path.relative_to(root).as_posix()] = sha256_file(path) or ""
+    return manifest
+
+
 def db_checksum(db: Path, table: str, cols: list[str]) -> dict:
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     try:
@@ -156,6 +167,8 @@ def main() -> int:
             "worker_tasks": db_count(db, "worker_tasks"),
             "worker_lifecycle_receipts": db_count(db, "worker_lifecycle_receipts"),
         },
+        "home_config_manifest": manifest_dir(home / "config"),
+        "home_config_exists": (home / "config").is_dir(),
         "production_before": {
             "worker_tasks": db_checksum(
                 prod, "worker_tasks", ["task_id", "state", "packet_sha256"]

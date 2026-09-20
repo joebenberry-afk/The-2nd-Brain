@@ -279,7 +279,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "0f325b74871ee79046562574e073b81c39d287411f12df0e710ce28b7985dc73"
+      "sha256": "167ac1777c3fa31a8a2b754a56888835aed7d0d16309a5c15b578734f731da39"
     },
     {
       "role": "watcher",
@@ -289,7 +289,7 @@
     {
       "role": "preflight",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\preflight_run.py",
-      "sha256": "77315af03dc611dd8590ee55efeeb8de3624a0284db26c0867b42204839bb663"
+      "sha256": "fd9fb535d4a75f39ad1946dd5e2f613aae5c1df53fe53d39e82c320bc26233b2"
     },
     {
       "role": "post-exit-check",
