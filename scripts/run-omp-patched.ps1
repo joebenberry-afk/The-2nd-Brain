@@ -16,6 +16,11 @@
     Start without verifying the installed bytes. Use only to diagnose why a verified launch is
     refused; the unpatched-bundle risk the check exists for is not covered then.
 
+.PARAMETER ManifestPath
+    Verify and launch from a different deployment manifest (or set OMP_DEPLOYMENT_MANIFEST), so a
+    successor candidate can be qualified in a staged layout without touching the sealed record or
+    the production installation. The manifest's host and extension roots decide what is verified.
+
 .EXAMPLE
     powershell -NoProfile -File scripts/run-omp-patched.ps1 --version
 
@@ -25,6 +30,7 @@
 [CmdletBinding()]
 param(
     [switch] $SkipIdentityCheck,
+    [string] $ManifestPath,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $Rest
 )
@@ -32,7 +38,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $repoRoot 'docs\integrations\omp-host-patch-2026-09-19\DEPLOYMENT-MANIFEST.json'
+if (-not $ManifestPath) {
+    $ManifestPath = Join-Path $repoRoot 'docs\integrations\omp-host-patch-2026-09-19\DEPLOYMENT-MANIFEST.json'
+    if ($env:OMP_DEPLOYMENT_MANIFEST) { $ManifestPath = $env:OMP_DEPLOYMENT_MANIFEST }
+}
+$manifestPath = $ManifestPath
 
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
     Write-Host "second-brain: deployment manifest missing: $manifestPath" -ForegroundColor Red

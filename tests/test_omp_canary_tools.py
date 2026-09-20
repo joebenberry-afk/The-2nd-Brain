@@ -40,6 +40,23 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _sha256_lf(path: Path) -> str:
+    """Hash as the candidate identity records it: LF-normalized bytes."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _source_tree_fingerprint(repo: Path) -> str | None:
+    from second_brain import build_identity
+
+    return build_identity.source_tree_fingerprint(repo)
+
+
+def _extension_fingerprint(repo: Path) -> str | None:
+    from second_brain import build_identity
+
+    return build_identity.adapter_build_fingerprint(repo)
+
+
 def _make_db(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.executescript(
@@ -862,28 +879,37 @@ def test_fixture_files_are_lf_for_native_patch_application(tmp_path: Path) -> No
     assert raw == b"def add(a, b):\n    return a - b\n"
 
 
-def test_tracked_identity_inventory_matches_live_files() -> None:
-    """The committed RUN-IDENTITIES.json must match the live bound files on this
-    machine; a stale inventory blocks the run by design (N1 class)."""
-    docs = (
-        Path(__file__).resolve().parents[1] / "docs" / "integrations" / "omp-host-patch-2026-09-19"
-    )
-    inventory = json.loads((docs / "RUN-IDENTITIES.json").read_text(encoding="utf-8"))
+def test_approved_successor_identity_matches_live_files() -> None:
+    """The approved successor candidate must match the live repository bytes.
+
+    Drift detection is bound to the approved successor (a committed pointer and
+    its recorded hashes), never to hashes computed from whatever happens to be
+    on disk. A stale candidate blocks by design (N1 class).
+    """
+    repo = Path(__file__).resolve().parents[1]
+    successor = repo / "docs" / "integrations" / "omp-host-patch-2026-09-19-successor"
+    approval = json.loads((successor / "APPROVED-SUCCESSOR.json").read_text(encoding="utf-8"))
+    assert approval["successor_dir"] == ("docs/integrations/omp-host-patch-2026-09-19-successor")
+    for name, key in (
+        ("SUCCESSOR-RECORD.json", "record_sha256"),
+        ("RUN-IDENTITIES.json", "identities_file_sha256"),
+        ("HASHES.txt", "hashes_file_sha256"),
+        ("SHIPPING-CANDIDATE-MANIFEST.json", "shipping_candidate_manifest_sha256"),
+    ):
+        assert _sha256(successor / name) == approval[key], f"approval drift: {name}"
+
+    identity = json.loads((successor / "CANDIDATE-IDENTITY.json").read_text(encoding="utf-8"))
+    assert identity["files"], "candidate identity must list the files it binds"
+    for relative, digest in identity["files"].items():
+        path = repo / relative
+        assert path.is_file(), f"candidate file missing: {relative}"
+        assert _sha256_lf(path) == digest, f"candidate drift: {relative}"
+    assert identity["fingerprints"]["source_tree_sha256"] == _source_tree_fingerprint(repo)
+    assert identity["fingerprints"]["extension_fingerprint"] == _extension_fingerprint(repo)
+
+    inventory = json.loads((successor / "RUN-IDENTITIES.json").read_text(encoding="utf-8"))
     roles = [entry["role"] for entry in inventory["identities"]]
     assert set(roles) == set(inventory["required_roles"]), "required roles must be listed exactly"
-    missing_on_disk = [
-        entry["path"] for entry in inventory["identities"] if not Path(entry["path"]).exists()
-    ]
-    if missing_on_disk:
-        import pytest
-
-        pytest.skip(f"canary/worktree bound paths unavailable: {missing_on_disk[:2]}")
-    for entry in inventory["identities"]:
-        assert entry["sha256"] is not None, entry["path"]
-        assert _sha256(Path(entry["path"])) == entry["sha256"], f"stale identity: {entry['path']}"
-    for line in (docs / "HASHES.txt").read_text(encoding="utf-8").splitlines():
-        digest, _, target = line.strip().partition(" ")
-        assert _sha256(Path(target.strip())) == digest, f"stale HASHES entry: {target}"
     contract = inventory.get("configuration_contract") or {}
     assert contract.get("profile") == "canary-settlement"
     assert contract.get("forbidden_env"), "configuration contract must guard overlays"
@@ -907,9 +933,25 @@ def test_tracked_identity_inventory_matches_live_files() -> None:
         else:
             assert path.exists(), f"bound user provider file missing: {path}"
             assert _sha256(path) == item["sha256"], f"stale user provider identity: {path}"
+            if item.get("attribution"):
+                assert item.get("predecessor_sha256"), (
+                    f"a rebound provider input must keep the hash it replaced: {item['path']}"
+                )
     fixture_entries = contract.get("fixture_allowed_entries", [])
     for entry in ("calc.py", "test_calc.py", "AGENTS.md"):
         assert entry in fixture_entries, f"fixture allowlist must include {entry}"
+
+
+def test_predecessor_seal_is_unchanged() -> None:
+    """The predecessor candidate stays sealed history; its own seal must hold."""
+    repo = Path(__file__).resolve().parents[1]
+    predecessor = repo / "docs" / "integrations" / "omp-host-patch-2026-09-19"
+    manifest = json.loads(
+        (predecessor / "SHIPPING-CANDIDATE-MANIFEST.json").read_text(encoding="utf-8")
+    )
+    candidate = manifest["candidate"]
+    assert _sha256(predecessor / "RUN-IDENTITIES.json") == candidate["identities_file_sha256"]
+    assert _sha256(predecessor / "HASHES.txt") == candidate["hashes_file_sha256"]
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:
