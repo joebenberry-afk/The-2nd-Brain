@@ -48,7 +48,15 @@
       {
         "name": "settings.json",
         "expects": "absent"
+      },
+      {
+        "name": ".env",
+        "expects": "absent"
       }
+    ],
+    "env_files_must_be_absent": [
+      "C:\\Users\\assas\\.env",
+      "C:\\Users\\assas\\.omp\\.env"
     ],
     "default_profile_user_config": "C:\\Users\\assas\\.omp\\agent\\config.yml",
     "forbidden_env": [
@@ -66,7 +74,12 @@
       ".omp/config.yml",
       ".omp/settings.json",
       ".claude/settings.yml",
-      ".claude/settings.json"
+      ".claude/settings.json",
+      ".env",
+      ".env.local",
+      ".env.development",
+      ".env.production",
+      ".env.test"
     ]
   },
   "identities": [
@@ -178,7 +191,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "0d310a29101b6b3770b97f522a7cd2e38de4c48fb8392b2db21ed90a59e871b4"
+      "sha256": "8d6794cc0847a8b67790b793364e0caaa87882d7c16fa12492c70e8b86cf8701"
     },
     {
       "role": "watcher",

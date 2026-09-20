@@ -229,6 +229,11 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         {"name": "config.yml", "expects": "absent"},
                         {"name": "config.yaml", "expects": "absent"},
                         {"name": "settings.json", "expects": "absent"},
+                        {"name": ".env", "expects": "absent"},
+                    ],
+                    "env_files_must_be_absent": [
+                        str(home_root / ".env"),
+                        str(home_root / ".omp" / ".env"),
                     ],
                     "default_profile_user_config": str(user_config),
                     "forbidden_env": [
@@ -238,7 +243,12 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                         "PI_PROFILE",
                     ],
                     "forbidden_argv_flags": ["--config"],
-                    "forbidden_project_overlays": [".omp/config.yml", ".claude/settings.yml"],
+                    "forbidden_project_overlays": [
+                        ".omp/config.yml",
+                        ".claude/settings.yml",
+                        ".env",
+                        ".env.production",
+                    ],
                 },
                 "identities": [
                     {"role": role, "path": str(path), "sha256": _sha256(path)}
@@ -550,6 +560,47 @@ def test_windows_case_folding_and_relative_home_cannot_bypass_binding(tmp_path: 
     assert "configuration:home-dir" in result["mismatched"]
 
 
+def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
+    """OMP eagerly loads .env from the home, config root, profile agent dir and
+    project cwd even when bun autoload is disabled; each path must fail closed."""
+    mod = _load("launch_run")
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-dotenv"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+
+    project_env = Path(spec["fixture"]) / ".env"
+    project_env.write_text("PI_CONFIG_DIR=.redirect\n", encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:project-overlays" in result["mismatched"]
+    project_env.unlink()
+
+    agent_env = Path(spec["_profile_agent_dir"]) / ".env"
+    agent_env.write_text("PI_CONFIG_DIR=.redirect\n", encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:profile-config:.env" in result["mismatched"]
+    agent_env.unlink()
+
+    home_env = Path(spec["_home_root"]) / ".env"
+    home_env.write_text("PI_CONFIG_DIR=.redirect\n", encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:env-files-absent" in result["mismatched"]
+    home_env.unlink()
+
+    # bun autoload must also be disabled for the actual child.
+    mod_main = (TOOLS / "launch_run.py").read_text(encoding="utf-8")
+    assert '"--no-env-file"' in mod_main
+
+
 def test_tracked_identity_inventory_matches_live_files() -> None:
     """The committed RUN-IDENTITIES.json must match the live bound files on this
     machine; a stale inventory blocks the run by design (N1 class)."""
@@ -586,6 +637,8 @@ def test_tracked_identity_inventory_matches_live_files() -> None:
                     "unbound profile config present; refresh the contract deliberately: "
                     f"{item['name']}"
                 )
+    for path in contract.get("env_files_must_be_absent", []):
+        assert not Path(str(path)).exists(), f"unbound env file present: {path}"
 
 
 def test_binding_failure_reaps_watcher_and_records_launch(tmp_path: Path) -> None:

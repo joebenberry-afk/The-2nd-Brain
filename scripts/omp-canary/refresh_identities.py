@@ -150,6 +150,11 @@ def main() -> int:
                 {"name": "config.yml", "expects": "absent"},
                 {"name": "config.yaml", "expects": "absent"},
                 {"name": "settings.json", "expects": "absent"},
+                {"name": ".env", "expects": "absent"},
+            ],
+            "env_files_must_be_absent": [
+                str(Path.home() / ".env"),
+                str(Path.home() / ".omp" / ".env"),
             ],
             "default_profile_user_config": str(user_config) if user_config.exists() else None,
             "forbidden_env": [
@@ -166,6 +171,11 @@ def main() -> int:
                 ".omp/settings.json",
                 ".claude/settings.yml",
                 ".claude/settings.json",
+                ".env",
+                ".env.local",
+                ".env.development",
+                ".env.production",
+                ".env.test",
             ],
         },
         "identities": [
