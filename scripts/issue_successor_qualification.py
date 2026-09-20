@@ -540,7 +540,16 @@ REMARKS = {
 }
 
 
-def collect_remeasured(root: Path) -> dict[tuple, dict]:
+def _prefer_remeasured(candidate: dict, current: dict, subject_commit: str | None) -> bool:
+    """Prefer an artifact measured at the ledger subject, then the newest one."""
+    candidate_at = candidate.get("source_commit") == subject_commit
+    current_at = current.get("source_commit") == subject_commit
+    if candidate_at != current_at:
+        return candidate_at
+    return str(candidate.get("observed_at") or "") > str(current.get("observed_at") or "")
+
+
+def collect_remeasured(root: Path, subject_commit: str | None = None) -> dict[tuple, dict]:
     """Index freshly produced artifacts by the identity the ledger keys on.
 
     Re-measurement replaces an artifact whose (phase, requirement, feature,
@@ -568,12 +577,17 @@ def collect_remeasured(root: Path) -> dict[tuple, dict]:
         )
         if not all(isinstance(part, str) and part for part in key):
             continue
-        index[key] = {
+        entry = {
             "path": path,
             "relative": path.relative_to(REPO_ROOT.parent.parent).as_posix(),
             "sha256": sha256_file(path),
             "coverage": document.get("coverage"),
+            "source_commit": document.get("source_commit"),
+            "observed_at": document.get("observed_at"),
         }
+        existing = index.get(key)
+        if existing is None or _prefer_remeasured(entry, existing, subject_commit):
+            index[key] = entry
     return index
 
 
@@ -629,7 +643,16 @@ def subject_delta(measured_commits: set[str], subject_commit: str) -> dict:
             "touches_measured_surface": sorted(
                 path
                 for path in changed
-                if path.startswith(("src/", "tests/", "brainstem/", "constitution/"))
+                if path.startswith(
+                    (
+                        "src/",
+                        "tests/",
+                        "brainstem/",
+                        "constitution/",
+                        "scripts/verify_",
+                        "scripts/run_",
+                    )
+                )
             ),
         }
     return delta
@@ -656,7 +679,11 @@ def main() -> int:
     )
     rows_by_key = {(row["phase"], row["requirement"]): row for row in predecessor_rows}
     mirror_references(canonical, home, predecessor_rows)
-    remeasured = collect_remeasured(args.remeasure_root) if args.remeasure_root else {}
+    remeasured = (
+        collect_remeasured(args.remeasure_root, subject["source_commit"])
+        if args.remeasure_root
+        else {}
+    )
     measured_commits: set[str] = {
         str(json.loads(entry["path"].read_text(encoding="utf-8")).get("source_commit"))
         for entry in remeasured.values()
