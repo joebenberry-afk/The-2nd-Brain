@@ -181,7 +181,7 @@ def read_schema_version(db: Path) -> int | None:
         conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=10)
         try:
             row = conn.execute(
-                "SELECT value FROM schema_version ORDER BY rowid DESC LIMIT 1"
+                "SELECT version FROM schema_version ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
             return int(row[0]) if row else None
         finally:
