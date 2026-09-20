@@ -143,6 +143,7 @@ def main() -> int:
         "configuration_contract": {
             "profile": "canary-settlement",
             "home_dir": str(Path.home()),
+            "config_dir_name": ".omp",
             "profile_dir": str(profile_dir),
             "profile_agent_dir": str(profile_agent_dir),
             "profile_config_files": [

@@ -251,21 +251,47 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         bool(expected_profile) and profile == expected_profile,
         {"expected": expected_profile, "actual": profile},
     )
-    # The config root is derived from the user home; a changed HOME/USERPROFILE
-    # moves every effective settings path even though absolute contract paths
-    # still exist.
+    # The config root is derived from the EFFECTIVE CHILD's user home (bun's
+    # os.homedir() uses USERPROFILE on Windows); a child-only override moves
+    # every effective settings path even though absolute contract paths still
+    # exist. Validate the child environment, then verify the resolved paths it
+    # implies.
     expected_home = contract.get("home_dir")
+    config_dir_name = contract.get("config_dir_name", ".omp")
+    child_userprofile = env.get("USERPROFILE")
+    child_home = env.get("HOME")
     home_dir_ok = (
-        bool(expected_home) and Path(str(expected_home)).resolve() == Path.home().resolve()
+        bool(expected_home)
+        and child_userprofile is not None
+        and Path(str(child_userprofile)).resolve() == Path(str(expected_home)).resolve()
+        and (
+            child_home is None
+            or Path(str(child_home)).resolve() == Path(str(expected_home)).resolve()
+        )
     )
     contract_check(
         "home-dir",
         home_dir_ok,
         {
             "expected": expected_home,
-            "python_home": str(Path.home()),
-            "USERPROFILE": env.get("USERPROFILE"),
+            "child_USERPROFILE": child_userprofile,
+            "child_HOME": child_home,
         },
+    )
+    resolved_profile_dir = (
+        Path(str(child_userprofile)) / str(config_dir_name) / "profiles" / str(profile)
+        if child_userprofile
+        else None
+    )
+    resolved_profile_ok = (
+        resolved_profile_dir is not None
+        and bool(contract.get("profile_dir"))
+        and resolved_profile_dir.resolve() == Path(str(contract.get("profile_dir"))).resolve()
+    )
+    contract_check(
+        "resolved-profile-dir",
+        resolved_profile_ok,
+        str(resolved_profile_dir) if resolved_profile_dir else None,
     )
     profile_dir = contract.get("profile_dir")
     contract_check("profile-dir", bool(profile_dir) and Path(profile_dir).is_dir(), profile_dir)

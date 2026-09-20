@@ -199,10 +199,10 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
     python.write_bytes(b"python")
     user_config = tmp_path / "user-config.yml"
     user_config.write_text("# user settings\n", encoding="utf-8")
-    profile_dir = tmp_path / "profile"
-    profile_dir.mkdir(exist_ok=True)
+    home_root = tmp_path / "home-root"
+    profile_dir = home_root / ".omp" / "profiles" / "canary-settlement"
     profile_agent_dir = profile_dir / "agent"
-    profile_agent_dir.mkdir(exist_ok=True)
+    profile_agent_dir.mkdir(parents=True, exist_ok=True)
 
     roles = {
         "executable-bun": bun,
@@ -221,7 +221,8 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                 "required_roles": list(roles),
                 "configuration_contract": {
                     "profile": "canary-settlement",
-                    "home_dir": str(Path.home()),
+                    "home_dir": str(home_root),
+                    "config_dir_name": ".omp",
                     "profile_dir": str(profile_dir),
                     "profile_agent_dir": str(profile_agent_dir),
                     "profile_config_files": [
@@ -292,6 +293,7 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
         "fixture_identity": {str(calc): _sha256(calc)},
         "argv": ["bun", "cli", "--profile", "canary-settlement", "-e", str(extension)],
         "_profile_agent_dir": str(profile_agent_dir),
+        "_home_root": str(home_root),
     }
 
 
@@ -300,6 +302,8 @@ def _bind(tmp_path: Path, spec: dict) -> dict:
     run_dir = tmp_path / "run"
     run_dir.mkdir(exist_ok=True)
     env = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
         "SECOND_BRAIN_HOME": spec["home"],
         "SECOND_BRAIN_PYTHON": spec["python"],
         "OM_CANARY_BOOT": spec["trace_file"],
@@ -407,6 +411,26 @@ def test_required_identity_binding_rejects_each_gap(tmp_path: Path) -> None:
     result = _bind(tmp_path, spec)
     assert result["all_bound"] is False
     assert "configuration:profile-config:config.yml" in result["mismatched"]
+
+    # A child-only USERPROFILE override moves the effective home and the
+    # named-profile configuration root; the parent environment stays valid.
+    spec = _complete_binding_spec(tmp_path)
+    redirect = tmp_path / "redirect-home"
+    (redirect / ".omp" / "profiles" / "canary-settlement" / "agent").mkdir(
+        parents=True, exist_ok=True
+    )
+    run_dir = tmp_path / "run-redirect-home"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "USERPROFILE": str(redirect),
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+    }
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-dir" in result["mismatched"]
+    assert "configuration:resolved-profile-dir" in result["mismatched"]
 
     spec = _complete_binding_spec(tmp_path)
     spec["argv"] = spec["argv"] + ["--config", str(tmp_path / "overlay.yml")]
