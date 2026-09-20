@@ -786,3 +786,39 @@ catalog, in an isolated checkout of `github.com/can1357/oh-my-pi` at tag
 `v18.2.6` with the candidate `src`/`tests` spliced in; the published package
 omits `tsconfig.json`, so the live install cannot run the check by itself.
 
+### check:types resolved (2026-09-20)
+
+Ran `tsgo -p tsconfig.json --noEmit` with the pinned dev build in an isolated
+environment built from the v18.2.6 config chain and the pinned global install.
+Differential against the unpatched published source: the candidate originally
+added one real error (`isolation-runner.ts:427` lost `handle` narrowing inside
+a trace thunk, fixed by capturing the narrowed backend outside the thunk); the
+remaining seven errors are dependency-resolution artifacts identical in the
+unpatched source. After the fix and after instrumentation removal the candidate
+has zero specific errors. Evidence:
+`outputs/reports/omp-canary29-evidence-20260919/check-types/`.
+
+### Instrumentation and hold removal + clean-candidate decisive subset (2026-09-20)
+
+Commits `eb65308` (campaign traces removed from isolation-runner 17 statements,
+worktree 9 calls plus helper and traceContext parameter, agent-session
+traceDrain/counters/describeCanaryFailure, main pre-quit block) and `40d2218`
+(hold fixture removed: the clean run proved the external coordinator depended
+on the removed hold-begin trace to learn the nonce-bound signal path, so the
+hold is instrumentation-bound fixture forcing, not shipping behaviour). The
+stripped worktree.ts reproduces the independently derived pre-instrumentation
+bytes exactly. Edited files were deliberately normalised back to CRLF. The
+frozen candidate's pre-existing module/route markers are retained; the launcher
+and watcher tools remain campaign tooling outside the installed package.
+
+Decisive subset on the clean candidate (`omp-canary29g-shipping-20260920`,
+fresh home/fixture, no hold, no coordinator): session-1 isolated A
+(`41876:1:SecondBrainCanaryA`) COMPLETED/released/settled/cleanup with receipts
+1-4 terminal true/true, B refused `WORKTREE_WRITER_BUSY`, patch applied and
+fixture green, exit 0; session-2 isolated successor
+(`17044:1:VerifyCalc`) COMPLETED/released/settled with terminal receipt, its
+run reported `1 passed`, exit 0; watcher captured state-1 and state-2 in both;
+production checksums unchanged. Host tests 36/36, lint 0 errors, check:types
+parity. Independent review of this delta is requested before any activation.
+
+
