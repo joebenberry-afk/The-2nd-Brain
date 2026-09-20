@@ -632,6 +632,27 @@ def test_unbound_omp_environment_overrides_rejected(tmp_path: Path) -> None:
     assert result["all_bound"] is False
     assert "configuration:required-env-values" in result["mismatched"]
 
+    # The hold prefix must match the spec: absent when no hold is requested,
+    # exactly the requested value otherwise.
+    env_hold = dict(base)
+    env_hold["OM_CANARY_HOLD_RELEASE_UNTIL"] = "C:/tmp/hold."
+    result = mod.bind_required_identities(spec, run_dir, env_hold, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:hold-prefix" in result["mismatched"]
+
+    spec_hold = _complete_binding_spec(tmp_path)
+    spec_hold["hold_prefix"] = "C:/tmp/hold."
+    env_ok = dict(base)
+    env_ok["OM_CANARY_HOLD_RELEASE_UNTIL"] = "C:/tmp/hold."
+    result = mod.bind_required_identities(spec_hold, run_dir, env_ok, spec_hold["argv"])
+    assert result["all_bound"] is True
+
+    env_bad = dict(base)
+    env_bad["OM_CANARY_HOLD_RELEASE_UNTIL"] = "C:/tmp/other."
+    result = mod.bind_required_identities(spec_hold, run_dir, env_bad, spec_hold["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:hold-prefix" in result["mismatched"]
+
 
 def test_dotenv_injection_paths_cannot_bypass_binding(tmp_path: Path) -> None:
     """OMP eagerly loads .env from the home, config root, profile agent dir and

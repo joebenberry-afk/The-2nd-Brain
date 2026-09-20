@@ -114,6 +114,11 @@ def env_set_ci(env: dict, name: str, value: str) -> None:
     env[name] = value
 
 
+def env_del_ci(env: dict, name: str) -> None:
+    for key in [key for key in env if key.upper() == name.upper()]:
+        env.pop(key, None)
+
+
 def validate_fresh_inputs(spec: dict) -> list[str]:
     """Refuse to reuse a previous run's artifacts by accident."""
     errors: list[str] = []
@@ -253,6 +258,15 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
         env_checks.append({"name": name, "expected": expected, "actual": actual, "ok": ok})
         if not ok:
             mismatched.append(f"env:{name}")
+
+    expected_hold = spec.get("hold_prefix")
+    actual_hold = env_get_ci(env, "OM_CANARY_HOLD_RELEASE_UNTIL")
+    hold_ok = actual_hold == expected_hold if expected_hold else actual_hold is None
+    env_checks.append(
+        {"name": "hold-prefix", "expected": expected_hold, "actual": actual_hold, "ok": hold_ok}
+    )
+    if not hold_ok:
+        mismatched.append("configuration:hold-prefix")
 
     profile = spec.get("profile")
     profile_flag_ok = "--profile" in argv and argv[argv.index("--profile") + 1] == profile
@@ -771,6 +785,9 @@ def main() -> int:
     env = merge_env(dict(os.environ), spec.get("extra_env", {}))
     if spec.get("hold_prefix"):
         env_set_ci(env, "OM_CANARY_HOLD_RELEASE_UNTIL", spec["hold_prefix"])
+    else:
+        # No hold requested: an inherited or extra_env value must not enable one.
+        env_del_ci(env, "OM_CANARY_HOLD_RELEASE_UNTIL")
     env_set_ci(env, "OM_CANARY_BOOT", spec["trace_file"])
 
     state: dict = {

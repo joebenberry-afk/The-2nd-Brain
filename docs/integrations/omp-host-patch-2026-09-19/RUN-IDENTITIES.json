@@ -275,7 +275,7 @@
     {
       "role": "launcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\launch_run.py",
-      "sha256": "618762f01d4c38e42ab4386cda76530eaf275680982f6595e0928e0dc2b5dfd2"
+      "sha256": "631c9af04d315089ddd159a1b341199f480e9218d9783fbdda15e817d6aeb634"
     },
     {
       "role": "watcher",
