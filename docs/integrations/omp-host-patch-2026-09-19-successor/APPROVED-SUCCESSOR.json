@@ -1,0 +1,12 @@
+{
+  "schema": "second-brain.omp-approved-successor.v1",
+  "approved_at": "2026-09-20T16:21:57.379231+00:00",
+  "successor_dir": "docs/integrations/omp-host-patch-2026-09-19-successor",
+  "record": "SUCCESSOR-RECORD.json",
+  "record_sha256": "6e418f262bd8aa2e9fa4497c2dfd8e9294dc544cd9873df450ab43637a52fec4",
+  "shipping_candidate_manifest_sha256": "443262f02971a0a75370ab26ebcc36ef2d21e709dbb4ce4001a82beefe0b89bb",
+  "identities_file_sha256": "362fdf5520e4b80b651d9de79a32ef5525295e2965fb246e96dbcd5f6f21f20d",
+  "hashes_file_sha256": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
+  "predecessor_dir": "docs/integrations/omp-host-patch-2026-09-19",
+  "rule": "Identity checks validate this successor. The predecessor remains sealed history and is never re-validated against live bytes."
+}

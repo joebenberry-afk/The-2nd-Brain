@@ -1,0 +1,119 @@
+{
+  "schema": "second-brain.omp-successor-shipping-candidate.v1",
+  "generated_at": "2026-09-20T16:21:57.378552+00:00",
+  "purpose": "Seal for the repaired successor candidate: the record files that describe it, the staged layout it was qualified in, and the campaign evidence it produced.",
+  "subject": {
+    "worktree": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2",
+    "branch": "brain/omp-native-6172a18-20260911",
+    "commit": "3aea51511727d9fbe493268d46103e8d76d6a418",
+    "source_tree_sha256": "ac92ebed844777835c128eaaaecfc55cb168f08f71de551250fae66ae8a3d33e",
+    "extension_fingerprint": "98eac447da17af54810b0c627eb3995a65464378d8e83b2fe8a2da33f60e267e"
+  },
+  "predecessor": {
+    "dir": "docs/integrations/omp-host-patch-2026-09-19",
+    "shipping_candidate_manifest_sha256": "10956335bd5db5fdc1405111a1b8a34ae81cc642db6664cac939485884b4c069",
+    "run_identities_sha256": "cd60bab4c58239128ac09bf0094100ec9a67db309904fd718cd96ae12217089d",
+    "hashes_file_sha256": "981a83e1ff7d7cc3da23ac026fba60d66038a99fc21389043df78b5f6524fd77",
+    "sealed_commit": "a2e49e4",
+    "functional_commit": "40d2218",
+    "candidate_head": "abf2ab9",
+    "status": "preserved byte-identical; its runs remain what executed"
+  },
+  "record_files": {
+    "SUCCESSOR-RECORD.json": "6e418f262bd8aa2e9fa4497c2dfd8e9294dc544cd9873df450ab43637a52fec4",
+    "HASHES.txt": "9890f3000cafd10e8387588e422c16b5c7eda12bc0d06a09badb35286e408d62",
+    "RUN-IDENTITIES.json": "362fdf5520e4b80b651d9de79a32ef5525295e2965fb246e96dbcd5f6f21f20d",
+    "REASONS.json": "daf661d7e85cfb38d0507b4daf3668b83236074915b024cb75bf462b321a00fb",
+    "CANDIDATE-IDENTITY.json": "42ceae4881378d098e3d7eb761d89bc3f46040660ecef39490f2b423ac89da24"
+  },
+  "evidence": {
+    "campaign_index": {
+      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
+      "sha256": "6b4a81c1a4604f63ecffa43d1cb21e31bab150e5a68b7befa3daa72a3595ebd0"
+    }
+  },
+  "checks": {
+    "campaign_index": {
+      "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\outputs\\reports\\omp-successor-qualification-20260920\\campaign-index.json",
+      "sha256": "6b4a81c1a4604f63ecffa43d1cb21e31bab150e5a68b7befa3daa72a3595ebd0"
+    },
+    "steps": {
+      "preflight": {
+        "exit": 0,
+        "schema_version": 24,
+        "home_counts": {
+          "worker_tasks": 0,
+          "worker_lifecycle_receipts": 0
+        },
+        "fixture_starts_red": true,
+        "fixture_sha256": {
+          "calc.py": "71bdccb8f575f1049fa00f1fc2ab6ba89d655be178c869ac7c190839e4fe2330",
+          "test_calc.py": "50bc95b769d0c31bed5aba18ec046c0788a52b19d3bd581733b340e00b6bc931"
+        }
+      },
+      "session-1": {
+        "child_exit": 0,
+        "qualification_complete": true,
+        "expectations_met": true,
+        "terminal_sequence": 4,
+        "state_1": {
+          "attempt": "attempt-d0e34f61c3bc5ca95e09566a2a74b80e",
+          "task_state": "WORKING",
+          "writer_ownership": "held",
+          "executor_settled": 0,
+          "cleanup_complete": 0
+        },
+        "state_2": {
+          "task_state": "COMPLETED",
+          "writer_ownership": "released",
+          "executor_settled": 1,
+          "cleanup_complete": 1,
+          "receipts": 4
+        }
+      },
+      "post-exit-1": {
+        "receipt_sequences_contiguous": {
+          "attempt-d0e34f61c3bc5ca95e09566a2a74b80e": true
+        },
+        "fixture_green": true,
+        "post_patch_calc_sha256": "63098273a7aaa630762d6f145dfcf9c61c8c9b290c6ebeb2a05fea5854ccb476"
+      },
+      "session-2": {
+        "child_exit": 0,
+        "qualification_complete": true,
+        "expectations_met": true
+      },
+      "post-exit-2": {
+        "receipt_sequences_contiguous": {
+          "attempt-4ce35472f3b2ecb11c91ef53f199e296": true,
+          "attempt-d0e34f61c3bc5ca95e09566a2a74b80e": true
+        },
+        "fixture_green": true,
+        "production_unchanged": true
+      },
+      "negative-control": {
+        "exit": 0,
+        "expected": "candidate passes (0), sealed demonstrates the defect (1)"
+      },
+      "rollback-rehearsal": {
+        "restored_files": 6,
+        "all_restored_exactly": true,
+        "manifest_check_exit": 1,
+        "launcher_exit": 2
+      }
+    },
+    "staged_layout": {
+      "root": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged",
+      "host_package": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+      "stage_manifest_sha256": "82846ee82074d55a382dd2146ec799a57fd715a349bc7cb26cc3a003ca987552",
+      "settlement_repaired_in_stage": true,
+      "runtime_packages": 14,
+      "vendor_junctions": 0
+    }
+  },
+  "explicit_non_claims": [
+    "The predecessor pack, its seals and its runs are unchanged.",
+    "No production installation, configuration, database, lease or host replacement.",
+    "Universal qualification stays HOLD; economics stays INSUFFICIENT."
+  ]
+}
