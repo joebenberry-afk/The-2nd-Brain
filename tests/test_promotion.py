@@ -1,5 +1,6 @@
 """Tests for policy promotion with guards (Phase 23)."""
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -985,6 +986,71 @@ def test_recovery_quarantines_undecodable_bytes(brain_home):
     assert actions[0]["records_quarantined"] == ["other-1.json"]
     archived = {p.read_bytes() for p in (promotions / "corrupt").glob("other-1.*.json")}
     assert archived == {b"\xff"}
+
+
+def test_superseded_publication_leaves_no_stale_marker(brain_home, monkeypatch):
+    """A later move of the artifact must not leave a marker claiming the old level."""
+    _green_candidate(brain_home)
+    original_write_record = promotion._write_record
+
+    def commit_then_supersede(home, record):
+        path = original_write_record(home, record)
+        # Model a concurrent publication for the same skill finishing after
+        # this one committed: the artifact ends up back at shadow.
+        source = home / "skills" / "candidates" / "scout"
+        target = home / "skills" / "shadow" / "scout"
+        source.rename(target)
+        return path
+
+    with monkeypatch.context() as patch:
+        patch.setattr(promotion, "_write_record", commit_then_supersede)
+        result = promotion.promote(brain_home, "scout", "shadow", "candidate")
+
+    assert result["promoted"] is True
+    assert result["authority_marker"] == "unavailable"
+    assert promotion._read_authority_marker(brain_home, "scout").get("last_level") != "candidate"
+    # The intent is not silently dropped: the next pass sees the artifact
+    # elsewhere and discards it.
+    actions = promotion.reconcile_publications(brain_home)
+    assert [a["action"] for a in actions] == ["discarded"]
+
+
+def test_quarantine_ignores_a_record_that_replaced_the_damage(brain_home):
+    """Bytes that are a valid record are never archived as damage."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    healthy = json.dumps(
+        {
+            "promotion_id": "promotion-1",
+            "skill_name": "scout",
+            "from_level": "shadow",
+            "to_level": "shadow",
+            "ts": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    (promotions / "scout-1.json").write_text(healthy, encoding="utf-8")
+
+    assert promotion._quarantine_corrupt_records(brain_home) == []
+    assert (promotions / "scout-1.json").read_text(encoding="utf-8") == healthy
+    assert not (promotions / "corrupt").exists()
+
+
+def test_quarantine_republishes_an_incomplete_archive(brain_home):
+    """A partial archive from an interrupted pass is not trusted as evidence."""
+    _skill(brain_home, name="scout")
+    promotions = brain_home / "state" / "promotions"
+    (promotions / "corrupt").mkdir(parents=True, exist_ok=True)
+    damaged = "{truncated"
+    digest = hashlib.sha256(damaged.encode()).hexdigest()[:12]
+    # A leftover partial archive naming this content, holding different bytes.
+    (promotions / "corrupt" / f"scout-1.{digest}.json").write_text("{partial", encoding="utf-8")
+    (promotions / "scout-1.json").write_text(damaged, encoding="utf-8")
+
+    assert promotion._quarantine_corrupt_records(brain_home) == ["scout-1.json"]
+    archived = (promotions / "corrupt" / f"scout-1.{digest}.json").read_text(encoding="utf-8")
+    assert archived == damaged
+    assert not (promotions / "scout-1.json").exists()
 
 
 def test_recovery_quarantines_a_corrupt_record(brain_home):
