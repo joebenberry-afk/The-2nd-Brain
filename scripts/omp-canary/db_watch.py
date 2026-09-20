@@ -237,6 +237,7 @@ class WatchState:
                 terminal_snapshot = backup_and_read(self.db, self.outdir / "state-2.sqlite")
                 terminal_row = find_terminal(terminal_snapshot["receipts"], self.attempt_id)
                 if terminal_row is None:
+                    (self.outdir / "state-2.sqlite").unlink(missing_ok=True)
                     return
                 self.state2 = self._record_snapshot(
                     terminal_snapshot, self.outdir / "state-2.sqlite"
@@ -249,9 +250,15 @@ class WatchState:
             return
 
         if self.state2 is None:
+            # Only take a terminal snapshot once the live read shows a terminal
+            # receipt; verify it in the retained copy, and remove a rejected
+            # candidate so its filename cannot be mistaken for evidence.
+            if find_terminal(read_rows(self.db), self.attempt_id) is None:
+                return
             snapshot = backup_and_read(self.db, self.outdir / "state-2.sqlite")
             terminal = find_terminal(snapshot["receipts"], self.attempt_id)
             if terminal is None:
+                (self.outdir / "state-2.sqlite").unlink(missing_ok=True)
                 return
             self.state2 = self._record_snapshot(snapshot, self.outdir / "state-2.sqlite")
             self.state2["phase"] = "terminal-cleanup-complete"

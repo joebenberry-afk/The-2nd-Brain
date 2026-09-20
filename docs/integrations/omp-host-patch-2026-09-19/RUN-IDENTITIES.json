@@ -284,12 +284,12 @@
     {
       "role": "watcher",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\db_watch.py",
-      "sha256": "13b37d4ae36bd578f81132a55415237f09cdfd1c8b2a2cdf26d32abfbe0632a0"
+      "sha256": "5d74e2937d69c0fde1dc9e22bcb0b20c9562fb32134134ca4328be489e51bfe1"
     },
     {
       "role": "preflight",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\preflight_run.py",
-      "sha256": "e72389f50934e5c8a8ff81c3809b158f049050144a22339adad66a5e6d170a3f"
+      "sha256": "db2a5db1d73f1270c56a19b3b2ea7870dca7f828875a109e5fa06c903c69031b"
     },
     {
       "role": "post-exit-check",
