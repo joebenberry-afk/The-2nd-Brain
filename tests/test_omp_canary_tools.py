@@ -293,6 +293,8 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
 
     home = tmp_path / "home"
     (home / "db").mkdir(parents=True, exist_ok=True)
+    (home / "config").mkdir(parents=True, exist_ok=True)
+    (home / "config" / "context.toml").write_text("[rtd]\nenabled = true\n", encoding="utf-8")
     conn = sqlite3.connect(home / "db" / "brain.sqlite")
     conn.execute("CREATE TABLE IF NOT EXISTS schema_version (value INTEGER)")
     conn.execute("DELETE FROM schema_version")
@@ -313,6 +315,8 @@ def _complete_binding_spec(tmp_path: Path) -> dict:
                 "project_id": "test-project",
                 "schema_version": 24,
                 "home_counts": {"worker_tasks": 0, "worker_lifecycle_receipts": 0},
+                "home_config_manifest": {"context.toml": _sha256(home / "config" / "context.toml")},
+                "home_config_exists": True,
                 "fixture_starts_red": {"red": True, "red_reason": "assertion-failure"},
             }
         ),
@@ -805,6 +809,45 @@ def test_project_and_user_discovery_inputs_cannot_bypass_binding(tmp_path: Path)
     result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
     assert result["all_bound"] is False
     assert any(item.startswith("configuration:user-provider") for item in result["mismatched"])
+
+
+def test_home_config_manifest_binds_run_home_configuration(tmp_path: Path) -> None:
+    """The run home's canonical config directory is a snapshot manifest; any
+    added, removed or changed file fails the last-boundary gate."""
+    mod = _load("launch_run")
+    spec = _complete_binding_spec(tmp_path)
+    run_dir = tmp_path / "run-home-config"
+    run_dir.mkdir(exist_ok=True)
+    env = {
+        "USERPROFILE": spec["_home_root"],
+        "HOME": spec["_home_root"],
+        "SECOND_BRAIN_HOME": spec["home"],
+        "SECOND_BRAIN_PYTHON": spec["python"],
+        "OM_CANARY_BOOT": spec["trace_file"],
+        "OM_CANARY_FORCE_ISOLATED": "1",
+        "OM_CANARY_ISOLATION": "1",
+    }
+    assert mod.bind_required_identities(spec, run_dir, env, spec["argv"])["all_bound"] is True
+
+    added = Path(spec["home"]) / "config" / "autoinject.toml"
+    added.write_text('[autoinject]\nmode = "off"\n', encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-config-manifest" in result["mismatched"]
+    added.unlink()
+
+    changed = Path(spec["home"]) / "config" / "context.toml"
+    changed.write_text("[rtd]\nenabled = false\n", encoding="utf-8")
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-config-manifest" in result["mismatched"]
+    changed.write_text("[rtd]\nenabled = true\n", encoding="utf-8")
+
+    changed.unlink()
+    result = mod.bind_required_identities(spec, run_dir, env, spec["argv"])
+    assert result["all_bound"] is False
+    assert "configuration:home-config-manifest" in result["mismatched"]
+    changed.write_text("[rtd]\nenabled = true\n", encoding="utf-8")
 
 
 def test_tracked_identity_inventory_matches_live_files() -> None:
