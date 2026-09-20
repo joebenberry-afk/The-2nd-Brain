@@ -1,28 +1,4 @@
 import { type NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
-import { appendFileSync } from "node:fs";
-
-const __traceRoute = (step: string | (() => string)): void => {
-	const target = process.env.OM_CANARY_BOOT;
-	if (!target) return;
-	try {
-		const text = typeof step === "function" ? step() : step;
-		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
-	} catch {
-		/* tracing must never affect execution */
-	}
-};
-
-const __identityRoute = (label: string): void => {
-	const target = process.env.OM_CANARY_BOOT;
-	if (!target) return;
-	try {
-		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} module:${label}:${import.meta.path}\n`);
-	} catch {
-		/* tracing must never affect execution */
-	}
-};
-__identityRoute("worktree");
-export { __traceRoute as __testTraceRoute };
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -568,11 +544,6 @@ export async function ensureIsolation(
 	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
-	__traceRoute(
-		`backend:resolve:preferred=${JSON.stringify(preferred ?? null)}:kind=${resolution.kind}:candidates=${JSON.stringify(
-			candidates,
-		)}:reason=${JSON.stringify(resolution.reason ?? null)}:mergedDir=${mergedDir}`,
-	);
 	let fallbackReason = resolution.reason ?? null;
 
 	for (const candidate of candidates) {
@@ -585,9 +556,7 @@ export async function ensureIsolation(
 		await fs.mkdir(baseDir, { recursive: true });
 		await writeIsolationOwner(baseDir, id);
 		try {
-			__traceRoute(`backend:start:candidate=${candidate}:mergedDir=${mergedDir}:repoRoot=${repoRoot}`);
 			await natives.isoStart(candidate, repoRoot, mergedDir);
-			__traceRoute(`backend:started:candidate=${candidate}`);
 			// Sever the isolation's git metadata from the source checkout. Copy
 			// backends duplicate `repoRoot`'s `.git` verbatim — a linked-worktree
 			// pointer file (or the rcopy `git worktree add` registration) leaves
@@ -616,24 +585,12 @@ export async function ensureIsolation(
 }
 
 /** Tear down a handle returned by {@link ensureIsolation}. */
-export async function cleanupIsolation(handle: IsolationHandle, traceContext?: string): Promise<void> {
-	const ctx = traceContext ?? "unbound";
+export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 	let failure: unknown;
-	__traceRoute(`cleanup:stop:invoke:backend=${handle.backend}:mergedDir=${handle.mergedDir}:ctx=${ctx}`);
 	try {
 		await natives.isoStop(handle.backend, handle.mergedDir);
-		__traceRoute(`cleanup:stop:ok:backend=${handle.backend}:ctx=${ctx}`);
 	} catch (err) {
 		failure = err;
-		__traceRoute(() => {
-			let errorText = "unprintable";
-			try {
-				errorText = err instanceof Error ? String(err.message) : String(err);
-			} catch {
-				/* trace formatting must never affect cleanup */
-			}
-			return `cleanup:stop:error:backend=${handle.backend}:ctx=${ctx}:error=${errorText}`;
-		});
 		logger.warn("isolation backend stop failed during cleanup", {
 			backend: handle.backend,
 			mergedDir: handle.mergedDir,
@@ -646,21 +603,10 @@ export async function cleanupIsolation(handle: IsolationHandle, traceContext?: s
 		// down, and a resolved cleanup would let settlement publish `settled` over
 		// resources that are still live.
 		const baseDir = path.dirname(handle.mergedDir);
-		__traceRoute(`cleanup:remove:invoke:baseDir=${baseDir}:ctx=${ctx}`);
 		try {
 			await fs.rm(baseDir, { recursive: true, force: true });
-			__traceRoute(`cleanup:remove:ok:baseDir=${baseDir}:ctx=${ctx}`);
 		} catch (rmError) {
 			failure ??= rmError;
-			__traceRoute(() => {
-				let errorText = "unprintable";
-				try {
-					errorText = rmError instanceof Error ? String(rmError.message) : String(rmError);
-				} catch {
-					/* trace formatting must never affect cleanup */
-				}
-				return `cleanup:remove:error:baseDir=${baseDir}:ctx=${ctx}:error=${errorText}`;
-			});
 			logger.warn("isolation directory removal failed during cleanup", {
 				backend: handle.backend,
 				baseDir,

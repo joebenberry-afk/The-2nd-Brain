@@ -2357,19 +2357,6 @@ export async function runRootCommand(
 				await disposeSessionQuietly(session);
 				stopThemeWatcher();
 				logger.debug("Attempt settlement pre-quit", { exitCode, at: Date.now() });
-				{
-					const traceTarget = process.env.OM_CANARY_BOOT;
-					if (traceTarget) {
-						try {
-							fsSync.appendFileSync(
-								traceTarget,
-								`${new Date().toISOString()} pid=${process.pid} pre-quit:exitCode=${exitCode}\n`,
-							);
-						} catch {
-							/* tracing must never affect execution */
-						}
-					}
-				}
 				await postmortem.quit(exitCode);
 			}
 		}

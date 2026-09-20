@@ -22,18 +22,6 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { classifyCleanupRequirement, cleanupOperationId, settleBarrier, type CleanupRoute } from "./cleanup-barrier";
 import { AttemptSettlementRegistry } from "./attempt-settlement";
-import { appendFileSync } from "node:fs";
-const __traceIsolation = (step: string | (() => string)): void => {
-	const target = process.env.OM_CANARY_BOOT;
-	if (!target) return;
-	try {
-		const text = typeof step === "function" ? step() : step;
-		appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
-	} catch {
-		/* tracing must never affect execution */
-	}
-};
-
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -392,43 +380,20 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		baseReleasePromise ??= opts.baseOptions.onRelease?.() ?? Promise.resolve();
 		return baseReleasePromise;
 	};
-	let barrierTraceContext: string | undefined;
 	const cleanupHandle = (): Promise<void> => {
 		cleanupPromise ??= (async () => {
-			const ctx = barrierTraceContext ?? "unbound";
-			__traceIsolation(`cleanup:start:agent=${opts.agentId}:backend=${handle?.backend ?? "none"}:ctx=${ctx}`);
 			try {
 				await releaseBase();
-				__traceIsolation(`cleanup:base-release:ok:agent=${opts.agentId}:ctx=${ctx}`);
 			} catch (baseError) {
-				__traceIsolation(() => {
-					let errorText = "unprintable";
-					try {
-						errorText = baseError instanceof Error ? String(baseError.message) : String(baseError);
-					} catch {
-						/* trace formatting must never affect cleanup */
-					}
-					return `cleanup:base-release:error:agent=${opts.agentId}:ctx=${ctx}:error=${errorText}`;
-				});
 				throw baseError;
 			}
 			if (handle && !retainWorkspace) {
 				try {
-					await cleanupIsolation(handle, barrierTraceContext);
-					__traceIsolation(`cleanup:stop:ok:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`);
+					await cleanupIsolation(handle);
 				} catch (error) {
 					// Narrowing is not preserved inside the thunk; capture the backend
 					// here (type-only: the traced text is identical).
 					const backend = handle.backend;
-					__traceIsolation(() => {
-						let errorText = "unprintable";
-						try {
-							errorText = error instanceof Error ? String(error.message) : String(error);
-						} catch {
-							/* trace formatting must never affect cleanup */
-						}
-						return `cleanup:stop:error:agent=${opts.agentId}:backend=${backend}:ctx=${ctx}:error=${errorText}`;
-					});
 					throw error;
 				}
 			} else if (handle && retainWorkspace) {
@@ -437,9 +402,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				// the barrier must reject rather than resolve on a skipped teardown. A
 				// retained run needs its own obligation classification (a distinct
 				// terminal state), not a silent success here.
-				__traceIsolation(
-					`cleanup:skipped:retainedWorkspace:agent=${opts.agentId}:backend=${handle.backend}:ctx=${ctx}`,
-				);
 				const retained = new Error("isolation cleanup not performed: workspace retained");
 				(retained as { retainedWorkspace?: boolean }).retainedWorkspace = true;
 				throw retained;
@@ -548,16 +510,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		isolationHandleAllocated: handle !== undefined,
 		registeredCleanupWork: 1,
 	});
-	__traceIsolation(
-		`obligation:route=${route}:kind=${requirement.kind}:attempt=${barrierIdentity.attemptId}:cleanup=${barrierIdentity.cleanupOperationId}`,
-	);
 	if (requirement.kind !== "required") {
 		throw new Error("isolation route must classify its cleanup obligation as required");
 	}
 	const cleanupBarrier = requirement.barrier;
-	const barrierIdentityText = `${barrierIdentity.attemptId}|${barrierIdentity.generation}|${barrierIdentity.cleanupOperationId}`;
-	barrierTraceContext = barrierIdentityText;
-	__traceIsolation(`barrier:armed:${barrierIdentityText}`);
 	void (async () => {
 		try {
 			// The inner isolationRelease deferred resolves in a finally even when the
@@ -565,35 +521,16 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			// resolve over a failed teardown. cleanupHandle() is memoised and rejects
 			// on failure, so awaiting it after the release is the authoritative
 			// cleanup outcome.
-			__traceIsolation(`barrier:awaited:${barrierIdentityText}`);
 			await isolationRelease.promise;
 			await cleanupHandle();
 			settleBarrier(cleanupBarrier, { ok: true });
-			__traceIsolation(
-				() =>
-					`barrier:settled:${barrierIdentityText}:state=${cleanupBarrier.state}:events=${cleanupBarrier.timeline.map(e => e.event).join(">")}`,
-			);
 		} catch (error) {
 			settleBarrier(cleanupBarrier, { ok: false, error });
-			__traceIsolation(() => {
-				let errorText = "unprintable";
-				try {
-					errorText = error instanceof Error ? String(error.message) : String(error);
-				} catch {
-					/* trace formatting must never affect settlement */
-				}
-				return `barrier:settled:${barrierIdentityText}:state=rejected:error=${errorText}`;
-			});
 		}
 	})();
 	opts.baseOptions.settlement?.trackCleanups([
 		{ resource: "isolation-handle", work: cleanupBarrier.promise },
 	]);
-	__traceIsolation(`isolation:owned:agent=${opts.agentId}:resource=isolation-handle:pending`);
-	void isolationRelease.promise.then(
-		() => __traceIsolation(`isolation:released:agent=${opts.agentId}`),
-		() => __traceIsolation(`isolation:failed:agent=${opts.agentId}`),
-	);
 	// Deterministic deferred-cleanup fixture (test-only). When a hold prefix is
 	// configured, the REAL post-run isolation release work (capture, commit,
 	// teardown) does not begin until the coordinator creates the exact
@@ -619,7 +556,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					cleanupOperationId: barrierIdentity.cleanupOperationId,
 					holdFile,
 				});
-				__traceIsolation(`isolation:hold-begin:${binding}`);
 				try {
 					await fs.lstat(holdPrefix);
 					throw new Error(`stale isolation hold prefix exists: ${holdPrefix}`);
@@ -637,7 +573,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						if (performance.now() - startedAt >= deadlineMs) {
 							throw new Error(`isolation hold signal arrived after the deadline: ${holdFile}`);
 						}
-						__traceIsolation(`isolation:hold-release:${binding}`);
 						return;
 					} catch (error) {
 						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -725,9 +660,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					});
 				} catch (patchErr) {
 					retainWorkspace = true;
-					__traceIsolation(
-						`cleanup:skipped:retainedWorkspace:route=merge-failed-patch-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
-					);
 					const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 					return rememberAgentArtifacts({
 						...result,
@@ -759,9 +691,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			} catch (persistErr) {
 				retainWorkspace = true;
-				__traceIsolation(
-					`cleanup:skipped:retainedWorkspace:route=nested-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
-				);
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
@@ -783,9 +712,6 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				return rememberAgentArtifacts({ ...result, ...patchResult });
 			} catch (patchErr) {
 				retainWorkspace = true;
-				__traceIsolation(
-					`cleanup:skipped:retainedWorkspace:route=patch-capture-failed:ctx=${barrierTraceContext ?? "unbound"}`,
-				);
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
 				return rememberAgentArtifacts({
 					...result,
