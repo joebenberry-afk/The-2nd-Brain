@@ -115,15 +115,33 @@ def prepare_home(canonical: Path, home: Path) -> None:
                 shutil.copyfile(path, target)
 
 
-def run_guard_refusal_trial(home: Path, out: Path) -> dict:
+def canonical_fingerprints(home: Path) -> dict:
+    """Fingerprints of the live Brain state the refusal trial must not change."""
+    skills = hashlib.sha256()
+    for path in sorted((home / "skills").rglob("*")):
+        if path.is_file():
+            skills.update(path.relative_to(home).as_posix().encode("utf-8"))
+            skills.update(path.read_bytes())
+    return {
+        "database_sha256": sha256_file(home / "db" / "brain.sqlite"),
+        "skills_tree_sha256": skills.hexdigest(),
+        "promotion_records": sorted(
+            path.name for path in (home / "state" / "promotions").glob("*.json")
+        ),
+    }
+
+
+def run_guard_refusal_trial(live_home: Path, out: Path) -> dict:
+    """Execute the real promotion refusal against the live Brain (read-only path)."""
     trial = (
         REPO_ROOT.parent.parent
         / "outputs/reports/omp-current-evidence-20260919/guard_refusal_trial.py"
     )
+    before = canonical_fingerprints(live_home)
     result = subprocess.run(
         [
             sys.executable, str(trial),
-            "--home", str(home),
+            "--home", str(live_home),
             "--out", str(out),
             "--session-id", "successor-qualification-guard-refusal",
         ],
@@ -131,13 +149,55 @@ def run_guard_refusal_trial(home: Path, out: Path) -> dict:
         text=True,
         env={k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")},
     )
+    after = canonical_fingerprints(live_home)
     return {
         "exit_code": result.returncode,
         "stdout": result.stdout[-600:],
         "stderr": result.stderr[-400:],
         "record_path": str(out),
         "record_sha256": sha256_file(out),
+        "live_home": str(live_home),
+        "live_state_before": before,
+        "live_state_after": after,
+        "live_state_unchanged": before == after,
+        "record": (
+            json.loads(out.read_text(encoding="utf-8")) if out.is_file() else None
+        ),
     }
+
+
+def causal_reproduction(carried: dict, trial: dict) -> dict:
+    """Compare the carried refusal observation with the live re-execution.
+
+    The carried observation is kept only if the live run reproduces it; a fresh
+    refusal for a different reason means the carried observation describes a
+    condition this subject no longer shows, and the requirement must hold instead
+    of being re-stamped.
+    """
+    record = trial.get("record") or {}
+    counterexample = carried.get("counterexample_observed_on_current_subject")
+    if not isinstance(counterexample, dict):
+        raise SystemExit("carried refusal observation has no counterexample block")
+    observed_guards = counterexample.get("guards")
+    live_guards = (record.get("state_before") or {}).get("guards")
+    observed_reason = counterexample.get("refusal_reason")
+    live_reason = (record.get("promote_result") or {}).get("reason")
+    reproduced = (
+        observed_guards == live_guards
+        and observed_reason == live_reason
+        and record.get("state_unchanged") is True
+    )
+    comparison = {
+        "carried_guards": observed_guards,
+        "live_guards": live_guards,
+        "carried_refusal_reason": observed_reason,
+        "live_refusal_reason": live_reason,
+        "live_state_unchanged": record.get("state_unchanged"),
+        "reproduced": reproduced,
+    }
+    if not reproduced:
+        raise SystemExit(f"carried refusal observation not reproduced: {comparison}")
+    return comparison
 
 
 def bind_causal_observation(
@@ -399,10 +459,12 @@ def main() -> int:
 
     # The governed-promotion refusal is re-executed against this subject; every
     # referenced artifact is re-stamped with the subject identity and lineage.
-    trial_out = qualification / "evidence" / "v2-i-guard-refusal-current.json"
-    trial = run_guard_refusal_trial(home, trial_out)
+    trial_out = qualification / "evidence" / "v2-i-guard-refusal-live.json"
+    trial = run_guard_refusal_trial(canonical, trial_out)
     if trial["exit_code"] != 0 or trial["record_sha256"] is None:
         raise SystemExit(f"guard refusal trial failed: {trial['stdout']} {trial['stderr']}")
+    if not trial["live_state_unchanged"]:
+        raise SystemExit("guard refusal trial changed live Brain state")
 
     trial_relative = trial_out.relative_to(home).as_posix()
     causal_relative = next(
@@ -434,10 +496,19 @@ def main() -> int:
             )
             extra_raw = None
             if relative == causal_relative:
+                carried_artifact = json.loads(
+                    (canonical / relative).read_text(encoding="utf-8")
+                )
+                comparison = causal_reproduction(
+                    carried_artifact.get("observed_data", {}), trial
+                )
                 note = (
-                    "re-observed on the activated subject: the governed promotion refusal path "
-                    "was re-executed against this home and its outcome recorded as an "
-                    "observation whose evidence names this artifact"
+                    "carried observation re-verified on the activated subject: the governed "
+                    "promotion refusal path was re-executed against the live Brain "
+                    f"(refusal reason {comparison['live_refusal_reason']!r}, state unchanged, "
+                    "no live state change) and reproduces this observation exactly; the "
+                    "observation record is re-stamped for this subject and the live trial is "
+                    "recorded as raw evidence beside it"
                 )
                 extra_raw = {
                     "path": trial_relative,
@@ -454,6 +525,7 @@ def main() -> int:
                     causal_binding = bind_causal_observation(
                         home, relative, digest, artifact, subject
                     )
+                    causal_binding["reproduction"] = comparison
         evidence_json = {
             "schema_version": 1,
             "classification": "observed",
@@ -584,8 +656,11 @@ def main() -> int:
                     "the host identity record for the activated runtime",
                 ],
                 "non_claims": [
-                    "Canonical home untouched: this runs against a disposable copy of the "
-                    "database and configuration.",
+                    "No canonical write: qualification runs against a disposable copy of the "
+                    "database, configuration, skills and state; the only interaction with the "
+                    "live home is the read-only refusal trial, whose refusal path returns "
+                    "before any mutation, and whose before/after fingerprints are recorded "
+                    "unchanged in this record.",
                     "Universal qualification is claimed only for what this verifier covers.",
                     "Economics remains INSUFFICIENT (n=2).",
                 ],
