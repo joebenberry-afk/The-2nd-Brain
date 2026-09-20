@@ -875,6 +875,15 @@ Remaining before the final label: fresh independent review of the closed
 ledger and of the executed rollback rehearsal (including the corrected
 stock-refusal limitation), then the final installed-outcome acceptance.
 
+A bounded Jev advisory check (model `jev-1.13.0`) was run on the closure
+evidence with verbatim excerpts: `closure_supported` 0.84,
+`correction_supported` 0.69, `residual_stale_risk` 0.56. Inputs, outputs and
+usage are recorded in
+`outputs/reports/omp-shipping-ledger-20260920/jev-advisory.json`; the residual
+stale-evidence signal is carried as recorded uncertainty (the bound artifact's
+measured content predates the shipping revision while the live re-check
+reproduced it) and does not override the deterministic verifier.
+
 
 
 ### check:types resolved (2026-09-20)
