@@ -387,6 +387,15 @@ def bind_required_identities(spec: dict, run_dir: Path, env: dict, argv: list[st
     ]
     contract_check("project-overlays", not overlay_hits, overlay_hits)
 
+    # OMP eagerly loads .env from $HOME, the config root, the profile agent
+    # directory and the project cwd at module load (pi-utils env.ts), even when
+    # bun autoload is disabled. Enforce absence of the files the contract does
+    # not deliberately bind.
+    env_file_hits = [
+        path for path in contract.get("env_files_must_be_absent", []) if Path(str(path)).exists()
+    ]
+    contract_check("env-files-absent", not env_file_hits, env_file_hits)
+
     schema_actual = read_schema_version(Path(spec["home"]) / "db" / "brain.sqlite")
     schema_ok = spec.get("schema_expected") is not None and schema_actual == spec.get(
         "schema_expected"
@@ -800,7 +809,15 @@ def main() -> int:
             )
             state["coordinator"].start()
 
-        argv = [spec["bun"], spec["cli"], "--profile", spec["profile"], "-p", "--auto-approve"]
+        argv = [
+            spec["bun"],
+            "--no-env-file",
+            spec["cli"],
+            "--profile",
+            spec["profile"],
+            "-p",
+            "--auto-approve",
+        ]
         for extension in spec.get("extension", []):
             argv += ["-e", extension]
         argv.append(f"@{spec['prompt_file']}")
