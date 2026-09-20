@@ -5,7 +5,7 @@ delta (bound + added + changed files with sealed, installed and rollback
 hashes), the installed extension files, and the qualified launch entrypoint.
 The activation card previously listed six host files while the installed delta
 is thirteen (audit finding F-07); this manifest is the single source that
-verification reads instead of a hand-maintained list.
+verification reads instead of a hand-maintained file list.
 
 Read-only: it inspects the sealed canary package, the installed retail package
 and the extension sources, and writes only the manifest (or prints it).
@@ -13,6 +13,12 @@ and the extension sources, and writes only the manifest (or prints it).
 Usage:
     python scripts/generate_omp_deployment_manifest.py --check
     python scripts/generate_omp_deployment_manifest.py --write
+
+    # A successor candidate keeps its own record without touching the sealed one:
+    python scripts/generate_omp_deployment_manifest.py --write \
+        --patch-dir docs/integrations/omp-host-patch-2026-09-19-successor \
+        --installed-host <staged host package> \
+        --installed-extension <staged extension root>
 """
 
 from __future__ import annotations
@@ -21,21 +27,19 @@ import argparse
 import hashlib
 import json
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PATCH_DIR = REPO_ROOT / "docs" / "integrations" / "omp-host-patch-2026-09-19"
-MANIFEST_PATH = PATCH_DIR / "DEPLOYMENT-MANIFEST.json"
-HASHES_FILE = PATCH_DIR / "HASHES.txt"
-DELTA_FILE = PATCH_DIR / "host-delta-applied.json"
+DEFAULT_PATCH_DIR = REPO_ROOT / "docs" / "integrations" / "omp-host-patch-2026-09-19"
 EXTENSION_SOURCES = REPO_ROOT / "brainstem" / "prime-extension"
 HOST_VERSION = "omp/18.2.6"
 
 _OMP_PACKAGES = Path.home() / ".bun/install/global/node_modules/@oh-my-pi"
-SEALED_PACKAGE = _OMP_PACKAGES / "pi-coding-agent-canary"
-INSTALLED_PACKAGE = _OMP_PACKAGES / "pi-coding-agent"
-INSTALLED_EXTENSION = Path.home() / ".omp/agent/extensions/second-brain"
+DEFAULT_SEALED_PACKAGE = _OMP_PACKAGES / "pi-coding-agent-canary"
+DEFAULT_INSTALLED_PACKAGE = _OMP_PACKAGES / "pi-coding-agent"
+DEFAULT_INSTALLED_EXTENSION = Path.home() / ".omp/agent/extensions/second-brain"
 BUN = Path.home() / ".bun/bin/bun.exe"
 
 
@@ -47,16 +51,39 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def bound_hashes() -> tuple[dict[str, str], dict[str, str]]:
+@dataclass(frozen=True)
+class Target:
+    """What a manifest describes: the patch record, and the bytes to compare.
+
+    Defaults are the sealed candidate and the production installation. A
+    successor candidate passes its own patch directory and the staged layout it
+    was qualified in, so the sealed record and the live installation are never
+    rewritten to describe work they did not do.
+    """
+
+    patch_dir: Path = DEFAULT_PATCH_DIR
+    sealed_package: Path = DEFAULT_SEALED_PACKAGE
+    installed_package: Path = DEFAULT_INSTALLED_PACKAGE
+    installed_extension: Path = DEFAULT_INSTALLED_EXTENSION
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.patch_dir / "DEPLOYMENT-MANIFEST.json"
+
+
+def bound_hashes(patch_dir: Path) -> tuple[dict[str, str], dict[str, str]]:
     """HASHES.txt split into host binds and extension binds.
 
     Host entries are package-relative; extension entries are relative to the
     extension source root (the installer copies ``src/*.ts`` flat and
-    ``types/*.d.ts`` into ``types/``).
+    ``types/*.d.ts`` into ``types/``). The sealed candidate writes absolute
+    paths under the canary package and the extension sources; a successor writes
+    absolute paths under its staged layout, marked by ``/host-source/`` and
+    ``/extension/``.
     """
     host: dict[str, str] = {}
     extension: dict[str, str] = {}
-    for line in HASHES_FILE.read_text(encoding="utf-8").splitlines():
+    for line in (patch_dir / "HASHES.txt").read_text(encoding="utf-8").splitlines():
         parts = line.split()
         if len(parts) != 2:
             continue
@@ -64,17 +91,23 @@ def bound_hashes() -> tuple[dict[str, str], dict[str, str]]:
         path = absolute.replace("\\", "/")
         if "/pi-coding-agent-canary/" in path:
             host[path.split("/pi-coding-agent-canary/", 1)[1]] = digest
+        elif "/host-source/" in path:
+            host[path.split("/host-source/", 1)[1]] = digest
         elif "/prime-extension/src/" in path:
             extension[path.split("/prime-extension/src/", 1)[1]] = digest
+        elif "/extension/" in path:
+            extension[path.split("/extension/", 1)[1]] = digest
     return host, extension
 
 
-def delta_path() -> Path:
+def delta_path(patch_dir: Path, explicit: Path | None = None) -> Path:
     """The recorded activation delta (which host files were added or changed)."""
     import os
 
+    if explicit is not None:
+        return explicit
     candidates = [
-        PATCH_DIR / "host-delta-applied.json",
+        patch_dir / "host-delta-applied.json",
         REPO_ROOT.parent.parent / "outputs/reports/omp-activation-20260920/host-delta-applied.json",
         REPO_ROOT / "outputs/reports/omp-activation-20260920/host-delta-applied.json",
     ]
@@ -88,18 +121,18 @@ def delta_path() -> Path:
             return candidate
     raise SystemExit(
         "recording activation delta not found; pass --delta or copy host-delta-applied.json "
-        f"into {PATCH_DIR}"
+        f"into {patch_dir}"
     )
 
 
-def host_files(delta_file: Path) -> list[dict]:
+def host_files(target: Target, delta_file: Path) -> list[dict]:
     delta = json.loads(delta_file.read_text(encoding="utf-8"))
-    bound, _extension_bound = bound_hashes()
+    bound, _extension_bound = bound_hashes(target.patch_dir)
     entries: list[dict] = []
 
     def entry(relative: str, role: str, rollback: dict) -> dict:
-        sealed = SEALED_PACKAGE / relative
-        installed = INSTALLED_PACKAGE / relative
+        sealed = target.sealed_package / relative
+        installed = target.installed_package / relative
         item = {
             "path": relative,
             "role": role,
@@ -125,14 +158,14 @@ def host_files(delta_file: Path) -> list[dict]:
     return entries
 
 
-def extension_files() -> list[dict]:
+def extension_files(target: Target) -> list[dict]:
     """Sealed extension sources mapped to their installed (flat) layout.
 
     The installer copies ``src/*.ts`` flat into the extension root and
     ``types/*.d.ts`` into ``types/``, so a nested sealed path and its installed
     name are not identical.
     """
-    _host_bound, extension_bound = bound_hashes()
+    _host_bound, extension_bound = bound_hashes(target.patch_dir)
     sealed: dict[str, Path] = {}
     for path in sorted((EXTENSION_SOURCES / "src").rglob("*.ts")):
         if path.is_file():
@@ -144,7 +177,7 @@ def extension_files() -> list[dict]:
     for relative, source in sorted(sealed.items()):
         digest = sha256_file(source)
         installed_name = relative if relative.startswith("types/") else relative.split("/")[-1]
-        installed = INSTALLED_EXTENSION / installed_name
+        installed = target.installed_extension / installed_name
         item = {
             "path": installed_name,
             "sealed_source_path": (
@@ -162,9 +195,9 @@ def extension_files() -> list[dict]:
     return entries
 
 
-def build(delta_file: Path) -> dict:
-    host = host_files(delta_file)
-    extension = extension_files()
+def build(target: Target, delta_file: Path) -> dict:
+    host = host_files(target, delta_file)
+    extension = extension_files(target)
     return {
         "schema": "second-brain.omp-host-deployment-manifest.v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -177,8 +210,8 @@ def build(delta_file: Path) -> dict:
         "host": {
             "name": "OMP",
             "version": HOST_VERSION,
-            "sealed_package": str(SEALED_PACKAGE),
-            "installed_package": str(INSTALLED_PACKAGE),
+            "sealed_package": str(target.sealed_package),
+            "installed_package": str(target.installed_package),
             "entrypoint": "src/cli.ts",
             "bundled_entrypoint": "dist/cli.js",
             "bundled_entrypoint_note": (
@@ -190,7 +223,7 @@ def build(delta_file: Path) -> dict:
             "files": host,
         },
         "extension": {
-            "installed_root": str(INSTALLED_EXTENSION),
+            "installed_root": str(target.installed_extension),
             "sealed_sources": str(EXTENSION_SOURCES / "src"),
             "file_count": len(extension),
             "files": extension,
@@ -235,39 +268,81 @@ def summary(manifest: dict) -> dict:
     }
 
 
+def manifest_is_current(stored: dict, live: dict) -> bool:
+    """Stored and live manifests describe the same installed bytes."""
+    stored_files = {item["path"]: item["installed_sha256"] for item in stored["host"]["files"]}
+    live_files = {item["path"]: item["installed_sha256"] for item in live["host"]["files"]}
+    stored_ext = {item["path"]: item["installed_sha256"] for item in stored["extension"]["files"]}
+    live_ext = {item["path"]: item["installed_sha256"] for item in live["extension"]["files"]}
+    return stored_files == live_files and stored_ext == live_ext
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="write the manifest file")
     parser.add_argument("--check", action="store_true", help="verify the manifest is current")
     parser.add_argument("--delta", type=Path, default=None, help="recorded activation delta JSON")
+    parser.add_argument(
+        "--patch-dir",
+        type=Path,
+        default=DEFAULT_PATCH_DIR,
+        help="patch record directory holding HASHES.txt (default: the sealed candidate)",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="manifest path (default: <patch-dir>/DEPLOYMENT-MANIFEST.json)",
+    )
+    parser.add_argument(
+        "--installed-host",
+        type=Path,
+        default=DEFAULT_INSTALLED_PACKAGE,
+        help="host package the manifest compares against (default: the production install)",
+    )
+    parser.add_argument(
+        "--installed-extension",
+        type=Path,
+        default=DEFAULT_INSTALLED_EXTENSION,
+        help="extension root the manifest compares against (default: the production install)",
+    )
+    parser.add_argument(
+        "--sealed-host",
+        type=Path,
+        default=DEFAULT_SEALED_PACKAGE,
+        help=(
+            "directory holding the intended host bytes (default: the sealed canary package); a "
+            "successor points this at its staged intended-bytes tree"
+        ),
+    )
     args = parser.parse_args()
 
-    manifest = build(args.delta or delta_path())
+    target = Target(
+        patch_dir=args.patch_dir,
+        sealed_package=args.sealed_host,
+        installed_package=args.installed_host,
+        installed_extension=args.installed_extension,
+    )
+    manifest = build(target, delta_path(target.patch_dir, args.delta))
     rendered = json.dumps(manifest, indent=2) + "\n"
+    manifest_path = args.out or target.manifest_path
     if args.write:
-        MANIFEST_PATH.write_text(rendered, encoding="utf-8")
-        print(f"wrote {MANIFEST_PATH}")
-    print(json.dumps(summary(manifest), indent=2))
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(rendered, encoding="utf-8")
+        print(f"wrote {manifest_path}")
+    stats = summary(manifest)
+    print(json.dumps(stats, indent=2))
 
     inconsistent = (
-        manifest["host"]["file_count"] != summary(manifest)["host_installed_matches_sealed"]
-        or manifest["extension"]["file_count"]
-        != summary(manifest)["extension_installed_matches_sealed"]
+        manifest["host"]["file_count"] != stats["host_installed_matches_sealed"]
+        or manifest["extension"]["file_count"] != stats["extension_installed_matches_sealed"]
     )
     if args.check:
-        if not MANIFEST_PATH.is_file():
+        if not manifest_path.is_file():
             print("NO MANIFEST: run with --write")
             return 2
-        stored = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        stored_files = {item["path"]: item["installed_sha256"] for item in stored["host"]["files"]}
-        live_files = {item["path"]: item["installed_sha256"] for item in manifest["host"]["files"]}
-        stored_ext = {
-            item["path"]: item["installed_sha256"] for item in stored["extension"]["files"]
-        }
-        live_ext = {
-            item["path"]: item["installed_sha256"] for item in manifest["extension"]["files"]
-        }
-        if stored_files != live_files or stored_ext != live_ext or inconsistent:
+        stored = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not manifest_is_current(stored, manifest) or inconsistent:
             print("MANIFEST STALE: regenerate with --write")
             return 1
         print("MANIFEST CURRENT: installed bytes match the recorded deployment")
