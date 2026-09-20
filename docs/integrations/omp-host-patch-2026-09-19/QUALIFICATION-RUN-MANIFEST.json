@@ -90,5 +90,6 @@
     "OM_CANARY_ISOLATION": "1",
     "OM_CANARY_HOLD_RELEASE_UNTIL": "identity-bound hold prefix (positive run only)"
   },
-  "status": "EVIDENCE ACCEPTED at instrumented candidate ed96ca5; instrumentation removal, sealing and activation gates remain"
+  "status": "SUPERSEDED for shipping by SHIPPING-CANDIDATE-MANIFEST.json; this file remains the run overlay for the accepted instrumented campaign (ed96ca5). The hold fixture it describes was removed from the shipping candidate (40d2218).",
+  "superseded_by": "docs/integrations/omp-host-patch-2026-09-19/SHIPPING-CANDIDATE-MANIFEST.json"
 }

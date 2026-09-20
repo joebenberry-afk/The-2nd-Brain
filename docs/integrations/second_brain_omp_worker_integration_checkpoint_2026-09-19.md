@@ -806,10 +806,14 @@ traceDrain/counters/describeCanaryFailure, main pre-quit block) and `40d2218`
 (hold fixture removed: the clean run proved the external coordinator depended
 on the removed hold-begin trace to learn the nonce-bound signal path, so the
 hold is instrumentation-bound fixture forcing, not shipping behaviour). The
-stripped worktree.ts reproduces the independently derived pre-instrumentation
-bytes exactly. Edited files were deliberately normalised back to CRLF. The
-frozen candidate's pre-existing module/route markers are retained; the launcher
-and watcher tools remain campaign tooling outside the installed package.
+stripped worktree.ts matches the earlier derived baseline except for two blank
+lines after the first import (semantic equivalence, not literal byte
+identity); the worktree module marker was part of the removed helper block
+while the job-manager/attempt-settlement/structured-subagent/index markers and
+route/owner-jobs traces are retained as pre-existing gated seams. Edited files
+were deliberately normalised back to CRLF. Host tests 36/36 (independently
+re-run by the reviewer); lint 0 errors executed as `bun x oxlint` from the host
+package directory.
 
 Decisive subset on the clean candidate (`omp-canary29g-shipping-20260920`,
 fresh home/fixture, no hold, no coordinator): session-1 isolated A
@@ -818,7 +822,20 @@ fresh home/fixture, no hold, no coordinator): session-1 isolated A
 fixture green, exit 0; session-2 isolated successor
 (`17044:1:VerifyCalc`) COMPLETED/released/settled with terminal receipt, its
 run reported `1 passed`, exit 0; watcher captured state-1 and state-2 in both;
-production checksums unchanged. Host tests 36/36, lint 0 errors, check:types
-parity. Independent review of this delta is requested before any activation.
+production checksums unchanged. The reviewer accepted this as the decisive
+subset and recorded the honest labels: session-1/post-exit.json includes both
+tasks (state-2.sqlite is the uncontaminated terminal snapshot), fine-grained
+teardown traces come from the instrumented campaign, and the runs enabled the
+isolation seams.
+
+Sealing record: `docs/integrations/omp-host-patch-2026-09-19/SHIPPING-CANDIDATE-MANIFEST.json`
+supersedes the instrumented-planning fields, binds both campaigns, preserves
+the derived-baseline limitation and labels the checksum scope. Reviewer verdict
+`PRE_ACTIVATION_BLOCKED` on two items: the mandatory host `check:types` is
+parity-verified but not passing, and the sealing metadata had to be
+reconciled (done by this manifest). A full pinned v18.2.6 workspace run is
+being prepared to obtain a passing exact-candidate type check or a documented
+exception decision.
+
 
 
