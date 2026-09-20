@@ -793,6 +793,25 @@ def test_failed_restore_restores_previously_empty_directory(brain_home, tmp_path
     assert list((target / "constitution").iterdir()) == []
 
 
+def test_failed_restore_keeps_preexisting_layout_parent(brain_home, tmp_path, monkeypatch):
+    """A layout parent that existed before the attempt is not removed."""
+    (brain_home / "constitution" / "snapshot-only.md").write_text("snapshot", encoding="utf-8")
+    bdir = backup_mod.create_backup(brain_home)
+    target = tmp_path / "target"
+    (target / "brainstem").mkdir(parents=True)  # pre-existing implicit layout parent
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated git init failure")
+
+    monkeypatch.setattr(backup_mod.subprocess, "run", boom)
+    monkeypatch.setenv("SECOND_BRAIN_HOME", str(target))
+
+    with pytest.raises(BackupError):
+        backup_mod.restore_backup(target, bdir, force=True)
+
+    assert (target / "brainstem").is_dir()
+
+
 def test_move_aside_failure_leaves_target_intact(brain_home, tmp_path, monkeypatch):
     """A failure while moving state aside must not lose the target's data."""
     _seed(brain_home, "orig")

@@ -329,24 +329,24 @@ def check_governance(home: Path, checks: list[Check]) -> None:
                 + "; inspect state/promotions/pending/",
             )
         )
-    elif gaps:
+    if gaps:
         checks.append(
             Check(
                 "governance authority",
-                STATUS_WARN,
+                STATUS_WARN if not unreadable else STATUS_FAIL,
                 "active skills without committed authority: " + ", ".join(gaps[:5]),
             )
         )
-    elif pending:
+    if pending:
         checks.append(
             Check(
-                "governance authority",
+                "governance journal",
                 STATUS_WARN,
                 f"{len(pending)} interrupted publication(s) pending; "
                 "run `brainctl promotions reconcile`",
             )
         )
-    else:
+    if not (unreadable or gaps or pending):
         checks.append(Check("governance authority", STATUS_OK, "promotion authority current"))
 
 

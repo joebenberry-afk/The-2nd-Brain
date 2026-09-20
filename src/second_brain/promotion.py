@@ -375,10 +375,15 @@ def _write_record(home: Path, record: dict) -> Path:
         )
         os.replace(tmp, target)
     except OSError as exc:
-        tmp.unlink(missing_ok=True)
-        reserve.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            reserve.unlink(missing_ok=True)
         raise BrainError(f"Could not write promotion record {target}: {exc}") from exc
-    reserve.unlink(missing_ok=True)
+    # The record is committed. Failing to remove the reservation sidecar must not
+    # turn a committed publication into a reported failure.
+    with contextlib.suppress(OSError):
+        reserve.unlink(missing_ok=True)
     return target
 
 
@@ -465,12 +470,17 @@ def _publish(
         target = _move_skill(home, skill_name, from_level, to_level)
     except Exception as exc:
         pending.unlink(missing_ok=True)
+        _heal_status(home, skill_name, from_level)
         reason = "destination_exists" if "already exists" in str(exc) else "move_failed"
         raise _PublicationFailure(reason, str(exc)) from exc
     try:
         record_path = _write_record(home, record)
     except Exception as exc:
         if _rollback_publication(home, skill_name, from_level, to_level):
+            # A concurrent recovery pass may have committed this publication's
+            # record while this caller was failing; reporting failure must not
+            # leave a record for state that was restored.
+            _discard_committed_record(home, skill_name, record.get("promotion_id"))
             pending.unlink(missing_ok=True)
             raise _PublicationFailure("record_failed", str(exc)) from exc
         # The artifact is still published, so it must not stay without authority:
@@ -552,33 +562,12 @@ def _reconcile_pending(home: Path, *, min_age_seconds: float = 0.0) -> list[dict
 
         current = _level_of(home, skill_name)
         if current == to_level:
-            try:
-                committed = any(
-                    r.get("promotion_id") == promotion_id for r in _read_records(home, skill_name)
-                )
-            except BrainError:
-                # A corrupt record store must not cascade into recovery failure;
-                # leave the journal for an operator and report it.
-                actions.append({"pending": path.name, "action": "records_unreadable"})
+            action, remove = _recover_journal(
+                home, path, record, skill_name, to_level, promotion_id
+            )
+            actions.append(action)
+            if not remove:
                 continue
-            if committed:
-                actions.append({"pending": path.name, "action": "already_committed"})
-            else:
-                try:
-                    _write_record(home, record)
-                except BrainError:
-                    actions.append({"pending": path.name, "action": "commit_failed"})
-                    continue
-                _write_authority_marker(
-                    home,
-                    skill_name,
-                    to_level,
-                    _recovered_active_version(home, skill_name, record)
-                    if to_level == "active"
-                    else None,
-                    promotion_id,
-                )
-                actions.append({"pending": path.name, "action": "committed"})
         else:
             _heal_status(home, skill_name, current)
             actions.append({"pending": path.name, "action": "discarded"})
@@ -603,6 +592,103 @@ def _recovered_active_version(home: Path, skill_name: str, record: dict) -> int 
     if isinstance(declared, str) and declared.isdigit() and int(declared) >= 1:
         return int(declared)
     return claimed if isinstance(claimed, int) and claimed >= 1 else None
+
+
+def _discard_committed_record(home: Path, skill_name: str, promotion_id: object) -> list[str]:
+    """Remove a committed record for a publication that was rolled back.
+
+    A concurrent recovery pass may commit this publication's record while the
+    original caller is still failing; the caller that reports failure must not
+    leave a record behind for state it restored.
+    """
+    if not isinstance(promotion_id, str) or not promotion_id:
+        return []
+    directory = _promotions_dir(home)
+    if not directory.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(directory.glob(f"{skill_name}-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("promotion_id") == promotion_id:
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            removed.append(path.name)
+    return removed
+
+
+def _quarantine_corrupt_records(home: Path, skill_name: str) -> list[str]:
+    """Move unreadable committed records aside so recovery can continue.
+
+    The damaged bytes are preserved under ``state/promotions/corrupt/`` for
+    inspection; otherwise the record store is append-only.
+    """
+    directory = _promotions_dir(home)
+    if not directory.is_dir():
+        return []
+    quarantine = directory / "corrupt"
+    moved: list[str] = []
+    for path in sorted(directory.glob(f"{skill_name}-*.json")):
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+            continue
+        except (OSError, json.JSONDecodeError):
+            pass
+        try:
+            quarantine.mkdir(parents=True, exist_ok=True)
+            os.replace(path, quarantine / path.name)
+        except OSError:
+            continue
+        moved.append(path.name)
+    return moved
+
+
+def _recover_journal(
+    home: Path,
+    path: Path,
+    record: dict,
+    skill_name: str,
+    to_level: str,
+    promotion_id: str,
+) -> tuple[dict, bool]:
+    """Commit one recovered journal. Returns (action, remove_journal).
+
+    The version recorded for an active publication is taken from the artifact
+    itself, and the record is written with that corrected value, so a journal
+    cannot raise the recorded baseline above what the artifact actually is.
+    """
+    try:
+        records = _read_records(home, skill_name)
+    except BrainError:
+        quarantined = _quarantine_corrupt_records(home, skill_name)
+        if not quarantined:
+            return {"pending": path.name, "action": "records_unreadable"}, False
+        try:
+            records = _read_records(home, skill_name)
+        except BrainError:
+            return {"pending": path.name, "action": "records_unreadable"}, False
+        base = {"pending": path.name, "records_quarantined": quarantined}
+    else:
+        base = {"pending": path.name}
+
+    committed = any(r.get("promotion_id") == promotion_id for r in records)
+    version = _recovered_active_version(home, skill_name, record) if to_level == "active" else None
+    if not committed:
+        recovered = {**record, "resulting_version": version} if to_level == "active" else record
+        try:
+            _write_record(home, recovered)
+        except BrainError:
+            return {**base, "action": "commit_failed"}, False
+    marker_ok = _write_authority_marker(home, skill_name, to_level, version, promotion_id)
+    if not marker_ok:
+        # Keep the intent: a later pass retries the marker (and repairs a marker
+        # that a previous pass could not write).
+        return {**base, "action": "marker_failed"}, False
+    return {**base, "action": "already_committed" if committed else "committed"}, True
 
 
 def reconcile_publications(home: Path, *, min_age_seconds: float = 0.0) -> list[dict]:
@@ -668,10 +754,12 @@ def _move_skill(home: Path, skill_name: str, from_level: str, to_level: str) -> 
     old_status = skillforge.read_metadata(skill_file).get("status") if skill_file.exists() else None
     if skill_file.exists():
         skillforge.set_status(skill_file, to_level)
-    target.parent.mkdir(parents=True, exist_ok=True)
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
         source.rename(target)  # atomic within the Brain home
     except OSError as exc:
+        # Restore the metadata too: a failed move must not leave the artifact
+        # claiming a level it is not in.
         if skill_file.exists() and old_status:
             skillforge.set_status(skill_file, old_status)
         raise BrainError(f"Could not move skill {skill_name!r}: {exc}") from exc
