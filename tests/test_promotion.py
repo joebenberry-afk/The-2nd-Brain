@@ -1099,7 +1099,7 @@ def test_quarantine_republishes_an_incomplete_archive(brain_home):
     promotions = brain_home / "state" / "promotions"
     (promotions / "corrupt").mkdir(parents=True, exist_ok=True)
     damaged = "{truncated"
-    digest = hashlib.sha256(damaged.encode()).hexdigest()[:12]
+    digest = hashlib.sha256(damaged.encode()).hexdigest()
     # A leftover partial archive naming this content, holding different bytes.
     (promotions / "corrupt" / f"scout-1.{digest}.json").write_text("{partial", encoding="utf-8")
     (promotions / "scout-1.json").write_text(damaged, encoding="utf-8")

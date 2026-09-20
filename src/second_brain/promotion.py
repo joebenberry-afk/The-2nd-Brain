@@ -720,7 +720,7 @@ def _quarantine_corrupt_records(home: Path) -> list[str]:
             # Another pass replaced the damage with a committed record.
             continue
         digest = hashlib.sha256(raw).hexdigest()
-        target = quarantine / f"{path.stem}.{digest[:12]}{path.suffix}"
+        target = quarantine / f"{path.stem}.{digest}{path.suffix}"
         try:
             quarantine.mkdir(parents=True, exist_ok=True)
             archived = (
@@ -731,7 +731,12 @@ def _quarantine_corrupt_records(home: Path) -> list[str]:
             # quarantine may never destroy evidence it could not preserve.
             continue
         if not archived:
-            partial = target.with_name(target.name + ".partial")
+            # The staging name is unique per pass: two passes archiving at once
+            # must never share the file that becomes the published archive, or
+            # one could publish a prefix another pass left behind. The target
+            # is content-addressed, so racers can only be archiving identical
+            # bytes, and the rename publishes complete bytes by construction.
+            partial = target.with_name(f"{target.name}.{os.getpid()}.{os.urandom(4).hex()}.partial")
             try:
                 partial.write_bytes(raw)
                 os.replace(partial, target)
