@@ -552,20 +552,6 @@ function cloneMessageEndNotification(message: AgentMessage): AgentMessage {
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
 const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
 
-/** Bounded, non-throwing description of a diagnostic failure value. */
-function describeCanaryFailure(value: unknown, depth = 0): string {
-	try {
-		if (depth > 3) return "...";
-		if (value instanceof AggregateError) {
-			const nested = value.errors.map(inner => describeCanaryFailure(inner, depth + 1)).join(" | ");
-			return `${value.message ? String(value.message) : "AggregateError"}${nested ? ` [${nested}]` : ""}`;
-		}
-		return value instanceof Error ? String(value.message) : String(value);
-	} catch {
-		return "unprintable";
-	}
-}
-
 /**
  * Translate a `power.sleepPrevention` mode into `PowerAssertion.start` options,
  * or `undefined` when the mode asks for no assertion at all.
@@ -2291,9 +2277,6 @@ export class AgentSession {
 	readonly #settlementObserverErrors: unknown[] = [];
 	#settlementObserverCompletedCount = 0;
 	#settlementObserverRejectedCount = 0;
-	#settlementObserverRegistrationCount = 0;
-	#settlementObserverSyncOnlyCount = 0;
-	#settlementObserverAsyncLifetimeCount = 0;
 	readonly #settlementObserverDrains = new Map<Promise<void>, {
 		current: () => Record<string, unknown>;
 		detach: () => void;
@@ -2319,19 +2302,10 @@ export class AgentSession {
 		let observed = 0;
 		let detached = false;
 		let finished = false;
-		let asyncLifetime = false;
 		let unsubscribe: (() => void) | undefined;
 		const finish = (): void => {
 			if (finished || !detached || pending.size > 0) return;
 			finished = true;
-			// Lifetime availability is per accepted subscription, never per callback:
-			// a subscription that ever returned asynchronous work owns that lifetime;
-			// one that never did is synchronous-only by contract.
-			if (asyncLifetime) {
-				this.#settlementObserverAsyncLifetimeCount += 1;
-			} else {
-				this.#settlementObserverSyncOnlyCount += 1;
-			}
 			if (observed === 0) failures.push(new Error("Observer detached before any settlement snapshot"));
 			// No per-snapshot releasePermitted re-validation here. This wrapper's
 			// guarantee is observer-work completion, not native cleanup by itself:
@@ -2361,15 +2335,13 @@ export class AgentSession {
 			unsubscribe?.();
 			finish();
 		};
-		this.#settlementObserverRegistrationCount += 1;
 		this.#settlementObserverDrains.set(done.promise, {
 			current: () => ({
 				sourceToolCallId: options?.sourceToolCallId,
 				observed,
 				detached,
-				lifetime: asyncLifetime ? "async-available" : "synchronous-only",
 				pendingCallbacks: pending.size,
-				failures: failures.map(value => describeCanaryFailure(value)),
+				failures: failures.map(String),
 				snapshots: [...snapshots.values()],
 			}),
 			detach,
@@ -2398,7 +2370,6 @@ export class AgentSession {
 				return;
 			}
 			snapshots.set(key, snapshot);
-			asyncLifetime = true;
 			const work = Promise.resolve(returned);
 			pending.add(work);
 			void work.then(() => {
@@ -2418,19 +2389,6 @@ export class AgentSession {
 	}
 
 	async #drainSettlementObservers(): Promise<Error | undefined> {
-		const traceDrain = (step: string | (() => string)): void => {
-			const target = process.env.OM_CANARY_BOOT;
-			if (!target) return;
-			try {
-				const text = typeof step === "function" ? step() : step;
-				fs.appendFileSync(target, `${new Date().toISOString()} pid=${process.pid} ${text}\n`);
-			} catch {
-				/* tracing must never affect execution */
-			}
-		};
-		traceDrain(
-			`observer-drain:start:pending=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:asyncLifetime=${this.#settlementObserverAsyncLifetimeCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}:registrationsClosed=${this.#settlementObserverRegistrationsClosed}`,
-		);
 		logger.debug("Attempt settlement observer drain started", {
 			pendingSubscriptions: this.#settlementObserverDrains.size, at: Date.now(),
 		});
@@ -2446,16 +2404,13 @@ export class AgentSession {
 				const manager = this.#ownedAsyncJobManager ?? this.#asyncJobManager;
 				if (manager) {
 					if (!this.#ownedAsyncJobManager && !this.#agentId) {
-						traceDrain("observer-drain:producer-fence:unavailable:reason=unscoped-shared-native-job-manager");
 						throw new Error("Cannot fence unscoped shared native job producers");
 					}
 					await manager.waitForProducers(this.#ownedAsyncJobManager ? undefined : this.#agentId);
 				}
 				await this.#drainInFlightEventHandlers();
 				producersComplete = true;
-				traceDrain("observer-drain:producer-fence:complete");
 				this.#settlementObserverRegistrationsClosed = true;
-				traceDrain("observer-drain:registrations-closed");
 				while (this.#settlementObserverDrains.size > 0) {
 					const owned = [...this.#settlementObserverDrains.keys()];
 					const results = await Promise.allSettled(owned);
@@ -2474,17 +2429,11 @@ export class AgentSession {
 					throw new AggregateError(this.#settlementObserverErrors, "Attempt settlement observer drain incomplete");
 				}
 			})(), 30_000, "Attempt settlement observer drain timed out");
-			traceDrain(
-				`observer-drain:end:completed=${drainedComplete}:rejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
-			);
 			logger.debug("Attempt settlement observer drain completed", {
 				producersComplete, at: Date.now(), receiptAcceptanceInferred: false,
 			});
 			return undefined;
 		} catch (error) {
-			traceDrain(() => {
-				return `observer-drain:abandoned:reason=${describeCanaryFailure(error)}:loopCompleted=${drainedComplete}:loopRejected=${drainedRejected}:remaining=${this.#settlementObserverDrains.size}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`;
-			});
 			logger.warn("Attempt settlement observer drain incomplete", {
 				at: Date.now(), producersComplete, reason: String(error),
 				failures: this.#settlementObserverErrors.map(String),
@@ -2495,9 +2444,6 @@ export class AgentSession {
 			this.#settlementObserverRegistrationsClosed = true;
 			const remainingAtDetach = this.#settlementObserverDrains.size;
 			for (const entry of this.#settlementObserverDrains.values()) entry.detach();
-			traceDrain(
-				`observer-drain:detached:remainingAtDetach=${remainingAtDetach}:mapSize=${this.#settlementObserverDrains.size}:registrations=${this.#settlementObserverRegistrationCount}:syncOnly=${this.#settlementObserverSyncOnlyCount}:asyncLifetime=${this.#settlementObserverAsyncLifetimeCount}:totalCompleted=${this.#settlementObserverCompletedCount}:totalRejected=${this.#settlementObserverRejectedCount}`,
-			);
 		}
 	}
 
