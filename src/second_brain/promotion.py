@@ -157,7 +157,14 @@ def _authority_marker_path(home: Path, skill_name: str) -> Path | None:
 
 
 def _read_authority_marker(home: Path, skill_name: str) -> dict:
-    """Authority the artifact carries itself (survives record loss)."""
+    """Authority the artifact carries itself (survives record loss).
+
+    Overlapping publications for one skill can finish their marker writes out of
+    order, so a carried ``last_level`` is trusted only while it matches where the
+    artifact actually sits; a disagreeing level is reported as ``stale_level``
+    and the rest of the marker stays usable (the version baseline only rises, so
+    it is unaffected by which publication wrote last).
+    """
     path = _authority_marker_path(home, skill_name)
     if path is None or not path.is_file():
         return {}
@@ -165,7 +172,25 @@ def _read_authority_marker(home: Path, skill_name: str) -> dict:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return value if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    level = value.get("last_level")
+    if isinstance(level, str) and level in LEVELS and _level_of(home, skill_name) != level:
+        return {**value, "last_level": None, "stale_level": level}
+    return value
+
+
+def stale_authority_markers(home: Path) -> list[str]:
+    """Skills whose carried marker names a level they are not in (read-only)."""
+    stale: list[str] = []
+    for level in LEVELS:
+        directory = _skill_dir(home, level)
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.iterdir()):
+            if entry.is_dir() and _read_authority_marker(home, entry.name).get("stale_level"):
+                stale.append(entry.name)
+    return stale
 
 
 def _write_authority_marker(
