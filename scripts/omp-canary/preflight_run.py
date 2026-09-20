@@ -37,6 +37,20 @@ def sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def write_lf(path: Path, text: str) -> None:
+    """Write a fixture file with LF endings.
+
+    The isolated patch is generated with LF context. The pinned host's native
+    canApplyPatch compares working-tree bytes and returns false for a CRLF file
+    whose patch context is LF (plain `git apply` normalizes and succeeds), so a
+    CRLF fixture silently produced "Patches were not applied". Fixture sources
+    must be LF from creation.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(normalized)
+
+
 def manifest_dir(root: Path) -> dict[str, str]:
     """Relative-path -> content hash for every file under root (bounded)."""
     manifest: dict[str, str] = {}
@@ -129,9 +143,9 @@ def main() -> int:
 
     if not fixture.exists():
         fixture.mkdir(parents=True)
-        (fixture / "calc.py").write_text(BUGGY_CALC, encoding="utf-8")
-        (fixture / "test_calc.py").write_text(TEST_CALC, encoding="utf-8")
-        (fixture / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n", encoding="utf-8")
+        write_lf(fixture / "calc.py", BUGGY_CALC)
+        write_lf(fixture / "test_calc.py", TEST_CALC)
+        write_lf(fixture / ".gitignore", "__pycache__/\n.pytest_cache/\n")
         subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
         # The isolation backend performs `git worktree add`, which requires a
         # valid HEAD; a fresh `git init` alone fails with "invalid reference:

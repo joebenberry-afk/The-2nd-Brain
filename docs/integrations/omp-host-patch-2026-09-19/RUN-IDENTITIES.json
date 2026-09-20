@@ -290,7 +290,7 @@
     {
       "role": "preflight",
       "path": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\scripts\\omp-canary\\preflight_run.py",
-      "sha256": "6aa66d647dfd6d1f0cde4dcc3263def5d686adbe73f7a5c88702a6651856bcf9"
+      "sha256": "d2e90915d3b03910debad5041705948d8d57fa5a63df81c6ae82a5f38f33039f"
     },
     {
       "role": "post-exit-check",
