@@ -1624,9 +1624,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       getStore(session)?.append(ompRoutingRecord("omp_worker_context_handoff", session, metadataRecord));
       mirror(session, "task_context_resolved", metadataRecord, { cwd: ctxCwd(ctx) });
       // Own marker must be first: raw task text may quote marker-shaped data.
+      // The context envelope is appended only when it carries facts; an empty
+      // envelope is prompt cost with no retrieved content.
+      const contextBlock = renderOmpWorkerContext(result.contextHandoff);
+      // Read-only workers cannot write through the sandbox, so a report routed to
+      // a file (local://-style) fails and is then pasted into the parent context
+      // anyway (observed 2026-09-21: two recon workers reported rejected writes).
+      const inlineReturnNote =
+        result.accessIntent === "read_only"
+          ? "\n\n[SECOND_BRAIN_WORKER_NOTE] Return your report as your final message; do not rely on writing files."
+          : "";
       augmented.push({
         ...item,
-        task: `[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${rawTask}\n\n${renderOmpWorkerContext(result.contextHandoff)}`,
+        task: `[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${rawTask}${contextBlock === "" ? "" : `\n\n${contextBlock}`}${inlineReturnNote}`,
       });
     }
     if (hasMutating) {

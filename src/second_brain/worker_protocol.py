@@ -224,15 +224,29 @@ def _store_context_snapshot(
 
 
 def _jit_snapshot(home: Path, packet: WorkerTaskPacket) -> dict[str, Any]:
-    """Compile a safe parent-session JIT body and ignore its volatile header."""
+    """Compile the parent-session JIT body a worker prompt may carry.
+
+    The worker already receives the task text in its own prompt, so the task
+    line and any section that resolved nothing are omitted: a body with no
+    retrieved facts returns empty and the caller emits no context block.
+    """
     safe_session = ledger.internal_session_id(packet.parent_session_id)
     try:
         capsule = jit.compile_context(
-            Path(home), safe_session, packet.objective, project_key=packet.project_id
+            Path(home),
+            safe_session,
+            packet.objective,
+            project_key=packet.project_id,
+            include_task=False,
+            omit_empty=True,
         )
         text = capsule.read_text(encoding="utf-8")
         body = text.split("\n# Task", 1)[1] if "\n# Task" in text else text
         body = "\n".join(line for line in body.splitlines() if not line.startswith("updated_at:"))
+        # A body that carries nothing but the marker is not context: report it as
+        # the empty string so the caller emits no context block and the recorded
+        # bytes/sha describe what is actually delivered.
+        body = body.strip()
         raw = body.encode("utf-8")
         visible = body[:WORKER_CONTEXT_MAX_TOTAL_CHARS]
         return {

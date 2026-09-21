@@ -200,6 +200,64 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(deltaTask).not.toContain("Brain-owned child context");
   });
 
+  it("renders nothing when every handoff section is empty", () => {
+    // Live 2026-09-21: recon workers received an envelope whose sections were all
+    // empty (`resolved_context: []`, `jit_context: ""`, `(none)`, `count: 0`).
+    expect(
+      renderOmpWorkerContext({
+        mode: "unchanged",
+        resolved_context: [],
+        context_delta: { changed_refs: [], removed_ref_hashes: [], jit_delta: "" },
+        context_fingerprint: "b".repeat(64),
+        jit_context: "",
+      }),
+    ).toBe("");
+  });
+
+  it("omits the context envelope from the dispatch while keeping the correlation marker", async () => {
+    const runner = vi.fn(async (options: OmpWorkerContextOptions) =>
+      contextResultForRequest(options, "unchanged"));
+    const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    const pi = {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
+    } as unknown as ExtensionAPI;
+    factory(pi, { ompWorkerContextRunner: runner });
+
+    const result = await handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-empty-context",
+        input: { agent: "scout", task: "Recon the seam", access_intent: "read_only" },
+      },
+      ctx(),
+    );
+    const task = rewrittenTask(result);
+
+    expect(task).toContain("[SECOND_BRAIN_WORKER_TASK task_id=");
+    expect(task).not.toContain("[SECOND_BRAIN_WORKER_CONTEXT]");
+  });
+
+  it("keeps the context envelope when the handoff resolved facts", async () => {
+    const runner = vi.fn(async (options: OmpWorkerContextOptions) =>
+      contextResultForRequest(options, "full"));
+    const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    const pi = {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
+    } as unknown as ExtensionAPI;
+    factory(pi, { ompWorkerContextRunner: runner });
+
+    const result = await handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-full-context",
+        input: { agent: "scout", task: "Recon the seam", access_intent: "read_only" },
+      },
+      ctx(),
+    );
+
+    expect(rewrittenTask(result)).toContain("[SECOND_BRAIN_WORKER_CONTEXT]");
+  });
+
   it("blocks task dispatch when Brain context preparation fails", async () => {
     const runner = vi.fn(async () => ({ ok: false, error: "CONTEXT_REF_UNRESOLVED" }));
     const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
