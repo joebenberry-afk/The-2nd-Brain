@@ -3370,6 +3370,73 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     });
   });
 
+  it("settles a read-only worker whose host reports the job id as progress id with a null jobId", async () => {
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const journal: unknown[] = [];
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => workerContextResult,
+      ompWorkerResultRunner: resultRunner,
+    }, journal);
+    const ctx = makeCtx();
+    // Verified live on OMP 18.2.8: background `task` progress carries the manager job
+    // as `id` and leaves `jobId` null, and the hub snapshot keys that same job by
+    // `id`. Without the `entry.id` fallback this loop `continue`d every entry, the
+    // read-only worker was never registered or settled, and its row was reaped
+    // FAILED / lease_expired (m00.3 §15.2). The shared helper always supplies a
+    // manager job id, so the real host shape is dispatched inline here.
+    const spawnResult = (await handlers.get("tool_call")!(
+      { toolName: "task", toolCallId: "null-job-id", input: { agent: "scout", task: "Reply with exactly: OK" } },
+      ctx,
+    )) as { input: { task: string } };
+    const augmentedTask = spawnResult.input.task;
+    const taskIdMatch = augmentedTask.match(/\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+)/);
+    if (taskIdMatch === null) throw new Error("augmented task missing SECOND_BRAIN_WORKER_TASK marker");
+    const taskId = taskIdMatch[1];
+    await handlers.get("tool_result")!(
+      {
+        toolName: "task",
+        toolCallId: "null-job-id",
+        input: {},
+        isError: false,
+        content: [{ type: "text", text: "Spawned agent" }],
+        details: {
+          results: [],
+          progress: [
+            { index: 0, id: "NullJobWorker", jobId: null, agent: "scout", task: augmentedTask, status: "pending" },
+          ],
+        },
+      },
+      ctx,
+    );
+
+    await handlers.get("tool_result")!({
+      toolName: "hub", toolCallId: "null-job-id-hub", input: { op: "wait" }, isError: false,
+      content: [{ type: "text", text: "settled" }],
+      details: {
+        op: "wait",
+        jobs: [{ id: "NullJobWorker", type: "task", status: "completed", agentId: "NullJobWorker" }],
+      },
+    }, ctx);
+
+    expect(await workerCompletionRecords()).toEqual([
+      expect.objectContaining({
+        task_id: taskId,
+        child_omp_agent_id: "NullJobWorker",
+        status: "completed",
+      }),
+    ]);
+    expect(journal).toContainEqual({
+      type: "custom",
+      customType: "second-brain.worker-result-accepted",
+      data: expect.objectContaining({ session: "wiring-test", taskId }),
+    });
+    // An admitted worker must never be reported as bypassing admission.
+    const bypassed = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((record) => record.kind === "omp_worker_admission_bypassed");
+    expect(bypassed).toEqual([]);
+  });
+
   it("binds reordered native batch progress by each entry's job id and task marker", async () => {
     const resultRunner = vi.fn(async () => ({ ok: true }));
     const journal: unknown[] = [];
@@ -3614,7 +3681,11 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).toContainEqual(receipt);
   });
 
-  it("does not fall back from missing progress jobId to progress id", async () => {
+  it("binds a manager-less progress entry by its dispatch identity", async () => {
+    // Live shape of this OMP version: the host reports a background task job
+    // as `id` and omits any manager job id, so that id is the only key a later
+    // hub delivery can carry. Read-only attempts never reach a settlement
+    // observer, so this registration is their only route to a terminal record.
     const resultRunner = vi.fn(async () => ({ ok: true }));
     const journal: unknown[] = [];
     const handlers = loadFactory({
@@ -3622,7 +3693,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       ompWorkerResultRunner: resultRunner,
     }, journal);
     const ctx = makeCtx();
-    const agentId = "KnownMissingJobWorker";
+    const agentId = "ManagerlessJobWorker";
     const toolCallId = "missing-progress-job";
     const spawn = (await handlers.get("tool_call")!({
       toolName: "task",
@@ -3650,18 +3721,28 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       },
     }, ctx);
 
-    await handlers.get("message_end")!(
-      asyncResultMessage([{
-        jobId: agentId,
-        agentId,
-        status: "completed",
-      }]),
-      ctx,
-    );
+    expect(journal).toContainEqual({
+      type: "custom",
+      customType: "second-brain.worker-job-pending",
+      data: expect.objectContaining({ session: "wiring-test", jobId: agentId, agentId, taskId }),
+    });
 
-    expect(await workerCompletionRecords()).toEqual([]);
-    expect(resultRunner).not.toHaveBeenCalled();
-    expect(journal).not.toContainEqual({
+    await handlers.get("tool_result")!({
+      toolName: "hub", toolCallId: "missing-progress-job-poll", input: {}, content: [], isError: false,
+      details: { jobs: [{ id: agentId, type: "task", status: "completed" }] },
+    }, ctx);
+
+    expect(await workerCompletionRecords()).toEqual([
+      expect.objectContaining({
+        task_id: taskId,
+        child_omp_agent_id: agentId,
+        status: "completed",
+      }),
+    ]);
+    expect(resultRunner).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ taskId, status: "completed" }),
+    );
+    expect(journal).toContainEqual({
       type: "custom",
       customType: "second-brain.worker-result-accepted",
       data: expect.objectContaining({ session: "wiring-test", taskId }),
