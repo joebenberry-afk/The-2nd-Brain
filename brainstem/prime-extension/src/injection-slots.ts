@@ -18,9 +18,17 @@
 
 import { createHash } from "node:crypto";
 
-export const MEMORY_COMMANDS_TEXT =
-  'To remember: run `brainctl remember "<claim>" --evidence <path>`.\n' +
-  'To check: `brainctl recall "<question>"`.\n';
+/**
+ * T1.6 memory commands (PREFIX component 3).
+ *
+ * Emptied 2026-09-21. An OMP session mounts no `brainctl` device, so the prefix
+ * told every session to run a command that does not exist there; recall is
+ * delivered by the Brain's own injection path and needs no model action. The
+ * instruction also pointed at an authority-minting entrypoint (`brainctl
+ * remember` can mint USER_AUTHORED/VERIFIED), which an agent-facing prompt
+ * should not recommend. The constant stays as a single seam for the slot.
+ */
+export const MEMORY_COMMANDS_TEXT = "";
 
 const sessionPrefixHashes = new Map<string, string>();
 
@@ -79,8 +87,11 @@ export function assemblePrefix(options: AssemblePrefixOptions): string {
     parts.push(descText);
   }
 
-  // (3) The two T1.6 commands
-  parts.push(MEMORY_COMMANDS_TEXT.trim());
+  // (3) Memory command slot — empty since 2026-09-21 (no such device is mounted)
+  const memoryCommands = MEMORY_COMMANDS_TEXT.trim();
+  if (memoryCommands) {
+    parts.push(memoryCommands);
+  }
 
   // (4) Project identity line
   const proj = (options.projectId || "default").trim();
@@ -106,7 +117,7 @@ export function appendPrefixExtras(base: string | undefined, projectId: string):
   if (base === undefined || base.trim() === "") return undefined;
   if (base.includes(PREFIX_EXTRAS_MARKER)) return base;
   const proj = (projectId || "default").trim();
-  const extras = `${MEMORY_COMMANDS_TEXT.trim()}\n\nProject: ${proj}`;
+  const extras = [MEMORY_COMMANDS_TEXT.trim(), `Project: ${proj}`].filter(Boolean).join("\n\n");
   return `${base}\n\n[${PREFIX_EXTRAS_MARKER}]\n${extras}`;
 }
 

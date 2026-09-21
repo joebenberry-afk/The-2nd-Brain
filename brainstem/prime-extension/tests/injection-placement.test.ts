@@ -71,8 +71,9 @@ describe("T2.4 Injection placement", () => {
 
     expect(prefix).toContain("[second-brain-lean-code-kernel]");
     expect(prefix).toContain("skill-test v1.0.0: Test purpose.");
-    expect(prefix).toContain('To remember: run `brainctl remember "<claim>" --evidence <path>`.');
-    expect(prefix).toContain('To check: `brainctl recall "<question>"`.');
+    // An OMP session mounts no `brainctl` device, so the prefix must not
+    // instruct it (2026-09-21).
+    expect(prefix).not.toContain("brainctl");
     expect(prefix).toContain("Project: test-proj");
 
     // Dynamic items must NOT be in prefix

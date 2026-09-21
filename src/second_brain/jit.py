@@ -40,6 +40,15 @@ _CONTEXT_REF_LIMIT = 32
 BODY_MARKER = "# Task"  # the body starts at this line; everything before is header
 
 
+_EMPTY_SECTION_LINES = frozenset({"(none)", "No matching terms.", "count: 0"})
+
+
+def _is_empty_section(lines: list[str]) -> bool:
+    """True when a rendered capsule section carries no retrieved content."""
+    meaningful = [line.strip() for line in lines if line.strip()]
+    return not meaningful or all(line in _EMPTY_SECTION_LINES for line in meaningful)
+
+
 def make_slug(task: str) -> str:
     """Slugify a task: lowercase, non-alphanumerics -> '-', max 40 chars.
 
@@ -155,12 +164,19 @@ def compile_context(
     verified_decisions: list[str] | None = None,
     memory_refs: list[str] | None = None,
     procedure_refs: list[str] | None = None,
+    include_task: bool = True,
+    omit_empty: bool = False,
 ) -> Path:
     """Compile the task context capsule. Returns its path.
 
     Ordered references are metadata only. Resolution and authorization remain
     the responsibility of the caller; this compiler never treats them as
     executable instructions.
+
+    ``include_task=False`` and ``omit_empty=True`` are the worker-dispatch
+    shape: the worker prompt already carries the task text, and a section that
+    resolved nothing is prompt cost with no content (2026-09-21: recon workers
+    received an envelope of empty sections).
     """
     if not isinstance(task, str):
         raise BrainError("task must be a string")
@@ -202,11 +218,10 @@ def compile_context(
     requirements = _load_or_none(show_requirements, home, session_id)
     reads = _load_or_none(show_reads, home, session_id) or []
 
-    body: list[str] = []
-    body.append(BODY_MARKER)
-    body.append("")
-    body.append(task.strip() if task.strip() else "(none)")
-    body.append("")
+    body: list[str] = [BODY_MARKER, ""]
+    if include_task:
+        body.append(task.strip() if task.strip() else "(none)")
+        body.append("")
 
     section_titles = {
         "protected_refs": "Protected References",
@@ -216,51 +231,51 @@ def compile_context(
         "procedure_refs": "Procedure",
     }
     for name in CONTEXT_ORDER:
+        refs = ordered_refs[name]
+        if omit_empty and not refs:
+            continue
         body.append(f"# {section_titles[name]}")
         body.append("")
-        refs = ordered_refs[name]
         if refs:
             body.extend(f"- {ref}" for ref in refs)
         else:
             body.append("(none)")
         body.append("")
 
-    body.append("# Requirements")
-    body.append("")
-    if requirements:
-        for entry in requirements:
-            body.append(
-                f"- {entry['id']} [{entry['importance']}/{entry['status']}] {entry['requirement']}"
-            )
-            for evidence in entry["evidence"]:
-                body.append(f"  - {evidence}")
-    else:
-        body.append("(none)")
-    body.append("")
+    if not (omit_empty and not requirements):
+        body.append("# Requirements")
+        body.append("")
+        if requirements:
+            for entry in requirements:
+                body.append(
+                    f"- {entry['id']} [{entry['importance']}/{entry['status']}] {entry['requirement']}"
+                )
+                for evidence in entry["evidence"]:
+                    body.append(f"  - {evidence}")
+        else:
+            body.append("(none)")
+        body.append("")
 
-    body.append("# Active State")
-    body.append("")
-    body.extend(_render_capsule(capsule))
-    body.append("")
-
-    body.append("# Project State")
-    body.append("")
-    body.extend(_project_state(home, proj))
-    body.append("")
-
-    body.append("# Lexicon Matches")
-    body.append("")
-    body.extend(_lexicon_matches(home, proj, task))
-    body.append("")
-
-    body.append("# Read Ledger Summary")
-    body.append("")
-    body.append(f"count: {len(reads)}")
+    read_lines = [f"count: {len(reads)}"]
     if reads:
-        for entry in reads[-10:]:
-            body.append(f"- {entry['path']} (purpose: {entry['purpose']})")
+        read_lines.extend(f"- {entry['path']} (purpose: {entry['purpose']})" for entry in reads[-10:])
     else:
-        body.append("(none)")
+        read_lines.append("(none)")
+
+    tail_sections: list[tuple[str, list[str], bool]] = [
+        ("Active State", _render_capsule(capsule), True),
+        ("Project State", _project_state(home, proj), True),
+        ("Lexicon Matches", _lexicon_matches(home, proj, task), True),
+        ("Read Ledger Summary", read_lines, False),
+    ]
+    for title, lines, trailing_blank in tail_sections:
+        if omit_empty and _is_empty_section(lines):
+            continue
+        body.append(f"# {title}")
+        body.append("")
+        body.extend(lines)
+        if trailing_blank:
+            body.append("")
 
     output = home / "outputs" / "context-capsules" / f"{session_id}-{make_slug(task)}.md"
     output.parent.mkdir(parents=True, exist_ok=True)

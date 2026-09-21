@@ -170,12 +170,23 @@ export function parseOmpWorkerContextOutput(stdout: string): OmpWorkerContextRes
 }
 
 export function renderOmpWorkerContext(handoff: OmpWorkerContextHandoff): string {
+  const resolved = Array.isArray(handoff.resolved_context) ? handoff.resolved_context : [];
+  const delta = handoff.context_delta ?? {};
+  const changed = Array.isArray(delta.changed_refs) ? delta.changed_refs : [];
+  const jitDelta = typeof delta.jit_delta === "string" ? delta.jit_delta.trim() : "";
+  const jit = typeof handoff.jit_context === "string" ? handoff.jit_context.trim() : "";
+  // Omit the envelope when it carries no facts. Live 2026-09-21: recon workers
+  // received an envelope whose every section was empty (`resolved_context: []`,
+  // `(none)`, `count: 0`) — pure prompt cost with no retrieved content.
+  if (resolved.length === 0 && changed.length === 0 && jit === "" && jitDelta === "") {
+    return "";
+  }
   const wire = JSON.stringify({
     mode: handoff.mode,
     resolved_context: handoff.resolved_context,
     context_delta: handoff.context_delta,
     context_fingerprint: handoff.context_fingerprint,
-    jit_context: handoff.jit_context,
+    jit_context: jit,
   });
   return `[SECOND_BRAIN_WORKER_CONTEXT]\n${wire}\n[/SECOND_BRAIN_WORKER_CONTEXT]`;
 }

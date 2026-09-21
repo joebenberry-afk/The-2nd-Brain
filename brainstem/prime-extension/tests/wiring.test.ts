@@ -2112,17 +2112,14 @@ describe("driver-orchestration contract (src/index.ts)", () => {
     expect(contract.driver_contract_injected).toBe(true);
   });
 
-  it("before_agent_start: PREFIX (T1.6 memory commands + project identity line) is actually delivered to the model, not just hashed for drift", async () => {
+  it("before_agent_start: PREFIX (project identity line, no unavailable command) is delivered to the model, not just hashed for drift", async () => {
     const handlers = loadFactory();
     const result = await handlers.get("before_agent_start")!({ prompt: "do the thing" }, DRIVER_CTX);
     const patch = result as { systemPrompt?: string } | undefined;
     expect(patch).toBeDefined();
-    expect(patch!.systemPrompt).toContain(
-      'To remember: run `brainctl remember "<claim>" --evidence <path>`.',
-    );
-    expect(patch!.systemPrompt).toContain('To check: `brainctl recall "<question>"`.');
     expect(patch!.systemPrompt).toContain("Project: default");
-    // PREFIX order: driver contract, then the T1.6 commands + project line
+    expect(patch!.systemPrompt).not.toContain("brainctl");
+    // PREFIX order: driver contract, then the project identity line
     expect(patch!.systemPrompt!.indexOf(MARKER)).toBeLessThan(
       patch!.systemPrompt!.indexOf("Project: default"),
     );
