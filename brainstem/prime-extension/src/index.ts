@@ -1111,9 +1111,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // both tables are unclassified and therefore fail closed.
   const readOnlyWorkerAgents: Record<string, true> = {
     scout: true, reviewer: true, "security-reviewer": true, validator: true,
+    "technical-librarian": true, "evidence-auditor": true,
+    "implementation-verifier": true, "system-architect": true,
   };
   const mutatingWorkerAgents: Record<string, true> = {
-    task: true, sonic: true,
+    task: true, sonic: true, "feature-implementer": true,
+    "integration-engineer": true, "performance-engineer": true,
   };
 
   // The OMP `task` schema has no `access_intent` field, so the harness can never
@@ -2114,7 +2117,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (rawEntry == null || typeof rawEntry !== "object") continue;
         const entry = rawEntry as Record<string, unknown>;
         const agentId = typeof entry.id === "string" ? entry.id : undefined;
-        const jobId = typeof entry.jobId === "string" ? entry.jobId : undefined;
+        // This OMP version reports the manager job as `entry.id` and leaves
+        // `entry.jobId` null (verified live 2026-09-21); the hub job snapshot and
+        // the async-result envelope both key that same job by `id`, so without the
+        // fallback every read-only worker is dropped, never settled, and reaped
+        // FAILED/lease_expired (m00.3 §15.2).
+        const jobId = typeof entry.jobId === "string" ? entry.jobId : agentId;
         const entryTask = typeof entry.task === "string" ? entry.task : "";
         const marker = entryTask.match(WORKER_TASK_MARKER_RE);
         if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
