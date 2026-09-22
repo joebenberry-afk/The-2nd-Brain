@@ -25,7 +25,7 @@ Also referenced and **not** copied here, with their retrieval route:
 
 | Reference | Where it lives | Route |
 | --- | --- | --- |
-| `Second_Brain_M00_OneShot_Closure_Mandate.md` | `docs/intake/` (this tree and `main`) | tracked in this worktree already |
+| `Second_Brain_M00_OneShot_Closure_Mandate.md` | `docs/intake/` in the **main checkout only** | read from the main tree; **corrected 2026-09-22** — an independent verifier found this file absent from the candidate (`docs/intake/` here holds only the register and this pack), so an earlier version of this row over-claimed that it was tracked in this worktree |
 | `M00.3_Phase_A_Host_Authority_Continuation.md` | `docs/requirements/` in `main` only | absent from this branch; read from the main checkout |
 | `schema-bootstrap-20260921/QUALIFICATION.md` | `outputs/reports/` in `main` only (gitignored) | read from the main checkout; the #2b debt list it carries is restated in `schema-authority.md` §8 |
 | `m00.2-p2-lease-and-manifest-20260921/REPORT.md` | `outputs/reports/` in `main` only | read from the main checkout |

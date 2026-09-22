@@ -419,8 +419,13 @@ describe("restart replay of a journaled worker completion", () => {
     const errors = records.filter((record) => record.kind === "extension_error");
     expect(errors.some((record) => String(record.error).includes(String(started.outcomes[0]?.error))))
       .toBe(true);
-    // A refusal must not be reported as a completed worker to anyone else either.
-    expect(records.filter((record) => record.kind === "worker_completed")).toHaveLength(0);
+    // NOTE: `emitWorkerCompletion` mirrors an *accepted* completion through `mirror(...)`
+    // (src/index.ts:883), which is fire-and-forget into the ledger-mirror engine and writes no
+    // telemetry record. Asserting "no worker_completed here" would therefore never fail, so it is
+    // deliberately absent: the honest statement is that the mirror sink is not asserted by this
+    // file, and an independent verifier flagged exactly that. What is asserted instead is the
+    // journal the extension itself writes: no `worker-result-accepted` (above) and a correlated
+    // `extension_error` (below).
     expect(started.dispatchFailures).toHaveLength(0);
 
     const after = probe(base, taskId);
