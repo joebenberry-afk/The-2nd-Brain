@@ -45,9 +45,22 @@ FEATURE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     "retrieval": {"required": (), "optional": ()},
     "context_injection": {"required": (), "optional": ()},
     "telemetry": {"required": (), "optional": ("effective_tool_grant",)},
-    "read_only_delegation": {
+    "read_only_delegation_declared": {
+        # A restricted mode: Brain knows which execution ran and can correlate its
+        # result. It is NOT a security-qualified lane, because nothing here proves the
+        # host's final effective tool grant (see SB-ORCH-001).
         "required": ("execution_binding",),
-        "optional": ("cancellation_observation", "effective_tool_grant"),
+        "optional": ("cancellation_observation",),
+    },
+    "read_only_delegation_verified": {
+        # The qualified lane: the host's effective tool grant is observed, so a worker
+        # named `scout` cannot have been granted a mutating tool after resolution.
+        "required": (
+            "execution_binding",
+            "effective_tool_grant",
+            "authenticated_observation_source",
+        ),
+        "optional": ("cancellation_observation",),
     },
     "mutating_delegation": {
         # The whole point: a writer lease may only be released on authenticated
@@ -158,18 +171,54 @@ def parse_manifest(raw: Any) -> dict[str, Any]:
     }
 
 
-def negotiate(raw_manifest: Any) -> dict[str, Any]:
-    """Decide which Brain features may run on the host behind this advertisement."""
+#: Features whose failure means a *safety* invariant would be weakened. These are
+#: additionally gated on the advertisement itself being trusted and bound to the
+#: qualified host identity: an advertisement is a claim, and a claim that arrives
+#: through a channel agent-controlled code can write is not evidence.
+SAFETY_FEATURES: tuple[str, ...] = (
+    "mutating_delegation",
+    "settlement_recovery",
+    "read_only_delegation_verified",
+)
+
+
+def negotiate(
+    raw_manifest: Any,
+    *,
+    trusted_advertisement: bool = False,
+    expect_host_version: str | None = None,
+) -> dict[str, Any]:
+    """Decide which Brain features may run on the host behind this advertisement.
+
+    ``trusted_advertisement`` must be passed by the caller that verified the
+    advertisement is bound to the qualified host identity (build verification, not a
+    file read). Until such a channel exists, the default leaves every safety feature
+    refused even when the manifest claims the capabilities.
+    """
     manifest = parse_manifest(raw_manifest)
     available = manifest["capabilities"]
+    version_matches = (
+        expect_host_version is None or manifest["host"]["version"] == expect_host_version
+    )
+    safety_gate = "advertisement is not bound to a qualified host identity"
+    if trusted_advertisement and not version_matches:
+        safety_gate = (
+            f"advertisement names host {manifest['host']['version']!r}, "
+            f"expected {expect_host_version!r}"
+        )
     features: dict[str, dict[str, Any]] = {}
     for feature, requirement in FEATURE_REQUIREMENTS.items():
         missing = [name for name in requirement["required"] if not available.get(name)]
         narrowed = [name for name in requirement["optional"] if not available.get(name)]
+        gated = feature in SAFETY_FEATURES and not (trusted_advertisement and version_matches)
+        reason = "capabilities present" if not missing else "missing: " + ", ".join(missing)
+        if gated and not missing:
+            reason = safety_gate
         features[feature] = {
-            "enabled": not missing,
-            "reason": "capabilities present" if not missing else "missing: " + ", ".join(missing),
+            "enabled": not missing and not gated,
+            "reason": reason,
             "narrowed_by": narrowed,
+            "safety_gated": feature in SAFETY_FEATURES,
         }
     disabled = {name: info for name, info in features.items() if not info["enabled"]}
     return {
@@ -180,11 +229,22 @@ def negotiate(raw_manifest: Any) -> dict[str, Any]:
         "features": features,
         "refusals": sorted(disabled),
         "fail_closed": bool(disabled),
+        "trusted_advertisement": trusted_advertisement,
     }
 
 
-def parse_observation(raw: Any) -> dict[str, Any]:
-    """Validate one host observation, binding it to an exact attempt and generation."""
+def parse_observation(
+    raw: Any,
+    *,
+    expect_attempt_id: str | None = None,
+    expect_host_generation: int | None = None,
+) -> dict[str, Any]:
+    """Validate one host observation, binding it to an exact attempt and generation.
+
+    Passing the identity the caller *intended* turns this from structural validation
+    into an end-to-end binding check: a well-formed payload for a different attempt or
+    generation is refused rather than silently accepted.
+    """
     if not isinstance(raw, dict):
         raise HostProtocolError("MALFORMED_OBSERVATION", "observation must be an object")
     if raw.get("protocol_version") != PROTOCOL_VERSION:
@@ -194,6 +254,16 @@ def parse_observation(raw: Any) -> dict[str, Any]:
     kind = _text(raw.get("kind"), "kind", limit=64)
     attempt_id = _text(raw.get("attempt_id"), "attempt_id")
     host_generation = _generation(raw.get("host_generation"))
+    if expect_attempt_id is not None and attempt_id != expect_attempt_id:
+        raise HostProtocolError(
+            "BINDING_MISMATCH",
+            f"observation names attempt {attempt_id!r}, expected {expect_attempt_id!r}",
+        )
+    if expect_host_generation is not None and host_generation != expect_host_generation:
+        raise HostProtocolError(
+            "BINDING_MISMATCH",
+            f"observation names generation {host_generation}, expected {expect_host_generation}",
+        )
     method = _text(raw.get("method"), "method")
     observation = _text(raw.get("observation"), "observation")
     parsed: dict[str, Any] = {
@@ -238,7 +308,7 @@ def parse_observation(raw: Any) -> dict[str, Any]:
         if not isinstance(raw.get("read_only"), bool):
             raise HostProtocolError("MALFORMED_OBSERVATION", "read_only must be a boolean")
         parsed["read_only"] = raw["read_only"]
-    elif kind == "HostExecutionCensus":
+    elif kind == "HostExecutionInventory":
         resources = raw.get("resources")
         if not isinstance(resources, list):
             raise HostProtocolError("MALFORMED_OBSERVATION", "resources must be a list")
@@ -247,16 +317,22 @@ def parse_observation(raw: Any) -> dict[str, Any]:
                 {
                     "kind": _text(entry.get("kind"), "resources[].kind", limit=64),
                     "id": _text(entry.get("id"), "resources[].id"),
-                    "quiescent": bool(entry.get("quiescent")),
+                    # What was OBSERVED, not what is true: a listed execution that looks
+                    # terminal is not proof that its worktree cannot still mutate.
+                    "observed_terminal": bool(entry.get("observed_terminal")),
                 }
                 for entry in resources
                 if isinstance(entry, dict)
             ),
             key=lambda entry: (entry["kind"], entry["id"]),
         )
-        if not isinstance(raw.get("resources_complete"), bool):
-            raise HostProtocolError("MALFORMED_OBSERVATION", "resources_complete must be a boolean")
-        parsed["resources_complete"] = raw["resources_complete"]
+        for flag, message in (
+            ("census_available", "census_available must be a boolean"),
+            ("census_scope_complete", "census_scope_complete must be a boolean"),
+        ):
+            if not isinstance(raw.get(flag), bool):
+                raise HostProtocolError("MALFORMED_OBSERVATION", message)
+            parsed[flag] = raw[flag]
     else:
         raise HostProtocolError("UNKNOWN_OBSERVATION_KIND", f"unknown observation kind {kind!r}")
     return parsed
