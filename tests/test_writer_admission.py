@@ -1682,13 +1682,16 @@ def test_non_terminal_transition_needs_no_completion_authority(brain_home, tmp_p
     _register(brain_home, root)
     context = _prepare(brain_home, root, "auth-telemetry")
     registration = worker_protocol.register_task(
-        brain_home, "auth-telemetry-telemetry", context["packet_sha256"], session_id="s"
+        brain_home,
+        "auth-telemetry-telemetry",
+        _response_text(context, "packet_sha256"),
+        session_id="s",
     )
     assert registration["state"] not in contracts.WorkerLifecycle.TERMINAL_STATES
     started = worker_protocol.record_worker_event(
         brain_home,
         "auth-telemetry-telemetry",
-        context["packet_sha256"],
+        _response_text(context, "packet_sha256"),
         "worker_started",
         host="omp",
     )
@@ -1711,9 +1714,9 @@ def test_protocol_invalid_terminal_transition_keeps_its_own_diagnostic(
         worker_protocol.record_worker_event(
             brain_home,
             "auth-protocol",
-            context["packet_sha256"],
+            _response_text(context, "packet_sha256"),
             "completed",
-            attempt_id=context["attempt_id"],
+            attempt_id=_response_text(context, "attempt_id"),
             callback_token="wrong",
         )
     assert raised.value.code == "PROTOCOL_ERROR"

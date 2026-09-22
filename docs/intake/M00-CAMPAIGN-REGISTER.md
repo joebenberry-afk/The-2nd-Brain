@@ -54,12 +54,12 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | #3-P | Producer forwards attempt authority through private host transport | extension `worker-result-bridge.ts`, `index.ts` | 4 producer contract tests (`tests/worker-result-authority.test.ts`); 763/763 extension suite | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | include in integrated review |
 | #3-C | Terminal-evidence guard at both protected writes | `worker_protocol.record_worker_event` | acceptance matrix (10 rows); mutation sensitivity; Jev 8/8 (revision `01e4bdd`, pre-integration) | reviewed at `01e4bdd` (`incorrect` as mergeable alone, guard sound) | `EVIDENCED_IN_CANDIDATE` | re-review at `1cee974`+ |
 | #3-R.1 | **Replay proof, Python side** (already executed): unauthorized duplicate writes no evidence; authenticated duplicate is idempotent | `worker_protocol.record_worker_event` | `test_terminal_event_without_token_is_refused_and_writes_no_evidence`, `test_duplicate_authenticated_terminal_event_is_idempotent` — both green in the 105-test candidate matrix | — | `EVIDENCED_IN_CANDIDATE` | treat as the durable-fact half of the replay proof |
-| #3-R.2 | **Replay proof, extension leg** — corrected expectation: emission is permitted; the requirement is no unauthorized authoritative effect | `recoverWorkerResults`, `before_agent_start`, `emitWorkerCompletion` | `brainstem/prime-extension/tests/worker-result-replay.test.ts` (7 cases) + `tests/fixtures/omp_replay_state.py`; report `outputs/reports/m00.3-replay-authority-20260922/REPORT.md` | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | independent review (blocked in-session: `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`) |
+| #3-R.2 | **Replay proof, extension leg** — corrected expectation: emission is permitted; the requirement is no unauthorized authoritative effect | `recoverWorkerResults`, `before_agent_start`, `emitWorkerCompletion` | `brainstem/prime-extension/tests/worker-result-replay.test.ts` (8 cases) + `tests/fixtures/omp_replay_state.py`; report `outputs/reports/m00.3-replay-authority-20260922/REPORT.md`; mutation: guard-removal 5 failed / reconstruction-removal 7 failed, bytes restored | read-only independent **audit** returned 9 PASS + 6 not-yet-demonstrated items, all six repaired (report §7); acceptance review still not obtained (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` blocks mutating dispatch in-session) | `EVIDENCED_IN_CANDIDATE` | obtain the producer/consumer/custody/replay review through an already-permitted route |
 | #3-R.3 | **Journal-controlled admission reconstruction** | `index.ts` recovery branch for `second-brain.worker-admission-pending` | held under #4; read-only case now reproduced end-to-end (integrated evidence, `REPORT.md` §4.3) | — | `OPEN` under **#4** (M00 blocker: forged read-only completion) | close #4 issuance/observation authority; do not resolve under #3 |
 | #3-R.4 | Tracking-state reconstruction is not new privileged admission (no issuance, no ownership, no execution start on the replay path) | `recoverWorkerResults` | `REPORT.md` §4.1; probe shows ownership/state unchanged | — | `EVIDENCED_IN_CANDIDATE` | include in #4 review |
 | ADM | **Admission-issuer authority**: a caller able to invoke admission obtains the credential for the attempt it created | `cli.py:3371-3384`, `omp_adapter.py:65-79`, `:138-139` | reproduced reading; `WORKTREE_WRITER_BUSY` proves exclusion on that path only | — | `OPEN` (explicit M00.3 blocker) | belongs to #4; #3 must not be described as closing no-self-approval |
 | #2a | Initiating schema-collision containment | `brain_schema`, `vmem` | `c017dc3`; qualification record with reviewer verdict at top | operational defect CLOSED | `CLOSED` (as scoped) | — |
-| #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | debt ledger in `schema-bootstrap-20260921/QUALIFICATION.md` | reviewer: `incorrect` for the stronger claim | `OPEN` | after #3: one authority for identity/legal transitions; deterministic registration; one version source per namespace; `events_fts` reserved-name conflict; per-missing-table DDL rule; deepen schema comparison; interrupt/compete-open tests; legacy reopen idempotency |
+| #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | increment 2026-09-22: `outputs/reports/m00.3-schema-authority-20260922/REPORT.md` — reserved-name ownership + mutation, import-time registration, VMem migration inside the authority transaction, one DB-version source, stronger `schema_dump`, inherited lint/type gates repaired | earlier stronger claim still `incorrect`; increment not yet re-reviewed | `IN_PROGRESS` — 4 of 7 open items closed | remaining: store-as-transition-authority (`_schema_state`/`_migrate_legacy_chain` incl. the version-2 `prev_hash` case), test-strength items (strict-prefix fixture, VMem public reader, separate-process first open, write witness), authority-chosen VMem columns |
 | #4 | Trusted issuance, host observations, effective grants | `BrainHostProtocol`, bridge, adapters | — | — | `OPEN` | after #2b: close the issuing route, not only the consumer; smallest enforceable candidate-local mechanism |
 | #5 | Repeatable settlement and truthful worker recording | worker lifecycle | — | — | `OPEN` | after #4: one guarded finalization path; ten sequential mutating workers on one disposable worktree |
 | #6 | Episode/root-scoped accounting | budget layer | — | — | `OPEN` | after #5: dedupe same billable request, not all requests; reserve before admission |
@@ -108,13 +108,19 @@ but at the **consumer**, not by host-side skipping, and the extension path throw
 Consequences for the mandated replay requirements, stated against the code rather than against my
 earlier summary:
 
+> **Owner correction (2026-09-22), applied below and in the executed evidence:** the requirement is
+> **zero unauthorized authoritative effects**, not zero completion emissions. A completion emitted
+> without the attempt's credential and refused by the Brain satisfies it. Any earlier statement in
+> this register that a fresh process must emit *nothing* is **superseded**; the executed test asserts
+> exactly one emission whose credential is absent, plus the refusal and the unchanged durable state.
+
 | Requirement | Status under the actual mechanism |
 | --- | --- |
-| no new authoritative terminal evidence without authority | **holds** — the Brain refuses; nothing is written |
-| no persisted callback secret | **holds** — the token is never journaled |
-| unauthenticated replay stays unverified, not failure/settlement | **holds for Brain state** (no fact created); the host surfaces a receipt failure, which needs to be checked for whether it marks anything failed |
-| no automatic re-admission of unresolved attempts | **does not hold as I described it** — recovery *does* re-admit the attempt from the journal. That is the designed dispatch-recovery path, but it is not what the mandate's wording describes, and it must be reported rather than glossed |
-| no ownership release on restart | **holds** — no release call on this path |
+| no new authoritative terminal evidence without authority | **holds, and is now executed end-to-end** — the Brain refuses with `UNAUTHORIZED_CALLBACK`; nothing is written |
+| no persisted callback secret | **holds** — the token is never journaled (asserted on the emitted options) |
+| unauthenticated replay stays unverified, not failure/settlement | **holds for Brain state** (no fact created); the extension records a receipt failure (`extension_error`) and journals no acceptance, no worker failure, and no `worker_completed` mirror |
+| no automatic re-admission of unresolved attempts | **holds as scoped**: recovery reconstructs *tracking state* from the journal (maps, pending set) and issues no credential, takes no ownership, and starts no execution — see #3-R.4. It is not a new privileged admission |
+| no ownership release on restart | **holds** — asserted directly on `writer_ownership` before/after, including on an attempt whose outcome was already accepted |
 
 ### New finding for #4: journal-controlled admission reconstruction
 
@@ -128,35 +134,41 @@ attempt-credential one: it belongs under **#4** (trusted host observation), and 
 form of the "altered journal entry" check the owner asked for. Not to be resolved under #3, and #3
 must not be described as establishing trustworthy host observation.
 
-## Verified recipe for the extension replay test (execute next)
+## Extension replay test recipe — EXECUTED (kept for provenance; the "zero invocations" line is superseded)
 
-Discovered, not yet executed. Everything needed is known:
+Discovered, then executed. The executed test is
+`brainstem/prime-extension/tests/worker-result-replay.test.ts` (8 cases, green) with the fixture
+`tests/fixtures/omp_replay_state.py`; results in
+`outputs/reports/m00.3-replay-authority-20260922/REPORT.md`.
 
-- **Entrypoint:** the extension factory (default export, `src/index.ts:794`). A test builds
-  `pi = { on: (name, h) => handlers.set(name, h), emit: () => {} } as unknown as ExtensionAPI`
-  (`tests/omp-routing.test.ts:115-121` shows the exact shape) and then calls `extension(pi, options)`.
+- **Entrypoint:** the extension factory (default export, `src/index.ts:794`). The test builds
+  `pi = { on, emit, appendEntry } as unknown as ExtensionAPI` and calls `factory(pi, options)`.
 - **Hook:** `before_agent_start` — one `recoverWorkerResults` call site sits inside it
   (`src/index.ts:2987` → call at `:3031`). Three other call sites exist (`:2175`, `:2301`, `:2372`).
-- **Runner override:** `options.ompWorkerResultRunner` (`:778`, bound at `:1095`) — capture every
-  invocation and assert on the captured options.
+- **Runner override:** `options.ompWorkerResultRunner` (`:778`, bound at `:1095`) — the seam captures
+  every invocation and delegates to the real bridge, so the captured options are what the Brain saw.
 - **Journal shape:** entries are read from `ctx.sessionManager.getEntries()`; the recovery loop
   accepts `customType === "second-brain.worker-result-pending"` with `fields.task_id`,
   `fields.packet_sha256`, `fields.status ∈ {completed, failed, cancelled}`, `fields.worker_agent`,
   plus top-level `attemptId` and `summary`.
-- **Why the negative case needs no setup:** a fresh process has an empty
-  `workerAdmissionsByTask`, so a journal entry cannot match (`:2112`) and must produce **zero**
-  runner invocations. That is the mandated fail-closed observation.
+- **~~Why the negative case needs no setup~~ (superseded):** the earlier claim that a fresh process
+  must produce **zero** runner invocations is wrong on both counts. Recovery reconstructs the
+  admission from `second-brain.worker-admission-pending`, the result entry then matches it, and the
+  completion **is** emitted — without a credential. The executed observation is exactly one emission
+  with `callbackToken === undefined` plus the consumer's refusal, not zero emissions. A journal with
+  a result entry but **no** admission entry still emits nothing, and that case is asserted as a
+  dependency control.
 
-**Vacuity trap — this is why the test was not written blind.** If the `before_agent_start` event
-object does not match what the handler expects, the handler returns early, the runner is never
-called, and the assertion "zero emissions" passes **without ever reaching recovery**. A failing
-guard and a handler that never ran are indistinguishable from the assertion alone. The test must
-therefore also assert a positive side effect that only a fully-executed hook produces (read the
-`:2987-3035` region for the cheapest observable, e.g. the readiness/telemetry record the hook
-writes), or drive an entry that must be *classified* — and fail loudly if the handler short-circuits.
+**Vacuity trap — resolved in the executed test.** A handler that never runs and a guard that refuses
+are indistinguishable from an absence assertion alone. The test therefore (a) asserts the registered
+handler exists, (b) asserts the positive side effects of a fully-executed hook (the emission and the
+`second-brain.worker-result-pending` journal entry it writes), and (c) drives a deliberately
+disconnected hook to show those reachability observations disappear — so the absence assertions
+cannot pass vacuously.
 
-Same discipline for the same-process case: it needs a live admission in `workerAdmissionsByTask`
-(populated by the dispatch flow), which is a larger fixture than the journal alone.
+The same-process live-admission fixture was not needed: the credential-present control replays the
+identical captured payload with the attempt's real token through the same real bridge and consumer,
+which proves the payload was binding-correct without driving the dispatch flow.
 
 ## Environment and constraints
 

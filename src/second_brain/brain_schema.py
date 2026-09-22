@@ -66,7 +66,12 @@ CANONICAL_TABLES: dict[str, tuple[str, ...]] = {
     "vmem": ("session_vmem",),
 }
 
-_IGNORED_NAMES = frozenset(
+#: Objects that live in the shared database without being canonical tables: the ledger's
+#: full-text index and the shadow tables SQLite creates for it. A name here is **not**
+#: ownership — `reserved_objects` treats one as ours only when its shape matches the
+#: definition the owning component registered. Anything else keeps the name and stays a
+#: foreign object, which `classify` reports and `ensure` refuses.
+RESERVED_NAMES = frozenset(
     {"events_fts", "events_fts_data", "events_fts_idx", "events_fts_content",
      "events_fts_docsize", "events_fts_config"}
 )
@@ -89,6 +94,7 @@ class DatabaseIdentity:
     version: int | None
     tables: set[str] = field(default_factory=set)
     unknown_tables: set[str] = field(default_factory=set)
+    reserved: set[str] = field(default_factory=set)
     missing_component_tables: dict[str, tuple[str, ...]] = field(default_factory=dict)
     ownership: dict[str, str] = field(default_factory=dict)
     has_rows: bool = False
@@ -154,10 +160,12 @@ def classify(
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
     }
     identity = DatabaseIdentity(state="empty", version=None, tables=set(tables))
+    verified_reserved = reserved_objects(conn, source)
+    identity.reserved = set(verified_reserved)
     ignored = {
         name for name in tables
-        if name.startswith(_IGNORED_PREFIXES) or name in _IGNORED_NAMES
-    }
+        if name.startswith(_IGNORED_PREFIXES)
+    } | set(verified_reserved)
     known = known_tables(source)
     identity.unknown_tables = {name for name in tables - ignored - known}
 
@@ -317,6 +325,7 @@ def _ensure_metadata(
 
 
 _CANONICAL_COLUMNS: dict[str, list[str]] = {}
+_REFERENCE_SHAPES: dict[str, tuple[bool, list[str]]] = {}
 
 
 _CREATE_TABLE_RE = re.compile(
@@ -338,26 +347,89 @@ def _statement_table(statement: str) -> str | None:
     return None
 
 
-def canonical_columns(source: dict[str, Component] | None = None) -> dict[str, list[str]]:
-    """The column list each canonical table must have, derived from the registered DDL."""
-    global _CANONICAL_COLUMNS
-    if _CANONICAL_COLUMNS:
-        return _CANONICAL_COLUMNS
+def _reference_shapes(
+    source: dict[str, Component] | None = None,
+) -> dict[str, tuple[bool, list[str]]]:
+    """Every object the registered DDL creates: ``(is_virtual_fts, ordered column names)``.
+
+    Built by running the registered DDL in an in-memory database, so the expected shape is the
+    authority's own definition rather than a second hand-written copy. SQLite creates a virtual
+    table's shadow tables alongside it, which is why this covers the reserved names as well.
+    """
+    global _REFERENCE_SHAPES
+    if _REFERENCE_SHAPES:
+        return _REFERENCE_SHAPES
     components_map = source if source is not None else components()
     conn = sqlite3.connect(":memory:")
     try:
         for name in sorted(components_map):
             for statement in _statements(components_map[name].ddl):
                 conn.execute(statement)
-        columns: dict[str, list[str]] = {}
-        for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-            columns[str(table)] = [
-                str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')
-            ]
-        _CANONICAL_COLUMNS = columns
-        return columns
+        shapes: dict[str, tuple[bool, list[str]]] = {}
+        for table, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'"):
+            shapes[str(table)] = (
+                isinstance(sql, str) and "using fts5" in sql.casefold(),
+                [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')],
+            )
+        _REFERENCE_SHAPES = shapes
+        return shapes
     finally:
         conn.close()
+
+
+def canonical_columns(source: dict[str, Component] | None = None) -> dict[str, list[str]]:
+    """The column list each registered table must have, derived from the registered DDL."""
+    global _CANONICAL_COLUMNS
+    if not _CANONICAL_COLUMNS:
+        _CANONICAL_COLUMNS = {
+            name: columns for name, (_, columns) in _reference_shapes(source).items()
+        }
+    return _CANONICAL_COLUMNS
+
+
+def reserved_objects(
+    conn: sqlite3.Connection,
+    source: dict[str, Component] | None = None,
+) -> frozenset[str]:
+    """Reserved-name objects present in this database that match the authority's definition.
+
+    A reserved name is not ownership. The ledger rebuilds `events_fts` from `events`, so an
+    object that merely carries that name — or the name of one of its shadow tables — may be
+    somebody else's data table. Only an object whose columns equal the authority's derived
+    definition, and (for the index itself) that is a real fts5 virtual table, is treated as
+    ours; anything else stays foreign, so `classify` reports it and `ensure` refuses rather
+    than ignoring it or letting `reindex()` remove it.
+    """
+    source = source if source is not None else components()
+    present = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
+    }
+    candidates = present & RESERVED_NAMES
+    if not candidates:
+        return frozenset()
+    reference = _reference_shapes(source)
+    verified: set[str] = set()
+    for name in sorted(reference):
+        is_virtual, columns = reference[name]
+        if not is_virtual or name not in RESERVED_NAMES or name not in candidates:
+            continue
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
+        ).fetchone()
+        if row is None or not isinstance(row[0], str) or "using fts5" not in row[0].casefold():
+            continue
+        actual = [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')]
+        if actual != columns:
+            continue
+        verified.add(name)
+        # SQLite refuses to create the index while one of its shadow names is taken, so a shadow
+        # name that exists beside a verified index is that index's own object. With no verified
+        # index, the shadow names are just names somebody used.
+        verified.update(
+            other for other in reference if other.startswith(f"{name}_") and other in present
+        )
+    return frozenset(verified)
 
 
 def _is_known_legacy_shape(
@@ -374,8 +446,9 @@ def _is_known_legacy_shape(
     """
     canonical = canonical_columns(source)
     known = known_tables(source)
+    reserved = reserved_objects(conn, source)
     for name in sorted(identity.tables):
-        if name.startswith(_IGNORED_PREFIXES) or name in _IGNORED_NAMES:
+        if name.startswith(_IGNORED_PREFIXES) or name in reserved:
             continue
         if name not in known or name not in canonical:
             return False
@@ -409,19 +482,28 @@ def _statements(ddl: str) -> list[str]:
 def schema_dump(conn: sqlite3.Connection) -> dict[str, Any]:
     """A structural fingerprint of the shared database, for equivalence comparisons.
 
-    Compares what actually defines a schema — tables, their columns, indexes, foreign keys —
-    plus the shared version and ownership rows. Used by tests and by any caller that needs to
-    assert two databases converged rather than merely both opening.
+    Compares what actually defines a schema — tables, their columns (including primary-key
+    flags), indexes, foreign keys, triggers, each object's stored SQL, the reserved objects
+    that belong to this database, and the shared version and ownership rows. Used by tests and
+    by any caller that needs to assert two databases converged rather than merely both opening.
     """
     tables = sorted(
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        if not str(row[0]).startswith(_IGNORED_PREFIXES) and str(row[0]) not in _IGNORED_NAMES
+        if not str(row[0]).startswith(_IGNORED_PREFIXES) and str(row[0]) not in RESERVED_NAMES
     )
-    dump: dict[str, Any] = {"tables": {}, "indexes": {}, "meta": {}}
+    dump: dict[str, Any] = {
+        "tables": {},
+        "indexes": {},
+        "sql": {},
+        "foreign_keys": {},
+        "triggers": {},
+        "reserved": {},
+        "meta": {},
+    }
     for name in tables:
         dump["tables"][name] = [
-            (str(row[1]), str(row[2]), int(row[3]), row[4])
+            (str(row[1]), str(row[2]), int(row[3]), row[4], int(row[5]))
             for row in conn.execute(f'PRAGMA table_info("{name}")')
         ]
         dump["indexes"][name] = sorted(
@@ -432,6 +514,22 @@ def schema_dump(conn: sqlite3.Connection) -> dict[str, Any]:
             )
             for row in conn.execute(f'PRAGMA index_list("{name}")')
         )
+        dump["foreign_keys"][name] = sorted(
+            (int(row[0]), str(row[2]), str(row[3]), str(row[4]), str(row[5]), str(row[6]))
+            for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')
+        )
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        dump["sql"][name] = str(row[0]) if row is not None and row[0] is not None else None
+    dump["triggers"] = sorted(
+        (str(row[0]), str(row[1]))
+        for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger'")
+    )
+    for name in sorted(reserved_objects(conn)):
+        dump["reserved"][name] = [
+            [str(row[1]), str(row[2])] for row in conn.execute(f'PRAGMA table_info("{name}")')
+        ]
     if META_TABLE in tables:
         dump["meta"] = {
             str(key): str(value)

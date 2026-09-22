@@ -48,7 +48,10 @@ from .contracts import (
 from .errors import BrainError
 from .security.paths import assert_safe_recursive_delete, resolve_under
 
-LEDGER_SCHEMA_VERSION = 2
+#: Database schema version of the shared per-session `ledger.sqlite`. One source: the bootstrap
+#: authority owns it (`brain_schema.SCHEMA_VERSION`) and writes it into `ledger_meta`; this alias
+#: exists so the ledger's own readers name the same number instead of carrying a second copy.
+LEDGER_SCHEMA_VERSION = brain_schema.SCHEMA_VERSION
 
 # T6.3 hash chain: fixed seed for the first event's prev_hash (64 zero hex
 # chars — no prior row exists to derive from).
@@ -231,6 +234,15 @@ def _ledger_table_shapes() -> dict[str, tuple[tuple, tuple]]:
         }
     finally:
         conn.close()
+
+
+# Registered at import time, not on first open: the authority's canonical shapes must not depend
+# on which store happened to open earlier in this process.
+brain_schema.register(
+    "ledger",
+    tables=tuple(sorted(_ledger_table_shapes())),
+    ddl=_SCHEMA + "\n" + _FTS_DDL,
+)
 
 
 def _legacy_history_fingerprint(conn: sqlite3.Connection) -> str:
@@ -459,10 +471,16 @@ class LedgerStore:
             ).fetchone()
         if header is None:
             # A component that shares this database (VMemStore) legitimately owns tables the
-            # ledger does not define. The authority decides what belongs here; this method
-            # only asks whether anything else is present.
-            unknown = set(tables) - set(shapes) - brain_schema.known_tables()
-            unknown = {name for name in unknown if not name.startswith(("sqlite_", "events_fts"))}
+            # ledger does not define, and the ledger's own full-text index is not a table it
+            # lists. The authority decides both: `reserved_objects` verifies that a reserved
+            # name really is the index this DDL defines, so a foreign object carrying that name
+            # stays unknown here instead of being ignored on the strength of its name.
+            reserved = brain_schema.reserved_objects(self._conn)
+            unknown = {
+                name
+                for name in set(tables) - set(shapes) - brain_schema.known_tables()
+                if not name.startswith("sqlite_") and name not in reserved
+            }
             if unknown:
                 raise BrainError("ledger schema unsupported: unidentified existing tables")
             for name in set(tables) & set(shapes):
@@ -536,14 +554,8 @@ class LedgerStore:
         try:
             # The shared authority decides identity first: this session's file may already
             # exist because another component (VMemStore) opened it, in which case the ledger's
-            # own tables are what is missing, not the schema.
-            brain_schema.register(
-                "ledger",
-                tables=tuple(sorted(_ledger_table_shapes())),
-                ddl=_SCHEMA + "\n" + _FTS_DDL,
-            )
-            # Creation and the header rows belong to the authority; this store supplies its own
-            # header fields and its DDL, and keeps its own post-conditions.
+            # own tables are what is missing, not the schema. This component's schema was
+            # registered at import; creation and the header rows belong to the authority.
             brain_schema.ensure(
                 conn=self._conn,
                 component="ledger",

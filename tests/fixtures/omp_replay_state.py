@@ -17,6 +17,7 @@ and runs the real bridge against this state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -167,6 +168,20 @@ def command_setup(args: argparse.Namespace) -> int:
         host_generation = 1
         native_attempt_id = f"native-{context['attempt_id']}"
         native_job_id = "job-1"
+    record = {
+        "task_id": args.task_id,
+        "attempt_id": context["attempt_id"],
+        "packet_sha256": context["packet_sha256"],
+        "project_id": context["project_id"],
+        "worktree_id": context["worktree_id"],
+        "host_session_id": args.host_session,
+        "agent_id": agent_id,
+        "host_generation": host_generation,
+        "native_attempt_id": native_attempt_id,
+        "native_job_id": native_job_id,
+        "callback_token": context.get("callback_token"),
+    }
+    (home / "replay-context.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     return _emit(
         {
             "ok": True,
@@ -189,28 +204,97 @@ def command_setup(args: argparse.Namespace) -> int:
     )
 
 
+def command_accept(args: argparse.Namespace) -> int:
+    """Complete the attempt with its own credential, so the outcome already exists."""
+    home = Path(args.base).resolve() / "home"
+    context = _stored_context(home, args.task_id)
+    outcome = complete(home, args.task_id, context, token=context["callback_token"])
+    return _emit({"ok": True, "task_id": args.task_id, "response": outcome})
+
+
+def complete(
+    home: Path, task_id: str, context: dict, *, token: str | None
+) -> dict:
+    """Send one completion exactly as the extension's bridge does, with or without authority."""
+    payload = {
+        "operation": "worker_result",
+        "harness": "omp",
+        "host_session_id": context["host_session_id"],
+        "session_id": context["host_session_id"],
+        "task_id": task_id,
+        "packet_sha256": context["packet_sha256"],
+        "attempt_id": context["attempt_id"],
+        "status": "completed",
+        "worker_agent": "worker",
+        "worker_model": "",
+        "worker_role": "",
+        "summary": "replay",
+        "child_omp_agent_id": context["agent_id"],
+        "host_generation": context["host_generation"],
+        "native_attempt_id": context["native_attempt_id"],
+        "native_job_id": context["native_job_id"],
+    }
+    if token is not None:
+        payload["callback_token"] = token
+    return omp_adapter.handle_request(home, payload)
+
+
+def _stored_context(home: Path, task_id: str) -> dict:
+    """Read back the identity a previous `setup` recorded, so commands stay independent."""
+    record = home / "replay-context.json"
+    if not record.exists():
+        raise FixtureError("CONTEXT_NOT_FOUND")
+    stored = json.loads(record.read_text(encoding="utf-8"))
+    if stored.get("task_id") != task_id:
+        raise FixtureError("CONTEXT_TASK_MISMATCH")
+    return stored
+
+
 def command_probe(args: argparse.Namespace) -> int:
     home = Path(args.base).resolve() / "home"
     with sqlite3.connect(db.db_path(home)) as conn:
+        columns = (
+            "state, writer_ownership, attempt_id, callback_token_sha256, logical_outcome,"
+            " executor_settled, cleanup_complete, lease_expires_at, host_generation,"
+            " native_attempt_id, native_job_id, agent_id, lifecycle_sequence"
+        )
         row = conn.execute(
-            "SELECT state, writer_ownership, attempt_id, callback_token_sha256"
-            " FROM worker_tasks WHERE task_id=?",
-            (args.task_id,),
+            f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (args.task_id,)
         ).fetchone()
         if row is None:
             return _emit({"ok": False, "error": "TASK_NOT_FOUND"}, 1)
+        receipt = conn.execute(
+            "SELECT result_sha256 FROM worker_attempt_results WHERE task_id=?",
+            (args.task_id,),
+        ).fetchone()
         results = conn.execute(
             "SELECT COUNT(*) FROM worker_attempt_results WHERE task_id=?", (args.task_id,)
         ).fetchone()[0]
-    digest = row[3]
+    (
+        state, ownership, attempt_id, digest, logical_outcome, settled, cleanup, lease,
+        host_generation, native_attempt_id, native_job_id, agent_id, sequence,
+    ) = row
     return _emit(
         {
             "ok": True,
-            "state": row[0],
-            "writer_ownership": row[1],
-            "attempt_id": row[2],
+            "state": state,
+            "writer_ownership": ownership,
+            "attempt_id": attempt_id,
             "attempt_results": int(results),
+            "result_sha256": receipt[0] if receipt is not None else None,
             "callback_digest_present": isinstance(digest, str) and len(digest) > 0,
+            "callback_digest_sha256": hashlib.sha256(digest.encode("utf-8")).hexdigest()
+            if isinstance(digest, str) and digest
+            else None,
+            "logical_outcome": logical_outcome,
+            "executor_settled": int(settled or 0),
+            "cleanup_complete": int(cleanup or 0),
+            "lease_expires_at": lease,
+            "host_generation": host_generation,
+            "native_attempt_id": native_attempt_id,
+            "native_job_id": native_job_id,
+            "agent_id": agent_id,
+            "lifecycle_sequence": int(sequence) if sequence is not None else None,
         }
     )
 
@@ -224,6 +308,9 @@ def main(argv: list[str]) -> int:
     setup.add_argument("--intent", required=True, choices=["mutating", "read_only"])
     # The host session that admitted the attempt; a completion only binds to the same one.
     setup.add_argument("--host-session", default="omp-session")
+    accept = subparsers.add_parser("accept")
+    accept.add_argument("--base", required=True)
+    accept.add_argument("--task-id", required=True)
     probe = subparsers.add_parser("probe")
     probe.add_argument("--base", required=True)
     probe.add_argument("--task-id", required=True)
@@ -231,6 +318,8 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "setup":
             return command_setup(args)
+        if args.command == "accept":
+            return command_accept(args)
         return command_probe(args)
     except FixtureError as error:
         return _emit({"ok": False, "error": error.code, "response": error.response}, 1)

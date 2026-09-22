@@ -26,26 +26,38 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import factory, { type ExtensionOptions } from "../src/index";
 import {
+  ompWorkerResultPayload,
   runOmpWorkerResult,
   type OmpWorkerResultOptions,
   type OmpWorkerResultOutcome,
 } from "../src/worker-result-bridge";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
-const PYTHON = process.env.SECOND_BRAIN_PYTHON ?? fileURLToPath(
-  new URL("../../../.venv/Scripts/python.exe", import.meta.url),
-);
+const CANDIDATE_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const PYTHON = process.env.SECOND_BRAIN_PYTHON ?? candidatePython();
 const FIXTURE = fileURLToPath(
   new URL("../../../tests/fixtures/omp_replay_state.py", import.meta.url),
 );
 const SESSION = "omp-session";
 const TIMESTAMP = "2026-01-01T00:00:00.000Z";
 let BASE = "";
+
+/** The candidate's own interpreter, derived from the test location rather than the environment. */
+function candidatePython(): string {
+  return join(CANDIDATE_ROOT, ".venv", "Scripts", "python.exe");
+}
+
+function assertInsideCandidate(resolved: string, what: string): void {
+  const root = resolve(CANDIDATE_ROOT);
+  const path = resolve(resolved);
+  expect(path, `${what} must resolve inside the candidate worktree: ${path}`)
+    .toContain(root);
+}
 
 const savedHome = process.env.SECOND_BRAIN_HOME;
 const savedPython = process.env.SECOND_BRAIN_PYTHON;
@@ -73,7 +85,18 @@ interface ProbeState {
   writer_ownership: string;
   attempt_id: string | null;
   attempt_results: number;
+  result_sha256: string | null;
   callback_digest_present: boolean;
+  callback_digest_sha256: string | null;
+  logical_outcome: string | null;
+  executor_settled: number;
+  cleanup_complete: number;
+  lease_expires_at: string | null;
+  host_generation: number | null;
+  native_attempt_id: string | null;
+  native_job_id: string | null;
+  agent_id: string | null;
+  lifecycle_sequence: number | null;
 }
 
 type Handler = (event: unknown, context: ExtensionContext) => unknown;
@@ -103,9 +126,22 @@ function setup(base: string, taskId: string, intent: "mutating" | "read_only"): 
   const parsed = runFixture<FixtureState & { ok: boolean }>([
     "setup", "--base", base, "--task-id", taskId, "--intent", intent, "--host-session", SESSION,
   ]);
-  expect(parsed.python).toBe(PYTHON);
-  expect(parsed.second_brain_file).toContain("m00.3-producer-guard");
+  // Identity of the state this case runs against: both the interpreter and the resolved source
+  // tree must live inside the candidate worktree, whatever the environment prefers. Asserting
+  // only equality with an environment-selected path would be a tautology.
+  assertInsideCandidate(parsed.python, "interpreter");
+  assertInsideCandidate(parsed.second_brain_file, "second_brain source");
+  expect(parsed.python).toBe(candidatePython());
+  expect(parsed.second_brain_file).toBe(join(CANDIDATE_ROOT, "src", "second_brain", "__init__.py"));
+  console.log(`[replay] interpreter=${parsed.python} second_brain=${parsed.second_brain_file}`);
   return parsed;
+}
+
+/** Run the fixture's authenticated completion, so the attempt already has an accepted outcome. */
+function accept(base: string, taskId: string): Record<string, unknown> {
+  return runFixture<{ ok: boolean } & Record<string, unknown>>([
+    "accept", "--base", base, "--task-id", taskId,
+  ]);
 }
 
 function probe(base: string, taskId: string): ProbeState {
@@ -254,7 +290,7 @@ async function runBeforeAgentStart(started: Started, state: FixtureState, entrie
   await handler!({ type: "before_agent_start", prompt: "replay" }, context(state, entries));
 }
 
-function telemetry(home: string): Array<Record<string, unknown>> {
+function telemetryRecords(home: string): Array<Record<string, unknown>> {
   const file = `${home}/telemetry/agent-performance/${SESSION}.jsonl`;
   if (!existsSync(file)) return [];
   return readFileSync(file, "utf8")
@@ -270,6 +306,23 @@ function journalKinds(started: Started): string[] {
     .filter((customType) => customType.startsWith("second-brain.worker-"));
 }
 
+/**
+ * Send the *same bytes the bridge sent* to the consumer directly and return its raw verdict.
+ * The bridge collapses a refusal into a receipt error, so this is what names the reason.
+ */
+function consumerVerdict(home: string, options: OmpWorkerResultOptions): Record<string, unknown> {
+  const payload = ompWorkerResultPayload(options);
+  const env = { ...childEnv(), SECOND_BRAIN_HOME: home };
+  const out = execFileSync(PYTHON, ["-m", "second_brain", "autoinject", "omp-routing"], {
+    input: JSON.stringify(payload),
+    env,
+    cwd: home,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return JSON.parse(out) as Record<string, unknown>;
+}
+
 /** The seam must delegate to the real bridge, so a receipt failure is a real refusal. */
 function expectReceiptFailure(outcome: OmpWorkerResultOutcome | undefined): void {
   expect(outcome, "the real bridge produced no outcome").toBeDefined();
@@ -277,6 +330,8 @@ function expectReceiptFailure(outcome: OmpWorkerResultOutcome | undefined): void
   expect(outcome!.status).toBeUndefined();
   expect(outcome!.resultSha256).toBeUndefined();
   expect(String(outcome!.error)).toMatch(/^BRAIN_WORKER_RESULT/);
+  // Transport failures would make the refusal vacuous: the consumer must have answered.
+  expect(outcome!.error).not.toBe("BRAIN_WORKER_RESULT_UNAVAILABLE");
 }
 
 beforeAll(() => {
@@ -351,9 +406,59 @@ describe("restart replay of a journaled worker completion", () => {
     expect(emitted.callbackToken).toBeUndefined();
 
     expectReceiptFailure(started.outcomes[0]);
+    // The same bytes, sent straight to the consumer, name the refusal: the Brain refused this
+    // attempt's completion for lack of the authority admission minted, not for a malformed or
+    // misbound request (the credential-present control below shows acceptance otherwise).
+    const verdict = consumerVerdict(state.home, started.emissions[0]);
+    expect(verdict.failure_code).toBe("UNAUTHORIZED_CALLBACK");
+    expect(verdict.status).toBe("failed");
+
     expect(journalKinds(started)).toContain("second-brain.worker-result-pending");
     expect(journalKinds(started)).not.toContain("second-brain.worker-result-accepted");
-    expect(telemetry(state.home).filter((record) => record.kind === "extension_error")).not.toHaveLength(0);
+    const records = telemetryRecords(state.home);
+    const errors = records.filter((record) => record.kind === "extension_error");
+    expect(errors.some((record) => String(record.error).includes(String(started.outcomes[0]?.error))))
+      .toBe(true);
+    // A refusal must not be reported as a completed worker to anyone else either.
+    expect(records.filter((record) => record.kind === "worker_completed")).toHaveLength(0);
+    expect(started.dispatchFailures).toHaveLength(0);
+
+    const after = probe(base, taskId);
+    expect(after).toEqual(before);
+  });
+
+  itSlow("replays an already accepted mutating completion without rewriting its outcome", async () => {
+    // The decisive duplicate case: the attempt already holds an accepted outcome and the
+    // credential that authorised it, and the replay has neither. Nothing about the accepted
+    // result, the authority digest or the ownership row may change.
+    const taskId = "replay-accepted";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    accept(base, taskId);
+    const before = probe(base, taskId);
+    expect(before).toMatchObject({
+      state: "COMPLETED",
+      writer_ownership: "held",
+      attempt_results: 1,
+      callback_digest_present: true,
+    });
+    expect(before.result_sha256, "the accepted outcome is on disk").toMatch(/^[0-9a-f]{64}$/);
+    expect(before.callback_digest_sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ]);
+
+    expect(started.emissions).toHaveLength(1);
+    expect(started.emissions[0].callbackToken).toBeUndefined();
+    expectReceiptFailure(started.outcomes[0]);
+    expect(consumerVerdict(state.home, started.emissions[0]).failure_code).toBe("UNAUTHORIZED_CALLBACK");
+    expect(journalKinds(started)).not.toContain("second-brain.worker-result-accepted");
     expect(started.dispatchFailures).toHaveLength(0);
 
     const after = probe(base, taskId);
