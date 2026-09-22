@@ -161,21 +161,49 @@ class AdvertisementProvenance:
             )
 
 
+def _strict_json_loads(raw: bytes) -> Any:
+    """Parse JSON bytes, refusing ambiguous documents instead of resolving them.
+
+    ``json.loads`` silently keeps the last of two duplicate keys, which would make a
+    qualified object depend on a parser convention: an advertisement repeating
+    ``"cleanup_observation"`` could be one thing to a verifier and another to whoever
+    reads the file later. Ambiguity is refused, not interpreted.
+    """
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in seen:
+                raise HostProtocolError(
+                    "DUPLICATE_JSON_KEY",
+                    f"advertisement repeats the key {key!r}; ambiguous JSON is refused",
+                )
+            seen[key] = value
+        return seen
+
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates)
+    except (UnicodeDecodeError, ValueError) as exc:
+        # HostProtocolError from the hook is not a ValueError subclass and propagates.
+        raise HostProtocolError(
+            "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
+        ) from exc
+
+
 def advertisement_sha256(advertisement: dict[str, Any] | bytes) -> str:
     """Canonical hash of an advertisement: the parsed object, not the raw file bytes.
 
-    Whitespace and key order are normalised, so the same advertisement hashes identically
-    whether it arrives as JSON bytes or as a parsed object — a verifier must not be able to
-    turn a legitimate verification into "unverified" by parsing first. Any tool that
-    produces a qualification record must use this function.
+    **Scope of this hash:** it identifies the *canonicalised advertisement object*
+    (keys sorted, whitespace normalised), so two differently serialised JSON files that
+    parse to the same object share one identity, and JSON bytes and an already-parsed
+    object hash identically. It is NOT a byte-level artifact hash. A qualification record
+    that needs both — "the exact file that was reviewed" and "the exact semantics Brain
+    negotiated" — should carry ``advertisement_artifact_sha256`` alongside this value.
+
+    Ambiguous documents are refused rather than resolved (see :func:`_strict_json_loads`).
     """
     if isinstance(advertisement, bytes):
-        try:
-            parsed: Any = json.loads(advertisement.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise HostProtocolError(
-                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
-            ) from exc
+        parsed: Any = _strict_json_loads(advertisement)
     else:
         parsed = advertisement
     try:
@@ -295,12 +323,7 @@ def verify_advertisement(
             f"(got {digest[:16]}…, expected {qualified.advertisement_sha256[:16]}…)",
         )
     if isinstance(advertisement, bytes):
-        try:
-            parsed: Any = json.loads(advertisement.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise HostProtocolError(
-                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
-            ) from exc
+        parsed: Any = _strict_json_loads(advertisement)
     else:
         parsed = advertisement
     manifest = parse_manifest(parsed)
@@ -339,12 +362,7 @@ def negotiate(
     """
     raw = raw_manifest
     if isinstance(raw, bytes):
-        try:
-            raw = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise HostProtocolError(
-                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
-            ) from exc
+        raw = _strict_json_loads(raw)
     manifest = parse_manifest(raw)
     available = manifest["capabilities"]
     digest = (

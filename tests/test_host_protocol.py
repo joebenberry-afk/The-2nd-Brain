@@ -398,6 +398,64 @@ def test_inventory_refuses_a_malformed_row_instead_of_dropping_it() -> None:
     assert error.value.code == "MALFORMED_OBSERVATION"
 
 
+def test_ambiguous_json_is_refused_not_resolved_by_key_order() -> None:
+    """A repeated key must not become a parser-dependent way to look qualified."""
+    duplicated_capability = (
+        b'{"protocol_version":1,"bridge":{"name":"brain-host-bridge","version":"1.0.0"},'
+        b'"host":{"vendor":"oh-my-pi","name":"pi-coding-agent","version":"18.2.8"},'
+        b'"capabilities":{"execution_binding":true,"cleanup_observation":false,'
+        b'"cleanup_observation":true,"settlement_observation":true,'
+        b'"authenticated_observation_source":true}}'
+    )
+    duplicated_version = (
+        b'{"protocol_version":1,"protocol_version":2,'
+        b'"bridge":{"name":"brain-host-bridge","version":"1.0.0"},'
+        b'"host":{"vendor":"oh-my-pi","name":"pi-coding-agent","version":"18.2.8"},'
+        b'"capabilities":{}}'
+    )
+
+    for raw in (duplicated_capability, duplicated_version):
+        for entry_point in (
+            lambda payload: host_protocol.advertisement_sha256(payload),
+            lambda payload: host_protocol.negotiate(payload),
+            lambda payload: host_protocol.verify_advertisement(
+                payload,
+                qualified=host_protocol.QualifiedHostIdentity(
+                    vendor="oh-my-pi",
+                    name="pi-coding-agent",
+                    version="18.2.8",
+                    advertisement_sha256="a" * 64,
+                    bridge_sha256="b" * 64,
+                ),
+            ),
+        ):
+            with pytest.raises(host_protocol.HostProtocolError) as error:
+                entry_point(raw)
+            assert error.value.code == "DUPLICATE_JSON_KEY"
+
+
+def test_unrelated_extra_fields_cannot_change_a_decision() -> None:
+    """Only validated fields decide; extras cannot smuggle a capability or a trust flag."""
+    advertisement = _capable()
+    advertisement["trusted"] = True
+    advertisement["trusted_advertisement"] = True
+    advertisement["security"] = {"authenticated_observation_source": True}
+    advertisement["capabilities"]["not_a_capability"] = True
+
+    with pytest.raises(host_protocol.HostProtocolError) as unknown:
+        host_protocol.parse_manifest(advertisement)
+    assert unknown.value.code == "UNKNOWN_CAPABILITY"
+
+    clean = _capable()
+    qualified = _qualification(clean)
+    provenance = host_protocol.verify_advertisement(clean, qualified=qualified)
+    smuggled = {**_capable(), "trusted": True}
+    decision = host_protocol.negotiate(smuggled, provenance=provenance)
+
+    assert decision["provenance"] == "unverified"
+    assert decision["features"]["mutating_delegation"]["enabled"] is False
+
+
 def test_a_provenance_cannot_be_rebound_to_another_advertisement() -> None:
     """The record is the anchor: a digest from elsewhere must not pair with it."""
     qualified = _qualification(_capable(cleanup_observation=False))
