@@ -176,7 +176,7 @@ def loads_strict(raw: bytes) -> Any:
             if key in seen:
                 raise HostProtocolError(
                     "DUPLICATE_JSON_KEY",
-                    f"advertisement repeats the key {key!r}; ambiguous JSON is refused",
+                    f"document repeats the key {key!r}; ambiguous JSON is refused",
                 )
             seen[key] = value
         return seen
@@ -186,7 +186,7 @@ def loads_strict(raw: bytes) -> Any:
     except (UnicodeDecodeError, ValueError) as exc:
         # HostProtocolError from the hook is not a ValueError subclass and propagates.
         raise HostProtocolError(
-            "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
+            "MALFORMED_MANIFEST", f"document is not JSON: {exc}"
         ) from exc
 
 
