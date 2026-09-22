@@ -205,12 +205,15 @@ export function reserveBudget(options: BudgetReserveOptions): Promise<BudgetRese
       }
       const reserved = parsed.reserved === true;
       const reason = typeof parsed.reason === "string" ? parsed.reason : undefined;
-      const degraded = parsed.reason === "ACCOUNTING_UNAVAILABLE";
       const state: BudgetState =
         parsed.state === "HARD" ? "HARD" : parsed.state === "SOFT" ? "SOFT" : "OK";
       resolve({
         reserved,
-        blocksDispatch: !reserved && (reason === "BUDGET_EXHAUSTED" || degraded),
+        // Fail closed on every Brain-side refusal: insufficient or zero allowance, unknown
+        // accounting, and a reservation identity that was already returned or spent all mean
+        // this dispatch has no capacity behind it. Only the transport branch above stays
+        // fail-open, because that answer carries no Brain decision at all.
+        blocksDispatch: !reserved,
         state,
         used: typeof parsed.used === "number" && Number.isFinite(parsed.used) ? Number(parsed.used) : null,
         cap: typeof parsed.cap === "number" ? parsed.cap : 0,
@@ -235,6 +238,80 @@ export interface BudgetConsumeResult {
 }
 
 export type BudgetConsumer = (options: BudgetConsumeOptions) => Promise<BudgetConsumeResult>;
+
+export interface BudgetCancelOptions extends BudgetCheckOptions {
+  taskId: string;
+  /** Why the capacity is being returned; recorded on the reservation row. */
+  reason: string;
+  /** The typed proof that no dispatch happened; the Brain refuses every other value. */
+  evidence: "proven_unused";
+}
+
+export interface BudgetCancelResult {
+  cancelled: boolean;
+  alreadyCancelled: boolean;
+  /** The Brain refused to return the capacity: the reservation is still a liability. */
+  refused?: string;
+  error?: string;
+}
+
+export type BudgetCanceller = (options: BudgetCancelOptions) => Promise<BudgetCancelResult>;
+
+/**
+ * Return a reservation's capacity, carrying the caller's typed proof that it was never used.
+ *
+ * `cancelled: false` means the capacity is *still spoken for* -- the Brain refused the evidence,
+ * the reservation was already consumed, or the bridge could not reach the Brain. The caller must
+ * keep treating the reservation as an open liability: a transport or refusal failure is never a
+ * local reason to restore headroom.
+ */
+export function cancelBudget(options: BudgetCancelOptions): Promise<BudgetCancelResult> {
+  const python =
+    options.python ??
+    process.env.SECOND_BRAIN_PYTHON ??
+    join(options.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const args = [
+    "-m", "second_brain", "--home", options.home, "governor", "cancel-budget-reservation",
+    "--session", options.sessionId, "--task-id", options.taskId,
+    "--reason", options.reason, "--evidence", options.evidence, "--json",
+  ];
+
+  const { promise, resolve } = createResolvers<BudgetCancelResult>();
+  execFile(
+    python,
+    args,
+    { cwd: options.home, env, timeout: options.timeoutMs ?? BUDGET_DEFAULT_TIMEOUT_MS, windowsHide: true },
+    (error, stdout) => {
+      // A refusal exits 4 with a well-formed body, so stdout is parsed before the process
+      // status is treated as a transport failure.
+      let parsed: Record<string, unknown> | null = null;
+      try {
+        parsed = JSON.parse(stdout) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
+      if (parsed === null) {
+        resolve({
+          cancelled: false,
+          alreadyCancelled: false,
+          error: error ? error.message : "INVALID_JSON",
+        });
+        return;
+      }
+      const refused = typeof parsed.refused === "string" ? parsed.refused : undefined;
+      resolve({
+        cancelled: parsed.cancelled === true,
+        alreadyCancelled: parsed.already_cancelled === true,
+        ...(refused ? { refused } : {}),
+      });
+    },
+  );
+  return promise;
+}
 
 /** Consume a reservation exactly once when the attempt it belongs to is finished. */
 export function consumeBudget(options: BudgetConsumeOptions): Promise<BudgetConsumeResult> {

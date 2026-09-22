@@ -1188,6 +1188,25 @@ def _parser() -> argparse.ArgumentParser:
     gov_consume.add_argument("--consumed-by", default=None, help="why it was consumed")
     gov_consume.add_argument("--json", action="store_true", help="machine-readable output")
 
+    gov_cancel = govs.add_parser(
+        "cancel-budget-reservation",
+        parents=[home_parent],
+        help="return a reservation's capacity, only with proven-unused evidence",
+    )
+    gov_cancel.add_argument("--session", required=True, help="host session id")
+    gov_cancel.add_argument(
+        "--task-id", required=True, help="worker task the reservation belongs to"
+    )
+    gov_cancel.add_argument(
+        "--reason", default="PROVEN_UNUSED", help="why the capacity is being returned"
+    )
+    gov_cancel.add_argument(
+        "--evidence",
+        default="unproven",
+        help="must be 'proven_unused'; every other value is refused",
+    )
+    gov_cancel.add_argument("--json", action="store_true", help="machine-readable output")
+
     gov_res_list = govs.add_parser(
         "budget-reservations",
         parents=[home_parent],
@@ -4258,6 +4277,22 @@ def cmd_governor(args) -> int:
         else:
             print(f"consumed={consumed['consumed']}")
         return 0
+
+    if args.governor_command == "cancel-budget-reservation":
+        cancelled = governor.cancel_budget_reservation(
+            home, args.session, args.task_id, args.reason, evidence=args.evidence
+        )
+        if args.json:
+            print(json.dumps(cancelled))
+        else:
+            print(
+                f"cancelled={cancelled['cancelled']} "
+                f"already_cancelled={cancelled['already_cancelled']}"
+                + (f" refused={cancelled['refused']}" if cancelled.get("refused") else "")
+            )
+        # A refusal is a distinct outcome, not an error: exit 4 says the capacity was NOT
+        # returned, so the caller keeps treating the reservation as an open liability.
+        return 0 if cancelled["cancelled"] else 4
 
     if args.governor_command == "budget-reservations":
         rows = governor.list_budget_reservations(home, args.session)

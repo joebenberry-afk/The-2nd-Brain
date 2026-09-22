@@ -14,6 +14,7 @@ import factory, {
 import {
   type OmpRoutingDecision,
 } from "../src/routing-bridge";
+import { cancelBudget, reserveBudget } from "../src/budget-bridge";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "../types/prime";
 import { TelemetryStore } from "../src/storage";
 
@@ -206,6 +207,50 @@ describe("T3.1 Hard and soft budget caps", () => {
     expect(broken.reserved).toBe(false);
     expect(broken.reason).toBe("RESERVATION_UNAVAILABLE");
     expect(broken.blocksDispatch, "transport failure keeps existing availability semantics").toBe(false);
+  });
+
+  it("cancelBudget bridge returns capacity only for a proven-unused reservation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "sb-cancel-bridge-"));
+    const python = fileURLToPath(new URL("../../../.venv/Scripts/python.exe", import.meta.url));
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(join(home, "config", "governor.toml"),
+      "[budgets]\nworker_tokens = 10\n", "utf8");
+
+    const granted = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t1", tokens: 10, python });
+    expect(granted.reserved, JSON.stringify(granted)).toBe(true);
+
+    const cancelled = await cancelBudget({
+      home, sessionId: "bridge-session", taskId: "t1",
+      reason: "PREPARATION_FAILED", evidence: "proven_unused", python,
+    });
+    expect(cancelled, JSON.stringify(cancelled)).toMatchObject({ cancelled: true, alreadyCancelled: false });
+
+    // The refund is real: the whole cap fits again for a different attempt.
+    const afterRefund = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t2", tokens: 10, python });
+    expect(afterRefund.reserved).toBe(true);
+    expect(afterRefund.outstanding).toBe(10);
+
+    // A duplicate cancellation reports itself and refunds nothing a second time.
+    const duplicate = await cancelBudget({
+      home, sessionId: "bridge-session", taskId: "t1",
+      reason: "PREPARATION_FAILED", evidence: "proven_unused", python,
+    });
+    expect(duplicate).toMatchObject({ cancelled: true, alreadyCancelled: true });
+
+    // The returned capacity cannot be re-created for the same attempt: a late dispatch is refused.
+    const late = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t1", tokens: 10, python });
+    expect(late.reserved).toBe(false);
+    expect(late.reason).toBe("RESERVATION_CANCELLED");
+    expect(late.blocksDispatch, "a late dispatch on returned capacity must not proceed").toBe(true);
+
+    // A broken bridge reports the failure instead of pretending the capacity came back.
+    const broken = await cancelBudget({
+      home, sessionId: "bridge-session", taskId: "t2",
+      reason: "PREPARATION_FAILED", evidence: "proven_unused", python: join(home, "no-python.exe"),
+    });
+    expect(broken.cancelled).toBe(false);
+    expect(broken.alreadyCancelled).toBe(false);
+    expect(broken.error).toBeDefined();
   });
 
   it("runBudgetCheck bridge parses CLI JSON output and handles fail-open", async () => {
