@@ -549,6 +549,32 @@ Both are recorded as M00 findings under the honest-accounting/source-authority b
 repaired by a product change here: the mandate forbids imposing synchronous readback on runtime
 appends, and the replay already demonstrates no-duplicate, no-authority-loss behavior.
 
+## Altered-journal downgrade check: EXECUTED, no downgrade (2026-09-22)
+
+Requirement: a journal label must not decide whether an authoritatively mutating attempt needs
+authentication. The authoritative decisions read the **persisted row's** `access_intent`
+(`worker_protocol.py:984`, `:1151-1152`, `:1222`, `:1265`) — written once at admission (`:896`) — not a
+journal entry. Executed against a persisted mutating attempt whose completion claimed `read_only`:
+
+| Case | Response | Durable state |
+| --- | --- | --- |
+| claim `read_only`, **no credential** | `failed / UNAUTHORIZED_CALLBACK` | `WORKING, held, 0 results` |
+| claim `read_only`, real credential | `completed` | `COMPLETED, held, 1 result` |
+| claim `mutating`, no credential (control) | `failed / UNAUTHORIZED_CALLBACK` (identical code) | `WORKING, held, 0 results` |
+
+The claim neither authenticates nor blocks: refusal is identical to the honest-claim control, and the
+credentialed path still completes. Extension side, same result:
+`tests/worker-completion-mirror.test.ts` → *"does not let a journal claiming read_only bypass
+authentication"* passes (no dispatch, no mirror record, attempt not terminal, no result row, ownership
+held). **#3 may take its narrow verdict on this point.**
+
+**Still #4 source/host authority, and not made harmless by the above:** the Brain decides whether
+writer admission is required from the host's declared `access_intent` at admission
+(`omp_adapter.py:111`, `:115`; `worker_protocol.py:755` requires attempt-bound admission only for
+mutating claims). A host that claims `read_only` while doing mutating work is not independently
+detected by that gate. That is a trust decision about the admission issuer, not about the journal, and
+it stays open under #4.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.

@@ -21,7 +21,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, globSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,6 +29,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 const itSlow = (name: string, run: () => Promise<void>) => it(name, run, 60_000);
 
 const observed = vi.hoisted(() => ({ dispatches: [] as Array<Record<string, unknown>> }));
+const recordedEntries: Array<{ customType: string; data: unknown }> = [];
 
 vi.mock("../src/ledger-mirror", async (importOriginal) => {
   const actual = await importOriginal<typeof ledgerMirror>();
@@ -156,17 +157,17 @@ function context(state: Fixture, entries: unknown[]): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-function admissionEntry(state: Fixture) {
+function admissionEntry(state: Fixture, intent = "mutating") {
   return { type: "custom", customType: "second-brain.worker-admission-pending", timestamp: TIMESTAMP,
     data: { session: SESSION, taskId: state.task_id, attemptId: state.attempt_id,
       packetSha256: state.packet_sha256, projectId: state.project_id, worktreeId: state.worktree_id,
-      accessIntent: "mutating", parentSessionId: SESSION, agent: "worker",
+      accessIntent: intent, parentSessionId: SESSION, agent: "worker",
       toolCallId: "call-mirror", sourceIndex: 0 } };
 }
 
-function jobEntry(state: Fixture) {
+function jobEntry(state: Fixture, intent = "mutating") {
   return { type: "custom", customType: "second-brain.worker-job-pending", timestamp: TIMESTAMP,
-    data: { session: SESSION, jobId: state.native_job_id, accessIntent: "mutating",
+    data: { session: SESSION, jobId: state.native_job_id, accessIntent: intent,
       toolCallId: "call-mirror", sourceIndex: 0, taskId: state.task_id, attemptId: state.attempt_id,
       packetSha256: state.packet_sha256, parentSessionId: SESSION, agent: "worker",
       agentId: state.agent_id, hostGeneration: state.host_generation,
@@ -186,14 +187,16 @@ const IDENTITY_ENTRY = { type: "custom", customType: "brain.active-state",
   details: { session_id: SESSION }, timestamp: TIMESTAMP };
 
 /** Drive the real registered hook; `token` represents host transport (absent on replay). */
-async function runHook(state: Fixture, token: string | undefined) {
+async function runHook(state: Fixture, token: string | undefined, intent = "mutating") {
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
   const outcomes: Array<Record<string, unknown>> = [];
   const pi = {
     on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) =>
       handlers.set(name, handler),
     emit: () => {},
-    appendEntry: () => {},
+    appendEntry: (customType: string, data: unknown) => {
+      recordedEntries.push({ customType, data });
+    },
   } as unknown as ExtensionAPI;
   const options: ExtensionOptions = {
     ompWorkerResultRunner: (workerOptions: OmpWorkerResultOptions) =>
@@ -207,8 +210,18 @@ async function runHook(state: Fixture, token: string | undefined) {
   const handler = handlers.get("before_agent_start");
   expect(handler, "before_agent_start was registered").toBeDefined();
   await handler!({ type: "before_agent_start", prompt: "mirror" },
-    context(state, [IDENTITY_ENTRY, admissionEntry(state), jobEntry(state), resultEntry(state)]));
+    context(state, [IDENTITY_ENTRY, admissionEntry(state, intent), jobEntry(state, intent), resultEntry(state)]));
   return outcomes;
+}
+
+function taskState(home: string, taskId: string): Record<string, unknown> {
+  const out = execFileSync(PYTHON, [FIXTURE, "probe", "--base", dirname(home), "--task-id", taskId],
+    { env: childEnv(), encoding: "utf8" });
+  return JSON.parse(out) as Record<string, unknown>;
+}
+
+function acceptanceClaims() {
+  return recordedEntries.filter((entry) => entry.customType.includes("worker-result-accepted"));
 }
 
 function completionDispatches(taskId: string) {
@@ -230,6 +243,7 @@ beforeEach(() => {
   vi.stubEnv("SECOND_BRAIN_PYTHON", PYTHON);
   vi.stubEnv("ORCHESTRATOR_MODELS", "");
   observed.dispatches.length = 0;
+  recordedEntries.length = 0;
 });
 
 afterEach(() => {
@@ -258,6 +272,9 @@ describe("worker completion mirror", () => {
     // negative case below would be measuring a point that never observes anything.
     const dispatched = completionDispatches(taskId);
     expect(dispatched.length, "one completion mirror dispatched for this attempt").toBe(1);
+    // Non-vacuity for the error case below: the accepted path really does record an acceptance claim.
+    expect(acceptanceClaims().length, "the accepted path records an acceptance journal entry")
+      .toBeGreaterThanOrEqual(1);
 
     // Destination evidence: the real mirror wrote a matching record into the disposable ledger.
     const deadline = Date.now() + 10_000;
@@ -288,6 +305,53 @@ describe("worker completion mirror", () => {
     expect(completionDispatches(taskId), "no completion mirror dispatched for a refused attempt")
       .toHaveLength(0);
     expect(mirroredCompletions(state.home, taskId)).toBe(0);
+  });
+
+  itSlow("fails closed when a credentialed completion errors at the consumer", async () => {
+    // The credential is present on the request (host transport supplies it) and the consumer still
+    // errors: an authentication refusal, not a missing-credential replay. Fail-closed means the
+    // extension converts neither the error nor the credential into a lifecycle fact.
+    const taskId = "mirror-credential-error";
+    const state = setup(`${BASE}/${taskId}`, taskId);
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    const sentinel = `sentinel-wrong-credential-${taskId}`;
+
+    const outcomes = await runHook(state, sentinel);
+    expect(outcomes[0]?.ok, "the credentialed completion is refused, not accepted").toBe(false);
+
+    expect(completionDispatches(taskId), "no completion mirror for an errored credential path")
+      .toHaveLength(0);
+    expect(mirroredCompletions(state.home, taskId), "no mirrored completion record").toBe(0);
+    expect(acceptanceClaims(), "no acceptance claim recorded for a refused completion").toHaveLength(0);
+
+    const after = taskState(state.home, taskId);
+    expect(after.state, "the attempt is not terminal").not.toBe("COMPLETED");
+    expect(after.attempt_results, "no accepted result row").toBe(0);
+    expect(after.writer_ownership, "ownership is not released by a failed completion").toBe("held");
+
+    const recorded = JSON.stringify(recordedEntries);
+    expect(recorded.includes(sentinel), "the credential never reaches a recorded destination").toBe(false);
+    expect(ledgerProbe(state.home, taskId).report.includes(sentinel), "nor the session ledger").toBe(false);
+  });
+
+  itSlow("does not let a journal claiming read_only bypass authentication", async () => {
+    // Altered-journal check: the host journal says read_only while the authoritative attempt is
+    // mutating. A journal label may not decide whether an authoritative mutating attempt needs its
+    // credential, so the outcome must match the honest-journal refusal exactly.
+    const taskId = "mirror-readonly-claim";
+    const state = setup(`${BASE}/${taskId}`, taskId);
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+
+    const outcomes = await runHook(state, undefined, "read_only");
+    expect(outcomes[0]?.ok, "the read_only claim does not authenticate the attempt").toBe(false);
+    expect(completionDispatches(taskId), "no completion mirror under a read_only claim")
+      .toHaveLength(0);
+    expect(mirroredCompletions(state.home, taskId), "no mirrored completion record").toBe(0);
+
+    const after = taskState(state.home, taskId);
+    expect(after.state, "the attempt is not terminal").not.toBe("COMPLETED");
+    expect(after.attempt_results, "no accepted result row").toBe(0);
+    expect(after.writer_ownership, "ownership unchanged by the claim").toBe("held");
   });
 
   itSlow("destination control: the real mirrorEvent reaches the ledger and the query finds it", async () => {
