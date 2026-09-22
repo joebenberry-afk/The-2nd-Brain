@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import db, economics, ledger, paths, telemetry
+from . import contracts, db, economics, ledger, paths, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -873,8 +873,62 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
     return total
 
 
+def _episode_host_sessions(home: Path, session_id: str) -> set[str]:
+    """Host session ids in this episode: the session itself plus every ledger whose
+    ``root_parent_session_id`` is this session's internal id.
+
+    The reservation writer and the spend accounting must scope liability identically, or a
+    fresh session id would reset an existing root episode's outstanding reservations.
+    """
+    root_id = ledger.internal_session_id(session_id)
+    sessions_dir = home / "state" / "sessions"
+    try:
+        children = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
+    except OSError as exc:
+        raise ValueError("session ledgers unavailable") from exc
+
+    def read_descendants(child: Path) -> list[sqlite3.Row]:
+        dbfile = child / "ledger.sqlite"
+        if not dbfile.is_file():
+            return []
+        try:
+            conn = sqlite3.connect(dbfile.absolute().as_uri() + "?mode=ro", timeout=1.0, uri=True)
+            conn.row_factory = sqlite3.Row
+            try:
+                return conn.execute(
+                    "SELECT internal_session_id, host_session_id FROM sessions "
+                    "WHERE root_parent_session_id = ?",
+                    (root_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
+
+    hosts = {session_id}
+    internal_id_by_host: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=8) as readers:
+        for rows in readers.map(read_descendants, children):
+            for row in rows:
+                internal_id = row["internal_session_id"]
+                host_id = row["host_session_id"]
+                known = internal_id_by_host.get(host_id)
+                if known is not None and known != internal_id:
+                    raise ValueError("conflicting descendant ledger identities")
+                internal_id_by_host[host_id] = internal_id
+                hosts.add(host_id)
+    return hosts
+
+
 def _descendant_total_tokens(home: Path, session_id: str) -> int:
     """Sum each unique ledger session rooted at ``session_id`` exactly once."""
+    return sum(
+        _session_total_tokens(home, host_id)
+        for host_id in sorted(_episode_host_sessions(home, session_id) - {session_id})
+    )
+
+
+def _legacy_descendant_total_tokens(home: Path, session_id: str) -> int:
     root_id = ledger.internal_session_id(session_id)
     sessions_dir = home / "state" / "sessions"
     try:
@@ -977,11 +1031,16 @@ def _budget_state(effective: int, cap: int, soft_ratio: float) -> str:
     return "OK"
 
 
-def _outstanding_tokens(conn: sqlite3.Connection, session_id: str) -> int:
+def _outstanding_tokens(conn: sqlite3.Connection, episode_hosts: set[str]) -> int:
+    """Open liability for the episode: consumed and *cancelled* rows are excluded, unresolved
+    ones are not -- uncertainty stays a liability until evidence arrives."""
+    if not episode_hosts:
+        return 0
+    placeholders = ",".join("?" for _ in episode_hosts)
     row = conn.execute(
         "SELECT COALESCE(SUM(tokens), 0) AS total FROM budget_reservations "
-        "WHERE session_id=? AND consumed_at IS NULL",
-        (session_id,),
+        f"WHERE session_id IN ({placeholders}) AND consumed_at IS NULL AND cancelled_at IS NULL",
+        tuple(sorted(episode_hosts)),
     ).fetchone()
     return int(row["total"]) if row is not None else 0
 
@@ -989,7 +1048,7 @@ def _outstanding_tokens(conn: sqlite3.Connection, session_id: str) -> int:
 def list_budget_reservations(
     home: Path | str, session_id: str | None = None
 ) -> list[dict[str, Any]]:
-    """Outstanding (unconsumed) reservations, oldest first.
+    """Outstanding reservations, oldest first: open liability, so cancelled rows are excluded.
 
     They survive process boundaries on purpose: a restart reads them to reconcile
     admissions that were reserved but never completed.
@@ -1000,12 +1059,13 @@ def list_budget_reservations(
     try:
         if session_id is None:
             rows = conn.execute(
-                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL ORDER BY created_at"
+                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL "
+                "AND cancelled_at IS NULL ORDER BY created_at"
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL AND session_id=? "
-                "ORDER BY created_at",
+                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL "
+                "AND cancelled_at IS NULL AND session_id=? ORDER BY created_at",
                 (session_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -1033,6 +1093,18 @@ def reserve_budget(
     cap = int(budgets["worker_tokens"] if role == "worker" else budgets["session_tokens"])
     soft_ratio = float(budgets["soft_ratio"])
     requested = int(tokens) if tokens is not None else cap
+    if cap <= 0:
+        # An explicit zero allowance refuses, with no default fallback: a configured cap of 0
+        # means zero, not "unset".
+        return {
+            "state": "HARD",
+            "reserved": False,
+            "reason": "BUDGET_EXHAUSTED",
+            "used": 0,
+            "cap": cap,
+            "outstanding": 0,
+            "requested": requested,
+        }
     try:
         used: int | None = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
             home_path, session_id
@@ -1049,6 +1121,8 @@ def reserve_budget(
         used = None
     dbfile = _reservations_dbfile(home_path)
     db.migrate(dbfile)
+    episode_hosts = _episode_host_sessions(home_path, session_id)
+    episode_id = ledger.internal_session_id(session_id)
     conn = db.connect(dbfile)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1057,7 +1131,7 @@ def reserve_budget(
             (session_id, task_id),
         ).fetchone()
         if existing is not None and existing["consumed_at"] is None:
-            outstanding = _outstanding_tokens(conn, session_id)
+            outstanding = _outstanding_tokens(conn, episode_hosts)
             conn.commit()
             return {
                 "state": (
@@ -1070,7 +1144,7 @@ def reserve_budget(
                 "outstanding": outstanding,
                 "requested": int(existing["tokens"]),
             }
-        outstanding = _outstanding_tokens(conn, session_id)
+        outstanding = _outstanding_tokens(conn, episode_hosts)
         if used is None:
             conn.rollback()
             return {
@@ -1095,8 +1169,9 @@ def reserve_budget(
             }
         conn.execute(
             "INSERT INTO budget_reservations"
-            "(reservation_id,session_id,task_id,role,tokens,created_at) VALUES(?,?,?,?,?,?)",
-            (uuid.uuid4().hex, session_id, task_id, role, requested, _now_iso()),
+            "(reservation_id,session_id,task_id,role,tokens,created_at,episode_id) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, session_id, task_id, role, requested, _now_iso(), episode_id),
         )
         conn.commit()
         total = used + outstanding + requested
@@ -1117,18 +1192,41 @@ def reserve_budget(
 
 
 def consume_budget_reservation(
-    home: Path | str, session_id: str, task_id: str, consumed_by: str | None = None
+    home: Path | str,
+    session_id: str,
+    task_id: str,
+    consumed_by: str | None = None,
+    *,
+    actual_tokens: int | None = None,
 ) -> dict[str, Any]:
-    """Consume a reservation exactly once; a repeat call reports it was already consumed."""
+    """Consume a reservation exactly once, reconciling actual usage if it is known.
+
+    A cancelled reservation can never be consumed: capacity that was returned cannot be spent
+    again by a dispatch that arrives late. Duplicate observations do not double-charge -- the
+    second call reports ``already_consumed`` and changes nothing.
+    """
     dbfile = _reservations_dbfile(Path(home))
     db.migrate(dbfile)
     conn = db.connect(dbfile)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT consumed_at, cancelled_at FROM budget_reservations "
+            "WHERE session_id=? AND task_id=?",
+            (session_id, task_id),
+        ).fetchone()
+        if row is not None and row["cancelled_at"] is not None:
+            conn.rollback()
+            return {
+                "consumed": False,
+                "already_consumed": False,
+                "refused": "RESERVATION_CANCELLED",
+            }
         cursor = conn.execute(
-            "UPDATE budget_reservations SET consumed_at=?, consumed_by=? "
+            "UPDATE budget_reservations SET consumed_at=?, consumed_by=?, actual_tokens=?, "
+            "resolved_at=?, resolution='consumed' "
             "WHERE session_id=? AND task_id=? AND consumed_at IS NULL",
-            (_now_iso(), consumed_by, session_id, task_id),
+            (_now_iso(), consumed_by, actual_tokens, _now_iso(), session_id, task_id),
         )
         consumed = cursor.rowcount == 1
         conn.commit()
@@ -1138,3 +1236,139 @@ def consume_budget_reservation(
         raise
     finally:
         conn.close()
+
+
+def cancel_budget_reservation(
+    home: Path | str,
+    session_id: str,
+    task_id: str,
+    reason: str,
+    *,
+    evidence: str = "unproven",
+) -> dict[str, Any]:
+    """Return capacity, but only for a reservation **proven unused**.
+
+    The caller must supply ``evidence="proven_unused"`` -- an unconditional refund is exactly the
+    bug this guards against, because a missing response does not establish that an operation never
+    happened. Cancelling is idempotent: a repeat reports ``already_cancelled`` and refunds nothing
+    twice. A consumed reservation cannot be cancelled.
+    """
+    if evidence != "proven_unused":
+        return {"cancelled": False, "already_cancelled": False, "refused": "EVIDENCE_REQUIRED"}
+    dbfile = _reservations_dbfile(Path(home))
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT consumed_at, cancelled_at FROM budget_reservations "
+            "WHERE session_id=? AND task_id=?",
+            (session_id, task_id),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return {"cancelled": False, "already_cancelled": False, "refused": "NOT_FOUND"}
+        if row["consumed_at"] is not None:
+            conn.rollback()
+            return {"cancelled": False, "already_cancelled": False, "refused": "ALREADY_CONSUMED"}
+        if row["cancelled_at"] is not None:
+            conn.rollback()
+            return {"cancelled": True, "already_cancelled": True, "reason": reason}
+        conn.execute(
+            "UPDATE budget_reservations SET cancelled_at=?, cancel_reason=?, resolved_at=?, "
+            "resolution='cancelled_unused' WHERE session_id=? AND task_id=?",
+            (_now_iso(), reason, _now_iso(), session_id, task_id),
+        )
+        conn.commit()
+        return {"cancelled": True, "already_cancelled": False, "reason": reason}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mark_budget_reservation_unresolved(
+    home: Path | str, session_id: str, task_id: str, reason: str
+) -> dict[str, Any]:
+    """Record that dispatch may have happened: the reservation keeps its liability."""
+    dbfile = _reservations_dbfile(Path(home))
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "UPDATE budget_reservations SET cancel_reason=?, resolution='unresolved' "
+            "WHERE session_id=? AND task_id=? AND consumed_at IS NULL AND cancelled_at IS NULL",
+            (reason, session_id, task_id),
+        )
+        changed = cursor.rowcount == 1
+        conn.commit()
+        return {"unresolved": changed, "reason": reason}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def reconcile_budget_reservations(
+    home: Path | str, session_id: str | None = None
+) -> dict[str, Any]:
+    """Decide every open reservation from durable evidence -- never by assumption.
+
+    The worker attempt row is the evidence: no attempt means the reservation was proven unused,
+    a native binding or a non-SUBMITTED state means dispatch happened, and SUBMITTED without a
+    binding means the outcome is unknown, so the liability stays.
+    """
+    home_path = Path(home)
+    dbfile = _reservations_dbfile(home_path)
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        sql = (
+            "SELECT session_id, task_id FROM budget_reservations "
+            "WHERE consumed_at IS NULL AND cancelled_at IS NULL"
+        )
+        params: list[Any] = []
+        if session_id is not None:
+            sql += " AND session_id=?"
+            params.append(session_id)
+        open_rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+    cancelled: list[str] = []
+    consumed: list[str] = []
+    unresolved: list[str] = []
+    for row in open_rows:
+        attempt = None
+        try:
+            with sqlite3.connect(dbfile) as worker_conn:
+                worker_conn.row_factory = sqlite3.Row
+                attempt = worker_conn.execute(
+                    "SELECT state, native_attempt_id FROM worker_tasks WHERE task_id=?",
+                    (row["task_id"],),
+                ).fetchone()
+        except sqlite3.Error:
+            attempt = None
+        if attempt is None:
+            outcome = cancel_budget_reservation(
+                home_path, row["session_id"], row["task_id"], "NO_ATTEMPT_RECORDED",
+                evidence="proven_unused",
+            )
+            cancelled.append(row["task_id"])
+            del outcome
+        elif attempt["native_attempt_id"] is not None or (
+            attempt["state"] not in (None, contracts.WorkerLifecycle.SUBMITTED)
+        ):
+            consumed.append(row["task_id"])
+            consume_budget_reservation(
+                home_path, row["session_id"], row["task_id"], "DISPATCH_OBSERVED"
+            )
+        else:
+            unresolved.append(row["task_id"])
+            mark_budget_reservation_unresolved(
+                home_path, row["session_id"], row["task_id"], "DISPATCH_UNCERTAIN"
+            )
+    return {"cancelled": cancelled, "consumed": consumed, "unresolved": unresolved}
