@@ -462,6 +462,62 @@ requires an observable append; only then does the accepted-completion case mean 
 Test-file status: committed as work-in-progress with two red cases on purpose; the refusal case is
 genuine evidence and the control is doing its job by failing. No green claim is made for this gate.
 
+## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
+
+**State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
+Verify `HEAD` and cleanliness before continuing; the last commits are `ffabe8a` (mirror gate WIP) and
+this capsule's commit. Register is authoritative; no other file needs re-deriving.
+
+**What the trace established (each item is measured, not inferred):**
+
+1. `mirror(...)` (`src/index.ts:883`) is the only completion-mirror path and runs **after** the
+   consumer accepts (`if (!outcome.ok) throw` precedes it) — so a refused completion cannot reach it.
+   The refused-completion case of `tests/worker-completion-mirror.test.ts` passes on both evidence
+   kinds (no dispatch, no record).
+2. The mirror's CLI is `python -m second_brain ledger append --session <host> --stdin-json`, and it
+   requires a **complete** `BrainLifecycleEvent`: `event_type`, `event_id`, `timestamp`,
+   `surface_visibility`, `ignorable`, `payload` (`cli.py:3624` → `contracts.py:1178`). Hand-made
+   envelopes therefore crash the CLI — a fixture/probe defect, **not** evidence about the mirror. Do
+   not probe this destination with hand-built payloads; use the real `mirrorEvent` builder.
+3. The destination is the **host session's** ledger, `state/sessions/<internal_session_id>/ledger.sqlite`
+   where `internal_session_id = ledger.internal_session_id(host_session_id)`; the fixture now creates
+   that session (`tests/fixtures/omp_replay_state.py`), because the CLI refuses implicit
+   initialization. In the trace home that path held **0 events** after hand-made probes.
+4. Open question, unresolved: the control's `mirrorEvent` returned `ok: true` while the query found no
+   matching record. So one of these holds — (a) it appends elsewhere, (b) the stored payload shape
+   does not match the query's `LIKE`, (c) `ok` is fail-open and nothing landed. **(c) is a defect.**
+
+**Next operation, exactly (one edit + one run, no new framework):**
+
+In `tests/worker-completion-mirror.test.ts`, in the destination-control case, immediately *after*
+`result.ok` is asserted, dump the destination instead of querying it:
+
+```
+for each state/sessions/*/ledger.sqlite:
+    SELECT event_type, substr(payload_json,1,200) FROM events ORDER BY rowid DESC LIMIT 3
+```
+
+plus the child process's own stdout/stderr if the seam can expose it. Decide (a)/(b)/(c) from what is
+actually stored — then, in order: fix the query to the real shape (b) and re-run; or point the query at
+the real destination (a) and re-run; or, if (c), repair `mirrorEvent` so `ok` requires an observable
+append (do **not** add a synchronous readback to every runtime append — that is a qualification
+concern, not a runtime one), then re-run. Then run the application-path mutation: make the refusal path
+mirror completion (a controlled edit in disposable candidate state only) and require the refused case to
+fail; restore exact bytes and require it to pass again.
+
+**Then the remaining executable queue (unchanged order):** interrupted terminal acceptance/result
+recording (establish shared transaction or documented durable pending state); forced credential-bearing
+error handling through the real path (the sentinel scan already in place stays separate evidence);
+journal fidelity captured from the actual candidate producer; integrated producer/adapter/consumer
+replay qualification; atomic reserve-before-dispatch under the decided fail-closed policy (zero
+allowance, unresolved accounting, concurrency, duplicate observations, restart with outstanding
+reservations).
+
+**Honest classifications to preserve:** `a6e1910` is a historical red subject (corrected by `1da6871`);
+author execution ≠ independent execution; the adverse acceptance verdict against `2f42873` stands and
+must be revisited, not waived, against the corrected subject. External and still unavailable: trusted
+issuer primitive, host descendant census, independent runtime execution surface.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
