@@ -437,6 +437,35 @@ def command_edges(args: argparse.Namespace) -> int:
     late_cancel["outcome"] = "cancelled"
     observations["cancel_after_acceptance"] = omp_adapter.handle_request(home, late_cancel)
     observations["accepted_attempt_after_late_cancel"] = ownership("edge-a")
+
+    # Newer-owner protection: `edge-b` was cancelled above and released, so a third attempt may take
+    # the worktree, and a fourth must then be refused while it holds it. `edge-a` (already released)
+    # may still append a receipt restating its own outcome, which must not touch the current holder.
+    fourth = worker("edge-d")
+    observations["fourth_while_held"] = admission("edge-e")
+    successor_before = ownership("edge-d")
+    restated = _lifecycle_payload(first, sequence=2)
+    observations["post_release_receipt"] = omp_adapter.handle_request(home, restated)
+    observations["released_attempt_after_receipt"] = ownership("edge-a")
+    observations["holder_after_post_release_receipt"] = ownership("edge-d")
+    assert successor_before == observations["holder_after_post_release_receipt"], "holder disturbed"
+
+    # Rebinding the same attempt to another native execution identity must be refused.
+    rebind = {
+        "operation": "worker_bind",
+        "task_id": "edge-d",
+        "packet_sha256": fourth["packet_sha256"],
+        "host_session_id": args.host_session,
+        "attempt_id": fourth["attempt_id"],
+        "project_id": fourth["project_id"],
+        "worktree_id": fourth["worktree_id"],
+        "callback_token": fourth["callback_token"],
+        "host_generation": 2,
+        "native_attempt_id": "native-reused-job-id",
+        "native_job_id": fourth["native_job_id"],
+        "agent_id": fourth["agent_id"],
+    }
+    observations["rebind_reused_native_id"] = omp_adapter.handle_request(home, rebind)
     return _emit({"ok": True, "home": str(home), "repo": str(repo), **observations})
 
 

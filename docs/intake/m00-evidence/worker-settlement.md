@@ -70,11 +70,15 @@ get wrong:
 | completion for the cancelled attempt, **with its credential** | **`INVALID_TRANSITION`** | a cancelled attempt cannot be turned back into a completion; the state is unchanged |
 | cancellation **after** acceptance (`edge-a`, already `COMPLETED`) | **`OUTCOME_CONFLICT`** | an accepted outcome is immutable; a later cancellation is refused as a rewrite rather than recorded by overwriting |
 | accepted attempt after the late cancellation | `COMPLETED`, `released`, 1 attempt result | accepted outcome preserved |
+| admission while a **newer** attempt holds the worktree (`edge-d` holds) | **`WORKTREE_WRITER_BUSY`** | the *current* holder excludes everyone else; exclusion is not a property of the first attempt |
+| a released attempt appending a further receipt restating its own outcome (sequence 2) | accepted; its own row stays `COMPLETED`/`released`/1 result, and it cannot change the outcome (`interrupted`/`cancelled` conflict, above) | "no further writes under the old attempt" is scoped precisely: the old attempt may restate its own terminal outcome to its own row, and cannot reacquire the worktree, alter the outcome, or touch another attempt |
+| the current holder after that post-release receipt | `WORKING`, `held`, 0 results — **unchanged** | a released attempt's late write does not disturb the newer owner |
+| rebinding an attempt to a different native execution identity (reused job id) | **`BINDING_MISMATCH`** | an attempt is bound to one execution identity; a recycled job/process id cannot be bound to it |
 
 Still not exercised (and therefore still open in #5): active descendants after a top-level result,
-delayed callbacks beyond the receipt replay above, process/job-ID reuse, late dispatch after
-revocation, restart during settlement, newer-owner protection with two live attempts, and the
-consolidation of `settle_task` with the lifecycle release into one guarded finalization path.
+delayed callbacks beyond the receipt replay above, and restart during settlement (every fixture command
+is already a separate process, so process restart is inherent, but a restart *between* acceptance and
+release is not covered).
 
 ## 4. Finalization vs release: two records, and what makes them consistent
 
