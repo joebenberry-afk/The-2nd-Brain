@@ -21,6 +21,7 @@ vi.mock("../src/ledger-mirror", async (importOriginal) => {
 });
 import {
   buildMirrorEventJson,
+  ledgerEventTypeFor,
   mirrorEvent,
   mirrorEventSync,
   resetMirrorInitCache,
@@ -846,5 +847,79 @@ describe("T-G6-F1/F2 mirror fixes", () => {
     expect(result.ok).toBe(true);
     expect(inits).toBe(2); // first init failed -> retried
     expect(appends).toBe(1);
+  });
+});
+
+/**
+ * The adapter must translate host kinds into the ledger's vocabulary. Before this bridge
+ * existed, seven mirrored kinds were unknown to the ledger and every append carrying one was
+ * a hard error ("unknown required event type"), because `ignorable` defaulted to false — the
+ * mirror recorded 7,755 such failures between 2026-08-16 and 2026-09-21.
+ */
+describe("ledger event vocabulary bridge", () => {
+  /** Every kind the extension's call sites pass to mirror(). */
+  const MIRRORED_KINDS = [
+    "session_started",
+    "user_task",
+    "tool_requested",
+    "tool_completed",
+    "turn_end",
+    "agent_ended",
+    "compaction_started",
+    "compaction_completed",
+    "session_inactive",
+    "decision",
+    "task_context_resolved",
+    "host_artifact_ref",
+    "worker_completed",
+    "environment_assessment",
+    "prefix_drift",
+    "ledger_degraded",
+    "worker_shutdown_telemetry_skipped",
+  ];
+
+  it("no mirrored kind can be a hard error to the ledger", () => {
+    for (const kind of MIRRORED_KINDS) {
+      const event = JSON.parse(buildMirrorEventJson({ kind, fields: {} })) as {
+        event_type: string;
+        ignorable: boolean;
+      };
+      const known = ledgerEventTypeFor(kind).unknownToLedger === false;
+      // Either the ledger knows the type, or the record is ignorable (skipped, not raised).
+      expect(known || event.ignorable === true, `kind ${kind} would hard-fail the ledger`).toBe(true);
+    }
+  });
+
+  it("never renames a kind the ledger already knows", () => {
+    // worker_completed / task_context_resolved / environment_assessment are kernel types, not
+    // host aliases: the adapter must not map them onto some "equivalent" and change their meaning.
+    for (const kind of ["worker_completed", "task_context_resolved", "environment_assessment"]) {
+      expect(ledgerEventTypeFor(kind)).toEqual({ eventType: kind, unknownToLedger: false });
+      const event = JSON.parse(buildMirrorEventJson({ kind, fields: {} })) as {
+        event_type: string;
+        ignorable: boolean;
+      };
+      expect(event.event_type).toBe(kind);
+      expect(event.ignorable).toBe(false);
+    }
+  });
+
+  it("passes a kind the ledger knows through unchanged and non-ignorable", () => {
+    for (const kind of ["decision", "turn_end", "session_started"]) {
+      const event = JSON.parse(buildMirrorEventJson({ kind, fields: {} })) as {
+        event_type: string;
+        ignorable: boolean;
+      };
+      expect(event.event_type).toBe(kind);
+      expect(event.ignorable).toBe(false);
+    }
+  });
+
+  it("a caller cannot escalate an unknown kind back into a hard error", () => {
+    const event = JSON.parse(
+      buildMirrorEventJson({ kind: "prefix_drift", fields: {}, ignorable: false }),
+    ) as { event_type: string; ignorable: boolean };
+    expect(event.event_type).toBe("prefix_drift");
+    expect(event.ignorable).toBe(true);
   });
 });
