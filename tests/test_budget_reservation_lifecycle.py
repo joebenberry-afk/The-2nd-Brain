@@ -8,6 +8,7 @@ suite exists to reject -- a missing response does not establish that nothing hap
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -23,8 +24,8 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "omp_replay_state.py"
 
 def _load_fixture():
     spec = importlib.util.spec_from_file_location("omp_fixture", FIXTURE)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
 
@@ -36,6 +37,25 @@ def _home(tmp_path: Path, *, worker_tokens: int, soft_ratio: float = 0.8) -> Pat
         f"[budgets]\nworker_tokens = {worker_tokens}\nsoft_ratio = {soft_ratio}\n", encoding="utf-8"
     )
     return home
+
+
+def _seed_usage(home: Path, session_id: str, total_tokens: int) -> None:
+    """The session has authoritative usage; without it the governor refuses as unaccountable."""
+    telemetry = home / "telemetry" / "agent-performance"
+    telemetry.mkdir(parents=True, exist_ok=True)
+    record = {
+        "v": 3,
+        "kind": "assistant_usage",
+        "session": session_id,
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "provider": "test-provider",
+        "model": "test-model",
+        "response_id": "seed-response-1",
+        "total_tokens": total_tokens,
+    }
+    (telemetry / f"{session_id}.jsonl").write_text(
+        json.dumps(record) + "\n", encoding="utf-8"
+    )
 
 
 def _open_reservation(home: Path, session_id: str, task_id: str) -> dict:
@@ -147,6 +167,54 @@ def test_consume_reconciles_actual_usage_once(tmp_path: Path) -> None:
     assert row["resolution"] == "consumed"
 
 
+def test_a_resolved_reservation_cannot_be_reopened(tmp_path: Path) -> None:
+    home = _home(tmp_path, worker_tokens=100)
+    governor.reserve_budget(home, "s1", "cancelled", tokens=40)
+    governor.cancel_budget_reservation(
+        home, "s1", "cancelled", "PREPARATION_FAILED", evidence="proven_unused"
+    )
+
+    # Capacity that was returned cannot be re-created by re-asking for the same attempt.
+    late = governor.reserve_budget(home, "s1", "cancelled", tokens=40)
+    assert late["reserved"] is False
+    assert late["reason"] == "RESERVATION_CANCELLED"
+    assert _open_reservation(home, "s1", "cancelled")["cancelled_at"] is not None
+
+    # The refusal wrote nothing, so the returned capacity is intact for other attempts.
+    assert governor.reserve_budget(home, "s1", "other", tokens=100)["reserved"] is True
+    governor.consume_budget_reservation(home, "s1", "other")
+
+    governor.reserve_budget(home, "s1", "spent", tokens=40)
+    governor.consume_budget_reservation(home, "s1", "spent")
+    replay = governor.reserve_budget(home, "s1", "spent", tokens=40)
+    assert replay["reserved"] is False
+    assert replay["reason"] == "RESERVATION_CONSUMED"
+
+
+def test_default_reservation_claims_the_remaining_allowance_not_a_fresh_cap(tmp_path: Path) -> None:
+    home = _home(tmp_path, worker_tokens=100)
+    _seed_usage(home, "s1", 30)
+
+    # The cap covers the whole root episode, so an untargeted claim takes what is left of it.
+    first = governor.reserve_budget(home, "s1", "t1")
+    assert first["reserved"] is True, first
+    assert first["requested"] == 70
+    assert first["outstanding"] == 70
+
+    # Nothing is left to book while that claim is outstanding.
+    second = governor.reserve_budget(home, "s1", "t2")
+    assert second["reserved"] is False
+    assert second["reason"] == "BUDGET_EXHAUSTED"
+
+    # Once the episode has spent the whole cap there is no remainder to claim.
+    governor.consume_budget_reservation(home, "s1", "t1")
+    _seed_usage(home, "s1", 100)
+    third = governor.reserve_budget(home, "s1", "t3")
+    assert third["reserved"] is False
+    assert third["reason"] == "BUDGET_EXHAUSTED"
+    assert third["requested"] == 0
+
+
 def test_zero_cap_always_refuses_without_a_default_fallback(tmp_path: Path) -> None:
     home = _home(tmp_path, worker_tokens=0)
     result = governor.reserve_budget(home, "s1", "t1", tokens=1)
@@ -187,7 +255,9 @@ def test_reconcile_cancels_only_when_no_attempt_exists(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("bound", [True, False])
-def test_reconcile_distinguishes_observed_dispatch_from_uncertainty(tmp_path: Path, bound: bool) -> None:
+def test_reconcile_distinguishes_observed_dispatch_from_uncertainty(
+    tmp_path: Path, bound: bool
+) -> None:
     fixture = _load_fixture()
     home = _home(tmp_path, worker_tokens=100)
     fixture.make_brain(home)  # the registry tables must exist before a project is registered

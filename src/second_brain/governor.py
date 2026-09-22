@@ -1086,7 +1086,14 @@ def reserve_budget(
     transaction, so two concurrent reservations cannot both pass on the same capacity.
     The reservation is idempotent per ``(session_id, task_id)``: reserving twice does not
     consume twice. A refusal writes nothing, so it never releases ownership and never
-    marks an admission approved.
+    marks an admission approved. A reservation that was already resolved -- cancelled as
+    unused, or consumed -- is refused rather than reopened: its capacity is gone, and a
+    late dispatch must not run against a reservation that no longer holds any.
+
+    Without an explicit ``tokens`` the reservation claims the **remaining** allowance
+    (``cap - used - outstanding``), not another full cap: the cap covers all worker usage in the
+    root episode, so charging each dispatch a fresh cap would refuse every dispatch as soon as
+    the episode had spent anything. A remainder of zero refuses like any other exhausted cap.
     """
     home_path = Path(home)
     budgets = _budget_config(home_path)
@@ -1130,8 +1137,30 @@ def reserve_budget(
             "SELECT * FROM budget_reservations WHERE session_id=? AND task_id=?",
             (session_id, task_id),
         ).fetchone()
-        if existing is not None and existing["consumed_at"] is None:
-            outstanding = _outstanding_tokens(conn, episode_hosts)
+        outstanding = _outstanding_tokens(conn, episode_hosts)
+        if existing is not None:
+            # A resolved reservation is a historical fact, not an open one. An attempt whose
+            # capacity was already returned (cancelled) or spent (consumed) must not be
+            # resurrected: a late dispatch would then run against a reservation that holds no
+            # capacity, and the cap would silently overbook.
+            resolved = (
+                "RESERVATION_CANCELLED"
+                if existing["cancelled_at"] is not None
+                else "RESERVATION_CONSUMED"
+                if existing["consumed_at"] is not None
+                else None
+            )
+            if resolved is not None:
+                conn.rollback()
+                return {
+                    "state": "HARD",
+                    "reserved": False,
+                    "reason": resolved,
+                    "used": used,
+                    "cap": cap,
+                    "outstanding": outstanding,
+                    "requested": int(existing["tokens"]),
+                }
             conn.commit()
             return {
                 "state": (
@@ -1144,7 +1173,6 @@ def reserve_budget(
                 "outstanding": outstanding,
                 "requested": int(existing["tokens"]),
             }
-        outstanding = _outstanding_tokens(conn, episode_hosts)
         if used is None:
             conn.rollback()
             return {
@@ -1156,7 +1184,11 @@ def reserve_budget(
                 "outstanding": outstanding,
                 "requested": requested,
             }
-        if used + outstanding + requested > cap:
+        if tokens is None:
+            # The default claim is everything the episode has left, so no second dispatch can
+            # book capacity that this one is already holding.
+            requested = max(cap - used - outstanding, 0)
+        if requested <= 0 or used + outstanding + requested > cap:
             conn.rollback()
             return {
                 "state": "HARD",

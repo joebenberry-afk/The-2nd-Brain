@@ -144,9 +144,11 @@ import {
   type BudgetRunner,
   type BudgetState,
   BUDGET_HARD_LINE,
+  cancelBudget,
   consumeBudget,
   reserveBudget,
   runBudgetCheck,
+  type BudgetCanceller,
   type BudgetConsumer,
   type BudgetReserver,
 } from "./budget-bridge";
@@ -795,6 +797,8 @@ export interface ExtensionOptions {
   budgetReserver?: BudgetReserver;
   /** Budget reservation consumer seam; production uses the governor consume bridge. */
   budgetConsumer?: BudgetConsumer;
+  /** Budget reservation cancellation seam; production uses the governor cancel bridge. */
+  budgetCanceller?: BudgetCanceller;
   /** Test seam to pre-seed session budget states. */
   sessionBudgetStates?: Map<string, BudgetState>;
 }
@@ -1108,6 +1112,28 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const budgetRunner = options.budgetRunner ?? runBudgetCheck;
   const budgetReserver = options.budgetReserver ?? reserveBudget;
   const budgetConsumer = options.budgetConsumer ?? consumeBudget;
+  const budgetCanceller = options.budgetCanceller ?? cancelBudget;
+  // Cancellation carries typed evidence and is never a local assumption: when the bridge
+  // reports `cancelled: false` the capacity is *still spoken for*, so the failure is recorded
+  // and the reservation stays an open liability instead of restoring headroom locally.
+  const cancelReservation = async (session: string, taskId: string, reason: string): Promise<void> => {
+    try {
+      const result = await budgetCanceller({
+        home: config.home ?? "",
+        sessionId: session,
+        taskId,
+        reason,
+        evidence: "proven_unused",
+      });
+      if (result.refused) {
+        getStore(session)?.append(sensors.extensionError(session, `RESERVATION_CANCEL_REFUSED:${result.refused}`));
+      } else if (result.error) {
+        getStore(session)?.append(sensors.extensionError(session, result.error));
+      }
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    }
+  };
   // Consumption is fail-soft and idempotent: the reservation is freed only when the
   // attempt is finished and cleaned up (or was never dispatched), and a failure here is
   // recorded rather than allowed to fail the completion.
@@ -1652,8 +1678,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         );
         // This item reserved before the call and never became an admission, so nothing else
         // will free it: a preparation failure must return its capacity, or repeated failures
-        // would exhaust the role cap without a single worker running.
-        await consumeReservation(session, taskId, "OMP_BATCH_PREPARATION_FAILED");
+        // would exhaust the role cap without a single worker running. The capacity is returned
+        // as *cancelled unused* -- this branch runs before any native dispatch, and the typed
+        // `proven_unused` evidence is what the Brain requires to refund it. A failed
+        // cancellation is recorded and leaves the reservation as an open liability.
+        await cancelReservation(session, taskId, "OMP_BATCH_PREPARATION_FAILED");
         for (const id of reservations) pendingWorkerTaskIds.delete(id);
         const reason = result.error ?? "P3.2 worker context preparation failed";
         getStore(session)?.append(

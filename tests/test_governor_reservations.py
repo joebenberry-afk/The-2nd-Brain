@@ -131,6 +131,56 @@ def test_refusal_exit_code_is_distinct(tmp_path: Path) -> None:
     assert json.loads(refused.stdout)["reserved"] is False
 
 
+def test_cancellation_cli_returns_capacity_only_with_evidence(tmp_path: Path) -> None:
+    home = _home(tmp_path, worker_tokens=100)
+    reserved = _cli(home, "reserve-budget", "--session", "s1", "--task-id", "t1", "--tokens", "60")
+    assert reserved.returncode == 0, reserved.stdout
+
+    # Without the typed evidence the Brain refuses and the reservation stays a liability.
+    unevidenced = _cli(
+        home, "cancel-budget-reservation", "--session", "s1", "--task-id", "t1",
+        "--reason", "PREPARATION_FAILED",
+    )
+    assert unevidenced.returncode == 4, unevidenced.stdout
+    assert json.loads(unevidenced.stdout) == {
+        "cancelled": False,
+        "already_cancelled": False,
+        "refused": "EVIDENCE_REQUIRED",
+    }
+    assert [row["task_id"] for row in governor.list_budget_reservations(home, "s1")] == ["t1"]
+
+    cancelled = _cli(
+        home, "cancel-budget-reservation", "--session", "s1", "--task-id", "t1",
+        "--reason", "PREPARATION_FAILED", "--evidence", "proven_unused",
+    )
+    assert cancelled.returncode == 0, cancelled.stdout
+    assert json.loads(cancelled.stdout) == {
+        "cancelled": True,
+        "already_cancelled": False,
+        "reason": "PREPARATION_FAILED",
+    }
+
+    duplicate = _cli(
+        home, "cancel-budget-reservation", "--session", "s1", "--task-id", "t1",
+        "--reason", "PREPARATION_FAILED", "--evidence", "proven_unused",
+    )
+    assert duplicate.returncode == 0
+    assert json.loads(duplicate.stdout)["already_cancelled"] is True
+
+    # A dispatch arriving after the cancellation cannot spend the returned capacity.
+    late = _cli(home, "consume-budget-reservation", "--session", "s1", "--task-id", "t1")
+    assert json.loads(late.stdout) == {
+        "consumed": False,
+        "already_consumed": False,
+        "refused": "RESERVATION_CANCELLED",
+    }
+
+    # One refund: the whole cap fits again.
+    refilled = _cli(home, "reserve-budget", "--session", "s1", "--task-id", "t2", "--tokens", "100")
+    assert refilled.returncode == 0, refilled.stdout
+    assert json.loads(refilled.stdout)["reserved"] is True
+
+
 def test_check_budget_behavior_is_unchanged(tmp_path: Path) -> None:
     home = _home(tmp_path, worker_tokens=100)
     result = governor.check_budget(home, "s1", "worker")

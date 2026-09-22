@@ -198,6 +198,7 @@ function loadFactory(options?: ExtensionOptions, journal?: unknown[], journalErr
     // intend). Tests that care about a refusal pass their own stub.
     budgetReserver: async () => ({ reserved: true, blocksDispatch: false, state: "OK", used: 0, cap: 400000, outstanding: 1 }),
     budgetConsumer: async () => ({ consumed: true, alreadyConsumed: false }),
+    budgetCanceller: async () => ({ cancelled: true, alreadyCancelled: false }),
     ...options,
     ompWorkerContextRunner,
   });
@@ -3005,16 +3006,18 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(contextRunner).not.toHaveBeenCalled();
   });
 
-  it("returns the reservation when the dispatch never happens", async () => {
+  it("cancels the reservation with proven-unused evidence when the dispatch never happens", async () => {
     const reserved = vi.fn().mockResolvedValue({
       reserved: true, blocksDispatch: false, state: "OK",
       used: 0, cap: 400000, outstanding: 1,
     });
     const consumed = vi.fn().mockResolvedValue({ consumed: true, alreadyConsumed: false });
+    const cancelled = vi.fn().mockResolvedValue({ cancelled: true, alreadyCancelled: false });
     const handlers = loadFactory({
       ompWorkerContextRunner: async () => ({ ok: false, error: "context preparation failed" }),
       budgetReserver: reserved,
       budgetConsumer: consumed,
+      budgetCanceller: cancelled,
     });
     const ctx = makeCtx();
 
@@ -3023,8 +3026,14 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     }, ctx);
 
     expect(reserved).toHaveBeenCalled();
-    // The attempt never became an admission, so the reservation must not survive it.
-    expect(consumed).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }));
+    // The attempt never became an admission, and this branch runs before any native dispatch:
+    // the capacity is returned as *cancelled, proven unused*, never consumed as if work happened.
+    expect(cancelled).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: expect.any(String),
+      reason: "OMP_BATCH_PREPARATION_FAILED",
+      evidence: "proven_unused",
+    }));
+    expect(consumed).not.toHaveBeenCalled();
   });
 
   it("records a child dispatched outside Brain admission exactly once", async () => {
