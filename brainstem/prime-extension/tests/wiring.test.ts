@@ -579,6 +579,38 @@ describe("factory wiring (src/index.ts)", () => {
     }
   });
 
+  it("publishes the host capability set for the session (capability-gated, fail-closed)", async () => {
+    const handlers = loadFactory();
+    await handlers.get("before_agent_start")!({ prompt: "do the thing" }, makeCtx());
+    const file = join(tmp, "state", "host-capabilities.json");
+    const caps = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    // This context exposes no settlement observer: mutating delegation is
+    // disabled, while spawning and read-only work stay available.
+    expect(caps.cleanup_backed_release).toBe(false);
+    expect(caps.mutating_delegation).toBe(false);
+    expect(caps.worker_spawn).toBe(true);
+
+    const capable = makeCtx({
+      observeAsyncJobLifecycle: () => () => {},
+      sessionManager: {
+        getSessionFile: () => join(tmp, "sessions", "capable-session.jsonl"),
+        getSessionId: () => "capable-session",
+        getHeader: () => ({
+          type: "session",
+          version: 1,
+          id: "capable-session",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }),
+        getEntries: () => [],
+      },
+    } as Partial<ExtensionContext>);
+    await handlers.get("before_agent_start")!({ prompt: "do the thing" }, capable);
+    const capableCaps = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+
+    expect(capableCaps.settlement_observation).toBe(true);
+    expect(capableCaps.mutating_delegation).toBe(true);
+  });
+
   it("session_shutdown is the final record once prior writes have settled", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();

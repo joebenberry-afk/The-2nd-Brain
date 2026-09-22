@@ -392,32 +392,26 @@ describe("OMP worker Context Capsule bridge", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("admits mutating dispatch on a stock host and releases only after a post-finalization frame", async () => {
+  it("refuses mutating dispatch on a stock host and keeps read-only delegation available", async () => {
     const contextRunner = vi.fn(async (options: OmpWorkerContextOptions) =>
       contextResultForRequest(options));
-    let bindOptions: Parameters<NonNullable<ExtensionOptions["ompWorkerBindRunner"]>>[0] | undefined;
-    const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async (options) => {
-      bindOptions = options;
-      return {
-        ok: true,
-        status: "accepted" as const,
-        taskId: options.taskId,
-        attemptId: options.attemptId,
-      };
-    });
-    const lifecycleSeen = deferred<Parameters<NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]>>[0]>();
-    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => {
-      lifecycleSeen.resolve(options);
-      return {
-        ok: true,
-        status: "accepted" as const,
-        taskId: options.taskId,
-        attemptId: options.attemptId,
-        sequence: options.sequence,
-      };
-    });
+    const bindRunner: NonNullable<ExtensionOptions["ompWorkerBindRunner"]> = vi.fn(async (options) => ({
+      ok: true,
+      status: "accepted" as const,
+      taskId: options.taskId,
+      attemptId: options.attemptId,
+    }));
+    const lifecycleRunner: NonNullable<ExtensionOptions["ompWorkerLifecycleRunner"]> = vi.fn(async (options) => ({
+      ok: true,
+      status: "accepted" as const,
+      taskId: options.taskId,
+      attemptId: options.attemptId,
+      sequence: options.sequence,
+    }));
     const subscribers = new Set<(payload: unknown) => void>();
     const handlers = new Map<string, (event: unknown, context: ExtensionContext) => unknown>();
+    // Stock host: lifecycle frames plus a read-only async-job snapshot, but no
+    // observer that can prove executor settlement and cleanup.
     const pi = {
       on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => handlers.set(name, handler),
       events: {
@@ -438,7 +432,9 @@ describe("OMP worker Context Capsule bridge", () => {
       recent: [],
     });
 
-    const result = await handlers.get("tool_call")!(
+    // Mutating delegation is fail-closed: the frame-only path cannot prove
+    // cleanup, so admitting it would leave the writer lease held/quarantined.
+    const mutating = await handlers.get("tool_call")!(
       {
         toolName: "task",
         toolCallId: "task-call-stock",
@@ -446,27 +442,28 @@ describe("OMP worker Context Capsule bridge", () => {
       },
       context,
     );
-
-    expect(result).not.toEqual({ block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" });
-    expect(rewrittenTask(result)).toContain("Brain-owned child context");
-    expect(lifecycleRunner).not.toHaveBeenCalled();
-    expect(subscribers.size).toBe(1);
-
-    for (const handler of subscribers) {
-      handler({ id: "WorkerA", parentToolCallId: "task-call-stock", index: 0, status: "completed" });
-    }
-    const observed = await lifecycleSeen.promise;
-
-    expect(bindRunner).toHaveBeenCalledTimes(1);
-    expect(bindOptions).toMatchObject({ nativeJobId: "WorkerA", agentId: "WorkerA" });
-    expect(observed).toMatchObject({
-      outcome: "completed",
-      executorSettled: true,
-      // Stock hosts detach late cleanup and expose no completion signal, so the
-      // default native path never claims cleanup it cannot prove.
-      cleanupComplete: false,
-      sequence: 1,
+    expect(mutating).toEqual({
+      block: true,
+      reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE",
     });
+    expect(lifecycleRunner).not.toHaveBeenCalled();
+    expect(bindRunner).not.toHaveBeenCalled();
+    expect(subscribers.size).toBe(0);
+
+    // The same host still admits read-only work.
+    const readOnly = await handlers.get("tool_call")!(
+      {
+        toolName: "task",
+        toolCallId: "task-call-stock-readonly",
+        input: { agent: "scout", task: "Inspect the seam" },
+      },
+      context,
+    );
+    expect(readOnly).not.toEqual({
+      block: true,
+      reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE",
+    });
+    expect(rewrittenTask(readOnly)).toContain("Brain-owned child context");
   });
 
   const settlementHarness = (releaseLifecycle?: Promise<void>) => {

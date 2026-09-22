@@ -852,6 +852,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   let store: TelemetryStore | null = null;
   const pendingRereads = new Map<string, { path: string }>();
   const readySessions = new Set<string>();
+  const capabilityReportedSessions = new Set<string>();
   const activeStateTouchedSessions = new Set<string>();
   const lastToolResultBytes = new Map<string, number>();
   const lastContextProvider = new Map<string, string | null>();
@@ -1176,6 +1177,34 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return null;
   };
 
+  /**
+   * What this host can actually be observed doing, decided from the live context
+   * rather than from a version string. Brain's features are capability-gated:
+   * a host that cannot prove settlement keeps memory, retrieval, injection and
+   * read-only work, and refuses mutating delegation (fail-closed).
+   */
+  const hostCapabilities = (ctx: ExtensionContext) => {
+    const settlementObservation = typeof ctx.observeAsyncJobLifecycle === "function";
+    const attemptSettlement = typeof ctx.observeAttemptSettlement === "function";
+    const lifecycleFrames = typeof pi.events?.on === "function";
+    const asyncJobSnapshot = typeof ctx.getAsyncJobSnapshot === "function";
+    const cleanupBackedRelease = settlementObservation || attemptSettlement;
+    return {
+      worker_spawn: true,
+      lifecycle_observation: lifecycleFrames || settlementObservation,
+      settlement_observation: settlementObservation,
+      attempt_settlement_observation: attemptSettlement,
+      cancellation_observation: asyncJobSnapshot,
+      // Only the patched observers report executor settlement plus proven cleanup.
+      // The frame-only path records cleanupComplete:false, which leaves the durable
+      // writer lease held/quarantined with no release.
+      cleanup_backed_release: cleanupBackedRelease,
+      mutating_delegation: cleanupBackedRelease,
+      read_only_delegation: lifecycleFrames || asyncJobSnapshot,
+      structured_usage: true,
+    };
+  };
+
   const releaseUndispatchedAdmission = async (
     admission: WorkerAdmission,
     failureCode: string,
@@ -1488,8 +1517,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       workerAccess.push(classified);
     }
     const hasMutating = workerAccess.some((entry) => entry.intent === "mutating");
+    // Mutating delegation is fail-closed: it needs a settlement source that can
+    // prove executor settlement and cleanup. The frame-only `native_lifecycle`
+    // path cannot prove either, so admitting mutating work there leaves the writer
+    // lease held/quarantined with no release path (observed on omp/18.2.8).
+    // Read-only delegation, memory, retrieval and injection are unaffected.
+    const capabilities = hostCapabilities(ctx);
     const settlementSource = hasMutating ? settlementSourceFor(ctx) : null;
-    if (hasMutating && settlementSource === null) {
+    if (hasMutating && !capabilities.cleanup_backed_release) {
       return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
     }
     const projectId = resolvedProjectIdForSession(session) ?? resolveProject();
@@ -2895,6 +2930,27 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     try {
       session = resolveAndJournalSessionId(ctx);
       establishWorkerRootSession(session, ctx);
+      // Publish this host's capability set once per session. Brain features are
+      // capability-gated, not version-gated: the file records what this host can
+      // be observed doing, so a degraded host is visible in state instead of only
+      // as a refusal at dispatch time. Host state, not a session event, so no
+      // telemetry record is added.
+      if (config.home && !capabilityReportedSessions.has(session)) {
+        capabilityReportedSessions.add(session);
+        try {
+          mkdirSync(join(config.home, "state"), { recursive: true });
+          writeFileSync(
+            join(config.home, "state", "host-capabilities.json"),
+            JSON.stringify(
+              { reported_at: new Date().toISOString(), session, ...hostCapabilities(ctx) },
+              null,
+              2,
+            ),
+          );
+        } catch {
+          // advisory only; a write failure never blocks a session
+        }
+      }
       const modelId = sensors.modelToString(ctx.model) ?? undefined;
       const guardCfg = loadOrchestratorGuardConfig();
       const role = resolveAgentRole(
