@@ -91,6 +91,93 @@ function eventIdFor(kind: string): string {
  * ledger — delivery succeeded (fire-and-forget goal met; the ledger remains
  * the sequence authority). A duplicate of a DIFFERENT event is a real error.
  */
+/**
+ * The ledger's own event vocabulary (kernel semantics), and the host kinds that map onto it.
+ *
+ * Host telemetry names stop at this boundary (owner decision D-6: OMP field names belong to
+ * the adapter, not the kernel), so the adapter — not the ledger — is what translates. The
+ * ledger's contract makes an unknown `event_type` a hard error unless the record is
+ * ignorable, which is why an unmapped kind used to fail every append it appeared in.
+ */
+/**
+ * The ledger's event vocabulary (kernel semantics), kept in sync with
+ * `src/second_brain/contracts.py::LifecycleEventType` — 40 members as of 2026-09-21.
+ *
+ * A kind in this set travels unchanged. A kind the ledger does not know is recorded as
+ * ignorable host bookkeeping, because the ledger treats an unknown non-ignorable
+ * `event_type` as a HARD error — which is what took this mirror down 7,755 times between
+ * 2026-08-16 and 2026-09-21. There is deliberately NO rename table here: guessing that a
+ * host kind means some other ledger type is how a kernel type gets silently remapped.
+ */
+const LEDGER_EVENT_TYPES: Record<string, true> = {
+  accuracy_gate: true,
+  agent_ended: true,
+  brain_no_injection: true,
+  brain_packet_delivered: true,
+  brain_retrieval_attempt: true,
+  compaction_completed: true,
+  compaction_started: true,
+  decision: true,
+  environment_assessment: true,
+  file_change_observed: true,
+  finding: true,
+  independent_verification: true,
+  result_corrected: true,
+  result_correction_requested: true,
+  result_returned: true,
+  result_reviewed: true,
+  session_finalized: true,
+  session_inactive: true,
+  session_started: true,
+  simplification_review: true,
+  stop_decided: true,
+  stop_finalized: true,
+  task_assigned: true,
+  task_completed: true,
+  task_context_resolved: true,
+  task_created: true,
+  task_failed: true,
+  test_observed: true,
+  tool_completed: true,
+  tool_requested: true,
+  tool_started: true,
+  turn_end: true,
+  user_task: true,
+  worker_cancelled: true,
+  worker_completed: true,
+  worker_failed: true,
+  worker_message: true,
+  worker_report: true,
+  worker_spawned: true,
+  worker_started: true,
+};
+
+
+export function ledgerEventTypeFor(kind: string): {
+  eventType: string;
+  /** True when the ledger has no such type, so the record must be ignorable. */
+  unknownToLedger: boolean;
+} {
+  if (Object.hasOwn(LEDGER_EVENT_TYPES, kind)) return { eventType: kind, unknownToLedger: false };
+  // Unknown: record it as host bookkeeping. The ledger skips an unknown ignorable record
+  // instead of raising, so a new host kind can never take the mirror down again.
+  return { eventType: kind, unknownToLedger: true };
+}
+
+/**
+ * Kinds the adapter mirrors that the ledger vocabulary does not contain. Each is a candidate
+ * for the kernel vocabulary rather than an adapter name — an artifact reference, prefix
+ * drift, a degraded ledger, skipped shutdown telemetry — but kernel growth needs the owner's
+ * decision, so for now they travel as ignorable bookkeeping: stored nowhere, projected
+ * nowhere, and never a hard failure.
+ */
+export const UNPROJECTED_MIRROR_KINDS: readonly string[] = [
+  "host_artifact_ref",
+  "prefix_drift",
+  "ledger_degraded",
+  "worker_shutdown_telemetry_skipped",
+];
+
 function isDuplicateOfThisEvent(cliError: string, eventJson: string): boolean {
   let eventId: unknown;
   try {
@@ -105,16 +192,24 @@ function isDuplicateOfThisEvent(cliError: string, eventJson: string): boolean {
 }
 
 export function buildMirrorEventJson(record: MirrorRecord): string {
+  const mapped = ledgerEventTypeFor(record.kind);
   const event = {
     // T-G6-F1: seq is OMITTED entirely — the ledger auto-assigns the
     // authoritative contiguous seq (host mirrors are stateless).
     event_id: record.eventId ?? eventIdFor(record.kind),
     agent_id: record.agentId ?? null,
     parent_event_id: record.parentEventId ?? null,
-    event_type: record.kind,
+    event_type: mapped.eventType,
     timestamp: new Date().toISOString(),
     surface_visibility: record.surfaceVisibility ?? "raw_only",
-    ignorable: record.ignorable ?? false,
+    // An unknown event type is a HARD ERROR to the ledger unless it is ignorable
+    // (`contracts.py`: "unknown required event type"), and a caller passing
+    // `ignorable: false` therefore used to fail every append for a kind the ledger
+    // had never heard of — 7,755 recorded failures between 2026-08-16 and 2026-09-21.
+    // The kind the ledger does not know is, by definition, not one Brain requires:
+    // it is recorded as host bookkeeping (skipped, never raised) and a caller cannot
+    // escalate it back into a hard error.
+    ignorable: record.ignorable === true || mapped.unknownToLedger,
     payload: record.fields,
   };
   return JSON.stringify(event);
