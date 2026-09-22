@@ -278,6 +278,32 @@ after revocation, restart, newer-owner protection). The `ADM` blocker (issuer au
 gate these: they run through the disposable fixture path already proven in
 `outputs/reports/m00.3-replay-authority-20260922/`.
 
+## Finish condition assessment (2026-09-22)
+
+Label: **M00_PARTIAL_EXTERNAL_BLOCKER** — not `M00_CANDIDATE_QUALIFIED`. **Production activation: NOT PERFORMED.**
+
+Evidence for the candidate, bound to the commits in this file and to `docs/intake/m00-evidence/`:
+extension suite 772/772; the applicable Python set 398 passed; `ruff` and `pyright` clean; the replay
+cases with their mutations; the ten-worker sequence and the ownership/receipt/cancellation matrix; the
+#2b increment with its mutation; the issuance-chain reproduction.
+
+Gates that are genuinely open, each with what would close it:
+
+| Gate | State | What closes it |
+| --- | --- | --- |
+| #3 acceptance review | audit done (9 PASS, 6 gaps repaired, then 2 more found and repaired); no *acceptance* review | an independent review of producer + consumer + custody + replay through a route this session lacks (mutating dispatch is refused by the host's own capability gate) |
+| #4 issuance | reproduced; issuer authentication isolated | a trusted channel or OS-identity boundary between host and agent process — outside this boundary's constraints |
+| #4 read-only lane | criteria recorded | an enforcement mechanism that can be demonstrated, not a declared role |
+| #5 descendants after a top-level result | **absent as an observation**: the host bridge advertises `execution_census: false` and only reacts to post-finalization frames, so a live descendant records nothing | a census-backed observation that a finished top-level result has no live descendants, or an explicit refusal to release without one |
+| #5 restart between acceptance and release | code path exists, no executed case | one executed case |
+| #6 reserve before admission | **absent** | capacity checked before a budget-consuming admission |
+| #6 fail-open cap | `check_budget` returns `state: OK` with `used: None` and `error: ACCOUNTING_UNAVAILABLE`; Claude Code records always land there | a policy decision on whether unmeasurable usage blocks admission, then enforcement |
+| #6 remaining summing readers | `contracts._calibration_pairs`, `scripts/run_paired_economics.py` | the same identity rule, or a recorded authorized exclusion |
+| cumulative qualification | not claimed | every gate above evidenced on one frozen subject |
+
+Per the mandate §10 this is a legitimate interim result: the candidate is honest about its boundaries,
+and the remaining gates are named with their closure conditions rather than waived.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
