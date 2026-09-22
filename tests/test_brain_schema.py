@@ -416,6 +416,65 @@ def test_case_7_competing_first_open_converges(brain_home) -> None:
     assert {"events", "session_vmem", "ledger_meta"} <= tables
 
 
+# --- the authority decides the transition (store no longer classifies) ------------------
+
+
+def _ledger_only_schema(home, session_id: str) -> sqlite3.Connection:
+    with _open_ledger(home, session_id) as store:
+        store.create_session(_identity(session_id))
+    return sqlite3.connect(_session_file(home, session_id))
+
+
+def test_component_shape_names_the_chain_transition_the_authority_allows(brain_home) -> None:
+    """A version-2 header without `prev_hash` is a shape the authority names, not the store.
+
+    The database is otherwise current: the only difference from the registered `events` shape is
+    the one registered column the hash chain added. The authority must call that `additive`, and
+    opening must perform the transition and end at the canonical state.
+    """
+    session_id = "authority-transition"
+    conn = _ledger_only_schema(brain_home, session_id)
+    try:
+        conn.execute("ALTER TABLE events DROP COLUMN prev_hash")
+        conn.commit()
+        shape = brain_schema.component_shape(conn, "ledger")
+    finally:
+        conn.close()
+    assert shape.state == "additive", shape
+    assert shape.missing == {"events": ("prev_hash",)}, shape.missing
+    assert shape.unexpected == {} and shape.altered == () and shape.absent_tables == ()
+
+    with _open_ledger(brain_home, session_id):
+        pass
+    conn = sqlite3.connect(_session_file(brain_home, session_id))
+    try:
+        assert brain_schema.component_shape(conn, "ledger").state == "current"
+        version = conn.execute(
+            "SELECT value FROM ledger_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert version == str(ledger.LEDGER_SCHEMA_VERSION)
+
+
+def test_component_shape_refuses_a_shape_the_authority_cannot_name(brain_home) -> None:
+    """An extra column is not an additive predecessor: it is a shape to preserve and refuse."""
+    session_id = "authority-unknown-shape"
+    conn = _ledger_only_schema(brain_home, session_id)
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN someone_elses_column TEXT")
+        conn.commit()
+        shape = brain_schema.component_shape(conn, "ledger")
+    finally:
+        conn.close()
+    assert shape.state == "unsupported", shape
+    assert shape.unexpected == {"events": ("someone_elses_column",)}, shape.unexpected
+
+    with pytest.raises(BrainError) as excinfo, _open_ledger(brain_home, session_id):
+        pass
+    assert "unsupported layout" in str(excinfo.value)
+
+
 # --- data preservation and the accounting witness --------------------------------------
 
 
