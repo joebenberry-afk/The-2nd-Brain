@@ -35,6 +35,12 @@ export interface OmpWorkerResultOptions {
   hostGeneration?: number;
   nativeAttemptId?: string;
   nativeJobId?: string | null;
+  /**
+   * Bearer authority minted for this attempt by Brain admission. Host-only: it must never reach
+   * child context, spawn text, diagnostics or telemetry. Omitted entirely when the attempt has
+   * none (read-only attempts are minted nothing by design).
+   */
+  callbackToken?: string;
   python?: string;
   timeoutMs?: number;
 }
@@ -97,6 +103,7 @@ export function runOmpWorkerResult(
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;
   env.SECOND_BRAIN_HOME = options.home;
+  const callbackToken = bounded(options.callbackToken ?? "", 512);
   const payload = {
     operation: "worker_result",
     harness: "omp",
@@ -115,6 +122,8 @@ export function runOmpWorkerResult(
     host_generation: options.hostGeneration,
     native_attempt_id: options.nativeAttemptId,
     native_job_id: options.nativeJobId,
+    // The completion authority, present only when admission issued one for this attempt.
+    ...(callbackToken ? { callback_token: callbackToken } : {}),
   };
   return new Promise((resolve) => {
     const child = execFile(

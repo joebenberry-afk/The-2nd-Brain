@@ -1939,6 +1939,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         hostGeneration: admission.hostGeneration,
         nativeAttemptId: admission.nativeAttemptId,
         nativeJobId: admission.nativeJobId,
+        // The attempt's bearer authority, forwarded host-to-host. It is deliberately not added
+        // to the host journal above, the child context, or any diagnostic.
+        callbackToken: admission.callbackToken,
       });
       if (!outcome.ok) throw new Error(outcome.error ?? "BRAIN_WORKER_RESULT_NOT_ACCEPTED");
       rememberWorkerIdentity(reportedWorkerTaskIds, fields.task_id);
