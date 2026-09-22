@@ -346,6 +346,49 @@ Findings recorded open rather than repaired here:
 - **Constructed journals**: the replay cases build journal entries rather than capturing them from a
   host, so fidelity of the construction is assumed, not measured.
 
+## Owner decisions and the corrected blocker classification (2026-09-22)
+
+**Budget policy — DECIDED (policy closed, feature open).** Refuse new billable dispatch when the
+applicable cap cannot be satisfied from authoritative accounting or an authoritative conservative
+bound; reserve before dispatch **atomically** with the check; preserve existing numerical limits,
+outstanding liabilities and root/descendant accounting; **no** automatic fail-open, **no** default
+allowance for an explicit zero, **no** session/episode reset evasion. In-flight work under a valid
+reservation keeps its accounting and completes/cleans up; a budget refusal must not release writer
+ownership or fabricate settlement. Authorized non-billable local work (tests, inspection, recovery
+diagnostics) stays available. **The decision authorizes no additional spending**, and the feature
+remains open until implemented and demonstrated with local fixtures.
+
+**Blocked ≠ satisfied.** The ledger's five blocked rows are **five unresolved acceptance gates**; the
+`blocked` label says nothing about whether an authorized next step exists. Corrected split:
+
+| Gate | Kind | Next executable step |
+| --- | --- | --- |
+| Ledger-mirror destination assertion | **executable** | assert the real mirror sink with a positive case and a mutation control |
+| "Terminal accepted, attempt result absent" | **executable** | controlled failure at the write boundary; rollback or a documented pending state |
+| Credential-bearing error serialization | **executable**, partly done | sentinel scan of recorded destinations now exists (below); still to do: force failures through the downstream handling with the sentinel |
+| Journal fidelity vs the actual producer | **executable** | capture a journal from the candidate producer in disposable state and compare with the fixtures |
+| Reserve-before-admission | **executable** (policy now fixed) | implement atomic check+reserve, keep refusal non-releasing |
+| Trusted issuer channel | external — host/security primitive | identify the exact missing primitive or the separately required authorization |
+| Host descendant census | external — observation/coverage capability | incomplete visibility must stay explicitly incomplete |
+| Independent **runtime** verification | capability, not source authority | bounded verification surface: a verifier invoking bounded recipes and receiving its own results; **no** unrestricted mutation or production writer lease |
+
+**Evidence distinctions to keep** (they must not be merged into one verdict):
+
+```
+Author-executed runtime evidence:      available where actually run
+Independent source/artifact review:    obtained; adverse
+Independent runtime execution:         not demonstrated
+Authenticated verification attestation: not demonstrated
+```
+
+**Executed on this instruction:** a credential scan over every destination the replay route records
+(journal, telemetry, returned outcomes, dispatch failures, refusal error string) for a real sentinel,
+9/9 green. Its first version carried a *senseless* positive control — it pointed at a surface where the
+sentinel cannot appear, because recovery never reconstructs the credential — and that control failed
+after being committed (commit `a6e1910`); corrected forward rather than rewritten, and the honest scope
+is recorded in the test: the assertion guards against a future change that starts threading the
+credential into a record, and the search's sensitivity is proven against a string that does contain it.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
