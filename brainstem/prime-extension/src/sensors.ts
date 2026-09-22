@@ -1050,13 +1050,11 @@ export function assistantUsage(
   const u = usage as Record<string, unknown>;
   const extra: Record<string, unknown> = { provider, model };
   if (typeof responseId === "string" && responseId.length > 0) {
-    // Bounded without becoming lossy: truncating a long identity could map two distinct host
-    // responses onto one recorded identity, and the accounting reader would then drop the second
-    // genuinely billed request. A digest of the full value keeps distinct identities distinct.
-    extra.response_id =
-      responseId.length <= 256
-        ? responseId
-        : `sha256:${createHash("sha256").update(responseId, "utf8").digest("hex")}`;
+    // One canonical form for every identity: a digest of the host's value. Branching (verbatim
+    // for short ids, digest for long ones) would put raw and encoded text in one namespace, so a
+    // host id that literally reads `sha256:<hex>` would collide with the encoded form of another
+    // response and collapse two billed requests into one. It also never stores the id verbatim.
+    extra.response_id = `sha256:${createHash("sha256").update(responseId, "utf8").digest("hex")}`;
   }
   const input = usageCounter(u.input);
   if (input !== undefined) extra.input_tokens = input;
