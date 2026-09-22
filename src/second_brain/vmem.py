@@ -321,7 +321,19 @@ class VMemStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA foreign_keys=ON")
-            brain_schema.register("vmem", tables=("session_vmem",), ddl=_VMEM_SCHEMA)
+            # Register the *post-migration* shape, derived from the same base DDL plus the same
+            # additive columns: a predecessor database (base DDL, no header, extensions already
+            # added by an earlier process) must be recognised as canonical-shaped, not refused.
+            # Deriving it here keeps one source for the shape instead of a second hand-written DDL.
+            brain_schema.register(
+                "vmem",
+                tables=("session_vmem",),
+                ddl=_VMEM_SCHEMA
+                + "\n".join(
+                    f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl};"
+                    for column, ddl in _VMEM_ADDITIVE_COLUMNS
+                ),
+            )
             conn.execute("BEGIN IMMEDIATE")
             try:
                 brain_schema.ensure(conn=conn, component="vmem", create=True)
