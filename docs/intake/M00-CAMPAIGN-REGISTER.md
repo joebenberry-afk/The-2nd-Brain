@@ -987,3 +987,173 @@ issuer primitive, host descendant census, independent runtime execution surface.
    report); rerun for the final candidate after any further source change.
 4. Then #2b, #4, #5, #6 in order, then the §9 security/deployment reconciliation and the cumulative
    evidence pack.
+
+## Reservation wiring closed through the real route, and two defects it exposed (2026-09-22)
+
+**Candidate:** branch `brain/m00.3-producer-guard`, commits `2dc8f26`, `507ad95`, `68bce68` plus the
+reader work below. Author-executed, as before: no independent executor is available in this session.
+
+**The route is closed.** `OMP_BATCH_PREPARATION_FAILED` no longer consumes its reservation. It calls
+`cancelBudget` (new bridge) → `governor cancel-budget-reservation` with `evidence="proven_unused"`,
+which the Brain requires before it returns capacity. The proof that this branch runs before any
+billable/native dispatch is carried on both sides: the host call is blocked (`{block: true}`), so no
+tool ran, and the durable attempt row the reconciler reads as "dispatch observed" does not exist.
+
+`tests/reservation-integration.test.ts` drives the **real** factory → real bridges → real governor CLI
+against a disposable home, and establishes the owner's chain plus its controls:
+
+| Case | Result |
+| --- | --- |
+| reserve → preparation fails → no dispatch → cancel(`proven_unused`) → `cancelled_unused` | pass; row `resolution='cancelled_unused'`, `cancel_reason='OMP_BATCH_PREPARATION_FAILED'`, no `worker_tasks` row |
+| duplicate preparation-failure handling → no second refund | pass; the late dispatch is refused `BRAIN_WORKER_BUDGET_RESERVATION_CANCELLED` before preparation, one row, one refund |
+| preparation succeeds → cancellation unavailable → normal consume | pass; reservation stays open, consumed once with `resolution='consumed'` |
+| cancellation bridge fails → no local capacity restore | pass; row stays uncancelled, the next claim is refused, the failure is recorded |
+
+The other side of the route is now refused at the Brain too: `reserve_budget` refuses to reopen a
+resolved reservation (`RESERVATION_CANCELLED` / `RESERVATION_CONSUMED`), and the reservation bridge
+fails closed on every Brain-side refusal instead of only on an exhausted cap.
+
+**Defect 1 — the reservation claimed a fresh full role cap.** Found by the integration test, not by
+inspection: the extension reserved without `--tokens`, so the Brain reserved `worker_tokens` outright.
+Since the cap covers all worker usage in the episode, `used + outstanding + requested > cap` refused
+**every** dispatch as soon as the session had recorded any usage. An untargeted claim is now the
+*remaining* allowance (`cap - used - outstanding`); a remainder of zero refuses like any exhausted cap.
+
+**Defect 2 — a descendant session charged a smaller book than its root's.** Found by the #6 reader
+tests: `_episode_host_sessions` scoped liability by *downward* lookup only, so a nested worker who
+asked for capacity saw `{itself}` and could book a fresh cap while its root already held one (measured:
+root holding 80 of a 100 cap, child granted 80 more). It now resolves the **root** from the asking
+session's own ledger (`root_parent_session_id` names the root, not the immediate parent) and charges
+the root episode; a declared root that cannot be resolved to a host session is unreadable bookkeeping
+and fails closed rather than becoming a smaller book. Two further accounting holes in the same path
+were closed with it: one descendant with no telemetry at all used to zero the *whole* episode's spend,
+and an episode that could not be resolved raised out of the admission path into the bridge's
+fail-open transport branch (a silent allowance) instead of refusing.
+
+**Jev (supplementary, guidance only).** `jev_decide` was asked which book a descendant must charge,
+with the measured overbooking case, the owner's "across root/descendants" clause and the isolated-root
+counterexample in evidence. It selected `root-episode-strict` at 0.96 with all three requirements
+supported (`keep-subtree-scope` contradicted). The decision agreed with the defect the tests had
+already exposed; it did not establish it. No claim in this section rests on that probability.
+
+**Migration version pins replaced by what the versions mean.** `tests/test_writer_admission.py` derived
+its expectations from the real migration set (`_migrations_after(version)`) instead of pinning `[23,24]`,
+and `tests/test_migration_chain.py` now establishes: contiguous unique numbers through the head; the
+reservation table and its one-reservation-per-(session, task) rule at 25; the additive notification
+outbox at 26 (a pre-existing row survives with `notification_pending = 0`); the reservation lifecycle
+columns at 27 (existing reservations keep NULL lifecycle fields); the ordered remainder applied exactly
+once from 24/25/26; the no-op at the head with a sensitivity control for the fingerprint witness; and a
+version interrupted inside its own transaction rolling back to nothing applied and resuming to exactly
+one canonical result once the real bytes are restored.
+
+**#6 readers now answer the admission question.** `check_budget` reports episode-scoped `used` **and**
+`outstanding`, with `available = cap - used - outstanding` (raw arithmetic: negative means overbooked);
+`state` stays spend-based on purpose, because a booking the worker may never spend must not block the
+driver's own tools. `list_budget_reservations` and `reconcile_budget_reservations` are episode-scoped
+for the same reason. The status reader is read-only: it does not create or migrate the reservation
+ledger as a side effect of being asked. Unknown usage stays `used=None` / `available=None` /
+`ACCOUNTING_UNAVAILABLE`, with the liability still reported; **deliberate and pinned asymmetry:** a
+session with *no telemetry at all* is unknown to the reader but a resolved zero to admission
+(`test_a_session_without_telemetry_is_unknown_to_the_reader_and_zero_to_admission`), because reading
+absence as unknown would refuse the first worker of every fresh session. Reader evidence covers root +
+descendant sessions, an unrelated episode, cancelled-vs-unresolved liability, consumed-vs-usage
+double counting, a duplicate billable observation (the `used == 65` witness), a restart through a
+separate CLI process, and the read-only guarantee.
+
+**Static analysis cleared, attributions as measured:** `ruff` clean; `pyright` 0 errors (all six were
+candidate-owned: two over-long lines and one fixture-loader annotation pattern in each of the two new
+suites); `tsc` and `eslint` clean.
+
+Gates on the current bytes: extension **786 passed / 37 files**, `pytest tests/test_budget_reservation_lifecycle.py
+tests/test_governor_reservations.py tests/test_governor.py` **87 passed**, `tests/test_migration_chain.py
+tests/test_writer_admission.py tests/test_migrations_property.py` **46 passed**.
+
+**Still open, and not claimed:** independent execution of any of the above; the remaining #2b
+test-strength items (strict-prefix fixture, VMem public reader, separate-process first open); the
+`contracts._calibration_pairs` / `scripts/run_paired_economics.py` readers, which answer a *different*
+question (chars-per-token calibration and study economics) and already dedupe by usage identity, so they
+were deliberately left alone rather than folded into the budget book; and the bounded
+independent-verification-route investigation.
+
+## Verification pass: interpreter resolution, failure attribution, and two more measured fixes (2026-09-22)
+
+**Interpreter resolution is part of the subject, and it was wrong by default.** The candidate
+worktree's `.venv` was created *from* the main repository's venv (`pyvenv.cfg` records
+`executable = C:\...\The-Second-Brain\.venv\Scripts\python.exe`). Invoked by a **relative** path it
+reports that main venv as `sys.executable`, whose `site-packages/_editable_impl_second_brain.pth`
+points at the **sibling `qualified-v2` worktree**; every subprocess spawned as `sys.executable` with a
+sanitized environment then imports that sibling's source rather than the candidate's. Invoked by
+**absolute** path the same interpreter resolves `...\m00.3-producer-guard\src\second_brain\__init__.py`
+(both probes recorded side by side). Measured consequence: `tests/test_v1_p4_qualification.py` (5
+cases) raised `Qualification runtime source mismatch: expected ...m00.3-producer-guard\src\second_brain\__init__.py,
+got '...qualified-v2\src\second_brain\__init__.py' using ...The-Second-Brain\.venv\Scripts\python.exe`
+under the relative invocation and passes under the absolute one. The guard behaved correctly: it
+refused to qualify a runtime whose source was not the candidate's. **Every gate reported below was
+produced with the absolute candidate interpreter and `PYTHONPATH=src`.** The extension bridge tests
+are unaffected: `reservation-integration.test.ts` pins `SECOND_BRAIN_PYTHON` to that interpreter, and
+a bridge-conditions probe (cwd elsewhere, `PYTHON*` stripped) resolves the candidate's source.
+
+**Defect: concurrent first open of the shared control database could kill the caller.** Found by
+`test_concurrent_reservations_cannot_both_pass` failing in a full run (`JSONDecodeError` from a child
+that produced no stdout). Reproduced deterministically: `PRAGMA journal_mode=WAL` answers
+SQLITE_BUSY *immediately* when the transition cannot take its exclusive lock — the busy timeout does
+not defer it, because the two connections may be converting from different modes — so the loser died
+with `sqlite3.OperationalError: database is locked` at `db.py:44`. Measured **14 crashes in 200
+concurrent first opens** on a quiet machine. Fixed with a bounded retry (then continue, because
+journal mode is a tuning choice) plus `busy_timeout` before the first locking statement; after,
+**0 crashes in 100 iterations** with exactly one grant each. `ledger.py` already had this convention
+for its own burst-resilience fix, so the retry was consolidated into one helper (`db.ensure_wal`)
+with the policy difference stated at each call site (the ledger requires WAL; the control database
+does not). The ledger's budget also rose from 0.3s to 1s.
+
+**Migration/schema reader work (committed earlier in this pass).** `check_budget` reports
+episode-scoped `used` **and** `outstanding` with `available = cap - used - outstanding`, read-only;
+`list_budget_reservations`/`reconcile_budget_reservations` are episode-scoped; the episode is resolved
+**upward** to the declared root and an unresolvable root fails closed; spend is resolved per host
+session so one telemetry-less descendant cannot zero the episode. Two overbooking/fail-open defects
+this exposed are recorded in the commit `d6b8686` message. `tests/test_migration_chain.py` replaced
+version pins with what 25/26/27 mean. `db.ensure` replays a component's registered **index**
+statements when their own name is free, so every strict prefix of the registered DDL converges
+(without it the new prefix test fails; verified by temporary revert).
+
+**Inherited failures — exact signatures, attributed by file-copy isolation at `09f394e`** (my three
+changed source files reverted to that commit's bytes, no stash; identical signatures before and
+after, so none of them is attributable to this session's work):
+
+| Test and exact signature | Attribution |
+| --- | --- |
+| `test_worker_lifecycle.py::test_worker_event_terminal_aliases_emit_result_telemetry[task_completed\|task_failed\|worker_cancelled\|worker_canceled]` → `assert 'failed' == 'ok'` (line 95) | inherited; cause located: `hermes_adapter.handle_worker_event` **deliberately** refuses terminal events with `failure_code: COMPLETION_AUTHORITY_UNAVAILABLE` ("Hermes has no authenticated completion authority") — the campaign's recorded external dependency (#4), which these tests predate |
+| `test_worker_protocol.py::test_context_handoff_reuses_unchanged_and_emits_changed_delta` → `KeyError: 'context_metadata'` | inherited (also recorded earlier) |
+| `test_worker_protocol.py::test_result_hash_and_correction_lifecycle_are_canonical` → `COMPLETION_AUTHORITY_UNAVAILABLE` vs `UNAUTHORIZED_WORKER` | inherited (also recorded earlier) |
+| `test_orchestration.py::test_missing_worker_is_explicit_and_correlated` → `COMPLETION_AUTHORITY_UNAVAILABLE` vs `WORKER_UNAVAILABLE` | inherited |
+| `test_omp_canary_tools.py::test_approved_successor_identity_matches_live_files` → `candidate drift: brainstem/prime-extension/src/budget-bridge.ts` | inherited + **by design**: 11 of the 40 bound files were already drifted at `09f394e` and the same 11 at HEAD (`budget-bridge.ts`, `index.ts`, `injection-slots.ts`, `ledger-mirror.ts`, `native-settlement.ts`, `sensors.ts`, `worker-context-bridge.ts`, `worker-result-bridge.ts`, `activate_omp_successor.py`, `cli.py`, `promotion.py`). No file entered or left that set; two of them drifted further. The identity was **not** resealed: §8 is explicit that candidate seals are not production approvals. Owner re-approval is the unlocking action |
+| `test_v1_p4_qualification.py` (5 cases) → `Qualification runtime source mismatch …` | environment/configuration, see above; passes with the candidate interpreter |
+
+**Jev (supplementary).** `jev_decide` on the descendant-scope question selected `root-episode-strict`
+(0.96, 3/3 requirements supported) — it agreed with a defect the tests had already exposed. `jev_gate`
+over the integrated source patch returned **`action: escalate`**, composite 0.792, `safe_to_apply`
+0.4, with **9 claims verified, 0 contradicted, 0 unsupported, 3 needs_review** (the three are the
+extension-side cancel/refusal/unclaimed-cap defect claims, supplied to it as prose rather than raw
+output). No claim was contradicted. The gate is recorded as a review input and was not re-asked for a
+nicer answer; it is not independent execution.
+
+### Gates on the frozen subject
+
+- `pytest` (candidate interpreter, `PYTHONPATH=src`), targeted: **87** (budget/governor), **46**
+  (migration chain + writer admission + migration properties), **24** (brain schema), **155**
+  (reservations/lifecycle/schema/migration/admission/governor), **146** (ledger/db/backup/schema/
+  reservations).
+- extension (`vitest`, candidate config): **786 passed / 37 files**, `tsc` clean, `eslint` clean.
+- `ruff check src tests scripts`: clean. `pyright`: **0 errors**.
+- concurrency measurement: 2 concurrent reservations, 100 iterations, **0 crashes, exactly one grant
+  each**.
+- full suite: recorded in the delivery report for this pass (see the campaign delivery note).
+
+### Still open, unchanged
+
+Independent execution of any of this (the standing gap: `task`/`feature-implementer`/
+`integration-engineer` dispatch refused, read-only verifiers have no execution tools); owner
+re-approval of the successor identity after a legitimate extension/source change; and the deliberate
+decision to leave `contracts._calibration_pairs` and `scripts/run_paired_economics.py` outside the
+budget book — they answer different questions (chars-per-token calibration, study economics) and
+already dedupe by usage identity.
