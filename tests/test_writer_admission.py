@@ -1564,6 +1564,13 @@ def _terminal_evidence(brain_home: Path, task_id: str) -> tuple[object, int]:
     return state, int(receipts)
 
 
+def _writer_ownership(brain_home: Path, task_id: str) -> object:
+    with sqlite3.connect(db.db_path(brain_home)) as conn:
+        return conn.execute(
+            "SELECT writer_ownership FROM worker_tasks WHERE task_id=?", (task_id,)
+        ).fetchone()[0]
+
+
 def _terminal_evidence_for_attempt(brain_home: Path, attempt_id: object) -> int:
     with sqlite3.connect(db.db_path(brain_home)) as conn:
         return int(
@@ -1598,11 +1605,15 @@ def test_terminal_event_without_token_is_refused_and_writes_no_evidence(
 ) -> None:
     context, binding = _working_task(brain_home, tmp_path, "auth-missing")
     before = _terminal_evidence(brain_home, "auth-missing")
+    assert _writer_ownership(brain_home, "auth-missing") == "held"
     refused = omp_adapter.handle_request(brain_home, _completion_payload(context, binding))
     assert refused.get("failure_code") == "UNAUTHORIZED_CALLBACK"
     assert "result_sha256" not in refused
     assert _terminal_evidence(brain_home, "auth-missing") == before
     assert before == ("WORKING", 0)
+    # A refused completion must not release the writer lease either: ownership is the effect the
+    # strongest release rule protects, and an unauthenticated caller cannot give it up.
+    assert _writer_ownership(brain_home, "auth-missing") == "held"
 
 
 def test_terminal_event_with_wrong_token_is_refused_and_writes_no_evidence(
