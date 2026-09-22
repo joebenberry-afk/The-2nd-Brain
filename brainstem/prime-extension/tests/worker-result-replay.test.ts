@@ -606,6 +606,53 @@ describe("restart replay of a journaled worker completion", () => {
     expect(after.attempt_results).toBe(1);
   });
 
+  itSlow("keeps the attempt credential out of every recorded destination", async () => {
+    // A raw credential in the private host-runner options is not a disclosure by itself; the
+    // question is whether any *recorded* surface serializes it. This scans the destinations this
+    // route actually writes: the extension's own journal, the telemetry it appends, and every
+    // error string returned to the caller. The runner-seam options are excluded deliberately —
+    // they are the host-internal transport, not a record.
+    const taskId = "replay-credential-scan";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    const sentinel = state.callback_token;
+    expect(typeof sentinel).toBe("string");
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ]);
+    const authorized = await runOmpWorkerResult({
+      ...started.emissions[0],
+      callbackToken: sentinel ?? undefined,
+    });
+    expect(authorized.ok).toBe(true);
+
+    // Sensitivity of the scan itself: the same search must find the credential where it does
+    // legitimately travel (the host-internal runner options). Without this, "not found" could
+    // simply mean the search does not work.
+    expect(JSON.stringify(started.emissions).includes(String(sentinel))).toBe(true);
+
+    const destinations: Record<string, string> = {
+      journal: JSON.stringify(started.journal),
+      telemetry: JSON.stringify(telemetryRecords(state.home)),
+      outcomes: JSON.stringify(started.outcomes),
+      dispatchFailures: JSON.stringify(started.dispatchFailures),
+    };
+    for (const [where, text] of Object.entries(destinations)) {
+      expect(text.includes(String(sentinel)), `credential appeared in ${where}`).toBe(false);
+    }
+    // The same requirement for the refusal path, which is where an error string is actually
+    // produced by the bridge.
+    const refused = await runOmpWorkerResult({ ...started.emissions[0], callbackToken: undefined });
+    expect(refused.ok).toBe(false);
+    expect(String(refused.error).includes(String(sentinel))).toBe(false);
+  });
+
   itSlow("records the open finding: a read-only attempt accepts a journal-only completion", async () => {
     // Known open finding under the source-authenticity boundary (#4), asserted here to fix its
     // real scope. The Brain's guard requires completion authority only for attempts that hold
