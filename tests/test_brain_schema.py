@@ -16,13 +16,19 @@ and the data-preservation assertions exist to make that impossible.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 
 from second_brain import brain_schema, ledger, vmem
 from second_brain.errors import BrainError
+
+ROOT = Path(__file__).resolve().parents[1] / "src"
 
 
 def _open_ledger(home, session_id: str):
@@ -414,6 +420,158 @@ def test_case_7_competing_first_open_converges(brain_home) -> None:
     assert errors == [], errors
     assert identity.state == "canonical", (identity.state, identity.unknown_tables)
     assert {"events", "session_vmem", "ledger_meta"} <= tables
+
+
+@pytest.mark.parametrize("cut", [1, 2, 3])
+def test_case_5c_every_strict_prefix_of_the_component_ddl_converges(brain_home, cut: int) -> None:
+    """A bootstrap interrupted after ANY statement of the registered DDL still converges.
+
+    The fixture is the authority's own statement sequence truncated at ``cut``, so every
+    interruption point is exercised instead of the one shape that happened to work. Cutting after
+    the table but before its indexes is the interesting one: the table is present, so a
+    table-keyed replay rule would leave the database permanently unindexed.
+    """
+    session_id = f"prefix-{cut}"
+    path = _session_file(brain_home, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    statements = brain_schema._statements(vmem._VMEM_SCHEMA)
+    assert cut < len(statements), "the last cut is the complete DDL, not a strict prefix"
+    conn = sqlite3.connect(path)
+    try:
+        for statement in statements[:cut]:
+            conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
+
+    _open_vmem(brain_home, session_id)
+    with _open_ledger(brain_home, session_id):
+        pass
+
+    reference = "prefix-reference"
+    with _open_ledger(brain_home, reference):
+        pass
+    _open_vmem(brain_home, reference)
+
+    conn = sqlite3.connect(path)
+    try:
+        identity = brain_schema.classify(conn)
+    finally:
+        conn.close()
+    assert identity.state == "canonical", (cut, identity.state)
+    assert _dump(path) == _dump(_session_file(brain_home, reference)), cut
+
+
+def test_case_4d_the_adopted_predecessor_answers_the_public_readers(brain_home) -> None:
+    """Adoption is only real if the public surface serves the preserved object afterwards."""
+    session_id = "legacy-public"
+    internal_id = ledger.internal_session_id(session_id)
+    path = _session_file(brain_home, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        for statement in brain_schema._statements(vmem._VMEM_SCHEMA)[:1]:
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO session_vmem (obj_id, internal_session_id, kind, title, summary,"
+            " content_sha256, token_estimate, residency_state, created_at, last_accessed_at,"
+            " metadata_json) VALUES ('o1',?, 'research_result','legacy title','s','h',7,"
+            "'resident','2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00','{}')",
+            (internal_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = _open_vmem(brain_home, session_id)
+    served = store.get_object("o1")
+    assert served is not None, "the adopted object must be readable through the public reader"
+    assert (served.title, served.token_estimate) == ("legacy title", 7)
+    assert [obj.obj_id for obj in store.list_objects()] == ["o1"]
+
+    conn = sqlite3.connect(path)
+    try:
+        shape = brain_schema.component_shape(conn, "vmem")
+    finally:
+        conn.close()
+    assert shape.state == "current", shape
+
+
+def test_case_7b_competing_first_open_across_real_processes(brain_home, tmp_path) -> None:
+    """The same race case 7 tests with threads, run with separate OS processes.
+
+    A thread barrier cannot produce the failure this guards against: two processes interleaving a
+    half-create are the real shape, and the arbitration has to be the database's write reservation
+    rather than in-process state.
+    """
+    session_id = "separate-process"
+    gate = tmp_path / "start-gate"
+    mode_by_child = ("ledger", "vmem", "ledger")
+    children = [
+        _spawn_session_open(brain_home, gate, tmp_path / f"child-{index}", mode)
+        for index, mode in enumerate(mode_by_child)
+    ]
+    gate.write_text("go\n", encoding="utf-8")
+    results = [
+        (child.wait(timeout=60), child.stderr.read(), child.stdout.read()) for child in children
+    ]
+    for index, (returncode, stderr, stdout) in enumerate(results):
+        assert returncode == 0, (index, stdout, stderr)
+
+    # The racing creation must not have produced an error, and both creation orders must have
+    # converged on the same schema a sequential open produces.
+    path = _session_file(brain_home, session_id)
+    conn = sqlite3.connect(path)
+    try:
+        identity = brain_schema.classify(conn)
+        tables = {
+            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+    assert identity.state == "canonical", (identity.state, identity.unknown_tables)
+    assert identity.version == brain_schema.SCHEMA_VERSION
+    assert {"events", "session_vmem", "ledger_meta"} <= tables
+
+    reference = brain_home / "state" / "sessions" / "reference"
+    with _open_ledger(brain_home, "reference"):
+        pass
+    _open_vmem(brain_home, "reference")
+    assert _dump(path) == _dump(_session_file(brain_home, "reference"))
+
+
+def _spawn_session_open(home, gate, out: Path, mode: str) -> subprocess.Popen[str]:
+    """One real process that waits on ``gate`` and then opens the session database."""
+    script = (
+        "import pathlib,sys,time\n"
+        "home,gate,out=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3])\n"
+        "mode=sys.argv[4]\n"
+        "sys.path.insert(0,sys.argv[5])\n"
+        "while not gate.exists():\n"
+        "    time.sleep(0.005)\n"
+        "from second_brain import ledger,vmem\n"
+        "session='separate-process'\n"
+        "if mode=='ledger':\n"
+        "    with ledger.LedgerStore(home,session,host='test').open(create=True):\n"
+        "        pass\n"
+        "else:\n"
+        "    vmem.VMemStore(home,session)\n"
+        "out.write_text('opened',encoding='utf-8')\n"
+    )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("PYTHONHOME", "PYTHONPATH")
+    }
+    env["PYTHONPATH"] = str(ROOT)
+    env["SECOND_BRAIN_HOME"] = str(home)
+    return subprocess.Popen(
+        [sys.executable, "-c", script, str(home), str(gate), str(out), mode, str(ROOT)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
 
 
 # --- the authority decides the transition (store no longer classifies) ------------------

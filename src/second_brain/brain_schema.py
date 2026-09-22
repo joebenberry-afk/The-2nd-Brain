@@ -283,8 +283,24 @@ def ensure(
     # re-created and never re-altered, so a shape that already carries the additive columns is
     # left to the component's own guarded migrations, while a shared table that nobody owns yet
     # (`ledger_meta`) is still created by whichever component registers it first.
+    #
+    # Indexes are keyed by their own name rather than by their table: a bootstrap interrupted
+    # between a table and its index leaves the table present, so a table-keyed rule would never
+    # replay the index and the database would stay permanently unindexed. Nothing is created over
+    # a name another object already holds -- a name is not ownership -- and a non-creating open
+    # writes nothing at all.
     present = {name for name in identity.tables}
+    taken = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+    }
     for statement in _statements(source[component].ddl):
+        index = _statement_index(statement)
+        if index is not None:
+            if create and index not in taken:
+                conn.execute(statement)
+                taken.add(index)
+            continue
         target = _statement_table(statement)
         if target is None or target not in present:
             conn.execute(statement)
@@ -335,6 +351,16 @@ _CREATE_INDEX_RE = re.compile(
     r"[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)"
 )
 _ALTER_TABLE_RE = re.compile(r"(?is)^\s*alter\s+table\s+[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)")
+_CREATE_INDEX_NAME_RE = re.compile(
+    r"(?is)^\s*create\s+(?:unique\s+)?index(?:\s+if\s+not\s+exists)?\s+"
+    r"[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)[\"`\]]?\s+on\s+"
+)
+
+
+def _statement_index(statement: str) -> str | None:
+    """The index name a ``CREATE INDEX`` statement declares, or None for any other statement."""
+    match = _CREATE_INDEX_NAME_RE.match(statement)
+    return match.group(1) if match is not None else None
 
 
 def _statement_table(statement: str) -> str | None:
