@@ -161,13 +161,13 @@ class AdvertisementProvenance:
             )
 
 
-def _strict_json_loads(raw: bytes) -> Any:
+def loads_strict(raw: bytes) -> Any:
     """Parse JSON bytes, refusing ambiguous documents instead of resolving them.
 
-    ``json.loads`` silently keeps the last of two duplicate keys, which would make a
-    qualified object depend on a parser convention: an advertisement repeating
-    ``"cleanup_observation"`` could be one thing to a verifier and another to whoever
-    reads the file later. Ambiguity is refused, not interpreted.
+    Public because every consumer of an advertisement, a qualification record or an
+    observation must reject ambiguity the same way: ``json.loads`` silently keeps the last
+    of two duplicate keys, so a document repeating ``"cleanup_observation"`` could be one
+    thing to the code that verifies it and another to whoever reads the file later.
     """
 
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -200,10 +200,10 @@ def advertisement_sha256(advertisement: dict[str, Any] | bytes) -> str:
     that needs both — "the exact file that was reviewed" and "the exact semantics Brain
     negotiated" — should carry ``advertisement_artifact_sha256`` alongside this value.
 
-    Ambiguous documents are refused rather than resolved (see :func:`_strict_json_loads`).
+    Ambiguous documents are refused rather than resolved (see :func:`loads_strict`).
     """
     if isinstance(advertisement, bytes):
-        parsed: Any = _strict_json_loads(advertisement)
+        parsed: Any = loads_strict(advertisement)
     else:
         parsed = advertisement
     try:
@@ -323,7 +323,7 @@ def verify_advertisement(
             f"(got {digest[:16]}…, expected {qualified.advertisement_sha256[:16]}…)",
         )
     if isinstance(advertisement, bytes):
-        parsed: Any = _strict_json_loads(advertisement)
+        parsed: Any = loads_strict(advertisement)
     else:
         parsed = advertisement
     manifest = parse_manifest(parsed)
@@ -362,7 +362,7 @@ def negotiate(
     """
     raw = raw_manifest
     if isinstance(raw, bytes):
-        raw = _strict_json_loads(raw)
+        raw = loads_strict(raw)
     manifest = parse_manifest(raw)
     available = manifest["capabilities"]
     digest = (

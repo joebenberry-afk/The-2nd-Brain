@@ -64,6 +64,24 @@ function mutatedContext(): unknown {
   };
 }
 
+/** A present-but-malformed group: `null` is not an empty list, so the surface is unreadable. */
+function nullGroupContext(): unknown {
+  return {
+    events: { on: () => () => undefined },
+    getAsyncJobSnapshot: () => ({ running: null }),
+  };
+}
+
+/** Rows whose id reads but whose agent field is renamed: binding can never resolve. */
+function idOnlyRowsContext(): unknown {
+  return {
+    events: { on: () => () => undefined },
+    getAsyncJobSnapshot: () => ({
+      running: [{ id: "ReconWorker", agent: "ReconWorker", status: "running" }],
+    }),
+  };
+}
+
 /** Executed checks for the behaviours a review flagged. Returns the verdict; the caller
  *  refuses to advertise when it is false. */
 function selfCheck(): boolean {
@@ -95,6 +113,13 @@ function selfCheck(): boolean {
   const mutated = advertise({ hostVersion: "mutated", context: mutatedContext() }).capabilities;
   record("renamed row fields disable execution_binding", false, mutated.execution_binding);
   record("renamed row fields disable cancellation", false, mutated.cancellation_observation);
+  // Second review round: a present-but-non-array group, and rows whose agent field is
+  // renamed while their id still reads. Both previously advertised binding as available
+  // while `executionIdForAgent` could only ever return null.
+  const nullGroup = advertise({ hostVersion: "null-group", context: nullGroupContext() }).capabilities;
+  record("null job group disables execution_binding", false, nullGroup.execution_binding);
+  const idOnly = advertise({ hostVersion: "id-only", context: idOnlyRowsContext() }).capabilities;
+  record("id-only rows disable execution_binding", false, idOnly.execution_binding);
 
   const ok = checks.every((check) => check.ok);
   console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok }));

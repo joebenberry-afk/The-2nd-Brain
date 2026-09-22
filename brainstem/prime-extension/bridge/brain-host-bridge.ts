@@ -180,15 +180,23 @@ function snapshotShapeUsable(surfaces: HostSurfaces): boolean {
     const group: unknown = value[key];
     return Array.isArray(group) ? group.length : 0;
   };
+  // A key that is present but is not an array is a malformed shape, not an empty list:
+  // reading it as "no rows" would advertise a capability that always resolves to null.
+  const wellFormed = ["running", "recent"].every((key) => {
+    if (!(key in value)) return true;
+    return Array.isArray(value[key as "running" | "recent"]);
+  });
+  if (!wellFormed) return false;
+
   const present = "running" in value || "recent" in value;
   if (!present) return false;
 
   const total = groupSize("running") + groupSize("recent");
-  // Present and empty is a usable surface; rows that cannot be read are not. A renamed
-  // row field must disable the capability rather than leave the bridge unable to bind
-  // while still claiming it can.
+  // Present and empty is a usable surface; rows that cannot be read are not. Binding needs
+  // *both* ids on one row — a row whose id reads but whose agent field is renamed leaves
+  // the bridge unable to bind, so claiming it can would be a claim it cannot deliver.
   if (total === 0) return true;
-  return rowsFrom(value).length > 0;
+  return rowsFrom(value).some((row) => row.id !== "" && row.agentId !== "");
 }
 
 /**
