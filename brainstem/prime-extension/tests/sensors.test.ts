@@ -241,7 +241,7 @@ describe("sensors: P3-B economics records (schema v3)", () => {
     const identified = sensors.assistantUsage(
       SESSION, "p", "m", { input: 1 }, "resp-abc",
     ) as unknown as Record<string, unknown>;
-    expect(identified.response_id).toBe("resp-abc");
+    expect(String(identified.response_id)).toMatch(/^sha256:[0-9a-f]{64}$/);
 
     const absent = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }) as unknown as
       Record<string, unknown>;
@@ -259,7 +259,13 @@ describe("sensors: P3-B economics records (schema v3)", () => {
     expect(digestA.response_id).not.toBe(digestB.response_id);
     const short = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, "resp-short") as unknown as
       Record<string, unknown>;
-    expect(short.response_id).toBe("resp-short");
+    // An id that literally reads like an encoded identity must not collide with the encoding of
+    // another one: every identity takes the same canonical form.
+    const literal = String(short.response_id);
+    const asLiteral = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, literal) as unknown as
+      Record<string, unknown>;
+    expect(asLiteral.response_id).not.toBe(short.response_id);
+    expect(asLiteral.response_id).not.toBe(literal);
 
     for (const value of ["", null, undefined, 7, { id: "x" }]) {
       const r = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, value) as unknown as

@@ -517,6 +517,7 @@ def operational_report(home: Path, since: str | None = None) -> dict:
         "validation_issues": 0,
     }
     seen_targets: set[str] = set()
+    seen_usage_identities: set[str] = set()
     for _, _, record in iter_records(home):
         if not isinstance(record, dict) or "__parse_error__" in record:
             continue
@@ -524,6 +525,13 @@ def operational_report(home: Path, since: str | None = None) -> dict:
             continue
         kind = record.get("kind")
         if kind == "assistant_usage":
+            # One billable response is one charge here too: a repeated observation of an identity
+            # already summed is skipped, an observation without identity is counted in full.
+            identity = usage_identity(record)
+            if identity is not None:
+                if identity in seen_usage_identities:
+                    continue
+                seen_usage_identities.add(identity)
             for field, source in (
                 ("input", "input_tokens"),
                 ("output", "output_tokens"),
