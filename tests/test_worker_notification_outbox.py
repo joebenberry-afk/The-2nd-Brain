@@ -29,8 +29,8 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "omp_replay_state.py"
 
 def _load_fixture():
     spec = importlib.util.spec_from_file_location("omp_fixture", FIXTURE)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
 
@@ -148,7 +148,9 @@ def test_repeated_delivery_is_duplicate_safe(attempt, monkeypatch) -> None:
     # The acknowledgement was "lost": the intent is pending again, so reconciliation runs twice
     # over an event that is already recorded. It must detect the duplicate, not record it twice.
     with sqlite3.connect(db.db_path(home)) as conn:
-        conn.execute("UPDATE worker_task_meta SET notification_pending=1 WHERE task_id=?", (task_id,))
+        conn.execute(
+            "UPDATE worker_task_meta SET notification_pending=1 WHERE task_id=?", (task_id,)
+        )
         conn.commit()
     again = worker_protocol.reconcile_worker_notifications(home, task_id=task_id)
     assert again["already_delivered"] == [task_id], again
