@@ -758,6 +758,50 @@ work), `tsc` clean, `eslint` clean, `ruff` clean, `pyright` 0 errors, `pytest te
 6 passed. Still author-executed, not independently verified — the independent-execution availability table
 above stands.
 
+## STOP DECISION (2026-09-22) — M00_PARTIAL_EXTERNAL_BLOCKER
+
+Candidate: branch `brain/m00.3-producer-guard`, HEAD `821a8f1ab5b9c5943d29182fc45b85cec928ddb4`, clean tree. **Production activation: NOT PERFORMED. No
+canonical-state mutation, no lease release, no approval rewrite, no new spending.**
+
+**Executed today, each with evidence recorded above:** the ledger-mirror gate (accepted positive,
+refused negative, real destination control, application-path mutation detected, exact restored bytes);
+interrupted terminal recording (pre-commit kill under a held write lock leaving no partial record;
+two-process accept/release; release idempotency; replay-after-release changing nothing); the post-commit
+window experiment with its two recorded findings; the altered-journal downgrade check on both sides of
+the boundary; the #5 ten-worker sequence and the ownership/receipt/cancellation/late-callback/reused-id
+matrix; reserve-before-dispatch (capability, wiring, wiring tests, plus a leak the new test found and a
+regression it exposed); and a Jev adjudication of seven milestone claims (all verified, none
+contradicted). Gates on the frozen subject: extension **781 passed / 36 files**, `tsc`, `eslint`, `ruff`
+clean, `pyright` 0 errors, `pytest tests/test_governor_reservations.py` 6 passed.
+
+**Terminal condition demonstrated (not asserted):** the required independent review is **unavailable in
+this session**, measured — `task`, `feature-implementer` and `integration-engineer` dispatches are all
+refused by the host's own gate with `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`, and the
+`implementation-verifier` role that does dispatch has no process-execution tool (it returned
+UNDEMONSTRATED by construction and supplied only static corroboration). Everything executed here is
+therefore **author-executed** and labelled as such; no author result is presented as independent
+execution. The external dependencies recorded earlier also stand: a trusted issuance channel between
+host and agent process (#4), a census-capable host bridge (`execution_census: false` today, which is why
+no executed case exists for "active descendants after a top-level result"), and an independent runtime
+execution surface.
+
+**Smallest specific actions that unlock the remainder:**
+
+1. Grant an execution-capable **independent** verification route (a permitted worker-settling dispatch, or
+   a verifier role with a shell) and re-run the four reservation claims plus the mirror gate on the frozen
+   subject. That alone is what stands between this candidate and a cumulative-qualification claim.
+2. For #4: a trusted issuance channel or OS-identity boundary between host and agent process — without it
+   the host's declared `access_intent` remains the only thing deciding whether writer admission is
+   required.
+3. For the descendants gate: a host bridge advertising an execution census, or an explicit refusal to
+   release without one.
+
+**Executable work that remains and is NOT blocked** (recorded so it is not mistaken for a closed gate):
+the #6 remaining summing readers (`contracts._calibration_pairs`, `scripts/run_paired_economics.py`)
+under the same identity rule, and the #2b test-strength items (strict-prefix fixture, VMem public reader,
+separate-process first open). Neither was started today; both are small and independent of the blocked
+routes.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
