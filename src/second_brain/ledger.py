@@ -33,7 +33,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, db, semantic
+from . import artifacts, brain_schema, semantic
 from .contracts import (
     BrainLifecycleEvent,
     BrainSessionIdentity,
@@ -458,7 +458,10 @@ class LedgerStore:
                 "SELECT value FROM ledger_meta WHERE key='schema_version'"
             ).fetchone()
         if header is None:
-            unknown = set(tables) - set(shapes)
+            # A component that shares this database (VMemStore) legitimately owns tables the
+            # ledger does not define. The authority decides what belongs here; this method
+            # only asks whether anything else is present.
+            unknown = set(tables) - set(shapes) - brain_schema.known_tables()
             unknown = {name for name in unknown if not name.startswith(("sqlite_", "events_fts"))}
             if unknown:
                 raise BrainError("ledger schema unsupported: unidentified existing tables")
@@ -531,28 +534,33 @@ class LedgerStore:
         assert self._conn is not None
         self._conn.execute("BEGIN IMMEDIATE")
         try:
+            # The shared authority decides identity first: this session's file may already
+            # exist because another component (VMemStore) opened it, in which case the ledger's
+            # own tables are what is missing, not the schema.
+            brain_schema.register(
+                "ledger",
+                tables=tuple(sorted(_ledger_table_shapes())),
+                ddl=_SCHEMA + "\n" + _FTS_DDL,
+            )
+            # Creation and the header rows belong to the authority; this store supplies its own
+            # header fields and its DDL, and keeps its own post-conditions.
+            brain_schema.ensure(
+                conn=self._conn,
+                component="ledger",
+                create=create,
+                header={
+                    "brain_version": self._brain_version(),
+                    "adapter_name": LEDGER_ADAPTER_NAME,
+                    "adapter_version": LEDGER_ADAPTER_VERSION,
+                    "created_at": _now(),
+                },
+            )
             # Inspect one stable schema under the existing SQLite writer lock.
             state = self._schema_state()
             if state == "legacy":
                 self._migrate_legacy_chain()
             elif state == "uninitialized":
-                if not create:
-                    raise BrainError("ledger not initialized (schema not ready)")
-                for statement in db.split_statements(_SCHEMA):
-                    self._conn.execute(statement)
-                self._conn.execute(_FTS_DDL)
-                header = {
-                    "schema_version": str(LEDGER_SCHEMA_VERSION),
-                    "brain_version": self._brain_version(),
-                    "adapter_name": LEDGER_ADAPTER_NAME,
-                    "adapter_version": LEDGER_ADAPTER_VERSION,
-                    "created_at": _now(),
-                }
-                self._conn.executemany(
-                    "INSERT INTO ledger_meta (key,value) VALUES (?,?)", header.items()
-                )
-                if self._schema_state() != "current":
-                    raise BrainError("ledger initialization did not produce the supported schema")
+                raise BrainError("ledger initialization did not produce the supported schema")
             self._conn.commit()
         except BaseException:
             self._conn.rollback()
