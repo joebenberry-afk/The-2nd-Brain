@@ -4745,6 +4745,11 @@ def cmd_worker_plane(args) -> int:
         return 0
 
     if args.worker_plane_command == "complete":
+        # Nomenclature debt (owner note, 2026-09-22): this records a repository-intelligence
+        # worker_plane row. It is NOT authoritative execution terminal evidence and never reaches
+        # worker_protocol.record_worker_event or the strongest writer-release rule, and it cannot
+        # release a writer. The word "complete" is what made that confusing once; the rename is
+        # deliberately deferred so this change stays scoped.
         plane.complete_worker(
             WorkerResultPacket(
                 worker_id=args.worker_id,
