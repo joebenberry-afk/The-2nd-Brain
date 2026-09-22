@@ -325,7 +325,9 @@ def _task_row(conn: sqlite3.Connection, task_id: str):
         " executor_settled, cleanup_complete, lease_expires_at, host_generation,"
         " native_attempt_id, native_job_id, agent_id, lifecycle_sequence"
     )
-    return conn.execute(f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (task_id,)).fetchone()
+    return conn.execute(
+        f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (task_id,)
+    ).fetchone()
 
 
 def _task_state(conn: sqlite3.Connection, task_id: str) -> tuple[object, object, int]:
@@ -336,6 +338,91 @@ def _task_state(conn: sqlite3.Connection, task_id: str) -> tuple[object, object,
         "SELECT COUNT(*) FROM worker_attempt_results WHERE task_id=?", (task_id,)
     ).fetchone()[0]
     return row[0], row[1], int(results)
+
+
+def command_edges(args: argparse.Namespace) -> int:
+    """The ownership and receipt edges a settlement path must not get wrong.
+
+    One attempt completes, then reports settlement *without* cleanup: ownership must quarantine and
+    the next admission must be refused. Cleanup then completes, the successor is admitted, and the
+    receipt rules are exercised (duplicate, conflicting, regressing). Finally the released attempt's
+    own completion is replayed, which must change nothing.
+    """
+    base = Path(args.base).resolve()
+    home = base / "home"
+    if home.exists() or (base / "registered").exists():
+        raise FixtureError("BASE_NOT_EMPTY")
+    base.mkdir(parents=True, exist_ok=True)
+    make_brain(home)
+    repo = make_repo(base)
+    registry.add_project(home, repo, project_id=PROJECT_ID)
+    observations: dict[str, object] = {}
+
+    def worker(task_id: str) -> dict:
+        context = admit(home, repo, task_id, "mutating", args.host_session)
+        binding = bind(home, task_id, context, args.host_session)
+        return {
+            **context,
+            "task_id": task_id,
+            "host_session_id": args.host_session,
+            "agent_id": binding["agent_id"],
+            "host_generation": binding["host_generation"],
+            "native_attempt_id": binding["native_attempt_id"],
+            "native_job_id": binding["native_job_id"],
+        }
+
+    def lifecycle(context: dict, *, sequence: int, settled: bool, cleanup: bool) -> dict:
+        payload = _lifecycle_payload(context, sequence=sequence)
+        payload["executor_settled"] = settled
+        payload["cleanup_complete"] = cleanup
+        return omp_adapter.handle_request(home, payload)
+
+    def ownership(task_id: str) -> dict:
+        with sqlite3.connect(db.db_path(home)) as conn:
+            state, owner, results = _task_state(conn, task_id)
+        return {"state": state, "writer_ownership": owner, "attempt_results": results}
+
+    def admission(task_id: str) -> dict:
+        payload = {
+            "operation": "worker_context",
+            "host_session_id": args.host_session,
+            "task_id": task_id,
+            "task": "disposable marker",
+            "scope": "repository",
+            "constraints": [],
+            "evidence_requirements": [],
+            "completion_condition": "marker written",
+            "context_refs": [],
+            "project_id": PROJECT_ID,
+            "cwd": str(repo),
+            "role": "driver",
+            "provider": "test",
+            "model": "test",
+            "worker_role": "worker",
+            "access_intent": "mutating",
+        }
+        return omp_adapter.handle_request(home, payload)
+
+    first = worker("edge-a")
+    observations["completion"] = complete(home, "edge-a", first, token=first["callback_token"])
+    observations["settled_without_cleanup"] = lifecycle(
+        first, sequence=0, settled=True, cleanup=False
+    )
+    observations["after_incomplete_cleanup"] = ownership("edge-a")
+    observations["successor_while_quarantined"] = admission("edge-b")
+    observations["cleanup_receipt"] = lifecycle(first, sequence=1, settled=True, cleanup=True)
+    observations["after_cleanup"] = ownership("edge-a")
+    successor = worker("edge-b")
+    observations["successor_after_release"] = {"task_id": successor["task_id"]}
+    observations["duplicate_receipt"] = lifecycle(first, sequence=1, settled=True, cleanup=True)
+    observations["regressing_sequence"] = lifecycle(first, sequence=0, settled=True, cleanup=True)
+    observations["replay_without_credential"] = complete(home, "edge-a", first, token=None)
+    observations["replay_with_credential"] = complete(
+        home, "edge-a", first, token=first["callback_token"]
+    )
+    observations["first_attempt_final"] = ownership("edge-a")
+    observations["successor_final"] = ownership("edge-b")
+    return _emit({"ok": True, "home": str(home), "repo": str(repo), **observations})
 
 
 def command_probe(args: argparse.Namespace) -> int:
@@ -389,6 +476,10 @@ def main(argv: list[str]) -> int:
     setup.add_argument("--intent", required=True, choices=["mutating", "read_only"])
     # The host session that admitted the attempt; a completion only binds to the same one.
     setup.add_argument("--host-session", default="omp-session")
+    edges = subparsers.add_parser("edges")
+    edges.add_argument("--base", required=True)
+    edges.add_argument("--task-id", required=True)
+    edges.add_argument("--host-session", default="omp-session")
     sequence = subparsers.add_parser("sequence")
     sequence.add_argument("--base", required=True)
     sequence.add_argument("--task-id", required=True)
@@ -408,6 +499,8 @@ def main(argv: list[str]) -> int:
             return command_accept(args)
         if args.command == "sequence":
             return command_sequence(args)
+        if args.command == "edges":
+            return command_edges(args)
         return command_probe(args)
     except FixtureError as error:
         return _emit({"ok": False, "error": error.code, "response": error.response}, 1)
