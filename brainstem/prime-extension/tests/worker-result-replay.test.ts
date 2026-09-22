@@ -1,0 +1,546 @@
+/**
+ * Restart replay: what a journaled completion may and may not cause.
+ *
+ * The extension journals an admission and a result, and after a restart it reconstructs tracking
+ * state from those entries. The credential admission minted is deliberately never journaled, so a
+ * replayed completion is emitted with none. The safety requirement is not "nothing is emitted" —
+ * it is that an unauthenticated replay produces no authoritative effect on either side:
+ *
+ *  - the recovered attempt is the journaled attempt, and the emitted options carry no credential;
+ *  - the Brain's own row — not the journal's `accessIntent` label — decides whether authority is
+ *    required, so a journal claiming `read_only` cannot downgrade a mutating attempt;
+ *  - a refusal is recorded as a receipt failure, never as a worker failure, a successful delivery
+ *    or a successful recovery;
+ *  - replayed duplicates add no further effects.
+ *
+ * The route under test is the extension factory's registered `before_agent_start` hook (recovery
+ * runs there, index.ts:3031) with the real result bridge (`runOmpWorkerResult`) and the real Python
+ * consumer (`-m second_brain autoinject omp-routing`), against the disposable Brain state built by
+ * `tests/fixtures/omp_replay_state.py`. Only the runner capture is a seam; it delegates to the real
+ * bridge. `tests/worker-result-authority.test.ts` covers payload construction with a mocked child.
+ *
+ * The last case records a known open finding rather than a protection: journal fields alone decide
+ * acceptance for a genuinely read-only attempt. It is reported under the source-authenticity
+ * boundary (#4), and it is asserted here so the boundary's real scope is evidence, not inference.
+ */
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import factory, { type ExtensionOptions } from "../src/index";
+import {
+  runOmpWorkerResult,
+  type OmpWorkerResultOptions,
+  type OmpWorkerResultOutcome,
+} from "../src/worker-result-bridge";
+import type { ExtensionAPI, ExtensionContext } from "../types/prime";
+
+const PYTHON = process.env.SECOND_BRAIN_PYTHON ?? fileURLToPath(
+  new URL("../../../.venv/Scripts/python.exe", import.meta.url),
+);
+const FIXTURE = fileURLToPath(
+  new URL("../../../tests/fixtures/omp_replay_state.py", import.meta.url),
+);
+const SESSION = "omp-session";
+const TIMESTAMP = "2026-01-01T00:00:00.000Z";
+let BASE = "";
+
+const savedHome = process.env.SECOND_BRAIN_HOME;
+const savedPython = process.env.SECOND_BRAIN_PYTHON;
+
+interface FixtureState {
+  home: string;
+  repo: string;
+  host_session_id: string;
+  task_id: string;
+  attempt_id: string;
+  packet_sha256: string;
+  project_id: string;
+  worktree_id: string | null;
+  agent_id: string;
+  host_generation: number;
+  native_attempt_id: string;
+  native_job_id: string;
+  callback_token: string | null;
+  python: string;
+  second_brain_file: string;
+}
+
+interface ProbeState {
+  state: string;
+  writer_ownership: string;
+  attempt_id: string | null;
+  attempt_results: number;
+  callback_digest_present: boolean;
+}
+
+type Handler = (event: unknown, context: ExtensionContext) => unknown;
+
+function childEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    // `PYTHONHOME` on this machine points at a corrupted interpreter tree, and no Brain
+    // environment from the running session may reach a disposable home.
+    if (key === "PYTHONHOME" || key === "PYTHONPATH" || key.startsWith("SECOND_BRAIN_")) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
+/** Run the fixture and return its single JSON envelope, failing loudly on a non-ok envelope. */
+function runFixture<T extends { ok: boolean }>(args: string[]): T {
+  const out = execFileSync(PYTHON, [FIXTURE, ...args], { env: childEnv(), encoding: "utf8", stdio: "pipe" });
+  const parsed = JSON.parse(out) as T;
+  if (!parsed.ok) throw new Error(`fixture ${args[0]} failed: ${out.trim()}`);
+  return parsed;
+}
+
+/** Create the disposable home + registered worktree + admitted attempt under `base`. */
+function setup(base: string, taskId: string, intent: "mutating" | "read_only"): FixtureState {
+  const parsed = runFixture<FixtureState & { ok: boolean }>([
+    "setup", "--base", base, "--task-id", taskId, "--intent", intent, "--host-session", SESSION,
+  ]);
+  expect(parsed.python).toBe(PYTHON);
+  expect(parsed.second_brain_file).toContain("m00.3-producer-guard");
+  return parsed;
+}
+
+function probe(base: string, taskId: string): ProbeState {
+  return runFixture<ProbeState & { ok: boolean }>(["probe", "--base", base, "--task-id", taskId]);
+}
+
+/** Session-binding entry the identity resolver reads; not a journal event. */
+const IDENTITY_ENTRY = {
+  type: "custom",
+  customType: "brain.active-state",
+  details: { session_id: SESSION },
+  timestamp: TIMESTAMP,
+};
+
+function admissionEntry(state: FixtureState, accessIntent: "mutating" | "read_only") {
+  return {
+    type: "custom",
+    customType: "second-brain.worker-admission-pending",
+    timestamp: TIMESTAMP,
+    data: {
+      session: SESSION,
+      taskId: state.task_id,
+      attemptId: state.attempt_id,
+      packetSha256: state.packet_sha256,
+      projectId: state.project_id,
+      worktreeId: state.worktree_id,
+      accessIntent,
+      parentSessionId: SESSION,
+      agent: "worker",
+      toolCallId: "call-replay",
+      sourceIndex: 0,
+    },
+  };
+}
+
+function jobEntry(state: FixtureState, accessIntent: "mutating" | "read_only") {
+  return {
+    type: "custom",
+    customType: "second-brain.worker-job-pending",
+    timestamp: TIMESTAMP,
+    data: {
+      session: SESSION,
+      jobId: state.native_job_id,
+      accessIntent,
+      toolCallId: "call-replay",
+      sourceIndex: 0,
+      taskId: state.task_id,
+      attemptId: state.attempt_id,
+      packetSha256: state.packet_sha256,
+      parentSessionId: SESSION,
+      agent: "worker",
+      agentId: state.agent_id,
+      hostGeneration: state.host_generation,
+      nativeAttemptId: state.native_attempt_id,
+      projectId: state.project_id,
+      worktreeId: state.worktree_id,
+    },
+  };
+}
+
+function resultEntry(state: FixtureState) {
+  return {
+    type: "custom",
+    customType: "second-brain.worker-result-pending",
+    timestamp: TIMESTAMP,
+    data: {
+      session: SESSION,
+      attemptId: state.attempt_id,
+      summary: "restart replay",
+      fields: {
+        task_id: state.task_id,
+        packet_sha256: state.packet_sha256,
+        status: "completed",
+        worker_agent: "worker",
+        child_omp_agent_id: state.agent_id,
+        child_omp_session_file: null,
+        worker_model: null,
+      },
+    },
+  };
+}
+
+function context(state: FixtureState, entries: unknown[]): ExtensionContext {
+  return {
+    cwd: state.repo,
+    model: { provider: "original-provider", id: "original-model" },
+    sessionManager: {
+      getSessionFile: () => `${state.home}/${SESSION}.jsonl`,
+      getSessionId: () => "native-omp-session",
+      getHeader: () => ({ type: "session", version: 1, id: "native-omp-session", timestamp: TIMESTAMP }),
+      getEntries: () => entries,
+    },
+    getContextUsage: () => undefined,
+    getSystemPrompt: () => "base",
+    signal: undefined,
+    hasUI: false,
+    ui: undefined,
+  } as unknown as ExtensionContext;
+}
+
+interface Started {
+  handlers: Map<string, Handler>;
+  journal: Array<{ customType: string; data: unknown }>;
+  emissions: OmpWorkerResultOptions[];
+  outcomes: OmpWorkerResultOutcome[];
+  dispatchFailures: unknown[];
+}
+
+/** Start the extension with the runner seam delegating to the real bridge. */
+function startExtension(options: { register?: boolean } = {}): Started {
+  const register = options.register ?? true;
+  const handlers = new Map<string, Handler>();
+  const journal: Array<{ customType: string; data: unknown }> = [];
+  const emissions: OmpWorkerResultOptions[] = [];
+  const outcomes: OmpWorkerResultOutcome[] = [];
+  const dispatchFailures: unknown[] = [];
+  const pi = {
+    on: (name: string, handler: Handler) => {
+      if (register) handlers.set(name, handler);
+    },
+    emit: () => {},
+    appendEntry: (customType: string, data: unknown) => {
+      journal.push({ customType, data });
+    },
+  } as unknown as ExtensionAPI;
+  const extensionOptions: ExtensionOptions = {
+    ompWorkerResultRunner: (workerOptions) => {
+      emissions.push(workerOptions);
+      return runOmpWorkerResult(workerOptions).then((outcome) => {
+        outcomes.push(outcome);
+        return outcome;
+      });
+    },
+    ompWorkerDispatchFailedRunner: (dispatchOptions) => {
+      dispatchFailures.push(dispatchOptions);
+      return Promise.resolve({ ok: true, status: "accepted" });
+    },
+  };
+  factory(pi, extensionOptions);
+  return { handlers, journal, emissions, outcomes, dispatchFailures };
+}
+
+async function runBeforeAgentStart(started: Started, state: FixtureState, entries: unknown[]): Promise<void> {
+  const handler = started.handlers.get("before_agent_start");
+  expect(handler, "before_agent_start was not registered").toBeDefined();
+  await handler!({ type: "before_agent_start", prompt: "replay" }, context(state, entries));
+}
+
+function telemetry(home: string): Array<Record<string, unknown>> {
+  const file = `${home}/telemetry/agent-performance/${SESSION}.jsonl`;
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Journal entries the extension itself wrote for worker lifecycle, not identity bookkeeping. */
+function journalKinds(started: Started): string[] {
+  return started.journal
+    .map((entry) => entry.customType)
+    .filter((customType) => customType.startsWith("second-brain.worker-"));
+}
+
+/** The seam must delegate to the real bridge, so a receipt failure is a real refusal. */
+function expectReceiptFailure(outcome: OmpWorkerResultOutcome | undefined): void {
+  expect(outcome, "the real bridge produced no outcome").toBeDefined();
+  expect(outcome!.ok).toBe(false);
+  expect(outcome!.status).toBeUndefined();
+  expect(outcome!.resultSha256).toBeUndefined();
+  expect(String(outcome!.error)).toMatch(/^BRAIN_WORKER_RESULT/);
+}
+
+beforeAll(() => {
+  BASE = mkdtempSync(join(tmpdir(), "sb-worker-replay-"));
+});
+
+beforeEach(() => {
+  vi.stubEnv("SECOND_BRAIN_HOME", BASE);
+  vi.stubEnv("SECOND_BRAIN_OBSERVABILITY", "on");
+  vi.stubEnv("SECOND_BRAIN_RTD", "off");
+  vi.stubEnv("SECOND_BRAIN_REREAD_AVOIDANCE", "OFF");
+  vi.stubEnv("SECOND_BRAIN_RECALL", "off");
+  vi.stubEnv("SECOND_BRAIN_PYTHON", PYTHON);
+  vi.stubEnv("ORCHESTRATOR_MODELS", "");
+  expect(existsSync(PYTHON), `candidate interpreter missing: ${PYTHON}`).toBe(true);
+  expect(existsSync(FIXTURE), `fixture missing: ${FIXTURE}`).toBe(true);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  if (savedHome === undefined) delete process.env.SECOND_BRAIN_HOME;
+  else process.env.SECOND_BRAIN_HOME = savedHome;
+  if (savedPython === undefined) delete process.env.SECOND_BRAIN_PYTHON;
+  else process.env.SECOND_BRAIN_PYTHON = savedPython;
+});
+
+afterAll(() => {
+  try {
+    rmSync(BASE, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    // A spawned bridge can still hold this disposable tree as its cwd, and Windows locks a live
+    // process's cwd. The tree lives in the OS temp directory and is not part of the tested
+    // behaviour, so report the leftover instead of failing the suite on cleanup.
+    console.warn(`[worker-result-replay] temp tree left behind: ${BASE}: ${String(error)}`);
+  }
+});
+
+/** These cases spawn a real interpreter and a real Brain consumer; the default 5s budget does not
+ * survive a loaded full-suite run. */
+const itSlow = (name: string, run: () => Promise<void>) => it(name, run, 60_000);
+
+describe("restart replay of a journaled worker completion", () => {
+  itSlow("recovers the journaled attempt, emits it without a credential, and changes no durable fact", async () => {
+    const taskId = "replay-mutating";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    const before = probe(base, taskId);
+    expect(before).toMatchObject({
+      state: "WORKING",
+      writer_ownership: "held",
+      attempt_results: 0,
+      callback_digest_present: true,
+    });
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ]);
+
+    // Reachability: the emission came from the journaled attempt, not from another route.
+    expect(started.emissions).toHaveLength(1);
+    const emitted = started.emissions[0];
+    expect(emitted.taskId).toBe(state.task_id);
+    expect(emitted.attemptId).toBe(state.attempt_id);
+    expect(emitted.packetSha256).toBe(state.packet_sha256);
+    expect(emitted.status).toBe("completed");
+    // The credential admission minted is never journaled, and recovery invents none.
+    expect(emitted.callbackToken).toBeUndefined();
+
+    expectReceiptFailure(started.outcomes[0]);
+    expect(journalKinds(started)).toContain("second-brain.worker-result-pending");
+    expect(journalKinds(started)).not.toContain("second-brain.worker-result-accepted");
+    expect(telemetry(state.home).filter((record) => record.kind === "extension_error")).not.toHaveLength(0);
+    expect(started.dispatchFailures).toHaveLength(0);
+
+    const after = probe(base, taskId);
+    expect(after).toEqual(before);
+  });
+
+  itSlow("does not let a journal label downgrade an authoritatively mutating attempt", async () => {
+    const taskId = "replay-downgrade";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    const before = probe(base, taskId);
+    expect(before.writer_ownership).toBe("held");
+    expect(before.callback_digest_present).toBe(true);
+
+    // The journal claims the attempt was read-only; the Brain's own row says mutating and holds
+    // the authority admission minted. The claim must not remove the requirement. The journal is
+    // otherwise complete (job binding included), so the label is the only difference from the
+    // authenticated-looking replay above — and a binding-only refusal would not satisfy this case.
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "read_only"),
+      jobEntry(state, "read_only"),
+      resultEntry(state),
+    ]);
+
+    expect(started.emissions).toHaveLength(1);
+    expect(started.emissions[0].callbackToken).toBeUndefined();
+    expect(started.emissions[0].attemptId).toBe(state.attempt_id);
+    expectReceiptFailure(started.outcomes[0]);
+    expect(journalKinds(started)).not.toContain("second-brain.worker-result-accepted");
+    expect(started.dispatchFailures).toHaveLength(0);
+
+    const after = probe(base, taskId);
+    expect(after).toEqual(before);
+  });
+
+  itSlow("repeats the refusal without accumulated effects when the same journal is replayed twice", async () => {
+    const taskId = "replay-twice";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    const before = probe(base, taskId);
+    const entries = [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ];
+
+    for (const _ of [0, 1]) {
+      const started = startExtension();
+      await runBeforeAgentStart(started, state, entries);
+      expect(started.emissions).toHaveLength(1);
+      expectReceiptFailure(started.outcomes[0]);
+      expect(journalKinds(started)).not.toContain("second-brain.worker-result-accepted");
+    }
+
+    const after = probe(base, taskId);
+    expect(after).toEqual(before);
+    expect(after.attempt_results).toBe(0);
+  });
+
+  itSlow("emits nothing when the journal holds a result but no persisted admission", async () => {
+    const taskId = "replay-no-admission";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [IDENTITY_ENTRY, resultEntry(state)]);
+
+    expect(started.emissions).toHaveLength(0);
+    expect(journalKinds(started)).toHaveLength(0);
+    expect(probe(base, taskId).state).toBe("WORKING");
+  });
+
+  itSlow("shows the reachability assertions are sensitive to the recovery hook running", async () => {
+    // Control for every case above: with the same fixture and the recovery hook disconnected, the
+    // observations that prove recovery ran disappear. Without this, "no authoritative effect"
+    // could pass because recovery never executed.
+    const taskId = "replay-disconnected";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+
+    const disconnected = startExtension({ register: false });
+    expect(disconnected.handlers.get("before_agent_start")).toBeUndefined();
+    expect(disconnected.handlers.size).toBe(0);
+    expect(disconnected.emissions).toHaveLength(0);
+    expect(journalKinds(disconnected)).toHaveLength(0);
+
+    // The same journal through the registered hook does produce the reachability evidence.
+    const connected = startExtension();
+    await runBeforeAgentStart(connected, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ]);
+    expect(connected.emissions).toHaveLength(1);
+    expect(journalKinds(connected)).toContain("second-brain.worker-result-pending");
+  });
+
+  itSlow("accepts the same emitted payload when the attempt's credential is present", async () => {
+    // Control for the refusals above: same fixture family, same bridge, same payload shape — only
+    // the credential differs. Acceptance proves the replayed payload was binding-correct, so the
+    // refusals were caused by the missing authority and not by a malformed or misbound request.
+    const taskId = "replay-credential";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "mutating");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    expect(typeof state.callback_token).toBe("string");
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "mutating"),
+      jobEntry(state, "mutating"),
+      resultEntry(state),
+    ]);
+    expect(started.emissions).toHaveLength(1);
+    expectReceiptFailure(started.outcomes[0]);
+
+    const authorized = await runOmpWorkerResult({
+      ...started.emissions[0],
+      callbackToken: state.callback_token ?? undefined,
+    });
+    expect(authorized).toMatchObject({
+      ok: true,
+      status: "completed",
+      taskId: state.task_id,
+      attemptId: state.attempt_id,
+      packetSha256: state.packet_sha256,
+    });
+
+    const after = probe(base, taskId);
+    expect(after.state).toBe("COMPLETED");
+    expect(after.attempt_results).toBe(1);
+  });
+
+  itSlow("records the open finding: a read-only attempt accepts a journal-only completion", async () => {
+    // Known open finding under the source-authenticity boundary (#4), asserted here to fix its
+    // real scope. The Brain's guard requires completion authority only for attempts that hold
+    // writer ownership; a read-only attempt holds none, so journal fields alone decide acceptance.
+    const taskId = "replay-readonly";
+    const base = `${BASE}/${taskId}`;
+    const state = setup(base, taskId, "read_only");
+    vi.stubEnv("SECOND_BRAIN_HOME", state.home);
+    expect(state.callback_token).toBeNull();
+    const before = probe(base, taskId);
+    expect(before).toMatchObject({
+      state: "WORKING",
+      writer_ownership: "released",
+      attempt_results: 0,
+      callback_digest_present: false,
+    });
+
+    const started = startExtension();
+    await runBeforeAgentStart(started, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "read_only"),
+      resultEntry(state),
+    ]);
+
+    expect(started.emissions).toHaveLength(1);
+    expect(started.emissions[0].callbackToken).toBeUndefined();
+    expect(started.outcomes[0]?.ok).toBe(true);
+    expect(journalKinds(started)).toContain("second-brain.worker-result-accepted");
+
+    const after = probe(base, taskId);
+    expect(after.state).toBe("COMPLETED");
+    expect(after.attempt_results).toBe(1);
+    // No writer lease existed to release, so the digest of this effect stays evidence integrity.
+    expect(after.writer_ownership).toBe(before.writer_ownership);
+
+    // A duplicate replay of the same accepted completion adds no second effect.
+    const replay = startExtension();
+    await runBeforeAgentStart(replay, state, [
+      IDENTITY_ENTRY,
+      admissionEntry(state, "read_only"),
+      resultEntry(state),
+    ]);
+    expect(replay.emissions).toHaveLength(1);
+    const repeated = probe(base, taskId);
+    expect(repeated.state).toBe("COMPLETED");
+    expect(repeated.attempt_results).toBe(1);
+  });
+});

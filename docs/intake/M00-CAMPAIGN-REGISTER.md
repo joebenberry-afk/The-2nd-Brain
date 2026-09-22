@@ -54,8 +54,9 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | #3-P | Producer forwards attempt authority through private host transport | extension `worker-result-bridge.ts`, `index.ts` | 4 producer contract tests (`tests/worker-result-authority.test.ts`); 763/763 extension suite | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | include in integrated review |
 | #3-C | Terminal-evidence guard at both protected writes | `worker_protocol.record_worker_event` | acceptance matrix (10 rows); mutation sensitivity; Jev 8/8 (revision `01e4bdd`, pre-integration) | reviewed at `01e4bdd` (`incorrect` as mergeable alone, guard sound) | `EVIDENCED_IN_CANDIDATE` | re-review at `1cee974`+ |
 | #3-R.1 | **Replay proof, Python side** (already executed): unauthorized duplicate writes no evidence; authenticated duplicate is idempotent | `worker_protocol.record_worker_event` | `test_terminal_event_without_token_is_refused_and_writes_no_evidence`, `test_duplicate_authenticated_terminal_event_is_idempotent` — both green in the 105-test candidate matrix | — | `EVIDENCED_IN_CANDIDATE` | treat as the durable-fact half of the replay proof |
-| #3-R.2 | **Replay proof, extension leg** (not yet executed) | `recoverWorkerResults`, `before_agent_start` | mechanism now read to the bottom of the reconstruction branch — see "CORRECTION" below | — | `OPEN` | execute with the corrected expectation |
-| #3-R.3 | **Journal-controlled admission reconstruction** | `index.ts` recovery branch for `second-brain.worker-admission-pending` | see "CORRECTION" | — | `OPEN` under **#4** | assess forged-journal acceptance for read-only attempts; do not resolve under #3 |
+| #3-R.2 | **Replay proof, extension leg** — corrected expectation: emission is permitted; the requirement is no unauthorized authoritative effect | `recoverWorkerResults`, `before_agent_start`, `emitWorkerCompletion` | `brainstem/prime-extension/tests/worker-result-replay.test.ts` (7 cases) + `tests/fixtures/omp_replay_state.py`; report `outputs/reports/m00.3-replay-authority-20260922/REPORT.md` | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | independent review (blocked in-session: `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`) |
+| #3-R.3 | **Journal-controlled admission reconstruction** | `index.ts` recovery branch for `second-brain.worker-admission-pending` | held under #4; read-only case now reproduced end-to-end (integrated evidence, `REPORT.md` §4.3) | — | `OPEN` under **#4** (M00 blocker: forged read-only completion) | close #4 issuance/observation authority; do not resolve under #3 |
+| #3-R.4 | Tracking-state reconstruction is not new privileged admission (no issuance, no ownership, no execution start on the replay path) | `recoverWorkerResults` | `REPORT.md` §4.1; probe shows ownership/state unchanged | — | `EVIDENCED_IN_CANDIDATE` | include in #4 review |
 | ADM | **Admission-issuer authority**: a caller able to invoke admission obtains the credential for the attempt it created | `cli.py:3371-3384`, `omp_adapter.py:65-79`, `:138-139` | reproduced reading; `WORKTREE_WRITER_BUSY` proves exclusion on that path only | — | `OPEN` (explicit M00.3 blocker) | belongs to #4; #3 must not be described as closing no-self-approval |
 | #2a | Initiating schema-collision containment | `brain_schema`, `vmem` | `c017dc3`; qualification record with reviewer verdict at top | operational defect CLOSED | `CLOSED` (as scoped) | — |
 | #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | debt ledger in `schema-bootstrap-20260921/QUALIFICATION.md` | reviewer: `incorrect` for the stronger claim | `OPEN` | after #3: one authority for identity/legal transitions; deterministic registration; one version source per namespace; `events_fts` reserved-name conflict; per-missing-table DDL rule; deepen schema comparison; interrupt/compete-open tests; legacy reopen idempotency |
@@ -170,12 +171,13 @@ Same discipline for the same-process case: it needs a live admission in `workerA
 
 ## Next executable step
 
-1. **#3-R restart replay** — reproduce a journal-only replay in disposable state, then implement
-   fail-closed reconciliation against durable facts (no persisted secrets, no auto re-admission, no
-   ownership release, duplicates inert).
-2. **#3-I real integration route** — exercise the candidate extension/bridge/adapter/Python path with
-   deterministic fixtures, naming exactly which route is qualified.
-3. **#3-M mutation** against the frozen integrated bytes, then **#3-review** covering producer,
-   consumer, custody and replay together.
+1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
+   frozen bytes of this report. In-session subagent dispatch is refused by the loaded extension
+   (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`), so this needs an already-permitted review route.
+2. **#3-I real integration route** — the replay leg now runs the real hook, bridge and Python consumer
+   against disposable state (`REPORT.md`); the remaining gap is the *packaged/installed* extension
+   under a real OMP host launch, which is a different subject from the source factory.
+3. **#3-M mutation** against the frozen integrated bytes — done for the replay subject (see §5 of the
+   report); rerun for the final candidate after any further source change.
 4. Then #2b, #4, #5, #6 in order, then the §9 security/deployment reconciliation and the cumulative
    evidence pack.
