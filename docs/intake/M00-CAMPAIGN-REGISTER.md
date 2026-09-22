@@ -823,6 +823,65 @@ this register and the commit history, and the decision's content is reproduced v
 permitted to write canonical state can re-invoke the same command with the same arguments against the real
 home.
 
+## STOP scope reconciled, and the post-commit recording/delivery defect repaired (2026-09-22)
+
+**STOP scope reconciliation.** Inspected through permitted interfaces: `continuation_forbidden` is
+**computed and printed only** (`cli.py:3793`, `:3808`) and the decision writes a ledger event
+(`stop-<id>`); **no code path reads a stop decision**, so the record is evidence, not a lock. Nothing was
+deleted, overwritten, or evaded, and no alternate home was used to dodge enforcement. The supported
+supervisory act is therefore the owner's direction in this correction — continued isolated
+implementation permitted, qualification still blocked — which is what is being acted on. The record and
+its inputs remain unchanged.
+
+**The defect was silent loss, and that is worth stating precisely.** `_emit_worker_event` ended in
+`except Exception: return` — a failed ledger append was swallowed, so the caller was told the completion
+succeeded while the notification was gone. My earlier reproduction of a *false failure* came from
+replacing the whole emitter with a raiser, which is not the shipping shape. Both shapes are now covered:
+
+- `migrations/0026_worker_notification_outbox.sql` adds `notification_event_key`,
+  `notification_pending`, `notification_delivered_at` to `worker_task_meta`.
+- The outbox intent (`notification_pending = 1`, with `session_id` preserved via `COALESCE`) commits **in
+  the same transaction** as the terminal fact, so the notification is reconstructible from durable state.
+- `_emit_worker_event` now **reports** `delivered` / `already_delivered` / `pending` instead of
+  swallowing. `record_worker_event` returns `recording: committed` with `notification: delivered|pending`,
+  and `omp_adapter` exposes both, so a committed recording can never read as a failed result and a lost
+  notification can never read as delivered.
+- `reconcile_worker_notifications(home, task_id=…)` rebuilds the payload from the committed row
+  (`terminal_notification_payload`), and because the ledger event id is a content hash of that payload
+  and `events.event_id` is `UNIQUE`, a repeated delivery is detected as a duplicate — delivery, not an
+  error — rather than becoming a second logical event.
+- `tests/test_worker_notification_outbox.py` (4 passed): interruption at the **real** append point
+  (`LedgerStore.append_events` fails, emitter reports pending, recording committed, no
+  `RESULT_UNAVAILABLE`); reconciliation delivers it through durable state only; a second reconciliation
+  over an already-recorded event is duplicate-safe (one event, pending cleared); the uninterrupted path
+  reports `delivered`.
+
+Two defects in my own patch were found and fixed by these tests rather than by inspection: the outbox
+upsert originally created the meta row with a **NULL `session_id`**, which the emitter preferred over the
+request session and so suppressed delivery; and an inserted `return "delivered"` landed *after* the
+`except` branch's return, making success unreachable and mislabelling every delivery as pending.
+
+**Worktree accident, disclosed.** A `git stash push` of mine failed on an untracked path, but a `;` in
+the same command line still ran `git stash pop`, which applied a **pre-existing stash from another
+branch** (`epitaxy: pre-switch…`) into this worktree, leaving five conflicted files and 72 untracked
+`memory/semantic/mem-*.md` copies. Repaired: the unintended application was reverted file by file with
+`git checkout HEAD --` (my own two sources excluded), the accidentally applied untracked copies removed,
+and the **stash entry left intact** so that work is preserved. `tmp_t03_probe.txt` is not mine and was
+left alone. The `;`-after-`&&` habit is what caused it; no stash was popped since.
+
+**Pre-existing failures, not mine (isolated by file copy, no stash):** with both of my changed files
+reverted to committed bytes, `tests/test_worker_protocol.py::test_context_handoff_reuses_unchanged_and_emits_changed_delta`
+(`KeyError: 'context_metadata'`) and `::test_result_hash_and_correction_lifecycle_are_canonical`
+(`COMPLETION_AUTHORITY_UNAVAILABLE` vs `UNAUTHORIZED_WORKER`) still fail. Left exactly as found. Also
+outstanding and **mine to update**: four migration-pin assertions in `tests/test_writer_admission.py`
+expect `[23,24]`/`[24]` and now see the legitimate `25`/`26`.
+
+**Still executable, not done:** the reservation fails-before/passes-after proof with the owner's four
+distinctions (cancel exactly once when genuinely unused; preserve exposure when dispatch is uncertain; no
+unconditional refund in `finally`; duplicate recovery and newer-request protection); the migration-pin
+updates; the #6 summing readers; the #2b test-strength items; and a bounded investigation of an existing
+independent-verification route (not by retrying the refused roles).
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.

@@ -324,7 +324,7 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
             "failure_code": "RESULT_NOT_RECORDED",
             "task_id": result.task_id,
         }
-    return {
+    response = {
         "status": result.status,
         "failure_code": result.failure_code,
         "task_id": result.task_id,
@@ -332,6 +332,14 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
         "attempt_id": attempt_id,
         "result_sha256": result_sha256,
     }
+    # Recording status and notification status are exposed separately. The terminal fact is
+    # committed either way, so a pending notification must never read as a failed result.
+    if receipt.get("recording") == "committed":
+        response["recording"] = "committed"
+        response["notification"] = receipt.get("notification", "unknown")
+        if isinstance(receipt.get("notification_error"), str):
+            response["notification_error"] = receipt["notification_error"]
+    return response
 
 
 def _prepare_worker_bind(home: Path, payload: Mapping[str, Any]) -> dict[str, Any]:

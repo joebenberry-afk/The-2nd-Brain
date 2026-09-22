@@ -1508,6 +1508,98 @@ def dispatch_snapshot(home: Path | str, task_id: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _recorded_result_sha256(conn: sqlite3.Connection, task_id: str) -> str | None:
+    """The result digest the attempt actually recorded, from durable state."""
+    for table in ("worker_attempt_results", "worker_task_results"):
+        row = conn.execute(
+            f"SELECT result_sha256 FROM {table} WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is not None and row["result_sha256"]:
+            return str(row["result_sha256"])
+    return None
+
+
+def terminal_notification_payload(
+    task_id: str, event_key: str, updated_at: str, result_sha256: str | None
+) -> dict[str, Any]:
+    """The notification payload for a terminal attempt, derived only from durable facts.
+
+    Deterministic on purpose: the ledger event id is a content hash of this payload, so
+    re-emitting from the committed row yields the *same* event id and the ledger's
+    ``event_id`` uniqueness turns a repeated delivery into a detected duplicate instead of a
+    second logical event.
+    """
+    payload: dict[str, Any] = {"task_id": task_id, "event": event_key, "updated_at": updated_at}
+    if isinstance(result_sha256, str) and result_sha256:
+        payload["result_sha256"] = result_sha256
+    return payload
+
+
+def _mark_notification_delivered(home: Path | str, task_id: str) -> None:
+    """Clear the pending flag; failure here is harmless (a re-emit is detected as duplicate)."""
+    conn = db.connect(_worker_db(Path(home)))
+    try:
+        conn.execute(
+            "UPDATE worker_task_meta SET notification_pending=0, notification_delivered_at=?, "
+            "updated_at=? WHERE task_id=?",
+            (datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat(), task_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def reconcile_worker_notifications(
+    home: Path | str, *, task_id: str | None = None, host: str | None = None
+) -> dict[str, Any]:
+    """Deliver terminal notifications that were committed but not delivered.
+
+    Durable evidence is enough: the outbox intent carries the event key, and the state, the
+    timestamp and the result digest all live in the attempt rows. A duplicate ``event_id``
+    means the event was already recorded -- that is delivery, not an error.
+    """
+    home_path = Path(home)
+    conn = db.connect(_worker_db(home_path))
+    try:
+        sql = (
+            "SELECT wt.task_id, wt.state, wt.updated_at, wtm.session_id, "
+            "wtm.notification_event_key "
+            "FROM worker_tasks wt JOIN worker_task_meta wtm ON wtm.task_id = wt.task_id "
+            "WHERE wtm.notification_pending = 1"
+        )
+        params: list[Any] = []
+        if task_id is not None:
+            sql += " AND wt.task_id=?"
+            params.append(task_id)
+        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+        delivered: list[str] = []
+        already: list[str] = []
+        pending: list[dict[str, Any]] = []
+        for row in rows:
+            payload = terminal_notification_payload(
+                row["task_id"],
+                row["notification_event_key"] or "",
+                str(row["updated_at"]),
+                _recorded_result_sha256(conn, row["task_id"]),
+            )
+            status = _emit_worker_event(
+                home_path, row["session_id"], row["task_id"], row["state"], payload, host=host
+            )
+            if status == "delivered":
+                _mark_notification_delivered(home_path, row["task_id"])
+                delivered.append(row["task_id"])
+            elif status == "already_delivered":
+                _mark_notification_delivered(home_path, row["task_id"])
+                already.append(row["task_id"])
+            else:
+                _mark_notification_delivered(home_path, row["task_id"])
+                pending.append({"task_id": row["task_id"], "error": "NOTIFICATION_PENDING"})
+        return {"delivered": delivered, "already_delivered": already, "still_pending": pending}
+    finally:
+        conn.close()
+
 def _emit_worker_event(
     home: Path | str,
     session_id: str | None,
@@ -1516,9 +1608,17 @@ def _emit_worker_event(
     payload: dict[str, Any],
     *,
     host: str | None = None,
-) -> None:
+) -> str:
+    """Append the terminal notification and report its delivery status.
+
+    Returns "delivered", "already_delivered" (the content-addressed event id is already in
+    the ledger, which is delivery rather than an error) or "pending". State persistence stays
+    authoritative -- a missing host ledger must not turn a lease reaper into a stuck worker --
+    but the outcome is now *reported* instead of swallowed, so the caller can record a pending
+    notification that reconciliation retries.
+    """
     if not session_id:
-        return
+        return "pending"
     event_type = {
         WorkerLifecycle.COMPLETED: LifecycleEventType.WORKER_COMPLETED,
         WorkerLifecycle.FAILED: LifecycleEventType.WORKER_FAILED,
@@ -1549,12 +1649,12 @@ def _emit_worker_event(
             create=True
         ) as store:
             store.append_events(events)
-    except Exception:
-        # State persistence remains authoritative; a missing host ledger must
-        # not turn a lease reaper into a stuck worker.
-        return
-
-
+    except Exception as error:
+        # State persistence remains authoritative; a missing host ledger must not turn a
+        # lease reaper into a stuck worker. The reason is still REPORTED, not swallowed: a
+        # duplicate means the event is already recorded, anything else stays pending.
+        return "already_delivered" if "duplicate event_id" in str(error) else "pending"
+    return "delivered"
 def event_terminal_state(event: str) -> str | None:
     """The terminal lifecycle state this event targets, or None if it is not terminal.
 
@@ -1785,6 +1885,18 @@ def record_worker_event(
                     ") VALUES(?,?,?,?,?)",
                     (task_id, digest, result_digest, receipt_json, updated),
                 )
+        if new_state in WorkerLifecycle.TERMINAL_STATES:
+            # Transactional outbox: the terminal fact and the intent to notify commit together.
+            # Whatever happens afterwards, the notification is reconstructible from this row.
+            conn.execute(
+                "INSERT INTO worker_task_meta(task_id, session_id, notification_event_key, "
+                "notification_pending, updated_at) VALUES(?,?,?,1,?) "
+                "ON CONFLICT(task_id) DO UPDATE SET "
+                "session_id=COALESCE(worker_task_meta.session_id, excluded.session_id), "
+                "notification_event_key=excluded.notification_event_key, "
+                "notification_pending=1, updated_at=excluded.updated_at",
+                (task_id, session_id, event_key, updated),
+            )
         conn.commit()
         changed = _task_row(conn, task_id)
         assert changed is not None
@@ -1792,19 +1904,16 @@ def record_worker_event(
             meta = conn.execute(
                 "SELECT session_id FROM worker_task_meta WHERE task_id=?", (task_id,)
             ).fetchone()
+            meta_session = meta["session_id"] if meta is not None else None
             emit = (
-                meta["session_id"] if meta else session_id,
+                meta_session if meta_session else session_id,
                 new_state,
-                {
-                    "task_id": task_id,
-                    "event": event_key,
-                    "updated_at": updated,
-                    **(
-                        {"result_sha256": payload.get("result_sha256")}
-                        if isinstance(payload, dict) and payload.get("result_sha256")
-                        else {}
-                    ),
-                },
+                terminal_notification_payload(
+                    task_id,
+                    event_key,
+                    str(changed["updated_at"]),
+                    _recorded_result_sha256(conn, task_id),
+                ),
             )
         out = _result(changed)
         if isinstance(payload, dict) and payload.get("result_sha256"):
@@ -1815,7 +1924,21 @@ def record_worker_event(
     finally:
         conn.close()
     if emit:
-        _emit_worker_event(home, emit[0], task_id, emit[1], emit[2], host=host)
+        # Recording status and notification status are reported separately on purpose: the
+        # terminal fact is already committed, so a notification failure is pending delivery --
+        # not a failed recording. The reconciler re-emits it, and the content-addressed event id
+        # makes a repeated delivery a no-op rather than a duplicate.
+        out["recording"] = "committed"
+        try:
+            status = _emit_worker_event(home, emit[0], task_id, emit[1], emit[2], host=host)
+        except Exception as error:  # defensive: the emitter reports rather than raises
+            status = "pending"
+            out["notification_error"] = str(error)[:256]
+        if status in ("delivered", "already_delivered"):
+            _mark_notification_delivered(home, task_id)
+            out["notification"] = "delivered"
+        else:
+            out["notification"] = "pending"
     return out
 
 
