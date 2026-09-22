@@ -882,6 +882,43 @@ unconditional refund in `finally`; duplicate recovery and newer-request protecti
 updates; the #6 summing readers; the #2b test-strength items; and a bounded investigation of an existing
 independent-verification route (not by retrying the refused roles).
 
+## Reservation lifecycle: implemented and tested in the Brain; extension call site NOT yet switched (2026-09-22)
+
+Implemented exactly the model the owner specified — capacity returns only on proven-unused evidence,
+uncertainty stays a liability, no unconditional refund:
+
+| Element | State |
+| --- | --- |
+| `migrations/0027_budget_reservation_lifecycle.sql` | `episode_id`, `cancelled_at`, `cancel_reason`, `resolved_at`, `resolution`, `actual_tokens` |
+| `governor.cancel_budget_reservation(..., evidence=...)` | refuses without `evidence="proven_unused"`; idempotent (`already_cancelled`, no second refund); refuses a consumed reservation |
+| `governor.mark_budget_reservation_unresolved` | keeps the liability, records the reason |
+| `governor.reconcile_budget_reservations` | decides from durable evidence only: no attempt row → `cancelled_unused` (`NO_ATTEMPT_RECORDED`); native binding or non-SUBMITTED → consumed; SUBMITTED without a binding → **unresolved**, liability kept |
+| `governor.reserve_budget` | explicit `cap <= 0` always refuses with no default fallback; outstanding is **episode-scoped** |
+| `governor._episode_host_sessions` | shared by spend accounting and reservation liability, so a later session in the same root episode adds liability instead of resetting it |
+| `governor.list_budget_reservations` | the *outstanding* view: cancelled and consumed rows excluded |
+| `tests/test_budget_reservation_lifecycle.py` | **11 passed** — the owner's ten cases plus the two reconcile branches (bound → consumed, unbound → unresolved) |
+
+**Not done, and deliberately not claimed:** the extension still calls `consumeReservation(...)` on the
+preparation-failure branch (`src/index.ts`, the `OMP_BATCH_PREPARATION_FAILED` path), which resolves the
+reservation as consumed rather than cancelling it with proven-unused evidence. That is the correct *effect*
+in that branch but the wrong *route* under the owner's rule, and the `cancelBudget` bridge step is the
+next edit. Nothing is claimed closed for the reservation feature until that swap lands and its
+evidence-gated cancellation is exercised through the wiring.
+
+**Still mine to do, in the owner's order:** the four `test_writer_admission.py` migration-pin updates
+(toward an expected ordered migration set + current schema version + migration 25/26 semantics, with the
+24→25→26, 25→26, 26→no-op and interrupted-migration upgrade paths); #6 summing readers on the same
+episode/root accounting; the #2b test-strength items; the bounded independent-verification-route
+investigation; final integrated suites; then cumulative review. Gate results on the current bytes:
+pytest 21 passed across the three touched modules, `ruff` one remaining finding, `pyright` 6 errors (at
+least one in my outbox test's fixture loader) — to be cleared before any review.
+
+**Evidence-strength labels kept as instructed:** the two `test_worker_protocol.py` failures are recorded as
+**reproduced on the comparison subject / not attributable to this patch** (file-copy isolation at
+committed bytes), never as "pre-existing" without an earlier baseline run, and they keep their exact
+signatures in the record. The ten-worker result keeps its scope: repeatable finalization through the
+tested route only — it does not demonstrate trusted issuance or descendant coverage.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
