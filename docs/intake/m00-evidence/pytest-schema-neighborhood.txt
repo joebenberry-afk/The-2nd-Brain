@@ -1,0 +1,21 @@
+============================= test session starts =============================
+collected 398 items
+
+tests\test_brain_schema.py ..................                            [  4%]
+tests\test_writer_admission.py .....................................     [ 13%]
+tests\test_ledger.py ................................................... [ 26%]
+.......                                                                  [ 28%]
+tests\test_vmem.py ..................................................... [ 41%]
+.................                                                        [ 45%]
+tests\test_vmem_coverage.py .............................                [ 53%]
+tests\test_vmem_live_integration.py ...                                  [ 54%]
+tests\test_governor.py ................................................. [ 66%]
+.....                                                                    [ 67%]
+tests\test_backup.py .................................................   [ 79%]
+tests\test_migrations_property.py ..                                     [ 80%]
+tests\test_db.py ........                                                [ 82%]
+tests\test_cleanup_t61.py .........                                      [ 84%]
+tests\test_contracts.py ........................................         [ 94%]
+tests\test_worker_recovery.py .....................                      [100%]
+
+======================= 398 passed in 74.46s (0:01:14) ========================

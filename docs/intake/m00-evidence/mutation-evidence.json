@@ -1,0 +1,82 @@
+{
+  "baseline": {
+    "src\\second_brain\\worker_protocol.py": "17997bccdb6a67aac745dd9558ed3665002a85b4f087dc03e95e5287f3e4fac2",
+    "brainstem\\prime-extension\\src\\index.ts": "f2c95300744bed95ffcc15655b12c6aa391165065aebdef4be22a2bb12749e6e"
+  },
+  "results": {
+    "completion-authority-guard-removed": {
+      "mutated_sha256": "d502e680c9acda0bafb8a003fa0539889f335385605e25f1a9101c1079559ddd",
+      "exit_code": 1,
+      "summary": [
+        "\u00d7 restart replay of a journaled worker completion > recovers the journaled attempt, emits it without a credential, and changes no durable fact 2718ms",
+        "\u00d7 restart replay of a journaled worker completion > replays an already accepted mutating completion without rewriting its outcome 2749ms",
+        "\u00d7 restart replay of a journaled worker completion > does not let a journal label downgrade an authoritatively mutating attempt 2624ms",
+        "\u00d7 restart replay of a journaled worker completion > repeats the refusal without accumulated effects when the same journal is replayed twice 2594ms",
+        "\u2713 restart replay of a journaled worker completion > emits nothing when the journal holds a result but no persisted admission  2388ms",
+        "\u2713 restart replay of a journaled worker completion > shows the reachability assertions are sensitive to the recovery hook running  2471ms",
+        "\u00d7 restart replay of a journaled worker completion > accepts the same emitted payload when the attempt's credential is present 2463ms",
+        "\u2713 restart replay of a journaled worker completion > records the open finding: a read-only attempt accepts a journal-only completion  4705ms",
+        "Test Files  1 failed (1)",
+        "Tests  5 failed | 3 passed (8)"
+      ],
+      "diagnostics": [
+        "\u2192 expected true to be false // Object.is equality",
+        "\u2192 expected true to be false // Object.is equality",
+        "\u2192 expected true to be false // Object.is equality",
+        "\u2192 expected true to be false // Object.is equality",
+        "\u2192 expected true to be false // Object.is equality",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > recovers the journaled attempt, emits it without a credential, and changes no durable fact",
+        "AssertionError: expected true to be false // Object.is equality",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > replays an already accepted mutating completion without rewriting its outcome",
+        "AssertionError: expected true to be false // Object.is equality",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > does not let a journal label downgrade an authoritatively mutating attempt",
+        "AssertionError: expected true to be false // Object.is equality",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > repeats the refusal without accumulated effects when the same journal is replayed twice",
+        "AssertionError: expected true to be false // Object.is equality",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > accepts the same emitted payload when the attempt's credential is present",
+        "AssertionError: expected true to be false // Object.is equality"
+      ],
+      "restored_exact_bytes": true
+    },
+    "journal-reconstruction-removed": {
+      "mutated_sha256": "6a6d51c13be9df53eee077800c5df1c987c5f70f856f474a9f883a0a708661bf",
+      "exit_code": 1,
+      "summary": [
+        "\u00d7 restart replay of a journaled worker completion > recovers the journaled attempt, emits it without a credential, and changes no durable fact 2456ms",
+        "\u00d7 restart replay of a journaled worker completion > replays an already accepted mutating completion without rewriting its outcome 2573ms",
+        "\u00d7 restart replay of a journaled worker completion > does not let a journal label downgrade an authoritatively mutating attempt 2384ms",
+        "\u00d7 restart replay of a journaled worker completion > repeats the refusal without accumulated effects when the same journal is replayed twice 2390ms",
+        "\u2713 restart replay of a journaled worker completion > emits nothing when the journal holds a result but no persisted admission  2415ms",
+        "\u00d7 restart replay of a journaled worker completion > shows the reachability assertions are sensitive to the recovery hook running 2228ms",
+        "\u00d7 restart replay of a journaled worker completion > accepts the same emitted payload when the attempt's credential is present 2268ms",
+        "\u00d7 restart replay of a journaled worker completion > records the open finding: a read-only attempt accepts a journal-only completion 2340ms",
+        "Test Files  1 failed (1)",
+        "Tests  7 failed | 1 passed (8)"
+      ],
+      "diagnostics": [
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "\u2192 expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > recovers the journaled attempt, emits it without a credential, and changes no durable fact",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > replays an already accepted mutating completion without rewriting its outcome",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > does not let a journal label downgrade an authoritatively mutating attempt",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > repeats the refusal without accumulated effects when the same journal is replayed twice",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > shows the reachability assertions are sensitive to the recovery hook running",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > accepts the same emitted payload when the attempt's credential is present",
+        "AssertionError: expected [] to have a length of 1 but got +0",
+        "FAIL  tests/worker-result-replay.test.ts > restart replay of a journaled worker completion > records the open finding: a read-only attempt accepts a journal-only completion",
+        "AssertionError: expected [] to have a length of 1 but got +0"
+      ],
+      "restored_exact_bytes": true
+    }
+  }
+}
