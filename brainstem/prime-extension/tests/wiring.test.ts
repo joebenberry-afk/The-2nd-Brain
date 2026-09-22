@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -582,8 +582,12 @@ describe("factory wiring (src/index.ts)", () => {
   it("publishes the host capability set for the session (capability-gated, fail-closed)", async () => {
     const handlers = loadFactory();
     await handlers.get("before_agent_start")!({ prompt: "do the thing" }, makeCtx());
-    const file = join(tmp, "state", "host-capabilities.json");
-    const caps = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const dir = join(tmp, "state", "host-capabilities");
+    const readAll = () =>
+      readdirSync(dir).map(
+        (name) => JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, unknown>,
+      );
+    const caps = readAll()[0];
     // This context exposes no settlement observer: mutating delegation is
     // disabled, while spawning and read-only work stay available.
     expect(caps.cleanup_backed_release).toBe(false);
@@ -605,10 +609,20 @@ describe("factory wiring (src/index.ts)", () => {
       },
     } as Partial<ExtensionContext>);
     await handlers.get("before_agent_start")!({ prompt: "do the thing" }, capable);
-    const capableCaps = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const all = readAll();
 
-    expect(capableCaps.settlement_observation).toBe(true);
-    expect(capableCaps.mutating_delegation).toBe(true);
+    // One file per session, so a probe context cannot overwrite the host's record.
+    expect(all).toHaveLength(2);
+    expect(
+      all.some(
+        (entry) => entry.settlement_observation === true && entry.mutating_delegation === true,
+      ),
+    ).toBe(true);
+    expect(
+      all.some(
+        (entry) => entry.cleanup_backed_release === false && entry.mutating_delegation === false,
+      ),
+    ).toBe(true);
   });
 
   it("session_shutdown is the final record once prior writes have settled", async () => {
@@ -3407,12 +3421,18 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       ompWorkerResultRunner: resultRunner,
     }, journal);
     const ctx = makeCtx();
-    // Verified live on OMP 18.2.8: background `task` progress carries the manager job
-    // as `id` and leaves `jobId` null, and the hub snapshot keys that same job by
-    // `id`. Without the `entry.id` fallback this loop `continue`d every entry, the
-    // read-only worker was never registered or settled, and its row was reaped
-    // FAILED / lease_expired (m00.3 §15.2). The shared helper always supplies a
-    // manager job id, so the real host shape is dispatched inline here.
+    // Verified live on OMP 18.2.8: background `task` progress carries the agent id
+    // as `id` and leaves `jobId` null, while the async-job snapshot is the only
+    // place that names the manager job id for that agent. The hub serializer drops
+    // `agentId` and carries the agent as `agentUrlId`. Before the manager id was
+    // resolved, this loop `continue`d every entry, the read-only worker was never
+    // registered or settled, and its row was reaped FAILED / lease_expired
+    // (m00.3 §15.2). The shared helper always supplies a manager job id, so the real
+    // host shape is dispatched inline here.
+    ctx.getAsyncJobSnapshot = () => ({
+      running: [{ id: "NullJobWorker", type: "task", status: "running", agentId: "NullJobWorker" }],
+      recent: [],
+    });
     const spawnResult = (await handlers.get("tool_call")!(
       { toolName: "task", toolCallId: "null-job-id", input: { agent: "scout", task: "Reply with exactly: OK" } },
       ctx,
@@ -3443,7 +3463,7 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       content: [{ type: "text", text: "settled" }],
       details: {
         op: "wait",
-        jobs: [{ id: "NullJobWorker", type: "task", status: "completed", agentId: "NullJobWorker" }],
+        jobs: [{ id: "NullJobWorker", type: "task", status: "completed", agentUrlId: "NullJobWorker" }],
       },
     }, ctx);
 
@@ -3464,6 +3484,86 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       .split("\n").filter(Boolean).map((line) => JSON.parse(line))
       .filter((record) => record.kind === "omp_worker_admission_bypassed");
     expect(bypassed).toEqual([]);
+  });
+
+  it("attributes a completion to the worker whose manager job id it names, not to the id it collides with", async () => {
+    const resultRunner = vi.fn(async () => ({ ok: true }));
+    const journal: unknown[] = [];
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => workerContextResult,
+      ompWorkerResultRunner: resultRunner,
+    }, journal);
+    const ctx = makeCtx();
+    // Live sequence (verified 2026-09-21): a background job already holds `bg_1`, so
+    // a task spawned with agent id `bg_1` is registered by the manager as `bg_1-2`,
+    // and the next spawn (`bg_1-2`) becomes `bg_1-2-2`. progress.id never carries the
+    // manager id, so binding by the agent id alone would settle the wrong worker —
+    // the id alone is not identity.
+    ctx.getAsyncJobSnapshot = () => ({
+      running: [
+        { id: "bg_1-2", type: "task", status: "running", agentId: "bg_1" },
+        { id: "bg_1-2-2", type: "task", status: "running", agentId: "bg_1-2" },
+      ],
+      recent: [],
+    });
+
+    const spawn = async (toolCallId: string, agentName: string) => {
+      const result = (await handlers.get("tool_call")!(
+        { toolName: "task", toolCallId, input: { agent: "scout", task: `Task for ${agentName}` } },
+        ctx,
+      )) as { input: { task: string } };
+      const augmentedTask = result.input.task;
+      const match = augmentedTask.match(/\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+)/);
+      if (match === null) throw new Error("augmented task missing marker");
+      await handlers.get("tool_result")!(
+        {
+          toolName: "task",
+          toolCallId,
+          input: {},
+          isError: false,
+          content: [{ type: "text", text: "Spawned agent" }],
+          details: {
+            results: [],
+            progress: [
+              { index: 0, id: agentName, jobId: null, agent: "scout", task: augmentedTask, status: "pending" },
+            ],
+          },
+        },
+        ctx,
+      );
+      return match[1];
+    };
+
+    const firstTaskId = await spawn("collision-first", "bg_1");
+    const secondTaskId = await spawn("collision-second", "bg_1-2");
+
+    const hubResult = (jobId: string, agentUrlId: string) =>
+      handlers.get("tool_result")!({
+        toolName: "hub", toolCallId: `hub-${jobId}`, input: { op: "wait" }, isError: false,
+        content: [{ type: "text", text: "settled" }],
+        details: { op: "wait", jobs: [{ id: jobId, type: "task", status: "completed", agentUrlId }] },
+      }, ctx);
+
+    await hubResult("bg_1-2", "bg_1");
+    await hubResult("bg_1-2-2", "bg_1-2");
+
+    const completions = await workerCompletionRecords();
+    expect(completions).toHaveLength(2);
+    expect(completions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ task_id: firstTaskId, child_omp_agent_id: "bg_1", status: "completed" }),
+      expect.objectContaining({ task_id: secondTaskId, child_omp_agent_id: "bg_1-2", status: "completed" }),
+    ]));
+    // The named agent is checked against the bound worker, so a completion whose
+    // manager id belongs to another spawn is refused rather than attributed.
+    const errors = (await readFile(telemetryFile(), "utf8").catch(() => ""))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((record) => record.kind === "extension_error");
+    expect(errors).toEqual([]);
+    expect(journal).toContainEqual({
+      type: "custom",
+      customType: "second-brain.worker-result-accepted",
+      data: expect.objectContaining({ session: "wiring-test", taskId: secondTaskId }),
+    });
   });
 
   it("binds reordered native batch progress by each entry's job id and task marker", async () => {
@@ -3710,11 +3810,11 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
     expect(journal).toContainEqual(receipt);
   });
 
-  it("binds a manager-less progress entry by its dispatch identity", async () => {
+  it("settles a manager-less progress entry only when the delivery names the agent", async () => {
     // Live shape of this OMP version: the host reports a background task job
-    // as `id` and omits any manager job id, so that id is the only key a later
-    // hub delivery can carry. Read-only attempts never reach a settlement
-    // observer, so this registration is their only route to a terminal record.
+    // as `id` and omits any manager job id. When the manager id cannot be resolved
+    // from the async-job snapshot, that id is the only key a later hub delivery can
+    // carry — so the delivery must also NAME the agent before it settles anything.
     const resultRunner = vi.fn(async () => ({ ok: true }));
     const journal: unknown[] = [];
     const handlers = loadFactory({
@@ -3756,9 +3856,24 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       data: expect.objectContaining({ session: "wiring-test", jobId: agentId, agentId, taskId }),
     });
 
+    // An id-only delivery cannot prove which worker settled: the fallback key is the
+    // agent id, and a job holding that id pushes another spawn onto it.
     await handlers.get("tool_result")!({
       toolName: "hub", toolCallId: "missing-progress-job-poll", input: {}, content: [], isError: false,
       details: { jobs: [{ id: agentId, type: "task", status: "completed" }] },
+    }, ctx);
+    expect(await workerCompletionRecords()).toEqual([]);
+    expect(resultRunner).not.toHaveBeenCalled();
+    expect((await readFile(telemetryFile(), "utf8").catch(() => ""))).toContain(
+      "BRAIN_WORKER_AGENT_ID_UNVERIFIED",
+    );
+
+    // A delivery that names the agent settles it.
+    await handlers.get("tool_result")!({
+      toolName: "hub", toolCallId: "missing-progress-job-poll-named", input: {}, content: [], isError: false,
+      details: {
+        jobs: [{ id: agentId, type: "task", status: "completed", agentUrlId: agentId }],
+      },
     }, ctx);
 
     expect(await workerCompletionRecords()).toEqual([

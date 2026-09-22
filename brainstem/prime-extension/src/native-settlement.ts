@@ -93,12 +93,12 @@ function asJobRows(value: unknown): NativeAsyncJobRow[] {
 }
 
 /** Find the native job id for one agent id; stock task jobs are registered under it. */
-export function nativeJobIdForAgent(
-  snapshot: NativeAsyncJobSnapshot | null,
-  agentId: string,
-): string | null {
-  if (snapshot === null) return null;
-  for (const row of [...asJobRows(snapshot.running), ...asJobRows(snapshot.recent)]) {
+export function nativeJobIdForAgent(snapshot: unknown, agentId: string): string | null {
+  // The host API returns `unknown`; validate the shape here so callers can pass it
+  // through without casting.
+  if (snapshot === null || typeof snapshot !== "object") return null;
+  const { running, recent } = snapshot as { running?: unknown; recent?: unknown };
+  for (const row of [...asJobRows(running), ...asJobRows(recent)]) {
     if (row.agentId === agentId && typeof row.id === "string" && row.id.length > 0) return row.id;
   }
   return null;

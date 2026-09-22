@@ -173,12 +173,22 @@ export function renderOmpWorkerContext(handoff: OmpWorkerContextHandoff): string
   const resolved = Array.isArray(handoff.resolved_context) ? handoff.resolved_context : [];
   const delta = handoff.context_delta ?? {};
   const changed = Array.isArray(delta.changed_refs) ? delta.changed_refs : [];
+  const removed = Array.isArray(delta.removed_ref_hashes) ? delta.removed_ref_hashes : [];
   const jitDelta = typeof delta.jit_delta === "string" ? delta.jit_delta.trim() : "";
   const jit = typeof handoff.jit_context === "string" ? handoff.jit_context.trim() : "";
   // Omit the envelope when it carries no facts. Live 2026-09-21: recon workers
   // received an envelope whose every section was empty (`resolved_context: []`,
-  // `(none)`, `count: 0`) — pure prompt cost with no retrieved content.
-  if (resolved.length === 0 && changed.length === 0 && jit === "" && jitDelta === "") {
+  // `(none)`, `count: 0`) — pure prompt cost with no retrieved content. A
+  // removal-only delta is content (the worker must know a ref was withdrawn), so
+  // it is included in the test even though the current handoff producer cannot
+  // emit one.
+  if (
+    resolved.length === 0 &&
+    changed.length === 0 &&
+    removed.length === 0 &&
+    jit === "" &&
+    jitDelta === ""
+  ) {
     return "";
   }
   const wire = JSON.stringify({
