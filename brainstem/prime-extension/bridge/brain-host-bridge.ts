@@ -102,6 +102,14 @@ const TERMINAL_STATUSES: Record<string, true> = {
   canceled: true,
 };
 
+/** Status tokens this bridge interprets. `running` is the one non-terminal value the live
+ *  host reports; the vocabulary exists because cancellation can only be observed through a
+ *  status the bridge can actually read. A renamed status field matches nothing here. */
+const KNOWN_STATUS_TOKENS: Record<string, true> = {
+  running: true,
+  ...TERMINAL_STATUSES,
+};
+
 function narrowSurfaces(context: unknown): HostSurfaces {
   if (context === null || typeof context !== "object") return {};
   const surfaces: HostSurfaces = {};
@@ -175,11 +183,6 @@ function snapshotShapeUsable(surfaces: HostSurfaces): boolean {
   }
   if (value === null || typeof value !== "object") return false;
 
-  const groupSize = (key: "running" | "recent"): number => {
-    if (!(key in value)) return 0;
-    const group: unknown = value[key];
-    return Array.isArray(group) ? group.length : 0;
-  };
   // A key that is present but is not an array is a malformed shape, not an empty list:
   // reading it as "no rows" would advertise a capability that always resolves to null.
   const wellFormed = ["running", "recent"].every((key) => {
@@ -191,12 +194,10 @@ function snapshotShapeUsable(surfaces: HostSurfaces): boolean {
   const present = "running" in value || "recent" in value;
   if (!present) return false;
 
-  const total = groupSize("running") + groupSize("recent");
-  // Present and empty is a usable surface; rows that cannot be read are not. Binding needs
-  // *both* ids on one row — a row whose id reads but whose agent field is renamed leaves
-  // the bridge unable to bind, so claiming it can would be a claim it cannot deliver.
-  if (total === 0) return true;
-  return rowsFrom(value).some((row) => row.id !== "" && row.agentId !== "");
+  // Structural only: the groups are present and array-shaped. Whether the *fields* inside a
+  // row are readable is a separate question, decided per capability below — a single
+  // boolean derived from binding evidence must not silently vouch for status readability.
+  return "running" in value || "recent" in value;
 }
 
 /**
@@ -231,18 +232,26 @@ export function terminalStatusFor(
 export function advertise(options: { hostVersion: string; context?: unknown }): Advertisement {
   const surfaces = narrowSurfaces(options.context);
   const snapshotAvailable = snapshotShapeUsable(surfaces);
+  const rows = snapshotAvailable ? snapshotRows(surfaces) : [];
+  // Two capabilities, two pieces of evidence. Binding needs both identities on a row;
+  // cancellation needs a status token this bridge interprets. Deriving both from binding
+  // evidence is what let a host that renamed only `status` be told it could report
+  // cancellations it would never observe. An empty snapshot is a well-formed surface that
+  // carries no evidence about row fields, so it advertises neither.
+  const bindingEvidence = rows.some((row) => row.id !== "" && row.agentId !== "");
+  const statusEvidence = rows.some((row) => KNOWN_STATUS_TOKENS[row.status] === true);
   const framesAvailable = surfaces.events?.on !== undefined;
   const capabilities: Record<Capability, boolean> = {
     effective_tool_grant: false,
     // The snapshot names both ids for running and recent jobs: that is correlation,
     // which the bridge can establish without being trusted about safety.
-    execution_binding: snapshotAvailable,
+    execution_binding: bindingEvidence,
     // No host-attested settlement exists on stock: frames carry a status but no
     // authenticated binding, so the bridge does not emit settlement at all.
     settlement_observation: false,
     // Nothing on stock reports that a worktree's cleanup finished.
     cleanup_observation: false,
-    cancellation_observation: snapshotAvailable,
+    cancellation_observation: statusEvidence,
     // The snapshot is a bounded window over an evicting list, and recovery needs a
     // *complete* census; enumerating rows is not completeness, so the capability is
     // advertised false rather than approximated from a partial read.
@@ -255,18 +264,22 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
   const evidence: Record<Capability, string> = {
     effective_tool_grant:
       "unavailable: a child's effective tool grant is not exposed; a driver's own tool surface is not evidence about a child",
-    execution_binding: snapshotAvailable
+    execution_binding: bindingEvidence
       ? "ctx.getAsyncJobSnapshot() running/recent rows, matching rows[].agentId and taking rows[].id"
-      : "unavailable: no getAsyncJobSnapshot on this host",
+      : snapshotAvailable
+        ? "unavailable: the snapshot carries no row with both an execution id and an agent identity"
+        : "unavailable: no getAsyncJobSnapshot on this host",
     settlement_observation:
       framesAvailable
         ? "unavailable: lifecycle frames carry an unauthenticated status only; the host-attested settlement API the retired patch added is absent"
         : "unavailable: no lifecycle surface at all",
     cleanup_observation:
       "unavailable: the host detaches late cleanup and exposes no completion signal",
-    cancellation_observation: snapshotAvailable
+    cancellation_observation: statusEvidence
       ? "ctx.getAsyncJobSnapshot() terminal status for the bound execution id"
-      : "unavailable: no getAsyncJobSnapshot on this host",
+      : snapshotAvailable
+        ? "unavailable: no row carries a status token this bridge interprets, so a cancellation could not be observed"
+        : "unavailable: no getAsyncJobSnapshot on this host",
     execution_census: snapshotAvailable
       ? "unavailable: the host snapshot is a bounded window over an evicting list, so a complete census cannot be established"
       : "unavailable: no getAsyncJobSnapshot on this host",

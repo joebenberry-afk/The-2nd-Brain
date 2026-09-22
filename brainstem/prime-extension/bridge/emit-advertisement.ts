@@ -82,6 +82,17 @@ function idOnlyRowsContext(): unknown {
   };
 }
 
+/** Rows that keep both ids but rename only the status field: binding stays valid, and
+ *  cancellation must not be claimed from the same evidence. */
+function statusRenamedContext(): unknown {
+  return {
+    events: { on: () => () => undefined },
+    getAsyncJobSnapshot: () => ({
+      running: [{ id: "ReconWorker", agentId: "ReconWorker", state: "running" }],
+    }),
+  };
+}
+
 /** Executed checks for the behaviours a review flagged. Returns the verdict; the caller
  *  refuses to advertise when it is false. */
 function selfCheck(): boolean {
@@ -120,6 +131,13 @@ function selfCheck(): boolean {
   record("null job group disables execution_binding", false, nullGroup.execution_binding);
   const idOnly = advertise({ hostVersion: "id-only", context: idOnlyRowsContext() }).capabilities;
   record("id-only rows disable execution_binding", false, idOnly.execution_binding);
+  // Third round: renaming only `status` leaves binding genuinely valid while making a
+  // cancellation unobservable, so the two capabilities must be decided separately.
+  const statusRenamed = advertise({ hostVersion: "status-renamed", context: statusRenamedContext() }).capabilities;
+  record("renamed status keeps execution_binding", true, statusRenamed.execution_binding);
+  record("renamed status disables cancellation_observation", false, statusRenamed.cancellation_observation);
+  const stockCaps = advertise({ hostVersion: "stock", context }).capabilities;
+  record("readable status keeps cancellation_observation", true, stockCaps.cancellation_observation);
 
   const ok = checks.every((check) => check.ok);
   console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok }));
