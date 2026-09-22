@@ -63,13 +63,30 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | #4 | Trusted issuance, host observations, effective grants | `BrainHostProtocol`, bridge, adapters | — | — | `OPEN` | after #2b: close the issuing route, not only the consumer; smallest enforceable candidate-local mechanism |
 | #5 | Repeatable settlement and truthful worker recording | worker lifecycle | — | — | `OPEN` | after #4: one guarded finalization path; ten sequential mutating workers on one disposable worktree |
 | #6 | Episode/root-scoped accounting | budget layer | — | — | `OPEN` | after #5: dedupe same billable request, not all requests; reserve before admission |
-| SB-ORCH-001 | Effective tool grant and enforcement | M00.3 register | record located in `.worktrees/qualified-v2` | — | `OPEN` | pull the finding text, restate subject, repair to final bytes |
-| SEC-AUTH-01 / SEC-AUTH-02 | Approval/issuance and trusted-memory authority | M00.3 register | record location **not yet found** in candidate; produced by a search across report-bearing trees | — | `OPEN` | locate the records (they live in gitignored reports and/or other trees); do not invent clauses |
-| SEC-INTEGRITY-01 | Versioned ledger integrity, replay, migration provenance | M00.3 register | as above | — | `OPEN` | locate; preserve historical ledger facts and explicit anchors |
-| FSUPD-01 | Authorized activation bound to exact staged and installed bytes | M00.3 register | as above; directly implicated by the identity reconciliation above | — | `OPEN` | locate; prove stage/installed subject binding in a disposable installation |
-| SEC-SKILL-01 / SB-PROMOTION-004 | Approved skill bytes bound at consumption | M00.3 register | as above | — | `OPEN` | locate; verify and consume the same approved bytes + dependencies |
-| SEC-HOOK-02 | Trusted hook execution rather than uncontrolled executable resolution | M00.3 register | as above | — | `OPEN` | locate; qualify the actual executable/config/dependency path and environment |
+| SB-ORCH-001 | Effective tool grant and enforcement | M00.3 register | `docs/requirements/M00.3_Phase_A_Host_Authority_Continuation.md:97` — "retain their actual open status unless separately and completely demonstrated"; `:201-202` lists the open HIGH set | — | `OPEN` | restate subject from the register, then repair to final bytes |
+| SEC-AUTH-01 | Approval/issuance authority | M00.3 register | `M00.3_Phase_A_Host_Authority_Continuation.md:201-202`; `outputs/reports/m00.2-p2-lease-and-manifest-20260921/REPORT.md` (main tree) | — | `OPEN` | read the m00.2-p2 record for the original clause before restating anything |
+| SEC-AUTH-02 | Trusted-memory authority | M00.3 register | `:97` — same retained-open status as SB-ORCH-001 | — | `OPEN` | as above |
+| SEC-INTEGRITY-01 | Versioned ledger integrity, replay, migration provenance | M00.3 register | `:201-202`; `outputs/reports/m00.2-p2-lease-and-manifest-20260921/REPORT.md` (main tree) | — | `OPEN` | preserve historical ledger facts and explicit migration anchors |
+| FSUPD-01 | Authorized activation bound to exact staged and installed bytes | M00.3 register | `:201-202`; directly implicated by the identity reconciliation above | — | `OPEN` | prove stage/installed subject binding in a disposable installation |
+| SEC-SKILL-01 / SB-PROMOTION-004 | Approved skill bytes bound at consumption | M00.3 register | `:201-202` | — | `OPEN` | verify and consume the same approved bytes + required dependencies |
+| SEC-HOOK-02 | Trusted hook execution rather than uncontrolled executable resolution | M00.3 register | `:201-202` | — | `OPEN` | qualify the actual executable/config/dependency path and environment, not a command string |
 | DOC-14 | Fourteen module documents missing | `NOT_YET_AUTHORED / SOURCE_UNAVAILABLE` disposition | inherited | — | `RETAINED` | do not recreate from memory; use authorized roadmap substitutions; do not mark unseen clauses satisfied |
+
+## Where the governing records live (subject reconciliation)
+
+The register's own sources are **not all present in this candidate**:
+
+| Source | Location | In candidate HEAD? |
+| --- | --- | --- |
+| `M00_OneShot_Closure_Mandate.md` | `docs/intake/` (main tree) | yes (it is the mandate) |
+| `M00.3_Phase_A_Host_Authority_Continuation.md` | `docs/requirements/` (main tree) | **absent** — branch predates it |
+| `m00.2-p2-lease-and-manifest-20260921/REPORT.md` | `outputs/reports/` (main tree, gitignored) | **absent** — reports are never copied into a fresh worktree |
+
+Consequences, recorded rather than papered over: this candidate cannot self-document those findings, a
+candidate seal cannot claim to include them, and any evidence pack must name the tree each reference
+lives in. The FINDING IDS were also initially mis-stated as missing: they exist as records, they were
+simply outside the candidate and outside the first search scope. Only the *clauses* remain to be read
+from the two sources above.
 
 ## Environment and constraints
 
