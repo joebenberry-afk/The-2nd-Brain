@@ -3835,6 +3835,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           provider,
           model,
           message.usage,
+          message.responseId,
         );
         if (record) getStore(session)?.append(record);
       }

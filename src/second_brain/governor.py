@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from . import economics, ledger
+from . import economics, ledger, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,13 @@ class SessionTokens:
     repeated_reads_avoided: int = 0
     model_calls_avoided: int = 0
 
+    # Usage-observation identity (§5.1 honesty): a repeated observation of the *same* billable
+    # response is not a second charge, and an observation with no host identity cannot be proven
+    # to be either — it is counted, never assumed to be a duplicate.
+    usage_observations: int = 0
+    usage_repeat_observations: int = 0
+    usage_unidentified_observations: int = 0
+
     # Compactions (§4.1)
     compactions: int = 0
     compaction_tokens: int = 0
@@ -220,6 +227,7 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
     session_id = session_jsonl_path.stem
     tokens = SessionTokens(session_id=session_id)
     numeric_usage_fields: set[str] = set()
+    counted_response_ids: set[str] = set()
     turn_fallback_counter = 0
     saw_turn_start = False
     current_turn = 0
@@ -285,6 +293,23 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                     tokens.source_kind = kind
                 elif tokens.source_kind != kind:
                     tokens.source_kind = None
+
+                # One billable response is one charge, however many times a writer observes it
+                # (delivery retry, or a second observation point for the same response). The
+                # identity decides for the whole observation — turn count, counters, cache epochs
+                # and cost — because deduplicating only some of them would leave the others
+                # double-counted. An observation the host left unidentified is counted and
+                # reported: it cannot be proven to be a repeat, and treating it as one would drop
+                # a genuinely billed request.
+                tokens.usage_observations += 1
+                response_id = telemetry.usage_identity(record)
+                if response_id is not None:
+                    if response_id in counted_response_ids:
+                        tokens.usage_repeat_observations += 1
+                        continue
+                    counted_response_ids.add(response_id)
+                else:
+                    tokens.usage_unidentified_observations += 1
                 tokens.model_turns += 1
 
                 # Cache-epoch attribution (T2.5): each assistant_usage/
@@ -336,11 +361,11 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 # Aggregate tokens (HONESTY: only count reported values;
                 # explicit null remains distinguishable from a zero).
                 for field in (
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "total_tokens",
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_read_tokens",
+                        "cache_write_tokens",
+                        "total_tokens",
                 ):
                     value = usage.get(field)
                     if isinstance(value, int) and not isinstance(value, bool):
@@ -789,6 +814,7 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
 
     total = 0
     usage_seen = False
+    counted: set[str] = set()
     for path in paths:
         with path.open(encoding="utf-8") as stream:
             for line_number, line in enumerate(stream, 1):
@@ -831,6 +857,13 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
                         f"unknown total_tokens for session {session_id!r} at "
                         f"{path.name}:{line_number}"
                     )
+                # The budget is charged once per billable response, exactly as the session
+                # summary is: a repeated observation must not move a spending threshold.
+                identity = telemetry.usage_identity(record)
+                if identity is not None:
+                    if identity in counted:
+                        continue
+                    counted.add(identity)
                 total += value
                 usage_seen = True
     if not usage_seen:

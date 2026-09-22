@@ -36,7 +36,7 @@ Kinds:
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason, original_chars?, visible_chars?, saved_chars?, artifact_ref?, command_class?, error_status?, distilled? (P3-F additive) |
 | lean_kernel | decision, reason, role, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; P3-D) |
 | extension_error | error (string, truncated) |
-| assistant_usage | provider, model, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
+| assistant_usage | provider, model, response_id?, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
 | provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
 | provider_response_meta | provider, model, status?, headers? [{key, value_sha256}] (v=3; P3-B) |
 | orchestrator_policy_violation | violation, model, detected_by, blocked |
@@ -266,6 +266,34 @@ Additive schema v3 records emitted by the Prime extension (`sensors.ts` /
 `index.ts`) from the provider hooks proven live in Phase A:
 
 ### `assistant_usage` (v=3; per assistant message, `message_end`)
+
+`response_id` carries the host's own identity for the billable response this usage belongs to
+(`message.responseId`). It is what lets a reader tell a **repeated observation of one response**
+apart from a **second billed request**:
+
+* an identity is recorded only when the host reported one; an absent or empty value means
+  *unidentified*, which is counted in full and reported, never treated as a duplicate (treating it
+  as one would drop a genuinely billed retry);
+* an identity longer than 256 units is recorded as `sha256:<hex of the full value>` rather than
+  truncated — truncation could make two distinct responses share one recorded identity;
+* readers deduplicate on response-scoped identities only (`response_id`, `api_request_id`, `uuid`),
+  prefixed by field name. Routing-decision and turn identifiers are deliberately **not** accepted
+  as response identity: they can cover more than one billed call.
+
+Readers that must apply this rule: `governor.parse_telemetry_session`, `governor._session_total_tokens`
+(the budget gate) and `telemetry.session_usage`.
+
+Two gaps are recorded here rather than assumed away:
+
+1. A response observed once as an identified `assistant_usage` and again as an unidentified
+   `model_invocation_completed` is still counted twice.
+2. `governor.check_budget` fails **open** when accounting is unavailable: it returns
+   `state: OK` together with `used: None` and `error: ACCOUNTING_UNAVAILABLE`
+   (`governor.check_budget`). The diagnostic is explicit, but a caller that branches on `state`
+   alone proceeds unmeasured. A record without a numeric `total_tokens` reaches that branch
+   (`_session_total_tokens` raises on unknown usage), which is the state for Claude Code records —
+   so the cap cannot protect sessions driven through that adapter. This is a policy question, not a
+   silent default, and it is left as recorded rather than changed here.
 
 - Fields: `provider`, `model`, `input_tokens`, `output_tokens`,
   `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `cost_total`.

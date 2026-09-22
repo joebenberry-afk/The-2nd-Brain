@@ -9,6 +9,29 @@ def _write_session(home, name, lines):
     f.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
 
 
+def test_session_usage_charges_one_response_once(brain_home):
+    """A repeated observation of the same billable response is not a second request.
+
+    The credit layer reads this counter, so double-counting it would inflate measured usage as
+    well as the session totals it is compared against. The unidentified pair is charged in full:
+    without a host identity nothing here can prove it is a repeat.
+    """
+    _write_session(
+        brain_home,
+        "usage-identity.jsonl",
+        [
+            _rec("assistant_usage", response_id="resp-1", input_tokens=100, total_tokens=150),
+            _rec("assistant_usage", response_id="resp-1", input_tokens=100, total_tokens=150),
+            _rec("assistant_usage", input_tokens=10, total_tokens=15),
+            _rec("assistant_usage", input_tokens=10, total_tokens=15),
+        ],
+    )
+    usage = telemetry.session_usage(brain_home, "s1")
+    assert usage["total"] == 180, usage
+    assert usage["input"] == 120, usage
+    assert usage["message_count"] == 3, usage
+
+
 def _rec(kind, **kw):
     rec = {"v": 2, "ts": "2026-08-14T10:00:00.000Z", "kind": kind, "session": "s1"}
     rec.update(kw)
