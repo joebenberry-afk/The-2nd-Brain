@@ -9,6 +9,9 @@ host build by a record — never because a caller asked for trust.
 """
 
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -504,3 +507,29 @@ def test_qualification_records_reject_malformed_hashes() -> None:
         )
 
     assert error.value.code == "MALFORMED_QUALIFICATION"
+
+
+_HARNESS = Path(__file__).resolve().parents[1] / "scripts" / "host-bridge-conformance.py"
+
+
+def test_the_conformance_cli_refuses_an_ambiguous_advertisement_file(tmp_path: Path) -> None:
+    """A reviewer reproduced exit 0 here: the harness pre-parsed its input with json.loads, so
+    duplicate keys were resolved by the parser before the contract ever saw the bytes. Strict
+    loading is only real if the tool that judges advertisements uses it."""
+    ambiguous = tmp_path / "ambiguous.json"
+    ambiguous.write_bytes(
+        b'{"protocol_version":1,"bridge":{"name":"brain-host-bridge","version":"1.0.0"},'
+        b'"host":{"vendor":"oh-my-pi","name":"pi-coding-agent","version":"18.2.8"},'
+        b'"capabilities":{"execution_binding":true,"cleanup_observation":false,'
+        b'"cleanup_observation":true}}'
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(_HARNESS), "--advertisement", str(ambiguous)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "DUPLICATE_JSON_KEY" in completed.stdout

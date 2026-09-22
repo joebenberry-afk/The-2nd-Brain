@@ -24,17 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from second_brain import host_protocol
 
 
-def _read_json(path: str) -> object:
-    raw = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
-    return json.loads(raw)
-
-
-def _read_jsonl(path: str) -> list[object]:
+def _read_bytes(path: str) -> bytes:
     if path == "-":
-        lines = sys.stdin.read().splitlines()
-    else:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
+        return sys.stdin.buffer.read()
+    return Path(path).read_bytes()
+
+
+def _read_observations(path: str) -> list[bytes]:
+    raw = sys.stdin.buffer.read() if path == "-" else Path(path).read_bytes()
+    return [line for line in raw.splitlines() if line.strip()]
 
 
 def _render(decision: dict) -> Iterable[str]:
@@ -83,11 +81,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    raw_advertisement = _read_json(args.advertisement)
+    raw_advertisement = _read_bytes(args.advertisement)
     provenance = None
     if args.qualified_identity:
         try:
-            record = _read_json(args.qualified_identity)
+            record = host_protocol.loads_strict(_read_bytes(args.qualified_identity))
             if not isinstance(record, dict):
                 raise host_protocol.HostProtocolError(
                     "MALFORMED_QUALIFICATION", "the qualification record must be an object"
@@ -125,11 +123,11 @@ def main() -> int:
         print("\n".join(_render(decision)))
 
     if args.observations is not None:
-        samples = _read_jsonl(args.observations)
+        samples = _read_observations(args.observations)
         validated: list[str] = []
         for sample in samples:
             try:
-                parsed = host_protocol.parse_observation(sample)
+                parsed = host_protocol.parse_observation(host_protocol.loads_strict(sample))
             except host_protocol.HostProtocolError as exc:
                 print(f"\nOBSERVATION REFUSED: {exc.code}: {exc.message}")
                 return 2
