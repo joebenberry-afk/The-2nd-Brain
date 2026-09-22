@@ -474,6 +474,40 @@ Test file: `brainstem/prime-extension/tests/worker-completion-mirror.test.ts` (`
 real fixture subprocesses, disposable candidate state only). No runtime readback was added to the
 product: the probe is test-side.
 
+## Interrupted terminal acceptance/result recording: EXECUTED (2026-09-22)
+
+Fixture seam used: `tests/fixtures/omp_replay_state.py` — `phase --phase accept` and `--phase release` are
+deliberately separate processes ("running them as two invocations *is* a restart between acceptance and
+release"), and `probe` reports durable state (`state`, `writer_ownership`, `attempt_results`, digest
+presence).
+
+**1. Pre-commit interruption (deterministic, not timing-based).** A held SQLite write lock
+(`BEGIN IMMEDIATE`) blocked the accepting process *before* commit — verified alive and blocked after
+2.5s — then it was killed. Durable state afterwards:
+`state=WORKING, writer_ownership=held, attempt_results=0` → **no partial terminal record**, no result row,
+no lost or prematurely released ownership. The same accept retried in a fresh process then succeeded
+(`ok=true, status=completed`) and the state became `COMPLETED, held, attempt_results=1` → the interrupted
+recording resumes and commits **exactly once**.
+
+**2. Post-acceptance interruption (process boundary).** accept in process A, no release; probe:
+`COMPLETED, held, attempt_results=1` → the accepted fact is durable and ownership is **not** released
+prematurely. release in process B (fresh, persisted state only): `ok=true, status=accepted`; probe:
+`COMPLETED, released, attempt_results=1` → released, still exactly one result row.
+
+**3. Idempotency and non-regression.** A second release returned `ok=true, accepted, COMPLETED` with the
+state unchanged; replaying the released attempt's own completion returned `ok=true, completed` and
+changed nothing (`COMPLETED, released, attempt_results=1`).
+
+**Rejected as non-evidence, recorded so it is not repeated:** an earlier attempt to interrupt mid-write by
+killing at randomized offsets across 8 runs proved nothing — the accept window is ~231 ms dominated by
+interpreter startup, and even a 2 ms kill landed *after* commit (`COMPLETED` every time). Timing-based
+kills do not reach the commit boundary; the write lock does.
+
+**Still to pair with this (scout in flight):** whether the terminal write and the result row share one
+transaction. The observed `WORKING + held + 0 results` state persisting across a pre-commit kill is
+consistent with a durable pending state, which is the documented alternative to single-transaction
+rollback; the mapper's file:line answer decides which claim is made.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
