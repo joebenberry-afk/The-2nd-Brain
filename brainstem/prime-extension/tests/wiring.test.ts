@@ -193,6 +193,11 @@ function loadFactory(options?: ExtensionOptions, journal?: unknown[], journalErr
         };
   factory(pi, {
     budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
+    // The budget seams default to granted/consumed so a test never reaches the real
+    // governor bridge (and never records a bridge failure for a reason the test did not
+    // intend). Tests that care about a refusal pass their own stub.
+    budgetReserver: async () => ({ reserved: true, blocksDispatch: false, state: "OK", used: 0, cap: 400000, outstanding: 1 }),
+    budgetConsumer: async () => ({ consumed: true, alreadyConsumed: false }),
     ...options,
     ompWorkerContextRunner,
   });
@@ -2978,6 +2983,48 @@ describe("OMP async worker result correlation (real factory, [worker_result_life
       toolName: "task", toolCallId: "released-reservation", input: { task: "retry after failure" },
     }, ctx);
     expect(recovered).toMatchObject({ input: { task: expect.stringContaining("retry after failure") } });
+  });
+
+  it("blocks the dispatch when the budget reservation is refused, before any preparation", async () => {
+    const reserved = vi.fn().mockResolvedValue({
+      reserved: false, blocksDispatch: true, state: "HARD",
+      used: 100, cap: 100, outstanding: 0, reason: "BUDGET_EXHAUSTED",
+    });
+    const contextRunner = vi.fn().mockResolvedValue(workerContextResult);
+    const handlers = loadFactory({ ompWorkerContextRunner: contextRunner, budgetReserver: reserved });
+    const ctx = makeCtx();
+
+    const blocked = await handlers.get("tool_call")!({
+      toolName: "task", toolCallId: "budget-refused", input: { agent: "scout", task: "budgeted task" },
+    }, ctx);
+
+    expect(blocked).toMatchObject({ block: true, reason: "BRAIN_WORKER_BUDGET_BUDGET_EXHAUSTED" });
+    expect(reserved).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String), role: "worker" }));
+    // Reserve-before-dispatch: the refusal short-circuits before the first
+    // budget-consuming step, so no context is requested and no admission is recorded.
+    expect(contextRunner).not.toHaveBeenCalled();
+  });
+
+  it("returns the reservation when the dispatch never happens", async () => {
+    const reserved = vi.fn().mockResolvedValue({
+      reserved: true, blocksDispatch: false, state: "OK",
+      used: 0, cap: 400000, outstanding: 1,
+    });
+    const consumed = vi.fn().mockResolvedValue({ consumed: true, alreadyConsumed: false });
+    const handlers = loadFactory({
+      ompWorkerContextRunner: async () => ({ ok: false, error: "context preparation failed" }),
+      budgetReserver: reserved,
+      budgetConsumer: consumed,
+    });
+    const ctx = makeCtx();
+
+    await handlers.get("tool_call")!({
+      toolName: "task", toolCallId: "budget-released", input: { agent: "scout", task: "released task" },
+    }, ctx);
+
+    expect(reserved).toHaveBeenCalled();
+    // The attempt never became an admission, so the reservation must not survive it.
+    expect(consumed).toHaveBeenCalledWith(expect.objectContaining({ taskId: expect.any(String) }));
   });
 
   it("records a child dispatched outside Brain admission exactly once", async () => {
