@@ -469,6 +469,26 @@ def command_edges(args: argparse.Namespace) -> int:
     return _emit({"ok": True, "home": str(home), "repo": str(repo), **observations})
 
 
+def command_phase(args: argparse.Namespace) -> int:
+    """Run one settlement phase, in its own process, against state a previous process left behind.
+
+    Acceptance and release are separate invocations on purpose: every command is a fresh process, so
+    running them as two invocations *is* a restart between acceptance and release. Nothing may be
+    carried in memory for the release to work.
+    """
+    base = Path(args.base).resolve()
+    home = base / "home"
+    context = _stored_context(home, args.task_id)
+    if args.phase == "accept":
+        response = complete(home, args.task_id, context, token=context["callback_token"])
+    elif args.phase == "release":
+        payload = _lifecycle_payload(context, sequence=0)
+        response = omp_adapter.handle_request(home, payload)
+    else:
+        raise FixtureError("PHASE_UNKNOWN")
+    return _emit({"ok": True, "phase": args.phase, "task_id": args.task_id, "response": response})
+
+
 def command_probe(args: argparse.Namespace) -> int:
     home = Path(args.base).resolve() / "home"
     with sqlite3.connect(db.db_path(home)) as conn:
@@ -525,6 +545,10 @@ def main(argv: list[str]) -> int:
     edges.add_argument("--base", required=True)
     edges.add_argument("--task-id", required=True)
     edges.add_argument("--host-session", default="omp-session")
+    phase = subparsers.add_parser("phase")
+    phase.add_argument("--base", required=True)
+    phase.add_argument("--task-id", required=True)
+    phase.add_argument("--phase", required=True, choices=["accept", "release"])
     sequence = subparsers.add_parser("sequence")
     sequence.add_argument("--base", required=True)
     sequence.add_argument("--task-id", required=True)
@@ -546,6 +570,8 @@ def main(argv: list[str]) -> int:
             return command_sequence(args)
         if args.command == "edges":
             return command_edges(args)
+        if args.command == "phase":
+            return command_phase(args)
         return command_probe(args)
     except FixtureError as error:
         return _emit({"ok": False, "error": error.code, "response": error.response}, 1)
