@@ -84,7 +84,45 @@ def governed_extension() -> dict[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pack", type=Path, required=True)
+    parser.add_argument(
+        "--staged",
+        type=Path,
+        default=None,
+        help="stage root holding the approved bytes (default: the host-patch campaign stage)",
+    )
+    parser.add_argument(
+        "--files",
+        nargs="*",
+        default=None,
+        metavar="LABEL=INSTALLED=SOURCE",
+        help=(
+            "activation surface, as data. Defaults to the three-file host-patch successor. "
+            "A one-file extension repair passes exactly one entry, which is how a bounded "
+            "repair reaches production without an unmanaged copy."
+        ),
+    )
+    parser.add_argument(
+        "--sealed-host",
+        type=Path,
+        default=None,
+        help=(
+            "the sealed reference for the host surface. Defaults to the canary under the "
+            "stage root; a repair that changes no host file passes the installed package, "
+            "which makes the recorded host delta zero because that is the truth."
+        ),
+    )
     args = parser.parse_args()
+    staged_root: Path = args.staged or STAGED
+    sealed_host: Path = args.sealed_host or (
+        staged_root / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary"
+    )
+    if args.files:
+        activation_files: tuple[tuple[str, Path, Path], ...] = tuple(
+            (label, Path(installed), Path(source))
+            for label, installed, source in (entry.split("=", 2) for entry in args.files)
+        )
+    else:
+        activation_files = ACTIVATION_FILES
     pack: Path = args.pack
     pack.mkdir(parents=True, exist_ok=True)
     backups = pack / "backups"
@@ -101,7 +139,7 @@ def main() -> int:
     }
 
     # 1. record the current identity and back it up
-    for label, installed, source in ACTIVATION_FILES:
+    for label, installed, source in activation_files:
         before = sha256_file(installed)
         approved = sha256_file(source)
         if approved is None:
@@ -137,7 +175,7 @@ def main() -> int:
 
     # 4. whole governed surface: unexpected deltas must be zero
     approved_extension = json.loads(
-        (STAGED / "STAGE-MANIFEST.json").read_text(encoding="utf-8")
+        (staged_root / "STAGE-MANIFEST.json").read_text(encoding="utf-8")
     )["extension"]["files"]
     approved_map = {row["staged"]: row["sha256"] for row in approved_extension}
     live_extension = governed_extension()
@@ -152,7 +190,7 @@ def main() -> int:
         installed = sha256_file(RETAIL / relative)
         canary = sha256_file(CANARY / relative)
         staged = sha256_file(
-            STAGED / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary" / relative
+            staged_root / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary" / relative
         )
         host_rows.append(
             {
@@ -201,7 +239,7 @@ def main() -> int:
             "--patch-dir",
             str(PRODUCTION_DIR),
             "--sealed-host",
-            str(STAGED / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary"),
+            str(sealed_host),
             "--installed-host",
             str(RETAIL),
             "--installed-extension",
@@ -220,7 +258,7 @@ def main() -> int:
             "--patch-dir",
             str(PRODUCTION_DIR),
             "--sealed-host",
-            str(STAGED / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary"),
+            str(sealed_host),
             "--installed-host",
             str(RETAIL),
             "--installed-extension",
