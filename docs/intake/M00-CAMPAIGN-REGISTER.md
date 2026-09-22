@@ -575,6 +575,57 @@ mutating claims). A host that claims `read_only` while doing mutating work is no
 detected by that gate. That is a trust decision about the admission issuer, not about the journal, and
 it stays open under #4.
 
+## #5 guarded finalization: ten-worker sequence and the ownership/receipt edges EXECUTED (2026-09-22)
+
+Fixture: `tests/fixtures/omp_replay_state.py sequence --count 10` and `edges`, both on fresh disposable
+homes (`omp-session`), no manual unlock, no worktree change, no restart, no expiry wait.
+
+**Ten sequential local mutating workers on one worktree and one database:** `iterations=10`, and every
+iteration reports `completion_status=completed`, `lifecycle_status=accepted`, `state=COMPLETED`,
+`writer_ownership=released`, `attempt_results=1`; failure codes empty; task ids `w-1 … w-10`. Each
+worker bound, executed, settled, cleaned up, released and permitted its successor.
+
+**Ownership and receipt edges** (raw response codes):
+
+| Case | Observed |
+| --- | --- |
+| settled without cleanup | accepted; then `writer_ownership=quarantined` |
+| successor while quarantined | `failed / WORKTREE_WRITER_BUSY` |
+| cleanup receipt completes | accepted → `writer_ownership=released` |
+| successor after release | admitted (`edge-b`) |
+| duplicate receipt | accepted, state unchanged |
+| regressing sequence | `rejected / RECEIPT_CONFLICT` |
+| replay without credential | `failed / UNAUTHORIZED_CALLBACK` |
+| replay with credential | completed; first attempt still `COMPLETED/released/1` |
+| cancellation before acceptance | `CANCELED`, `released`; later completion `INVALID_TRANSITION` |
+| cancellation after acceptance | `rejected / OUTCOME_CONFLICT`; accepted outcome not rewritten |
+| fourth writer while one held | `failed / WORKTREE_WRITER_BUSY` |
+| late receipt after release | accepted; the *new* holder untouched (`WORKING/held`) — newer-owner protection |
+| reused native id rebind | `rejected / BINDING_MISMATCH` |
+
+This covers the mandate's named cases for immediate completion, outcome-before-cleanup, cancellation
+before/after acceptance, delayed (late) callbacks, duplicate receipts, process/job-ID reuse,
+late dispatch after revocation, newer-owner protection, and restart (separately: the two-process
+`phase` experiments above). **One named case has no executed evidence: "active descendants after a
+top-level result."** Its code is mapped — observers are armed in the spawn path
+(`src/index.ts:1864-1883`), and on `session_shutdown` an attempt that still awaits cleanup keeps the
+observer alive with a 30s expiry that only detaches (`:4430-4455`, comment: *"Expiry only detaches
+observers: it never releases an unproven lease"*), while a cleaned-up attempt disposes immediately and
+journals `observer-complete`. No test covers `observer-incomplete`/`observer-complete`/`observer-expired`
+at all (grep over `tests/*.test.ts`). Testing it requires arming the observer through the real spawn
+event, whose driving pattern already exists in `tests/worker-result-replay.test.ts`; a blind test would
+risk passing vacuously, so it is recorded as a gap with its location instead of guessed.
+
+**Release-gate finding (structural, cross-checked against the code):** for attempt-bound mutating
+attempts, ownership release has exactly one gate — an authenticated native receipt carrying
+`executor_settled AND cleanup_complete` (`worker_protocol.py:1435-1441`); recording a terminal result
+only renews the lease (`:1743-1748`, written `:1755`), `reap` quarantines and never releases
+(`:2041`, `:2072-2079`), and `record_worker_dispatch_failure` releases only an unbound reservation
+(`:1261-1268`, `:1289-1292`). `settle_task` (`:1973-2029`) is a later approval transaction over an
+already-recorded result and is not an ownership path. So the "single guarded finalization path" holds
+for ownership: the other two names are distinct *purposes* (lease renewal, unbound-reservation cleanup),
+not competing release gates.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
