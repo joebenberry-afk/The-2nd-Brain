@@ -229,6 +229,38 @@ baselines still name the current bytes.
 4. The acceptance review of #3 must be closed through a permitted route before the candidate can claim
    `M00_CANDIDATE_QUALIFIED`.
 
+## #5 execution brief (from the mandate §7, with the code's current shape)
+
+Requirement: one guarded finalization path for normal completion *and* completed-attempt
+reconciliation. Required evidence is a trusted accepted outcome, authenticated executor settlement,
+authenticated cleanup, prevention of further writes under the old attempt, and an exact current
+ownership match. `COMPLETED + expired lease + result row` is not a substitute; lease expiry alone
+never authorises release; a fully evidenced normal completion must not wait for expiry.
+
+Where the code stands (read, not yet exercised as a packet):
+
+- `worker_protocol.settle_task` (`:1973`) already demands `approved is True`, postcondition evidence,
+  matching approved-review evidence, and a durably bound result before it writes `settled_at`. It
+  accepts `COMPLETED` only, and is idempotent when `settled_at` already equals the current stamp.
+- Ownership changes on two other paths: `ingest_worker_lifecycle` (`:1438`, `executor_settled and
+  cleanup_complete` → `released`; `interrupted` or `executor_settled` alone → `quarantined`) and
+  `record_worker_dispatch_failure` (`:1289`, unbound reservation only). These are the candidate
+  "finalization paths" to reconcile into the guarded one.
+- `reap` (`:2041`) quarantines expired writer authority and keeps legacy read-only reaping — it must
+  not be the thing that releases a writer.
+- `worker_recovery.py` carries the recovery proposals (`RELEASED`/`quarantined` vocabulary, the
+  `_..._row` guard at `:242-257`) and is where restart-time recovery authority must stay missing
+  rather than falsely succeed.
+
+Evidence to produce: ten sequential local mutating workers on one disposable worktree/database, each
+binding, executing, settling, cleaning up, releasing and permitting its successor without manual
+unlock, worktree change, restart or expiry wait; plus the separate cases the mandate names (immediate
+completion, outcome-before-cleanup, active descendants after a top-level result, cancellation before
+and after acceptance, delayed callbacks, duplicate receipts, process/job-ID reuse, late dispatch
+after revocation, restart, newer-owner protection). The `ADM` blocker (issuer authentication) does not
+gate these: they run through the disposable fixture path already proven in
+`outputs/reports/m00.3-replay-authority-20260922/`.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
