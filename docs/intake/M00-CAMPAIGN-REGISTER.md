@@ -503,10 +503,51 @@ killing at randomized offsets across 8 runs proved nothing — the accept window
 interpreter startup, and even a 2 ms kill landed *after* commit (`COMPLETED` every time). Timing-based
 kills do not reach the commit boundary; the write lock does.
 
-**Still to pair with this (scout in flight):** whether the terminal write and the result row share one
-transaction. The observed `WORKING + held + 0 results` state persisting across a pre-commit kill is
-consistent with a durable pending state, which is the documented alternative to single-transaction
-rollback; the mapper's file:line answer decides which claim is made.
+**Answered (settlement mapper, file:line):** the completion write set is **one atomic transaction**
+(`src/second_brain/worker_protocol.py:1618→1788`, `conn.commit()` at `:1788`). There is **no durable
+PENDING/recording state** anywhere on the Python side — the lifecycle states carry no PENDING member
+(`contracts.py:529-533`) — so nothing half-recorded exists to resume: a pre-commit kill leaves the row
+untouched (SQLite rollback), a post-commit kill leaves the state and the result durable together. The
+durable state a crash *does* leave is the pre-terminal row (`{SUBMITTED,WORKING,UNRESOLVED}`,
+`lifecycle_sequence=-1`), which `worker_recovery._interrupted_row` (`worker_recovery.py:223-257`,
+predicate `:246-249`) reads back and `inspect_attempt` surfaces as `unresolved_conditions`
+(`:128-186`). Recording a terminal result does **not** release ownership: it only renews the lease
+(`worker_protocol.py:1743-1748`, written `:1755`); release requires an authenticated native receipt
+carrying `executor_settled AND cleanup_complete`, otherwise `quarantined` (`:1435-1441`).
+
+## The interrupted-recording window is post-commit, and it is the advisory ledger emit (2026-09-22)
+
+The mapper's inference was testable, so it was tested. `record_worker_event` commits at
+`worker_protocol.py:1788` and only then calls `_emit_worker_event` at `:1818` — outside the
+transaction, with no `try/except`. Forcing that emit to raise (test-side patch of the module symbol,
+no product change) produced:
+
+| Observation | Result |
+| --- | --- |
+| Caller response | `{status: failed, failure_code: RESULT_UNAVAILABLE}` |
+| Durable Brain state | `state=COMPLETED`, `writer_ownership=held`, 1 attempt receipt, packet digest matches |
+| Session ledger | `worker_completed`/`result_corrected` events = **0** — the emit was lost in the window |
+| `verify_result_binding(home, task, packet, real receipt sha)` | **`None`** (bound) |
+| Replay of the same completion, emit working | `{status: completed}`; ledger still **0**; binding still `None`; no duplicate receipt |
+
+**Classification, with the limits stated.** The accepted fact survives, ownership is neither released
+nor leaked, and replay is idempotent — so this is **not** an authority or atomicity gap. For
+attempt-bound tasks `verify_result_binding` short-circuits on the attempt receipt (`:661-673`) and
+never reaches the ledger read (`:691-699`), which is consistent with the ledger being an advisory
+mirror — the same posture as the extension's own fire-and-forget, fail-open completion mirror. What
+remains open is narrower and is recorded rather than fixed:
+
+- **Label asymmetry (finding, honest-accounting boundary).** The caller is told `RESULT_UNAVAILABLE`
+  while the recording actually committed. It is fail-safe because replay is idempotent, but the label
+  does not distinguish *committed* from *failed* as the acceptance criteria require the system to.
+- **Lost ledger emit is not repaired**: nothing re-emits the completion event after an idempotent
+  replay, so the audit trail keeps the gap. Acceptable only while the ledger is documented as
+  advisory; if any consumer treats a ledger completion event as authority, that consumer is wrong and
+  should be corrected to consult the receipt.
+
+Both are recorded as M00 findings under the honest-accounting/source-authority boundary. Neither is
+repaired by a product change here: the mandate forbids imposing synchronous readback on runtime
+appends, and the replay already demonstrates no-duplicate, no-authority-loss behavior.
 
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
