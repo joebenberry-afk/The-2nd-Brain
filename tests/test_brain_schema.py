@@ -498,6 +498,62 @@ def test_component_shape_treats_a_view_where_a_table_belongs_as_absent(brain_hom
     assert "unidentified existing tables" in str(excinfo.value)
 
 
+def _observer_connection(path) -> sqlite3.Connection:
+    """A second connection held open across a reopen, to observe other connections' commits."""
+    return sqlite3.connect(path, timeout=5.0, isolation_level=None)
+
+
+def test_reopening_a_current_database_performs_no_content_changing_commit(brain_home) -> None:
+    """Logical idempotency and write-free reopening are separate claims, and both need evidence.
+
+    Structural equality (case 3) establishes the first. The second needs a witness, and the witness
+    needs its own sensitivity check — a witness that cannot fail proves nothing.
+
+    Measured granularity of this witness (it is coarser than "no writes at all"):
+
+    * a **content-changing** commit by another connection (a new row, or a changed value) moves
+      `data_version` — this is what the sensitivity check below exercises;
+    * a *same-value* `UPDATE` that still reports `rowcount == 1` does **not** move it;
+    * rolled-back work, and writes to other files (the session manifest, telemetry), are outside it.
+
+    So a zero delta supports exactly one claim: **the reopen committed no content change to this
+    database.** "No writes at all" would need instrumentation inside the tested connections
+    (`total_changes` alongside a seam, or a trace/authorizer hook), which these public entry points
+    do not expose; that limitation is recorded rather than papered over.
+    """
+    session_id = "write-witness"
+    with _open_ledger(brain_home, session_id) as store:
+        store.create_session(_identity(session_id))
+    _open_vmem(brain_home, session_id)
+    path = _session_file(brain_home, session_id)
+
+    observer = _observer_connection(path)
+    try:
+        before = observer.execute("PRAGMA data_version").fetchone()[0]
+        # Two full reopens through the public entry points, not a raw connection.
+        with _open_ledger(brain_home, session_id):
+            pass
+        _open_vmem(brain_home, session_id)
+        with _open_ledger(brain_home, session_id):
+            pass
+        after = observer.execute("PRAGMA data_version").fetchone()[0]
+        assert after == before, "reopening a current database committed a content change"
+
+        # Sensitivity: the witness fires for a deliberately introduced content change.
+        writer = sqlite3.connect(path, timeout=5.0)
+        try:
+            writer.execute(
+                "INSERT OR REPLACE INTO ledger_meta (key,value) VALUES ('witness_probe','1')"
+            )
+            writer.commit()
+        finally:
+            writer.close()
+        witnessed = observer.execute("PRAGMA data_version").fetchone()[0]
+        assert witnessed != before, "the witness did not detect a deliberate content change"
+    finally:
+        observer.close()
+
+
 # --- data preservation and the accounting witness --------------------------------------
 
 
