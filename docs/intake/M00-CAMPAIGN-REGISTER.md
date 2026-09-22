@@ -389,6 +389,50 @@ after being committed (commit `a6e1910`); corrected forward rather than rewritte
 is recorded in the test: the assertion guards against a future change that starts threading the
 credential into a record, and the search's sensitivity is proven against a string that does contain it.
 
+## Handover: the ledger-mirror gate, ready to execute (2026-09-22)
+
+Context reached its limit mid-task; this is the exact next operation, with the anchors it needs, so it
+resumes without rediscovery.
+
+**What was established for this gate:**
+
+- `mirror(...)` (`src/index.ts:883`) is the only path that writes a completion mirror, and it is called
+  from `emitWorkerCompletion` **after** the consumer accepts — `if (!outcome.ok) throw` precedes it, so
+  in the current code a refused completion cannot reach the mirror at all. The gate is therefore about
+  proving that property *and* that it is observable.
+- `mirror(...)` → `mirrorFireAndForget` (`src/ledger-mirror.ts:447`) → `mirrorEvent` (`:410`), which
+  spawns the Brain CLI with the record JSON on **stdin**, resolves fail-open, and retries **exactly
+  once** after `MIRROR_RETRY_DELAY_MS`. It returns no promise to the caller, so the test must observe
+  the destination rather than await a handle.
+- The destination is the session's ledger: `state/sessions/<internal_session_id>/ledger.sqlite`
+  (`internal_session_id` from the host session id), events keyed by the mirror `kind`
+  (`worker_completed`). The disposable fixture already provides that home.
+
+**The operation to implement** (unit of work, not a framework):
+
+1. **Positive**: reuse the credential-present control (already in the file) so a completed attempt is
+   accepted; poll the ledger, bounded (≈5 s, 100 ms steps, exit on first match), for exactly one
+   `worker_completed` **correlated to that `task_id`**. A correlated-by-absence-of-poll is not a pass.
+2. **Refusal**: the unauthenticated replay case; poll the same way for **no `worker_completed` for
+   that attempt's `task_id`**, while explicitly allowing a refusal diagnostic to exist — the
+   prohibition is a false authoritative completion, not an empty ledger.
+3. **Mutation control**: execute the erroneous application path, not a direct row insert — call the
+   real exported `mirrorEvent` with kind `worker_completed` and the refused attempt's fields, then
+   require the step-2 query to find it, i.e. the assertion must fail once the regression exists.
+4. Record the producer/route identity of the observed record (which kind, which attempt) so the
+   evidence names what was captured.
+
+**Then, in the owner's order**: interrupted terminal recording (does the terminal write and the result
+row share one transaction? prove rollback or a documented durable pending state); credential-error
+forcing through the real credential-bearing path (the sentinel scan already in place stays separate);
+journal fidelity captured from the candidate producer; then reserve-before-dispatch under the decided
+fail-closed policy, tested with zero allowance, unresolved accounting, concurrency, duplicate
+observations and restart with outstanding reservations.
+
+**Fix-forward commits to name in any report:** `a6e1910` is the historical failing-test subject (a red
+control that was committed); `1da6871` is the correction. Qualification subjects must cite the latter,
+never the former.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
