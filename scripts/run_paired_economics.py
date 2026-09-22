@@ -1188,6 +1188,7 @@ def aggregate_telemetry(
     stamps: list[float] = []
     accounting_available = True
     accounting_errors: list[str] = []
+    seen_usage_identities: set[str] = set()
     for raw_path in sorted(paths):
         path = Path(raw_path).resolve()
         start = 0
@@ -1236,6 +1237,18 @@ def aggregate_telemetry(
             if kind not in {"assistant_usage", "model_invocation_completed"}:
                 continue
             usage = record if kind == "assistant_usage" else record.get("usage")
+            # One billable response is one charge here too: a repeated observation of an identity
+            # already summed must not raise a model turn or a token total, or the measured
+            # economics of a run would depend on how many times a writer retried its delivery.
+            # An observation with no identity is counted in full — nothing here can prove it is a
+            # repeat, and dropping it would lose a genuinely billed request.
+            from second_brain.telemetry import usage_identity
+
+            identity = usage_identity(record)
+            if identity is not None:
+                if identity in seen_usage_identities:
+                    continue
+                seen_usage_identities.add(identity)
             model_turns += 1
             if not isinstance(usage, dict):
                 for field in _REQUIRED_USAGE:
