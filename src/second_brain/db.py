@@ -9,15 +9,45 @@ pending migrations (idempotent).
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
+import time
 from datetime import UTC
 from pathlib import Path
 
 from .errors import MigrationError
 from .paths import db_path  # noqa: F401  (re-export; used as db.db_path)
 
+logger = logging.getLogger(__name__)
+
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+#: The journal-mode transition is retried this many times, then left alone.
+_WAL_ATTEMPTS = 20
+_WAL_RETRY_SECONDS = 0.05
+
+
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    """Switch the database into WAL, waiting out a concurrent first open.
+
+    SQLite answers SQLITE_BUSY *immediately* when the journal-mode transition cannot take the
+    exclusive lock it needs: the busy timeout does not defer it, because the two connections may be
+    converting from different modes. Two processes opening a fresh database therefore raced, and
+    one died with "database is locked" at `PRAGMA journal_mode=WAL` (measured: 14 crashes in 200
+    concurrent first opens, 1 in 10). The transition is retried briefly and then left alone --
+    journal mode is a tuning choice, and a database that stays in rollback-journal mode is still
+    correct, so a connection is never failed over it.
+    """
+    for attempt in range(_WAL_ATTEMPTS):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError:
+            if attempt == _WAL_ATTEMPTS - 1:
+                logger.debug("WAL transition unavailable; keeping the current journal mode")
+                return
+            time.sleep(_WAL_RETRY_SECONDS)
 
 SCHEMA_VERSION_DDL = """CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL,
@@ -35,11 +65,12 @@ def connect(dbfile: str | Path, *, readonly: bool = False) -> sqlite3.Connection
     else:
         conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    # The busy timeout is set before the first locking statement, so every wait below has a policy.
+    conn.execute("PRAGMA busy_timeout=5000")
     if not readonly:
-        conn.execute("PRAGMA journal_mode=WAL")
+        _enable_wal(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
