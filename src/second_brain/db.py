@@ -28,26 +28,29 @@ _WAL_ATTEMPTS = 20
 _WAL_RETRY_SECONDS = 0.05
 
 
-def _enable_wal(conn: sqlite3.Connection) -> None:
-    """Switch the database into WAL, waiting out a concurrent first open.
+def ensure_wal(conn: sqlite3.Connection, *, required: bool) -> None:
+    """Put the database into WAL, waiting out a concurrent first open.
 
     SQLite answers SQLITE_BUSY *immediately* when the journal-mode transition cannot take the
     exclusive lock it needs: the busy timeout does not defer it, because the two connections may be
-    converting from different modes. Two processes opening a fresh database therefore raced, and
-    one died with "database is locked" at `PRAGMA journal_mode=WAL` (measured: 14 crashes in 200
-    concurrent first opens, 1 in 10). The transition is retried briefly and then left alone --
-    journal mode is a tuning choice, and a database that stays in rollback-journal mode is still
-    correct, so a connection is never failed over it.
+    converting from different modes. Concurrent first opens of the same fresh database therefore
+    failed with "database is locked" (measured on the shared control database: 14 crashes in 200
+    concurrent opens). The transition is retried in bounded steps, and ``required`` decides what a
+    caller does when even those do not win it: the ledger's append guarantees need WAL, while the
+    control database only loses a tuning choice.
     """
+    error: sqlite3.OperationalError | None = None
     for attempt in range(_WAL_ATTEMPTS):
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             return
-        except sqlite3.OperationalError:
-            if attempt == _WAL_ATTEMPTS - 1:
-                logger.debug("WAL transition unavailable; keeping the current journal mode")
-                return
-            time.sleep(_WAL_RETRY_SECONDS)
+        except sqlite3.OperationalError as exc:
+            error = exc
+            if attempt != _WAL_ATTEMPTS - 1:
+                time.sleep(_WAL_RETRY_SECONDS)
+    if required:
+        raise error  # type: ignore[misc]
+    logger.debug("WAL transition unavailable; keeping the current journal mode")
 
 SCHEMA_VERSION_DDL = """CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL,
@@ -68,7 +71,7 @@ def connect(dbfile: str | Path, *, readonly: bool = False) -> sqlite3.Connection
     # The busy timeout is set before the first locking statement, so every wait below has a policy.
     conn.execute("PRAGMA busy_timeout=5000")
     if not readonly:
-        _enable_wal(conn)
+        ensure_wal(conn, required=False)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA synchronous=NORMAL")
     return conn
