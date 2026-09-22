@@ -388,18 +388,12 @@ class LedgerStore:
         conn.execute("PRAGMA busy_timeout=5000")
         # journal_mode=WAL is a schema-level change sqlite does NOT reliably
         # subject to the busy handler (reproduced: OperationalError 'database
-        # is locked' on concurrent init of the same fresh ledger). Bounded
-        # retry keeps first-init atomic without a lock service.
-        journal_error: sqlite3.OperationalError | None = None
-        for _attempt in range(3):
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-                break
-            except sqlite3.OperationalError as exc:
-                journal_error = exc
-                time.sleep(0.1)
-        else:
-            raise journal_error  # type: ignore[misc]
+        # is locked' on concurrent init of the same fresh ledger). The shared
+        # bounded retry keeps first-init atomic without a lock service; the
+        # ledger requires it rather than continuing without WAL.
+        from . import db as db_mod
+
+        db_mod.ensure_wal(conn, required=True)
         conn.execute("PRAGMA synchronous=FULL")
         conn.execute("PRAGMA foreign_keys=ON")
         self._conn = conn
