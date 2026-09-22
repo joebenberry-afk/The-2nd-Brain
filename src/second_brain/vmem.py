@@ -25,7 +25,17 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from . import artifacts, capabilities, contracts, db, decisions, ledger, semantic, working_set
+from . import (
+    artifacts,
+    brain_schema,
+    capabilities,
+    contracts,
+    db,
+    decisions,
+    ledger,
+    semantic,
+    working_set,
+)
 from .errors import BrainError
 from .paths import db_path as _control_db_path
 
@@ -299,12 +309,26 @@ class VMemStore:
         self._init_db()
 
     def _init_db(self) -> None:
+        """Open the shared session database through the one bootstrap authority.
+
+        VMemStore writes the same `ledger.sqlite` as LedgerStore. Initialization therefore
+        asks `brain_schema` what the file is and applies only vmem's own DDL, under a write
+        reservation, so two components racing to initialize cannot interleave half-creates
+        and neither can mistake the other's tables for an unknown schema.
+        """
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.executescript(_VMEM_SCHEMA)
+            brain_schema.register("vmem", tables=("session_vmem",), ddl=_VMEM_SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                brain_schema.ensure(conn=conn, component="vmem", create=True)
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
             existing_columns = {
                 str(row[1]).casefold()
                 for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
