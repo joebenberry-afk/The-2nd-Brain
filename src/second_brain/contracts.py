@@ -1260,6 +1260,13 @@ class SessionSegment:
 # Ledger schema versioning (§14).
 # ---------------------------------------------------------------------------
 
+#: Version of the *header envelope* this module defines and validates (`LedgerHeader` /
+#: `read_ledger_header`). It is a protocol version of the header record, and it is deliberately
+#: a different namespace from the shared database schema version that `brain_schema` owns and
+#: records in `ledger_meta.schema_version` (2 today). The two numbers describe different things
+#: and are not required to agree: a database migration does not restate the header envelope, and
+#: a header-envelope change does not migrate the database. `LedgerStore` writes the database
+#: version into the session manifest; callers building a `LedgerHeader` pass this envelope value.
 LEDGER_SCHEMA_VERSION = 1
 
 

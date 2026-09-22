@@ -86,25 +86,14 @@ export function parseOmpWorkerResultOutput(stdout: string): OmpWorkerResultOutco
 }
 
 /**
- * Convert one completed/failed/cancelled worker child result into a validated
- * T4.1 lifecycle event. `worker_identity` assembly (agent_id, internal
- * session id, role_profile normalization) happens Python-side inside
- * `omp_adapter._prepare_worker_result` — this bridge sends only the flat
- * wire fields the Python `worker_result` operation expects.
+ * The exact wire payload for one completion. Exported so a caller (and its tests) can
+ * corroborate the same bytes against the Brain directly instead of reconstructing them.
  */
-export function runOmpWorkerResult(
+export function ompWorkerResultPayload(
   options: OmpWorkerResultOptions,
-): Promise<OmpWorkerResultOutcome> {
-  const python =
-    options.python ??
-    process.env.SECOND_BRAIN_PYTHON ??
-    join(options.home, ".venv", "Scripts", "python.exe");
-  const env: Record<string, string | undefined> = { ...process.env };
-  delete env.PYTHONHOME;
-  delete env.PYTHONPATH;
-  env.SECOND_BRAIN_HOME = options.home;
+): Record<string, unknown> {
   const callbackToken = bounded(options.callbackToken ?? "", 512);
-  const payload = {
+  return {
     operation: "worker_result",
     harness: "omp",
     host_session_id: bounded(options.sessionId, 128),
@@ -125,6 +114,27 @@ export function runOmpWorkerResult(
     // The completion authority, present only when admission issued one for this attempt.
     ...(callbackToken ? { callback_token: callbackToken } : {}),
   };
+}
+
+/**
+ * Convert one completed/failed/cancelled worker child result into a validated
+ * T4.1 lifecycle event. `worker_identity` assembly (agent_id, internal
+ * session id, role_profile normalization) happens Python-side inside
+ * `omp_adapter._prepare_worker_result` — this bridge sends only the flat
+ * wire fields the Python `worker_result` operation expects.
+ */
+export function runOmpWorkerResult(
+  options: OmpWorkerResultOptions,
+): Promise<OmpWorkerResultOutcome> {
+  const python =
+    options.python ??
+    process.env.SECOND_BRAIN_PYTHON ??
+    join(options.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const payload = ompWorkerResultPayload(options);
   return new Promise((resolve) => {
     const child = execFile(
       python,

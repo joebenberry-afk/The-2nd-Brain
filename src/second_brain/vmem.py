@@ -124,6 +124,21 @@ _VMEM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("pinned_until_turn", "INTEGER DEFAULT 0"),
 )
 
+# Registered at import time, not on first open: the authority's canonical shapes must not depend
+# on which store happened to open earlier in this process. The registered shape is the
+# *post-migration* one — the base DDL plus the same additive columns — so a predecessor database
+# (base DDL, no header, extensions already added by an earlier process) is recognised as carrying
+# the canonical shape rather than refused.
+brain_schema.register(
+    "vmem",
+    tables=("session_vmem",),
+    ddl=_VMEM_SCHEMA
+    + "\n".join(
+        f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl};"
+        for column, ddl in _VMEM_ADDITIVE_COLUMNS
+    ),
+)
+
 
 @dataclass
 class SessionObject:
@@ -321,34 +336,26 @@ class VMemStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA foreign_keys=ON")
-            # Register the *post-migration* shape, derived from the same base DDL plus the same
-            # additive columns: a predecessor database (base DDL, no header, extensions already
-            # added by an earlier process) must be recognised as canonical-shaped, not refused.
-            # Deriving it here keeps one source for the shape instead of a second hand-written DDL.
-            brain_schema.register(
-                "vmem",
-                tables=("session_vmem",),
-                ddl=_VMEM_SCHEMA
-                + "\n".join(
-                    f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl};"
-                    for column, ddl in _VMEM_ADDITIVE_COLUMNS
-                ),
-            )
             conn.execute("BEGIN IMMEDIATE")
             try:
                 brain_schema.ensure(conn=conn, component="vmem", create=True)
+                # An adopted predecessor keeps its own shape, and the authority deliberately never
+                # re-alterns a table that already exists. The additive columns such a database
+                # predates are therefore applied here — inside the same write reservation as the
+                # adoption decision, so an interrupted open rolls back to the shape it started
+                # from instead of leaving a half-migrated table behind. Idempotent: a column that
+                # is already present is not altered again.
+                existing_columns = {
+                    str(row[1]).casefold()
+                    for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
+                }
+                for column, ddl in _VMEM_ADDITIVE_COLUMNS:
+                    if column.casefold() not in existing_columns:
+                        conn.execute(f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl}")
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
                 raise
-            existing_columns = {
-                str(row[1]).casefold()
-                for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
-            }
-            for column, ddl in _VMEM_ADDITIVE_COLUMNS:
-                if column.casefold() not in existing_columns:
-                    conn.execute(f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl}")
-            conn.commit()
 
     def store_object(
         self,

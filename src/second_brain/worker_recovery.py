@@ -797,7 +797,8 @@ def release_unbound_quarantine(
         # identical to a reservation that never bound. What distinguishes them is recorded
         # observation plus a closed launch window, so both are required.
         attestation = conn.execute(
-            "SELECT attempt_id,kind,actor,recorded_at,resource FROM worker_recovery_events WHERE event_id=?",
+            "SELECT attempt_id,kind,actor,recorded_at,resource FROM worker_recovery_events"
+            " WHERE event_id=?",
             (quiescence_event_id,),
         ).fetchone()
         if attestation is None:
@@ -916,8 +917,8 @@ def release_settled_quarantine(
 
     The predicate is therefore the recorded terminal, not the absence of one:
 
-    - state is terminal, ``logical_outcome`` is recorded, and a ``worker_attempt_results`` row exists
-      for the attempt - the execution finished and its result is on disk;
+    - state is terminal, ``logical_outcome`` is recorded, and a ``worker_attempt_results``
+      row exists for the attempt - the execution finished and its result is on disk;
     - the lease has expired;
     - the writer is still ``quarantined`` (an attempt that already released is a no-op).
 

@@ -284,6 +284,99 @@ def test_case_6_a_foreign_table_is_never_adopted_renamed_or_removed(brain_home) 
     assert survived == [("keep me",)], "refusal must not delete or rewrite foreign state"
 
 
+def test_case_6b_a_reserved_name_does_not_establish_ownership(brain_home) -> None:
+    """`events_fts` is the ledger's index, not a name the ledger owns.
+
+    An object that merely carries the name is somebody's table: opening must refuse it, and the
+    refusal must leave it — and its rows — exactly where they were. This is the case where the
+    earlier rule ignored the name and could then drop the object during `reindex()`.
+    """
+    session_id = "reserved-foreign"
+    path = _session_file(brain_home, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE events_fts (event_id TEXT, note TEXT)")
+        conn.execute("INSERT INTO events_fts (event_id, note) VALUES ('foreign', 'keep me')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(BrainError) as excinfo:
+        _open_ledger(brain_home, session_id)
+    assert "unidentified existing tables" in str(excinfo.value)
+    assert "events_fts" in str(excinfo.value)
+
+    with pytest.raises(BrainError) as vmem_excinfo:
+        _open_vmem(brain_home, session_id)
+    assert "unidentified existing tables" in str(vmem_excinfo.value)
+
+    conn = sqlite3.connect(path)
+    try:
+        identity = brain_schema.classify(conn)
+        survived = conn.execute("SELECT note FROM events_fts").fetchall()
+        tables = {
+            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+    assert survived == [("keep me",)], "refusal must not remove a foreign object"
+    assert "events_fts" not in identity.reserved
+    assert "events_fts" in identity.unknown_tables
+    # A file holding only that object is not an empty file waiting to be initialized.
+    assert identity.state == "unknown-tables", identity.state
+    assert "events" not in tables, "a refused open must not have created the ledger's tables"
+
+
+def test_case_6c_a_shadow_table_name_does_not_establish_ownership(brain_home) -> None:
+    """The index's shadow-table names are reserved too, and equally unowned by name alone."""
+    session_id = "reserved-shadow"
+    path = _session_file(brain_home, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE events_fts_data (id INTEGER PRIMARY KEY, block BLOB)")
+        conn.execute("INSERT INTO events_fts_data (block) VALUES (x'00')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(BrainError) as excinfo:
+        _open_ledger(brain_home, session_id)
+    assert "unidentified existing tables" in str(excinfo.value)
+    assert "events_fts_data" in str(excinfo.value)
+
+    conn = sqlite3.connect(path)
+    try:
+        survived = conn.execute("SELECT count(*) FROM events_fts_data").fetchone()[0]
+    finally:
+        conn.close()
+    assert survived == 1
+
+
+def test_case_6d_the_ledgers_own_index_is_recognised_and_reindexed(brain_home) -> None:
+    """The positive control: the object the ledger itself created stays ours."""
+    session_id = "own-index"
+    with _open_ledger(brain_home, session_id) as store:
+        store.create_session(_identity("own-index"))
+        first = store.reindex()
+        second = store.reindex()
+    path = _session_file(brain_home, session_id)
+    conn = sqlite3.connect(path)
+    try:
+        identity = brain_schema.classify(conn)
+        verified = brain_schema.reserved_objects(conn)
+        dump = brain_schema.schema_dump(conn)
+    finally:
+        conn.close()
+    assert identity.state == "canonical", (identity.state, identity.unknown_tables)
+    assert identity.unknown_tables == set()
+    assert "events_fts" in verified
+    assert "events_fts_data" in verified
+    assert dump["reserved"], "the index is part of the compared structure"
+    assert first == second, "reindex is idempotent"
+
+
 # --- 7: competing first-open -----------------------------------------------------------
 
 

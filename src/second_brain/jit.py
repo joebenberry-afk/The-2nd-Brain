@@ -248,7 +248,8 @@ def compile_context(
         if requirements:
             for entry in requirements:
                 body.append(
-                    f"- {entry['id']} [{entry['importance']}/{entry['status']}] {entry['requirement']}"
+                    f"- {entry['id']} [{entry['importance']}/{entry['status']}] "
+                    f"{entry['requirement']}"
                 )
                 for evidence in entry["evidence"]:
                     body.append(f"  - {evidence}")
@@ -258,7 +259,9 @@ def compile_context(
 
     read_lines = [f"count: {len(reads)}"]
     if reads:
-        read_lines.extend(f"- {entry['path']} (purpose: {entry['purpose']})" for entry in reads[-10:])
+        read_lines.extend(
+            f"- {entry['path']} (purpose: {entry['purpose']})" for entry in reads[-10:]
+        )
     else:
         read_lines.append("(none)")
 
