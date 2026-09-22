@@ -1043,57 +1043,6 @@ def _authenticate_native_callback(
         raise WorkerPacketError("UNAUTHORIZED_CALLBACK", "native callback token rejected")
 
 
-def _require_terminal_authority(
-    row: dict[str, Any], *, callback_token: str | None, task_id: str, transport: str
-) -> None:
-    """A terminal transition requires the authority that admission minted for the attempt.
-
-    Every path that can finish an attempt reaches it through `record_worker_event` (or its
-    mapping alias `process_worker_event`), so the requirement lives at the protected writes
-    rather than in each transport: a caller cannot opt out by not checking. The CLI's
-    `worker-plane complete` writes repository-intelligence bookkeeping and is not this
-    transition; the strongest release rule reads the recorded terminal plus the attempt result
-    row, which is what this guards.
-
-    An attempt-bearing task with no stored token digest cannot be completed here: it is an
-    attempt admitted before admission minted tokens, so the honest answer is to refuse rather
-    than invent an authority for it. The reaper is unaffected — expiry marks a task failed by
-    its own rule without claiming a completion.
-
-    A task registered without admission carries no attempt, so no admission token exists to
-    require and no attempt-scoped release can read its outcome. Its authority is packet
-    identity, which the caller has already checked. That is a named, weaker class:
-    attempt-bearing tasks cannot use it.
-
-    A transport with no authenticated completion-authority mechanism refuses explicitly rather
-    than appearing to fail protocol validation. Hermes is in that state by owner decision: it
-    may report non-terminal telemetry, and it may not authoritatively complete a worker.
-    """
-    if row.get("attempt_id") is None:
-        return
-    stored = row.get("callback_token_sha256")
-    if not isinstance(stored, str) or not stored:
-        # No authority was ever minted for this attempt. Admission mints one exactly for the
-        # attempts that hold writer ownership; a read-only attempt holds none and therefore has
-        # nothing to release, so its terminal evidence is a named, weaker class and this is not
-        # the path the release rule reads. If a writer-holding attempt ever appears without a
-        # digest, fail closed rather than fall through.
-        if row.get("writer_ownership") in WRITER_PROTECTING_STATES:
-            raise WorkerPacketError(
-                "COMPLETION_AUTHORITY_UNAVAILABLE",
-                f"transport={transport!r} offers no authenticated completion authority for "
-                f"attempt {row.get('attempt_id')!r}; a terminal transition requires one",
-            )
-        return
-    supplied = (
-        hashlib.sha256(callback_token.encode("utf-8")).hexdigest()
-        if isinstance(callback_token, str) and callback_token
-        else ""
-    )
-    if not secrets.compare_digest(stored, supplied):
-        raise WorkerPacketError("UNAUTHORIZED_CALLBACK", "worker completion token rejected")
-
-
 def _binding_matches(
     row: dict[str, Any],
     host_generation: int,
@@ -1555,18 +1504,6 @@ def _emit_worker_event(
         return
 
 
-def event_terminal_state(event: str) -> str | None:
-    """The terminal lifecycle state this event targets, or None if it is not terminal.
-
-    Public so a transport can decide whether an event needs completion authority without
-    duplicating the event table.
-    """
-    if not isinstance(event, str):
-        return None
-    target = _WORKER_EVENT_STATES.get(event.strip().casefold())
-    return target if target in WorkerLifecycle.TERMINAL_STATES else None
-
-
 def record_worker_event(
     home: Path | str,
     task_id: str,
@@ -1579,14 +1516,8 @@ def record_worker_event(
     now: datetime | str | None = None,
     lease_seconds: int | float | None = None,
     host: str | None = None,
-    callback_token: str | None = None,
-    transport: str = "unknown",
 ) -> dict[str, Any]:
-    """Apply one worker event with packet identity, terminal authority and lease guards.
-
-    A terminal event additionally requires the `callback_token` issued to the attempt by
-    admission; see `_require_terminal_authority`.
-    """
+    """Apply one worker event with packet identity and lease renewal guards."""
     digest = _packet_hash(packet_sha256)
     if not isinstance(event, str) or not event.strip():
         raise WorkerPacketError("PROTOCOL_ERROR", "worker event must be non-empty")
@@ -1627,11 +1558,6 @@ def record_worker_event(
             # Terminal outcome is immutable, but a same-outcome result receipt
             # may arrive after the native lifecycle receipt.
             if event_key == "delivered" or row["state"] == target:
-                # Terminal-evidence write #1: the outcome exists already, and this writes or
-                # refreshes the attempt result row the release rule reads. Same authority.
-                _require_terminal_authority(
-                    row, callback_token=callback_token, task_id=task_id, transport=transport
-                )
                 if row.get("attempt_id") is not None:
                     receipt = conn.execute(
                         "SELECT result_sha256 FROM worker_attempt_results WHERE attempt_id=?",
@@ -1733,13 +1659,6 @@ def record_worker_event(
             raise WorkerPacketError("PROTOCOL_ERROR", "completed task has no ACCEPTED fact")
         assert target is not None
         new_state = WorkerLifecycle.transition(row["state"], target)
-        if new_state in WorkerLifecycle.TERMINAL_STATES:
-            # Terminal-evidence write #2, the canonical point: lifecycle legality is established
-            # (so an invalid transition keeps its precise diagnostic) and this write makes the
-            # outcome durable.
-            _require_terminal_authority(
-                row, callback_token=callback_token, task_id=task_id, transport=transport
-            )
         lease = _renewal_lease(
             row["lease_expires_at"], current, _lease_seconds(home, lease_seconds)
         )
@@ -1838,12 +1757,6 @@ def process_worker_event(home: Path | str, event: dict[str, Any], **kwargs: Any)
         payload=event,
         attempt_id=event.get("attempt_id"),
         session_id=event.get("session_id"),
-        callback_token=event.get("callback_token"),
-        transport=(
-            event["transport"]
-            if isinstance(event.get("transport"), str) and event["transport"]
-            else "unknown"
-        ),
         **kwargs,
     )
 

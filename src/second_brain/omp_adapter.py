@@ -308,11 +308,6 @@ def _prepare_worker_result(home: Path, payload: Mapping[str, Any]) -> dict[str, 
             },
             attempt_id=attempt_id,
             session_id=session_id,
-            # The authority admission minted. The host transport already carries it; passing it
-            # here is what makes the completion path authenticated. It must never reach the
-            # worker's context, result content, logs or telemetry.
-            callback_token=_text(payload.get("callback_token")) or None,
-            transport="omp",
             host="omp",
         )
     except contracts.WorkerPacketError as exc:
