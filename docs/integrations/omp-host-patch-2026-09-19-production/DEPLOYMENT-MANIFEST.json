@@ -1,11 +1,11 @@
 {
   "schema": "second-brain.omp-host-deployment-manifest.v1",
-  "generated_at": "2026-09-20T17:09:52.784182+00:00",
+  "generated_at": "2026-09-22T02:07:11.482849+00:00",
   "purpose": "Single machine-readable deployment record for the patched OMP host and the Second Brain extension: every file that must match, its rollback action, and the qualified launch entrypoint. Verification (scripts/run-omp-patched.ps1) and the activation card read this manifest instead of a hand-maintained file list.",
   "host": {
     "name": "OMP",
     "version": "omp/18.2.6",
-    "sealed_package": "C:\\Users\\assas\\AppData\\Local\\Temp\\omp-successor-20260920\\staged\\global\\node_modules\\@oh-my-pi\\pi-coding-agent-canary",
+    "sealed_package": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
     "installed_package": "C:\\Users\\assas\\.bun\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent",
     "entrypoint": "src/cli.ts",
     "bundled_entrypoint": "dist/cli.js",
@@ -15,96 +15,96 @@
       {
         "path": "src/async/job-manager.ts",
         "role": "bound",
-        "sealed_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
-        "installed_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
+        "sealed_sha256": "f3f87b826924ea6b6d9b5d3dd3d8d7769fd2950b215ac4d328cc0ab9e15a2dcb",
+        "installed_sha256": "f3f87b826924ea6b6d9b5d3dd3d8d7769fd2950b215ac4d328cc0ab9e15a2dcb",
         "rollback": {
           "action": "restore",
-          "sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8"
+          "sha256": "f3f87b826924ea6b6d9b5d3dd3d8d7769fd2950b215ac4d328cc0ab9e15a2dcb"
         },
         "installed_matches_sealed": true,
-        "bound_sha256": "796b2c2877f4d861dff177d83eaa9835ec8ce667e35c6bf01a18787a76f4a9a8",
+        "bound_sha256": "f3f87b826924ea6b6d9b5d3dd3d8d7769fd2950b215ac4d328cc0ab9e15a2dcb",
         "installed_matches_bound": true
       },
       {
         "path": "src/main.ts",
         "role": "bound",
-        "sealed_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
-        "installed_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
+        "sealed_sha256": "1ca07a614dc12b28c8c055e7c34d2b2851f5b5aee4ac93ea9c3de6f6e486e39f",
+        "installed_sha256": "1ca07a614dc12b28c8c055e7c34d2b2851f5b5aee4ac93ea9c3de6f6e486e39f",
         "rollback": {
           "action": "restore",
-          "sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca"
+          "sha256": "1ca07a614dc12b28c8c055e7c34d2b2851f5b5aee4ac93ea9c3de6f6e486e39f"
         },
         "installed_matches_sealed": true,
-        "bound_sha256": "24066b5f2ebd93a00b01668367d69356e5b0823d7c75787945e02c8b5956b0ca",
+        "bound_sha256": "1ca07a614dc12b28c8c055e7c34d2b2851f5b5aee4ac93ea9c3de6f6e486e39f",
         "installed_matches_bound": true
       },
       {
         "path": "src/session/agent-session.ts",
         "role": "bound",
-        "sealed_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
-        "installed_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
+        "sealed_sha256": "cc62a8860c30e15aacdfee0a98430ddd3085d434387b99ab7abd82f63c5f5c2a",
+        "installed_sha256": "cc62a8860c30e15aacdfee0a98430ddd3085d434387b99ab7abd82f63c5f5c2a",
         "rollback": {
           "action": "restore",
-          "sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e"
+          "sha256": "cc62a8860c30e15aacdfee0a98430ddd3085d434387b99ab7abd82f63c5f5c2a"
         },
         "installed_matches_sealed": true,
-        "bound_sha256": "5b364240041dae84f72d6aa9ae9558ff9d26d1865ac817af1919a288a5f23b2e",
+        "bound_sha256": "cc62a8860c30e15aacdfee0a98430ddd3085d434387b99ab7abd82f63c5f5c2a",
         "installed_matches_bound": true
       },
       {
         "path": "src/task/cleanup-barrier.ts",
         "role": "bound",
-        "sealed_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
-        "installed_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
+        "sealed_sha256": null,
+        "installed_sha256": null,
         "rollback": {
           "action": "restore",
-          "sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a"
+          "sha256": "None"
         },
-        "installed_matches_sealed": true,
-        "bound_sha256": "9b93e0d86e554fcef95025924abaf8ba97cd2ce8f71335a8596837d0ba59d56a",
-        "installed_matches_bound": true
+        "installed_matches_sealed": false,
+        "bound_sha256": "None",
+        "installed_matches_bound": false
       },
       {
         "path": "src/task/isolation-runner.ts",
         "role": "bound",
-        "sealed_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
-        "installed_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
+        "sealed_sha256": "4c6acf490d24bbe07bfe419c7660e858578501a4e1f8f966c7cd43604144a142",
+        "installed_sha256": "4c6acf490d24bbe07bfe419c7660e858578501a4e1f8f966c7cd43604144a142",
         "rollback": {
           "action": "restore",
-          "sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145"
+          "sha256": "4c6acf490d24bbe07bfe419c7660e858578501a4e1f8f966c7cd43604144a142"
         },
         "installed_matches_sealed": true,
-        "bound_sha256": "fb16666f5c8360c85f7b5da5649db7e7a5f9152d78b646f6c784092648924145",
+        "bound_sha256": "4c6acf490d24bbe07bfe419c7660e858578501a4e1f8f966c7cd43604144a142",
         "installed_matches_bound": true
       },
       {
         "path": "src/task/worktree.ts",
         "role": "bound",
-        "sealed_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
-        "installed_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
+        "sealed_sha256": "eb410c0fc3e3821d4e847b94553099d0ef26363da747ba36a8024dce639b6e2c",
+        "installed_sha256": "eb410c0fc3e3821d4e847b94553099d0ef26363da747ba36a8024dce639b6e2c",
         "rollback": {
           "action": "restore",
-          "sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30"
+          "sha256": "eb410c0fc3e3821d4e847b94553099d0ef26363da747ba36a8024dce639b6e2c"
         },
         "installed_matches_sealed": true,
-        "bound_sha256": "c45ec6f80b43e2c0f8e5b6e181e189c4f5e8ac93a34c9fb6d36be5c444d03b30",
+        "bound_sha256": "eb410c0fc3e3821d4e847b94553099d0ef26363da747ba36a8024dce639b6e2c",
         "installed_matches_bound": true
       },
       {
         "path": "src/task/attempt-settlement.ts",
         "role": "added",
-        "sealed_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
-        "installed_sha256": "78ba5dddbe7efda385e0219cab4c2b70bddda4a516d0d6fe65aea2bad8e0c917",
+        "sealed_sha256": null,
+        "installed_sha256": null,
         "rollback": {
           "action": "delete"
         },
-        "installed_matches_sealed": true
+        "installed_matches_sealed": false
       },
       {
         "path": "src/extensibility/extensions/runner.ts",
         "role": "changed",
-        "sealed_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
-        "installed_sha256": "0e7d61e4aad7995ddfe0e259b61d6ef3c2ea0c6ab9a9b54d3070e480088ad7eb",
+        "sealed_sha256": "4c0669c19f3a947fc629c13259e1ed070a977f97424d89ef7a57edf769fb73bb",
+        "installed_sha256": "4c0669c19f3a947fc629c13259e1ed070a977f97424d89ef7a57edf769fb73bb",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -114,8 +114,8 @@
       {
         "path": "src/extensibility/extensions/types.ts",
         "role": "changed",
-        "sealed_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
-        "installed_sha256": "15663640e92c6ef7c3281510205d288e139d566c3c2e591c01162352b06d35eb",
+        "sealed_sha256": "5a81d51811007312e77c1a0f25e3ebb1424a3a81a7181280eca9f19b977360f7",
+        "installed_sha256": "5a81d51811007312e77c1a0f25e3ebb1424a3a81a7181280eca9f19b977360f7",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -125,8 +125,8 @@
       {
         "path": "src/sdk.ts",
         "role": "changed",
-        "sealed_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
-        "installed_sha256": "07b10d0d27d1d430a70b9212ae64e6e0b0dfdd88153a3a5b21982329242b1d5c",
+        "sealed_sha256": "ea371761d1a997b5077f984dc9408e1559bc7786aaa10a256934cf93ff261876",
+        "installed_sha256": "ea371761d1a997b5077f984dc9408e1559bc7786aaa10a256934cf93ff261876",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -136,8 +136,8 @@
       {
         "path": "src/task/executor.ts",
         "role": "changed",
-        "sealed_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
-        "installed_sha256": "19938a4808cc3e389b77579de7df10345b1716be829208f19b3dab36c5db71f9",
+        "sealed_sha256": "c6012cb3fa82e4cc8b2d034deffa674a9472224eabd0d81c8c803ec1c490b0f0",
+        "installed_sha256": "c6012cb3fa82e4cc8b2d034deffa674a9472224eabd0d81c8c803ec1c490b0f0",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -147,8 +147,8 @@
       {
         "path": "src/task/index.ts",
         "role": "changed",
-        "sealed_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
-        "installed_sha256": "4b111e4d47eaa0318c817c28b73a978a8b2696505e01566147bf07081edd7149",
+        "sealed_sha256": "6252dc99e7dce761747fad0d29c3de2616bbdfc1fcedb77fb494f4e1a76d6061",
+        "installed_sha256": "6252dc99e7dce761747fad0d29c3de2616bbdfc1fcedb77fb494f4e1a76d6061",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -158,8 +158,8 @@
       {
         "path": "src/task/structured-subagent.ts",
         "role": "changed",
-        "sealed_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
-        "installed_sha256": "7ed981a0003d05c92f847c7797f2681718eefffa23a3db09924d734485b4d5b7",
+        "sealed_sha256": "7c8f33f9f75e00743e26ccf2f9bcca5c5d749dd7ac8bda257b9d84d7afcb18ec",
+        "installed_sha256": "7c8f33f9f75e00743e26ccf2f9bcca5c5d749dd7ac8bda257b9d84d7afcb18ec",
         "rollback": {
           "action": "restore",
           "sha256": null
@@ -225,17 +225,17 @@
       {
         "path": "index.ts",
         "sealed_source_path": "brainstem/prime-extension/src/index.ts",
-        "sealed_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
-        "installed_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+        "sealed_sha256": "42b57b41c531a3a9f113e7e28531b24d540609808b6e8ee3d5fefe9410b75a41",
+        "installed_sha256": "42b57b41c531a3a9f113e7e28531b24d540609808b6e8ee3d5fefe9410b75a41",
         "installed_matches_sealed": true,
-        "bound_sha256": "7318c161ba27c64ed7c194a4d6f2c5517cef9038da30ec54b15cd8bae00e850a",
+        "bound_sha256": "42b57b41c531a3a9f113e7e28531b24d540609808b6e8ee3d5fefe9410b75a41",
         "installed_matches_bound": true
       },
       {
         "path": "injection-slots.ts",
         "sealed_source_path": "brainstem/prime-extension/src/injection-slots.ts",
-        "sealed_sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35",
-        "installed_sha256": "d9e45ceb467a7a26142055035709bab13cb2c2f8e9c2fb9de9d982c9627ebe35",
+        "sealed_sha256": "41c101c9985189f6b0d08736aefb18bcd956e3fd85744f58a2a46cf118a7a79f",
+        "installed_sha256": "41c101c9985189f6b0d08736aefb18bcd956e3fd85744f58a2a46cf118a7a79f",
         "installed_matches_sealed": true
       },
       {
@@ -248,15 +248,15 @@
       {
         "path": "ledger-mirror.ts",
         "sealed_source_path": "brainstem/prime-extension/src/ledger-mirror.ts",
-        "sealed_sha256": "d09428e0b144f34e1a5edcf8a4b02fe25c64009325a79fb05bacd5a996bfb844",
-        "installed_sha256": "d09428e0b144f34e1a5edcf8a4b02fe25c64009325a79fb05bacd5a996bfb844",
+        "sealed_sha256": "f57651affdb9788889545e9a2fdadf46b21a170e2c11d0874fbe391a67293345",
+        "installed_sha256": "f57651affdb9788889545e9a2fdadf46b21a170e2c11d0874fbe391a67293345",
         "installed_matches_sealed": true
       },
       {
         "path": "native-settlement.ts",
         "sealed_source_path": "brainstem/prime-extension/src/native-settlement.ts",
-        "sealed_sha256": "333ecef26a9d37c3f9bdc793df453c589b8000239b4254310cf072c37226eb67",
-        "installed_sha256": "333ecef26a9d37c3f9bdc793df453c589b8000239b4254310cf072c37226eb67",
+        "sealed_sha256": "24f0575c281bc0ef96f741114a87c34e7b77b2842ee4ac3ee247048c95aa3f57",
+        "installed_sha256": "24f0575c281bc0ef96f741114a87c34e7b77b2842ee4ac3ee247048c95aa3f57",
         "installed_matches_sealed": true
       },
       {
@@ -339,8 +339,8 @@
       {
         "path": "worker-context-bridge.ts",
         "sealed_source_path": "brainstem/prime-extension/src/worker-context-bridge.ts",
-        "sealed_sha256": "ed1a2ef8faba378c99c2fe61c8ec0754547d6fd064da90d6af957aa94552375a",
-        "installed_sha256": "ed1a2ef8faba378c99c2fe61c8ec0754547d6fd064da90d6af957aa94552375a",
+        "sealed_sha256": "861288389d092ba744b71051743231e65c30a132605c79e7f9422e56882b774a",
+        "installed_sha256": "861288389d092ba744b71051743231e65c30a132605c79e7f9422e56882b774a",
         "installed_matches_sealed": true
       },
       {
