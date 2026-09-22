@@ -17,8 +17,8 @@ source authoritative or current — that is what the revision and the verdict co
 | `schema-authority.md` | same tree → `outputs/reports/m00.3-schema-authority-20260922/REPORT.md` | `b5f809f` | `67913db5…d5df` | #2b increment: reserved names unowned, import-time registration, authority-chosen transition, version namespaces, `schema_dump`, gate repairs |
 | `pytest-schema-neighborhood.txt` | same tree → `…/pytest-schema-neighborhood.txt` | `b5f809f` | `abcc45b1…0f03` | 398 passed on the applicable Python set (the transcript names each test) |
 | `admission-issuance.md` | same tree → `outputs/reports/m00.3-admission-issuance-20260922/REPORT.md` | `40c0c96` | `f4db94c5…1250` | #4/ADM: `worker_context` hands the caller the credential it mints; issuer closure isolated as a partial external blocker |
-| `worker-settlement.md` | same tree → `outputs/reports/m00.3-worker-settlement-20260922/REPORT.md` | `b5f809f` | `1c68de42…2f8e` | #5: ten sequential workers; ownership/receipt/cancellation matrix; finalization-vs-release distinction |
-| `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `08d6b508…dc10` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
+| `worker-settlement.md` | same tree → `outputs/reports/m00.3-worker-settlement-20260922/REPORT.md` | `b5f809f` | `PENDING-COMMIT…RECHECK` | #5: ten sequential workers; ownership/receipt/cancellation matrix; finalization-vs-release distinction |
+| `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `PENDING-COMMIT…RECHECK` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
 | `ten-worker-sequence.json` | same tree → `…/ten-worker-sequence.json` | `9a32a9b` | `8d690425…6aab` | raw observations behind the ten-worker sequence (10 × `COMPLETED`/`released`, 1 result each) |
 
 Also referenced and **not** copied here, with their retrieval route:
