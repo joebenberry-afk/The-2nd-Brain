@@ -250,17 +250,98 @@ def _stored_context(home: Path, task_id: str) -> dict:
     return stored
 
 
+def _lifecycle_payload(context: dict, *, sequence: int) -> dict:
+    return {
+        "operation": "worker_lifecycle",
+        "task_id": context["task_id"],
+        "packet_sha256": context["packet_sha256"],
+        "host_session_id": context["host_session_id"],
+        "attempt_id": context["attempt_id"],
+        "project_id": context["project_id"],
+        "worktree_id": context["worktree_id"],
+        "callback_token": context["callback_token"],
+        "host_generation": context["host_generation"],
+        "native_attempt_id": context["native_attempt_id"],
+        "native_job_id": context["native_job_id"],
+        "agent_id": context["agent_id"],
+        "sequence": sequence,
+        "outcome": "completed",
+        "executor_settled": True,
+        "cleanup_complete": True,
+    }
+
+
+def command_sequence(args: argparse.Namespace) -> int:
+    """Run `count` sequential mutating workers on one disposable worktree.
+
+    Each iteration admits, binds, completes and releases; the next iteration's admission is what
+    proves the release took effect, because a mutating admission is refused while another attempt
+    holds the worktree and the loop never waits for a lease to expire.
+    """
+    base = Path(args.base).resolve()
+    home = base / "home"
+    if home.exists() or (base / "registered").exists():
+        raise FixtureError("BASE_NOT_EMPTY")
+    base.mkdir(parents=True, exist_ok=True)
+    make_brain(home)
+    repo = make_repo(base)
+    registry.add_project(home, repo, project_id=PROJECT_ID)
+    iterations: list[dict] = []
+    for index in range(1, args.count + 1):
+        task_id = f"{args.task_id}-{index}"
+        context = admit(home, repo, task_id, "mutating", args.host_session)
+        binding = bind(home, task_id, context, args.host_session)
+        enriched = {
+            **context,
+            "task_id": task_id,
+            "host_session_id": args.host_session,
+            "agent_id": binding["agent_id"],
+            "host_generation": binding["host_generation"],
+            "native_attempt_id": binding["native_attempt_id"],
+            "native_job_id": binding["native_job_id"],
+        }
+        completion = complete(home, task_id, enriched, token=context["callback_token"])
+        lifecycle = omp_adapter.handle_request(home, _lifecycle_payload(enriched, sequence=0))
+        with sqlite3.connect(db.db_path(home)) as conn:
+            state, ownership, results = _task_state(conn, task_id)
+        iterations.append(
+            {
+                "index": index,
+                "task_id": task_id,
+                "completion_status": completion.get("status"),
+                "completion_failure": completion.get("failure_code"),
+                "lifecycle_status": lifecycle.get("status"),
+                "state": state,
+                "writer_ownership": ownership,
+                "attempt_results": results,
+            }
+        )
+    return _emit({"ok": True, "home": str(home), "repo": str(repo), "iterations": iterations})
+
+
+def _task_row(conn: sqlite3.Connection, task_id: str):
+    columns = (
+        "state, writer_ownership, attempt_id, callback_token_sha256, logical_outcome,"
+        " executor_settled, cleanup_complete, lease_expires_at, host_generation,"
+        " native_attempt_id, native_job_id, agent_id, lifecycle_sequence"
+    )
+    return conn.execute(f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (task_id,)).fetchone()
+
+
+def _task_state(conn: sqlite3.Connection, task_id: str) -> tuple[object, object, int]:
+    row = _task_row(conn, task_id)
+    if row is None:
+        raise FixtureError("TASK_NOT_FOUND")
+    results = conn.execute(
+        "SELECT COUNT(*) FROM worker_attempt_results WHERE task_id=?", (task_id,)
+    ).fetchone()[0]
+    return row[0], row[1], int(results)
+
+
 def command_probe(args: argparse.Namespace) -> int:
     home = Path(args.base).resolve() / "home"
     with sqlite3.connect(db.db_path(home)) as conn:
-        columns = (
-            "state, writer_ownership, attempt_id, callback_token_sha256, logical_outcome,"
-            " executor_settled, cleanup_complete, lease_expires_at, host_generation,"
-            " native_attempt_id, native_job_id, agent_id, lifecycle_sequence"
-        )
-        row = conn.execute(
-            f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (args.task_id,)
-        ).fetchone()
+        row = _task_row(conn, args.task_id)
         if row is None:
             return _emit({"ok": False, "error": "TASK_NOT_FOUND"}, 1)
         receipt = conn.execute(
@@ -308,6 +389,11 @@ def main(argv: list[str]) -> int:
     setup.add_argument("--intent", required=True, choices=["mutating", "read_only"])
     # The host session that admitted the attempt; a completion only binds to the same one.
     setup.add_argument("--host-session", default="omp-session")
+    sequence = subparsers.add_parser("sequence")
+    sequence.add_argument("--base", required=True)
+    sequence.add_argument("--task-id", required=True)
+    sequence.add_argument("--count", type=int, default=10)
+    sequence.add_argument("--host-session", default="omp-session")
     accept = subparsers.add_parser("accept")
     accept.add_argument("--base", required=True)
     accept.add_argument("--task-id", required=True)
@@ -320,6 +406,8 @@ def main(argv: list[str]) -> int:
             return command_setup(args)
         if args.command == "accept":
             return command_accept(args)
+        if args.command == "sequence":
+            return command_sequence(args)
         return command_probe(args)
     except FixtureError as error:
         return _emit({"ok": False, "error": error.code, "response": error.response}, 1)
