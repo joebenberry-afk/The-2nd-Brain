@@ -873,22 +873,20 @@ def _session_total_tokens(home: Path, session_id: str) -> int:
     return total
 
 
-def _episode_host_sessions(home: Path, session_id: str) -> set[str]:
-    """Host session ids in this episode: the session itself plus every ledger whose
-    ``root_parent_session_id`` is this session's internal id.
+def _session_ledger_rows(home: Path) -> list[sqlite3.Row]:
+    """Every session row declared by the ledgers under ``state/sessions``, read-only.
 
-    The reservation writer and the spend accounting must scope liability identically, or a
-    fresh session id would reset an existing root episode's outstanding reservations.
+    One pass, so a session's episode can be resolved from the session itself instead of from
+    whichever ledger happens to be scanned first.
     """
-    root_id = ledger.internal_session_id(session_id)
     sessions_dir = home / "state" / "sessions"
     try:
-        children = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
+        ledgers = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
     except OSError as exc:
         raise ValueError("session ledgers unavailable") from exc
 
-    def read_descendants(child: Path) -> list[sqlite3.Row]:
-        dbfile = child / "ledger.sqlite"
+    def read_rows(ledger_dir: Path) -> list[sqlite3.Row]:
+        dbfile = ledger_dir / "ledger.sqlite"
         if not dbfile.is_file():
             return []
         try:
@@ -896,104 +894,107 @@ def _episode_host_sessions(home: Path, session_id: str) -> set[str]:
             conn.row_factory = sqlite3.Row
             try:
                 return conn.execute(
-                    "SELECT internal_session_id, host_session_id FROM sessions "
-                    "WHERE root_parent_session_id = ?",
-                    (root_id,),
+                    "SELECT internal_session_id, host_session_id, root_parent_session_id "
+                    "FROM sessions"
                 ).fetchall()
             finally:
                 conn.close()
         except sqlite3.Error as exc:
             raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
 
-    hosts = {session_id}
-    internal_id_by_host: dict[str, str] = {}
+    rows: list[sqlite3.Row] = []
     with ThreadPoolExecutor(max_workers=8) as readers:
-        for rows in readers.map(read_descendants, children):
-            for row in rows:
-                internal_id = row["internal_session_id"]
-                host_id = row["host_session_id"]
-                known = internal_id_by_host.get(host_id)
-                if known is not None and known != internal_id:
-                    raise ValueError("conflicting descendant ledger identities")
-                internal_id_by_host[host_id] = internal_id
-                hosts.add(host_id)
-    return hosts
+        for chunk in readers.map(read_rows, ledgers):
+            rows.extend(chunk)
+    return rows
+
+
+def _episode_host_sessions(home: Path, session_id: str) -> set[str]:
+    """Host session ids in the root episode ``session_id`` belongs to.
+
+    The episode is the *root* session plus every session whose ledger declares it that root. The
+    root is resolved upward from the asking session, because a nested worker must charge the same
+    book as its root: otherwise a dispatch from below books capacity the root has already spent or
+    is holding. A declared root that cannot be resolved to a host session is unreadable
+    bookkeeping, not a licence to charge a smaller book.
+    """
+    internal_id_by_host: dict[str, str] = {}
+    host_by_internal: dict[str, str] = {}
+    root_parent_by_internal: dict[str, str] = {}
+    for row in _session_ledger_rows(home):
+        internal_id = row["internal_session_id"]
+        host_id = row["host_session_id"]
+        known_internal = internal_id_by_host.get(host_id)
+        known_host = host_by_internal.get(internal_id)
+        if (known_internal is not None and known_internal != internal_id) or (
+            known_host is not None and known_host != host_id
+        ):
+            raise ValueError("conflicting descendant ledger identities")
+        internal_id_by_host[host_id] = internal_id
+        host_by_internal[internal_id] = host_id
+        declared_root = row["root_parent_session_id"]
+        if declared_root is not None:
+            root_parent_by_internal[internal_id] = declared_root
+
+    root_host = session_id
+    declared_root = root_parent_by_internal.get(ledger.internal_session_id(session_id))
+    if declared_root is not None:
+        resolved = host_by_internal.get(declared_root)
+        if resolved is None:
+            raise ValueError(f"unresolved episode root for session {session_id!r}")
+        root_host = resolved
+    root_id = ledger.internal_session_id(root_host)
+    return {root_host} | {
+        host_id
+        for host_id, internal_id in internal_id_by_host.items()
+        if root_parent_by_internal.get(internal_id) == root_id
+    }
+
+
+def _session_or_zero(home: Path, session_id: str) -> int:
+    """Spend for one host session, where *no telemetry at all* is a resolved zero.
+
+    An identity with no recorded usage has recorded nothing -- a fact about that identity. A
+    telemetry file that exists but cannot establish usage is not the same fact and still raises.
+    """
+    try:
+        return _session_total_tokens(home, session_id)
+    except FileNotFoundError:
+        return 0
 
 
 def _descendant_total_tokens(home: Path, session_id: str) -> int:
-    """Sum each unique ledger session rooted at ``session_id`` exactly once."""
+    """Sum the other host sessions of the episode, each resolved once.
+
+    One descendant with no telemetry at all contributes its own zero; it must not zero the whole
+    episode, which would let an unrelated missing file hide real spend.
+    """
     return sum(
-        _session_total_tokens(home, host_id)
+        _session_or_zero(home, host_id)
         for host_id in sorted(_episode_host_sessions(home, session_id) - {session_id})
     )
 
 
-def _legacy_descendant_total_tokens(home: Path, session_id: str) -> int:
-    root_id = ledger.internal_session_id(session_id)
-    sessions_dir = home / "state" / "sessions"
-    try:
-        children = sorted(sessions_dir.iterdir()) if sessions_dir.is_dir() else []
-    except OSError as exc:
-        raise ValueError("session ledgers unavailable") from exc
-
-    def read_descendants(child: Path) -> list[sqlite3.Row]:
-        dbfile = child / "ledger.sqlite"
-        if not dbfile.is_file():
-            return []
-        try:
-            conn = sqlite3.connect(
-                dbfile.absolute().as_uri() + "?mode=ro",
-                timeout=1.0,
-                uri=True,
-            )
-            conn.row_factory = sqlite3.Row
-            try:
-                return conn.execute(
-                    "SELECT internal_session_id, host_session_id "
-                    "FROM sessions WHERE root_parent_session_id = ?",
-                    (root_id,),
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            raise ValueError(f"unreadable session ledger {dbfile.name}") from exc
-
-    descendants_by_internal_id: dict[str, str] = {}
-    internal_id_by_host: dict[str, str] = {}
-    # Independent read-only ledgers are I/O-bound; never share connections or
-    # accumulate identity state in workers. map preserves validation order.
-    with ThreadPoolExecutor(max_workers=8) as readers:
-        for rows in readers.map(read_descendants, children):
-            for row in rows:
-                internal_id = row["internal_session_id"]
-                host_id = row["host_session_id"]
-                if not internal_id or not host_id:
-                    raise ValueError("descendant ledger identity is incomplete")
-                known_host = descendants_by_internal_id.get(internal_id)
-                known_internal = internal_id_by_host.get(host_id)
-                if (known_host is not None and known_host != host_id) or (
-                    known_internal is not None and known_internal != internal_id
-                ):
-                    raise ValueError("conflicting descendant ledger identities")
-                descendants_by_internal_id[internal_id] = host_id
-                internal_id_by_host[host_id] = internal_id
-
-    return sum(
-        _session_total_tokens(home, host_id) for host_id in descendants_by_internal_id.values()
-    )
-
-
 def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]:
-    """T3.1 hard/soft budget caps.
+    """T3.1 hard/soft budget caps, read from the same episode book that admission reserves from.
 
-    Returns ``{"state": "OK"|"SOFT"|"HARD", "used": int, "cap": int}``
-    when accounting is complete. Accounting failures preserve fail-open
-    policy but report ``used=None`` and ``error=ACCOUNTING_UNAVAILABLE``.
+    ``used`` is episode-scoped spend -- this host session plus every session whose ledger
+    declares it root parent -- and ``outstanding`` is that same episode's open reservation
+    liability: cancelled rows are excluded, unresolved ones are not. ``available`` is what the
+    cap has left once both are counted, which is the quantity reserve-before-dispatch consumes,
+    so a reader and a refusal can never tell different stories.
+
+    ``state`` stays spend-based on purpose: a reservation is a booking the worker may never
+    spend, and making the whole session HARD on a booking in flight would block the driver's own
+    tools while a worker runs. Unknown usage is reported separately (``used=None``,
+    ``available=None``, ``error=ACCOUNTING_UNAVAILABLE``) instead of being read as zero, and a
+    liability that cannot be read is reported rather than assumed absent.
     """
     home_path = Path(home)
     budgets = _budget_config(home_path)
     cap = int(budgets["worker_tokens"] if role == "worker" else budgets["session_tokens"])
     soft_ratio = float(budgets["soft_ratio"])
+    outstanding = _episode_outstanding_tokens(home_path, session_id)
     try:
         used = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
             home_path, session_id
@@ -1004,6 +1005,8 @@ def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]
             "state": "OK",
             "used": None,
             "cap": cap,
+            "outstanding": outstanding,
+            "available": None,
             "error": "ACCOUNTING_UNAVAILABLE",
         }
     if used >= cap:
@@ -1012,7 +1015,47 @@ def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]
         state = "SOFT"
     else:
         state = "OK"
-    return {"state": state, "used": used, "cap": cap}
+    if outstanding is None:
+        return {
+            "state": state,
+            "used": used,
+            "cap": cap,
+            "outstanding": None,
+            "available": None,
+            "error": "RESERVATION_LEDGER_UNAVAILABLE",
+        }
+    # Raw arithmetic on purpose: a negative remainder means the episode is already overbooked
+    # (legacy rows, or spend recorded after a booking), which a clamp would hide.
+    return {
+        "state": state,
+        "used": used,
+        "cap": cap,
+        "outstanding": outstanding,
+        "available": cap - used - outstanding,
+    }
+
+
+def _episode_outstanding_tokens(home: Path, session_id: str) -> int | None:
+    """The episode's open reservation liability, or ``None`` when it cannot be read.
+
+    Read-only: a status reader must not create or migrate the ledger as a side effect of being
+    asked a question. A ledger that does not exist yet holds no reservations.
+    """
+    dbfile = _reservations_dbfile(home)
+    if not dbfile.is_file():
+        return 0
+    try:
+        conn = db.connect(dbfile, readonly=True)
+    except sqlite3.Error:
+        logger.debug("reservation ledger unreadable", exc_info=True)
+        return None
+    try:
+        return _outstanding_tokens(conn, _episode_host_sessions(home, session_id))
+    except (sqlite3.Error, ValueError):
+        logger.debug("reservation liability unreadable", exc_info=True)
+        return None
+    finally:
+        conn.close()
 
 
 def _reservations_dbfile(home: Path) -> Path:
@@ -1048,12 +1091,19 @@ def _outstanding_tokens(conn: sqlite3.Connection, episode_hosts: set[str]) -> in
 def list_budget_reservations(
     home: Path | str, session_id: str | None = None
 ) -> list[dict[str, Any]]:
-    """Outstanding reservations, oldest first: open liability, so cancelled rows are excluded.
+    """Open reservation liability, oldest first: cancelled rows are excluded, unresolved ones
+    are not.
 
-    They survive process boundaries on purpose: a restart reads them to reconcile
-    admissions that were reserved but never completed.
+    With a session id this is the *root episode's* liability (every host session whose ledger
+    belongs to that episode), which is the same set admission reserves against and the one a
+    restart has to reconcile. Without one it is every episode in this home -- an explicit
+    whole-home view, not an answer about one episode.
+
+    They survive process boundaries on purpose: a restart reads them to reconcile admissions
+    that were reserved but never completed.
     """
-    dbfile = _reservations_dbfile(Path(home))
+    home_path = Path(home)
+    dbfile = _reservations_dbfile(home_path)
     db.migrate(dbfile)
     conn = db.connect(dbfile)
     try:
@@ -1063,10 +1113,13 @@ def list_budget_reservations(
                 "AND cancelled_at IS NULL ORDER BY created_at"
             ).fetchall()
         else:
+            hosts = sorted(_episode_host_sessions(home_path, session_id))
+            placeholders = ",".join("?" for _ in hosts)
             rows = conn.execute(
                 "SELECT * FROM budget_reservations WHERE consumed_at IS NULL "
-                "AND cancelled_at IS NULL AND session_id=? ORDER BY created_at",
-                (session_id,),
+                f"AND cancelled_at IS NULL AND session_id IN ({placeholders}) "
+                "ORDER BY created_at",
+                tuple(hosts),
             ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -1113,22 +1166,23 @@ def reserve_budget(
             "requested": requested,
         }
     try:
-        used: int | None = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
-            home_path, session_id
+        episode_hosts = _episode_host_sessions(home_path, session_id)
+        # Each host session resolves on its own: an identity that has recorded no usage is a
+        # *resolved* zero, while telemetry that exists but cannot establish usage is not. Neither
+        # is allowed to hide the rest of the episode's spend, and an episode whose root cannot be
+        # resolved is unresolvable bookkeeping rather than a smaller book.
+        used: int | None = _session_or_zero(home_path, session_id) + sum(
+            _session_or_zero(home_path, host_id)
+            for host_id in sorted(episode_hosts - {session_id})
         )
-    except FileNotFoundError:
-        # No telemetry recorded for this session yet: nothing has been spent, which is a
-        # *resolved* zero rather than an unresolvable accounting state. Treating it as
-        # unavailable would refuse the first worker of every fresh session.
-        used = 0
     except Exception:
-        # Genuinely unresolvable (unreadable or malformed usage): fail closed. A session
-        # that cannot be accounted for must not consume budget it cannot be charged for.
+        # Genuinely unresolvable (unreadable, malformed, or unresolved-root): fail closed. An
+        # episode that cannot be accounted for must not consume budget it cannot be charged for.
         logger.debug("reserve_budget accounting unavailable (fail-closed)", exc_info=True)
         used = None
+        episode_hosts = {session_id}
     dbfile = _reservations_dbfile(home_path)
     db.migrate(dbfile)
-    episode_hosts = _episode_host_sessions(home_path, session_id)
     episode_id = ledger.internal_session_id(session_id)
     conn = db.connect(dbfile)
     try:
@@ -1351,7 +1405,8 @@ def reconcile_budget_reservations(
 
     The worker attempt row is the evidence: no attempt means the reservation was proven unused,
     a native binding or a non-SUBMITTED state means dispatch happened, and SUBMITTED without a
-    binding means the outcome is unknown, so the liability stays.
+    binding means the outcome is unknown, so the liability stays. A session id reconciles that
+    session's whole root episode, because that is the book the reservations were written to.
     """
     home_path = Path(home)
     dbfile = _reservations_dbfile(home_path)
@@ -1364,8 +1419,10 @@ def reconcile_budget_reservations(
         )
         params: list[Any] = []
         if session_id is not None:
-            sql += " AND session_id=?"
-            params.append(session_id)
+            hosts = sorted(_episode_host_sessions(home_path, session_id))
+            placeholders = ",".join("?" for _ in hosts)
+            sql += f" AND session_id IN ({placeholders})"
+            params.extend(hosts)
         open_rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
     finally:
         conn.close()
