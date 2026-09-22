@@ -1928,3 +1928,83 @@ def test_hermes_plugin_correction_cache_preserves_result_identity(
     review_request = next(call for call in calls if call["event"] == "worker_result_review")
     assert review_request["result"]["packet_sha256"] == packet_sha
     assert review_request["result"]["result_sha256"] == result_sha
+
+
+# --- Completion authority (M00.3 #3): Hermes fails closed -------------------------------------
+#
+# Hermes carries no authenticated completion-authority mechanism: it never admits an attempt, so
+# no admission token exists to check. Terminal lifecycle evidence sets a task's terminal state
+# and participates in writer release, so the transport refuses it with an explicit code instead
+# of relying on a transport-specific exception inside Brain Core. Ordinary non-terminal
+# reporting is unaffected. Later Hermes adapter work can satisfy the same Brain-owned authority
+# contract through its own transport implementation.
+
+
+def _authority_packet(binding: Any, task_id: str) -> contracts.WorkerTaskPacket:
+    return contracts.WorkerTaskPacket(
+        task_id=task_id,
+        parent_session_id=binding.host_session_id,
+        driver_identity=contracts.AgentIdentity(
+            agent_id=binding.agent_id,
+            internal_session_id=binding.brain_session_id,
+            host_agent_id=binding.bot_name,
+            parent_agent_id=None,
+            role_profile=binding.bot_role,
+            model=binding.model,
+            provider=binding.provider,
+            created_at="2026-08-18T10:00:00Z",
+        ),
+        requested_role="dev",
+        objective="attempt an unauthenticated terminal lifecycle event",
+        scope="repository",
+        constraints=[],
+        evidence_requirements=[],
+        completion_condition="return evidence",
+        context_refs=[],
+        project_id=binding.project_id,
+        repo_root=binding.repo_root,
+        access_intent="read_only",
+    ).validate()
+
+
+def _authority_binding(brain_home: Path, session: str) -> Any:
+    start = _start_payload(session=session, bot="Brain-Integrator") | {"bot_role": "integrator"}
+    return hermes_adapter.resolve_binding(brain_home, start)
+
+
+def test_hermes_terminal_result_refuses_without_completion_authority(brain_home: Path) -> None:
+    """An unsatisfiable terminal result (`failed`, via the unavailable worker path) must be
+    refused with the transport capability gap named, not silently accepted."""
+    binding = _authority_binding(brain_home, "authority-result")
+    packet = _authority_packet(binding, "authority-result-task")
+    response = hermes_adapter.request_worker_task(
+        brain_home, binding, json.loads(packet.canonical_json())
+    )
+    assert response["status"] == "failed"
+    assert response["failure_code"] == "COMPLETION_AUTHORITY_UNAVAILABLE"
+    assert response["transport"] == binding.session.host
+    persisted = worker_protocol.lookup_task(brain_home, packet.task_id, packet.canonical_hash())
+    assert persisted is not None
+    assert persisted["state"] not in contracts.WorkerLifecycle.TERMINAL_STATES
+
+
+def test_hermes_bridge_refuses_terminal_event_and_keeps_non_terminal(brain_home: Path) -> None:
+    binding = _authority_binding(brain_home, "authority-bridge")
+    packet = _authority_packet(binding, "authority-bridge-task")
+    hermes_adapter.request_worker_task(brain_home, binding, json.loads(packet.canonical_json()))
+    base = {
+        "task_id": packet.task_id,
+        "packet_sha256": packet.canonical_hash(),
+    }
+    allowed = hermes_adapter.handle_worker_event(
+        brain_home, binding, {**base, "event": "worker_started"}
+    )
+    assert allowed["status"] == "ok"
+    refused = hermes_adapter.handle_worker_event(
+        brain_home, binding, {**base, "event": "completed"}
+    )
+    assert refused["status"] == "failed"
+    assert refused["failure_code"] == "COMPLETION_AUTHORITY_UNAVAILABLE"
+    persisted = worker_protocol.lookup_task(brain_home, packet.task_id, packet.canonical_hash())
+    assert persisted is not None
+    assert persisted["state"] not in contracts.WorkerLifecycle.TERMINAL_STATES
