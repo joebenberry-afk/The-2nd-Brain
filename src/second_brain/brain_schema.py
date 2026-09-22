@@ -30,6 +30,7 @@ deleted.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
@@ -269,11 +270,15 @@ def ensure(
     # Only the calling component's tables are created here. A component that created another
     # component's tables would enlarge its blast radius for no gain: whichever opens second adds
     # what is missing, and both orders converge on the same schema.
-    own_missing = (
-        component in identity.missing_component_tables or identity.state in ("empty", "partial")
-    )
-    if own_missing:
-        for statement in _statements(source[component].ddl):
+    # A statement runs only when its target is absent from this database. That is what makes the
+    # DDL idempotent *and* compatible with a predecessor: a table that already exists is never
+    # re-created and never re-altered, so a shape that already carries the additive columns is
+    # left to the component's own guarded migrations, while a shared table that nobody owns yet
+    # (`ledger_meta`) is still created by whichever component registers it first.
+    present = {name for name in identity.tables}
+    for statement in _statements(source[component].ddl):
+        target = _statement_table(statement)
+        if target is None or target not in present:
             conn.execute(statement)
 
     _ensure_metadata(conn, source, header or {})
@@ -312,6 +317,25 @@ def _ensure_metadata(
 
 
 _CANONICAL_COLUMNS: dict[str, list[str]] = {}
+
+
+_CREATE_TABLE_RE = re.compile(
+    r"(?is)^\s*create\s+table(?:\s+if\s+not\s+exists)?\s+[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)"
+)
+_CREATE_INDEX_RE = re.compile(
+    r"(?is)^\s*create\s+(?:unique\s+)?index(?:\s+if\s+not\s+exists)?\s+\S+\s+on\s+"
+    r"[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)"
+)
+_ALTER_TABLE_RE = re.compile(r"(?is)^\s*alter\s+table\s+[\"`\[]?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _statement_table(statement: str) -> str | None:
+    """Which table a DDL statement targets, or None when it targets no single table."""
+    for pattern in (_CREATE_TABLE_RE, _CREATE_INDEX_RE, _ALTER_TABLE_RE):
+        match = pattern.match(statement)
+        if match is not None:
+            return match.group(1)
+    return None
 
 
 def canonical_columns(source: dict[str, Component] | None = None) -> dict[str, list[str]]:

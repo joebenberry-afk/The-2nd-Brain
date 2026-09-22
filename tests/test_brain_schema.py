@@ -128,7 +128,7 @@ def _identity(session_id: str):
         created_at=datetime.now(UTC).isoformat(),
         status="active",
         pinned=False,
-        schema_version=contracts.LEDGER_SCHEMA_VERSION,
+        schema_version=ledger.LEDGER_SCHEMA_VERSION,
     )
 
 
@@ -362,3 +362,45 @@ def _event(session_id: str, event_id: str):
         ignorable=False,
         payload={"note": "bootstrap qualification"},
     )
+
+
+def test_case_4c_the_immediate_parent_vmem_shape_is_adopted(brain_home) -> None:
+    """The genuine pre-patch predecessor: base DDL *plus* the four additive columns, no header.
+
+    The parent added those columns without ever stamping a version, so a database created by the
+    parent is header-less and 19 columns wide. Refusing it would be a regression against the
+    running copy this repair replaces, so it is pinned here.
+    """
+    path = _session_file(brain_home, "parent-shape")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        combined = vmem._VMEM_SCHEMA + "\n".join(
+            f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl};"
+            for column, ddl in vmem._VMEM_ADDITIVE_COLUMNS
+        )
+        for statement in brain_schema._statements(combined):
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO session_vmem (obj_id, internal_session_id, kind, title, summary,"
+            " content_sha256, token_estimate, residency_state, created_at, last_accessed_at,"
+            " metadata_json) VALUES ('o1','i1','research_result','t','s','h',1,'resident',"
+            " '2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00','{}')"
+        )
+        conn.commit()
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(session_vmem)")]
+    finally:
+        conn.close()
+    assert len(columns) == 19, columns
+
+    store = _open_vmem(brain_home, "parent-shape")  # adopted, not refused
+
+    conn = sqlite3.connect(path)
+    try:
+        identity = brain_schema.classify(conn)
+        rows = conn.execute("SELECT obj_id FROM session_vmem").fetchall()
+    finally:
+        conn.close()
+    assert identity.state == "canonical", identity
+    assert rows == [("o1",)]
+    assert store is not None
