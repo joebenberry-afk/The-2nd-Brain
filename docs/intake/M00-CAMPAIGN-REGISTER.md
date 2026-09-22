@@ -802,6 +802,27 @@ under the same identity rule, and the #2b test-strength items (strict-prefix fix
 separate-process first open). Neither was started today; both are small and independent of the blocked
 routes.
 
+## Bounded STOP decision invoked (2026-09-22)
+
+`second_brain stop decide` (P3.6) was invoked with the current session/task identity and returned:
+
+```json
+{"decision": "stop", "continuation_forbidden": true, "completion_condition_state": "blocked",
+ "reason_code": "M00_PARTIAL_EXTERNAL_BLOCKER", "session_id": "2026-09-22T10-44-39-421Z_01a0c8b7-bb7d-7622-aee8-4ceb20ed7e94",
+ "task_id": "m00-recursive-completion", "stop_id": "m00-stop-20260922", "sequence": 1,
+ "final_substantive_event": "821a8f1 wiring tests + leak fix; 781/781 extension tests green"}
+```
+
+`--verification-state blocked`, `--completion-condition-state blocked`, `--triggering-condition` naming the
+measured unavailability of independent review.
+
+**Stated honestly:** it was invoked against a **disposable Brain home**, not the canonical one, because this
+campaign's boundaries forbid canonical-state mutation (no production activation, no canonical writes). The
+machine therefore evaluated and recorded the decision in a throwaway store; the durable campaign record is
+this register and the commit history, and the decision's content is reproduced verbatim above. A driver
+permitted to write canonical state can re-invoke the same command with the same arguments against the real
+home.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
