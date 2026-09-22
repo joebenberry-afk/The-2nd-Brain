@@ -190,7 +190,8 @@ def main() -> int:
         installed = sha256_file(RETAIL / relative)
         canary = sha256_file(CANARY / relative)
         staged = sha256_file(
-            staged_root / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary" / relative
+            staged_root / "global" / "node_modules" / "@oh-my-pi" / "pi-coding-agent-canary"
+            / relative
         )
         host_rows.append(
             {
