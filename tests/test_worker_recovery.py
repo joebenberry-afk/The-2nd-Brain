@@ -251,6 +251,86 @@ def test_T4_recovery_does_not_advance_lifecycle_sequence(tmp_path: Path) -> None
 # --- settlement reconciliation (unchanged contract) --------------------------
 
 
+def _results_table(home: Path) -> None:
+    """The store always carries this table (migrations); the settled rule reads it."""
+    with sqlite3.connect(worker_recovery._db(home)) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS worker_attempt_results("
+            "attempt_id TEXT, task_id TEXT, packet_sha256 TEXT, result_sha256 TEXT,"
+            "payload_json TEXT, recorded_at TEXT)"
+        )
+
+
+def _settled_result(home: Path, attempt_id: str = "attempt-1") -> None:
+    """Add the result row the settled rule binds to: evidence the execution finished."""
+    _results_table(home)
+    with sqlite3.connect(worker_recovery._db(home)) as conn:
+        conn.execute(
+            "INSERT INTO worker_attempt_results(attempt_id,result_sha256) VALUES(?,?)",
+            (attempt_id, "b" * 64),
+        )
+
+
+def _ownership(home: Path, attempt_id: str = "attempt-1") -> str | None:
+    with sqlite3.connect(worker_recovery._db(home)) as conn:
+        row = conn.execute(
+            "SELECT writer_ownership FROM worker_tasks WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def test_settled_release_requires_a_recorded_result_row(tmp_path: Path) -> None:
+    """A terminal-looking row without a result is not evidence that execution ended."""
+    home = _make_home(tmp_path)
+    _attempt(home, ownership="quarantined", state="COMPLETED", outcome="completed")
+    _results_table(home)  # the table is present; the row that proves the result is not
+
+    with pytest.raises(worker_recovery.RecoveryError):
+        worker_recovery.release_settled_quarantine(
+            home, attempt_id="attempt-1", actor="operator", dry_run=False
+        )
+
+    assert _ownership(home) == "quarantined"
+
+
+def test_settled_release_refuses_an_attempt_without_a_recorded_terminal(tmp_path: Path) -> None:
+    """The class whose launch window may still be open must not use the settled rule."""
+    home = _make_home(tmp_path)
+    _attempt(home, ownership="quarantined", state="UNRESOLVED", outcome=None)
+    _settled_result(home)
+
+    with pytest.raises(worker_recovery.RecoveryError):
+        worker_recovery.release_settled_quarantine(
+            home, attempt_id="attempt-1", actor="operator", dry_run=False
+        )
+
+    assert _ownership(home) == "quarantined"
+
+
+def test_settled_release_binds_to_the_recorded_terminal(tmp_path: Path) -> None:
+    """Terminal state, outcome, result row and an expired lease release; dry run changes nothing."""
+    home = _make_home(tmp_path)
+    _attempt(home, ownership="quarantined", state="COMPLETED", outcome="completed")
+    _settled_result(home)
+
+    dry = worker_recovery.release_settled_quarantine(home, attempt_id="attempt-1", actor="operator")
+    assert dry["action"] == "released-settled"
+    assert dry["dry_run"] is True
+    assert dry["changed"] is False
+    assert _ownership(home) == "quarantined"
+
+    applied = worker_recovery.release_settled_quarantine(
+        home, attempt_id="attempt-1", actor="operator", dry_run=False
+    )
+    assert applied["changed"] is True
+    assert _ownership(home) == "released"
+
+    again = worker_recovery.release_settled_quarantine(
+        home, attempt_id="attempt-1", actor="operator", dry_run=False
+    )
+    assert again["action"] == "already-released"
+
+
 def test_settlement_reconciliation_still_requires_evidence(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
     _attempt(home, executor_settled=1, cleanup_complete=0, outcome="completed")

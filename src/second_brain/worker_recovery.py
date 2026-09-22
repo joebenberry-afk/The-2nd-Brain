@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .worker_protocol import _worker_db, reap  # same package: share the durable store
+from .worker_protocol import _as_dt, _worker_db, reap  # shared store
 
 RECOVERY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS worker_recovery_events(
@@ -735,3 +735,285 @@ def reap_expired(
 ) -> list[dict[str, Any]]:
     """Existing protocol reaper: expired or unacknowledged attempts move to quarantine."""
     return reap(home if home is not None else Path.cwd(), now=now)
+
+def release_unbound_quarantine(
+    home: Path | str | None = None,
+    *,
+    attempt_id: str,
+    actor: str,
+    quiescence_event_id: str,
+    dry_run: bool = True,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Release the writer authority of a reservation that never acquired an execution identity.
+
+    Admission takes the worktree writer at admission time, so a reservation abandoned
+    before binding still holds it. When its lease expires the reaper quarantines that
+    writer, and because a never-bound row has no host generation, ``record_census`` -
+    which requires a known generation - can never release it. The worktree then stays
+    blocked for good, and no mutating worker can start in it.
+
+    This path closes that class and only that class. Any recorded execution identity -
+    a host generation, a native attempt id, a native job id, or a bound agent - makes
+    the row ineligible, so it cannot overwrite a writer that may still be alive; those
+    rows keep the census-and-attestation path and its generation requirement.
+    """
+    import hashlib
+
+    recorded = _now(now)
+    with _connect(home, write=not dry_run) as conn:
+        rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
+        if not rows:
+            raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
+        row = rows[0]
+        if row.get("writer_ownership") == RELEASED:
+            return {"attempt_id": attempt_id, "action": "already-released", "changed": False}
+        if row.get("writer_ownership") != "quarantined":
+            raise RecoveryError(
+                "NOT_QUARANTINED",
+                "only a quarantined writer can be released by this path",
+                detail={"writer_ownership": row.get("writer_ownership")},
+            )
+        if row.get("access_intent") != "mutating":
+            raise RecoveryError(
+                "NOT_A_WRITER",
+                "only a mutating reservation holds writer authority",
+                detail={"access_intent": row.get("access_intent")},
+            )
+        identity = {
+            field: row.get(field)
+            for field in ("host_generation", "native_attempt_id", "native_job_id", "agent_id")
+            if row.get(field) not in (None, "")
+        }
+        if identity:
+            raise RecoveryError(
+                "EXECUTION_IDENTITY_PRESENT",
+                "this reservation acquired an execution identity, so its release must go "
+                "through the census and attestation path, not this one",
+                detail=identity,
+            )
+        # An absent identity is NOT proof that no worker is alive. On a stock host the identity
+        # columns stay unset until the terminal frame, so a worker that is still running looks
+        # identical to a reservation that never bound. What distinguishes them is recorded
+        # observation plus a closed launch window, so both are required.
+        attestation = conn.execute(
+            "SELECT attempt_id,kind,actor,recorded_at,resource FROM worker_recovery_events WHERE event_id=?",
+            (quiescence_event_id,),
+        ).fetchone()
+        if attestation is None:
+            raise RecoveryError(
+                "ATTESTATION_NOT_FOUND",
+                "no recovery event matches that quiescence attestation id",
+            )
+        if attestation["attempt_id"] != attempt_id:
+            raise RecoveryError(
+                "ATTESTATION_MISMATCH",
+                "that attestation belongs to a different attempt",
+                detail={"attestation_attempt_id": attestation["attempt_id"]},
+            )
+        if attestation["kind"] != "quiescence":
+            raise RecoveryError(
+                "ATTESTATION_NOT_QUIESCENCE",
+                "only a recorded quiescence attestation can support this release",
+                detail={"kind": attestation["kind"]},
+            )
+        expected_resource = f"worktree:{row.get('worktree_root')}"
+        if attestation["resource"] != expected_resource:
+            raise RecoveryError(
+                "ATTESTATION_RESOURCE_MISMATCH",
+                "the attestation must be about the resource being released; an observation about "
+                "some other resource - a process id, or the worktree before launch - says nothing "
+                "about whether a writer is live now",
+                detail={
+                    "attestation_resource": attestation["resource"],
+                    "required_resource": expected_resource,
+                },
+            )
+        expires = row.get("lease_expires_at")
+        if expires is None or _as_dt(expires) > _as_dt(recorded):
+            raise RecoveryError(
+                "LEASE_STILL_VALID",
+                "the reservation's lease has not expired, so a worker may still be running",
+                detail={"lease_expires_at": expires},
+            )
+        payload = {
+            "actor": actor,
+            "attempt_id": attempt_id,
+            "host_generation": None,
+            "quiescence_event_id": quiescence_event_id,
+            "kind": "release",
+            "method": "operator release of a never-bound quarantined reservation",
+            "observation": (
+                "no execution identity was ever recorded for this reservation, so no writer "
+                "was ever registered against this worktree"
+            ),
+            "resource": f"worktree:{row.get('worktree_root')}",
+        }
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        event_id = "r-" + digest[:16]
+        raise RecoveryError(
+            "RELEASE_AUTHORITY_UNAVAILABLE",
+            "no release is justified on this line. An absent execution identity does not prove a "
+            "reservation never bound (a running worker's identity columns stay unset until its "
+            "terminal frame), bind_worker_attempt does not fence execution after lease expiry, and "
+            "this line has no host-authenticated observation channel - record_quiescence accepts "
+            "any non-empty attestation from any caller. Clearance needs the M00.3 non-agent "
+            "authority channel; until it exists, an orphaned reservation stays quarantined and the "
+            "worktree it holds stays blocked.",
+            detail={"attempt_id": attempt_id, "resource": expected_resource, "eligible": True},
+        )
+        if not dry_run:
+            conn.execute(
+                "UPDATE worker_tasks SET writer_ownership=?, updated_at=? "
+                "WHERE attempt_id=? AND writer_ownership='quarantined'",
+                (RELEASED, recorded, attempt_id),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO worker_recovery_events("
+                "event_id,attempt_id,host_generation,kind,resource,method,actor,"
+                "payload_sha256,payload_json,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    event_id,
+                    attempt_id,
+                    None,
+                    "release",
+                    payload["resource"],
+                    payload["method"],
+                    actor,
+                    digest,
+                    payload_json,
+                    recorded,
+                ),
+            )
+            conn.commit()
+    return {
+        "attempt_id": attempt_id,
+        "action": "released-unbound",
+        "changed": not dry_run,
+        "dry_run": dry_run,
+        "event_id": event_id,
+        "quiescence_event_id": quiescence_event_id,
+        "worktree_root": row.get("worktree_root"),
+        "worktree_id": row.get("worktree_id"),
+    }
+
+def release_settled_quarantine(
+    home: Path | str | None = None,
+    *,
+    attempt_id: str,
+    actor: str,
+    dry_run: bool = True,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Release the writer authority of an attempt whose execution is recorded as finished.
+
+    A different class from ``release_unbound_quarantine``, resting on different evidence, and the
+    distinction is the whole point. There, no identity proved the execution had not started, and an
+    idle attestation cannot close that window because a queued native dispatch is not fenced. Here
+    the attempt carries a terminal state, a logical outcome, and a result row: the execution that
+    held this writer has ended, so the release cannot overlap it.
+
+    The predicate is therefore the recorded terminal, not the absence of one:
+
+    - state is terminal, ``logical_outcome`` is recorded, and a ``worker_attempt_results`` row exists
+      for the attempt - the execution finished and its result is on disk;
+    - the lease has expired;
+    - the writer is still ``quarantined`` (an attempt that already released is a no-op).
+
+    Anything without a recorded terminal stays refused: for that class the launch window is still
+    open and this path must not be used.
+    """
+    import hashlib
+
+    recorded = _now(now)
+    with _connect(home, write=not dry_run) as conn:
+        rows = _rows(conn, project_id=None, task_id=None, attempt_id=attempt_id)
+        if not rows:
+            raise RecoveryError("ATTEMPT_NOT_FOUND", "no worker attempt matches that attempt id")
+        row = rows[0]
+        if row.get("writer_ownership") == RELEASED:
+            return {"attempt_id": attempt_id, "action": "already-released", "changed": False}
+        if row.get("writer_ownership") != "quarantined":
+            raise RecoveryError(
+                "NOT_QUARANTINED",
+                "only a quarantined writer can be released by this path",
+                detail={"writer_ownership": row.get("writer_ownership")},
+            )
+        if row.get("access_intent") != "mutating":
+            raise RecoveryError(
+                "NOT_A_WRITER",
+                "only a mutating reservation holds writer authority",
+                detail={"access_intent": row.get("access_intent")},
+            )
+        if row.get("state") not in ("COMPLETED", "FAILED", "CANCELED", "REJECTED"):
+            raise RecoveryError(
+                "NOT_TERMINAL",
+                "this path requires a recorded terminal state; an attempt without one may still "
+                "have an open launch window",
+                detail={"state": row.get("state")},
+            )
+        if row.get("logical_outcome") in (None, ""):
+            raise RecoveryError(
+                "NO_RECORDED_OUTCOME",
+                "the attempt has no recorded logical outcome, so its execution is not established "
+                "as finished",
+            )
+        result = conn.execute(
+            "SELECT result_sha256 FROM worker_attempt_results WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if result is None:
+            raise RecoveryError(
+                "NO_RECORDED_RESULT",
+                "no result row exists for this attempt, so its execution is not established as "
+                "finished",
+            )
+        expires = row.get("lease_expires_at")
+        if expires is None or _as_dt(expires) > _as_dt(recorded):
+            raise RecoveryError(
+                "LEASE_STILL_VALID",
+                "the reservation's lease has not expired",
+                detail={"lease_expires_at": expires},
+            )
+        payload = {
+            "actor": actor,
+            "attempt_id": attempt_id,
+            "host_generation": row.get("host_generation"),
+            "kind": "release-settled",
+            "method": "operator release of a writer whose execution recorded its terminal",
+            "observation": (
+                "records a terminal state, a logical outcome and a result row; the execution that "
+                "held this writer has ended"
+            ),
+            "resource": f"worktree:{row.get('worktree_root')}",
+            "state": row.get("state"),
+            "logical_outcome": row.get("logical_outcome"),
+            "result_sha256": result["result_sha256"],
+        }
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        event_id = "s-" + digest[:16]
+        if not dry_run:
+            conn.execute(
+                "UPDATE worker_tasks SET writer_ownership=?, updated_at=? "
+                "WHERE attempt_id=? AND writer_ownership='quarantined'",
+                (RELEASED, recorded, attempt_id),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO worker_recovery_events(event_id,attempt_id,host_generation,"
+                "kind,resource,method,actor,payload_sha256,payload_json,recorded_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (event_id, attempt_id, str(row.get("host_generation")), "release-settled",
+                 payload["resource"], payload["method"], actor, digest, payload_json, recorded),
+            )
+            conn.commit()
+    return {
+        "attempt_id": attempt_id,
+        "action": "released-settled",
+        "changed": not dry_run,
+        "dry_run": dry_run,
+        "event_id": event_id,
+        "state": row.get("state"),
+        "worktree_id": row.get("worktree_id"),
+        "worktree_root": row.get("worktree_root"),
+    }

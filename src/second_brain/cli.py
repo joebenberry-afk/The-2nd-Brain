@@ -1379,6 +1379,21 @@ def _parser() -> argparse.ArgumentParser:
     lease_recover.add_argument(
         "--apply", action="store_true", help="perform the release (default: dry run)"
     )
+    lease_settled = wps.add_parser(
+        "lease-release-settled",
+        parents=[home_parent],
+        help=(
+            "release an attempt whose recorded execution ended (terminal state, logical "
+            "outcome and a result row) — the strongest-evidence rule; attempts without a "
+            "recorded terminal stay refused"
+        ),
+    )
+    lease_settled.add_argument("--attempt", dest="attempt_id", required=True)
+    lease_settled.add_argument("--actor", default="operator")
+    lease_settled.add_argument(
+        "--apply", action="store_true", help="perform the release (default: dry run)"
+    )
+    lease_settled.add_argument("--json", action="store_true")
     lease_recover.add_argument("--json", action="store_true")
 
     wp_spawn = wps.add_parser(
@@ -4627,7 +4642,12 @@ def cmd_worker_plane(args) -> int:
     )
 
     home = _home(args)
-    if args.worker_plane_command in {"lease-inspect", "lease-quiesce", "lease-recover"}:
+    if args.worker_plane_command in {
+        "lease-inspect",
+        "lease-quiesce",
+        "lease-recover",
+        "lease-release-settled",
+    }:
         import json as _json
 
         from . import worker_recovery
@@ -4646,6 +4666,13 @@ def cmd_worker_plane(args) -> int:
                     observation=args.observation,
                     actor=args.actor,
                     host_generation=args.host_generation,
+                )
+            elif args.worker_plane_command == "lease-release-settled":
+                payload = worker_recovery.release_settled_quarantine(
+                    home,
+                    attempt_id=args.attempt_id,
+                    actor=args.actor,
+                    dry_run=not args.apply,
                 )
             else:
                 payload = worker_recovery.recover(
