@@ -54,11 +54,8 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | #3-P | Producer forwards attempt authority through private host transport | extension `worker-result-bridge.ts`, `index.ts` | 4 producer contract tests (`tests/worker-result-authority.test.ts`); 763/763 extension suite | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | include in integrated review |
 | #3-C | Terminal-evidence guard at both protected writes | `worker_protocol.record_worker_event` | acceptance matrix (10 rows); mutation sensitivity; Jev 8/8 (revision `01e4bdd`, pre-integration) | reviewed at `01e4bdd` (`incorrect` as mergeable alone, guard sound) | `EVIDENCED_IN_CANDIDATE` | re-review at `1cee974`+ |
 | #3-R.1 | **Replay proof, Python side** (already executed): unauthorized duplicate writes no evidence; authenticated duplicate is idempotent | `worker_protocol.record_worker_event` | `test_terminal_event_without_token_is_refused_and_writes_no_evidence`, `test_duplicate_authenticated_terminal_event_is_idempotent` — both green in the 105-test candidate matrix | — | `EVIDENCED_IN_CANDIDATE` | treat as the durable-fact half of the replay proof |
-| #3-R.2 | **Replay proof, extension leg** (not yet executed) | `recoverWorkerResults` via the `before_agent_start` hook | mechanism read; harness recipe below | — | `OPEN` | execute the recipe below |
-| #3-R | **Restart replay**: journal without valid authority creates no new terminal evidence; accepted facts and ownership preserved; no secret persistence; no auto re-admission; replayed duplicates inert | host journal + `worker_recovery` path | source read of `recoverWorkerResults` (`index.ts:2094-2139`): entries are emitted only when a **live in-memory admission** matches the entry's `attemptId` (`:2112`), and the credential is never journaled — so after a restart the map is empty and every journaled completion is skipped, never emitted; nothing on that path marks failure, re-admits, or releases | — | `OPEN` — **proof obligation, not missing mechanism** | **next**: prove it with tests — (a) journaled completion with no live admission ⇒ zero completion emissions, state and ownership unchanged; (b) same-process replay with the admission still held ⇒ emits **with** the credential; (c) unauthorized duplicate leaves durable facts untouched (Python side). Then decide whether "skipped" must additionally be labelled unverified |
-| #3-I | Real producer→consumer path (extension → bridge → `omp_adapter` → `record_worker_event`) with deterministic fixtures | candidate OMP installation | extension-side "real factory" lifecycle tests cover the extension leg only | — | `OPEN` | build the candidate OMP launch/loader route; distinguish fixture transport from production entrypoint |
-| #3-M | Mutation re-run against **these** integrated bytes, with exact-byte restore | candidate | earlier run was against `01e4bdd` bytes | — | `OPEN` | after #3-R/#3-I land, so the mutation covers final bytes |
-| #3-V | Credential custody on the accepted-mutating route (sentinels; model-visible output, logs, exceptions, telemetry, transcripts, journals) | extension + adapter | source audit: every token site host-internal; child/spawn path never carries it | — | `EVIDENCED_IN_CANDIDATE` (source) | sentinel run on the real route |
+| #3-R.2 | **Replay proof, extension leg** (not yet executed) | `recoverWorkerResults`, `before_agent_start` | mechanism now read to the bottom of the reconstruction branch — see "CORRECTION" below | — | `OPEN` | execute with the corrected expectation |
+| #3-R.3 | **Journal-controlled admission reconstruction** | `index.ts` recovery branch for `second-brain.worker-admission-pending` | see "CORRECTION" | — | `OPEN` under **#4** | assess forged-journal acceptance for read-only attempts; do not resolve under #3 |
 | ADM | **Admission-issuer authority**: a caller able to invoke admission obtains the credential for the attempt it created | `cli.py:3371-3384`, `omp_adapter.py:65-79`, `:138-139` | reproduced reading; `WORKTREE_WRITER_BUSY` proves exclusion on that path only | — | `OPEN` (explicit M00.3 blocker) | belongs to #4; #3 must not be described as closing no-self-approval |
 | #2a | Initiating schema-collision containment | `brain_schema`, `vmem` | `c017dc3`; qualification record with reviewer verdict at top | operational defect CLOSED | `CLOSED` (as scoped) | — |
 | #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | debt ledger in `schema-bootstrap-20260921/QUALIFICATION.md` | reviewer: `incorrect` for the stronger claim | `OPEN` | after #3: one authority for identity/legal transitions; deterministic registration; one version source per namespace; `events_fts` reserved-name conflict; per-missing-table DDL rule; deepen schema comparison; interrupt/compete-open tests; legacy reopen idempotency |
@@ -89,6 +86,46 @@ candidate seal cannot claim to include them, and any evidence pack must name the
 lives in. The FINDING IDS were also initially mis-stated as missing: they exist as records, they were
 simply outside the candidate and outside the first search scope. Only the *clauses* remain to be read
 from the two sources above.
+
+## CORRECTION — my earlier #3-R claim was wrong (falsified by reading the rest of the branch)
+
+I recorded that after a restart the admission map is empty, so journaled completions are "skipped,
+never emitted". **That is false.** `recoverWorkerResults` reconstructs an admission from the journal
+entry `second-brain.worker-admission-pending` and writes it into `workerAdmissionsByTask` and
+`workerAdmissionsBySource` (`index.ts:1990-2013`), then `pendingWorkerTaskIds.add(...)`.
+
+The reconstructed admission carries `taskId, attemptId, packetSha256, projectId, worktreeId,
+accessIntent, parentSessionId, agent, toolCallId, sourceIndex, lifecycleRevision, callbackChain,
+cleanupAccepted` — and **no `callbackToken`**, because the credential is never journaled.
+
+So the real post-restart behaviour is: the journaled completion **is** emitted (the attemptId matches
+the reconstructed admission), `emitWorkerCompletion` forwards `admission.callbackToken` = `undefined`,
+the bridge omits the field, and the **Brain refuses it** for a mutating attempt. Fail-closed holds —
+but at the **consumer**, not by host-side skipping, and the extension path throws
+`BRAIN_WORKER_RESULT_NOT_ACCEPTED` on that refusal.
+
+Consequences for the mandated replay requirements, stated against the code rather than against my
+earlier summary:
+
+| Requirement | Status under the actual mechanism |
+| --- | --- |
+| no new authoritative terminal evidence without authority | **holds** — the Brain refuses; nothing is written |
+| no persisted callback secret | **holds** — the token is never journaled |
+| unauthenticated replay stays unverified, not failure/settlement | **holds for Brain state** (no fact created); the host surfaces a receipt failure, which needs to be checked for whether it marks anything failed |
+| no automatic re-admission of unresolved attempts | **does not hold as I described it** — recovery *does* re-admit the attempt from the journal. That is the designed dispatch-recovery path, but it is not what the mandate's wording describes, and it must be reported rather than glossed |
+| no ownership release on restart | **holds** — no release call on this path |
+
+### New finding for #4: journal-controlled admission reconstruction
+
+Because the reconstructed admission is built from journal data (`taskId`, `attemptId`,
+`packetSha256`, `accessIntent`, `projectId`, …) and **read-only attempts are exempt from the
+completion guard by design** (admission mints them no authority), a caller who can write journal
+entries could construct a read-only admission — `cleanupAccepted` is even set by the reconstruction
+when `accessIntent === "read_only"` — and then have the host emit a read-only completion that the
+Brain **accepts without any credential**. That is a source-authenticity boundary question, not an
+attempt-credential one: it belongs under **#4** (trusted host observation), and it is the concrete
+form of the "altered journal entry" check the owner asked for. Not to be resolved under #3, and #3
+must not be described as establishing trustworthy host observation.
 
 ## Verified recipe for the extension replay test (execute next)
 
