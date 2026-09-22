@@ -455,10 +455,10 @@ def component_shape(
     if component not in source:
         raise BrainError(f"shared schema: component {component!r} is not registered")
     expected = registered_shapes(source)
-    tables = {
-        str(row[0]): str(row[1])
-        for row in conn.execute("SELECT name,type FROM sqlite_master WHERE type IN ('table','view')")
-    }
+    rows = conn.execute(
+        "SELECT name,type FROM sqlite_master WHERE type IN ('table','view')"
+    )
+    tables = {str(row[0]): str(row[1]) for row in rows}
     mine = set(source[component].tables) | {META_TABLE}
     absent = tuple(
         sorted(name for name in mine if name in expected and tables.get(name) != "table")
