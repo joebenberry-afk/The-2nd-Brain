@@ -25,7 +25,8 @@ export type Capability =
   | "settlement_observation"
   | "cleanup_observation"
   | "cancellation_observation"
-  | "execution_census";
+  | "execution_census"
+  | "authenticated_observation_source";
 
 export const CAPABILITIES: readonly Capability[] = [
   "effective_tool_grant",
@@ -34,6 +35,7 @@ export const CAPABILITIES: readonly Capability[] = [
   "cleanup_observation",
   "cancellation_observation",
   "execution_census",
+  "authenticated_observation_source",
 ];
 
 export interface Advertisement {
@@ -191,6 +193,10 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
     cleanup_observation: false,
     cancellation_observation: snapshotAvailable,
     execution_census: snapshotAvailable,
+    // Nothing signs a payload: any code in the agent's execution context could emit
+    // identical JSON. Until an impersonation boundary exists, settlement and cleanup
+    // can never be trusted from this bridge — which is what keeps mutating work off.
+    authenticated_observation_source: false,
   };
   const evidence: Record<Capability, string> = {
     effective_tool_grant:
@@ -210,6 +216,8 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
     execution_census: snapshotAvailable
       ? "ctx.getAsyncJobSnapshot() running plus recent rows"
       : "unavailable: no getAsyncJobSnapshot on this host",
+    authenticated_observation_source:
+      "unavailable: advertisements and observations are unsigned; code sharing the agent's execution context could emit identical bytes and there is no OS-level impersonation boundary on this host",
   };
   return {
     protocol_version: PROTOCOL_VERSION,

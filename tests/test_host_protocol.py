@@ -42,6 +42,7 @@ def test_a_capable_bridge_enables_mutating_delegation() -> None:
             settlement_observation=True,
             cleanup_observation=True,
             execution_census=True,
+            authenticated_observation_source=True,
         )
     )
 
@@ -50,8 +51,31 @@ def test_a_capable_bridge_enables_mutating_delegation() -> None:
     assert decision["fail_closed"] is False
 
 
+def test_settlement_claims_without_an_authentication_boundary_still_refuse_mutating() -> None:
+    """A host that merely asserts settlement must not unlock mutating work."""
+    decision = host_protocol.negotiate(
+        _manifest(
+            execution_binding=True,
+            settlement_observation=True,
+            cleanup_observation=True,
+            execution_census=True,
+            authenticated_observation_source=False,
+        )
+    )
+
+    assert decision["features"]["mutating_delegation"]["enabled"] is False
+    reason = decision["features"]["mutating_delegation"]["reason"]
+    assert "authenticated_observation_source" in reason
+
+
 @pytest.mark.parametrize(
-    "capability", ["execution_binding", "settlement_observation", "cleanup_observation"]
+    "capability",
+    [
+        "execution_binding",
+        "settlement_observation",
+        "cleanup_observation",
+        "authenticated_observation_source",
+    ],
 )
 def test_each_missing_required_capability_refuses_mutating_delegation(capability: str) -> None:
     """Mutation check: removing any single safety capability refuses the feature."""
@@ -60,6 +84,7 @@ def test_each_missing_required_capability_refuses_mutating_delegation(capability
         "settlement_observation": True,
         "cleanup_observation": True,
         "execution_census": True,
+        "authenticated_observation_source": True,
     }
     full[capability] = False
 

@@ -31,6 +31,10 @@ CAPABILITIES: tuple[str, ...] = (
     "cleanup_observation",
     "cancellation_observation",
     "execution_census",
+    # "Authenticated" is part of the capability, not a footnote: an observation that
+    # any code in the agent's execution context could emit is a claim, not evidence.
+    # Without this, a host that merely asserts settlement would unlock mutating work.
+    "authenticated_observation_source",
 )
 
 #: Brain features and the capabilities each one needs. ``required`` refuses the feature
@@ -47,12 +51,21 @@ FEATURE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "mutating_delegation": {
         # The whole point: a writer lease may only be released on authenticated
-        # settlement and cleanup, so both are required, not optional.
-        "required": ("execution_binding", "settlement_observation", "cleanup_observation"),
+        # settlement and cleanup, so all three are required, not optional.
+        "required": (
+            "execution_binding",
+            "settlement_observation",
+            "cleanup_observation",
+            "authenticated_observation_source",
+        ),
         "optional": ("execution_census", "cancellation_observation"),
     },
     "settlement_recovery": {
-        "required": ("settlement_observation", "execution_census"),
+        "required": (
+            "settlement_observation",
+            "execution_census",
+            "authenticated_observation_source",
+        ),
         "optional": ("cancellation_observation",),
     },
 }
