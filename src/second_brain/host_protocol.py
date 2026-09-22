@@ -18,7 +18,10 @@ opaque id the bridge reports, and the bridge — not Brain — absorbs any renam
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 PROTOCOL_VERSION = 1
@@ -86,6 +89,78 @@ FEATURE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
 _MAX_TEXT = 512
 
+#: How much authority a feature's being enabled actually carries.
+#: ``unrestricted`` — no host capability needed; ``restricted`` — a mode whose missing
+#: check is itself the risk, so it is informational and must not be wired to dispatch
+#: without proof; ``safety_qualified`` — gated on capabilities *and* provenance.
+FEATURE_CLASS: dict[str, str] = {
+    "memory": "unrestricted",
+    "retrieval": "unrestricted",
+    "context_injection": "unrestricted",
+    "telemetry": "unrestricted",
+    "read_only_delegation_declared": "restricted",
+    "read_only_delegation_verified": "safety_qualified",
+    "mutating_delegation": "safety_qualified",
+    "settlement_recovery": "safety_qualified",
+}
+
+
+@dataclass(frozen=True)
+class QualifiedHostIdentity:
+    """The exact host build the Brain has qualified, identified by artifact hashes.
+
+    A *record*, not a runtime value: it is produced when a candidate is qualified and
+    reviewed, together with the hashes of the advertisement and of the bridge artifact
+    that were reviewed. Nothing at execution time may invent one.
+    """
+
+    vendor: str
+    name: str
+    version: str
+    advertisement_sha256: str
+    bridge_sha256: str
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("vendor", self.vendor),
+            ("name", self.name),
+            ("version", self.version),
+        ):
+            if not isinstance(value, str) or value.strip() == "":
+                raise HostProtocolError(
+                    "MALFORMED_QUALIFICATION", f"{field_name} must be a non-empty string"
+                )
+        for field_name, digest in (
+            ("advertisement_sha256", self.advertisement_sha256),
+            ("bridge_sha256", self.bridge_sha256),
+        ):
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise HostProtocolError(
+                    "MALFORMED_QUALIFICATION", f"{field_name} must be a sha256 hex digest"
+                )
+
+
+@dataclass(frozen=True)
+class AdvertisementProvenance:
+    """Proof that one exact advertisement came from the qualified host build.
+
+    Bound to the advertisement's bytes, so verifying one advertisement cannot authorise
+    a different one.
+    """
+
+    host: QualifiedHostIdentity
+    advertisement_sha256: str
+
+
+def advertisement_sha256(advertisement: dict[str, Any] | bytes) -> str:
+    """Canonical hash of an advertisement, stable across key order and whitespace."""
+    raw = (
+        advertisement
+        if isinstance(advertisement, bytes)
+        else json.dumps(advertisement, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return hashlib.sha256(raw).hexdigest()
+
 
 class HostProtocolError(Exception):
     """A manifest or observation that does not satisfy the contract."""
@@ -129,7 +204,8 @@ def parse_manifest(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise HostProtocolError("MALFORMED_MANIFEST", "manifest must be an object")
     version = raw.get("protocol_version")
-    if version != PROTOCOL_VERSION:
+    # `True == 1` in Python, so a boolean version would otherwise pass as v1.
+    if isinstance(version, bool) or not isinstance(version, int) or version != PROTOCOL_VERSION:
         raise HostProtocolError(
             "UNSUPPORTED_PROTOCOL_VERSION",
             f"bridge advertises protocol_version {version!r}; "
@@ -175,6 +251,48 @@ def parse_manifest(raw: Any) -> dict[str, Any]:
 #: additionally gated on the advertisement itself being trusted and bound to the
 #: qualified host identity: an advertisement is a claim, and a claim that arrives
 #: through a channel agent-controlled code can write is not evidence.
+def verify_advertisement(
+    advertisement: dict[str, Any] | bytes,
+    *,
+    qualified: QualifiedHostIdentity,
+) -> AdvertisementProvenance:
+    """Bind an advertisement to the qualified host build, or refuse.
+
+    There is deliberately no boolean form: the only way to obtain a provenance is to
+    present bytes whose hash and identity match a qualification record. A caller cannot
+    assert trust; it can only present artifacts that were reviewed.
+    """
+    digest = advertisement_sha256(advertisement)
+    if digest != qualified.advertisement_sha256:
+        raise HostProtocolError(
+            "ADVERTISEMENT_NOT_QUALIFIED",
+            "advertisement bytes do not match the qualified record "
+            f"(got {digest[:16]}…, expected {qualified.advertisement_sha256[:16]}…)",
+        )
+    if isinstance(advertisement, bytes):
+        try:
+            parsed: Any = json.loads(advertisement.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise HostProtocolError(
+                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
+            ) from exc
+    else:
+        parsed = advertisement
+    manifest = parse_manifest(parsed)
+    host = manifest["host"]
+    if (host["vendor"], host["name"], host["version"]) != (
+        qualified.vendor,
+        qualified.name,
+        qualified.version,
+    ):
+        raise HostProtocolError(
+            "HOST_IDENTITY_MISMATCH",
+            f"advertisement names {host['vendor']}/{host['name']} {host['version']}, "
+            f"qualified record is {qualified.vendor}/{qualified.name} {qualified.version}",
+        )
+    return AdvertisementProvenance(host=qualified, advertisement_sha256=digest)
+
+
 SAFETY_FEATURES: tuple[str, ...] = (
     "mutating_delegation",
     "settlement_recovery",
@@ -185,32 +303,38 @@ SAFETY_FEATURES: tuple[str, ...] = (
 def negotiate(
     raw_manifest: Any,
     *,
-    trusted_advertisement: bool = False,
-    expect_host_version: str | None = None,
+    provenance: AdvertisementProvenance | None = None,
 ) -> dict[str, Any]:
     """Decide which Brain features may run on the host behind this advertisement.
 
-    ``trusted_advertisement`` must be passed by the caller that verified the
-    advertisement is bound to the qualified host identity (build verification, not a
-    file read). Until such a channel exists, the default leaves every safety feature
-    refused even when the manifest claims the capabilities.
+    ``provenance`` can only come from :func:`verify_advertisement` against a
+    qualification record, and it is bound to the advertisement's bytes: a provenance
+    obtained for one advertisement does not authorise another. Without it every
+    safety-qualified feature is refused, whatever the manifest claims.
     """
     manifest = parse_manifest(raw_manifest)
     available = manifest["capabilities"]
-    version_matches = (
-        expect_host_version is None or manifest["host"]["version"] == expect_host_version
+    digest = (
+        advertisement_sha256(raw_manifest) if isinstance(raw_manifest, (dict, bytes)) else ""
     )
-    safety_gate = "advertisement is not bound to a qualified host identity"
-    if trusted_advertisement and not version_matches:
-        safety_gate = (
-            f"advertisement names host {manifest['host']['version']!r}, "
-            f"expected {expect_host_version!r}"
-        )
+    host = manifest["host"]
+    provenance_matches = (
+        provenance is not None
+        and provenance.advertisement_sha256 == digest
+        and (provenance.host.vendor, provenance.host.name, provenance.host.version)
+        == (host["vendor"], host["name"], host["version"])
+    )
+    safety_gate = (
+        "advertisement is not bound to a qualified host identity"
+        if provenance is None
+        else "provenance was computed for different advertisement bytes"
+    )
     features: dict[str, dict[str, Any]] = {}
     for feature, requirement in FEATURE_REQUIREMENTS.items():
         missing = [name for name in requirement["required"] if not available.get(name)]
         narrowed = [name for name in requirement["optional"] if not available.get(name)]
-        gated = feature in SAFETY_FEATURES and not (trusted_advertisement and version_matches)
+        feature_class = FEATURE_CLASS[feature]
+        gated = feature in SAFETY_FEATURES and not provenance_matches
         reason = "capabilities present" if not missing else "missing: " + ", ".join(missing)
         if gated and not missing:
             reason = safety_gate
@@ -218,18 +342,20 @@ def negotiate(
             "enabled": not missing and not gated,
             "reason": reason,
             "narrowed_by": narrowed,
-            "safety_gated": feature in SAFETY_FEATURES,
+            "feature_class": feature_class,
+            "security_qualified": feature_class == "safety_qualified",
         }
     disabled = {name: info for name, info in features.items() if not info["enabled"]}
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "host": manifest["host"],
+        "host": host,
         "bridge": manifest["bridge"],
         "capabilities": available,
         "features": features,
         "refusals": sorted(disabled),
         "fail_closed": bool(disabled),
-        "trusted_advertisement": trusted_advertisement,
+        "advertisement_sha256": digest,
+        "provenance": "verified" if provenance_matches else "unverified",
     }
 
 
@@ -247,7 +373,8 @@ def parse_observation(
     """
     if not isinstance(raw, dict):
         raise HostProtocolError("MALFORMED_OBSERVATION", "observation must be an object")
-    if raw.get("protocol_version") != PROTOCOL_VERSION:
+    version = raw.get("protocol_version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != PROTOCOL_VERSION:
         raise HostProtocolError(
             "UNSUPPORTED_PROTOCOL_VERSION", "observation protocol_version mismatch"
         )
@@ -312,20 +439,29 @@ def parse_observation(
         resources = raw.get("resources")
         if not isinstance(resources, list):
             raise HostProtocolError("MALFORMED_OBSERVATION", "resources must be a list")
-        parsed["resources"] = sorted(
-            (
+        normalized: list[dict[str, Any]] = []
+        for entry in resources:
+            if not isinstance(entry, dict):
+                # Silently dropping a malformed row would present a shorter list as
+                # valid evidence; the inventory must fail closed instead.
+                raise HostProtocolError(
+                    "MALFORMED_OBSERVATION", "every resource entry must be an object"
+                )
+            if not isinstance(entry.get("observed_terminal"), bool):
+                raise HostProtocolError(
+                    "MALFORMED_OBSERVATION",
+                    "observed_terminal must be a boolean (what was observed, not a truthy value)",
+                )
+            normalized.append(
                 {
                     "kind": _text(entry.get("kind"), "resources[].kind", limit=64),
                     "id": _text(entry.get("id"), "resources[].id"),
                     # What was OBSERVED, not what is true: a listed execution that looks
                     # terminal is not proof that its worktree cannot still mutate.
-                    "observed_terminal": bool(entry.get("observed_terminal")),
+                    "observed_terminal": entry["observed_terminal"],
                 }
-                for entry in resources
-                if isinstance(entry, dict)
-            ),
-            key=lambda entry: (entry["kind"], entry["id"]),
-        )
+            )
+        parsed["resources"] = sorted(normalized, key=lambda item: (item["kind"], item["id"]))
         for flag, message in (
             ("census_available", "census_available must be a boolean"),
             ("census_scope_complete", "census_scope_complete must be a boolean"),

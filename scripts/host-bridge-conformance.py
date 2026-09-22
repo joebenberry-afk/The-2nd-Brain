@@ -43,6 +43,8 @@ def _render(decision: dict) -> Iterable[str]:
     yield f"Host:   {host['vendor']}/{host['name']} {host['version']}"
     yield f"Bridge: {decision['bridge']['name']} {decision['bridge']['version']}"
     yield f"Protocol: BrainHostProtocol v{decision['protocol_version']}"
+    digest = decision["advertisement_sha256"][:16]
+    yield f"Provenance: {decision['provenance']} (advertisement {digest}…)"
     yield ""
     yield "Capabilities"
     yield "──────────────────────────────────────"
@@ -72,23 +74,47 @@ def main() -> int:
     )
     parser.add_argument("--json", action="store_true", help="emit the decision as JSON only")
     parser.add_argument(
-        "--trusted-advertisement",
-        action="store_true",
-        help="the caller has bound this advertisement to the qualified host identity",
-    )
-    parser.add_argument(
-        "--expect-host-version",
+        "--qualified-identity",
         default=None,
-        help="refuse safety features unless the advertisement names this host build",
+        help=(
+            "JSON record {vendor,name,version,advertisement_sha256,bridge_sha256} qualifying "
+            "this host; without it every safety feature is refused"
+        ),
     )
     args = parser.parse_args()
 
+    raw_advertisement = _read_json(args.advertisement)
+    provenance = None
+    if args.qualified_identity:
+        try:
+            record = _read_json(args.qualified_identity)
+            if not isinstance(record, dict):
+                raise host_protocol.HostProtocolError(
+                    "MALFORMED_QUALIFICATION", "the qualification record must be an object"
+                )
+            qualified = host_protocol.QualifiedHostIdentity(**record)
+            provenance = host_protocol.verify_advertisement(
+                raw_advertisement, qualified=qualified
+            )
+        except host_protocol.HostProtocolError as exc:
+            print(
+                json.dumps(
+                    {
+                        "provenance": "refused",
+                        "code": exc.code,
+                        "message": exc.message,
+                        "consequence": "safety features remain refused",
+                    },
+                    indent=2,
+                )
+            )
+            return 3
+        except TypeError as exc:
+            print(json.dumps({"provenance": "malformed", "message": str(exc)}, indent=2))
+            return 3
+
     try:
-        decision = host_protocol.negotiate(
-            _read_json(args.advertisement),
-            trusted_advertisement=args.trusted_advertisement,
-            expect_host_version=args.expect_host_version,
-        )
+        decision = host_protocol.negotiate(raw_advertisement, provenance=provenance)
     except host_protocol.HostProtocolError as exc:
         print(json.dumps({"conformant": False, "code": exc.code, "message": exc.message}, indent=2))
         return 2
