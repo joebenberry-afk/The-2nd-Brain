@@ -235,6 +235,39 @@ describe("sensors: P3-B economics records (schema v3)", () => {
     expect(sensors.assistantUsage(SESSION, "p", "m", null)).toBeNull();
   });
 
+  it("assistant_usage carries the host's response identity, and never invents one", () => {
+    // The identity is what makes a repeated observation of one billable response recognisable
+    // downstream; the host reports it as `responseId` on the assistant message.
+    const identified = sensors.assistantUsage(
+      SESSION, "p", "m", { input: 1 }, "resp-abc",
+    ) as unknown as Record<string, unknown>;
+    expect(identified.response_id).toBe("resp-abc");
+
+    const absent = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }) as unknown as
+      Record<string, unknown>;
+    expect(absent).not.toHaveProperty("response_id");
+
+    // Long identities are digested rather than truncated: two responses whose first 256 units
+    // agree must not collapse into one recorded identity, or accounting would drop one of them.
+    const longA = "x".repeat(300) + "A";
+    const longB = "x".repeat(300) + "B";
+    const digestA = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, longA) as unknown as
+      Record<string, unknown>;
+    const digestB = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, longB) as unknown as
+      Record<string, unknown>;
+    expect(String(digestA.response_id)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(digestA.response_id).not.toBe(digestB.response_id);
+    const short = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, "resp-short") as unknown as
+      Record<string, unknown>;
+    expect(short.response_id).toBe("resp-short");
+
+    for (const value of ["", null, undefined, 7, { id: "x" }]) {
+      const r = sensors.assistantUsage(SESSION, "p", "m", { input: 1 }, value) as unknown as
+        Record<string, unknown>;
+      expect(r).not.toHaveProperty("response_id");
+    }
+  });
+
   it("provider_request_meta contains keys/counts/sizes/hashes only, never content", () => {
     const payload = {
       model: "deepseek/deepseek-v4-flash",

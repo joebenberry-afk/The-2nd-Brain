@@ -164,6 +164,47 @@ class TestSessionTokensBasic:
         assert tokens.cost_total == pytest.approx(0.025)
         assert tokens.cost_total_seen == 2
         assert tokens.model_turns == 3
+class TestUsageObservationIdentity:
+    """One billable response is one charge, however many times it is observed."""
+
+    def test_repeat_observation_of_one_response_is_counted_once(self, brain_home):
+        records = [
+            _rec("assistant_usage", response_id="resp-1", input_tokens=100, output_tokens=50,
+                 total_tokens=150, cost_total=0.25),
+            # Same response observed again (delivery retry / second observation point).
+            _rec("assistant_usage", response_id="resp-1", input_tokens=100, output_tokens=50,
+                 total_tokens=150, cost_total=0.25),
+            # A genuinely distinct billed request must still count in full.
+            _rec("assistant_usage", response_id="resp-2", input_tokens=10, output_tokens=5,
+                 total_tokens=15, cost_total=0.05),
+        ]
+        _write_session(brain_home, "dedupe", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "dedupe.jsonl"
+        )
+        assert tokens.total_tokens == 165, "the repeat must not be charged twice"
+        assert tokens.input_tokens == 110
+        assert tokens.model_turns == 2, "two distinct responses are two model turns"
+        assert tokens.usage_observations == 3
+        assert tokens.usage_repeat_observations == 1
+        assert tokens.usage_unidentified_observations == 0
+        assert tokens.cost_total == 0.3, "cost must not double-count a repeated observation"
+
+    def test_unidentified_observations_are_counted_not_assumed_to_be_duplicates(self, brain_home):
+        """With no host identity a repeat cannot be proven, so it is never dropped as one."""
+        records = [
+            _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
+            _rec("assistant_usage", input_tokens=100, output_tokens=50, total_tokens=150),
+        ]
+        _write_session(brain_home, "unidentified", records)
+        tokens = governor.parse_telemetry_session(
+            brain_home / "telemetry" / "agent-performance" / "unidentified.jsonl"
+        )
+        assert tokens.total_tokens == 300, "unidentified usage is counted in full"
+        assert tokens.usage_observations == 2
+        assert tokens.usage_repeat_observations == 0
+        assert tokens.usage_unidentified_observations == 2
+
 
 
 class TestDerivedMetrics:
@@ -1156,6 +1197,58 @@ class TestCheckBudget:
 
         result = governor.check_budget(brain_home, parent_host_id, "driver")
         assert result["used"] == 10
+
+    def test_a_repeated_observation_of_one_response_is_charged_once(self, brain_home):
+        """The spending gate charges per billable response, not per telemetry row.
+
+        The same response observed twice must not move a threshold, while a genuinely distinct
+        request is still charged in full. Without the identity rule the used value here would be
+        25, which crosses the soft ratio and would report SOFT instead of OK.
+        """
+        (brain_home / "config" / "governor.toml").write_text(
+            "[budgets]\nsession_tokens = 30\nworker_tokens = 30\nsoft_ratio = 0.8\n",
+            encoding="utf-8",
+        )
+        session_id = "identity-budget"
+        _write_session(
+            brain_home,
+            session_id,
+            [
+                _rec("assistant_usage", session=session_id, response_id="resp-1", total_tokens=10),
+                _rec("assistant_usage", session=session_id, response_id="resp-1", total_tokens=10),
+                _rec("assistant_usage", session=session_id, response_id="resp-2", total_tokens=5),
+            ],
+        )
+        _write_ledger_session(brain_home, session_id, project_id="project-one")
+        assert governor.check_budget(brain_home, session_id, "driver") == {
+            "state": "OK",
+            "used": 15,
+            "cap": 30,
+        }
+
+    def test_unidentified_observations_are_charged_in_full(self, brain_home):
+        """No identity means no proof of a repeat, so both are charged (the honest direction)."""
+        (brain_home / "config" / "governor.toml").write_text(
+            "[budgets]\nsession_tokens = 30\nworker_tokens = 30\nsoft_ratio = 0.8\n",
+            encoding="utf-8",
+        )
+        session_id = "identity-less-budget"
+        _write_session(
+            brain_home,
+            session_id,
+            [
+                _rec("assistant_usage", session=session_id, total_tokens=20),
+                _rec("assistant_usage", session=session_id, total_tokens=20),
+            ],
+        )
+        _write_ledger_session(brain_home, session_id, project_id="project-one")
+        # Charged twice (40 > cap) — a wrong dedupe here would report OK at 20 and let the
+        # session spend past its ceiling.
+        assert governor.check_budget(brain_home, session_id, "driver") == {
+            "state": "HARD",
+            "used": 40,
+            "cap": 30,
+        }
 
     def test_independent_roots_nested_worker_duplicate_resume_and_old_home(self, brain_home):
         """A/B/C scope, nested A usage, duplicate rows, resume, and old history."""

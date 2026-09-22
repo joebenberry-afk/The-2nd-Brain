@@ -1018,6 +1018,13 @@ export interface AssistantUsageRecord extends BaseRecord {
   kind: "assistant_usage";
   provider: string | null;
   model: string | null;
+  /**
+   * The host's identity for the response this usage belongs to (`message.responseId`, present on
+   * every assistant message in the live transcript). It is what lets an accounting reader
+   * recognise a *repeated observation of the same billable request* instead of summing it twice;
+   * absent when the host did not report one, which must never be read as "a duplicate".
+   */
+  response_id?: string;
   /** Each counter present ONLY when the host reported it (zero preserved). */
   input_tokens?: number;
   output_tokens?: number;
@@ -1037,10 +1044,20 @@ export function assistantUsage(
   provider: string | null,
   model: string | null,
   usage: unknown,
+  responseId?: unknown,
 ): AssistantUsageRecord | null {
   if (usage == null || typeof usage !== "object") return null;
   const u = usage as Record<string, unknown>;
   const extra: Record<string, unknown> = { provider, model };
+  if (typeof responseId === "string" && responseId.length > 0) {
+    // Bounded without becoming lossy: truncating a long identity could map two distinct host
+    // responses onto one recorded identity, and the accounting reader would then drop the second
+    // genuinely billed request. A digest of the full value keeps distinct identities distinct.
+    extra.response_id =
+      responseId.length <= 256
+        ? responseId
+        : `sha256:${createHash("sha256").update(responseId, "utf8").digest("hex")}`;
+  }
   const input = usageCounter(u.input);
   if (input !== undefined) extra.input_tokens = input;
   const output = usageCounter(u.output);

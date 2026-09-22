@@ -375,6 +375,27 @@ def _ts(record: dict) -> str | None:
     return record.get("ts") if isinstance(record.get("ts"), str) else None
 
 
+#: Record fields that identify the *billable response* a usage observation belongs to, most
+#: specific first. Only response-scoped identifiers qualify: a routing decision id or a turn id can
+#: cover more than one billed call, so treating one as a response identity could discard a
+#: genuinely billed request. A field the host did not report yields no identity — which is counted,
+#: never assumed to be a duplicate.
+_USAGE_IDENTITY_FIELDS = ("response_id", "api_request_id", "uuid")
+
+
+def usage_identity(record: dict) -> str | None:
+    """The billable-response identity one usage observation carries, or ``None`` when it has none.
+
+    The field name is part of the identity so that identifiers from different adapters can never be
+    compared with each other by accident.
+    """
+    for field in _USAGE_IDENTITY_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value:
+            return f"{field}:{value}"
+    return None
+
+
 def session_usage(home: Path, session_id: str) -> dict:
     """Return exact token counters reported for one session.
 
@@ -393,6 +414,7 @@ def session_usage(home: Path, session_id: str) -> dict:
     reasoning_total = 0
     reasoning_seen = False
     message_count = 0
+    counted: set[str] = set()
     field_sources = (
         ("input", "input_tokens"),
         ("cache_read", "cache_read_tokens"),
@@ -410,6 +432,14 @@ def session_usage(home: Path, session_id: str) -> dict:
         usage = record if kind == "assistant_usage" else record.get("usage")
         if not isinstance(usage, dict):
             continue
+        # One billable response is one charge: a second observation of an identity already counted
+        # is not a second request. An observation with no identity is counted in full, because
+        # nothing here can prove it is a repeat.
+        identity = usage_identity(record)
+        if identity is not None:
+            if identity in counted:
+                continue
+            counted.add(identity)
         message_count += 1
         if source_kind is None:
             source_kind = kind
