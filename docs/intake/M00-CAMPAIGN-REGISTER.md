@@ -677,14 +677,26 @@ unreadable or malformed usage still fails closed and refuses. In the bridge, `BU
 `ACCOUNTING_UNAVAILABLE` set `blocksDispatch`; a transport failure reports `RESERVATION_UNAVAILABLE`
 without blocking, which preserves the availability semantics the existing check bridge already has.
 
-**NOT WIRED — and no reserve-before-dispatch claim is made.** The extension still does not reserve
-before a worker dispatch, and does not consume on completion. Exact remaining work, both parts together:
-reserve immediately before the preparation call in `src/index.ts:1566` (`safeWorkerContextRunner`, the
-first budget-consuming step of a dispatch) and consume at completion/undispatched release
-(`src/index.ts:1955` accepted path, `:1483` `releaseUndispatchedAdmission`). They must land together:
-reserving without consuming would consume the role cap permanently after the first worker. The call site
-sits in the settlement-guard region that this campaign's tests exercise, so it needs the guard tests run
-alongside — deliberately not half-applied here.
+**NOW WIRED (same session, after the capability commit).** The extension reserves immediately before
+`safeWorkerContextRunner` — the first budget-consuming step of a dispatch — through a new
+`budgetReserver` seam, and a blocking refusal returns `{block: true, reason: BRAIN_WORKER_BUDGET_*}`,
+records an `omp_worker_budget_refused` routing record, writes **no** admission, and touches no
+ownership. Consumption is wired at the three sites that mean "finished": the dispatch-failure
+acceptance (`:1258`), the live cleanup acceptance (`:1470`), and the recovered cleanup acceptance
+(`:2070`), plus the accepted-completion path **for read-only attempts only** (`admission.cleanupAccepted`
+is true from admission for them, so the cleanup transition would never fire and their reservation would
+leak). A mutating attempt keeps its accounting until the cleanup facts arrive, which is the policy.
+Consumption is fail-soft and idempotent: an error is recorded and never fails the completion.
+
+Gates on the wired candidate: `tsc` clean, `eslint` clean on the touched files, and **29 tests across 5
+guard files green** (`worker-completion-mirror`, `budget-caps`, `worker-result-replay`,
+`worker-result-authority`, `native-settlement`) — so the settlement guard behaviour the rest of this
+campaign depends on is unchanged.
+
+**Honest remaining gap on this item:** the bridges are tested and the guard paths are tested, but no test
+yet asserts the *wiring* itself — that a blocking reservation stops a dispatch at the call site, and that
+a cleanup transition actually consumes. That is a stub-seam test through the spawn path, and it is the
+next step for this item. It is not claimed as demonstrated.
 
 **Delegation note:** mutating workers are unavailable in this session — both `task` and
 `feature-implementer` dispatches were refused by the harness with
