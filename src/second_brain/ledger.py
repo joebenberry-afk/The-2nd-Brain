@@ -495,26 +495,17 @@ class LedgerStore:
             raise BrainError(
                 f"ledger schema {version} unsupported; runtime requires {LEDGER_SCHEMA_VERSION}"
             )
-        current = legacy = True
-        for name, (columns, foreign_keys) in shapes.items():
-            actual = (
-                tuple(
-                    tuple(row)
-                    for row in self._conn.execute(f"PRAGMA table_info({_sql_name(name)})")
-                ),
-                tuple(
-                    tuple(row)
-                    for row in self._conn.execute(f"PRAGMA foreign_key_list({_sql_name(name)})")
-                ),
-            )
-            current = current and tables.get(name) == "table" and actual == (columns, foreign_keys)
-            prior_columns = tuple(
-                row for row in columns if not (name == "events" and row[1] == "prev_hash")
-            )
-            legacy = (
-                legacy and tables.get(name) == "table" and actual == (prior_columns, foreign_keys)
-            )
-        if current and version == LEDGER_SCHEMA_VERSION:
+        # Which transition this database needs is the *authority's* decision, not this store's:
+        # it compares the live tables against the shapes derived from the registered DDL and
+        # names the difference. This store only carries out the transition it was told to make,
+        # and refuses every state the authority does not recognise.
+        shape = brain_schema.component_shape(self._conn, "ledger")
+        chain_only = (
+            shape.state == "additive"
+            and set(shape.missing) <= {"events"}
+            and set(shape.missing.get("events", ())) <= {"prev_hash"}
+        )
+        if shape.state == "current" and version == LEDGER_SCHEMA_VERSION:
             malformed = self._conn.execute(
                 "SELECT seq FROM events WHERE typeof(prev_hash) != 'text' "
                 "OR length(prev_hash) != 64 OR prev_hash GLOB '*[^0-9a-f]*' LIMIT 1"
@@ -523,7 +514,7 @@ class LedgerStore:
                 raise BrainError("ledger hash chain is missing or malformed; refusing repair")
             self._chain_origin()
             return "current"
-        if legacy or (current and version == 1):
+        if chain_only or (shape.state == "current" and version == 1):
             recorded_integrity = self._conn.execute(
                 "SELECT key FROM ledger_meta WHERE key IN (?, 'last_verified_seq')",
                 (_CHAIN_ORIGIN_KEY,),

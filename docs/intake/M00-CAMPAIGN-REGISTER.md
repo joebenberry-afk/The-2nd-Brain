@@ -59,7 +59,7 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | #3-R.4 | Tracking-state reconstruction is not new privileged admission (no issuance, no ownership, no execution start on the replay path) | `recoverWorkerResults` | `REPORT.md` §4.1; probe shows ownership/state unchanged | — | `EVIDENCED_IN_CANDIDATE` | include in #4 review |
 | ADM | **Admission-issuer authority**: a caller able to invoke admission obtains the credential for the attempt it created | `cli.py:3371-3384`, `omp_adapter.py:65-79`, `:138-139` | reproduced reading; `WORKTREE_WRITER_BUSY` proves exclusion on that path only | — | `OPEN` (explicit M00.3 blocker) | belongs to #4; #3 must not be described as closing no-self-approval |
 | #2a | Initiating schema-collision containment | `brain_schema`, `vmem` | `c017dc3`; qualification record with reviewer verdict at top | operational defect CLOSED | `CLOSED` (as scoped) | — |
-| #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | increment 2026-09-22: `outputs/reports/m00.3-schema-authority-20260922/REPORT.md` — reserved-name ownership + mutation, import-time registration, VMem migration inside the authority transaction, one DB-version source, stronger `schema_dump`, inherited lint/type gates repaired | earlier stronger claim still `incorrect`; increment not yet re-reviewed | `IN_PROGRESS` — 4 of 7 open items closed | remaining: store-as-transition-authority (`_schema_state`/`_migrate_legacy_chain` incl. the version-2 `prev_hash` case), test-strength items (strict-prefix fixture, VMem public reader, separate-process first open, write witness), authority-chosen VMem columns |
+| #2b | Canonical schema authority | `brain_schema`, `ledger`, `vmem`, `contracts` | increment 2026-09-22: `outputs/reports/m00.3-schema-authority-20260922/REPORT.md` — reserved-name ownership + mutation, import-time registration, VMem migration inside the authority transaction, the authority now decides the component transition (`component_shape`, incl. the version-2 header missing `prev_hash`), one DB-version source, stronger `schema_dump`, inherited lint/type gates repaired | earlier stronger claim still `incorrect`; increment not yet re-reviewed | `IN_PROGRESS` — 5 of 7 open items closed | remaining: test-strength items (strict-prefix fixture, VMem public reader, separate-process first open, write witness) and authority-chosen VMem column application |
 | #4 | Trusted issuance, host observations, effective grants | `BrainHostProtocol`, bridge, adapters | — | — | `OPEN` | after #2b: close the issuing route, not only the consumer; smallest enforceable candidate-local mechanism |
 | #5 | Repeatable settlement and truthful worker recording | worker lifecycle | — | — | `OPEN` | after #4: one guarded finalization path; ten sequential mutating workers on one disposable worktree |
 | #6 | Episode/root-scoped accounting | budget layer | — | — | `OPEN` | after #5: dedupe same billable request, not all requests; reserve before admission |
@@ -180,6 +180,54 @@ which proves the payload was binding-correct without driving the dispatch flow.
 - Never touch the runtime worktree, installed extension, canonical database or production leases.
   Disposable homes/installations only; snapshots via a supported consistent mechanism (never a main
   DB file alone, never deleting WAL/SHM to make inspection work).
+
+## Resume checkpoint (2026-09-22, after the corrected replay semantics)
+
+**Candidate:** `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`, HEAD `f6e817f`
+(on top of `e304aff`, `545133d`, `1cee974`). Worktree clean; `worker_protocol.py`
+(`17997bcc…f3e4fac2`) and `index.ts` (`f2c95300…12749e6e`) unchanged, so the recorded mutation
+baselines still name the current bytes.
+
+**Done in this session**
+
+- #3 replay, corrected expectation, executed end-to-end: `brainstem/prime-extension/tests/worker-result-replay.test.ts`
+  (8 cases) + `tests/fixtures/omp_replay_state.py`; report
+  `outputs/reports/m00.3-replay-authority-20260922/`; extension suite 771/771; mutation
+  guard-removal 5 failed / reconstruction-removal 7 failed with exact byte restoration.
+- Read-only independent **audit** of those artifacts: 9 PASS, 6 not-yet-demonstrated items, all six
+  repaired (report §7). The **acceptance review** of producer/consumer/custody/replay is still open.
+- #3-R.4: reconstruction is tracking-state only (no issuance, no ownership, no execution start).
+- #2b increment: `outputs/reports/m00.3-schema-authority-20260922/` — reserved names unowned (+
+  mutation), import-time registration, VMem migration inside the authority transaction, the authority
+  now decides the component transition, one database-version source, stronger `schema_dump`,
+  inherited ruff/pyright gate failures repaired. `ruff` and `pyright` clean; the 13-file Python set
+  green.
+
+**Environment constraints observed in this session (they will recur)**
+
+- **Mutating subagent dispatch is refused by the loaded extension**
+  (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`: this host advertises no settlement capability).
+  Task-tool spawns that imply edits are blocked; read-only agents (e.g. `evidence-auditor`) are
+  accepted. Work therefore proceeds inline, and the acceptance review needs an already-permitted
+  route.
+- Python must be run with `PYTHONHOME`/`PYTHONPATH` removed (the user-level `PYTHONHOME` points at a
+  corrupted tree).
+- Temp-tree cleanup can leave a directory behind when a spawned bridge still holds it as its cwd;
+  the replay test reports the leftover instead of failing the suite.
+- One fail-open telemetry warning (`telemetry write failed: ENOENT`) appears in the read-only replay
+  case; recorded, not hidden.
+
+**Next executable step**
+
+1. #2b remaining debt (test strength; authority-chosen VMem columns) — optional for M00, listed in the
+   #2b report.
+2. **#4** trusted issuance and host observations: close the issuing route as well as the consumer
+   (`ADM` row), including the open forged read-only completion finding (#3-R.3) now reproduced
+   end-to-end.
+3. **#5** settlement and truthful worker recording; **#6** episode/root-scoped accounting; then the §9
+   security/deployment reconciliation and the cumulative evidence pack.
+4. The acceptance review of #3 must be closed through a permitted route before the candidate can claim
+   `M00_CANDIDATE_QUALIFIED`.
 
 ## Next executable step
 

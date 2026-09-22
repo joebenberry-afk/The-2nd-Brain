@@ -325,7 +325,6 @@ def _ensure_metadata(
 
 
 _CANONICAL_COLUMNS: dict[str, list[str]] = {}
-_REFERENCE_SHAPES: dict[str, tuple[bool, list[str]]] = {}
 
 
 _CREATE_TABLE_RE = re.compile(
@@ -347,32 +346,69 @@ def _statement_table(statement: str) -> str | None:
     return None
 
 
-def _reference_shapes(
-    source: dict[str, Component] | None = None,
-) -> dict[str, tuple[bool, list[str]]]:
-    """Every object the registered DDL creates: ``(is_virtual_fts, ordered column names)``.
+@dataclass(frozen=True)
+class _RegisteredObject:
+    """One object the registered DDL creates, as the authority derives it."""
 
-    Built by running the registered DDL in an in-memory database, so the expected shape is the
-    authority's own definition rather than a second hand-written copy. SQLite creates a virtual
-    table's shadow tables alongside it, which is why this covers the reserved names as well.
+    virtual: bool
+    columns: tuple[str, ...]
+    table_info: tuple[tuple, ...]
+    foreign_keys: tuple[tuple, ...]
+
+
+@dataclass(frozen=True)
+class ComponentShape:
+    """How a component's live tables differ from the shapes this authority registers.
+
+    A pure report: which registered tables are absent, which registered columns are missing,
+    which present columns are not registered, and which tables differ in some other way
+    (column type, nullability, default, primary-key position, or foreign keys).
     """
-    global _REFERENCE_SHAPES
-    if _REFERENCE_SHAPES:
-        return _REFERENCE_SHAPES
+
+    state: str
+    absent_tables: tuple[str, ...] = ()
+    missing: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    unexpected: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    altered: tuple[str, ...] = ()
+
+
+_REFERENCE_OBJECTS: dict[str, _RegisteredObject] = {}
+
+
+def _registered_objects(
+    source: dict[str, Component] | None = None,
+) -> dict[str, _RegisteredObject]:
+    """Every object the registered DDL creates, from the authority's own definition.
+
+    Built by running the registered DDL in an in-memory database. SQLite creates a virtual
+    table's shadow tables alongside it, which is why this covers the reserved names too.
+    """
+    global _REFERENCE_OBJECTS
+    if _REFERENCE_OBJECTS:
+        return _REFERENCE_OBJECTS
     components_map = source if source is not None else components()
     conn = sqlite3.connect(":memory:")
     try:
         for name in sorted(components_map):
             for statement in _statements(components_map[name].ddl):
                 conn.execute(statement)
-        shapes: dict[str, tuple[bool, list[str]]] = {}
+        objects: dict[str, _RegisteredObject] = {}
         for table, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'"):
-            shapes[str(table)] = (
-                isinstance(sql, str) and "using fts5" in sql.casefold(),
-                [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')],
+            name = str(table)
+            objects[name] = _RegisteredObject(
+                virtual=isinstance(sql, str) and "using fts5" in sql.casefold(),
+                columns=tuple(
+                    str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')
+                ),
+                table_info=tuple(
+                    tuple(row) for row in conn.execute(f'PRAGMA table_info("{name}")')
+                ),
+                foreign_keys=tuple(
+                    tuple(row) for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')
+                ),
             )
-        _REFERENCE_SHAPES = shapes
-        return shapes
+        _REFERENCE_OBJECTS = objects
+        return objects
     finally:
         conn.close()
 
@@ -382,9 +418,93 @@ def canonical_columns(source: dict[str, Component] | None = None) -> dict[str, l
     global _CANONICAL_COLUMNS
     if not _CANONICAL_COLUMNS:
         _CANONICAL_COLUMNS = {
-            name: columns for name, (_, columns) in _reference_shapes(source).items()
+            name: list(obj.columns) for name, obj in _registered_objects(source).items()
         }
     return _CANONICAL_COLUMNS
+
+
+def registered_shapes(
+    source: dict[str, Component] | None = None,
+) -> dict[str, tuple[tuple[tuple, ...], tuple[tuple, ...]]]:
+    """Each registered table's ``(PRAGMA table_info, PRAGMA foreign_key_list)`` expectation."""
+    return {
+        name: (obj.table_info, obj.foreign_keys)
+        for name, obj in _registered_objects(source).items()
+    }
+
+
+def component_shape(
+    conn: sqlite3.Connection,
+    component: str,
+    source: dict[str, Component] | None = None,
+) -> ComponentShape:
+    """Report how ``component``'s live tables differ from their registered shapes.
+
+    The decision this exists to centralise: a component must not decide for itself whether an
+    unfamiliar layout is a predecessor it may migrate or a shape it must refuse. The authority
+    answers with one of three states —
+
+    ``current``     every registered table of the component matches its registered shape;
+    ``additive``    the only differences are registered **columns that are absent**, i.e. a
+                    database predating an additive change; a component may apply its own
+                    guarded additive transition for exactly those columns;
+    ``unsupported`` anything else (absent tables, unregistered columns, or any other shape
+                    difference) — refuse rather than repair.
+    """
+    source = source if source is not None else components()
+    if component not in source:
+        raise BrainError(f"shared schema: component {component!r} is not registered")
+    expected = registered_shapes(source)
+    tables = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
+    }
+    mine = set(source[component].tables) | {META_TABLE}
+    absent = tuple(sorted(name for name in mine if name in expected and name not in tables))
+    missing: dict[str, tuple[str, ...]] = {}
+    unexpected: dict[str, tuple[str, ...]] = {}
+    altered: list[str] = []
+    for name in sorted(name for name in mine if name in expected and name in tables):
+        table_info, foreign_keys = expected[name]
+        actual_info = tuple(tuple(row) for row in conn.execute(f'PRAGMA table_info("{name}")'))
+        actual_keys = tuple(
+            tuple(row) for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')
+        )
+        expected_columns = tuple(str(row[1]) for row in table_info)
+        actual_columns = tuple(str(row[1]) for row in actual_info)
+        absent_columns = tuple(
+            column for column in expected_columns if column not in actual_columns
+        )
+        extra_columns = tuple(
+            column for column in actual_columns if column not in expected_columns
+        )
+        if absent_columns:
+            missing[name] = absent_columns
+        if extra_columns:
+            unexpected[name] = extra_columns
+        if actual_keys != foreign_keys:
+            altered.append(name)
+            continue
+        kept = {column for column in expected_columns if column in actual_columns}
+        expected_rows = {
+            str(row[1]): row for row in table_info if str(row[1]) in kept
+        }
+        actual_rows = {str(row[1]): row for row in actual_info if str(row[1]) in kept}
+        if expected_rows != actual_rows:
+            altered.append(name)
+    if absent or unexpected or altered:
+        state = "unsupported"
+    elif missing:
+        state = "additive"
+    else:
+        state = "current"
+    return ComponentShape(
+        state=state,
+        absent_tables=absent,
+        missing=missing,
+        unexpected=unexpected,
+        altered=tuple(altered),
+    )
 
 
 def reserved_objects(
@@ -408,19 +528,19 @@ def reserved_objects(
     candidates = present & RESERVED_NAMES
     if not candidates:
         return frozenset()
-    reference = _reference_shapes(source)
+    reference = _registered_objects(source)
     verified: set[str] = set()
     for name in sorted(reference):
-        is_virtual, columns = reference[name]
-        if not is_virtual or name not in RESERVED_NAMES or name not in candidates:
+        registered = reference[name]
+        if not registered.virtual or name not in RESERVED_NAMES or name not in candidates:
             continue
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
         ).fetchone()
         if row is None or not isinstance(row[0], str) or "using fts5" not in row[0].casefold():
             continue
-        actual = [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')]
-        if actual != columns:
+        actual = tuple(str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")'))
+        if actual != registered.columns:
             continue
         verified.add(name)
         # SQLite refuses to create the index while one of its shadow names is taken, so a shadow
