@@ -316,6 +316,36 @@ Gates that are genuinely open, each with what would close it:
 Per the mandate §10 this is a legitimate interim result: the candidate is honest about its boundaries,
 and the remaining gates are named with their closure conditions rather than waived.
 
+## Acceptance verification (2026-09-22) — read-only, and what it changed
+
+An independent `implementation-verifier` reviewed the #3 subject (producer, consumer, custody,
+replay) through the read-only lane it *could* use: **FAIL on the evidence criterion, UNDEMONSTRATED on
+the four runtime criteria** because its harness exposes no execution. It did not reproduce an
+unauthorized write or a credential disclosure, and it is recorded as an evidence verdict, not a
+runtime one.
+
+Two of its findings were real and are repaired, not argued with:
+
+1. **A vacuous assertion in my own test.** The "no false `worker_completed` mirror" check read the
+   telemetry store, but `mirror(...)` (`src/index.ts:883`) is fire-and-forget into the ledger-mirror
+   engine and writes no telemetry record — so the assertion could never fail. It is removed, with a
+   comment naming where the real sink is, and the mirror sink is now recorded as **not asserted by
+   that file** rather than claimed clean. Same failure mode as the witness that could not fail
+   (report §4) and the stale test count Jev caught: the check, not the code, was the weak link.
+2. **A false provenance claim in my own evidence pack.** `MANIFEST.md` said the closure mandate was
+   "tracked in this worktree"; it exists only in the main checkout. Corrected in place, with the
+   correction visible.
+
+Findings recorded open rather than repaired here:
+
+- **Intermediate state not covered**: "terminal lifecycle accepted, attempt result still absent" is
+  not reproduced by any case.
+- **Untested disclosure path**: runner options carry the raw credential into the extension, and the
+  downstream error path serializes arbitrary error strings without secret redaction
+  (`sensors.ts:833-837`). Source argues it is not reached on the refusal path; no test proves it.
+- **Constructed journals**: the replay cases build journal entries rather than capturing them from a
+  host, so fidelity of the construction is assumed, not measured.
+
 ## Next executable step
 
 1. **#3 independent review** — producer, consumer, credential custody and replay together, bound to the
