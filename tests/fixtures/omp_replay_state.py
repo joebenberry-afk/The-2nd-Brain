@@ -323,7 +323,7 @@ def _task_row(conn: sqlite3.Connection, task_id: str):
     columns = (
         "state, writer_ownership, attempt_id, callback_token_sha256, logical_outcome,"
         " executor_settled, cleanup_complete, lease_expires_at, host_generation,"
-        " native_attempt_id, native_job_id, agent_id, lifecycle_sequence"
+        " native_attempt_id, native_job_id, agent_id, lifecycle_sequence, settled_at"
     )
     return conn.execute(
         f"SELECT {columns} FROM worker_tasks WHERE task_id=?", (task_id,)
@@ -455,7 +455,7 @@ def command_probe(args: argparse.Namespace) -> int:
         ).fetchone()[0]
     (
         state, ownership, attempt_id, digest, logical_outcome, settled, cleanup, lease,
-        host_generation, native_attempt_id, native_job_id, agent_id, sequence,
+        host_generation, native_attempt_id, native_job_id, agent_id, sequence, settled_at,
     ) = row
     return _emit(
         {
@@ -478,6 +478,7 @@ def command_probe(args: argparse.Namespace) -> int:
             "native_job_id": native_job_id,
             "agent_id": agent_id,
             "lifecycle_sequence": int(sequence) if sequence is not None else None,
+            "settled_at": settled_at,
         }
     )
 
