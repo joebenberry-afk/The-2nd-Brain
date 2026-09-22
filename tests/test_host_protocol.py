@@ -8,6 +8,8 @@ advertisement unlocks a safety feature only when its exact bytes are bound to a 
 host build by a record — never because a caller asked for trust.
 """
 
+import json
+
 import pytest
 
 from second_brain import host_protocol
@@ -394,6 +396,38 @@ def test_inventory_refuses_a_malformed_row_instead_of_dropping_it() -> None:
         host_protocol.parse_observation(payload)
 
     assert error.value.code == "MALFORMED_OBSERVATION"
+
+
+def test_a_provenance_cannot_be_rebound_to_another_advertisement() -> None:
+    """The record is the anchor: a digest from elsewhere must not pair with it."""
+    qualified = _qualification(_capable(cleanup_observation=False))
+    other_digest = host_protocol.advertisement_sha256(_capable())
+
+    with pytest.raises(host_protocol.HostProtocolError) as misbound:
+        host_protocol.AdvertisementProvenance(host=qualified, advertisement_sha256=other_digest)
+
+    assert misbound.value.code == "PROVENANCE_MISBOUND"
+
+
+def test_bytes_and_parsed_advertisements_hash_identically() -> None:
+    """A legitimate verification must not become 'unverified' because the caller parsed first."""
+    advertisement = _capable()
+    raw = json.dumps(advertisement, indent=2).encode("utf-8")
+    qualified = host_protocol.QualifiedHostIdentity(
+        vendor="oh-my-pi",
+        name="pi-coding-agent",
+        version="18.2.8",
+        advertisement_sha256=host_protocol.advertisement_sha256(advertisement),
+        bridge_sha256="a" * 64,
+    )
+
+    provenance = host_protocol.verify_advertisement(raw, qualified=qualified)
+    from_bytes = host_protocol.negotiate(raw, provenance=provenance)
+    from_object = host_protocol.negotiate(json.loads(raw.decode("utf-8")), provenance=provenance)
+
+    assert from_bytes["provenance"] == "verified"
+    assert from_object["provenance"] == "verified"
+    assert from_object["features"]["mutating_delegation"]["enabled"] is True
 
 
 def test_an_observation_with_a_boolean_protocol_version_is_refused() -> None:

@@ -144,22 +144,47 @@ class QualifiedHostIdentity:
 class AdvertisementProvenance:
     """Proof that one exact advertisement came from the qualified host build.
 
-    Bound to the advertisement's bytes, so verifying one advertisement cannot authorise
-    a different one.
+    The *record* is the anchor: the digest carried here must equal the record's own
+    advertisement hash, so a digest computed from some other advertisement cannot be
+    paired with a legitimate record. (Forging the record itself is forging the
+    qualification, which is outside this layer's power — see the authority channel.)
     """
 
     host: QualifiedHostIdentity
     advertisement_sha256: str
 
+    def __post_init__(self) -> None:
+        if self.advertisement_sha256 != self.host.advertisement_sha256:
+            raise HostProtocolError(
+                "PROVENANCE_MISBOUND",
+                "provenance digest does not match the qualified record's advertisement hash",
+            )
+
 
 def advertisement_sha256(advertisement: dict[str, Any] | bytes) -> str:
-    """Canonical hash of an advertisement, stable across key order and whitespace."""
-    raw = (
-        advertisement
-        if isinstance(advertisement, bytes)
-        else json.dumps(advertisement, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    )
-    return hashlib.sha256(raw).hexdigest()
+    """Canonical hash of an advertisement: the parsed object, not the raw file bytes.
+
+    Whitespace and key order are normalised, so the same advertisement hashes identically
+    whether it arrives as JSON bytes or as a parsed object — a verifier must not be able to
+    turn a legitimate verification into "unverified" by parsing first. Any tool that
+    produces a qualification record must use this function.
+    """
+    if isinstance(advertisement, bytes):
+        try:
+            parsed: Any = json.loads(advertisement.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise HostProtocolError(
+                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
+            ) from exc
+    else:
+        parsed = advertisement
+    try:
+        canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise HostProtocolError(
+            "MALFORMED_MANIFEST", f"advertisement is not JSON-serialisable: {exc}"
+        ) from exc
+    return hashlib.sha256(canonical).hexdigest()
 
 
 class HostProtocolError(Exception):
@@ -312,7 +337,15 @@ def negotiate(
     obtained for one advertisement does not authorise another. Without it every
     safety-qualified feature is refused, whatever the manifest claims.
     """
-    manifest = parse_manifest(raw_manifest)
+    raw = raw_manifest
+    if isinstance(raw, bytes):
+        try:
+            raw = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise HostProtocolError(
+                "MALFORMED_MANIFEST", f"advertisement is not JSON: {exc}"
+            ) from exc
+    manifest = parse_manifest(raw)
     available = manifest["capabilities"]
     digest = (
         advertisement_sha256(raw_manifest) if isinstance(raw_manifest, (dict, bytes)) else ""
@@ -321,6 +354,9 @@ def negotiate(
     provenance_matches = (
         provenance is not None
         and provenance.advertisement_sha256 == digest
+        # Same value by construction, stated explicitly: the incoming advertisement must
+        # match the *record's* hash, not merely the digest the provenance carries.
+        and provenance.advertisement_sha256 == provenance.host.advertisement_sha256
         and (provenance.host.vendor, provenance.host.name, provenance.host.version)
         == (host["vendor"], host["name"], host["version"])
     )
