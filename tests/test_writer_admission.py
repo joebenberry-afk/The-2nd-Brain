@@ -506,7 +506,6 @@ def test_structured_task_outcome_never_releases_writer_without_cleanup(
             "task_id": "logical-result",
             "attempt_id": context["attempt_id"],
             "packet_sha256": context["packet_sha256"],
-            "callback_token": context["callback_token"],
             "child_omp_agent_id": binding["agent_id"],
             "host_generation": binding["host_generation"],
             "native_attempt_id": binding["native_attempt_id"],
@@ -540,7 +539,6 @@ def test_mutating_result_rejects_wrong_native_identity_without_poisoning_attempt
         "task_id": context["task_id"],
         "attempt_id": context["attempt_id"],
         "packet_sha256": context["packet_sha256"],
-        "callback_token": context["callback_token"],
         "child_omp_agent_id": binding["agent_id"],
         "host_generation": binding["host_generation"],
         "native_attempt_id": binding["native_attempt_id"],
@@ -710,7 +708,6 @@ def test_retry_mints_new_attempt_and_old_or_reused_native_identity_cannot_releas
             "task_id": "retry-task",
             "attempt_id": first["attempt_id"],
             "packet_sha256": first["packet_sha256"],
-            "callback_token": first["callback_token"],
             "child_omp_agent_id": old_binding["agent_id"],
             "host_generation": old_binding["host_generation"],
             "native_attempt_id": old_binding["native_attempt_id"],
@@ -1520,192 +1517,3 @@ def test_real_writers_can_run_in_parallel_in_distinct_git_worktrees(brain_home, 
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
-
-
-# --- Completion authority (M00.3 #3) ---------------------------------------------------------
-#
-# Terminal lifecycle evidence is authority-bearing: it sets a task's terminal state and it writes
-# the attempt result row that the strongest writer-release rule reads. These cases are the
-# acceptance matrix for that guard. The negative cases assert protected state is unchanged, not
-# merely that an error came back.
-
-
-def _completion_payload(
-    context: dict[str, object], binding: dict[str, object], *, token: object = ...
-) -> dict[str, object]:
-    payload = {
-        "operation": "worker_result",
-        "host_session_id": f"session-{context['task_id']}",
-        "task_id": context["task_id"],
-        "attempt_id": context["attempt_id"],
-        "packet_sha256": context["packet_sha256"],
-        "child_omp_agent_id": binding["agent_id"],
-        "host_generation": binding["host_generation"],
-        "native_attempt_id": binding["native_attempt_id"],
-        "native_job_id": binding["native_job_id"],
-        "status": "completed",
-        "worker_agent": f"agent-{context['task_id']}",
-        "worker_role": "worker",
-        "summary": "authenticated completion",
-    }
-    if token is not ...:
-        payload["callback_token"] = token
-    return payload
-
-
-def _terminal_evidence(brain_home: Path, task_id: str) -> tuple[object, int]:
-    with sqlite3.connect(db.db_path(brain_home)) as conn:
-        state = conn.execute(
-            "SELECT state FROM worker_tasks WHERE task_id=?", (task_id,)
-        ).fetchone()[0]
-        receipts = conn.execute(
-            "SELECT COUNT(*) FROM worker_attempt_results WHERE task_id=?", (task_id,)
-        ).fetchone()[0]
-    return state, int(receipts)
-
-
-def _terminal_evidence_for_attempt(brain_home: Path, attempt_id: object) -> int:
-    with sqlite3.connect(db.db_path(brain_home)) as conn:
-        return int(
-            conn.execute(
-                "SELECT COUNT(*) FROM worker_attempt_results WHERE attempt_id=?",
-                (attempt_id,),
-            ).fetchone()[0]
-        )
-
-
-def _working_task(brain_home: Path, tmp_path: Path, task_id: str) -> tuple[dict, dict]:
-    root, _ = _repo(tmp_path)
-    _register(brain_home, root)
-    context = _prepare(brain_home, root, task_id)
-    binding = _bind(brain_home, context)
-    return context, binding
-
-
-def test_authenticated_terminal_event_is_accepted(brain_home, tmp_path) -> None:
-    context, binding = _working_task(brain_home, tmp_path, "auth-ok")
-    accepted = omp_adapter.handle_request(
-        brain_home, _completion_payload(context, binding, token=context["callback_token"])
-    )
-    assert accepted["status"] == "completed"
-    state, receipts = _terminal_evidence(brain_home, "auth-ok")
-    assert state == "COMPLETED"
-    assert receipts == 1
-
-
-def test_terminal_event_without_token_is_refused_and_writes_no_evidence(
-    brain_home, tmp_path
-) -> None:
-    context, binding = _working_task(brain_home, tmp_path, "auth-missing")
-    before = _terminal_evidence(brain_home, "auth-missing")
-    refused = omp_adapter.handle_request(brain_home, _completion_payload(context, binding))
-    assert refused.get("failure_code") == "UNAUTHORIZED_CALLBACK"
-    assert "result_sha256" not in refused
-    assert _terminal_evidence(brain_home, "auth-missing") == before
-    assert before == ("WORKING", 0)
-
-
-def test_terminal_event_with_wrong_token_is_refused_and_writes_no_evidence(
-    brain_home, tmp_path
-) -> None:
-    context, binding = _working_task(brain_home, tmp_path, "auth-wrong")
-    before = _terminal_evidence(brain_home, "auth-wrong")
-    refused = omp_adapter.handle_request(
-        brain_home, _completion_payload(context, binding, token="not-the-minted-token")
-    )
-    assert refused.get("failure_code") == "UNAUTHORIZED_CALLBACK"
-    assert _terminal_evidence(brain_home, "auth-wrong") == before
-
-
-def test_token_belonging_to_another_attempt_cannot_complete_the_current_one(
-    brain_home, tmp_path
-) -> None:
-    """A genuinely valid token is still not authority for a different attempt."""
-    root, _ = _repo(tmp_path)
-    _register(brain_home, root)
-    first = _prepare(brain_home, root, "auth-other-attempt")
-    old_binding = _bind(brain_home, first)
-    settled = omp_adapter.handle_request(
-        brain_home, _completion_payload(first, old_binding, token=first["callback_token"])
-    )
-    assert settled["status"] == "completed"
-    released = omp_adapter.handle_request(
-        brain_home,
-        _lifecycle_payload(
-            old_binding,
-            sequence=0,
-            outcome="completed",
-            executor_settled=True,
-            cleanup_complete=True,
-        ),
-    )
-    assert released["writer_ownership"] == "released"
-
-    retry = _prepare(brain_home, root, "auth-other-attempt")
-    assert retry["attempt_id"] != first["attempt_id"]
-    foreign_token = first["callback_token"]
-    assert isinstance(foreign_token, str) and foreign_token
-    binding = _bind(brain_home, retry)
-    before = _terminal_evidence_for_attempt(brain_home, retry["attempt_id"])
-    refused = omp_adapter.handle_request(
-        brain_home, _completion_payload(retry, binding, token=foreign_token)
-    )
-    assert refused.get("failure_code") in {"UNAUTHORIZED_CALLBACK", "STALE_ATTEMPT"}
-    assert _terminal_evidence_for_attempt(brain_home, retry["attempt_id"]) == before
-    assert before == 0
-
-
-def test_duplicate_authenticated_terminal_event_is_idempotent(brain_home, tmp_path) -> None:
-    context, binding = _working_task(brain_home, tmp_path, "auth-duplicate")
-    payload = _completion_payload(context, binding, token=context["callback_token"])
-    first = omp_adapter.handle_request(brain_home, payload)
-    second = omp_adapter.handle_request(brain_home, payload)
-    assert first["status"] == "completed"
-    assert second["status"] == "completed"
-    state, receipts = _terminal_evidence(brain_home, "auth-duplicate")
-    assert (state, receipts) == ("COMPLETED", 1)
-
-
-def test_non_terminal_transition_needs_no_completion_authority(brain_home, tmp_path) -> None:
-    root, _ = _repo(tmp_path)
-    _register(brain_home, root)
-    context = _prepare(brain_home, root, "auth-telemetry")
-    registration = worker_protocol.register_task(
-        brain_home, "auth-telemetry-telemetry", context["packet_sha256"], session_id="s"
-    )
-    assert registration["state"] not in contracts.WorkerLifecycle.TERMINAL_STATES
-    started = worker_protocol.record_worker_event(
-        brain_home,
-        "auth-telemetry-telemetry",
-        context["packet_sha256"],
-        "worker_started",
-        host="omp",
-    )
-    assert started["state"] == "WORKING"
-
-
-def test_protocol_invalid_terminal_transition_keeps_its_own_diagnostic(
-    brain_home, tmp_path
-) -> None:
-    """The authority check guards the write, so it must not mask the state machine's
-    more precise protocol error. A completion for a task with no ACCEPTED fact is a protocol
-    fault whatever token accompanies it."""
-    root, _ = _repo(tmp_path)
-    _register(brain_home, root)
-    # Prepared, never worked: no ACCEPTED fact exists, so completion is a protocol fault.
-    context = _prepare(brain_home, root, "auth-protocol")
-    assert _terminal_evidence(brain_home, "auth-protocol") == ("SUBMITTED", 0)
-    # The canonical transition, reached with a wrong token AND an impossible completion.
-    with pytest.raises(contracts.WorkerPacketError) as raised:
-        worker_protocol.record_worker_event(
-            brain_home,
-            "auth-protocol",
-            context["packet_sha256"],
-            "completed",
-            attempt_id=context["attempt_id"],
-            callback_token="wrong",
-        )
-    assert raised.value.code == "PROTOCOL_ERROR"
-    assert "ACCEPTED" in str(raised.value)
-    # The refused transition left no protected mutation behind.
-    assert _terminal_evidence(brain_home, "auth-protocol") == ("SUBMITTED", 0)

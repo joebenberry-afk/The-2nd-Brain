@@ -811,26 +811,6 @@ def request_worker_task(
             result = contracts.WorkerResultPacket(
                 **{**unavailable.__dict__, "failure_code": exc.code}
             ).validate()
-    if worker_protocol.event_terminal_state(result.status):
-        # `result.status` is a lifecycle event key here, exactly as core consumes it
-        # (`_WORKER_EVENT_STATES[result_packet.status]`), so map it rather than comparing it to
-        # lifecycle states: the two vocabularies differ in case and only the mapping is
-        # authoritative.
-        # Transport capability gap, by owner decision 2026-09-22. Hermes carries no
-        # authenticated completion-authority mechanism: it never admits an attempt, so no
-        # admission token exists to check, and terminal lifecycle evidence is authority-bearing
-        # (it sets a task's terminal state and participates in writer release). It therefore
-        # fails closed here, in the transport, with an explicit code rather than through a
-        # transport-specific exception inside Brain Core. Ordinary non-terminal reporting below
-        # is unaffected. Later Hermes adapter work can satisfy the same Brain-owned authority
-        # contract through its own transport implementation.
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": "COMPLETION_AUTHORITY_UNAVAILABLE",
-            "task_id": packet.task_id,
-            "transport": binding.session.host,
-        }
     try:
         event_payload = {
             **json.loads(result.canonical_json()),
@@ -904,17 +884,6 @@ def handle_worker_event(
     """Apply a worker transport event without running a model."""
     try:
         event = dict(event_data)
-        # Same capability gap as request_worker_task: Hermes has no authenticated completion
-        # authority, so it cannot author terminal lifecycle evidence through the bridge either.
-        if worker_protocol.event_terminal_state(
-            str(event.get("event") or event.get("type") or event.get("status") or "")
-        ):
-            return {
-                **_response_base(binding, "worker_event"),
-                "status": "failed",
-                "failure_code": "COMPLETION_AUTHORITY_UNAVAILABLE",
-                "transport": binding.session.host,
-            }
         event.setdefault("session_id", binding.host_session_id)
         result = worker_protocol.process_worker_event(Path(home), event)
     except contracts.WorkerPacketError as exc:
