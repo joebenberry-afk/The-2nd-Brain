@@ -963,6 +963,15 @@ def _parser() -> argparse.ArgumentParser:
         help="finish or discard interrupted publications (idempotent)",
     )
     promo_rec.add_argument("--json", action="store_true")
+    promo_fix = promo_subs.add_parser(
+        "repair-versions",
+        parents=[home_parent],
+        help=(
+            "bind the artifact's declared active version where a committed active "
+            "publication predates version binding (audit F-03)"
+        ),
+    )
+    promo_fix.add_argument("--json", action="store_true")
 
     ims = im.add_subparsers(dest="immune_command", required=True)
     imp = ims.add_parser("policy", parents=[home_parent], help="register a guarded policy")
@@ -2806,6 +2815,16 @@ def cmd_promotions(args) -> int:
                 print(f"{action.get('action')}: {action.get('pending')}")
         else:
             print("nothing to reconcile")
+        return 0
+    if getattr(args, "promotions_command", None) == "repair-versions":
+        actions = promotion.repair_active_version_history(home)
+        if getattr(args, "json", False):
+            print(json.dumps(actions, sort_keys=True))
+        elif actions:
+            for action in actions:
+                print(f"{action.get('action')}: {action.get('skill')}")
+        else:
+            print("nothing to repair")
         return 0
     status = promotion.promotion_status(home)
     print(status)
