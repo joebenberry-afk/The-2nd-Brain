@@ -1147,7 +1147,13 @@ nicer answer; it is not independent execution.
 - `ruff check src tests scripts`: clean. `pyright`: **0 errors**.
 - concurrency measurement: 2 concurrent reservations, 100 iterations, **0 crashes, exactly one grant
   each**.
-- full suite: recorded in the delivery report for this pass (see the campaign delivery note).
+- full suite on the frozen subject (`ab4f97d`, candidate interpreter, `PYTHONPATH=src`):
+  **2357 tests collected, 8 failures, no other test failed**. The eight are exactly the
+  attributed set above: 4 `test_worker_lifecycle` terminal-alias cases, 2 `test_worker_protocol`,
+  1 `test_orchestration`, 1 `test_omp_canary_tools` successor-drift (inherited/by design).
+  The concurrency flake and the five environment errors from the first two runs are gone: the
+  first was fixed (`db.ensure_wal`), the second was interpreter resolution (`sys.executable`
+  loading the sibling `qualified-v2` worktree). No candidate regression is present in this run.
 
 ### Still open, unchanged
 
