@@ -422,6 +422,21 @@ def command_edges(args: argparse.Namespace) -> int:
     )
     observations["first_attempt_final"] = ownership("edge-a")
     observations["successor_final"] = ownership("edge-b")
+
+    # Cancellation around acceptance. `edge-b` holds the worktree and has no accepted outcome, so
+    # cancelling it is the before-acceptance case; a later completion must not turn it back.
+    cancel_before = _lifecycle_payload(successor, sequence=0)
+    cancel_before["outcome"] = "cancelled"
+    observations["cancel_before_acceptance"] = omp_adapter.handle_request(home, cancel_before)
+    observations["cancelled_state"] = ownership("edge-b")
+    observations["completion_after_cancellation"] = complete(
+        home, "edge-b", successor, token=successor["callback_token"]
+    )
+    observations["cancelled_state_after_completion"] = ownership("edge-b")
+    late_cancel = _lifecycle_payload(first, sequence=2)
+    late_cancel["outcome"] = "cancelled"
+    observations["cancel_after_acceptance"] = omp_adapter.handle_request(home, late_cancel)
+    observations["accepted_attempt_after_late_cancel"] = ownership("edge-a")
     return _emit({"ok": True, "home": str(home), "repo": str(repo), **observations})
 
 
