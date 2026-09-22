@@ -12,14 +12,14 @@ source authoritative or current — that is what the revision and the verdict co
 | Copy | Origin tree / path | Revision | sha256 | Scope it supports |
 | --- | --- | --- | --- | --- |
 | `replay-authority.md` | `.worktrees/m00.3-producer-guard` → `outputs/reports/m00.3-replay-authority-20260922/REPORT.md` | `9a32a9b` (report frozen at `f6e817f`) | `114b4cef…115db` | #3-R.2/#3-R.4 corrected replay expectation, the 8 cases, mutation sensitivity, the read-only finding under #4 |
-| `mutation-evidence.json` | same tree → `…/mutation-evidence.json` | `b5f809f` | `1a90be26…7ab0` | guard-removal 5/8 failed, reconstruction-removal 7/8 failed, exact byte restoration, baseline hashes |
+| `mutation-evidence.json` | same tree → `…/mutation-evidence.json` | `b5f809f` | `a22b899d…1018` | guard-removal 5/8 failed, reconstruction-removal 7/8 failed, exact byte restoration, baseline hashes |
 | `vitest-full-transcript.txt` | same tree → `…/vitest-full-transcript.txt` | `9a32a9b` | `2c642bdc…12ec` | extension suite 771/771 including the replay cases and per-case identity lines |
 | `schema-authority.md` | same tree → `outputs/reports/m00.3-schema-authority-20260922/REPORT.md` | `b5f809f` | `67913db5…d5df` | #2b increment: reserved names unowned, import-time registration, authority-chosen transition, version namespaces, `schema_dump`, gate repairs |
-| `pytest-schema-neighborhood.txt` | same tree → `…/pytest-schema-neighborhood.txt` | `b5f809f` | `40ceaa0a…1bef` | 398 passed on the applicable Python set (the transcript names each test) |
+| `pytest-schema-neighborhood.txt` | same tree → `…/pytest-schema-neighborhood.txt` | `b5f809f` | `abcc45b1…0f03` | 398 passed on the applicable Python set (the transcript names each test) |
 | `admission-issuance.md` | same tree → `outputs/reports/m00.3-admission-issuance-20260922/REPORT.md` | `40c0c96` | `f4db94c5…1250` | #4/ADM: `worker_context` hands the caller the credential it mints; issuer closure isolated as a partial external blocker |
-| `worker-settlement.md` | same tree → `outputs/reports/m00.3-worker-settlement-20260922/REPORT.md` | `b5f809f` | `87043a64…d39ce` | #5: ten sequential workers; ownership/receipt/cancellation matrix; finalization-vs-release distinction |
-| `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `ed1bb4db…98cf` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
-| `ten-worker-sequence.json` | same tree → `…/ten-worker-sequence.json` | `9a32a9b` | `83932116…5cd9` | raw observations behind the ten-worker sequence (10 × `COMPLETED`/`released`, 1 result each) |
+| `worker-settlement.md` | same tree → `outputs/reports/m00.3-worker-settlement-20260922/REPORT.md` | `b5f809f` | `1c68de42…2f8e` | #5: ten sequential workers; ownership/receipt/cancellation matrix; finalization-vs-release distinction |
+| `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `08d6b508…dc10` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
+| `ten-worker-sequence.json` | same tree → `…/ten-worker-sequence.json` | `9a32a9b` | `8d690425…6aab` | raw observations behind the ten-worker sequence (10 × `COMPLETED`/`released`, 1 result each) |
 
 Also referenced and **not** copied here, with their retrieval route:
 
@@ -32,6 +32,19 @@ Also referenced and **not** copied here, with their retrieval route:
 
 That last group is the honest residue: those sources are outside this candidate, the register must
 keep naming the tree they live in, and the campaign must not claim a candidate seal includes them.
+
+## Verifying a copy
+
+Digests above are of the **repository blob**, so they do not depend on how the working tree stores
+line endings (`.gitattributes` marks this directory `-text` so no conversion is applied):
+
+```
+git cat-file blob HEAD:docs/intake/m00-evidence/<name> | sha256sum
+```
+
+Five of them were regenerated after their reports were extended (the two JSON observation files, the
+settlement report, the pytest transcript and the mutation evidence); the table carries the current
+values, and the command above is the authority if a working copy and the table ever disagree.
 
 ## Correction applied to a claim in this pack
 
