@@ -706,6 +706,26 @@ dispatch normally; the verifier has **no execution tools**, so its verdicts on e
 UNDEMONSTRATED by construction (useful static corroboration, no reproduction). An execution-capable
 verifier is still outstanding for the new reservation evidence.
 
+## Independent verification availability, measured today (2026-09-22)
+
+Required independent review of the new code is **unavailable in this session**, and the attempts are
+recorded rather than asserted:
+
+| Attempt | Result |
+| --- | --- |
+| `implementation-verifier` (read-only reviewer role) | dispatched; reported it has **no process-execution tool** (its own capability listing showed only Jev MCP devices) → every executed claim came back UNDEMONSTRATED by construction |
+| `task` (general-purpose) | dispatch refused: `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` |
+| `feature-implementer` | dispatch refused: `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` |
+| `integration-engineer` | dispatch refused: `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` |
+| `scout` (read-only research) | dispatches normally; produced the settlement mapping and the spawn recipe — analysis only, no execution |
+
+So the harness currently permits **read-only research agents** and refuses **worker-settling agents**. That
+is why the reservation work was implemented by the authorized driver in the isolated candidate (the
+mandate's named fallback for unavailable mutating workers), and why the executor/author distinction is
+kept explicit here: the tests and the mutation/restore evidence are author-executed and are labelled as
+such, never as independent execution. An execution-capable independent verifier remains outstanding for
+the reservation work and must not be claimed as satisfied.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.
