@@ -54,12 +54,12 @@ function stockContext(): unknown {
   };
 }
 
-/** A deliberately renamed field layout: the narrowing layer must fail closed. */
+/** A deliberately renamed ROW layout, arrays intact: the row narrowing must fail closed. */
 function mutatedContext(): unknown {
   return {
     events: { on: () => () => undefined },
     getAsyncJobSnapshot: () => ({
-      active: [{ job_id: "ReconWorker", agent: "ReconWorker", state: "running" }],
+      running: [{ job_id: "ReconWorker", agent: "ReconWorker", state: "running" }],
     }),
   };
 }
@@ -89,11 +89,11 @@ function selfCheck(): void {
     false,
     observeInventory(context, { attemptId: "a", hostGeneration: 1 })?.census_scope_complete,
   );
-  // Field-shape mutation: renamed host fields must switch the host-dependent
+  // Field-shape mutation: renamed host row fields must switch the host-dependent
   // capabilities off rather than leave the bridge binding against a shape it misreads.
   const mutated = advertise({ hostVersion: "mutated", context: mutatedContext() }).capabilities;
-  record("renamed host fields disable execution_binding", false, mutated.execution_binding);
-  record("renamed host fields disable cancellation", false, mutated.cancellation_observation);
+  record("renamed row fields disable execution_binding", false, mutated.execution_binding);
+  record("renamed row fields disable cancellation", false, mutated.cancellation_observation);
 
   console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok: checks.every((c) => c.ok) }));
 }

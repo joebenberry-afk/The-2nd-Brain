@@ -1,10 +1,11 @@
 """BrainHostProtocol v1 contract: capability-driven negotiation, fail-closed refusals.
 
 The point of these tests is not that the current OMP behaves; it is that a *future* host
-is judged by the capabilities it advertises. A version string must change nothing, a
-missing safety capability must refuse its feature, a missing optional capability must
-leave unrelated features running, and an advertisement that is not bound to a qualified
-host identity must not unlock a safety feature no matter what it claims.
+is judged by the capabilities it advertises, and that no caller can promote a claim into
+evidence. A version string must change nothing, a missing safety capability must refuse
+its feature, a missing optional capability must leave unrelated features running, and an
+advertisement unlocks a safety feature only when its exact bytes are bound to a qualified
+host build by a record — never because a caller asked for trust.
 """
 
 import pytest
@@ -23,6 +24,31 @@ def _manifest(**capabilities: bool) -> dict:
     }
 
 
+def _capable(**overrides: bool) -> dict:
+    granted = {
+        "execution_binding": True,
+        "effective_tool_grant": True,
+        "settlement_observation": True,
+        "cleanup_observation": True,
+        "execution_census": True,
+        "authenticated_observation_source": True,
+    }
+    granted.update(overrides)
+    return _manifest(**granted)
+
+
+def _qualification(advertisement: dict, **overrides: str) -> host_protocol.QualifiedHostIdentity:
+    fields = {
+        "vendor": "oh-my-pi",
+        "name": "pi-coding-agent",
+        "version": "18.2.8",
+        "advertisement_sha256": host_protocol.advertisement_sha256(advertisement),
+        "bridge_sha256": "a" * 64,
+    }
+    fields.update(overrides)
+    return host_protocol.QualifiedHostIdentity(**fields)  # type: ignore[arg-type]
+
+
 # --- negotiation -------------------------------------------------------------
 
 
@@ -34,81 +60,84 @@ def test_stock_18_2_8_keeps_read_only_work_and_refuses_mutating_delegation() -> 
 
     assert decision["features"]["mutating_delegation"]["enabled"] is False
     assert decision["features"]["settlement_recovery"]["enabled"] is False
-    # Declared read-only work is a restricted mode, not a security-qualified lane.
-    assert decision["features"]["read_only_delegation_declared"]["enabled"] is True
+    # Declared read-only work is a restricted, informational mode — not a qualified lane.
+    declared = decision["features"]["read_only_delegation_declared"]
+    assert declared["enabled"] is True
+    assert declared["feature_class"] == "restricted"
+    assert declared["security_qualified"] is False
     assert decision["features"]["read_only_delegation_verified"]["enabled"] is False
     for feature in ("memory", "retrieval", "context_injection", "telemetry"):
         assert decision["features"][feature]["enabled"] is True
+        assert decision["features"][feature]["feature_class"] == "unrestricted"
 
 
-def test_declared_read_only_is_not_verified_read_only() -> None:
-    """Without the effective tool grant, 'scout' is a name, not proof of read-only tools."""
+def test_declared_read_only_is_never_security_qualified() -> None:
+    """A role name is not authority: the verified lane needs the effective tool grant."""
     decision = host_protocol.negotiate(
         _manifest(execution_binding=True, authenticated_observation_source=True)
     )
 
-    assert decision["features"]["read_only_delegation_verified"]["enabled"] is False
-    verified_reason = decision["features"]["read_only_delegation_verified"]["reason"]
-    assert "effective_tool_grant" in verified_reason
+    verified = decision["features"]["read_only_delegation_verified"]
+    assert verified["enabled"] is False
+    assert "effective_tool_grant" in verified["reason"]
+    assert decision["features"]["read_only_delegation_declared"]["security_qualified"] is False
 
 
-def test_a_capable_bridge_enables_the_safety_features_once_the_advertisement_is_trusted() -> None:
+def test_a_qualified_capable_advertisement_enables_the_safety_features() -> None:
+    advertisement = _capable()
     decision = host_protocol.negotiate(
-        _manifest(
-            execution_binding=True,
-            effective_tool_grant=True,
-            settlement_observation=True,
-            cleanup_observation=True,
-            execution_census=True,
-            authenticated_observation_source=True,
+        advertisement,
+        provenance=host_protocol.verify_advertisement(
+            advertisement, qualified=_qualification(advertisement)
         ),
-        trusted_advertisement=True,
-        expect_host_version="18.2.8",
     )
 
+    assert decision["provenance"] == "verified"
     assert decision["features"]["mutating_delegation"]["enabled"] is True
     assert decision["features"]["read_only_delegation_verified"]["enabled"] is True
     assert decision["refusals"] == []
-    assert decision["fail_closed"] is False
 
 
 def test_a_tampered_advertisement_cannot_unlock_a_safety_feature() -> None:
-    """Claiming every safety capability is not evidence: the advertisement must be bound."""
-    claiming_everything = _manifest(
-        execution_binding=True,
-        effective_tool_grant=True,
-        settlement_observation=True,
-        cleanup_observation=True,
-        execution_census=True,
-        authenticated_observation_source=True,
-    )
+    """Claiming every safety capability is not evidence, with or without a provenance."""
+    advertisement = _capable()
 
-    decision = host_protocol.negotiate(claiming_everything)
-
-    assert decision["features"]["mutating_delegation"]["enabled"] is False
-    assert decision["features"]["read_only_delegation_verified"]["enabled"] is False
-    assert decision["features"]["mutating_delegation"]["safety_gated"] is True
-    reason = decision["features"]["mutating_delegation"]["reason"]
+    unverified = host_protocol.negotiate(advertisement)
+    assert unverified["provenance"] == "unverified"
+    assert unverified["features"]["mutating_delegation"]["enabled"] is False
+    reason = unverified["features"]["mutating_delegation"]["reason"]
     assert "not bound to a qualified host identity" in reason
+
+    # A provenance obtained for other bytes must not authorise this advertisement.
+    original = _capable(cleanup_observation=False)
+    provenance = host_protocol.verify_advertisement(
+        original, qualified=_qualification(original)
+    )
+    tampered = host_protocol.negotiate(advertisement, provenance=provenance)
+    assert tampered["provenance"] == "unverified"
+    assert tampered["features"]["mutating_delegation"]["enabled"] is False
+    assert "different advertisement bytes" in tampered["features"]["mutating_delegation"]["reason"]
+
     # Unrelated features are untouched by the safety gate.
-    assert decision["features"]["memory"]["enabled"] is True
+    assert unverified["features"]["memory"]["enabled"] is True
 
 
-def test_an_advertisement_for_a_different_host_build_refuses_safety_features() -> None:
-    capable = _manifest(
-        execution_binding=True,
-        settlement_observation=True,
-        cleanup_observation=True,
-        authenticated_observation_source=True,
-    )
+def test_an_advertisement_from_an_unqualified_build_is_refused() -> None:
+    """The qualification record names the build; anything else is not that build."""
+    advertisement = _capable()
 
-    decision = host_protocol.negotiate(
-        capable, trusted_advertisement=True, expect_host_version="18.2.9"
-    )
+    with pytest.raises(host_protocol.HostProtocolError) as mismatch:
+        host_protocol.verify_advertisement(
+            advertisement, qualified=_qualification(advertisement, version="18.2.9")
+        )
+    assert mismatch.value.code == "HOST_IDENTITY_MISMATCH"
 
-    assert decision["features"]["mutating_delegation"]["enabled"] is False
-    reason = decision["features"]["mutating_delegation"]["reason"]
-    assert "18.2.9" in reason and "18.2.8" in reason
+    with pytest.raises(host_protocol.HostProtocolError) as bytes_moved:
+        host_protocol.verify_advertisement(
+            advertisement, qualified=_qualification(advertisement, advertisement_sha256="b" * 64)
+        )
+    assert bytes_moved.value.code == "ADVERTISEMENT_NOT_QUALIFIED"
+    assert not hasattr(host_protocol, "trusted_advertisement")
 
 
 @pytest.mark.parametrize(
@@ -122,16 +151,13 @@ def test_an_advertisement_for_a_different_host_build_refuses_safety_features() -
 )
 def test_each_missing_required_capability_refuses_mutating_delegation(capability: str) -> None:
     """Mutation check: removing any single safety capability refuses the feature."""
-    full = {
-        "execution_binding": True,
-        "settlement_observation": True,
-        "cleanup_observation": True,
-        "execution_census": True,
-        "authenticated_observation_source": True,
-    }
-    full[capability] = False
-
-    decision = host_protocol.negotiate(_manifest(**full), trusted_advertisement=True)
+    advertisement = _capable(**{capability: False})
+    decision = host_protocol.negotiate(
+        advertisement,
+        provenance=host_protocol.verify_advertisement(
+            advertisement, qualified=_qualification(advertisement)
+        ),
+    )
 
     assert decision["features"]["mutating_delegation"]["enabled"] is False
     assert capability in decision["features"]["mutating_delegation"]["reason"]
@@ -169,11 +195,14 @@ def test_unknown_capability_and_foreign_protocol_version_are_refused() -> None:
         host_protocol.parse_manifest(foreign)
     assert version_error.value.code == "UNSUPPORTED_PROTOCOL_VERSION"
 
-    # An unknown capability never implicitly grants anything.
-    decision = host_protocol.negotiate(
-        _manifest(execution_binding=True), trusted_advertisement=True
-    )
-    assert decision["features"]["mutating_delegation"]["enabled"] is False
+
+def test_a_boolean_protocol_version_is_not_version_one() -> None:
+    """`True == 1` in Python: a boolean must not pass as a protocol revision."""
+    boolean_version = _manifest()
+    boolean_version["protocol_version"] = True
+    with pytest.raises(host_protocol.HostProtocolError) as error:
+        host_protocol.parse_manifest(boolean_version)
+    assert error.value.code == "UNSUPPORTED_PROTOCOL_VERSION"
 
 
 def test_absent_capabilities_default_to_unavailable() -> None:
@@ -255,6 +284,7 @@ def test_observation_refuses_a_payload_for_a_different_attempt_or_generation() -
     host_protocol.parse_observation(
         payload, expect_attempt_id="attempt-intended", expect_host_generation=4
     )
+
     with pytest.raises(host_protocol.HostProtocolError) as other_attempt:
         host_protocol.parse_observation(payload, expect_attempt_id="attempt-other")
     assert other_attempt.value.code == "BINDING_MISMATCH"
@@ -306,9 +336,8 @@ def test_tool_grant_requires_an_exact_surface_hash() -> None:
         )
 
 
-def test_inventory_reports_observation_and_never_inferred_quiescence() -> None:
-    """An inventory is what the host listed; scope completeness is stated, not assumed."""
-    payload = {
+def _inventory(**overrides: object) -> dict:
+    payload: dict = {
         "protocol_version": 1,
         "kind": "HostExecutionInventory",
         "attempt_id": "attempt-1",
@@ -322,8 +351,13 @@ def test_inventory_reports_observation_and_never_inferred_quiescence() -> None:
         "method": "host snapshot enumeration (bounded window)",
         "observation": "two executions observed; absence of a row proves nothing",
     }
+    payload.update(overrides)
+    return payload
 
-    parsed = host_protocol.parse_observation(payload)
+
+def test_inventory_reports_observation_and_never_inferred_quiescence() -> None:
+    """An inventory is what the host listed; scope completeness is stated, not assumed."""
+    parsed = host_protocol.parse_observation(_inventory())
 
     assert [(entry["kind"], entry["id"]) for entry in parsed["resources"]] == [
         ("host_execution", "b"),
@@ -331,4 +365,50 @@ def test_inventory_reports_observation_and_never_inferred_quiescence() -> None:
     ]
     assert parsed["census_scope_complete"] is False
     with pytest.raises(host_protocol.HostProtocolError):
-        host_protocol.parse_observation({**payload, "census_scope_complete": "yes"})
+        host_protocol.parse_observation(_inventory(census_scope_complete="yes"))
+
+
+@pytest.mark.parametrize("value", ["yes", 1, 0, None, "false"])
+def test_inventory_refuses_a_coerced_terminal_flag(value: object) -> None:
+    """A truthy value is not an observation: the flag must be a real boolean."""
+    payload = _inventory(
+        resources=[{"kind": "host_execution", "id": "b", "observed_terminal": value}]
+    )
+
+    with pytest.raises(host_protocol.HostProtocolError) as error:
+        host_protocol.parse_observation(payload)
+
+    assert error.value.code == "MALFORMED_OBSERVATION"
+
+
+def test_inventory_refuses_a_malformed_row_instead_of_dropping_it() -> None:
+    """Dropping an unreadable row would present a shorter list as valid evidence."""
+    payload = _inventory(
+        resources=[
+            {"kind": "host_execution", "id": "b", "observed_terminal": True},
+            "not-an-object",
+        ]
+    )
+
+    with pytest.raises(host_protocol.HostProtocolError) as error:
+        host_protocol.parse_observation(payload)
+
+    assert error.value.code == "MALFORMED_OBSERVATION"
+
+
+def test_an_observation_with_a_boolean_protocol_version_is_refused() -> None:
+    with pytest.raises(host_protocol.HostProtocolError):
+        host_protocol.parse_observation({**_settlement(True), "protocol_version": True})
+
+
+def test_qualification_records_reject_malformed_hashes() -> None:
+    with pytest.raises(host_protocol.HostProtocolError) as error:
+        host_protocol.QualifiedHostIdentity(
+            vendor="oh-my-pi",
+            name="pi-coding-agent",
+            version="18.2.8",
+            advertisement_sha256="not-a-hash",
+            bridge_sha256="a" * 64,
+        )
+
+    assert error.value.code == "MALFORMED_QUALIFICATION"

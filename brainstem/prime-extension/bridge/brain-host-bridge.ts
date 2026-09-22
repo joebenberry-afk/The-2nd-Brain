@@ -174,10 +174,21 @@ function snapshotShapeUsable(surfaces: HostSurfaces): boolean {
     return false;
   }
   if (value === null || typeof value !== "object") return false;
-  return (
-    ("running" in value && Array.isArray(value.running)) ||
-    ("recent" in value && Array.isArray(value.recent))
-  );
+
+  const groupSize = (key: "running" | "recent"): number => {
+    if (!(key in value)) return 0;
+    const group: unknown = value[key];
+    return Array.isArray(group) ? group.length : 0;
+  };
+  const present = "running" in value || "recent" in value;
+  if (!present) return false;
+
+  const total = groupSize("running") + groupSize("recent");
+  // Present and empty is a usable surface; rows that cannot be read are not. A renamed
+  // row field must disable the capability rather than leave the bridge unable to bind
+  // while still claiming it can.
+  if (total === 0) return true;
+  return rowsFrom(value).length > 0;
 }
 
 /**
