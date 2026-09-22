@@ -144,7 +144,11 @@ import {
   type BudgetRunner,
   type BudgetState,
   BUDGET_HARD_LINE,
+  consumeBudget,
+  reserveBudget,
   runBudgetCheck,
+  type BudgetConsumer,
+  type BudgetReserver,
 } from "./budget-bridge";
 export {
   type BudgetCheckOptions,
@@ -787,6 +791,10 @@ export interface ExtensionOptions {
   rereadHintRunner?: RereadHintRunner;
   /** Budget check runner seam; production uses governor check-budget CLI bridge. */
   budgetRunner?: BudgetRunner;
+  /** Budget reservation runner seam; production uses the governor reserve-budget bridge. */
+  budgetReserver?: BudgetReserver;
+  /** Budget reservation consumer seam; production uses the governor consume bridge. */
+  budgetConsumer?: BudgetConsumer;
   /** Test seam to pre-seed session budget states. */
   sessionBudgetStates?: Map<string, BudgetState>;
 }
@@ -1098,6 +1106,24 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   const workerDispatchFailedRunner = options.ompWorkerDispatchFailedRunner ?? runOmpWorkerDispatchFailed;
   const sessionBudgetStates = options.sessionBudgetStates ?? new Map<string, BudgetState>();
   const budgetRunner = options.budgetRunner ?? runBudgetCheck;
+  const budgetReserver = options.budgetReserver ?? reserveBudget;
+  const budgetConsumer = options.budgetConsumer ?? consumeBudget;
+  // Consumption is fail-soft and idempotent: the reservation is freed only when the
+  // attempt is finished and cleaned up (or was never dispatched), and a failure here is
+  // recorded rather than allowed to fail the completion.
+  const consumeReservation = async (session: string, taskId: string, consumedBy: string): Promise<void> => {
+    try {
+      const result = await budgetConsumer({
+        home: config.home ?? "",
+        sessionId: session,
+        taskId,
+        consumedBy,
+      });
+      if (result.error) getStore(session)?.append(sensors.extensionError(session, result.error));
+    } catch (error) {
+      getStore(session)?.append(sensors.extensionError(session, error));
+    }
+  };
   const safeWorkerContextRunner = async (
     workerOptions: OmpWorkerContextOptions,
   ): Promise<OmpWorkerContextResult> => {
@@ -1257,6 +1283,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         attemptId: admission.attemptId,
         failureCode,
       });
+      await consumeReservation(admission.parentSessionId, admission.taskId, failureCode);
       return true;
     } catch {
       getStore(admission.parentSessionId)?.append(sensors.extensionError(
@@ -1458,6 +1485,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
     if (observation.executorSettled && observation.cleanupComplete) {
       admission.cleanupAccepted = true;
+      void consumeReservation(admission.parentSessionId, admission.taskId, "cleanup-complete");
       pendingWorkerTaskIds.delete(admission.taskId);
       for (const [key, job] of pendingWorkerJobs) if (job.taskId === admission.taskId) pendingWorkerJobs.delete(key);
       const sourceKey = JSON.stringify([
@@ -1560,6 +1588,31 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
       const taskId = taskIds[index];
       const accessIntent: "read_only" | "mutating" = workerAccess[index].intent;
+      // Reserve-before-dispatch: capacity is checked and reserved in one Brain-side
+      // transaction before the first budget-consuming step of this dispatch. A refusal
+      // blocks the dispatch, records no admission, and never releases writer ownership.
+      const budgetReservation = await budgetReserver({
+        home: config.home ?? "",
+        sessionId: session,
+        taskId,
+        role: "worker",
+      });
+      if (budgetReservation.blocksDispatch) {
+        for (const id of reservations) pendingWorkerTaskIds.delete(id);
+        getStore(session)?.append(
+          ompRoutingRecord("omp_worker_budget_refused", session, {
+            task_id: taskId,
+            failure_code: budgetReservation.reason ?? "BUDGET_EXHAUSTED",
+          }),
+        );
+        return {
+          block: true,
+          reason: `BRAIN_WORKER_BUDGET_${budgetReservation.reason ?? "EXHAUSTED"}`,
+        };
+      }
+      if (budgetReservation.error) {
+        getStore(session)?.append(sensors.extensionError(session, budgetReservation.error));
+      }
       const result = await safeWorkerContextRunner({
         home: config.home ?? "",
         sessionId: session,
@@ -1957,6 +2010,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         taskId: fields.task_id,
         attemptId: admission.attemptId,
       });
+      // A read-only attempt has no cleanup transition to wait for, so its reservation is
+      // freed at acceptance; a mutating attempt keeps its accounting until the cleanup
+      // facts arrive. Consumption is idempotent, so a later cleanup call is a no-op.
+      if (admission.cleanupAccepted) {
+        void consumeReservation(session, fields.task_id, "accepted-with-cleanup");
+      }
       mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
@@ -2033,6 +2092,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (!("executorSettled" in data) || data.executorSettled !== true ||
             !("cleanupComplete" in data) || data.cleanupComplete !== true) continue;
         admission.cleanupAccepted = true;
+        void consumeReservation(admission.parentSessionId, admission.taskId, "cleanup-complete-recovered");
         pendingWorkerTaskIds.delete(admission.taskId);
         if (reportedWorkerTaskIds.has(admission.taskId)) {
           workerAdmissionsByTask.delete(admission.taskId);

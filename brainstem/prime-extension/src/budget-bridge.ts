@@ -222,3 +222,56 @@ export function reserveBudget(options: BudgetReserveOptions): Promise<BudgetRese
 
   return promise;
 }
+
+export interface BudgetConsumeOptions extends BudgetCheckOptions {
+  taskId: string;
+  consumedBy?: string;
+}
+
+export interface BudgetConsumeResult {
+  consumed: boolean;
+  alreadyConsumed: boolean;
+  error?: string;
+}
+
+export type BudgetConsumer = (options: BudgetConsumeOptions) => Promise<BudgetConsumeResult>;
+
+/** Consume a reservation exactly once when the attempt it belongs to is finished. */
+export function consumeBudget(options: BudgetConsumeOptions): Promise<BudgetConsumeResult> {
+  const python =
+    options.python ??
+    process.env.SECOND_BRAIN_PYTHON ??
+    join(options.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const args = [
+    "-m", "second_brain", "--home", options.home, "governor", "consume-budget-reservation",
+    "--session", options.sessionId, "--task-id", options.taskId, "--json",
+  ];
+  if (options.consumedBy !== undefined) args.push("--consumed-by", options.consumedBy);
+
+  const { promise, resolve } = createResolvers<BudgetConsumeResult>();
+  execFile(
+    python,
+    args,
+    { cwd: options.home, env, timeout: options.timeoutMs ?? BUDGET_DEFAULT_TIMEOUT_MS, windowsHide: true },
+    (error, stdout) => {
+      try {
+        const parsed = JSON.parse(stdout) as Record<string, unknown>;
+        resolve({
+          consumed: parsed.consumed === true,
+          alreadyConsumed: parsed.already_consumed === true,
+        });
+      } catch {
+        resolve({
+          consumed: false,
+          alreadyConsumed: false,
+          error: error ? error.message : "INVALID_JSON",
+        });
+      }
+    },
+  );
+  return promise;
+}
