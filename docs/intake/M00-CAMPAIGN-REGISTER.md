@@ -726,6 +726,38 @@ kept explicit here: the tests and the mutation/restore evidence are author-execu
 such, never as independent execution. An execution-capable independent verifier remains outstanding for
 the reservation work and must not be claimed as satisfied.
 
+## Reserve-before-dispatch: the wiring itself is now tested, and the test found a leak (2026-09-22)
+
+The stub-seam wiring tests the previous entry named as missing now exist in
+`tests/wiring.test.ts` and drive the real spawn path (`tool_call` with `input.agent = "scout"`, the
+read-only roster entry, plus `makeCtx()`; the recipe's key detail is that an absent `agent` sends the
+call down the mutating path where the settlement-capability guard blocks it — which is exactly the
+`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` the harness returned for worker dispatches).
+
+| Test | Asserts |
+| --- | --- |
+| "blocks the dispatch when the budget reservation is refused, before any preparation" | `{block: true, reason: BRAIN_WORKER_BUDGET_BUDGET_EXHAUSTED}` from the reserve seam, and the context runner is **never called** — the refusal short-circuits before the first budget-consuming step |
+| "returns the reservation when the dispatch never happens" | a preparation failure consumes the reservation, so repeated failures cannot exhaust the cap |
+
+**The second test found a real leak in the wiring I had just written:** on preparation failure the code
+released previously prepared admissions but never freed the *failing* item's reservation, so every failed
+preparation stranded capacity until the cap was gone. Fixed in `src/index.ts` by consuming the item's
+reservation in that branch, with the reason spelled out in a comment. This is the kind of defect the
+missing test was hiding, which is why the gap was recorded rather than assumed benign.
+
+**Also fixed, and it was a real regression I introduced:** my consumption calls reached the *real*
+governor bridge during tests, which failed and appended extension-error records, breaking
+`wiring.test.ts` "attributes a completion to the worker whose manager job id it names" (expected no
+records, got 4). Isolated by stashing my uncommitted work (still failed) and then checking out the
+pre-wiring `index.ts` at `b4c161a` (**passed**), which proved the wiring caused it. Fix: `loadFactory`
+now defaults the two new seams the same way it already defaulted `budgetRunner`, so a test that does not
+care about budget never touches the real bridge.
+
+**Gates on the current candidate:** full extension suite **781 passed / 36 files** (was 772 before this
+work), `tsc` clean, `eslint` clean, `ruff` clean, `pyright` 0 errors, `pytest tests/test_governor_reservations.py`
+6 passed. Still author-executed, not independently verified — the independent-execution availability table
+above stands.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.

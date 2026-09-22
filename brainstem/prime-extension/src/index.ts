@@ -1650,6 +1650,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             releaseUndispatchedAdmission(admission, "OMP_BATCH_PREPARATION_FAILED"),
           ),
         );
+        // This item reserved before the call and never became an admission, so nothing else
+        // will free it: a preparation failure must return its capacity, or repeated failures
+        // would exhaust the role cap without a single worker running.
+        await consumeReservation(session, taskId, "OMP_BATCH_PREPARATION_FAILED");
         for (const id of reservations) pendingWorkerTaskIds.delete(id);
         const reason = result.error ?? "P3.2 worker context preparation failed";
         getStore(session)?.append(

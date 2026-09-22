@@ -19,7 +19,7 @@
  * regression test, which must exercise the refused-completion path itself.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, globSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
