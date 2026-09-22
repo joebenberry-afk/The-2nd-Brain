@@ -64,8 +64,9 @@ function mutatedContext(): unknown {
   };
 }
 
-/** Executed checks for the behaviours a review flagged: these print, not assert. */
-function selfCheck(): void {
+/** Executed checks for the behaviours a review flagged. Returns the verdict; the caller
+ *  refuses to advertise when it is false. */
+function selfCheck(): boolean {
   const context = stockContext();
   const checks: Array<{ check: string; expected: unknown; observed: unknown; ok: boolean }> = [];
   const record = (check: string, expected: unknown, observed: unknown): void => {
@@ -95,15 +96,23 @@ function selfCheck(): void {
   record("renamed row fields disable execution_binding", false, mutated.execution_binding);
   record("renamed row fields disable cancellation", false, mutated.cancellation_observation);
 
-  console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok: checks.every((c) => c.ok) }));
+  const ok = checks.every((check) => check.ok);
+  console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok }));
+  return ok;
 }
 
 const packagePath = argValue("--package", "");
 const contextMode = argValue("--context", "real");
-const context = contextMode === "absent" ? {} : stockContext();
 
+// Fail closed BEFORE presenting an advertisement: a bridge whose narrowing has regressed
+// must not hand a harness something that merely looks conformant.
+if (!selfCheck()) {
+  console.error("bridge self-check failed: refusing to present an advertisement");
+  process.exit(1);
+}
+
+const context = contextMode === "absent" ? {} : stockContext();
 console.log(JSON.stringify(advertise({ hostVersion: hostVersion(packagePath), context })));
-selfCheck();
 
 const observations: Array<HostObservation | null> = [
   observeBinding(context, { attemptId: "attempt-sample", hostGeneration: 1, agentId: "ReconWorker" }),
