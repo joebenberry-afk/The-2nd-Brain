@@ -53,6 +53,8 @@ State vocabulary: `OPEN` / `IN_PROGRESS` / `EVIDENCED_IN_CANDIDATE` / `INDEPENDE
 | --- | --- | --- | --- | --- | --- | --- |
 | #3-P | Producer forwards attempt authority through private host transport | extension `worker-result-bridge.ts`, `index.ts` | 4 producer contract tests (`tests/worker-result-authority.test.ts`); 763/763 extension suite | not independently reviewed | `EVIDENCED_IN_CANDIDATE` | include in integrated review |
 | #3-C | Terminal-evidence guard at both protected writes | `worker_protocol.record_worker_event` | acceptance matrix (10 rows); mutation sensitivity; Jev 8/8 (revision `01e4bdd`, pre-integration) | reviewed at `01e4bdd` (`incorrect` as mergeable alone, guard sound) | `EVIDENCED_IN_CANDIDATE` | re-review at `1cee974`+ |
+| #3-R.1 | **Replay proof, Python side** (already executed): unauthorized duplicate writes no evidence; authenticated duplicate is idempotent | `worker_protocol.record_worker_event` | `test_terminal_event_without_token_is_refused_and_writes_no_evidence`, `test_duplicate_authenticated_terminal_event_is_idempotent` — both green in the 105-test candidate matrix | — | `EVIDENCED_IN_CANDIDATE` | treat as the durable-fact half of the replay proof |
+| #3-R.2 | **Replay proof, extension leg** (not yet executed) | `recoverWorkerResults` via the `before_agent_start` hook | mechanism read; harness recipe below | — | `OPEN` | execute the recipe below |
 | #3-R | **Restart replay**: journal without valid authority creates no new terminal evidence; accepted facts and ownership preserved; no secret persistence; no auto re-admission; replayed duplicates inert | host journal + `worker_recovery` path | source read of `recoverWorkerResults` (`index.ts:2094-2139`): entries are emitted only when a **live in-memory admission** matches the entry's `attemptId` (`:2112`), and the credential is never journaled — so after a restart the map is empty and every journaled completion is skipped, never emitted; nothing on that path marks failure, re-admits, or releases | — | `OPEN` — **proof obligation, not missing mechanism** | **next**: prove it with tests — (a) journaled completion with no live admission ⇒ zero completion emissions, state and ownership unchanged; (b) same-process replay with the admission still held ⇒ emits **with** the credential; (c) unauthorized duplicate leaves durable facts untouched (Python side). Then decide whether "skipped" must additionally be labelled unverified |
 | #3-I | Real producer→consumer path (extension → bridge → `omp_adapter` → `record_worker_event`) with deterministic fixtures | candidate OMP installation | extension-side "real factory" lifecycle tests cover the extension leg only | — | `OPEN` | build the candidate OMP launch/loader route; distinguish fixture transport from production entrypoint |
 | #3-M | Mutation re-run against **these** integrated bytes, with exact-byte restore | candidate | earlier run was against `01e4bdd` bytes | — | `OPEN` | after #3-R/#3-I land, so the mutation covers final bytes |
@@ -87,6 +89,36 @@ candidate seal cannot claim to include them, and any evidence pack must name the
 lives in. The FINDING IDS were also initially mis-stated as missing: they exist as records, they were
 simply outside the candidate and outside the first search scope. Only the *clauses* remain to be read
 from the two sources above.
+
+## Verified recipe for the extension replay test (execute next)
+
+Discovered, not yet executed. Everything needed is known:
+
+- **Entrypoint:** the extension factory (default export, `src/index.ts:794`). A test builds
+  `pi = { on: (name, h) => handlers.set(name, h), emit: () => {} } as unknown as ExtensionAPI`
+  (`tests/omp-routing.test.ts:115-121` shows the exact shape) and then calls `extension(pi, options)`.
+- **Hook:** `before_agent_start` — one `recoverWorkerResults` call site sits inside it
+  (`src/index.ts:2987` → call at `:3031`). Three other call sites exist (`:2175`, `:2301`, `:2372`).
+- **Runner override:** `options.ompWorkerResultRunner` (`:778`, bound at `:1095`) — capture every
+  invocation and assert on the captured options.
+- **Journal shape:** entries are read from `ctx.sessionManager.getEntries()`; the recovery loop
+  accepts `customType === "second-brain.worker-result-pending"` with `fields.task_id`,
+  `fields.packet_sha256`, `fields.status ∈ {completed, failed, cancelled}`, `fields.worker_agent`,
+  plus top-level `attemptId` and `summary`.
+- **Why the negative case needs no setup:** a fresh process has an empty
+  `workerAdmissionsByTask`, so a journal entry cannot match (`:2112`) and must produce **zero**
+  runner invocations. That is the mandated fail-closed observation.
+
+**Vacuity trap — this is why the test was not written blind.** If the `before_agent_start` event
+object does not match what the handler expects, the handler returns early, the runner is never
+called, and the assertion "zero emissions" passes **without ever reaching recovery**. A failing
+guard and a handler that never ran are indistinguishable from the assertion alone. The test must
+therefore also assert a positive side effect that only a fully-executed hook produces (read the
+`:2987-3035` region for the cheapest observable, e.g. the readiness/telemetry record the hook
+writes), or drive an entry that must be *classified* — and fail loudly if the handler short-circuits.
+
+Same discipline for the same-process case: it needs a live admission in `workerAdmissionsByTask`
+(populated by the dispatch flow), which is a larger fixture than the journal alone.
 
 ## Environment and constraints
 
