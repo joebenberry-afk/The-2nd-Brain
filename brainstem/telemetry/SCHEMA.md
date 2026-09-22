@@ -285,8 +285,13 @@ Readers that must apply this rule: `governor.parse_telemetry_session`, `governor
 
 Two gaps are recorded here rather than assumed away:
 
-1. A response observed once as an identified `assistant_usage` and again as an unidentified
-   `model_invocation_completed` is still counted twice.
+1. Cross-*field* equivalence is deliberately not attempted. An identity is `field:value`, so the
+   same billable response observed once under `response_id` (Prime) and once under `api_request_id`
+   (Hermes) counts twice. Merging the two id spaces would be a guess about host semantics, and a
+   wrong guess drops a bill, so the gap is recorded instead. Note that Hermes records *are*
+   identifiable: the usage allowlist (`hermes_adapter.py:_bounded_invocation_value`) filters nested
+   usage keys, but `api_request_id` is carried at the record's top level and is accepted here. What
+   remains unproven is whether those two names ever describe the same billable response.
 2. `governor.check_budget` fails **open** when accounting is unavailable: it returns
    `state: OK` together with `used: None` and `error: ACCOUNTING_UNAVAILABLE`
    (`governor.check_budget`). The diagnostic is explicit, but a caller that branches on `state`
