@@ -433,34 +433,46 @@ observations and restart with outstanding reservations.
 control that was committed); `1da6871` is the correction. Qualification subjects must cite the latter,
 never the former.
 
-## Ledger-mirror gate: executed, ONE case green, and an unresolved finding (2026-09-22)
+## Ledger-mirror gate: CLOSED (five elements executed, 2026-09-22)
 
-`tests/worker-completion-mirror.test.ts` exists and runs. **Do not read this as the gate closed.**
+The earlier "unresolved finding" is **retracted as a product defect** and replaced by the measured
+account below. Cause of that false red: my own query selected the wrong destination path and then
+matched the wrong shape — not the mirror, and not a fail-open `ok`.
 
-| Case | Result |
+**What the recorded evidence shows.** The completion mirror's CLI is
+`python -m second_brain ledger append --session <host> --stdin-json`, which requires a complete
+`BrainLifecycleEvent` (`event_type`, `event_id`, `timestamp`, `surface_visibility`, `ignorable`,
+`payload` — `cli.py:3624` → `contracts.py:1178`). Hand-made envelopes therefore crash the CLI; that
+was a probe defect and is recorded so it is not repeated. The destination is the **host session's**
+ledger, `state/sessions/<internal_session_id>/ledger.sqlite`, and the fixture now creates that
+session (the CLI refuses implicit initialization).
+
+**Producer and consumer records are distinguishable, and that was the real anomaly.** For an accepted
+completion the host ledger holds two `worker_completed` rows:
+`{"child_omp_agent_id":…,"child_omp_session_file":null,"packet_sha256":…,"status":"completed","task_id":…,"worker_agent":"worker","worker_model":null}`
+(the extension's mirror, worker fields verbatim) and
+`{"event":"completed","result_sha256":…,"state":"COMPLETED","task_id":…,"updated_at":…}`
+(the consumer's own authoritative record). My earlier "duplicate mirror" was this conflation. The
+probe now classifies rows `mirror-attributed` vs `other-writer`, and one probe supplies both the count
+and the diagnostics so an assertion can never disagree with the evidence printed beside it.
+
+**Gate closure — all five, executed on candidate bytes:**
+
+| Element | Result |
 | --- | --- |
-| Refused completion through the real handler | **PASS** — no `worker_completed` mirror dispatched for the refused attempt (path evidence), and no matching record in the disposable ledger |
-| Accepted completion through the real handler | **FAIL (unresolved)** — the dispatch *was* observed for the attempt (path evidence works), but no matching record is found in the session ledger |
-| Destination/query control (real `mirrorEvent` via `vi.importActual`) | **FAIL (unresolved)** — `mirrorEvent` returned `ok: true` and the query still found no record |
+| Accepted-handler positive | PASS — dispatch observed; exactly 1 mirror-attributed record for the attempt |
+| Refused-handler negative | PASS — no `worker_completed` mirror dispatched and no matching record |
+| Real destination/query control | PASS — real `mirrorEvent` with the real envelope; record found at the real destination |
+| Application-path mutation | DETECTED — mirror moved above the acceptance guard (`src/index.ts:1946`/`:1960`), and the same refusal test failed: *"no completion mirror dispatched for a refused attempt: expected [ { …(6) } ] to have a length of +0 but got 1"* |
+| Exact restored candidate | PASS — `git checkout -- src/index.ts`, clean status, all three cases green |
 
-**The finding, stated without a conclusion I cannot support:** `mirrorEvent` can report success while no
-matching record is observable in `state/sessions/<internal_session_id>/ledger.sqlite`. Three
-explanations remain open and are distinguishable only by one more diagnostic: (a) the mirror writes to
-a different destination, (b) the stored payload shape differs from the query's `LIKE` (the CLI rejects
-a hand-made `{kind, fields}` envelope with *"unknown required event type: None"*, so the mirror
-evidently sends its own envelope — the stored shape was never verified), or (c) the reported `ok` is
-fail-open and the append did not land. **(c) would be a real defect**: the owner's instruction is
-explicit that a fail-open mirror return must not be treated as proof its append succeeded, and the
-control just demonstrated exactly that gap.
+**Method note for later mutation runs:** compare source identity with `Path.read_bytes()`; python
+text-mode hashing plus EOL normalization under `.gitattributes` produced a spurious hash mismatch
+(`506334e0…` disk vs `5645bdef…` blob) that git status independently proved harmless.
 
-Next operation, precisely: after `mirrorEvent` returns ok, dump the destination before the query —
-`SELECT event_type, substr(payload_json,1,200) FROM events ORDER BY rowid DESC LIMIT 3` in every
-`state/sessions/*/ledger.sqlite` of the disposable home, plus the CLI's own exit/output — and decide
-(a)/(b)/(c) from what is actually there. If (c), repair `mirrorEvent`'s ok semantics so success
-requires an observable append; only then does the accepted-completion case mean anything.
-
-Test-file status: committed as work-in-progress with two red cases on purpose; the refusal case is
-genuine evidence and the control is doing its job by failing. No green claim is made for this gate.
+Test file: `brainstem/prime-extension/tests/worker-completion-mirror.test.ts` (`itSlow`, 60s per case,
+real fixture subprocesses, disposable candidate state only). No runtime readback was added to the
+product: the probe is test-side.
 
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
