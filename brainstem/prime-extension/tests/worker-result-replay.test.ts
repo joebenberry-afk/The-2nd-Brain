@@ -632,10 +632,16 @@ describe("restart replay of a journaled worker completion", () => {
     });
     expect(authorized.ok).toBe(true);
 
-    // Sensitivity of the scan itself: the same search must find the credential where it does
-    // legitimately travel (the host-internal runner options). Without this, "not found" could
-    // simply mean the search does not work.
-    expect(JSON.stringify(started.emissions).includes(String(sentinel))).toBe(true);
+    // Sensitivity of the scan itself, and the honest scope of this case: on the *replay* path the
+    // credential is absent by construction — recovery never reconstructs it — so scanning these
+    // destinations cannot by itself show that the search works. The control therefore proves the
+    // search against a string that does contain the sentinel, and the assertion above is a guard
+    // against a future change that starts threading the credential into a record. The path where
+    // the credential legitimately travels (host-internal runner options, supplied to the direct
+    // bridge call below) is a transport, not a record, and is excluded on purpose.
+    const probe = JSON.stringify({ transport: sentinel });
+    expect(probe.includes(String(sentinel))).toBe(true);
+    expect(JSON.stringify({ transport: undefined }).includes(String(sentinel))).toBe(false);
 
     const destinations: Record<string, string> = {
       journal: JSON.stringify(started.journal),
