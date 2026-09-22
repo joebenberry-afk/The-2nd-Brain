@@ -1005,13 +1005,22 @@ def test_migration_preserves_legacy_worker_rows_and_is_repeatable(tmp_path) -> N
     finally:
         conn.close()
 
-    assert db.migrate(dbfile) == [23, 24]
+    assert db.migrate(dbfile) == _migrations_after(22)
     assert db.migrate(dbfile) == []
     with db.connect(dbfile) as migrated:
         row = migrated.execute(
             "SELECT task_id,attempt_id,writer_ownership FROM worker_tasks"
         ).fetchone()
         assert tuple(row) == ("legacy", None, None)
+
+
+def _migrations_after(version: int) -> list[int]:
+    """The ordered migrations above ``version``.
+
+    Derived from the real migration set so a new migration extends this expectation instead of
+    breaking a version pin that never said what the number meant.
+    """
+    return [int(p.name[:4]) for p in db.migration_files() if int(p.name[:4]) > version]
 
 
 def _migrate_through_23(dbfile: Path, migrations_dir: Path) -> None:
@@ -1097,10 +1106,10 @@ def test_physical_writer_migration_reopens_clean_backup_and_enforces_identity(
     with sqlite3.connect(source) as source_conn, sqlite3.connect(restored) as restored_conn:
         source_conn.backup(restored_conn)
 
-    assert db.migrate(source) == [24]
+    assert db.migrate(source) == _migrations_after(23)
     expected_worktree_id = registry.resolve_registered_worktree(home, "alpha", root).worktree_id
     assert expected_worktree_id != legacy_worktree_id
-    assert db.migrate(restored) == [24]
+    assert db.migrate(restored) == _migrations_after(23)
     for database in (source, restored):
         assert db.migrate(database) == []
         with db.connect(database) as conn:
@@ -1231,7 +1240,7 @@ def test_physical_writer_migration_refuses_conflicts_atomically_and_disables_dis
             == old_index_sql
         )
         assert _physical_writer_index_columns(conn) == []
-    assert db.pending_migrations(dbfile) == [24]
+    assert db.pending_migrations(dbfile) == _migrations_after(23)
 
     with pytest.raises(contracts.WorkerPacketError) as blocked:
         worker_protocol.admit_worker_attempt(
@@ -1309,7 +1318,7 @@ def test_concurrent_physical_writer_migration_applies_once(tmp_path: Path) -> No
     _migrate_through_23(dbfile, tmp_path / "migrations-v23-concurrent")
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(db.migrate, (dbfile, dbfile)))
-    assert sorted(results) == [[], [24]]
+    assert sorted(results) == [[], _migrations_after(23)]
     with db.connect(dbfile) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM schema_version WHERE version=24").fetchone()[0] == 1
