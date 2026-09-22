@@ -66,13 +66,14 @@ export type HostCancellation = ObservationBase & {
   cancelled: boolean;
 };
 
-export type HostExecutionCensus = ObservationBase & {
-  kind: "HostExecutionCensus";
-  resources: Array<{ kind: string; id: string; quiescent: boolean }>;
-  resources_complete: boolean;
+export type HostExecutionInventory = ObservationBase & {
+  kind: "HostExecutionInventory";
+  resources: Array<{ kind: string; id: string; observed_terminal: boolean }>;
+  census_available: boolean;
+  census_scope_complete: boolean;
 };
 
-export type HostObservation = HostWorkerBinding | HostCancellation | HostExecutionCensus;
+export type HostObservation = HostWorkerBinding | HostCancellation | HostExecutionInventory;
 
 /** The surfaces this bridge reads. Everything else about the host stays unknown to it. */
 export interface HostSurfaces {
@@ -82,7 +83,9 @@ export interface HostSurfaces {
   events?: { on?: unknown };
 }
 
-/** Host field names appear only in this narrowing block. */
+/** Host field names are READ only in this narrowing block; the diagnostic strings that
+ * describe an observation may name the surface they came from, but no other function
+ * reads a host object and no host object crosses the boundary. */
 interface JobRow {
   /** OMP manager execution id (`jobs[].id`). */
   id: string;
@@ -154,13 +157,42 @@ function snapshotRows(surfaces: HostSurfaces): JobRow[] {
   }
 }
 
-/** Bind an agent identity to the host's execution id, from the snapshot alone. */
+/**
+ * Whether the snapshot's *shape* is the one this bridge knows how to read.
+ *
+ * Renaming the host's arrays (or returning something else entirely) must make the
+ * capability false rather than leave the bridge silently unable to bind: a claim it
+ * cannot deliver is worse than an advertised gap. An empty snapshot is still a usable
+ * shape — absence of jobs is not absence of the surface.
+ */
+function snapshotShapeUsable(surfaces: HostSurfaces): boolean {
+  if (surfaces.getAsyncJobSnapshot === undefined) return false;
+  let value: unknown;
+  try {
+    value = surfaces.getAsyncJobSnapshot({ recentLimit: 64 });
+  } catch {
+    return false;
+  }
+  if (value === null || typeof value !== "object") return false;
+  return (
+    ("running" in value && Array.isArray(value.running)) ||
+    ("recent" in value && Array.isArray(value.recent))
+  );
+}
+
+/**
+ * Bind an agent identity to the host's execution id, from the snapshot alone.
+ *
+ * Returns null when the identity is not uniquely resolvable: an agent name can be
+ * reused, and a first-match lookup would silently bind the wrong execution.
+ */
 export function executionIdForAgent(context: unknown, agentId: string): string | null {
   if (agentId === "") return null;
+  const matches = new Set<string>();
   for (const row of snapshotRows(narrowSurfaces(context))) {
-    if (row.agentId === agentId) return row.id;
+    if (row.agentId === agentId) matches.add(row.id);
   }
-  return null;
+  return matches.size === 1 ? [...matches][0] : null;
 }
 
 /** The terminal status observed for exactly this execution id, or null. */
@@ -179,7 +211,7 @@ export function terminalStatusFor(
 
 export function advertise(options: { hostVersion: string; context?: unknown }): Advertisement {
   const surfaces = narrowSurfaces(options.context);
-  const snapshotAvailable = surfaces.getAsyncJobSnapshot !== undefined;
+  const snapshotAvailable = snapshotShapeUsable(surfaces);
   const framesAvailable = surfaces.events?.on !== undefined;
   const capabilities: Record<Capability, boolean> = {
     effective_tool_grant: false,
@@ -192,7 +224,10 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
     // Nothing on stock reports that a worktree's cleanup finished.
     cleanup_observation: false,
     cancellation_observation: snapshotAvailable,
-    execution_census: snapshotAvailable,
+    // The snapshot is a bounded window over an evicting list, and recovery needs a
+    // *complete* census; enumerating rows is not completeness, so the capability is
+    // advertised false rather than approximated from a partial read.
+    execution_census: false,
     // Nothing signs a payload: any code in the agent's execution context could emit
     // identical JSON. Until an impersonation boundary exists, settlement and cleanup
     // can never be trusted from this bridge — which is what keeps mutating work off.
@@ -214,7 +249,7 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
       ? "ctx.getAsyncJobSnapshot() terminal status for the bound execution id"
       : "unavailable: no getAsyncJobSnapshot on this host",
     execution_census: snapshotAvailable
-      ? "ctx.getAsyncJobSnapshot() running plus recent rows"
+      ? "unavailable: the host snapshot is a bounded window over an evicting list, so a complete census cannot be established"
       : "unavailable: no getAsyncJobSnapshot on this host",
     authenticated_observation_source:
       "unavailable: advertisements and observations are unsigned; code sharing the agent's execution context could emit identical bytes and there is no OS-level impersonation boundary on this host",
@@ -250,8 +285,11 @@ export function observeCancellation(
   context: unknown,
   input: { attemptId: string; hostGeneration: number; executionId: string },
 ): HostCancellation | null {
+  // Only a cancelled execution is a cancellation. A failed one is a failure, which the
+  // Brain learns from its own result path; reporting it here would relabel an ordinary
+  // failure as an operator/host cancellation.
   const status = terminalStatusFor(context, input.executionId);
-  if (status !== "cancelled" && status !== "failed") return null;
+  if (status !== "cancelled") return null;
   return {
     protocol_version: PROTOCOL_VERSION,
     kind: "HostCancellation",
@@ -259,32 +297,35 @@ export function observeCancellation(
     host_generation: input.hostGeneration,
     native_execution_id: input.executionId,
     cancelled: true,
-    method: "ctx.getAsyncJobSnapshot(): terminal status observed for this exact execution id",
-    observation: `execution ${input.executionId} reached terminal status ${status}`,
+    method: "host snapshot: cancelled status observed for this exact execution id",
+    observation: `execution ${input.executionId} was cancelled`,
   };
 }
 
-export function observeCensus(
+export function observeInventory(
   context: unknown,
   input: { attemptId: string; hostGeneration: number },
-): HostExecutionCensus | null {
+): HostExecutionInventory | null {
   const surfaces = narrowSurfaces(context);
   if (surfaces.getAsyncJobSnapshot === undefined) return null;
   const rows = snapshotRows(surfaces);
   return {
     protocol_version: PROTOCOL_VERSION,
-    kind: "HostExecutionCensus",
+    kind: "HostExecutionInventory",
     attempt_id: input.attemptId,
     host_generation: input.hostGeneration,
     resources: rows.map((row) => ({
       kind: "host_execution",
       id: row.id,
-      // Presence in the snapshot is not proof a worktree is idle: the census reports
-      // what the host lists, and says so, rather than inferring quiescence.
-      quiescent: TERMINAL_STATUSES[row.status] === true,
+      // What the snapshot showed, not a claim that anything is idle.
+      observed_terminal: TERMINAL_STATUSES[row.status] === true,
     })),
-    resources_complete: true,
-    method: "ctx.getAsyncJobSnapshot(): enumeration of running plus recent executions",
-    observation: `${rows.length} host executions listed at census time`,
+    census_available: true,
+    // The snapshot is a bounded window over an evicting list, so its scope is never
+    // provably complete. Recovery must not read "no listed workers" as "nothing can
+    // mutate this worktree".
+    census_scope_complete: false,
+    method: "host snapshot enumeration (bounded window); scope completeness not establishable",
+    observation: `${rows.length} host executions observed; absence of a row proves nothing`,
   };
 }

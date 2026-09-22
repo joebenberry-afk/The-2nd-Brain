@@ -71,10 +71,24 @@ def main() -> int:
         "--observations", default=None, help="optional JSONL of observation samples"
     )
     parser.add_argument("--json", action="store_true", help="emit the decision as JSON only")
+    parser.add_argument(
+        "--trusted-advertisement",
+        action="store_true",
+        help="the caller has bound this advertisement to the qualified host identity",
+    )
+    parser.add_argument(
+        "--expect-host-version",
+        default=None,
+        help="refuse safety features unless the advertisement names this host build",
+    )
     args = parser.parse_args()
 
     try:
-        decision = host_protocol.negotiate(_read_json(args.advertisement))
+        decision = host_protocol.negotiate(
+            _read_json(args.advertisement),
+            trusted_advertisement=args.trusted_advertisement,
+            expect_host_version=args.expect_host_version,
+        )
     except host_protocol.HostProtocolError as exc:
         print(json.dumps({"conformant": False, "code": exc.code, "message": exc.message}, indent=2))
         return 2

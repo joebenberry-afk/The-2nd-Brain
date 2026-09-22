@@ -11,9 +11,10 @@
 import { readFileSync } from "node:fs";
 import {
   advertise,
+  executionIdForAgent,
   observeBinding,
   observeCancellation,
-  observeCensus,
+  observeInventory,
   type HostObservation,
 } from "./brain-host-bridge";
 
@@ -41,13 +42,60 @@ function stockContext(): unknown {
   return {
     events: { on: () => () => undefined },
     getAsyncJobSnapshot: () => ({
-      running: [
-        { id: "ReconWorker", type: "task", status: "running", agentId: "ReconWorker" },
-        { id: "ReconWorker-2", type: "task", status: "completed", agentId: "ReconWorker" },
+      running: [{ id: "ReconWorker", type: "task", status: "running", agentId: "ReconWorker" }],
+      recent: [
+        { id: "CancelledJob", type: "task", status: "cancelled", agentId: "CancelledJob" },
+        { id: "FailedJob", type: "task", status: "failed", agentId: "FailedJob" },
+        // Two rows that share an agent identity: binding must refuse, not pick one.
+        { id: "ReusedA", type: "task", status: "completed", agentId: "ReusedAgent" },
+        { id: "ReusedB", type: "task", status: "completed", agentId: "ReusedAgent" },
       ],
-      recent: [{ id: "FinishedJob", type: "task", status: "failed", agentId: "FinishedJob" }],
     }),
   };
+}
+
+/** A deliberately renamed field layout: the narrowing layer must fail closed. */
+function mutatedContext(): unknown {
+  return {
+    events: { on: () => () => undefined },
+    getAsyncJobSnapshot: () => ({
+      active: [{ job_id: "ReconWorker", agent: "ReconWorker", state: "running" }],
+    }),
+  };
+}
+
+/** Executed checks for the behaviours a review flagged: these print, not assert. */
+function selfCheck(): void {
+  const context = stockContext();
+  const checks: Array<{ check: string; expected: unknown; observed: unknown; ok: boolean }> = [];
+  const record = (check: string, expected: unknown, observed: unknown): void => {
+    checks.push({ check, expected, observed, ok: observed === expected });
+  };
+
+  record("unique agent binds its execution id", "ReconWorker", executionIdForAgent(context, "ReconWorker"));
+  record("reused agent refuses to bind", null, executionIdForAgent(context, "ReusedAgent"));
+  record(
+    "cancelled execution reports a cancellation",
+    true,
+    observeCancellation(context, { attemptId: "a", hostGeneration: 1, executionId: "CancelledJob" })?.cancelled,
+  );
+  record(
+    "failed execution is not a cancellation",
+    null,
+    observeCancellation(context, { attemptId: "a", hostGeneration: 1, executionId: "FailedJob" }),
+  );
+  record(
+    "inventory never claims complete scope",
+    false,
+    observeInventory(context, { attemptId: "a", hostGeneration: 1 })?.census_scope_complete,
+  );
+  // Field-shape mutation: renamed host fields must switch the host-dependent
+  // capabilities off rather than leave the bridge binding against a shape it misreads.
+  const mutated = advertise({ hostVersion: "mutated", context: mutatedContext() }).capabilities;
+  record("renamed host fields disable execution_binding", false, mutated.execution_binding);
+  record("renamed host fields disable cancellation", false, mutated.cancellation_observation);
+
+  console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok: checks.every((c) => c.ok) }));
 }
 
 const packagePath = argValue("--package", "");
@@ -55,15 +103,16 @@ const contextMode = argValue("--context", "real");
 const context = contextMode === "absent" ? {} : stockContext();
 
 console.log(JSON.stringify(advertise({ hostVersion: hostVersion(packagePath), context })));
+selfCheck();
 
 const observations: Array<HostObservation | null> = [
   observeBinding(context, { attemptId: "attempt-sample", hostGeneration: 1, agentId: "ReconWorker" }),
   observeCancellation(context, {
     attemptId: "attempt-sample",
     hostGeneration: 1,
-    executionId: "FinishedJob",
+    executionId: "CancelledJob",
   }),
-  observeCensus(context, { attemptId: "attempt-sample", hostGeneration: 1 }),
+  observeInventory(context, { attemptId: "attempt-sample", hostGeneration: 1 }),
 ];
 for (const observation of observations) {
   if (observation !== null) console.log(JSON.stringify(observation));
