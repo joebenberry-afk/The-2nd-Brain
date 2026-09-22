@@ -550,6 +550,60 @@ def test_authority_gaps_reports_active_skill_without_history(brain_home):
     assert promotion.promotion_status(brain_home, "orphan")["authority_gaps"] == ["orphan"]
 
 
+def _legacy_active_record(brain_home, name, **extra):
+    promotions = brain_home / "state" / "promotions"
+    promotions.mkdir(parents=True, exist_ok=True)
+    (promotions / f"{name}-1.json").write_text(
+        json.dumps(
+            {
+                "skill_name": name,
+                "from_level": "shadow",
+                "to_level": "active",
+                "ts": "2026-01-01T00:00:00+00:00",
+                "session_id": "legacy",
+                **extra,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_repair_active_version_history_binds_the_artifact_version(brain_home):
+    """A pre-binding active publication is reconstructed from the artifact, not left as a gap."""
+    _skill(brain_home, name="orphan", level="active")
+    _legacy_active_record(brain_home, "orphan")
+    assert promotion.authority_gaps(brain_home) == ["orphan"]
+
+    actions = promotion.repair_active_version_history(brain_home)
+
+    assert [a["action"] for a in actions] == ["repaired"]
+    assert actions[0]["version"] == 1
+    assert promotion.authority_gaps(brain_home) == []
+    marker = (
+        brain_home / paths.SKILL_LEVEL_DIRS["active"] / "orphan" / promotion.AUTHORITY_MARKER
+    )
+    assert json.loads(marker.read_text(encoding="utf-8"))["last_active_version"] == 1
+    # Idempotent: the bound version is now readable, so a second pass has nothing to do.
+    assert promotion.repair_active_version_history(brain_home) == []
+
+
+def test_repair_active_version_history_refuses_without_a_declared_version(brain_home):
+    """Missing evidence fails conservatively: no version is invented, the gap stays."""
+    directory = brain_home / paths.SKILL_LEVEL_DIRS["active"] / "unversioned"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(
+        "---\nname: unversioned\nstatus: active\n---\n\n# Purpose\n\n- x\n",
+        encoding="utf-8",
+    )
+    _legacy_active_record(brain_home, "unversioned")
+
+    actions = promotion.repair_active_version_history(brain_home)
+
+    assert [a["action"] for a in actions] == ["version_unavailable"]
+    assert promotion.authority_gaps(brain_home) == ["unversioned"]
+    assert not (directory / promotion.AUTHORITY_MARKER).exists()
+
+
 # ---------------------------------------------------------------------------
 # Audit follow-up: failure boundaries found by the independent verification
 # ---------------------------------------------------------------------------

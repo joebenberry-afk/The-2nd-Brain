@@ -281,6 +281,81 @@ def authority_gaps(home: Path) -> list[str]:
     return gaps
 
 
+def repair_active_version_history(home: Path) -> list[dict]:
+    """Bind the artifact's declared version to active publications that lack one.
+
+    A publication committed before version binding existed leaves the active
+    version unreconstructable: doctor reports the skill as lacking committed
+    authority, and a later promotion has no baseline to compare against (audit
+    F-03). The version bound here is the artifact's own declared version — the
+    same rule journal recovery uses — so the repair can never raise the recorded
+    baseline above the published artifact, and it refuses when the artifact
+    declares none. History stays append-only: the repair adds a record.
+    """
+    active_dir = _skill_dir(home, "active")
+    if not active_dir.is_dir():
+        return []
+    actions: list[dict] = []
+    for entry in sorted(active_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        try:
+            records = _read_records(home, name)
+        except BrainError as exc:
+            actions.append(
+                {"skill": name, "action": "records_unreadable", "detail": str(exc)[:120]}
+            )
+            continue
+        active = [r for r in records if r.get("to_level") == "active"]
+        if not active or any(isinstance(r.get("resulting_version"), int) for r in active):
+            continue
+        latest = sorted(active, key=lambda r: r.get("ts", ""))[-1]
+        version = _recovered_active_version(home, name, latest)
+        if version is None:
+            actions.append({"skill": name, "action": "version_unavailable"})
+            continue
+        try:
+            path = _write_record(
+                home,
+                {
+                    "skill_name": name,
+                    "kind": "authority_history_repair",
+                    "from_level": "active",
+                    "to_level": "active",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "session_id": "promotions-repair-versions",
+                    "resulting_version": version,
+                    "reason": (
+                        "authority-history reconstruction (audit F-03): the active "
+                        f"publication at {latest.get('ts')} predates version binding "
+                        "and carried no resulting_version"
+                    ),
+                },
+            )
+        except BrainError as exc:
+            actions.append({"skill": name, "action": "record_failed", "detail": str(exc)[:120]})
+            continue
+        promotion_id = latest.get("promotion_id")
+        marker_written = _write_authority_marker(
+            home,
+            name,
+            "active",
+            version,
+            promotion_id if isinstance(promotion_id, str) else None,
+        )
+        actions.append(
+            {
+                "skill": name,
+                "action": "repaired",
+                "version": version,
+                "record": path.name,
+                "marker_written": marker_written,
+            }
+        )
+    return actions
+
+
 def _version_check(home: Path, skill_name: str) -> tuple[bool, str | None, int | None]:
     """§119 version gate: the artifact must carry a valid positive integer
     version, and it must strictly exceed any version this skill previously
