@@ -283,9 +283,21 @@ gate these: they run through the disposable fixture path already proven in
 Label: **M00_PARTIAL_EXTERNAL_BLOCKER** — not `M00_CANDIDATE_QUALIFIED`. **Production activation: NOT PERFORMED.**
 
 Evidence for the candidate, bound to the commits in this file and to `docs/intake/m00-evidence/`:
-extension suite 772/772; the applicable Python set 398 passed; `ruff` and `pyright` clean; the replay
-cases with their mutations; the ten-worker sequence and the ownership/receipt/cancellation matrix; the
-#2b increment with its mutation; the issuance-chain reproduction.
+extension suite **772/772** (35 files, run from `brainstem/prime-extension`); the applicable Python set
+**426 passed / exit 0** (15 files: schema, writer admission, ledger, vmem ×3, governor, telemetry ×2, backup,
+migrations property, db, cleanup, contracts, worker recovery); `ruff` and `pyright` clean; `tsc` and
+`eslint` exit 0; the replay cases with their mutations; the ten-worker sequence and the
+ownership/receipt/cancellation matrix; the #2b increment with its mutation; the issuance-chain
+reproduction.
+
+**Correction (Jev, 2026-09-22).** The first version of this paragraph quoted "398 passed" — a figure
+measured *before* the accounting change — as though it were bound to the committed bytes. Jev returned
+that claim `contradicted` (0.68, confidence 0.51); it was right, the number was stale, and it has been
+re-measured above on the current bytes. Digests of the three files whose behaviour this paragraph
+covers, at commit `b886cf5` + the identity repair: `governor.py` `66ab9b22…`, `telemetry.py`
+`98739b5f…`, `sensors.ts` `32138ef2…` (the first two thirds-of-hash prefixes shown; full values in the
+session transcript). Note the auditor's earlier binding evidence named the pre-repair digests — that
+binding covered the intermediate state, and these supersede it for the current one.
 
 Gates that are genuinely open, each with what would close it:
 
