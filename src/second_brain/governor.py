@@ -18,12 +18,14 @@ import logging
 import os
 import re
 import sqlite3
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import economics, ledger, telemetry
+from . import db, economics, ledger, paths, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -957,3 +959,182 @@ def check_budget(home: Path | str, session_id: str, role: str) -> dict[str, Any]
     else:
         state = "OK"
     return {"state": state, "used": used, "cap": cap}
+
+
+def _reservations_dbfile(home: Path) -> Path:
+    return paths.db_path(home)
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _budget_state(effective: int, cap: int, soft_ratio: float) -> str:
+    if effective >= cap:
+        return "HARD"
+    if effective >= cap * soft_ratio:
+        return "SOFT"
+    return "OK"
+
+
+def _outstanding_tokens(conn: sqlite3.Connection, session_id: str) -> int:
+    row = conn.execute(
+        "SELECT COALESCE(SUM(tokens), 0) AS total FROM budget_reservations "
+        "WHERE session_id=? AND consumed_at IS NULL",
+        (session_id,),
+    ).fetchone()
+    return int(row["total"]) if row is not None else 0
+
+
+def list_budget_reservations(
+    home: Path | str, session_id: str | None = None
+) -> list[dict[str, Any]]:
+    """Outstanding (unconsumed) reservations, oldest first.
+
+    They survive process boundaries on purpose: a restart reads them to reconcile
+    admissions that were reserved but never completed.
+    """
+    dbfile = _reservations_dbfile(Path(home))
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        if session_id is None:
+            rows = conn.execute(
+                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL ORDER BY created_at"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM budget_reservations WHERE consumed_at IS NULL AND session_id=? "
+                "ORDER BY created_at",
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def reserve_budget(
+    home: Path | str,
+    session_id: str,
+    task_id: str,
+    role: str = "worker",
+    tokens: int | None = None,
+) -> dict[str, Any]:
+    """Atomically check capacity and reserve budget for one worker admission.
+
+    The capacity check and the reservation happen inside one ``BEGIN IMMEDIATE``
+    transaction, so two concurrent reservations cannot both pass on the same capacity.
+    The reservation is idempotent per ``(session_id, task_id)``: reserving twice does not
+    consume twice. A refusal writes nothing, so it never releases ownership and never
+    marks an admission approved.
+    """
+    home_path = Path(home)
+    budgets = _budget_config(home_path)
+    cap = int(budgets["worker_tokens"] if role == "worker" else budgets["session_tokens"])
+    soft_ratio = float(budgets["soft_ratio"])
+    requested = int(tokens) if tokens is not None else cap
+    try:
+        used: int | None = _session_total_tokens(home_path, session_id) + _descendant_total_tokens(
+            home_path, session_id
+        )
+    except FileNotFoundError:
+        # No telemetry recorded for this session yet: nothing has been spent, which is a
+        # *resolved* zero rather than an unresolvable accounting state. Treating it as
+        # unavailable would refuse the first worker of every fresh session.
+        used = 0
+    except Exception:
+        # Genuinely unresolvable (unreadable or malformed usage): fail closed. A session
+        # that cannot be accounted for must not consume budget it cannot be charged for.
+        logger.debug("reserve_budget accounting unavailable (fail-closed)", exc_info=True)
+        used = None
+    dbfile = _reservations_dbfile(home_path)
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM budget_reservations WHERE session_id=? AND task_id=?",
+            (session_id, task_id),
+        ).fetchone()
+        if existing is not None and existing["consumed_at"] is None:
+            outstanding = _outstanding_tokens(conn, session_id)
+            conn.commit()
+            return {
+                "state": (
+                    "OK" if used is None else _budget_state(used + outstanding, cap, soft_ratio)
+                ),
+                "reserved": True,
+                "idempotent": True,
+                "used": used,
+                "cap": cap,
+                "outstanding": outstanding,
+                "requested": int(existing["tokens"]),
+            }
+        outstanding = _outstanding_tokens(conn, session_id)
+        if used is None:
+            conn.rollback()
+            return {
+                "state": "HARD",
+                "reserved": False,
+                "reason": "ACCOUNTING_UNAVAILABLE",
+                "used": None,
+                "cap": cap,
+                "outstanding": outstanding,
+                "requested": requested,
+            }
+        if used + outstanding + requested > cap:
+            conn.rollback()
+            return {
+                "state": "HARD",
+                "reserved": False,
+                "reason": "BUDGET_EXHAUSTED",
+                "used": used,
+                "cap": cap,
+                "outstanding": outstanding,
+                "requested": requested,
+            }
+        conn.execute(
+            "INSERT INTO budget_reservations"
+            "(reservation_id,session_id,task_id,role,tokens,created_at) VALUES(?,?,?,?,?,?)",
+            (uuid.uuid4().hex, session_id, task_id, role, requested, _now_iso()),
+        )
+        conn.commit()
+        total = used + outstanding + requested
+        return {
+            "state": _budget_state(total, cap, soft_ratio),
+            "reserved": True,
+            "idempotent": False,
+            "used": used,
+            "cap": cap,
+            "outstanding": outstanding + requested,
+            "requested": requested,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def consume_budget_reservation(
+    home: Path | str, session_id: str, task_id: str, consumed_by: str | None = None
+) -> dict[str, Any]:
+    """Consume a reservation exactly once; a repeat call reports it was already consumed."""
+    dbfile = _reservations_dbfile(Path(home))
+    db.migrate(dbfile)
+    conn = db.connect(dbfile)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "UPDATE budget_reservations SET consumed_at=?, consumed_by=? "
+            "WHERE session_id=? AND task_id=? AND consumed_at IS NULL",
+            (_now_iso(), consumed_by, session_id, task_id),
+        )
+        consumed = cursor.rowcount == 1
+        conn.commit()
+        return {"consumed": consumed, "already_consumed": not consumed}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

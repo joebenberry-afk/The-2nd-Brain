@@ -626,6 +626,74 @@ already-recorded result and is not an ownership path. So the "single guarded fin
 for ownership: the other two names are distinct *purposes* (lease renewal, unbound-reservation cleanup),
 not competing release gates.
 
+## Jev adjudication of the closed-gate claims (2026-09-22)
+
+`jev_verify`, seven claims batched against raw evidence excerpts (code lines, experiment output,
+vitest output). Result: **7 verified, 0 contradicted, 0 unsupported, 0 flagged for review**.
+
+| Claim | Verdict (confidence) |
+| --- | --- |
+| Terminal state + `worker_attempt_results` row commit in one transaction | verified (0.81) |
+| Pre-commit kill leaves no partial terminal record; ownership still held | verified (1.00) |
+| A `read_only` claim does not change authentication for a persisted mutating attempt | verified (1.00) |
+| A refused completion yields no mirror dispatch and no mirror record | verified (1.00) |
+| Ten sequential workers released and permitted successors without expiry wait | verified (0.99) |
+| Ownership release requires an authenticated receipt with `executor_settled AND cleanup_complete` | verified (1.00) |
+| The ledger emit is post-commit and its loss does not change the binding verdict | verified (1.00) |
+
+Honest weighting: the weakest is the transaction claim at 0.81 — the evidence shows a single
+`conn.commit()` with `rollback` on exception and the emit after `conn.close()`, which *supports* one
+transaction without proving no second implicit one elsewhere in the write set. That is exactly what
+the independent verifier's C4 checks by reproduction, so it is not accepted on the model's word.
+Per the repository's Jev rules, these verdicts direct further investigation; they do not replace the
+deterministic tests or the independent verifier, and they are not used here to close anything on their
+own.
+
+## Reserve-before-dispatch: Brain-side capability DELIVERED AND TESTED, extension gate NOT YET WIRED (2026-09-22)
+
+Owner policy (register line 370) is "implement atomic check+reserve, refusal non-releasing". What is
+now in the candidate and executed:
+
+| Element | State |
+| --- | --- |
+| `migrations/0025_budget_reservations.sql` | new table + unique `(session_id, task_id)` index |
+| `governor.reserve_budget / consume_budget_reservation / list_budget_reservations` | implemented |
+| `governor reserve-budget \| consume-budget-reservation \| budget-reservations` CLI | implemented; a refusal exits **3** so a caller can fail closed without parsing stdout |
+| `tests/test_governor_reservations.py` | 6 passed |
+| `budget-bridge.reserveBudget` + case in `tests/budget-caps.test.ts` | 4 passed (file), including the new case |
+
+Evidence of the acceptance items: check and reservation share one `BEGIN IMMEDIATE`, so two concurrent
+`reserve-budget` processes for 80 of a 100 cap cannot both succeed (test asserts exactly one reserved
+row); a reservation survives a process boundary, is idempotent per `(session, task)` (re-reserving does
+not consume twice), is consumed exactly once, and a refused reservation writes **no** row — so it cannot
+release or alter writer ownership. `check-budget` semantics are unchanged and still report spend, not
+reservations. Gates: `ruff` clean, `pyright` 0 errors, `tsc` clean, vitest 9 passed, pytest 6 passed.
+
+**Policy decision recorded, because it changed the first draft:** a session with no telemetry yet is a
+**resolved zero** (`FileNotFoundError` from `_session_total_tokens` → `used = 0`), not unresolvable
+accounting. Treating it as unavailable made the first worker of every fresh session unrestartable —
+observed directly (`reserved: false, reason: ACCOUNTING_UNAVAILABLE` on an empty home). Genuinely
+unreadable or malformed usage still fails closed and refuses. In the bridge, `BUDGET_EXHAUSTED` and
+`ACCOUNTING_UNAVAILABLE` set `blocksDispatch`; a transport failure reports `RESERVATION_UNAVAILABLE`
+without blocking, which preserves the availability semantics the existing check bridge already has.
+
+**NOT WIRED — and no reserve-before-dispatch claim is made.** The extension still does not reserve
+before a worker dispatch, and does not consume on completion. Exact remaining work, both parts together:
+reserve immediately before the preparation call in `src/index.ts:1566` (`safeWorkerContextRunner`, the
+first budget-consuming step of a dispatch) and consume at completion/undispatched release
+(`src/index.ts:1955` accepted path, `:1483` `releaseUndispatchedAdmission`). They must land together:
+reserving without consuming would consume the role cap permanently after the first worker. The call site
+sits in the settlement-guard region that this campaign's tests exercise, so it needs the guard tests run
+alongside — deliberately not half-applied here.
+
+**Delegation note:** mutating workers are unavailable in this session — both `task` and
+`feature-implementer` dispatches were refused by the harness with
+`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` — so per the mandate's fallback the authorized driver
+implemented this in the isolated candidate. Read-only specialists (`scout`, `implementation-verifier`)
+dispatch normally; the verifier has **no execution tools**, so its verdicts on executed claims were
+UNDEMONSTRATED by construction (useful static corroboration, no reproduction). An execution-capable
+verifier is still outstanding for the new reservation evidence.
+
 ## RESUME CAPSULE — ledger-mirror trace (2026-09-22, context exhaustion)
 
 **State:** candidate worktree `.worktrees/m00.3-producer-guard`, branch `brain/m00.3-producer-guard`.

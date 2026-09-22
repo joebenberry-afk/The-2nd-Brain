@@ -1159,6 +1159,43 @@ def _parser() -> argparse.ArgumentParser:
     )
     gov_budget.add_argument("--json", action="store_true", help="machine-readable output")
 
+    gov_reserve = govs.add_parser(
+        "reserve-budget",
+        parents=[home_parent],
+        help="atomically check capacity and reserve worker budget before dispatch",
+    )
+    gov_reserve.add_argument("--session", required=True, help="host session id")
+    gov_reserve.add_argument(
+        "--task-id", required=True, help="worker task the reservation belongs to"
+    )
+    gov_reserve.add_argument(
+        "--role", default="worker", help="role profile; 'worker' uses [budgets] worker_tokens"
+    )
+    gov_reserve.add_argument(
+        "--tokens", type=int, default=None, help="tokens to reserve (default: the role cap)"
+    )
+    gov_reserve.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_consume = govs.add_parser(
+        "consume-budget-reservation",
+        parents=[home_parent],
+        help="consume a budget reservation exactly once at completion",
+    )
+    gov_consume.add_argument("--session", required=True, help="host session id")
+    gov_consume.add_argument(
+        "--task-id", required=True, help="worker task the reservation belongs to"
+    )
+    gov_consume.add_argument("--consumed-by", default=None, help="why it was consumed")
+    gov_consume.add_argument("--json", action="store_true", help="machine-readable output")
+
+    gov_res_list = govs.add_parser(
+        "budget-reservations",
+        parents=[home_parent],
+        help="outstanding (unconsumed) budget reservations, for restart reconciliation",
+    )
+    gov_res_list.add_argument("--session", default=None, help="filter to one host session")
+    gov_res_list.add_argument("--json", action="store_true", help="machine-readable output")
+
     fw = sub.add_parser(
         "firewall",
         parents=[home_parent],
@@ -4194,6 +4231,45 @@ def cmd_governor(args) -> int:
         except KeyError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
+
+    if args.governor_command == "reserve-budget":
+        reservation = governor.reserve_budget(
+            home, args.session, args.task_id, args.role, args.tokens
+        )
+        if args.json:
+            print(json.dumps(reservation))
+        else:
+            print(
+                f"state={reservation['state']} reserved={reservation['reserved']} "
+                f"used={reservation['used']} cap={reservation['cap']} "
+                f"outstanding={reservation['outstanding']}"
+                + (f" reason={reservation['reason']}" if reservation.get("reason") else "")
+            )
+        # A refusal is a distinct outcome, not an error: exit 3 lets a caller fail closed
+        # without having to parse stdout.
+        return 0 if reservation["reserved"] else 3
+
+    if args.governor_command == "consume-budget-reservation":
+        consumed = governor.consume_budget_reservation(
+            home, args.session, args.task_id, args.consumed_by
+        )
+        if args.json:
+            print(json.dumps(consumed))
+        else:
+            print(f"consumed={consumed['consumed']}")
+        return 0
+
+    if args.governor_command == "budget-reservations":
+        rows = governor.list_budget_reservations(home, args.session)
+        if args.json:
+            print(json.dumps({"reservations": rows}))
+        else:
+            for row in rows:
+                print(
+                    f"{row['session_id']} {row['task_id']} tokens={row['tokens']} "
+                    f"role={row['role']} at={row['created_at']}"
+                )
+        return 0
 
     if args.governor_command == "check-budget":
         result = governor.check_budget(home, args.session, args.role)
