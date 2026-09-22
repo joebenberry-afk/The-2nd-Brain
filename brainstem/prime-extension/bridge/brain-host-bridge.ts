@@ -40,7 +40,7 @@ export const CAPABILITIES: readonly Capability[] = [
 
 export interface Advertisement {
   protocol_version: 1;
-  bridge: { name: string; version: string };
+  bridge: { name: string; version: string; sha256?: string };
   host: { vendor: string; name: string; version: string };
   capabilities: Record<Capability, boolean>;
   evidence: Record<Capability, string>;
@@ -229,7 +229,14 @@ export function terminalStatusFor(
   return null;
 }
 
-export function advertise(options: { hostVersion: string; context?: unknown }): Advertisement {
+export function advertise(options: {
+  hostVersion: string;
+  /** Digest of the bridge artifact that produced this advertisement. Optional here so an
+   *  unqualified host can still advertise; a *qualification* requires it (Brain refuses a
+   *  record whose bridge hash is not the digest the advertisement carries). */
+  bridgeSha256?: string;
+  context?: unknown;
+}): Advertisement {
   const surfaces = narrowSurfaces(options.context);
   const snapshotAvailable = snapshotShapeUsable(surfaces);
   const rows = snapshotAvailable ? snapshotRows(surfaces) : [];
@@ -288,7 +295,11 @@ export function advertise(options: { hostVersion: string; context?: unknown }): 
   };
   return {
     protocol_version: PROTOCOL_VERSION,
-    bridge: { name: BRIDGE_NAME, version: BRIDGE_VERSION },
+    bridge: {
+      name: BRIDGE_NAME,
+      version: BRIDGE_VERSION,
+      ...(options.bridgeSha256 === undefined ? {} : { sha256: options.bridgeSha256 }),
+    },
     host: { vendor: "oh-my-pi", name: "pi-coding-agent", version: options.hostVersion },
     capabilities,
     evidence,

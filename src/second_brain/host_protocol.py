@@ -246,6 +246,23 @@ def _generation(value: Any, field: str = "host_generation") -> int:
     return value
 
 
+def _bridge_digest(value: Any) -> str | None:
+    """The digest a manifest may carry for the bridge artifact it was produced by.
+
+    Optional in the manifest — an unqualified host may omit it — but a *qualification*
+    requires it to equal the record's bridge hash. Otherwise the record's bridge_sha256
+    would be decorative: a record could be paired with any bridge at all, which is the
+    attack class "qualified advertisement, different bridge".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise HostProtocolError(
+            "MALFORMED_MANIFEST", "bridge.sha256 must be a sha256 hex digest when present"
+        )
+    return value
+
+
 def parse_manifest(raw: Any) -> dict[str, Any]:
     """Validate a bridge advertisement.
 
@@ -288,6 +305,7 @@ def parse_manifest(raw: Any) -> dict[str, Any]:
         "bridge": {
             "name": _token(bridge.get("name"), "bridge.name"),
             "version": _text(bridge.get("version"), "bridge.version", limit=64),
+            "sha256": _bridge_digest(bridge.get("sha256")),
         },
         "host": {
             "vendor": _token(host.get("vendor"), "host.vendor"),
@@ -338,6 +356,14 @@ def verify_advertisement(
             f"advertisement names {host['vendor']}/{host['name']} {host['version']}, "
             f"qualified record is {qualified.vendor}/{qualified.name} {qualified.version}",
         )
+    bridge_digest = manifest["bridge"]["sha256"]
+    if bridge_digest is None or bridge_digest != qualified.bridge_sha256:
+        raise HostProtocolError(
+            "BRIDGE_NOT_QUALIFIED",
+            f"advertisement carries bridge digest {bridge_digest!r}; the record qualifies "
+            f"{qualified.bridge_sha256} — a qualified advertisement from a different bridge "
+            "is not a qualified bridge",
+        )
     return AdvertisementProvenance(host=qualified, advertisement_sha256=digest)
 
 
@@ -377,6 +403,9 @@ def negotiate(
         and provenance.advertisement_sha256 == provenance.host.advertisement_sha256
         and (provenance.host.vendor, provenance.host.name, provenance.host.version)
         == (host["vendor"], host["name"], host["version"])
+        # Same value by construction as well: the bridge named by the record must be the
+        # bridge that produced this advertisement.
+        and provenance.host.bridge_sha256 == (manifest["bridge"]["sha256"] or "")
     )
     safety_gate = (
         "advertisement is not bound to a qualified host identity"

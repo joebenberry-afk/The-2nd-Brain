@@ -8,7 +8,9 @@
  *   bun emit-advertisement.ts --package <path/to/package.json> [--context real|absent]
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   advertise,
   executionIdForAgent,
@@ -150,6 +152,12 @@ function selfCheck(): boolean {
   // Converse of the evidence rule: a readable-but-empty snapshot proves nothing about row
   // fields, so both row-dependent capabilities must be false. (Jev flagged this as a claim
   // I had asserted without executing.)
+  // The digest is optional in the bridge and required for a qualification: both halves
+  // are checked here so neither can silently drift.
+  record("advertisement omits an unknown bridge digest", undefined,
+    advertise({ hostVersion: "x", context }).bridge.sha256);
+  record("advertisement carries the digest it was given", "0".repeat(64),
+    advertise({ hostVersion: "x", bridgeSha256: "0".repeat(64), context }).bridge.sha256);
   const empty = advertise({ hostVersion: "empty", context: emptySnapshotContext() }).capabilities;
   record("empty snapshot advertises no binding", false, empty.execution_binding);
   record("empty snapshot advertises no cancellation", false, empty.cancellation_observation);
@@ -170,7 +178,11 @@ if (!selfCheck()) {
 }
 
 const context = contextMode === "absent" ? {} : stockContext();
-console.log(JSON.stringify(advertise({ hostVersion: hostVersion(packagePath), context })));
+console.log(
+  JSON.stringify(
+    advertise({ hostVersion: hostVersion(packagePath), bridgeSha256: bridgeSha256(), context }),
+  ),
+);
 
 const observations: Array<HostObservation | null> = [
   observeBinding(context, { attemptId: "attempt-sample", hostGeneration: 1, agentId: "ReconWorker" }),
@@ -183,4 +195,18 @@ const observations: Array<HostObservation | null> = [
 ];
 for (const observation of observations) {
   if (observation !== null) console.log(JSON.stringify(observation));
+}
+
+/**
+ * Digest of the bridge module this entry loads, read from its own file.
+ *
+ * Self-reported by construction: it detects drift between the bridge that produced an
+ * advertisement and the bridge a qualification record names, which is the attack class
+ * "qualified advertisement, different bridge". It is not an impersonation boundary — a
+ * hostile bridge could report the honest digest of other bytes — which is exactly why
+ * `authenticated_observation_source` is advertised false.
+ */
+function bridgeSha256(): string {
+  const modulePath = fileURLToPath(new URL("./brain-host-bridge.ts", import.meta.url));
+  return createHash("sha256").update(readFileSync(modulePath)).digest("hex");
 }

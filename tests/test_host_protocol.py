@@ -17,13 +17,17 @@ import pytest
 
 from second_brain import host_protocol
 
+#: The digest a bridge reports for its own artifact. Any 64-hex value works as a fixture;
+#: what matters is that the record and the advertisement must agree on it.
+_BRIDGE_SHA = "b" * 64
+
 
 def _manifest(**capabilities: bool) -> dict:
     base = {name: False for name in host_protocol.CAPABILITIES}
     base.update(capabilities)
     return {
         "protocol_version": 1,
-        "bridge": {"name": "brain-host-bridge", "version": "1.0.0"},
+        "bridge": {"name": "brain-host-bridge", "version": "1.0.0", "sha256": _BRIDGE_SHA},
         "host": {"vendor": "oh-my-pi", "name": "pi-coding-agent", "version": "18.2.8"},
         "capabilities": base,
     }
@@ -48,7 +52,7 @@ def _qualification(advertisement: dict, **overrides: str) -> host_protocol.Quali
         "name": "pi-coding-agent",
         "version": "18.2.8",
         "advertisement_sha256": host_protocol.advertisement_sha256(advertisement),
-        "bridge_sha256": "a" * 64,
+        "bridge_sha256": _BRIDGE_SHA,
     }
     fields.update(overrides)
     return host_protocol.QualifiedHostIdentity(**fields)  # type: ignore[arg-type]
@@ -427,7 +431,7 @@ def test_ambiguous_json_is_refused_not_resolved_by_key_order() -> None:
                     vendor="oh-my-pi",
                     name="pi-coding-agent",
                     version="18.2.8",
-                    advertisement_sha256="a" * 64,
+                    advertisement_sha256=_BRIDGE_SHA,
                     bridge_sha256="b" * 64,
                 ),
             ),
@@ -479,7 +483,7 @@ def test_bytes_and_parsed_advertisements_hash_identically() -> None:
         name="pi-coding-agent",
         version="18.2.8",
         advertisement_sha256=host_protocol.advertisement_sha256(advertisement),
-        bridge_sha256="a" * 64,
+        bridge_sha256=_BRIDGE_SHA,
     )
 
     provenance = host_protocol.verify_advertisement(raw, qualified=qualified)
@@ -533,3 +537,55 @@ def test_the_conformance_cli_refuses_an_ambiguous_advertisement_file(tmp_path: P
 
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "DUPLICATE_JSON_KEY" in completed.stdout
+
+
+# --- the bridge artifact binding ----------------------------------------------
+
+
+def test_a_record_for_a_different_bridge_is_refused() -> None:
+    """The attack class "qualified advertisement, different bridge".
+
+    Before this check existed the record's bridge_sha256 was decorative: the advertisement
+    carried no digest to compare, so a record pinning an unrelated bridge hash was accepted
+    and that hash flowed into the provenance. A qualified advertisement from a different
+    bridge is not a qualified bridge.
+    """
+    advertisement = _capable()
+    qualified = _qualification(advertisement, bridge_sha256="a" * 64)
+
+    with pytest.raises(host_protocol.HostProtocolError) as excinfo:
+        host_protocol.verify_advertisement(advertisement, qualified=qualified)
+
+    assert excinfo.value.code == "BRIDGE_NOT_QUALIFIED"
+
+
+def test_an_advertisement_without_a_bridge_digest_cannot_be_qualified() -> None:
+    """Absent is refused, not ignored: omitting the digest must not skip the binding."""
+    advertisement = _capable()
+    del advertisement["bridge"]["sha256"]
+    # The record must match these exact bytes, so the refusal can only come from the
+    # missing bridge digest rather than from the advertisement hash.
+    qualified = _qualification(advertisement)
+
+    with pytest.raises(host_protocol.HostProtocolError) as excinfo:
+        host_protocol.verify_advertisement(advertisement, qualified=qualified)
+
+    assert excinfo.value.code == "BRIDGE_NOT_QUALIFIED"
+
+
+def test_a_hand_built_provenance_cannot_skip_the_bridge_binding() -> None:
+    """verify_advertisement refuses; negotiation must not be a second, weaker door."""
+    advertisement = _capable()
+    digest = host_protocol.advertisement_sha256(advertisement)
+    stray = host_protocol.QualifiedHostIdentity(
+        vendor="oh-my-pi",
+        name="pi-coding-agent",
+        version="18.2.8",
+        advertisement_sha256=digest,
+        bridge_sha256="c" * 64,
+    )
+    provenance = host_protocol.AdvertisementProvenance(host=stray, advertisement_sha256=digest)
+
+    decision = host_protocol.negotiate(advertisement, provenance=provenance)
+
+    assert decision["features"]["mutating_delegation"]["enabled"] is False
