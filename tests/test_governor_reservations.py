@@ -181,18 +181,29 @@ def test_cancellation_cli_returns_capacity_only_with_evidence(tmp_path: Path) ->
     assert json.loads(refilled.stdout)["reserved"] is True
 
 
-def test_check_budget_behavior_is_unchanged(tmp_path: Path) -> None:
+def test_check_budget_reports_the_episode_liability_beside_spend(tmp_path: Path) -> None:
     home = _home(tmp_path, worker_tokens=100)
-    result = governor.check_budget(home, "s1", "worker")
-    assert set(result) >= {"state", "used", "cap"}
-    assert result["cap"] == 100
+
+    # No recorded usage is unknown, not zero: the reader does not invent a fact.
+    assert governor.check_budget(home, "s1", "worker") == {
+        "state": "OK",
+        "used": None,
+        "cap": 100,
+        "outstanding": 0,
+        "available": None,
+        "error": "ACCOUNTING_UNAVAILABLE",
+    }
 
     reservation = governor.reserve_budget(home, "s1", "t1", tokens=40)
     assert reservation["reserved"] is True
-    # check-budget keeps its own contract: it reports spend, not reservations.
+
+    # The booking admission just took stays visible while spend is unknown: state is spend-based,
+    # the liability is not hidden by it.
     after = governor.check_budget(home, "s1", "worker")
     assert after["state"] == "OK"
     assert after["cap"] == 100
+    assert after["outstanding"] == 40
+    assert after["available"] is None
 
 
 def _rows(home: Path) -> list[dict[str, object]]:

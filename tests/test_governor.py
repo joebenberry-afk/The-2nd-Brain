@@ -1021,7 +1021,13 @@ class TestCheckBudget:
         ]
         _write_session(brain_home, "budget-ok", records)
         result = governor.check_budget(brain_home, "budget-ok", "driver")
-        assert result == {"state": "OK", "used": 200, "cap": 400000}
+        assert result == {
+            "state": "OK",
+            "used": 200,
+            "cap": 400000,
+            "outstanding": 0,
+            "available": 399800,
+        }
 
     def test_soft_cap_at_boundary(self, brain_home):
         """Usage exactly at cap * soft_ratio is SOFT (>= boundary)."""
@@ -1029,7 +1035,13 @@ class TestCheckBudget:
         records = [_rec("assistant_usage", session="budget-soft", total_tokens=96000)]
         _write_session(brain_home, "budget-soft", records)
         result = governor.check_budget(brain_home, "budget-soft", "worker")
-        assert result == {"state": "SOFT", "used": 96000, "cap": 120000}
+        assert result == {
+            "state": "SOFT",
+            "used": 96000,
+            "cap": 120000,
+            "outstanding": 0,
+            "available": 24000,
+        }
 
     def test_soft_cap_just_below_boundary_is_ok(self, brain_home):
         """One token below the soft threshold stays OK."""
@@ -1049,7 +1061,13 @@ class TestCheckBudget:
         records = [_rec("assistant_usage", session="budget-hard", total_tokens=120000)]
         _write_session(brain_home, "budget-hard", records)
         result = governor.check_budget(brain_home, "budget-hard", "worker")
-        assert result == {"state": "HARD", "used": 120000, "cap": 120000}
+        assert result == {
+            "state": "HARD",
+            "used": 120000,
+            "cap": 120000,
+            "outstanding": 0,
+            "available": 0,
+        }
 
     def test_worker_role_uses_worker_cap(self, brain_home):
         """role == 'worker' caps at worker_tokens, not session_tokens."""
@@ -1062,12 +1080,21 @@ class TestCheckBudget:
         assert result["cap"] == 400000
 
     def test_missing_telemetry_fails_open_without_factual_zero(self, brain_home):
-        """Unavailable accounting is explicit while the governor remains fail-open."""
+        """Unavailable accounting is explicit while the governor remains fail-open.
+
+        A session with no telemetry at all is *unknown* here, not a factual zero -- this reader
+        reports what it can prove. Admission has the same input and must still decide, so
+        ``reserve_budget`` reads a session with no recorded history as a resolved zero; the
+        distinction is deliberate and pinned by
+        ``test_a_session_without_telemetry_is_unknown_to_the_reader_and_zero_to_admission``.
+        """
         result = governor.check_budget(brain_home, "never-existed", "driver")
         assert result == {
             "state": "OK",
             "used": None,
             "cap": 400000,
+            "outstanding": 0,
+            "available": None,
             "error": "ACCOUNTING_UNAVAILABLE",
         }
 
@@ -1085,6 +1112,8 @@ class TestCheckBudget:
             "state": "OK",
             "used": None,
             "cap": 400000,
+            "outstanding": 0,
+            "available": None,
             "error": "ACCOUNTING_UNAVAILABLE",
         }
 
@@ -1103,7 +1132,13 @@ class TestCheckBudget:
         records = [_rec("assistant_usage", session="budget-custom", total_tokens=500)]
         _write_session(brain_home, "budget-custom", records)
         result = governor.check_budget(brain_home, "budget-custom", "driver")
-        assert result == {"state": "SOFT", "used": 500, "cap": 1000}
+        assert result == {
+            "state": "SOFT",
+            "used": 500,
+            "cap": 1000,
+            "outstanding": 0,
+            "available": 500,
+        }
 
     def test_descendant_usage_counts_toward_parent(self, brain_home):
         """A worker session rooted at the parent contributes its total_tokens
@@ -1224,6 +1259,8 @@ class TestCheckBudget:
             "state": "OK",
             "used": 15,
             "cap": 30,
+            "outstanding": 0,
+            "available": 15,
         }
 
     def test_unidentified_observations_are_charged_in_full(self, brain_home):
@@ -1248,6 +1285,8 @@ class TestCheckBudget:
             "state": "HARD",
             "used": 40,
             "cap": 30,
+            "outstanding": 0,
+            "available": -10,
         }
 
     def test_independent_roots_nested_worker_duplicate_resume_and_old_home(self, brain_home):
@@ -1300,7 +1339,9 @@ class TestCheckBudget:
         duplicate_dir.mkdir(parents=True)
         shutil.copy2(nested_db, duplicate_dir / "ledger.sqlite")
 
-        expected_a = {"state": "OK", "used": 65, "cap": 100}
+        # The episode witness: 10 (root) + 15 (child) + 40 (nested) = 65, with the duplicate
+        # nested ledger row and the second root ledger both contributing nothing new.
+        expected_a = {"state": "OK", "used": 65, "cap": 100, "outstanding": 0, "available": 35}
         assert governor.check_budget(brain_home, root_a, "driver") == expected_a
         _write_ledger_session(brain_home, root_a, project_id="project-one")
         assert governor.check_budget(brain_home, root_a, "driver") == expected_a
@@ -1308,16 +1349,24 @@ class TestCheckBudget:
             "state": "OK",
             "used": 5,
             "cap": 100,
+            "outstanding": 0,
+            "available": 95,
         }
         assert governor.check_budget(brain_home, root_c, "driver") == {
             "state": "SOFT",
             "used": 90,
             "cap": 100,
+            "outstanding": 0,
+            "available": 10,
         }
+        # A nested session resolves the ROOT episode's book: 65 of the 40-token worker cap, so
+        # the answer is over budget rather than a comfortable 40 of 40 from its own usage alone.
         assert governor.check_budget(brain_home, nested_a, "worker") == {
             "state": "HARD",
-            "used": 40,
+            "used": 65,
             "cap": 40,
+            "outstanding": 0,
+            "available": -25,
         }
 
     def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(self, brain_home):
@@ -1340,6 +1389,8 @@ class TestCheckBudget:
             "state": "OK",
             "used": 20,
             "cap": 120000,
+            "outstanding": 0,
+            "available": 119980,
         }
 
     def test_malformed_telemetry_fails_open_with_diagnostic(self, brain_home):
@@ -1351,6 +1402,8 @@ class TestCheckBudget:
             "state": "OK",
             "used": None,
             "cap": 120000,
+            "outstanding": 0,
+            "available": None,
             "error": "ACCOUNTING_UNAVAILABLE",
         }
 
@@ -1368,5 +1421,7 @@ class TestCheckBudget:
             "state": "OK",
             "used": None,
             "cap": 400000,
+            "outstanding": None,
+            "available": None,
             "error": "ACCOUNTING_UNAVAILABLE",
         }
