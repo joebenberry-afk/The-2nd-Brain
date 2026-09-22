@@ -45,6 +45,7 @@ import type {
 import { createHash } from "node:crypto";
 import {
   createNativeSettlementObserver,
+  nativeJobIdForAgent,
   type NativeAsyncJobSnapshot,
   type NativeSubagentLifecycleFrame,
 } from "./native-settlement";
@@ -932,7 +933,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // deliveries later settle those same correlations.
   const pendingWorkerJobs = new Map<
     string,
-    { taskId: string; packetSha256: string; parentSessionId: string; agent: string; agentId: string }
+    {
+      taskId: string;
+      packetSha256: string;
+      parentSessionId: string;
+      agent: string;
+      agentId: string;
+      /** True when the key is the agent id because no manager job id was resolvable. */
+      keyedByAgentFallback: boolean;
+    }
   >();
   interface WorkerAdmission {
     taskId: string;
@@ -1326,6 +1335,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           parentSessionId: admission.parentSessionId,
           agent: admission.agent,
           agentId: observation.agentId,
+          keyedByAgentFallback: false,
         });
         journalWorkerEvent(admission.parentSessionId, "second-brain.worker-job-pending", {
           session: admission.parentSessionId,
@@ -2043,9 +2053,19 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           continue;
         }
         pendingWorkerTaskIds.add(data.taskId);
+        // Legacy journal entries predate the flag: the observer path keyed by the real
+        // manager id, the progress path keyed by the agent id. An entry whose recorded
+        // job id IS its agent id cannot be told apart, so it takes the conservative
+        // case — the delivery must name the agent before it settles.
+        const recordedFallback =
+          "keyedByAgentFallback" in data ? data.keyedByAgentFallback === true : undefined;
+        const keyedByAgentFallback =
+          recordedFallback === true ||
+          (recordedFallback === undefined && data.jobId === data.agentId);
         pendingWorkerJobs.set(key, {
           taskId: data.taskId, packetSha256: data.packetSha256, parentSessionId: session, agent: data.agent,
           agentId: data.agentId,
+          keyedByAgentFallback,
         });
         const admission = workerAdmissionsByTask.get(data.taskId);
         if (
@@ -2158,16 +2178,29 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // rendered output and agent-name equality are not correlation sources.
     const rawProgress = details.progress;
     if (Array.isArray(rawProgress)) {
+      // One snapshot per batch: it names both ids (`id` plus `agentId`) for running
+      // and recent jobs, which is the only authoritative agent -> manager-job map
+      // the stock host exposes (the hub serializer drops agentId).
+      const asyncJobSnapshot: unknown =
+        typeof ctx.getAsyncJobSnapshot === "function" ? ctx.getAsyncJobSnapshot() : null;
       for (const rawEntry of rawProgress) {
         if (rawEntry == null || typeof rawEntry !== "object") continue;
         const entry = rawEntry as Record<string, unknown>;
         const agentId = typeof entry.id === "string" ? entry.id : undefined;
         // This OMP version reports the manager job as `entry.id` and leaves
-        // `entry.jobId` null (verified live 2026-09-21); the hub job snapshot and
-        // the async-result envelope both key that same job by `id`, so without the
-        // fallback every read-only worker is dropped, never settled, and reaped
-        // FAILED/lease_expired (m00.3 §15.2).
-        const jobId = typeof entry.jobId === "string" ? entry.jobId : agentId;
+        // `entry.jobId` null (verified live 2026-09-21), so the manager id is
+        // RESOLVED, never guessed from the agent id: a background job can already
+        // hold the agent id, which pushes this spawn's manager id to `<id>-2`, and a
+        // guessed key would then settle whichever other worker owns that id.
+        const managerJobId =
+          typeof entry.jobId === "string"
+            ? entry.jobId
+            : (nativeJobIdForAgent(asyncJobSnapshot, agentId ?? "") ?? undefined);
+        // An unresolvable manager id falls back to the agent id, and such an entry is
+        // settled only when the delivery NAMES the agent: the id alone is not identity,
+        // because a job already holding that id pushes another spawn onto it.
+        const keyedByAgentFallback = managerJobId === undefined;
+        const jobId = managerJobId ?? agentId;
         const entryTask = typeof entry.task === "string" ? entry.task : "";
         const marker = entryTask.match(WORKER_TASK_MARKER_RE);
         if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
@@ -2202,6 +2235,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           parentSessionId: marker[3] ?? session,
           agent: typeof entry.agent === "string" ? entry.agent : "unknown",
           agentId,
+          keyedByAgentFallback,
         });
         journalWorkerEvent(session, "second-brain.worker-job-pending", {
           session, jobId, attemptId: admission.attemptId, ...pendingWorkerJobs.get(key),
@@ -2273,7 +2307,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         reportBypassedWorkerJob(session, jobId, job.agentId, job.status, "hub_job_snapshot");
         continue;
       }
-      if (job.agentId !== undefined && job.agentId !== pending.agentId) {
+      // The snapshot names the worker as `agentId` on some paths and as
+      // `agentUrlId` when the job carries a structured result — the live stock
+      // shape for `task` jobs (verified 2026-09-21). When either is present it
+      // must name the worker this entry is bound to; otherwise the entry is not
+      // settled, because a job that already holds the agent id pushes another
+      // spawn's manager id onto it and the id alone would then attribute the
+      // completion to the wrong worker.
+      const namedAgent =
+        typeof job.agentId === "string"
+          ? job.agentId
+          : typeof job.agentUrlId === "string"
+            ? job.agentUrlId
+            : undefined;
+      if (namedAgent === undefined && pending.keyedByAgentFallback) {
+        // No manager job id was resolvable for this spawn, so the key is the agent id
+        // and a delivery that names no agent cannot prove which worker settled.
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_UNVERIFIED"));
+        continue;
+      }
+      if (namedAgent !== undefined && namedAgent !== pending.agentId) {
         getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
         continue;
       }
@@ -2342,6 +2395,13 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       if (job.agentId !== pending.agentId) {
         getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
+        continue;
+      }
+      if (pending.keyedByAgentFallback && job.jobId !== pending.agentId) {
+        // The envelope names both ids, so a fallback-keyed entry is settled only when
+        // the manager id it carries is the agent id it was keyed by; anything else
+        // means the manager renamed this spawn and the id belongs to another worker.
+        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_UNVERIFIED"));
         continue;
       }
       const status = job.status === "completed" || job.status === "failed" || job.status === "cancelled" ? job.status : undefined;
@@ -2938,9 +2998,16 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (config.home && !capabilityReportedSessions.has(session)) {
         capabilityReportedSessions.add(session);
         try {
-          mkdirSync(join(config.home, "state"), { recursive: true });
+          // Per-session evidence, never one mutable "current" claim: any probe or
+          // test context that resolves this home could otherwise publish a
+          // capability set for the host it is not running on (observed
+          // 2026-09-21: a fixture session wrote cleanup_backed_release:true into
+          // the single live file, contradicting the real host).
+          const dir = join(config.home, "state", "host-capabilities");
+          mkdirSync(dir, { recursive: true });
+          const name = `${createHash("sha256").update(session, "utf8").digest("hex").slice(0, 16)}.json`;
           writeFileSync(
-            join(config.home, "state", "host-capabilities.json"),
+            join(dir, name),
             JSON.stringify(
               { reported_at: new Date().toISOString(), session, ...hostCapabilities(ctx) },
               null,

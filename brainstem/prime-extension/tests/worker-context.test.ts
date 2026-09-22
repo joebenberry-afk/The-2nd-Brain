@@ -446,6 +446,9 @@ describe("OMP worker Context Capsule bridge", () => {
       block: true,
       reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE",
     });
+    // Refusal happens before the context RPC and before any binding, so no
+    // admission, reservation or lease is created for the refused spawn.
+    expect(contextRunner).not.toHaveBeenCalled();
     expect(lifecycleRunner).not.toHaveBeenCalled();
     expect(bindRunner).not.toHaveBeenCalled();
     expect(subscribers.size).toBe(0);
