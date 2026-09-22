@@ -475,8 +475,8 @@ def test_case_4d_the_adopted_predecessor_answers_the_public_readers(brain_home) 
         conn.execute(
             "INSERT INTO session_vmem (obj_id, internal_session_id, kind, title, summary,"
             " content_sha256, token_estimate, residency_state, created_at, last_accessed_at,"
-            " metadata_json) VALUES ('o1',?, 'research_result','legacy title','s','h',7,"
-            "'resident','2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00','{}')",
+            " metadata_json) VALUES ('o1',?, 'RESEARCH_RESULT','legacy title','s','h',7,"
+            "'RESIDENT','2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00','{}')",
             (internal_id,),
         )
         conn.commit()
