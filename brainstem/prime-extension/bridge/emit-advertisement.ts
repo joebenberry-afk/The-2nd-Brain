@@ -93,6 +93,15 @@ function statusRenamedContext(): unknown {
   };
 }
 
+/** A well-formed but empty snapshot: the surface is readable, and it carries no evidence
+ *  about row fields, so neither row-dependent capability may be advertised from it. */
+function emptySnapshotContext(): unknown {
+  return {
+    events: { on: () => () => undefined },
+    getAsyncJobSnapshot: () => ({ running: [], recent: [] }),
+  };
+}
+
 /** Executed checks for the behaviours a review flagged. Returns the verdict; the caller
  *  refuses to advertise when it is false. */
 function selfCheck(): boolean {
@@ -138,6 +147,12 @@ function selfCheck(): boolean {
   record("renamed status disables cancellation_observation", false, statusRenamed.cancellation_observation);
   const stockCaps = advertise({ hostVersion: "stock", context }).capabilities;
   record("readable status keeps cancellation_observation", true, stockCaps.cancellation_observation);
+  // Converse of the evidence rule: a readable-but-empty snapshot proves nothing about row
+  // fields, so both row-dependent capabilities must be false. (Jev flagged this as a claim
+  // I had asserted without executing.)
+  const empty = advertise({ hostVersion: "empty", context: emptySnapshotContext() }).capabilities;
+  record("empty snapshot advertises no binding", false, empty.execution_binding);
+  record("empty snapshot advertises no cancellation", false, empty.cancellation_observation);
 
   const ok = checks.every((check) => check.ok);
   console.error(JSON.stringify({ self_check: "bridge behaviours", checks, ok }));
