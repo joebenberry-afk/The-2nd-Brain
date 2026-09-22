@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from second_brain import db, omp_adapter, paths, registry, worker_protocol
+from second_brain import contracts, db, ledger, omp_adapter, paths, registry, worker_protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ID = "replay-project"
@@ -144,6 +144,23 @@ def command_setup(args: argparse.Namespace) -> int:
     make_brain(home)
     repo = make_repo(base)
     registry.add_project(home, repo, project_id=PROJECT_ID)
+    # The host session's ledger is a precondition of the completion mirror: the extension appends a
+    # `worker_completed` event to the *host* session's ledger, and the CLI refuses to initialize a
+    # session implicitly. Production has this session (the host creates it); the fixture represents
+    # that state rather than letting the mirror fail for a reason unrelated to what is under test.
+    with ledger.LedgerStore(home, args.host_session, host="omp").open(create=True) as store:
+        store.create_session(
+            contracts.BrainSessionIdentity(
+                internal_session_id=ledger.internal_session_id(args.host_session),
+                host="omp",
+                host_session_id=args.host_session,
+                project_id=PROJECT_ID,
+                created_at="2026-01-01T00:00:00.000Z",
+                status="active",
+                pinned=False,
+                schema_version=ledger.LEDGER_SCHEMA_VERSION,
+            )
+        )
     context = admit(home, repo, args.task_id, args.intent, args.host_session)
     if args.intent == "mutating":
         binding = bind(home, args.task_id, context, args.host_session)
