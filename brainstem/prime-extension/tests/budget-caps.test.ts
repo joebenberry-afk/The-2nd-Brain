@@ -1,5 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import factory, {
@@ -174,6 +176,37 @@ describe("T3.1 Hard and soft budget caps", () => {
 
   });
 
+
+  it("reserveBudget bridge refuses on the decided cases and never invents a reservation", async () => {
+    const { reserveBudget } = await import("../src/budget-bridge");
+    const home = mkdtempSync(join(tmpdir(), "sb-reserve-bridge-"));
+    const python = fileURLToPath(new URL("../../../.venv/Scripts/python.exe", import.meta.url));
+
+    // Zero remaining allowance: the Brain refuses, and the bridge must block the dispatch.
+    mkdirSync(join(home, "config"), { recursive: true });
+    writeFileSync(join(home, "config", "governor.toml"),
+      "[budgets]\nworker_tokens = 10\n", "utf8");
+    const granted = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t1", tokens: 10, python });
+    expect(granted.reserved, JSON.stringify(granted)).toBe(true);
+    expect(granted.blocksDispatch).toBe(false);
+    expect(granted.outstanding).toBe(10);
+
+    const refused = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t2", tokens: 10, python });
+    expect(refused.reserved).toBe(false);
+    expect(refused.reason).toBe("BUDGET_EXHAUSTED");
+    expect(refused.blocksDispatch, "a budget refusal blocks the dispatch").toBe(true);
+
+    // Re-reserving the same task is idempotent: it must not consume capacity twice.
+    const again = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t1", tokens: 10, python });
+    expect(again.reserved).toBe(true);
+    expect(again.outstanding).toBe(10);
+
+    // A broken bridge reports itself rather than pretending a reservation happened.
+    const broken = await reserveBudget({ home, sessionId: "bridge-session", taskId: "t3", python: join(home, "no-python.exe") });
+    expect(broken.reserved).toBe(false);
+    expect(broken.reason).toBe("RESERVATION_UNAVAILABLE");
+    expect(broken.blocksDispatch, "transport failure keeps existing availability semantics").toBe(false);
+  });
 
   it("runBudgetCheck bridge parses CLI JSON output and handles fail-open", async () => {
     const failOpen = await runBudgetCheck({

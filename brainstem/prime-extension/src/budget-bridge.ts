@@ -112,3 +112,113 @@ export function runBudgetCheck(options: BudgetCheckOptions): Promise<BudgetCheck
 
   return promise;
 }
+
+export interface BudgetReserveOptions extends BudgetCheckOptions {
+  /** The worker task this reservation belongs to; idempotent per (session, task). */
+  taskId: string;
+  /** Tokens to reserve; the Brain defaults to the role cap. */
+  tokens?: number;
+}
+
+export interface BudgetReserveResult {
+  reserved: boolean;
+  /** The decided fail-closed outcome: this dispatch must not proceed. */
+  blocksDispatch: boolean;
+  state: BudgetState;
+  used: number | null;
+  cap: number;
+  outstanding: number;
+  reason?: string;
+  error?: string;
+}
+
+export type BudgetReserver = (options: BudgetReserveOptions) => Promise<BudgetReserveResult>;
+
+/**
+ * Atomically check capacity and reserve budget before a worker dispatch.
+ *
+ * Unlike the budget *check*, this is fail-closed on the cases the owner's policy names:
+ * zero remaining allowance and unresolved accounting both refuse the dispatch. A bridge
+ * failure is reported as `RESERVATION_UNAVAILABLE` and does not block on its own -- that
+ * keeps the transport availability semantics of `runBudgetCheck` and leaves the caller to
+ * record the error, with the refusal path reserved for real budget answers.
+ */
+export function reserveBudget(options: BudgetReserveOptions): Promise<BudgetReserveResult> {
+  const python =
+    options.python ??
+    process.env.SECOND_BRAIN_PYTHON ??
+    join(options.home, ".venv", "Scripts", "python.exe");
+  const env: Record<string, string | undefined> = { ...process.env };
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  env.SECOND_BRAIN_HOME = options.home;
+  const role = options.role || "worker";
+  const args = [
+    "-m",
+    "second_brain",
+    "--home",
+    options.home,
+    "governor",
+    "reserve-budget",
+    "--session",
+    options.sessionId,
+    "--task-id",
+    options.taskId,
+    "--role",
+    role,
+    "--json",
+  ];
+  if (options.tokens !== undefined) args.push("--tokens", String(options.tokens));
+
+  const { promise, resolve } = createResolvers<BudgetReserveResult>();
+
+  execFile(
+    python,
+    args,
+    {
+      cwd: options.home,
+      env,
+      timeout: options.timeoutMs ?? BUDGET_DEFAULT_TIMEOUT_MS,
+      windowsHide: true,
+    },
+    (error, stdout) => {
+      // A refusal exits 3 with a well-formed body, so stdout is parsed before the
+      // process status is treated as a transport failure.
+      let parsed: Record<string, unknown> | null = null;
+      try {
+        parsed = JSON.parse(stdout) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
+      if (parsed === null) {
+        resolve({
+          reserved: false,
+          blocksDispatch: false,
+          state: "OK",
+          used: null,
+          cap: 0,
+          outstanding: 0,
+          reason: "RESERVATION_UNAVAILABLE",
+          ...(error ? { error: error.message } : { error: "INVALID_JSON" }),
+        });
+        return;
+      }
+      const reserved = parsed.reserved === true;
+      const reason = typeof parsed.reason === "string" ? parsed.reason : undefined;
+      const degraded = parsed.reason === "ACCOUNTING_UNAVAILABLE";
+      const state: BudgetState =
+        parsed.state === "HARD" ? "HARD" : parsed.state === "SOFT" ? "SOFT" : "OK";
+      resolve({
+        reserved,
+        blocksDispatch: !reserved && (reason === "BUDGET_EXHAUSTED" || degraded),
+        state,
+        used: typeof parsed.used === "number" && Number.isFinite(parsed.used) ? Number(parsed.used) : null,
+        cap: typeof parsed.cap === "number" ? parsed.cap : 0,
+        outstanding: typeof parsed.outstanding === "number" ? parsed.outstanding : 0,
+        ...(reason ? { reason } : {}),
+      });
+    },
+  );
+
+  return promise;
+}
