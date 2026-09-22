@@ -475,6 +475,29 @@ def test_component_shape_refuses_a_shape_the_authority_cannot_name(brain_home) -
     assert "unsupported layout" in str(excinfo.value)
 
 
+def test_component_shape_treats_a_view_where_a_table_belongs_as_absent(brain_home) -> None:
+    """Only a real table satisfies a registered table; a view carrying the name does not.
+
+    The open refuses earlier, on the unrecognised table the view is built over — which is the
+    point: the file is refused rather than treated as a database whose `events` merely moved.
+    """
+    session_id = "authority-view"
+    conn = _ledger_only_schema(brain_home, session_id)
+    try:
+        conn.execute("ALTER TABLE events RENAME TO events_moved")
+        conn.execute("CREATE VIEW events AS SELECT * FROM events_moved")
+        conn.commit()
+        shape = brain_schema.component_shape(conn, "ledger")
+    finally:
+        conn.close()
+    assert shape.state == "unsupported", shape
+    assert "events" in shape.absent_tables, shape.absent_tables
+
+    with pytest.raises(BrainError) as excinfo, _open_ledger(brain_home, session_id):
+        pass
+    assert "unidentified existing tables" in str(excinfo.value)
+
+
 # --- data preservation and the accounting witness --------------------------------------
 
 

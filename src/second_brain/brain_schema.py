@@ -456,15 +456,17 @@ def component_shape(
         raise BrainError(f"shared schema: component {component!r} is not registered")
     expected = registered_shapes(source)
     tables = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
+        str(row[0]): str(row[1])
+        for row in conn.execute("SELECT name,type FROM sqlite_master WHERE type IN ('table','view')")
     }
     mine = set(source[component].tables) | {META_TABLE}
-    absent = tuple(sorted(name for name in mine if name in expected and name not in tables))
+    absent = tuple(
+        sorted(name for name in mine if name in expected and tables.get(name) != "table")
+    )
     missing: dict[str, tuple[str, ...]] = {}
     unexpected: dict[str, tuple[str, ...]] = {}
     altered: list[str] = []
-    for name in sorted(name for name in mine if name in expected and name in tables):
+    for name in sorted(name for name in mine if name in expected and tables.get(name) == "table"):
         table_info, foreign_keys = expected[name]
         actual_info = tuple(tuple(row) for row in conn.execute(f'PRAGMA table_info("{name}")'))
         actual_keys = tuple(
