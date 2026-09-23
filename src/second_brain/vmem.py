@@ -333,25 +333,28 @@ class VMemStore:
         """
         with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
             conn.execute("PRAGMA busy_timeout=5000")
-            conn.execute("PRAGMA journal_mode=WAL")
+            db.ensure_wal(conn, required=True)
             conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("BEGIN IMMEDIATE")
             try:
                 brain_schema.ensure(conn=conn, component="vmem", create=True)
-                # An adopted predecessor keeps its own shape, and the authority deliberately never
-                # re-alterns a table that already exists. The additive columns such a database
-                # predates are therefore applied here — inside the same write reservation as the
-                # adoption decision, so an interrupted open rolls back to the shape it started
-                # from instead of leaving a half-migrated table behind. Idempotent: a column that
-                # is already present is not altered again.
-                existing_columns = {
-                    str(row[1]).casefold()
-                    for row in conn.execute("PRAGMA table_info(session_vmem)").fetchall()
-                }
-                for column, ddl in _VMEM_ADDITIVE_COLUMNS:
-                    if column.casefold() not in existing_columns:
-                        conn.execute(f"ALTER TABLE session_vmem ADD COLUMN {column} {ddl}")
+                # The shared authority names the only legal additive predecessor. Do not
+                # infer permission to migrate from a local list of columns alone.
+                shape = brain_schema.component_shape(conn, "vmem")
+                additions = dict(_VMEM_ADDITIVE_COLUMNS)
+                if (
+                    shape.state == "unsupported"
+                    or set(shape.missing) - {"session_vmem"}
+                    or set(shape.missing.get("session_vmem", ())) - additions.keys()
+                ):
+                    raise BrainError(
+                        "vmem schema has an unsupported layout; preserve it before maintenance"
+                    )
+                for column in shape.missing.get("session_vmem", ()):
+                    conn.execute(
+                        f"ALTER TABLE session_vmem ADD COLUMN {column} {additions[column]}"
+                    )
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")

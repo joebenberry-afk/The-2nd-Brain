@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any
 
 from .errors import BrainError
@@ -100,6 +101,7 @@ class DatabaseIdentity:
     has_rows: bool = False
 
 _REGISTRY: dict[str, Component] = {}
+_CACHE_LOCK = RLock()
 
 
 def register(name: str, tables: tuple[str, ...], ddl: str) -> None:
@@ -115,15 +117,24 @@ def register(name: str, tables: tuple[str, ...], ddl: str) -> None:
             f"shared schema: component {name!r} declares {declared} but the authority "
             f"recognises {tuple(sorted(canonical))}"
         )
-    existing = _REGISTRY.get(name)
-    if existing is not None and (existing.tables, existing.ddl) != (tuple(tables), ddl):
-        raise BrainError(f"shared schema: component {name!r} registered twice with different DDL")
-    _REGISTRY[name] = Component(name=name, tables=tuple(tables), ddl=ddl)
+    global _REFERENCE_OBJECTS, _CANONICAL_COLUMNS
+    with _CACHE_LOCK:
+        existing = _REGISTRY.get(name)
+        if existing is not None and (existing.tables, existing.ddl) != (tuple(tables), ddl):
+            raise BrainError(
+                f"shared schema: component {name!r} registered twice with different DDL"
+            )
+        if existing is None:
+            # Late imports must not reuse an earlier component's derived shape.
+            _REFERENCE_OBJECTS = {}
+            _CANONICAL_COLUMNS = {}
+        _REGISTRY[name] = Component(name=name, tables=tuple(tables), ddl=ddl)
 
 
 def components() -> dict[str, Component]:
     """Every registered component, in a deterministic order."""
-    return {name: _REGISTRY[name] for name in sorted(_REGISTRY)}
+    with _CACHE_LOCK:
+        return {name: _REGISTRY[name] for name in sorted(_REGISTRY)}
 
 
 def known_tables(components_map: dict[str, Component] | None = None) -> frozenset[str]:
@@ -410,43 +421,56 @@ def _registered_objects(
     table's shadow tables alongside it, which is why this covers the reserved names too.
     """
     global _REFERENCE_OBJECTS
-    if _REFERENCE_OBJECTS:
-        return _REFERENCE_OBJECTS
-    components_map = source if source is not None else components()
-    conn = sqlite3.connect(":memory:")
-    try:
-        for name in sorted(components_map):
-            for statement in _statements(components_map[name].ddl):
-                conn.execute(statement)
-        objects: dict[str, _RegisteredObject] = {}
-        for table, sql in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'"):
-            name = str(table)
-            objects[name] = _RegisteredObject(
-                virtual=isinstance(sql, str) and "using fts5" in sql.casefold(),
-                columns=tuple(
-                    str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')
-                ),
-                table_info=tuple(
-                    tuple(row) for row in conn.execute(f'PRAGMA table_info("{name}")')
-                ),
-                foreign_keys=tuple(
-                    tuple(row) for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')
-                ),
-            )
-        _REFERENCE_OBJECTS = objects
-        return objects
-    finally:
-        conn.close()
+    with _CACHE_LOCK:
+        current = components()
+        components_map = source if source is not None else current
+        cacheable = components_map == current
+        if cacheable and _REFERENCE_OBJECTS:
+            return _REFERENCE_OBJECTS
+        conn = sqlite3.connect(":memory:")
+        try:
+            for name in sorted(components_map):
+                for statement in _statements(components_map[name].ddl):
+                    conn.execute(statement)
+            objects: dict[str, _RegisteredObject] = {}
+            for table, sql in conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='table'"
+            ):
+                name = str(table)
+                objects[name] = _RegisteredObject(
+                    virtual=isinstance(sql, str) and "using fts5" in sql.casefold(),
+                    columns=tuple(
+                        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')
+                    ),
+                    table_info=tuple(
+                        tuple(row) for row in conn.execute(f'PRAGMA table_info("{name}")')
+                    ),
+                    foreign_keys=tuple(
+                        tuple(row) for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')
+                    ),
+                )
+            if cacheable:
+                _REFERENCE_OBJECTS = objects
+            return objects
+        finally:
+            conn.close()
 
 
 def canonical_columns(source: dict[str, Component] | None = None) -> dict[str, list[str]]:
     """The column list each registered table must have, derived from the registered DDL."""
     global _CANONICAL_COLUMNS
-    if not _CANONICAL_COLUMNS:
-        _CANONICAL_COLUMNS = {
-            name: list(obj.columns) for name, obj in _registered_objects(source).items()
+    with _CACHE_LOCK:
+        current = components()
+        components_map = source if source is not None else current
+        cacheable = components_map == current
+        if cacheable and _CANONICAL_COLUMNS:
+            return _CANONICAL_COLUMNS
+        columns = {
+            name: list(obj.columns) for name, obj in _registered_objects(components_map).items()
         }
-    return _CANONICAL_COLUMNS
+        if cacheable:
+            _CANONICAL_COLUMNS = columns
+        return columns
 
 
 def registered_shapes(

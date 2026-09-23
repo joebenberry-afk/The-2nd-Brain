@@ -512,9 +512,10 @@ def test_case_7b_competing_first_open_across_real_processes(brain_home, tmp_path
         for index, mode in enumerate(mode_by_child)
     ]
     gate.write_text("go\n", encoding="utf-8")
-    results = [
-        (child.wait(timeout=60), child.stderr.read(), child.stdout.read()) for child in children
-    ]
+    results = []
+    for child in children:
+        stdout, stderr = child.communicate(timeout=60)
+        results.append((child.returncode, stderr, stdout))
     for index, (returncode, stderr, stdout) in enumerate(results):
         assert returncode == 0, (index, stdout, stderr)
 
@@ -533,7 +534,6 @@ def test_case_7b_competing_first_open_across_real_processes(brain_home, tmp_path
     assert identity.version == brain_schema.SCHEMA_VERSION
     assert {"events", "session_vmem", "ledger_meta"} <= tables
 
-    reference = brain_home / "state" / "sessions" / "reference"
     with _open_ledger(brain_home, "reference"):
         pass
     _open_vmem(brain_home, "reference")
@@ -572,6 +572,49 @@ def _spawn_session_open(home, gate, out: Path, mode: str) -> subprocess.Popen[st
         text=True,
         env=env,
     )
+
+
+def test_vmem_late_registration_migrates_a_predecessor_in_a_cold_process(
+    brain_home,
+) -> None:
+    """A ledger first open must not cache away a subsequently imported VMem shape."""
+    script = (
+        "import sqlite3,sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0,sys.argv[2])\n"
+        "from second_brain import brain_schema,ledger\n"
+        "home=Path(sys.argv[1])\n"
+        "with ledger.LedgerStore(home,'prime-cache',host='test').open(create=True): pass\n"
+        "assert 'second_brain.vmem' not in sys.modules\n"
+        "old_source=brain_schema.components()\n"
+        "from second_brain import vmem\n"
+        "brain_schema.registered_shapes(old_source)\n"
+        "brain_schema.canonical_columns(old_source)\n"
+        "session='late-vmem'\n"
+        "path=home/'state'/'sessions'/ledger.internal_session_id(session)/'ledger.sqlite'\n"
+        "path.parent.mkdir(parents=True,exist_ok=True)\n"
+        "with sqlite3.connect(path) as conn:\n"
+        "    for statement in brain_schema._statements(vmem._VMEM_SCHEMA):\n"
+        "        conn.execute(statement)\n"
+        "    assert len(list(conn.execute('PRAGMA table_info(session_vmem)')))==15\n"
+        "vmem.VMemStore(home,session)\n"
+        "vmem.VMemStore(home,session)\n"
+        "with sqlite3.connect(path) as conn:\n"
+        "    assert len(list(conn.execute('PRAGMA table_info(session_vmem)')))==19\n"
+        "    assert brain_schema.component_shape(conn,'vmem').state=='current'\n"
+    )
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in ("PYTHONHOME", "PYTHONPATH")
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(brain_home), str(ROOT)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 # --- the authority decides the transition (store no longer classifies) ------------------
@@ -631,6 +674,29 @@ def test_component_shape_refuses_a_shape_the_authority_cannot_name(brain_home) -
     with pytest.raises(BrainError) as excinfo, _open_ledger(brain_home, session_id):
         pass
     assert "unsupported layout" in str(excinfo.value)
+
+
+def test_vmem_refuses_a_shape_the_authority_cannot_name(brain_home) -> None:
+    session_id = "vmem-unknown-shape"
+    _open_vmem(brain_home, session_id)
+    path = _session_file(brain_home, session_id)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("ALTER TABLE session_vmem ADD COLUMN foreign_column TEXT")
+        conn.commit()
+        assert brain_schema.component_shape(conn, "vmem").state == "unsupported"
+    finally:
+        conn.close()
+
+    with pytest.raises(BrainError, match="unsupported layout"):
+        _open_vmem(brain_home, session_id)
+    conn = sqlite3.connect(path)
+    try:
+        assert "foreign_column" in {
+            row[1] for row in conn.execute("PRAGMA table_info(session_vmem)")
+        }
+    finally:
+        conn.close()
 
 
 def test_component_shape_treats_a_view_where_a_table_belongs_as_absent(brain_home) -> None:
