@@ -1,0 +1,215 @@
+{
+  "probe": "native-noninterference",
+  "date": "20260923",
+  "model": "deepseek/deepseek-flash",
+  "extension": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\brainstem\\prime-extension\\src\\index.ts",
+  "installed_control": "C:\\Users\\assas\\.omp\\agent\\extensions\\second-brain\\index.ts",
+  "brain_home_files": [
+    "db\\brain.sqlite",
+    "state\\autoinject-emit-cache.json",
+    "state\\cache\\negative.sqlite",
+    "state\\extension-runtime-ready.json",
+    "state\\host-capabilities\\154c534413cd3977.json",
+    "state\\sessions\\154c534413cd3977f2795add035418c58fb674e4d7bc69efa6de9674da193411\\ledger.sqlite",
+    "state\\sessions\\154c534413cd3977f2795add035418c58fb674e4d7bc69efa6de9674da193411\\manifest.json",
+    "state\\sessions\\2026-09-23T21-21-19-706Z_01a0d024-fb5a-709d-ba5a-aef01a540436\\environment-evidence.json",
+    "state\\sessions\\2026-09-23T21-21-25-523Z_01a0d025-1213-7237-a8c6-53bf7506d12a\\environment-evidence.json",
+    "state\\sessions\\2026-09-23T21-21-39-612Z_01a0d025-491c-7028-9ca7-8d33fb63370b\\environment-evidence.json",
+    "state\\sessions\\2026-09-23T21-21-47-217Z_01a0d025-66d1-7074-9b31-fcb4c908b134\\environment-evidence.json",
+    "state\\sessions\\2026-09-23T21-21-47-243Z_01a0d025-66eb-729a-8e32-39b8d66934ea\\environment-evidence.json",
+    "state\\sessions\\2026-09-23T21-21-54-822Z_01a0d025-8486-7560-99e8-c839b776cd67\\environment-evidence.json",
+    "state\\sessions\\45dfe397a5ba744b85f6ec8cbe07b93fdbf456c1b5c99969ad1cc97c654f14cb\\ledger.sqlite",
+    "state\\sessions\\45dfe397a5ba744b85f6ec8cbe07b93fdbf456c1b5c99969ad1cc97c654f14cb\\manifest.json",
+    "state\\sessions\\50b646dd6bd25cc0b5237efb9e222f410fd63426f2c8597c5349855ec5e3ccbe\\ledger.sqlite",
+    "state\\sessions\\50b646dd6bd25cc0b5237efb9e222f410fd63426f2c8597c5349855ec5e3ccbe\\manifest.json",
+    "state\\sessions\\a9c7a4f24dae497c58f88bbf1d014ed6acfa89458829463d01b7488e5d3a85f7\\ledger.sqlite",
+    "state\\sessions\\a9c7a4f24dae497c58f88bbf1d014ed6acfa89458829463d01b7488e5d3a85f7\\manifest.json",
+    "state\\sessions\\e14c599bcdc7679620b253c43ce111405170b011bb6c8803757400237f6c2dc9\\ledger.sqlite",
+    "state\\sessions\\e14c599bcdc7679620b253c43ce111405170b011bb6c8803757400237f6c2dc9\\manifest.json",
+    "state\\sessions\\f1daedd7fc784a4252105a26b04de37a376e3e3b8e4fe2e9c141ea29a715f482\\ledger.sqlite",
+    "state\\sessions\\f1daedd7fc784a4252105a26b04de37a376e3e3b8e4fe2e9c141ea29a715f482\\manifest.json",
+    "telemetry\\agent-performance\\2026-09-23T21-21-19-706Z_01a0d024-fb5a-709d-ba5a-aef01a540436.jsonl",
+    "telemetry\\agent-performance\\2026-09-23T21-21-25-523Z_01a0d025-1213-7237-a8c6-53bf7506d12a.jsonl",
+    "telemetry\\agent-performance\\2026-09-23T21-21-39-612Z_01a0d025-491c-7028-9ca7-8d33fb63370b.jsonl",
+    "telemetry\\agent-performance\\2026-09-23T21-21-47-217Z_01a0d025-66d1-7074-9b31-fcb4c908b134.jsonl",
+    "telemetry\\agent-performance\\2026-09-23T21-21-47-243Z_01a0d025-66eb-729a-8e32-39b8d66934ea.jsonl",
+    "telemetry\\agent-performance\\2026-09-23T21-21-54-822Z_01a0d025-8486-7560-99e8-c839b776cd67.jsonl"
+  ],
+  "arm_workdir": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh",
+  "arms": [
+    {
+      "spawn_calls": 1,
+      "spawns": [
+        {
+          "names": [
+            "ProbeSonic"
+          ],
+          "agents": [
+            "sonic"
+          ],
+          "result": "{\"content\": [{\"type\": \"text\", \"text\": \"Spawned agent `ProbeSonic` (job `ProbeSonic`). Its result auto-delivers on yield; `hub jobs` only summarizes it, while `hub wait` can consume it first. DM `ProbeSonic` via `hub` send to coordinate while it runs; use `hub` only to inspect (`jobs`), wait, or canc",
+          "refused": false
+        }
+      ],
+      "spawned_agents": [
+        "ProbeSonic"
+      ],
+      "refused_spawns": [],
+      "other_tool_calls": [],
+      "final_text": [
+        "RESULT ProbeSonic"
+      ],
+      "interference_markers": {},
+      "interference_total": 0,
+      "arm": "brain_off_single",
+      "extension": null,
+      "returncode": 0,
+      "wall_seconds": 6.1,
+      "raw_path": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh\\brain_off_single\\raw.jsonl",
+      "stderr_tail": ""
+    },
+    {
+      "spawn_calls": 1,
+      "spawns": [
+        {
+          "names": [
+            "ProbeSonic"
+          ],
+          "agents": [
+            "sonic"
+          ],
+          "result": "{\"content\": [{\"type\": \"text\", \"text\": \"Spawned agent `ProbeSonic` (job `ProbeSonic`). Its result auto-delivers on yield; `hub jobs` only summarizes it, while `hub wait` can consume it first. DM `ProbeSonic` via `hub` send to coordinate while it runs; use `hub` only to inspect (`jobs`), wait, or canc",
+          "refused": false
+        }
+      ],
+      "spawned_agents": [
+        "ProbeSonic"
+      ],
+      "refused_spawns": [],
+      "other_tool_calls": [],
+      "final_text": [
+        "The task tool was called exactly once.\n\nRESULT ProbeSonic"
+      ],
+      "interference_markers": {},
+      "interference_total": 0,
+      "arm": "brain_on_single",
+      "extension": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\brainstem\\prime-extension\\src\\index.ts",
+      "returncode": 0,
+      "wall_seconds": 11.9,
+      "raw_path": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh\\brain_on_single\\raw.jsonl",
+      "stderr_tail": ""
+    },
+    {
+      "spawn_calls": 1,
+      "spawns": [
+        {
+          "names": [
+            "ProbeA",
+            "ProbeB"
+          ],
+          "agents": [
+            "sonic",
+            "sonic"
+          ],
+          "result": "{\"content\": [{\"type\": \"text\", \"text\": \"Spawned 2 background agents using sonic. Each result auto-delivers on yield; `hub jobs` only summarizes it, while `hub wait` can consume it first.\\n- `ProbeA` (job `ProbeA`)\\n- `ProbeB` (job `ProbeB`)\\nDM these ids via `hub` send to coordinate while they run; u",
+          "refused": false
+        }
+      ],
+      "spawned_agents": [
+        "ProbeA",
+        "ProbeB"
+      ],
+      "refused_spawns": [],
+      "other_tool_calls": [],
+      "final_text": [
+        "RESULT 0"
+      ],
+      "interference_markers": {},
+      "interference_total": 0,
+      "arm": "brain_off_batch",
+      "extension": null,
+      "returncode": 0,
+      "wall_seconds": 8.0,
+      "raw_path": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh\\brain_off_batch\\raw.jsonl",
+      "stderr_tail": ""
+    },
+    {
+      "spawn_calls": 1,
+      "spawns": [
+        {
+          "names": [
+            "ProbeA",
+            "ProbeB"
+          ],
+          "agents": [
+            "sonic",
+            "sonic"
+          ],
+          "result": "{\"content\": [{\"type\": \"text\", \"text\": \"Spawned 2 background agents using sonic. Each result auto-delivers on yield; `hub jobs` only summarizes it, while `hub wait` can consume it first.\\n- `ProbeA` (job `ProbeA`)\\n- `ProbeB` (job `ProbeB`)\\nDM these ids via `hub` send to coordinate while they run; u",
+          "refused": false
+        }
+      ],
+      "spawned_agents": [
+        "ProbeA",
+        "ProbeB"
+      ],
+      "refused_spawns": [],
+      "other_tool_calls": [],
+      "final_text": [
+        "RESULT 2"
+      ],
+      "interference_markers": {},
+      "interference_total": 0,
+      "arm": "brain_on_batch",
+      "extension": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\brainstem\\prime-extension\\src\\index.ts",
+      "returncode": 0,
+      "wall_seconds": 15.2,
+      "raw_path": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh\\brain_on_batch\\raw.jsonl",
+      "stderr_tail": ""
+    },
+    {
+      "spawn_calls": 1,
+      "spawns": [
+        {
+          "names": [
+            "Probe"
+          ],
+          "agents": [
+            "sonic"
+          ],
+          "result": "{\"content\": [{\"type\": \"text\", \"text\": \"BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE\"}], \"details\": {}}",
+          "refused": true
+        }
+      ],
+      "spawned_agents": [],
+      "refused_spawns": [
+        "Probe"
+      ],
+      "other_tool_calls": [],
+      "final_text": [
+        "RESULT BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE"
+      ],
+      "interference_markers": {
+        "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE": 13
+      },
+      "interference_total": 13,
+      "arm": "installed_build_single",
+      "extension": "C:\\Users\\assas\\.omp\\agent\\extensions\\second-brain\\index.ts",
+      "returncode": 0,
+      "wall_seconds": 11.0,
+      "raw_path": "C:\\Users\\assas\\AppData\\Local\\Temp\\ni-arms-ewxyggmh\\installed_build_single\\raw.jsonl",
+      "stderr_tail": ""
+    }
+  ],
+  "verdicts": {
+    "C1_native_single_spawn_succeeds": true,
+    "C2_native_batch_spawn_succeeds": true,
+    "C5_no_brain_settlement_permission_needed": true,
+    "C6_no_unauthorized_coordinator": true,
+    "C7_no_worker_admission_required": true,
+    "C8_no_budget_reservation_prerequisite": true,
+    "C9_no_coordinator_instruction_injection": true,
+    "C12_brain_on_matches_brain_off_spawn_semantics": true,
+    "probe_sensitivity_demonstrated": true
+  }
+}

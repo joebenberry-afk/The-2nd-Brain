@@ -33,16 +33,16 @@ candidate manifest is a byte comparison, never protected approval.
 
 | Finding | Retired subject | Applicable retained subject/status |
 |---|---|---|
-| M00-CORD-01/02, SB-ORCH-001, #3/#4/#5 | Coordinator custody, effective-grant worker admission, leases/settlement: `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Native host noninterference and memory/context consumer integrity: `OPEN` until real path qualified. |
-| SEC-AUTH-01 | Worker issuer only: retired, not fixed | Protected approval and caller-authored verification action: `OPEN`. |
-| SEC-AUTH-02 | Worker completion/observer-only authority: retired | `remember --grade VERIFIED`, origin, policy lane and trusted-memory authorization: `OPEN`. |
-| SEC-INTEGRITY-01 | Active worker settlement branch retired | Ledger chain, replay and migration integrity: `OPEN`. |
-| SEC-SKILL-01 / SB-PROMOTION-004 | None of approved skill consumption | Evaluation, protected approval, exact consumed bytes/dependencies: `OPEN`. |
-| FSUPD-01 / FSPATH-03 | Patched-host activation/rollback retired without qualification | Extension install, approval, copy and rollback: `OPEN`; installer tests do not prove protected approval. |
+| M00-CORD-01/02, SB-ORCH-001, #3/#4/#5 | Coordinator custody, effective-grant worker admission, leases/settlement: `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Native host noninterference: **executed** (§8 of the disposition record); memory/context consumer integrity: `OPEN` until real path qualified. |
+| SEC-AUTH-01 | Worker issuer only: retired, not fixed | Protected approval and caller-authored verification action: `OPEN — REPRODUCED ON RETAINED PATHS`; owner accept/defer decision required. |
+| SEC-AUTH-02 | Worker completion/observer-only authority: retired | `remember --grade`, origin and trusted-memory authority: `OPEN — REPRODUCED ON RETAINED PATHS`; owner accept/defer decision required. |
+| SEC-INTEGRITY-01 | Active worker settlement branch retired | Ledger chain/replay clauses **refuted** (full-envelope chain, genesis recomputation, replay rejects a broken chain); unkeyed self-anchored chain `DEFERRED` (key custody); unverified rehydration `FIXED + regression-tested` in this packet. |
+| SEC-SKILL-01 / SB-PROMOTION-004 | None of approved skill consumption | Consumption-time byte binding **refuted** on every retained route (Python + TS); approval-record authority `DEFERRED` to the SEC-AUTH-01 channel. |
+| FSUPD-01 / FSPATH-03 | Patched-host activation/rollback retired without qualification | Literal defect retired with the file; surviving installer: post-swap installed-tree verification `FIXED + Pester-tested`, path containment `DEFERRED (operator-chosen)`, protected approval `DEFERRED (blocked)`. |
 | FSLNCH-02 | Patched-host launcher retired; original seal retained | No current patched launcher to qualify. |
-| SEC-HOOK-02 | No general retirement | Retained hooks/process executable trust: `OPEN`. |
+| SEC-HOOK-02 | No general retirement | Managed hook route **closed and pinned by Pester**; non-hook search-path resolution `DEFERRED — LOW` (same-user blast radius). |
 | SB-PROMPT-002 / 003 | Worker task-context renderer retired | Project-ID model-visible sinks remain subject to validation; retrieved content has no instruction authority: `OPEN` for integrated proof. |
-| SEC-DEP-01 | No security waiver | Current dev lockfile advisory state: `OPEN` until assessed. |
+| SEC-DEP-01 | No security waiver | Dev-only: `js-yaml` HIGH `FIXED` by lockfile bump (audit `high: 0`); two `vitest`/`@vitest/mocker` moderates `DEFERRED` with named semver-major remediation. |
 | Aggregate usage reader | Retained accounting honesty | **FIXED + regression-tested** (`M00-FINAL` §1): counters the host never reported read as `None`/`null`/`-` with `token_usage_seen` coverage, explicit host zeros stay `0`, and `attribute_roles` counts unknown totals in `*_unknown_token_sessions`; `economics.verdict` already drops pairs with unknown tokens. Previously coerced to `0`. |
 | `scripts/run_p3_promotion_campaign.py` | Not an orchestration subject | Retained operator-invoked evaluation harness (operator-frozen model env; no Brain admission/lease/settlement; vendor CLI owns permissions). Scope-boundary header added; any future Brain-authority reach from it is a defect. |
 | #2a/#2b, #6, DOC-14 | Agent reservation/admission retired | Schema/recovery, honest passive usage and missing DOC-14 source: `OPEN` where applicable. |
@@ -70,16 +70,25 @@ settlement authority. The desired result is **Brain added no orchestration
 authority and native behavior stayed native**, not "Brain controls spawning
 correctly".
 
-Status: `OPEN / NOT PROVEN` — no real host differential has been executed
-against the frozen candidate yet (only a read-only installed-CLI probe). The
-observable checks that used to accompany this criterion (native `task`, single
-and batch workers, concurrency, `hub`/steering, workpool, cancellation,
-restart/revival, no injected coordinator contract, no Brain role gate, no
-Brain reservation before dispatch, no Brain credential or settlement receipt
-required, unchanged model selection, enabled memory/context for parent and
-children, clear refusal of explicitly enabled retired operations, and matched
-controls) are all still valid *observations* of non-interference; none of them
-requires or authorizes building Brain orchestration.
+Status: `EXECUTED` for the spawn surface on this candidate — see
+[`m00-evidence/high-dispositions-20260923.md`](m00-evidence/high-dispositions-20260923.md)
+§8 and the raw payload
+[`m00-evidence/native-noninterference-20260923.json`](m00-evidence/native-noninterference-20260923.json).
+Five arms (Brain-off/on × single/batch, plus a pre-removal sensitivity control)
+ran through `scripts/native_noninterference_probe.py` with a disposable brain
+home: candidate arms spawned native single and batch agents exactly as the
+Brain-off baseline did with zero interference markers, while the control was
+refused with `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` — so the probe is
+sensitive, not blind. Not covered there: `hub`/steering, workpool,
+cancellation/restart timing and model selection. The observable checks that used
+to accompany this criterion (native `task`, single and batch workers,
+concurrency, `hub`/steering, workpool, cancellation, restart/revival, no
+injected coordinator contract, no Brain role gate, no Brain reservation before
+dispatch, no Brain credential or settlement receipt required, unchanged model
+selection, enabled memory/context for parent and children, clear refusal of
+explicitly enabled retired operations, and matched controls) all remain valid
+*observations* of non-interference; none of them requires or authorizes building
+Brain orchestration.
 
 ### Test-retirement mapping
 
@@ -142,6 +151,33 @@ tracked pack: `docs/intake/m00-evidence/orchestrator-removal-gate-20260923.md`
   correction invalidates affected checks and requires a new subject.
 - Resolve retained applicable HIGHs before declaring the finite gate passed.
   No production activation or Stage 1 v3 claim follows from an incomplete gate.
+
+### Closure packet — retained-HIGH dispositions and native differential (2026-09-23)
+
+Executed evidence for this packet:
+`docs/intake/m00-evidence/retained-high-closure-20260923.md` (gates and limits),
+`m00-evidence/high-dispositions-20260923.md` (per finding),
+`m00-evidence/native-noninterference-20260923.json` (raw probe payload).
+
+- Gates on this subject: ruff clean, pyright `0 errors`, Python **2113 passed /
+  1 skipped / 0 failed**, extension `tsc --noEmit` and ESLint exit 0 with
+  vitest **26 files / 600 tests passed**, installer+rollback Pester **20/20**.
+- Native non-interference differential **executed**: five arms, 8/8 recorded
+  verdicts true, and a pre-removal sensitivity control that refuses the same
+  spawn — so the clean candidate result is a measurement, not an insensitive
+  probe. `hub`/steering, workpool, cancellation and model selection remain
+  observations.
+- Fixed in this packet: unverified ledger rehydration (fail-closed + regression
+  test), installer post-swap installed-tree verification (restore on mismatch,
+  Pester-covered), `js-yaml` dev-dependency HIGH (lockfile only; the sibling
+  worktree's installed tree was verified untouched).
+- Dispositioned per finding in the table above. Still blocking until the owner
+  decides: `SEC-AUTH-01`, `SEC-AUTH-02`.
+- Environment note for the next session: Python gates must address the candidate
+  interpreter by **absolute path**. A relative `.venv/Scripts/python.exe` here
+  reaches the main checkout's venv, and child processes then import a sibling
+  worktree's package — which is what the `Qualification runtime source
+  mismatch` guard exists to catch.
 
 ## Historical campaign record — superseded, preserved verbatim below
 

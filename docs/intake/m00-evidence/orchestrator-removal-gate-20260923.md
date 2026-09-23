@@ -239,6 +239,12 @@ Full suite on the amended subject: **2112 passed, 1 skipped, 0 failed**.
 - **Native non-interference is not proved** (`M00-NATIVE-ORCH-01`
   `OPEN`): no real OMP session invoked native `task`/`batch`/`hub` against this
   candidate under a matched control.
+- **Latest update (later packet, not part of this record's subject):** the
+  `M00-NATIVE-ORCH-01` line and the HIGH-findings line below were superseded by
+  [`high-dispositions-20260923.md`](high-dispositions-20260923.md), which
+  executes the native non-interference differential and dispositions each
+  finding individually. Those dispositions belong to the later candidate and do
+  not retroactively change what this record measured on `ce15820`.
 - **Applicable HIGH findings remain open**: `SEC-AUTH-01`, `SEC-AUTH-02`,
   `SEC-INTEGRITY-01`, `SEC-SKILL-01`/`SB-PROMOTION-004`, `FSUPD-01`/`FSPATH-03`,
   `SEC-HOOK-02`, `SEC-DEP-01` (current lockfile advisories), project-ID

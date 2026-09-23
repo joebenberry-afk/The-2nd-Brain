@@ -36,15 +36,16 @@ remain untouched; they are not proof of current execution guarantees.
 | Subject | Current disposition | Required evidence or blocker |
 |---|---|---|
 | M00-CORD-01/02, SB-ORCH-001, worker parts of #3/#4/#5 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | No reachable coordinator issuance, effective-grant admission, worker completion/settlement or test-only reactivation. Preserve historical negative evidence. |
-| SEC-AUTH-01 | `OPEN` for retained actions | Caller-authored verification action/approval must not become protected completion or publication authority. Worker issuer-only clause retired, not the finding. |
-| SEC-AUTH-02 | `OPEN` | Agent-callable remember/evidence paths must not mint `USER_AUTHORED`, `VERIFIED`, or policy-lane authority without authenticated approval. Worker settlement-only clause retired. |
-| SEC-INTEGRITY-01 | `OPEN` | Full-envelope ledger integrity, verified replay, migration and preservation; retired worker receipts stay historical. |
-| SEC-SKILL-01 / SB-PROMOTION-004 | `OPEN` | Consumption-time approved bytes, evaluation and dependency binding, protected promotion. |
-| FSUPD-01 / FSPATH-03 | `OPEN` for extension installation/rollback | Never infer approval from a mutable candidate manifest. Preserve backup, exact installed-byte and rollback protections; remove host-patch launch path. |
-| SEC-HOOK-02 | `OPEN` | Bound executable/configuration/environment trust on retained hooks and subprocesses. |
+| SEC-AUTH-01 | `OPEN — REPRODUCED ON RETAINED PATHS` | Caller-authored verification action/approval must not become protected completion or publication authority. Removal deleted the strongest sink (`stop` is now an inert refusal) but not the finding. Needs a non-agent-controlled approval channel; owner accept/defer decision required (`m00-evidence/high-dispositions-20260923.md` §6). |
+| SEC-AUTH-02 | `OPEN — REPRODUCED ON RETAINED PATHS` | Agent-callable remember/evidence paths must not mint `USER_AUTHORED`, `VERIFIED`, or policy-lane authority without authenticated approval; `tests/test_cli.py` currently pins the caller-minted `project_rule` ceiling as behaviour. Owner accept/defer decision required (§7). |
+| SEC-INTEGRITY-01 | `NARROWED` | Full-envelope chain, genesis recomputation and replay rejection verified; rehydration projection now fails closed on an unverified chain (`FIXED + regression-tested`). Unkeyed, self-anchored chain `DEFERRED` to key custody. Retired worker receipts stay historical (§1). |
+| SEC-SKILL-01 / SB-PROMOTION-004 | `NARROWED` | Consumption-time approved bytes bound on every retained Python and TS route; the approval *record* is still caller-authored, so protected promotion remains `DEFERRED` to the SEC-AUTH-01 channel (§2). |
+| FSUPD-01 / FSPATH-03 | `NARROWED` | Registry approval is never inferred from a candidate manifest. Post-swap installed-tree verification with restore `FIXED + Pester-tested`; path containment `DEFERRED (operator-chosen)`; protected approval `DEFERRED (blocked)` (§3). |
+| SEC-HOOK-02 | `NARROWED` | Managed hook route binds absolute executables and is pinned by Pester; remaining bare search-path resolution lives in non-hook subprocesses with same-user blast radius, `DEFERRED — LOW` (§4). |
+| M00-NATIVE-ORCH-01 | `EXECUTED — spawn surface` | Host differential with matched Brain-on/off arms plus a pre-removal sensitivity control: native single and batch spawns succeeded unchanged, zero interference markers, control refused. `hub`/steering, workpool, cancellation and model selection remain observations, not proven rows (§8). |
 | SB-PROMPT-002 / 003 | Project-ID sinks retained; worker-context renderer retired | Narrow IDs before model-visible text; no retrieved/context data gains instruction authority. Removal is not a general prompt-trust waiver. |
 | FSLNCH-02 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Patched-host launcher removed; original seal and finding retained as history. |
-| SEC-DEP-01 | `OPEN` for dev toolchain reconciliation | Re-evaluate the current lockfile against the audited Vitest/js-yaml advisories. |
+| SEC-DEP-01 | `HIGH FIXED; two dev-only moderates DEFERRED` | `js-yaml` 4.3.1 → 4.3.2 by lockfile update (audit `high: 0`, no runtime dependencies); `vitest`/`@vitest/mocker` need a semver-major `vitest@5` toolchain jump with re-frozen test evidence (§5). |
 | #2a/#2b, #6, DOC-14 | `OPEN` where retained | Fresh/reopen/idempotent/backup/recovery; passive billed-request dedupe/unknowns; missing DOC-14 clauses cannot be invented. |
 
 No applicable HIGH is closed by relabeling its reproduction. The register

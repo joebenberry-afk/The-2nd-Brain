@@ -56,6 +56,51 @@ Set-Item -Path ("Function:\global:{0}" -f $FailureCommand) -Value $failure
     }
 }
 
+function Invoke-PhantomAfterSwapInstall(
+    [string]$Root,
+    [string]$ScriptPath,
+    [string]$StageLeaf,
+    [string]$PhantomName,
+    [string[]]$ScriptArguments
+) {
+    # Moves the stage into place for real, then drops an extra file into the
+    # installed tree. That reproduces "the swap did not land as verified" without
+    # pretending the filesystem failed.
+    $wrapper = Join-Path $Root ("phantom-wrapper-" + [guid]::NewGuid().ToString("N") + ".ps1")
+    @'
+param(
+    [string]$ScriptPath,
+    [string]$StageLeaf,
+    [string]$PhantomName
+)
+$realCommand = Get-Command Move-Item -CommandType Cmdlet
+$override = {
+    param(
+        [object]$Path,
+        [object]$Destination,
+        [object]$LiteralPath,
+        [switch]$Force,
+        [switch]$Recurse
+    )
+    $moved = & $realCommand @PSBoundParameters
+    $leaf = [System.IO.Path]::GetFileName([string]$Path)
+    if ($leaf -like $StageLeaf) {
+        [System.IO.File]::WriteAllText(
+            (Join-Path ([string]$Destination) $PhantomName), "unverified extra file")
+    }
+    return $moved
+}.GetNewClosure()
+Set-Item -Path ("Function:\global:{0}" -f "Move-Item") -Value $override
+& $ScriptPath @args
+'@ | Set-Content -Path $wrapper
+    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $wrapper `
+        $ScriptPath $StageLeaf $PhantomName @ScriptArguments 2>&1
+    return [pscustomobject]@{
+        ExitCode = $LASTEXITCODE
+        Output = @($output)
+    }
+}
+
 Describe "OMP extension install and rollback" {
     BeforeEach {
         $testRoot = Join-Path $env:TEMP ("sb-ext-test-" + [guid]::NewGuid().ToString("N"))
@@ -367,5 +412,30 @@ Describe "OMP extension install and rollback" {
             -SourceRoot $script:brain -ExtensionsDir $script:extRoot 2>&1 | Out-Null
         $LASTEXITCODE | Should Not Be 0
         ((Get-TestManifest $script:target) -join "`n") | Should Be $before
+    }
+
+    It "removes a freshly installed extension that does not match source" {
+        New-Item -ItemType Directory -Force -Path $script:extRoot | Out-Null
+        $result = Invoke-PhantomAfterSwapInstall $testRoot $script:installer `
+            ".second-brain-install-*" "phantom-after-swap.ts" `
+            @("-SourceRoot", $script:brain, "-ExtensionsDir", $script:extRoot)
+
+        $result.ExitCode | Should Not Be 0
+        (Test-Path $script:target) | Should Be $false
+        @(Get-ChildItem $script:extRoot -Directory -Filter ".second-brain-*").Count | Should Be 0
+    }
+
+    It "restores the previous extension when the installed tree does not match source" {
+        New-Item -ItemType Directory -Force -Path $script:target | Out-Null
+        Set-Content -Path (Join-Path $script:target "keep.txt") -Value "keep"
+        $before = (Get-TestManifest $script:target) -join "`n"
+
+        $result = Invoke-PhantomAfterSwapInstall $testRoot $script:installer `
+            ".second-brain-install-*" "phantom-after-swap.ts" `
+            @("-SourceRoot", $script:brain, "-ExtensionsDir", $script:extRoot)
+
+        $result.ExitCode | Should Not Be 0
+        ((Get-TestManifest $script:target) -join "`n") | Should Be $before
+        @(Get-ChildItem $script:extRoot -Directory -Filter ".second-brain-*").Count | Should Be 0
     }
 }

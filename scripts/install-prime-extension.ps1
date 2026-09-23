@@ -94,8 +94,8 @@ try {
         New-Item -ItemType Directory -Force -Path (Join-Path $Stage "types") | Out-Null
         Copy-Item -Force (Join-Path $TypesSrc "*.d.ts") (Join-Path $Stage "types")
     }
-    $InstalledManifest = @(Get-ExtensionManifest $Stage)
-    if ((Compare-Object $ExpectedManifest $InstalledManifest).Count -ne 0) {
+    $StagedManifest = @(Get-ExtensionManifest $Stage)
+    if ((Compare-Object $ExpectedManifest $StagedManifest).Count -ne 0) {
         throw "Installed extension manifest does not match source"
     }
     $TargetDisplaced = $false
@@ -111,6 +111,19 @@ try {
             Move-Item $Displaced $Target
         }
         throw
+    }
+    # The verified stage is only a statement about the staged bytes: re-verify
+    # what actually landed in the discovery path, and undo the swap when it does
+    # not match. Otherwise an interrupted or partial move could leave an
+    # unverified extension loaded by OMP while the install reported success.
+    $InstalledManifest = @(Get-ExtensionManifest $Target)
+    if ((Compare-Object $ExpectedManifest $InstalledManifest).Count -ne 0) {
+        Remove-Item -Recurse -Force $Target
+        if ($TargetDisplaced) {
+            Move-Item $Displaced $Target
+            $TargetDisplaced = $false
+        }
+        throw "Installed extension manifest does not match source after swap"
     }
     if (Test-Path $Displaced) { Remove-Item -Recurse -Force $Displaced }
 } catch {
