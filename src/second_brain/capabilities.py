@@ -1,34 +1,4 @@
-"""
-Provider capability table (plan T2.6) and harness capability profiles/tiers
-(plan T4.3).
-
-Two independent, unrelated schemas share this module by design (T4.3
-brief: "extend the existing provider-capability module" rather than create
-a second control plane):
-
-1. `get_provider_capabilities` -- a narrow, config-driven schema describing
-   what a request-routing provider truthfully advertises about prompt
-   caching and context capacity. Every field is nullable and comes verbatim
-   from `config/v2.toml [providers.<provider_id>]` -- never inferred from
-   the model or provider name. A missing provider row and an
-   unreadable/malformed config file both fail open to the same
-   conservative defaults: no cache support, every other field unknown.
-
-2. `observe`/`declare`/`harness_tier`/`list_capabilities`/`tier_behavior`
-   (T4.3) -- a DB-backed `harness_capabilities` table (migration
-   `0015_harness_capabilities.sql`) recording what a HOST HARNESS (Claude
-   Code, Codex, Antigravity, Hermes, ...) actually supports: session
-   lifecycle, prompt injection, tool/usage/cache/compaction telemetry,
-   model rewriting, tool filtering, subagents, budget enforcement. Unlike
-   the fail-open provider schema above, an unknown *capability name* here
-   is a caller-contract violation (a typo'd literal, not untrusted
-   external input) and raises `UnknownCapabilityError`; an unknown
-   *telemetry event kind* passed to `observe` is untrusted/evolving
-   external input and is a deterministic no-op instead.
-
-T3.3 (capability-aware routing) remains a future task and is out of scope
-here.
-"""
+"""Provider context/cache facts and observed Brain-compatible host capabilities."""
 
 from __future__ import annotations
 
@@ -119,7 +89,7 @@ def get_provider_capabilities(home: Path | str, provider_id: str) -> dict[str, A
 # T4.3: harness capability profiles and tiers.
 # ---------------------------------------------------------------------------
 
-#: Exact capability vocabulary (T4.3 brief) -- no extras, no fewer.
+# Only memory/context and passive observation capabilities are active.
 KNOWN_CAPABILITIES: frozenset[str] = frozenset(
     {
         "session_events",
@@ -129,41 +99,16 @@ KNOWN_CAPABILITIES: frozenset[str] = frozenset(
         "cache_telemetry",
         "compaction_events",
         "model_rewrite",
-        "tool_filter",
-        "subagents",
-        "budget_enforcement",
     }
 )
 
-#: Capabilities whose supported=true triggers at least tier T1.
 _T1_TRIGGER_CAPABILITIES: frozenset[str] = frozenset(
-    {"tool_events", "usage_telemetry", "cache_telemetry", "compaction_events"}
+    {"tool_events", "usage_telemetry", "cache_telemetry", "compaction_events", "model_rewrite"}
 )
 
-#: Capabilities whose supported=true triggers tier T2 (T2 wins over T1/T0).
-_T2_TRIGGER_CAPABILITIES: frozenset[str] = frozenset(
-    {"model_rewrite", "tool_filter", "subagents", "budget_enforcement"}
-)
-
-#: Shared human-readable tier-behavior strings. Declared once here; other
-#: tasks/modules that need tier-conditional behavior should import this
-#: rather than redefine it (T4.3 brief: "reuse one shared declaration").
 TIER_BEHAVIOR: dict[str, str] = {
-    "T0": (
-        "Baseline harness: only session lifecycle / prompt-injection "
-        "visibility (or nothing) is confirmed. Treat as opaque -- observe "
-        "only, never assume tool, usage, or control-surface access."
-    ),
-    "T1": (
-        "Operationally observable harness: tool, usage, cache, or "
-        "compaction telemetry is confirmed. Safe to report cost/perf "
-        "metrics for this harness; still no control surface."
-    ),
-    "T2": (
-        "Fully governable harness: model rewriting, tool filtering, "
-        "subagent orchestration, or budget enforcement is confirmed. Safe "
-        "to enable adapter-side governance features for this harness."
-    ),
+    "T0": "Session lifecycle or prompt injection may be observed; no host execution authority.",
+    "T1": "Brain context and telemetry may be observed; no host execution authority.",
 }
 
 
@@ -175,15 +120,8 @@ class UnknownCapabilityError(ValueError):
     malformed config file, this is loud and deterministic."""
 
 
-# Known telemetry `kind` (see `telemetry.KNOWN_KINDS`) -> the harness
-# capability/capabilities it evidences when observed. One kind may
-# evidence more than one capability only when real evidence supports both
-# (e.g. `session_compact` is both a session-lifecycle event AND a
-# compaction event). Capabilities with no entry on the right-hand side of
-# any mapping here have no `observe()` path yet -- see the T4.3 task
-# report for the grep-based evidence and the documented gaps
-# (`cache_telemetry`, `budget_enforcement`: no distinct emitted kind
-# unambiguously reports either today; only reachable via `declare`).
+# Only emitted memory/context and passive observer events establish capabilities.
+# Unknown historic execution telemetry cannot activate a Brain capability.
 _EVENT_KIND_CAPABILITIES: dict[str, tuple[str, ...]] = {
     # Session lifecycle.
     "session_start": ("session_events",),
@@ -205,28 +143,13 @@ _EVENT_KIND_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "assistant_usage": ("usage_telemetry",),
     "provider_request_meta": ("usage_telemetry",),
     "provider_response_meta": ("usage_telemetry",),
-    # Model rewrite: `rtd_shadow` is the only kind that evidences the
-    # model-visible content actually being rewritten before the model sees
-    # it (Reversible Tool Distillation substitutes the tool result body).
-    # `hermes_model_decision`/`model_fallback_used`/`model_routing_decision`/
-    # `model_invocation_*` are model SELECTION/dispatch bookkeeping (which
-    # provider/model was chosen, retried, or invoked), not prompt/content
-    # rewriting, so they are deliberately not mapped here.
+    # Reversible Tool Distillation substitutes content, never a provider/model.
     "rtd_shadow": ("model_rewrite",),
-    # Tool filter.
-    "stop_blocked": ("tool_filter",),
-    "stop_allowed": ("tool_filter",),
-    "orchestrator_policy_violation": ("tool_filter",),
-    # Subagents.
-    "omp_worker_context_handoff": ("subagents",),
-    "omp_worker_child_result": ("subagents",),
-    "hermes_worker_lifecycle": ("subagents",),
-    "handoff_sent": ("subagents",),
 }
 
 
 def _capabilities_db(home: Path | str) -> Path:
-    """Self-healing DB open, mirroring `worker_protocol._worker_db`."""
+    """Open the historical capability ledger without changing execution rights."""
     dbfile = paths.db_path(Path(home))
     if db.pending_migrations(dbfile):
         db.migrate(dbfile)
@@ -428,12 +351,7 @@ def declare(
 def list_capabilities(home: Path | str, harness_id: str) -> dict[str, dict[str, Any]]:
     """Full current state of every known capability for `harness_id`.
 
-    Always returns exactly the 10 `KNOWN_CAPABILITIES` keys. A capability
-    with no recorded row reads back as
-    `{"supported": None, "version": None, "observed_at": None, "evidence": None}`
-    -- never silently `True`. Shared by `harness_tier` and the
-    `brainctl v2 harness capabilities` CLI command so neither duplicates
-    this SQL.
+    Missing or obsolete capabilities remain historical rows, never active claims.
     """
     dbfile = _capabilities_db(home)
     conn = db.connect(dbfile, readonly=True)
@@ -467,9 +385,7 @@ def list_capabilities(home: Path | str, harness_id: str) -> dict[str, dict[str, 
 def tier_from_snapshot(profile: dict[str, Any]) -> str:
     """Derive the effective tier from one host-bound capability snapshot.
 
-    Only capabilities with ``status=observed`` can authorize governance.
-    Raw declarations and stale/unbound observations remain visible in the
-    snapshot for diagnosis but never raise the effective tier.
+    Only host-bound observations count as descriptive feature evidence.
     """
     rows = profile.get("capabilities")
     if not isinstance(rows, dict):
@@ -479,8 +395,6 @@ def tier_from_snapshot(profile: dict[str, Any]) -> str:
         for name, row in rows.items()
         if isinstance(row, dict) and row.get("status") == "observed"
     }
-    if observed & _T2_TRIGGER_CAPABILITIES:
-        return "T2"
     if observed & _T1_TRIGGER_CAPABILITIES:
         return "T1"
     return "T0"
@@ -515,7 +429,7 @@ def tier_behavior(
     host_version: str | None = None,
     config_binding: str | None = None,
 ) -> str:
-    """Return the behavior permitted by the effective host-bound tier."""
+    """Return the descriptive feature tier, not execution permission."""
     return TIER_BEHAVIOR[
         harness_tier(
             home,

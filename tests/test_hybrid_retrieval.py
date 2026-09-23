@@ -1,12 +1,12 @@
 """Tests for Hybrid Multi-Tier Retrieval & Cascade (Plan §9)."""
 
 import json
-import os
 import subprocess
 import sys
 
 import pytest
 
+from conftest import clean_python_env
 from second_brain import semantic
 from second_brain.errors import BrainError
 from second_brain.hybrid_retrieval import (
@@ -479,7 +479,7 @@ class TestCascadeCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert q_res.returncode == 0
         data = json.loads(q_res.stdout)
@@ -500,7 +500,7 @@ class TestCascadeCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert clr_res.returncode == 0
         assert "Cleared negative result cache" in clr_res.stdout

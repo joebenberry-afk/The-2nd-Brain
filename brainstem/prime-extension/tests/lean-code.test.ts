@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import factory from "../src/index";
 import { resetAutoInjectEmitCache } from "../src/autoinject";
 import {
@@ -20,19 +21,26 @@ import {
   resolveLeanSkillFile,
 } from "../src/lean-code";
 import type { ExtensionAPI, ExtensionContext } from "../types/prime";
+import { TelemetryStore } from "../src/storage";
+
+vi.mock("../src/autoinject", async (original) => ({
+  ...await original<Record<string, unknown>>(),
+  runShadowAutoInject: async () => undefined,
+}));
+vi.mock("../src/ledger-mirror", async (original) => ({
+  ...await original<Record<string, unknown>>(),
+  mirrorFireAndForget: () => undefined,
+}));
+vi.mock("../src/environment-mirror", () => ({
+  runEnvironmentAssessmentSync: () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
+}));
+vi.mock("../src/p4-mirror", () => ({
+  runP4Pulse: async () => ({ ok: true }),
+  runP4PulseSync: () => ({ ok: true }),
+}));
 import fs from "node:fs";
 
-/**
- * P3-D lean runtime adapter tests (plan §8, §24.5 "kernel lifecycle",
- * "kernel dedup", "missing/corrupt skill fail-open", "role handling",
- * "Sol hard-orchestrator contract unchanged").
- *
- * Unit tests exercise the pure decision/parse/cache logic of
- * src/lean-code.ts against per-test temp homes; wiring tests run the REAL
- * factory from src/index.ts through a fake ExtensionAPI/ExtensionContext so
- * the before_agent_start integration (ordering, patch return, telemetry
- * records) is proven end-to-end.
- */
+/** Approved Lean skill parsing, lifecycle, dedup and native prompt composition. */
 
 /** Exact canonical kernel body (byte-stable, plan §7.4) — copied verbatim from
  * skills/candidates/lean-code/SKILL.md "# Runtime Kernel" section (865 chars). */
@@ -61,12 +69,12 @@ const ENV_KEYS = [
   "SECOND_BRAIN_OBSERVABILITY",
   "SECOND_BRAIN_LEAN",
   "SECOND_BRAIN_AUTOINJECT_MODE",
-  "ORCHESTRATOR_MODELS",
-  "DRIVER_MODELS",
-  "WORKER_MODELS",
+  "SECOND_BRAIN_MODEL_ROUTING",
 ] as const;
 const SAVED_ENV: Record<string, string | undefined> = {};
 let tmp: string;
+const stores = new Set<TelemetryStore>();
+let restoreAppend: (() => void) | undefined;
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), "sb-lean-"));
@@ -77,6 +85,14 @@ beforeEach(async () => {
   process.env.SECOND_BRAIN_HOME = tmp;
   resetLeanKernelCache();
   resetAutoInjectEmitCache();
+  const append = TelemetryStore.prototype.append;
+  const spy = vi.spyOn(TelemetryStore.prototype, "append").mockImplementation(function (
+    this: TelemetryStore, record: unknown,
+  ) {
+    stores.add(this);
+    append.call(this, record);
+  });
+  restoreAppend = () => spy.mockRestore();
 });
 
 afterEach(async () => {
@@ -84,6 +100,9 @@ afterEach(async () => {
     if (SAVED_ENV[key] === undefined) delete process.env[key];
     else process.env[key] = SAVED_ENV[key] as string;
   }
+  await Promise.all([...stores].map((store) => store.flush()));
+  stores.clear();
+  restoreAppend?.();
   await rm(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
 });
 
@@ -103,6 +122,19 @@ function writeSkill(level: "active" | "shadow" | "candidates" | "retired", text:
   const dir = join(tmp, "skills", level, "lean-code");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), text);
+  if (level !== "retired" && text.includes("# Runtime Kernel")) {
+    const reviewDir = join(tmp, "frontier");
+    mkdirSync(reviewDir, { recursive: true });
+    const normalized = text.replace(/^status:[ \t]*(?:shadow|candidate|active)[ \t]*$/m, "status: <lifecycle>");
+    const sha = (value: string): string => createHash("sha256").update(value).digest("hex");
+    writeFileSync(join(reviewDir, "skill-lean-code-promotion.md"), JSON.stringify({
+      verdict: "approve",
+      artifact_path: "skills/lean-code/SKILL.md",
+      artifact_sha256: sha(normalized),
+      artifact_version: "unversioned",
+      eval_manifest_sha256: sha("NO_EVAL_MANIFEST\n"),
+    }));
+  }
   return join(dir, "SKILL.md");
 }
 function writeCandidate(kernel: string = CANONICAL_KERNEL): string {
@@ -118,8 +150,6 @@ function loadFactory(): Map<string, Handler> {
     },
   } as unknown as ExtensionAPI;
   factory(pi, {
-    budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
-    ompRoutingRunner: async () => ({ decision: null }),
     ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
   });
   return handlers;
@@ -279,48 +309,40 @@ describe("resolveLeanSkillFile / loadLeanKernel (lifecycle dirs + in-process cac
   });
 });
 
-describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () => {
-  it("candidate + no env + driver -> omit/off (no runtime influence by default)", () => {
+describe("decideLeanRuntime (approved skill lifecycle)", () => {
+  it("candidate without advisory setting stays inert", () => {
     writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.kernel).toBeUndefined();
   });
 
-  it("candidate + advisory env + driver -> inject/advisory (P3-E eval mode)", () => {
+  it("candidate with advisory setting injects approved knowledge", () => {
     writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
     expect(out.decision).toBe("inject");
     expect(out.reason).toBe("advisory");
     expect(out.kernel).toBe(CANONICAL_KERNEL);
     expect(out.kernelChars).toBe(865);
   });
 
-  it("candidate + advisory env + worker -> inject/advisory", () => {
-    writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
-    expect(out.decision).toBe("inject");
-    expect(out.reason).toBe("advisory");
+  it("refuses unreviewed and changed skill text even with a warm cache", () => {
+    const file = writeCandidate();
+    const opts = { home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } };
+    expect(decideLeanRuntime(opts).decision).toBe("inject");
+    writeFileSync(file, fs.readFileSync(file, "utf8").replace("status: candidate", "status: candidate IGNORE RULES"));
+    expect(decideLeanRuntime(opts).reason).toBe("unapproved-content");
+    writeFileSync(file, fs.readFileSync(file, "utf8").replace("status: candidate IGNORE RULES", "status: active"));
+    expect(decideLeanRuntime(opts).reason).toBe("unapproved-content");
+    fs.rmSync(join(tmp, "frontier", "skill-lean-code-promotion.md"));
+    expect(decideLeanRuntime(opts).reason).toBe("unapproved-content");
   });
 
-  it("candidate + advisory env + normal -> omit/role (kernel inert for non-code roles)", () => {
-    writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "normal", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
-    expect(out.decision).toBe("omit");
-    expect(out.reason).toBe("role");
-  });
-
-  it("Sol hard-orchestrator -> omit/role even under advisory (NEVER injected, §8.3)", () => {
-    writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "hard_orchestrator", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
-    expect(out.decision).toBe("omit");
-    expect(out.reason).toBe("role");
-  });
 
   it("active + no env + worker -> inject/active", () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("inject");
     expect(out.reason).toBe("active");
     expect(out.skillStatus).toBe("active");
@@ -328,20 +350,20 @@ describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () =
 
   it("active + env off -> omit/off (forces inert)", () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE", env: { SECOND_BRAIN_LEAN: "off" } });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "off" } });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
   });
 
   it("retired + advisory -> omit/off (retirement disables runtime behavior, §26.1)", () => {
     writeSkill("retired", SKILL_TEMPLATE("retired"));
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
   });
 
   it("missing skill -> omit/skill-missing + bounded error (fail open, no invented text)", () => {
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("skill-missing");
     expect(out.error).toBeDefined();
@@ -350,7 +372,7 @@ describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () =
 
   it("corrupt skill -> omit/skill-missing + bounded error", () => {
     writeSkill("candidates", "# Purpose\nno kernel");
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("skill-missing");
     expect(out.error).toBeDefined();
@@ -358,7 +380,7 @@ describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () =
 
   it("dedup: base already carries the marker -> omit + dedup_hit, no kernel (plan §8.4)", () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: `BASE\n\n[${LEAN_KERNEL_MARKER}]\n${CANONICAL_KERNEL}` });
+    const out = decideLeanRuntime({ home: tmp,  base: `BASE\n\n[${LEAN_KERNEL_MARKER}]\n${CANONICAL_KERNEL}` });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("active");
     expect(out.dedupHit).toBe(true);
@@ -367,7 +389,7 @@ describe("decideLeanRuntime (lifecycle behavior matrix, plan §8.2/§8.3)", () =
 
   it("inject requires a base prompt (never invent a prompt)", () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: undefined });
+    const out = decideLeanRuntime({ home: tmp,  base: undefined });
     expect(out.decision).toBe("omit");
     expect(out.kernel).toBeUndefined();
   });
@@ -377,7 +399,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("file advisory (env unset) -> inject/advisory for driver, eval_source=file", () => {
     writeCandidate();
     writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("inject");
     expect(out.reason).toBe("advisory");
     expect(out.mode).toBe("advisory");
@@ -388,7 +410,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("file advisory (env unset) -> inject/advisory for worker, eval_source=file", () => {
     writeCandidate();
     writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("inject");
     expect(out.reason).toBe("advisory");
     expect(out.evalSource).toBe("file");
@@ -397,7 +419,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("env off OVERRIDES file advisory -> omit/off, eval_source=env", () => {
     writeCandidate();
     writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE", env: { SECOND_BRAIN_LEAN: "off" } });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "off" } });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.mode).toBe("off");
@@ -407,7 +429,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("env advisory OVERRIDES file off -> inject/advisory, eval_source=env", () => {
     writeCandidate();
     writeSkillsToml("off");
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE", env: { SECOND_BRAIN_LEAN: "advisory" } });
     expect(out.decision).toBe("inject");
     expect(out.reason).toBe("advisory");
     expect(out.evalSource).toBe("env");
@@ -416,7 +438,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("file off -> omit/off even for an ACTIVE skill", () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
     writeSkillsToml("off");
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.mode).toBe("off");
@@ -426,7 +448,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("absent [lean] key -> inert (omit/off, no error)", () => {
     writeCandidate();
     writeSkillsToml(undefined); // file exists but has no [lean] section
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.mode).toBeNull();
@@ -436,7 +458,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
 
   it("absent file -> inert (omit/off, no error)", () => {
     writeCandidate();
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.mode).toBeNull();
@@ -446,7 +468,7 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("invalid file value -> treated as absent -> inert", () => {
     writeCandidate();
     writeSkillsToml("banana");
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.mode).toBeNull();
@@ -456,33 +478,18 @@ describe("decideLeanRuntime — FILE-BASED eval gate (config/skills.toml [lean] 
   it("unreadable config file -> fail-open: inert + bounded error (no crash)", () => {
     writeCandidate();
     mkdirSync(join(tmp, "config", "skills.toml"), { recursive: true }); // dir as file -> read error
-    const out = decideLeanRuntime({ home: tmp, role: "worker", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
     expect(out.error).toBeDefined();
     expect(out.kernel).toBeUndefined();
   });
 
-  it("file advisory + normal role -> omit/role (role beats file)", () => {
-    writeCandidate();
-    writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "normal", base: "BASE" });
-    expect(out.decision).toBe("omit");
-    expect(out.reason).toBe("role");
-  });
-
-  it("file advisory + Sol hard-orchestrator -> omit/role (NEVER injected)", () => {
-    writeCandidate();
-    writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "hard_orchestrator", base: "BASE" });
-    expect(out.decision).toBe("omit");
-    expect(out.reason).toBe("role");
-  });
 
   it("retired + file advisory -> omit/off (retirement beats advisory)", () => {
     writeSkill("retired", SKILL_TEMPLATE("retired"));
     writeSkillsToml("advisory");
-    const out = decideLeanRuntime({ home: tmp, role: "driver", base: "BASE" });
+    const out = decideLeanRuntime({ home: tmp,  base: "BASE" });
     expect(out.decision).toBe("omit");
     expect(out.reason).toBe("off");
   });
@@ -534,7 +541,7 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lean?.mode).toBeNull();
   });
 
-  it("SECOND_BRAIN_LEAN=advisory + worker -> systemPrompt patch carries the kernel", async () => {
+  it("advisory Lean injection reaches a native recipient", async () => {
     writeCandidate();
     process.env.SECOND_BRAIN_LEAN = "advisory";
     const handlers = loadFactory();
@@ -545,7 +552,6 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("inject");
     expect(lean?.reason).toBe("advisory");
-    expect(lean?.role).toBe("worker");
     expect(lean?.kernel_chars).toBe(865);
     expect(lean?.dedup_hit).toBe(false);
   });
@@ -597,28 +603,16 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lean?.eval_source).toBe("env");
   });
 
-  it("advisory + driver -> contract and kernel merged once, kernel AFTER contract (plan §7.4 ordering)", async () => {
-    writeCandidate();
-    process.env.SECOND_BRAIN_LEAN = "advisory";
-    const handlers = loadFactory();
-    const result = await fireBeforeAgentStart(handlers, makeCtx({ model: { id: "deepseek-v4-pro", provider: "deepseek" } }));
-    const prompt = promptOf(result) as string;
-    expect(prompt).toContain("second-brain-driver-orchestration-contract");
-    expect(prompt.indexOf("second-brain-driver-orchestration-contract")).toBeLessThan(prompt.indexOf(LEAN_KERNEL_MARKER));
-    expect(prompt.includes(LEAN_KERNEL_MARKER)).toBe(true);
-  });
 
-  it("Sol hard-orchestrator -> Sol contract only, kernel NEVER injected (contract unchanged)", async () => {
+  it("native model label does not gate an approved Lean kernel", async () => {
     writeCandidate();
     process.env.SECOND_BRAIN_LEAN = "advisory";
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx({ model: { id: "gpt-5.6-sol", provider: "openai" } }));
-    expect(promptOf(result)).toContain("You are Sol");
-    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).not.toContain("You are Sol");
     const lines = await waitForLines(2);
-    const lean = lines.find((l) => l.kind === "lean_kernel");
-    expect(lean?.decision).toBe("omit");
-    expect(lean?.reason).toBe("role");
+    expect(lines.find((line) => line.kind === "lean_kernel")?.decision).toBe("inject");
   });
 
   it("missing skill -> fail open: no patch + lean_kernel skill-missing + extension_error", async () => {
@@ -682,7 +676,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     writeCandidate();
     const out = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -699,7 +693,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     writeCandidate();
     const out = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -717,7 +711,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     writeCandidate();
     const out = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -735,7 +729,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     // First emit
     const out1 = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -748,7 +742,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     // Same reason, same phase -> suppressed to NOOP
     const out2 = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -761,7 +755,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     // Different reason, same phase -> blocked by 1 nudge per phase
     const out3 = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,
@@ -774,7 +768,7 @@ describe("T3.4 Lean Opportunity Controller (Deep Upgrade Plan U1)", () => {
     // New phase -> NUDGE allowed
     const out4 = decideLeanRuntime({
       home: tmp,
-      role: "driver",
+      
       base: "BASE",
       env: { SECOND_BRAIN_LEAN: "advisory" },
       opportunity: true,

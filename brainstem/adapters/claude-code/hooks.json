@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
+            "command": "\"<POWERSHELL_EXE>\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
+            "command": "\"<POWERSHELL_EXE>\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
             "timeout": 30
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
+            "command": "\"<POWERSHELL_EXE>\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
             "timeout": 30
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
+            "command": "\"<POWERSHELL_EXE>\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
             "timeout": 30
           }
         ]
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
+            "command": "\"<POWERSHELL_EXE>\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"<RUN_PS1>\"",
             "timeout": 30
           }
         ]

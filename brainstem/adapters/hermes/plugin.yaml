@@ -3,9 +3,6 @@ version: 0.1.0
 description: Thin Hermes Agent adapter for The Second Brain
 provides_tools:
   - second_brain_writeback
-  - second_brain_delegate
-  - second_brain_review_worker_result
-  - second_brain_correct_worker_result
   - second_brain_handoff_read
 provides_hooks:
   - on_session_start
@@ -15,8 +12,6 @@ provides_hooks:
   - post_api_request
   - api_request_error
   - on_session_finalize
-provides_middleware:
-  - llm_request
 config_schema:
   brain_home:
     type: str
@@ -36,21 +31,7 @@ config_schema:
   repo_root:
     type: str
     description: Repository root used for project resolution
-  model_candidates:
-    type: list
-    description: Bounded provider/model/tier/capability/cost/availability metadata passed to Brain routing
   timeout_seconds:
     type: float
     default: 5.0
     description: Fail-open timeout for one Brain request
-  worker_profile:
-    type: str
-    description: Persistent Hermes worker profile; empty means explicit unavailable
-  hermes_cli:
-    type: str
-    default: hermes
-    description: Hermes CLI executable used only for configured worker delegation
-  worker_timeout_seconds:
-    type: float
-    default: 180.0
-    description: Bounded wall-clock limit for one persistent worker run

@@ -68,7 +68,7 @@ def test_case_1_fresh_db_ledger_first_then_vmem(brain_home) -> None:
     assert identity.state == "canonical", identity
     assert identity.unknown_tables == set()
     assert identity.missing_component_tables == {}, identity.missing_component_tables
-    assert identity.ownership == {"component:ledger": "2", "component:vmem": "2"}
+    assert identity.ownership == {"component:ledger": "3", "component:vmem": "3"}
 
 
 def test_case_2_fresh_db_vmem_first_then_ledger(brain_home) -> None:
@@ -85,6 +85,42 @@ def test_case_2_fresh_db_vmem_first_then_ledger(brain_home) -> None:
     assert identity.state == "canonical", identity
     assert identity.unknown_tables == set()
     assert identity.missing_component_tables == {}, identity.missing_component_tables
+
+
+def test_vmem_only_v2_header_upgrades_when_ledger_is_added(brain_home) -> None:
+    session_id = "vmem-v2-predecessor"
+    _open_vmem(brain_home, session_id)
+    path = _session_file(brain_home, session_id)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE ledger_meta SET value='2' WHERE key='schema_version'")
+        conn.execute("UPDATE ledger_meta SET value='2' WHERE key='component:vmem'")
+        conn.execute(
+            "INSERT INTO session_vmem (obj_id,internal_session_id,kind,title,summary,"
+            "content_sha256,token_estimate,residency_state,created_at,last_accessed_at,"
+            "metadata_json) VALUES ('o1','i1','research_result','t','s','h',1,'resident',"
+            "'2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00','{}')"
+        )
+    with _open_ledger(brain_home, session_id) as store:
+        assert store.integrity()["hash_chain_ok"] is True
+    with sqlite3.connect(path) as conn:
+        assert brain_schema.classify(conn).version == 3
+        assert conn.execute("SELECT obj_id FROM session_vmem").fetchall() == [("o1",)]
+
+
+def test_vmem_refuses_headerless_ledger_history(brain_home) -> None:
+    session_id = "headerless-ledger-history"
+    with _open_ledger(brain_home, session_id) as store:
+        store.append_events([_event(session_id, "existing")])
+    path = _session_file(brain_home, session_id)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DELETE FROM ledger_meta WHERE key='schema_version'")
+    with pytest.raises(BrainError, match="missing schema_version header"):
+        _open_vmem(brain_home, session_id)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT value FROM ledger_meta WHERE key='schema_version'"
+        ).fetchone() is None
+        assert conn.execute("SELECT event_id FROM events").fetchall() == [("existing",)]
 
 
 def test_the_two_creation_orders_converge_on_the_same_schema(brain_home) -> None:
@@ -627,22 +663,24 @@ def _ledger_only_schema(home, session_id: str) -> sqlite3.Connection:
 
 
 def test_component_shape_names_the_chain_transition_the_authority_allows(brain_home) -> None:
-    """A version-2 header without `prev_hash` is a shape the authority names, not the store.
+    """A v2 header without either chain column is a named additive predecessor.
 
-    The database is otherwise current: the only difference from the registered `events` shape is
-    the one registered column the hash chain added. The authority must call that `additive`, and
-    opening must perform the transition and end at the canonical state.
+    The authority recognizes the exact two registered missing columns; the
+    ledger applies both transitions and reaches the current shared version.
     """
     session_id = "authority-transition"
     conn = _ledger_only_schema(brain_home, session_id)
     try:
+        conn.execute("ALTER TABLE events DROP COLUMN envelope_hash")
         conn.execute("ALTER TABLE events DROP COLUMN prev_hash")
+        conn.execute("DELETE FROM ledger_meta WHERE key='envelope_chain_origin'")
+        conn.execute("UPDATE ledger_meta SET value='2' WHERE key='schema_version'")
         conn.commit()
         shape = brain_schema.component_shape(conn, "ledger")
     finally:
         conn.close()
     assert shape.state == "additive", shape
-    assert shape.missing == {"events": ("prev_hash",)}, shape.missing
+    assert shape.missing == {"events": ("prev_hash", "envelope_hash")}, shape.missing
     assert shape.unexpected == {} and shape.altered == () and shape.absent_tables == ()
 
     with _open_ledger(brain_home, session_id):

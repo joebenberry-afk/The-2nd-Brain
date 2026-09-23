@@ -1,152 +1,72 @@
 # The Second Brain
 
-> A model-independent continual-learning control layer that surrounds coding
-> agents, remembers verified experience, actively manages context, chooses
-> tools and skills adaptively, learns from success/failure, transfers validated
-> experience across projects, and improves future agent performance without
-> retraining the underlying LLM.
+Harness-independent memory, context, knowledge, approved skills and safe
+reuse for coding agents. The native harness owns agent creation, model
+selection, tool permissions and task lifecycle. Brain does not orchestrate
+agents, stop tasks, or reserve worker capacity.
 
-**Specification:** `The_Second_Brain_OS_V4_2_Self_Hosting_OneShot_Implementation_Plan.md`
-is the authoritative implementation plan. The v4.3 proof plan supplied for
-this campaign governs validation; v4.1 and the Definitive plan are retained
-as research history. Verified repository reality wins over stale narrative
-text.
+**Candidate status (2026-09-23):** The orchestrator-removal worktree is
+candidate-only and not qualified or activated. See
+[`docs/intake/Second_Brain_M00_OneShot_Closure_Mandate.md`](docs/intake/Second_Brain_M00_OneShot_Closure_Mandate.md),
+[`docs/intake/M00-CAMPAIGN-REGISTER.md`](docs/intake/M00-CAMPAIGN-REGISTER.md)
+and the [orchestration-free v3 roadmap](docs/intake/Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md).
+The completed v4.2 implementation specification and previous v1/v2 release
+reports remain historical subjects. They do not qualify the removed controller
+or this candidate's current bytes. The installed production profile and
+canonical Brain state have not been changed by this candidate.
 
-**Canonical location:** `%USERPROFILE%\Documents\The-Second-Brain`
-(resolvable via the `SECOND_BRAIN_HOME` environment variable).
+## Retained product boundary
 
-## v1.0.0 release status
+- Canonical memory, project-scoped retrieval, source/provenance/freshness,
+  authorized writes and approved skill consumption.
+- Automatic bounded context, per-recipient delivery, compaction checkpoint,
+  memory/context recovery and handoff envelopes.
+- Passive model-usage/cost accounting with explicit missing-data coverage;
+  bounded Brain-local cache, index, retrieval and storage work.
+- Thin OMP, Codex, Claude Code, Antigravity and Hermes adapters for supported
+  memory/telemetry hooks. Host-specific labels do not become privileged
+  authorization or model-routing rules.
 
-Second Brain **v1.0.0** is released. The authoritative source of truth for
-what is qualified is `outputs/reports/rc2/00-AUTHORITATIVE-CURRENT-STATUS-LEDGER.md`
-(all 37 roadmap items, P0.1 through P4.5, `PROVEN`) plus the P4/P4.5 release
-gate in `outputs/reports/v1-p4/qualification-report.md` and
-`outputs/reports/v1-release-baseline.md`. P4.5 (Controlled Self-Optimization)
-qualified the governed optimization *mechanism* — real fingerprint → real
-candidate binding → real counterfactual evidence → propose → evaluate →
-activate — using a genuine Antigravity/Gemini paired session; the evaluated
-Lean-code candidate showed measured negative ROI and activation was
-correctly refused. That refusal is the qualifying evidence, not a promotion
-of the candidate.
+Orchestration-only APIs are removed; still-reachable old CLI/transport calls
+refuse without opening execution state. Historical worker leases, receipts,
+budget rows, migrations and sealed host-patch records remain intact as
+history—not active admission, settlement or refunded capacity.
 
-**V2 boundary:** `v1.0.0` remains the released baseline. The v2 RC is
-unqualified and remains **HOLD**. Native worker correlation requires both
-OMP [#10928](https://github.com/can1357/oh-my-pi/pull/10928) (delivered
-`jobId`, `status`, `agentId`) and
-[#10948](https://github.com/can1357/oh-my-pi/pull/10948) (dispatch progress
-`id` = child agent ID, `jobId` = exact manager-returned ID).
-Brain binds and journals each native job ID to its packet and expected
-child identity. Missing bindings, mismatched agents, and legacy unbound
-journals are not guessed from names or rendered output. Neither draft PR
-is a released host capability. No deployment, provider qualification,
-Gate 22/23, or v2 release tag is authorized by the
-[offline proof](outputs/reports/v2/omp-burnin/20260905-dispatch-binding/).
+## Repository and local development
 
-The status table and campaign notes below this section describe the earlier
-Phase 0-23 / "v4.3 optimization campaign" build history and are retained as
-historical record; they predate the rc2 37-item roadmap ledger and are not
-the current v1 status source.
+`src/second_brain/` contains the Python memory/storage/CLI core.
+`brainstem/prime-extension/` contains the OMP context/telemetry adapter.
+`memory/`, `experiences/`, `decisions/`, `projects/`, `skills/` and `engrams/`
+are canonical; `db/`, `state/`, `telemetry/` and local reports are derived.
+The constitution changes only through explicit reviewed change control.
 
-## Status
-
-| Phase | Name | Status |
-|-------|------|--------|
-| 0 | Project creation | done |
-| 1 | Foundation | done |
-| 2 | Observability | done |
-| 3 | Project integration | done |
-| 4 | Working set / JIT context | done |
-| 5 | Sensory gateway / RTD | done (shadow-only) |
-| 6..23 | (gated) | done; see `outputs/reports/` |
-
-Each phase is gated by its acceptance criteria in the plan. Milestone reports
-live in `outputs/reports/<milestone>.md`.
-
-### Optimization campaign status (2026-08-15)
-
-- Telemetry hot-path fixes (Phases 2-4) committed: stable per-lifecycle
-  anonymous session id; RTD eligibility decided before serialization with one
-  shared measurement; telemetry dir mkdir-once. RTD remains **shadow mode**
-  (no substitution); `context.toml [rtd] threshold_chars` is now wired into
-  the threshold ladder (env override still highest); other `[rtd]` keys stay
-  informational (see `proof/reports/config-consumption.md`).
-- Sol minimal-orchestrator guard committed and deployed: the Prime extension
-  blocks `bash`/`edit`/`websearch` for orchestrator-model sessions and
-  injects the Sol contract via `before_agent_start`. Live rollout
-  2026-08-15T06:45:44Z: 8 files SHA-identical to repo; post-deploy census
-  clean (0 `orchestrator_policy_violation` in 22,615 records, 0
-  `extension_error`, 0 new anon files). Contract:
-  `brainstem/policies/sol-minimal-orchestrator.md`.
-- Skill router: `skills.toml [router] max_active` is ENFORCED (fallback 3,
-  CLI `--max-active` overrides); SKILL.md metadata cached with mtime
-  invalidation.
-- Retrieval (FTS5 + filters + dedupe + ranking) committed and live: FTS5
-  engine, hard filters, dedupe, ranking; live DB reindexed to schema v7,
-  `memory_fts` 6/6 (FTS branch ~5 ms).
-- Live rollout result (2026-08-15): final status **PARTIALLY VALIDATED** —
-  deployment, per-session loading, recall hook, telemetry health, FTS5 and
-  campaign delegation are live-proven; Sol-specific acceptance is blocked
-  only by model availability (proof: `outputs/reports/optimization-proof.md`).
-
-## Layout
-
-- `constitution/` — protected rules (never auto-rewritten by the Brain)
-- `config/` — TOML policy defaults (context, learning, retrieval, ...)
-- `src/second_brain/` — Python control layer (`brainctl`)
-- `scripts/` — bootstrap, adapters, doctor (PowerShell) + `brainctl.py`
-- `db/brain.sqlite` — local control/index database (derived, rebuildable)
-- `memory/`, `experiences/`, `decisions/`, `projects/`, `skills/`, `engrams/` — canonical knowledge stores
-- `state/`, `telemetry/`, `plasticity/`, `sleep/` — runtime/derived data
-- `outputs/reports/` — milestone reports
-- `tests/` — pytest suite
-
-## Quick start (Windows)
+Use a disposable `--home` and the candidate interpreter for development;
+unset inherited `PYTHONHOME`/`PYTHONPATH` before supplying the candidate
+`src` import root. Do not run the repository test suite against the canonical
+home. The installed extension is not updated by changing source files.
 
 ```powershell
-cd $env:USERPROFILE\Documents\The-Second-Brain
-powershell -ExecutionPolicy Bypass -File scripts\\bootstrap.ps1
-.venv\Scripts\python -m second_brain doctor
+$env:PYTHONHOME = $null; $env:PYTHONPATH = $null
+.venv\Scripts\python.exe -m second_brain doctor --home <disposable-home>
+.venv\Scripts\python.exe -m pytest
+.venv\Scripts\python.exe -m ruff check src tests
+.venv\Scripts\python.exe -m pyright
 ```
 
-or manually:
+The extension has development-only test dependencies. Install, backup and
+rollback paths are described in
+[`brainstem/prime-extension/README.md`](brainstem/prime-extension/README.md).
+Candidate byte manifests compare sources and installed extension inventories;
+they are not protected approval or authorization to activate production.
 
-```powershell
-python -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
-brainctl init
-brainctl doctor
-```
+## Historical release context
 
-`brainctl` commands implemented so far: `init`, `doctor`, `status`,
-`project add|list|status|detach|remove`, `backup`, `restore`,
-`telemetry report|validate`, `capsule init|update|show`,
-`requirements add|evidence|status|show|check`, `read-ledger record|show`,
-`context compile`.
-
-## Host capability confidence
-
-`brainctl v2 harness capabilities <host> --host-version <version> --config-binding <binding> --json`
-reports governance tiers from current, bound `observed` capabilities only.
-Declarations, stale observations, and missing bindings remain visible for
-diagnosis but cannot authorize T1/T2 behavior. Matrix callers can supply
-per-harness `host_bindings`; declaration-only matrices are not native-host proof.
-
-## OMP session identity and continuity
-
-Fresh OMP sessions use their native header timestamp and session ID, not a
-transcript basename. Identically named files and newly created named workers
-therefore do not share a Brain ledger. Verified existing canonical assignments
-are retained and journaled with their native identity; malformed, conflicting,
-or unproven legacy state is refused rather than replaced with an empty ledger.
-Worker-root authority still follows native filesystem breadcrumbs, not prompt
-text or a claimed parent header. Identity is recorded before the first Brain
-operation, including extension-restart recovery without a new startup event.
-
-Mutating worker results must also match the admitted native child, attempt,
-manager job, and host generation. Raw task results/progress must belong to the
-original dispatch and source slot; mismatches do not consume a valid result.
-Update the OMP extension and Python runtime together, with no active workers,
-and restart older OMP sessions before dispatching through the new protocol.
+The earlier v1.0.0 baseline and later v2 RC reports under `outputs/reports/`
+describe their original executed bytes. The old Sol/driver contracts, patched
+host launcher, native worker binding campaign and governed test fixtures are
+not part of this candidate. Open retained authorization, integrity, skill,
+hook and extension-activation findings remain blockers rather than being
+silently inherited as passes.
 
 ## Paired economics answer review
 

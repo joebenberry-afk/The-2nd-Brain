@@ -9,11 +9,10 @@ Invariants:
 - seq is contiguous (append batches must start at max(seq)+1);
 - event_id unique per session; parent_event_id must reference a known event;
 - object files are content-addressed and digest-verified on read;
-- schema versioning per plan §14 (refuse newer; deterministic error for
-  unknown older; reading never rewrites);
-- replay is independent: a fresh connection validates schema/seq/objects and
-  reconstructs the lineage projection, comparing against a captured
-  projection to report the FIRST divergence (plan §9.10).
+- schema versioning per plan §14 (refuse unsupported versions; recognized
+  predecessors migrate transactionally, preserving original event cells);
+- replay verifies and projects one connection's consistent SQLite snapshot
+  before reporting the first divergence (plan §9.10).
 """
 
 from __future__ import annotations
@@ -89,6 +88,22 @@ LEDGER_ADAPTER_VERSION = "0.1.0"
 _MANIFEST = "manifest.json"
 _OBJECT_DIR = "objects"
 _CHAIN_ORIGIN_KEY = "hash_chain_origin"
+_ENVELOPE_ORIGIN_KEY = "envelope_chain_origin"
+_ENVELOPE_COLUMNS = (
+    "seq", "event_id", "internal_session_id", "agent_id", "parent_event_id",
+    "host_entry_id", "host_parent_entry_id", "segment_id", "event_type",
+    "timestamp", "surface_visibility", "ignorable", "payload_json",
+    "artifact_sha256", "source_event_ids", "prev_hash",
+)
+_ENVELOPE_SELECT = ", ".join((*_ENVELOPE_COLUMNS, "envelope_hash"))
+
+
+def _envelope_digest(previous: str, fields: tuple[Any, ...]) -> str:
+    return hashlib.sha256(
+        b"second-brain:event-envelope:v2\0"
+        + previous.encode("ascii")
+        + canonical_json(fields).encode("utf-8")
+    ).hexdigest()
 _FTS_KEYS = ("title", "summary", "file", "symbol", "task", "task_sha256", "decision", "tool")
 
 
@@ -138,7 +153,8 @@ CREATE TABLE IF NOT EXISTS events (
     payload_json TEXT NOT NULL,
     artifact_sha256 TEXT,
     source_event_ids TEXT,
-    prev_hash TEXT
+    prev_hash TEXT,
+    envelope_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS request_epochs (
     epoch_id TEXT PRIMARY KEY,
@@ -247,7 +263,10 @@ brain_schema.register(
 
 def _legacy_history_fingerprint(conn: sqlite3.Connection) -> str:
     """Bind original storage classes and bytes, excluding only the new chain column."""
-    columns = [row[1] for row in conn.execute("PRAGMA table_info(events)") if row[1] != "prev_hash"]
+    columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(events)")
+        if row[1] not in ("prev_hash", "envelope_hash")
+    ]
     digest = hashlib.sha256(json.dumps(columns, separators=(",", ":")).encode("utf-8"))
     projection = ",".join(
         f"typeof({_sql_name(name)}),CAST({_sql_name(name)} AS BLOB)" for name in columns
@@ -485,33 +504,48 @@ class LedgerStore:
             version = int(header[0])
         except (TypeError, ValueError) as exc:
             raise BrainError("ledger schema version is malformed") from exc
-        if version not in (1, LEDGER_SCHEMA_VERSION):
+        if version not in (1, 2, LEDGER_SCHEMA_VERSION):
             raise BrainError(
                 f"ledger schema {version} unsupported; runtime requires {LEDGER_SCHEMA_VERSION}"
             )
-        # Which transition this database needs is the *authority's* decision, not this store's:
-        # it compares the live tables against the shapes derived from the registered DDL and
-        # names the difference. This store only carries out the transition it was told to make,
-        # and refuses every state the authority does not recognise.
+        # Shape permission comes from the shared schema authority; a version
+        # label alone cannot turn an envelope-era column into old history.
         shape = brain_schema.component_shape(self._conn, "ledger")
-        chain_only = (
-            shape.state == "additive"
-            and set(shape.missing) <= {"events"}
-            and set(shape.missing.get("events", ())) <= {"prev_hash"}
-        )
-        if shape.state == "current" and version == LEDGER_SCHEMA_VERSION:
+        missing = set(shape.missing.get("events", ()))
+        additive = shape.state == "additive" and set(shape.missing) == {"events"}
+        if version == LEDGER_SCHEMA_VERSION and shape.state == "current":
+            origin = self._envelope_origin()
+            count = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            if origin is None:
+                if count:
+                    raise BrainError("ledger envelope-chain origin is missing")
+                return "native"
+            boundary = origin["legacy_through_seq"]
             malformed = self._conn.execute(
-                "SELECT seq FROM events WHERE typeof(prev_hash) != 'text' "
-                "OR length(prev_hash) != 64 OR prev_hash GLOB '*[^0-9a-f]*' LIMIT 1"
+                "SELECT seq FROM events WHERE "
+                "(typeof(envelope_hash) != 'text' OR length(envelope_hash) != 64 "
+                "OR envelope_hash GLOB '*[^0-9a-f]*') OR "
+                "(seq <= ? AND (typeof(prev_hash) != 'text' OR length(prev_hash) != 64 "
+                "OR prev_hash GLOB '*[^0-9a-f]*')) OR "
+                "(seq > ? AND prev_hash IS NOT NULL) LIMIT 1",
+                (boundary, boundary),
             ).fetchone()
-            if malformed is not None:
-                raise BrainError("ledger hash chain is missing or malformed; refusing repair")
+            if malformed is not None or boundary > count:
+                raise BrainError("ledger envelope hash chain is missing or malformed")
             self._chain_origin()
             return "current"
-        if chain_only or (shape.state == "current" and version == 1):
+        if version == 2 and additive and missing == {"envelope_hash"}:
+            self._chain_origin()
+            return "payload-chain"
+        if version in (1, 2) and additive and missing in (
+            {"prev_hash", "envelope_hash"},
+            {"envelope_hash"},
+        ):
+            if version == 2 and missing == {"envelope_hash"}:
+                return "payload-chain"
             recorded_integrity = self._conn.execute(
-                "SELECT key FROM ledger_meta WHERE key IN (?, 'last_verified_seq')",
-                (_CHAIN_ORIGIN_KEY,),
+                "SELECT key FROM ledger_meta WHERE key IN (?, ?, 'last_verified_seq')",
+                (_CHAIN_ORIGIN_KEY, _ENVELOPE_ORIGIN_KEY),
             ).fetchone()
             triggers = self._conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='trigger'"
@@ -555,7 +589,15 @@ class LedgerStore:
             # Inspect one stable schema under the existing SQLite writer lock.
             state = self._schema_state()
             if state == "legacy":
+                previous = int(self._conn.execute(
+                    "SELECT value FROM ledger_meta WHERE key='schema_version'"
+                ).fetchone()[0])
                 self._migrate_legacy_chain()
+                self._migrate_envelope_chain(source_version=previous)
+            elif state == "payload-chain":
+                self._migrate_envelope_chain()
+            elif state == "native":
+                self._initialize_envelope_origin()
             elif state == "uninitialized":
                 raise BrainError("ledger initialization did not produce the supported schema")
             self._conn.commit()
@@ -664,9 +706,10 @@ class LedgerStore:
             "INSERT INTO ledger_meta (key,value) VALUES (?,?)",
             (_CHAIN_ORIGIN_KEY, canonical_json(origin)),
         )
+        # Remain a v2 predecessor within this transaction; only the shared
+        # authority may publish v3 after the envelope transition succeeds.
         self._conn.execute(
-            "UPDATE ledger_meta SET value=? WHERE key='schema_version'",
-            (str(LEDGER_SCHEMA_VERSION),),
+            "UPDATE ledger_meta SET value='2' WHERE key='schema_version'"
         )
 
     def _chain_origin(self) -> dict[str, Any] | None:
@@ -696,8 +739,147 @@ class LedgerStore:
             )
         return origin
 
+    def _envelope_origin(self) -> dict[str, Any] | None:
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT value FROM ledger_meta WHERE key=?", (_ENVELOPE_ORIGIN_KEY,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            origin = json.loads(row[0])
+        except (TypeError, ValueError) as exc:
+            raise BrainError("ledger envelope-chain origin is malformed") from exc
+        if (
+            not isinstance(origin, dict)
+            or origin.get("format_version") != 2
+            or origin.get("algorithm") != "sha256-full-event-envelope-v2"
+            or origin.get("origin") not in ("native_v3", "derived_predecessor")
+            or type(origin.get("legacy_through_seq")) is not int
+            or origin["legacy_through_seq"] < 0
+            or not isinstance(origin.get("derived_at"), str)
+            or origin.get("pre_migration_authenticity_verified") is not False
+            or (
+                origin["origin"] == "native_v3"
+                and (origin["legacy_through_seq"] != 0
+                     or origin.get("source_snapshot_sha256") is not None)
+            )
+            or (
+                origin["origin"] == "derived_predecessor"
+                and (origin.get("legacy_schema_version") not in (1, 2)
+                     or not self._valid_chain_hash(origin.get("source_snapshot_sha256"))
+                     or not self._valid_chain_hash(origin.get("legacy_history_sha256")))
+            )
+        ):
+            raise BrainError("ledger envelope-chain origin is unsupported")
+        if origin["origin"] == "derived_predecessor":
+            old = self._conn.execute(
+                "SELECT value FROM ledger_meta WHERE key=?", (_CHAIN_ORIGIN_KEY,)
+            ).fetchone()
+            actual = hashlib.sha256(old[0].encode("utf-8")).hexdigest() if old else None
+            expected = origin.get("legacy_origin_sha256")
+            if (
+                actual != expected
+                or (expected is not None and not self._valid_chain_hash(expected))
+            ):
+                raise BrainError("ledger legacy origin differs from migration provenance")
+        return origin
+
+    @staticmethod
+    def _envelope_seed(origin: dict[str, Any]) -> str:
+        return hashlib.sha256(
+            b"second-brain:event-envelope-origin:v2\0"
+            + canonical_json(origin).encode("utf-8")
+        ).hexdigest()
+
+    def _initialize_envelope_origin(self) -> dict[str, Any]:
+        assert self._conn is not None and self._conn.in_transaction
+        origin = {
+            "format_version": 2,
+            "algorithm": "sha256-full-event-envelope-v2",
+            "origin": "native_v3",
+            "legacy_through_seq": 0,
+            "source_snapshot_sha256": None,
+            "derived_at": _now(),
+            "pre_migration_authenticity_verified": False,
+        }
+        self._conn.execute(
+            "INSERT INTO ledger_meta (key,value) VALUES (?,?)",
+            (_ENVELOPE_ORIGIN_KEY, canonical_json(origin)),
+        )
+        return origin
+
+    def _migrate_envelope_chain(self, *, source_version: int = 2) -> None:
+        assert self._conn is not None and self._conn.in_transaction
+        if self._envelope_origin() is not None:
+            raise BrainError("ledger envelope transition already has an origin")
+        count, first, last = self._conn.execute(
+            "SELECT COUNT(*),COALESCE(MIN(seq),0),COALESCE(MAX(seq),0) FROM events"
+        ).fetchone()
+        if count and (first != 1 or last != count):
+            raise BrainError("ledger predecessor has noncontiguous history")
+        if self._conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise BrainError("ledger predecessor has foreign-key violations")
+        if not self._verify_object_digests()[0]:
+            raise BrainError("ledger predecessor object evidence is corrupted")
+        running = _GENESIS_HASH
+        for row in self._conn.execute(
+            "SELECT payload_json,prev_hash FROM events ORDER BY seq"
+        ):
+            if not isinstance(row["payload_json"], str):
+                raise BrainError("ledger predecessor payload is not text")
+            running = hashlib.sha256(
+                (running + row["payload_json"]).encode("utf-8")
+            ).hexdigest()
+            if row["prev_hash"] != running:
+                raise BrainError("ledger predecessor payload hash chain is broken")
+        before = _legacy_history_fingerprint(self._conn)
+        self._conn.execute("ALTER TABLE events ADD COLUMN envelope_hash TEXT")
+        if count and source_version in (1, 2):
+            snapshot_hash, snapshot_size = self._preserve_legacy_snapshot()
+            self._conn.execute(
+                "INSERT OR IGNORE INTO object_refs "
+                "(sha256,size,mime,role,added_at) VALUES (?,?,?,?,?)",
+                (snapshot_hash, snapshot_size, "application/vnd.sqlite3",
+                 "legacy-ledger-snapshot", _now()),
+            )
+            old = self._conn.execute(
+                "SELECT value FROM ledger_meta WHERE key=?", (_CHAIN_ORIGIN_KEY,)
+            ).fetchone()
+            origin = {
+                "format_version": 2,
+                "algorithm": "sha256-full-event-envelope-v2",
+                "origin": "derived_predecessor",
+                "legacy_schema_version": source_version,
+                "legacy_through_seq": last,
+                "legacy_history_sha256": before,
+                "source_snapshot_sha256": snapshot_hash,
+                "legacy_origin_sha256": (
+                    hashlib.sha256(old[0].encode("utf-8")).hexdigest() if old else None
+                ),
+                "derived_at": _now(),
+                "pre_migration_authenticity_verified": False,
+            }
+            self._conn.execute(
+                "INSERT INTO ledger_meta (key,value) VALUES (?,?)",
+                (_ENVELOPE_ORIGIN_KEY, canonical_json(origin)),
+            )
+        else:
+            origin = self._initialize_envelope_origin()
+        running = self._envelope_seed(origin)
+        for row in self._conn.execute(
+            f"SELECT {', '.join(_ENVELOPE_COLUMNS)} FROM events ORDER BY seq"
+        ):
+            running = _envelope_digest(running, tuple(row))
+            self._conn.execute(
+                "UPDATE events SET envelope_hash=? WHERE seq=?", (running, row["seq"])
+            )
+        if _legacy_history_fingerprint(self._conn) != before:
+            raise BrainError("ledger envelope transition changed original event storage")
+        brain_schema.complete_transition(self._conn, "ledger")
+
     def _migration_manifest_pending(self) -> bool:
-        if self._chain_origin() is None:
+        if self._envelope_origin() is None:
             return False
         target = _contained(self._dir, _MANIFEST)
         if not target.exists():
@@ -710,6 +892,7 @@ class LedgerStore:
             ) from exc
         if not isinstance(manifest, dict) or manifest.get("schema_version") not in (
             1,
+            2,
             LEDGER_SCHEMA_VERSION,
         ):
             raise BrainError("migrated ledger manifest has an unsupported schema")
@@ -884,43 +1067,51 @@ class LedgerStore:
                     if parent_in_db is None and event.parent_event_id not in batch_ids:
                         raise BrainError(f"invalid parent_event_id: {event.parent_event_id!r}")
             seqs: list[int] = []
-            prior_row_hash = self._conn.execute(
-                "SELECT prev_hash FROM events ORDER BY seq DESC LIMIT 1"
+            prior = self._conn.execute(
+                "SELECT envelope_hash FROM events ORDER BY seq DESC LIMIT 1"
             ).fetchone()
-            running_prev_hash = prior_row_hash[0] if prior_row_hash is not None else _GENESIS_HASH
+            if prior is None:
+                origin = self._envelope_origin()
+                if origin is None:
+                    raise BrainError("ledger envelope-chain origin is missing")
+                running = self._envelope_seed(origin)
+            else:
+                running = prior[0]
             for insert_index, event in enumerate(events):
                 effective_seq = event.seq if event.seq > 0 else next_seq + insert_index
-                payload_canonical = canonical_json(event.payload)
-                event_prev_hash = hashlib.sha256(
-                    (running_prev_hash + payload_canonical).encode("utf-8")
-                ).hexdigest()
-                self._conn.execute(
+                fields = (
+                    effective_seq,
+                    event.event_id,
+                    event.internal_session_id,
+                    event.agent_id,
+                    event.parent_event_id,
+                    event.host_entry_id,
+                    event.host_parent_entry_id,
+                    event.segment_id,
+                    event.event_type.value,
+                    event.timestamp,
+                    event.surface_visibility.value,
+                    1 if event.ignorable else 0,
+                    canonical_json(event.payload),
+                    event.artifact_sha256,
+                    canonical_json(event.source_event_ids),
+                    None,
+                )
+                stored = self._conn.execute(
                     "INSERT INTO events (seq, event_id, internal_session_id, agent_id, "
                     " parent_event_id, host_entry_id, host_parent_entry_id, segment_id, "
                     " event_type, timestamp, surface_visibility, ignorable, payload_json, "
-                    " artifact_sha256, source_event_ids, prev_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        effective_seq,
-                        event.event_id,
-                        event.internal_session_id,
-                        event.agent_id,
-                        event.parent_event_id,
-                        event.host_entry_id,
-                        event.host_parent_entry_id,
-                        event.segment_id,
-                        event.event_type.value,
-                        event.timestamp,
-                        event.surface_visibility.value,
-                        1 if event.ignorable else 0,
-                        payload_canonical,
-                        event.artifact_sha256,
-                        canonical_json(event.source_event_ids),
-                        event_prev_hash,
-                    ),
+                    " artifact_sha256, source_event_ids, prev_hash, envelope_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    f"RETURNING {', '.join(_ENVELOPE_COLUMNS)}",
+                    (*fields, None),
+                ).fetchone()
+                assert stored is not None
+                running = _envelope_digest(running, tuple(stored))
+                self._conn.execute(
+                    "UPDATE events SET envelope_hash=? WHERE seq=?", (running, effective_seq)
                 )
                 seqs.append(effective_seq)
-                running_prev_hash = event_prev_hash
             for event in events:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO events_fts (event_id, event_type, payload_text) "
@@ -996,18 +1187,12 @@ class LedgerStore:
                 bad.append(obj["sha256"][:12])
         return (not bad, bad)
 
-    def integrity(self, *, full_chain: bool = False) -> dict[str, Any]:
-        """Seq contiguity, orphan parents, schema version, and hash-chain integrity.
+    def integrity(self) -> dict[str, Any]:
+        """Check sequence, parents, schema, and the chain from genesis.
 
-        Ordinary checks resume from ``last_verified_seq`` (plan T6.3). Replay sets
-        ``full_chain`` to distrust that mutable watermark and verify from genesis.
-
-        Object payloads are NOT
-        re-hashed here — ``read_object()`` digest-verifies on every read,
-        and ``replay()`` separately full-verifies every object_refs row
-        before returning a projection; re-hashing all objects on every
-        integrity()/checkpoint_ledger() call was the eager cost this
-        rewrite removes.
+        A persisted verification watermark is caller-writable data, not a
+        trusted checkpoint. Object digests are verified on read and again
+        during replay; checking them on every checkpoint is unnecessary.
         """
         assert self._conn is not None
         row = self._conn.execute(
@@ -1026,42 +1211,23 @@ class LedgerStore:
             ).fetchone()[0]
         )
 
-        if full_chain:
-            last_verified_seq = 0
-            running_prev_hash = _GENESIS_HASH
-        else:
-            last_verified_row = self._conn.execute(
-                "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
-            ).fetchone()
-            last_verified_seq = int(last_verified_row[0]) if last_verified_row is not None else 0
-            seed_row = self._conn.execute(
-                "SELECT prev_hash FROM events WHERE seq = ?", (last_verified_seq,)
-            ).fetchone()
-            running_prev_hash = seed_row[0] if seed_row is not None else _GENESIS_HASH
-
+        origin = self._envelope_origin()
+        if origin is None:
+            raise BrainError("ledger envelope-chain origin is missing")
+        running = self._envelope_seed(origin)
         hash_chain_ok = True
         hash_chain_break_seq: int | None = None
-        verified_through = last_verified_seq
+        verified_through = 0
         for erow in self._conn.execute(
-            "SELECT seq, payload_json, prev_hash FROM events WHERE seq > ? ORDER BY seq ASC",
-            (last_verified_seq,),
+            f"SELECT {_ENVELOPE_SELECT} FROM events ORDER BY seq ASC"
         ):
-            expected = hashlib.sha256(
-                (running_prev_hash + erow["payload_json"]).encode("utf-8")
-            ).hexdigest()
-            if expected != erow["prev_hash"]:
+            expected = _envelope_digest(running, erow[:-1])
+            if expected != erow["envelope_hash"]:
                 hash_chain_ok = False
                 hash_chain_break_seq = int(erow["seq"])
                 break
-            running_prev_hash = erow["prev_hash"]
+            running = erow["envelope_hash"]
             verified_through = int(erow["seq"])
-
-        if hash_chain_ok and not full_chain:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO ledger_meta (key, value) VALUES ('last_verified_seq', ?)",
-                (str(verified_through),),
-            )
-            self._conn.commit()
 
         return {
             "seq_contiguous": contiguous,
@@ -1073,6 +1239,7 @@ class LedgerStore:
             "hash_chain_verified_through_seq": verified_through,
             "hash_chain_break_seq": hash_chain_break_seq,
             "hash_chain_origin": self._chain_origin(),
+            "envelope_chain_origin": origin,
         }
 
     # -- segments ---------------------------------------------------------------
@@ -1289,59 +1456,62 @@ class LedgerStore:
     # -- replay -----------------------------------------------------------------
 
     def replay(self, lineage: list[str]) -> ProjectedContext:
-        """Independent replay (plan §9.10): fresh-connection semantics via this store's
-        own connection + validation, reconstructing the root->leaf lineage projection.
-
-        Detects seq gaps, orphan parents, object failures, and in-place payload
-        edits against the existing payload-only chain, without trusting its watermark.
-        """
+        """Verify and project a root-to-leaf lineage from one SQLite snapshot."""
         assert self._conn is not None
-        integrity = self.integrity(full_chain=True)
-        if not integrity["seq_contiguous"]:
-            raise BrainError("replay rejected: seq not contiguous")
-        if integrity["orphan_parents"]:
-            raise BrainError("replay rejected: orphan parent_event_id")
-        if not integrity["hash_chain_ok"]:
-            raise BrainError("replay rejected: hash chain broken")
-        digests_ok, bad_objects = self._verify_object_digests()
-        if not digests_ok:
-            raise BrainError(f"replay rejected: object digest failures {bad_objects}")
-        chain = _lineage_chain(self._conn, lineage)
-        rows = self._conn.execute(
-            f"SELECT * FROM events WHERE event_id IN ({','.join('?' for _ in chain)}) ORDER BY seq",
-            list(chain),
-        ).fetchall()
-        events = [_row_to_event(r) for r in rows]
-        segments = [
-            SessionSegment.from_dict(
-                {
-                    "segment_id": r["segment_id"],
-                    "internal_session_id": r["internal_session_id"],
-                    "index": r["idx"],
-                    "start_seq": r["start_seq"],
-                    "end_seq": r["end_seq"],
-                    "started_reason": r["started_reason"],
-                    "compaction_id": r["compaction_id"],
-                    "active": bool(r["active"]),
-                }
+        owns_snapshot = not self._conn.in_transaction
+        if owns_snapshot:
+            self._conn.execute("BEGIN")
+        try:
+            integrity = self.integrity()
+            if not integrity["seq_contiguous"]:
+                raise BrainError("replay rejected: seq not contiguous")
+            if integrity["orphan_parents"]:
+                raise BrainError("replay rejected: orphan parent_event_id")
+            if not integrity["hash_chain_ok"]:
+                raise BrainError("replay rejected: hash chain broken")
+            digests_ok, bad_objects = self._verify_object_digests()
+            if not digests_ok:
+                raise BrainError(f"replay rejected: object digest failures {bad_objects}")
+            chain = _lineage_chain(self._conn, lineage)
+            rows = self._conn.execute(
+                "SELECT * FROM events WHERE event_id IN "
+                f"({','.join('?' for _ in chain)}) ORDER BY seq",
+                list(chain),
+            ).fetchall()
+            events = [_row_to_event(r) for r in rows]
+            segments = [
+                SessionSegment.from_dict(
+                    {
+                        "segment_id": r["segment_id"],
+                        "internal_session_id": r["internal_session_id"],
+                        "index": r["idx"],
+                        "start_seq": r["start_seq"],
+                        "end_seq": r["end_seq"],
+                        "started_reason": r["started_reason"],
+                        "compaction_id": r["compaction_id"],
+                        "active": bool(r["active"]),
+                    }
+                )
+                for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
+            ]
+            epochs = [
+                RequestEpoch.from_dict(dict(r))
+                for r in self._conn.execute(
+                    "SELECT * FROM request_epochs ORDER BY start_seq"
+                ).fetchall()
+            ]
+            fingerprints = [
+                RequestFingerprint.from_dict(dict(r))
+                for r in self._conn.execute(
+                    "SELECT * FROM request_fingerprints ORDER BY seq"
+                ).fetchall()
+            ]
+            return ProjectedContext(
+                events=events, segments=segments, epochs=epochs, fingerprints=fingerprints
             )
-            for r in self._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
-        ]
-        epochs = [
-            RequestEpoch.from_dict(dict(r))
-            for r in self._conn.execute(
-                "SELECT * FROM request_epochs ORDER BY start_seq"
-            ).fetchall()
-        ]
-        fingerprints = [
-            RequestFingerprint.from_dict(dict(r))
-            for r in self._conn.execute(
-                "SELECT * FROM request_fingerprints ORDER BY seq"
-            ).fetchall()
-        ]
-        return ProjectedContext(
-            events=events, segments=segments, epochs=epochs, fingerprints=fingerprints
-        )
+        finally:
+            if owns_snapshot:
+                self._conn.rollback()
 
     # -- header ----------------------------------------------------------------
 

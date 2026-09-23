@@ -21,7 +21,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from second_brain import injection_slots, semantic
+from second_brain import frontier, injection_slots, semantic, skillforge
+
+
+def _approve(home: Path, skill_file: Path, skill_id: str) -> None:
+    """Skills reach the prompt only as reviewed, currently approved active bytes."""
+    skillforge.set_status(skill_file, "active")
+    frontier.frontier_review(
+        home, f"skill-{skill_id}-promotion", "skill", "high", "reviewer", "approve"
+    )
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HERMES_PLUGIN = REPO_ROOT / "brainstem" / "adapters" / "hermes" / "hermes_plugin.py"
@@ -36,6 +45,7 @@ def _seed_skill(home: Path, name: str, purpose: str, body: str) -> Path:
         f"# Instructions\n{body}\n"
     )
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    _approve(home, skill_dir / "SKILL.md", name)
     return skill_dir / "SKILL.md"
 
 
@@ -48,6 +58,7 @@ def _seed_lean_skill(home: Path) -> Path:
         "# Runtime Kernel\nWrite minimal code. No unnecessary abstractions.\n"
     )
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    _approve(home, skill_dir / "SKILL.md", "lean-code")
     return skill_dir / "SKILL.md"
 
 

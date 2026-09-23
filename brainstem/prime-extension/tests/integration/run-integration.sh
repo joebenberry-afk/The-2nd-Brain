@@ -37,10 +37,17 @@ unset PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_SOCKET \
       PRIME_AGENT_INTERNAL_SESSION_LEASE_CREATED_AT \
       PRIME_AGENT_LAUNCHER_PATH \
       PRIME_AGENT_BUILD_ID 2>/dev/null || true
+unset PYTHONHOME PYTHONPATH UV_INTERNAL__PYTHONHOME PYTHONSTARTUP
 
 TMP="$(mktemp -d)"
 TMP_WIN="$(cygpath -w "$TMP" 2>/dev/null || echo "$TMP")"
 trap 'rm -rf "$TMP"' EXIT
+
+# Host session/config files must not fall back to the user's real profile.
+export HOME="$TMP"
+export USERPROFILE="$TMP_WIN"
+export XDG_CONFIG_HOME="$TMP/config-home"
+export XDG_DATA_HOME="$TMP/data-home"
 
 # A minimal but plausible brain home: VERSION + config/brain.toml +
 # pre-created telemetry dir.
@@ -53,6 +60,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok: $*"; }
 
 export SECOND_BRAIN_HOME="$TMP_WIN"
+# The disposable home has no interpreter. Bind bridges to this candidate,
+# never to an inherited Python or the installed Brain.
+export SECOND_BRAIN_PYTHON="$(cygpath -w "$REPO_ROOT/.venv/Scripts/python.exe" 2>/dev/null || echo "$REPO_ROOT/.venv/Scripts/python.exe")"
+test -f "$REPO_ROOT/.venv/Scripts/python.exe" || fail "candidate Python is missing"
 
 run_agent() { # $1 = label, $2 = daemon pipe
   local label="$1" pipe="$2"

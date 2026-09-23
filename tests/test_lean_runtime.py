@@ -8,12 +8,13 @@ kernel source (kernel hash/char count unchanged; no duplicate copy).
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 
 import pytest
 
-from second_brain import lean_runtime
+from second_brain import frontier, lean_runtime, skillforge
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE_SKILL = REPO_ROOT / "skills" / "candidates" / "lean-code" / "SKILL.md"
@@ -36,6 +37,31 @@ def _seed(home: Path, level: str) -> None:
     target = home / "skills" / level / "lean-code"
     target.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CANDIDATE_SKILL, target / "SKILL.md")
+    if level in ("active", "shadow"):
+        skillforge.set_status(target / "SKILL.md", level)
+    if level != "retired":
+        frontier.frontier_review(
+            home, "skill-lean-code-promotion", "skill", "high", "reviewer", "approve"
+        )
+
+
+def test_lean_requires_current_review_even_on_cache_hit(home: Path) -> None:
+    target = home / "skills" / "candidates" / "lean-code" / "SKILL.md"
+    target.parent.mkdir(parents=True)
+    shutil.copy2(CANDIDATE_SKILL, target)
+    env = {"SECOND_BRAIN_LEAN": "advisory"}
+    assert _decide(home, "driver", env).reason == "unapproved_content"
+
+    frontier.frontier_review(
+        home, "skill-lean-code-promotion", "skill", "high", "reviewer", "approve"
+    )
+    assert _decide(home, "driver", env).decision == "inject"
+    before = target.stat()
+    body = target.read_text(encoding="utf-8")
+    target.write_text(body.replace("LEAN CODE:", "EVIL CODE:"), encoding="utf-8")
+    assert target.stat().st_size == before.st_size
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert _decide(home, "driver", env).reason == "unapproved_content"
 
 
 def _decide(home: Path, role: str, env: dict[str, str] | None = None):

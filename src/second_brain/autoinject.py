@@ -39,6 +39,7 @@ import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,6 @@ from . import (
     governor,
     hybrid_retrieval,
     ledger,
-    model_routing,
     reconsolidation,
     registry,
     semantic,
@@ -69,7 +69,9 @@ from .contracts import (
     canonical_json,
     estimate_tokens,
 )
+from .errors import BrainError
 from .paths import db_path
+from .security.identifiers import validate_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -226,44 +228,62 @@ def _record_retrieval_abstention(
         logger.debug("retrieval abstention decision record failed", exc_info=True)
 
 
-_BUDGET_POLICY_VERSION = "v3.1"
+class TaskClass(StrEnum):
+    TRIVIAL = "trivial"
+    NAVIGATION = "navigation"
+    IMPLEMENTATION = "implementation"
+    DEBUGGING = "debugging"
+    VERIFICATION = "verification"
+    EXPLORATION = "exploration"
+    HIGH_RISK = "high_risk"
+    CONTINUATION = "continuation"
 
 
-def _budget_rollout_stage(home: Path) -> str:
-    """config/v2.toml [rollout] brainstem; SHADOW default (matches the routing/eviction
-    decisions(kind=...) stage-resolution pattern)."""
-    stage = "SHADOW"
-    try:
-        v2_path = Path(home) / "config" / "v2.toml"
-        if v2_path.is_file():
-            v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
-            candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
-            if candidate in decisions._ROLLOUT_STAGES:
-                stage = candidate
-    except Exception:
-        pass
-    return stage
-
-
-def _record_budget_soft(home: Path, intent: RetrievalIntent, used: int, cap: int) -> None:
-    """Record the SOFT budget determination (T3.1) without persisting task/query
-    content, following the exact pattern of `_record_retrieval_abstention`."""
-    try:
-        decisions.record(
-            home,
-            kind="budget",
-            session_id=intent.session_id,
-            task_id=None,
-            chosen={"decision": "NO_INJECTION", "state": "SOFT"},
-            alternatives=["INJECT"],
-            propensity=1.0,
-            randomized=False,
-            policy_version=_BUDGET_POLICY_VERSION,
-            stage=_budget_rollout_stage(home),
-            inputs={"used": used, "cap": cap},
-        )
-    except Exception:
-        logger.debug("budget SOFT decision record failed", exc_info=True)
+def classify_task(task_or_hash: str, *, risk_class: str | None = None) -> TaskClass:
+    """Classify retrieval-holdout tasks without selecting an agent or model."""
+    if isinstance(task_or_hash, TaskClass):
+        return task_or_hash
+    text = str(task_or_hash).strip()
+    lower = text.lower()
+    for item in TaskClass:
+        if lower == item.value:
+            return item
+    if risk_class in ("HIGH", "CRITICAL"):
+        return TaskClass.HIGH_RISK
+    classes = tuple(TaskClass)
+    if len(text) == 16 and all(c in "0123456789abcdefABCDEF" for c in text):
+        return classes[int(text, 16) % len(classes)]
+    signals = (
+        (TaskClass.CONTINUATION, ("continue", "continuation", "resume", "pick up")),
+        (
+            TaskClass.VERIFICATION,
+            ("verify", "verification", "check", "assert", "audit", "lint", "gate"),
+        ),
+        (
+            TaskClass.DEBUGGING,
+            ("debug", "debugging", "fix", "bug", "error", "failure", "trace", "issue", "crash"),
+        ),
+        (
+            TaskClass.NAVIGATION,
+            ("navigate", "navigation", "find", "search", "locate", "where", "list", "grep", "glob"),
+        ),
+        (
+            TaskClass.EXPLORATION,
+            ("explore", "exploration", "investigate", "research", "survey", "discover"),
+        ),
+        (
+            TaskClass.HIGH_RISK,
+            ("critical", "high risk", "security", "permission", "drop table", "destroy", "root"),
+        ),
+        (
+            TaskClass.TRIVIAL,
+            ("trivial", "summarize", "summary", "readme", "ping", "hello", "echo", "typo"),
+        ),
+    )
+    for task_class, words in signals:
+        if any(word in lower for word in words):
+            return task_class
+    return TaskClass.IMPLEMENTATION
 
 
 _ROLLOUT_STAGE_RANKS: dict[str, int] = {
@@ -368,7 +388,7 @@ def resolve_project(
     """Resolve one canonical project identity for every adapter surface."""
     if explicit is not None and str(explicit).strip():
         return {
-            "project_id": str(explicit).strip(),
+            "project_id": validate_project_id(explicit),
             "resolution": "explicit",
             "repo_root": str(Path(cwd).resolve()) if cwd else "",
             "confidence": "high",
@@ -383,11 +403,13 @@ def resolve_project(
                 manifest_id = registry.detect_explicit_id(str(manifest_root))
                 if manifest_id:
                     return {
-                        "project_id": manifest_id,
+                        "project_id": validate_project_id(manifest_id),
                         "resolution": "manifest",
                         "repo_root": str(manifest_root),
                         "confidence": "high",
                     }
+        except BrainError:
+            raise
         except Exception:
             pass
         try:
@@ -402,11 +424,13 @@ def resolve_project(
             if matches:
                 _, project, root = max(matches, key=lambda item: item[0])
                 return {
-                    "project_id": project.id,
+                    "project_id": validate_project_id(project.id),
                     "resolution": "registry_path",
                     "repo_root": str(root),
                     "confidence": "high",
                 }
+        except BrainError:
+            raise
         except Exception:
             pass
 
@@ -420,11 +444,13 @@ def resolve_project(
                         and registry.remote_identity(project.git_remote) == identity
                     ):
                         return {
-                            "project_id": project.id,
+                            "project_id": validate_project_id(project.id),
                             "resolution": "git_remote",
                             "repo_root": str(cwd_path),
                             "confidence": "medium",
                         }
+        except BrainError:
+            raise
         except Exception:
             pass
     else:
@@ -439,18 +465,20 @@ def resolve_project(
                 except ValueError:
                     continue
                 return {
-                    "project_id": project.id,
+                    "project_id": validate_project_id(project.id),
                     "resolution": "registry_path",
                     "repo_root": str(root),
                     "confidence": "high",
                 }
+        except BrainError:
+            raise
         except Exception:
             pass
 
     env_project = os.environ.get("SECOND_BRAIN_PROJECT")
     if env_project and env_project.strip():
         return {
-            "project_id": env_project.strip(),
+            "project_id": validate_project_id(env_project),
             "resolution": "env",
             "repo_root": str(cwd_path) if cwd_path else "",
             "confidence": "medium",
@@ -917,13 +945,6 @@ def prepare_injection(
             selected_ids=list(selected_ids) if selected_ids is not None else [],
         )
 
-    # T3.1: SOFT budget check, after intent validation (the `empty`/
-    # `decision` scaffolding above), before any retrieval work begins.
-    budget = governor.check_budget(home, intent.session_id, intent.role_profile)
-    if budget.get("state") == "SOFT":
-        _record_budget_soft(home, intent, budget.get("used", 0), budget.get("cap", 0))
-        return decision(NoInjectionReason.BUDGET_SOFT)
-
     query_mode = "idf"
     query_text = (
         retrieval_text if retrieval_text is not None else _retrieval_query_text(home, intent)
@@ -1183,10 +1204,9 @@ def prepare_injection(
     stage_rank = _ROLLOUT_STAGE_RANKS.get(stage, 0)
     is_stage_eligible = stage_rank >= _ROLLOUT_STAGE_RANKS["CANARY"]
 
-    t_class = model_routing.classify_task(
+    t_class_val = classify_task(
         intent.task_text or "", risk_class=getattr(intent, "risk_class", None)
-    )
-    t_class_val = t_class.value if isinstance(t_class, model_routing.TaskClass) else str(t_class)
+    ).value
     is_class_eligible = t_class_val in {"trivial", "navigation", "implementation"} and getattr(
         intent, "risk_class", None
     ) not in ("HIGH", "CRITICAL")

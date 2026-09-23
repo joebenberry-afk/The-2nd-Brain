@@ -24,73 +24,56 @@ from . import (
     artifacts,
     autoinject,
     contracts,
-    decisions,
     firewall,
-    governor,
     handoff,
     injection_slots,
     ledger,
-    model_routing,
     router,
     skills,
     vmem,
-    worker_protocol,
 )
 from .errors import BrainError
+from .security.identifiers import validate_project_id
 
 ADAPTER_VERSION = "0.1.0"
 _HOST = "hermes"
-_SUPPORTED_EVENTS = {
-    "session_start",
-    "pre_llm_call",
-    "post_tool_call",
-    "post_api_request",
-    "api_request_error",
-    "session_before_compact",
-    "writeback",
-    "session_end",
-    "worker_task_prepare",
-    "worker_task_request",
-    "worker_event",
-    "worker_result_review",
-    "worker_result_correction",
-    "worker_result_corrected",
-    "handoff_create",
-    "handoff_read",
-}
+_RETIRED_EVENTS = frozenset(
+    {
+        "worker_task_prepare",
+        "worker_task_request",
+        "worker_event",
+        "worker_result_review",
+        "worker_result_correction",
+        "worker_result_corrected",
+    }
+)
+_SUPPORTED_EVENTS = frozenset(
+    {
+        "session_start",
+        "pre_llm_call",
+        "post_tool_call",
+        "post_api_request",
+        "api_request_error",
+        "session_before_compact",
+        "writeback",
+        "session_end",
+        "handoff_create",
+        "handoff_read",
+    }
+)
 _VMEM_HOT_CONTEXT_BUDGET = 512
 _TOOL_RESULT_MAX_CHARS = 4000
 _ATTRIBUTION_FIELD_MAX_CHARS = 64
-_MODEL_CANDIDATE_KEYS = ("candidates", "model_candidates", "candidate_metadata", "models")
-_MODEL_ROUTING_MAX_ERROR_CHARS = 128
-
-# T3.1 hard/soft budget caps.
-_BUDGET_HARD_LINE = "[SECOND_BRAIN_BUDGET] hard cap reached; state INPUT_REQUIRED"
-_BUDGET_POLICY_VERSION = "v3.1"
-
-
-def _budget_rollout_stage(home: Path) -> str:
-    """config/v2.toml [rollout] brainstem; SHADOW default (same stage-resolution pattern
-    used by the "routing"/"eviction" decisions() call sites in this module and in
-    vmem.py)."""
-    stage = "SHADOW"
-    try:
-        v2_raw = tomllib.loads((home / "config" / "v2.toml").read_text(encoding="utf-8"))
-        candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
-        if candidate in decisions._ROLLOUT_STAGES:
-            stage = candidate
-    except Exception:
-        pass
-    return stage
 
 
 _VMEM_CACHE_BREAKPOINT_FILE = "cache_breakpoints.json"
-_SESSION_CACHE_STATE: dict[str, dict[str, Any]] = {}
+_SESSION_CACHE_STATE: dict[tuple[Path, str], dict[str, Any]] = {}
 
 
 def _load_vmem_cache_state(home: Path, host_session_id: str) -> dict[str, Any]:
-    if host_session_id in _SESSION_CACHE_STATE:
-        return dict(_SESSION_CACHE_STATE[host_session_id])
+    key = (home.absolute(), host_session_id)
+    if key in _SESSION_CACHE_STATE:
+        return dict(_SESSION_CACHE_STATE[key])
     internal_id = ledger.internal_session_id(host_session_id)
     sdir = home / "state" / "sessions" / internal_id
     fpath = sdir / _VMEM_CACHE_BREAKPOINT_FILE
@@ -98,7 +81,7 @@ def _load_vmem_cache_state(home: Path, host_session_id: str) -> dict[str, Any]:
         try:
             data = json.loads(fpath.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                _SESSION_CACHE_STATE[host_session_id] = data
+                _SESSION_CACHE_STATE[key] = data
                 return dict(data)
         except Exception:
             pass
@@ -110,12 +93,12 @@ def _load_vmem_cache_state(home: Path, host_session_id: str) -> dict[str, Any]:
         "last_model": None,
         "last_cache_read_tokens": None,
     }
-    _SESSION_CACHE_STATE[host_session_id] = state
+    _SESSION_CACHE_STATE[key] = state
     return dict(state)
 
 
 def _save_vmem_cache_state(home: Path, host_session_id: str, state: dict[str, Any]) -> None:
-    _SESSION_CACHE_STATE[host_session_id] = dict(state)
+    _SESSION_CACHE_STATE[(home.absolute(), host_session_id)] = dict(state)
     internal_id = ledger.internal_session_id(host_session_id)
     sdir = home / "state" / "sessions" / internal_id
     sdir.mkdir(parents=True, exist_ok=True)
@@ -265,8 +248,10 @@ def resolve_binding(home: Path | str, payload: dict[str, Any]) -> HermesBinding:
     explicit_project = _first_text(payload, "project_id", "project") or None
     try:
         project_id = autoinject._resolve_project_id(home_path, repo_root, explicit_project)
+    except BrainError:
+        raise
     except Exception:
-        project_id = explicit_project or "default"
+        project_id = validate_project_id(explicit_project or "default")
 
     provider = _first_text(payload, "provider", default="unknown")
     model = _first_text(payload, "model", default="unknown")
@@ -338,1086 +323,7 @@ def _agent_identity(binding: HermesBinding) -> contracts.AgentIdentity:
     )
 
 
-def _worker_payload(
-    binding: HermesBinding,
-    packet: contracts.WorkerTaskPacket,
-    result: contracts.WorkerResultPacket | None = None,
-    status: str = "created",
-    failure_code: str | None = None,
-    context_metadata: dict[str, Any] | None = None,
-    correction: contracts.WorkerCorrectionPacket | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        **_identity_fields(binding),
-        "task_id": packet.task_id,
-        "parent_session_id": packet.parent_session_id,
-        "project_id": packet.project_id,
-        "repo_root": packet.repo_root,
-        "requested_role": packet.requested_role,
-        "fanout": packet.fanout,
-        "fanout_index": packet.fanout_index,
-        "depth": packet.depth,
-        "packet_bytes": len(packet.canonical_json().encode("utf-8")),
-        "packet_sha256": packet.canonical_hash(),
-        "status": status,
-    }
-    if context_metadata is not None:
-        payload.update(
-            {
-                "context_ref_count": context_metadata.get("resolved_count", 0),
-                "context_visible_chars": context_metadata.get("visible_chars", 0),
-                "context_visible_bytes": context_metadata.get("visible_bytes", 0),
-                "context_visible_tokens_estimate": context_metadata.get(
-                    "visible_tokens_estimate", 0
-                ),
-                "context_source_chars": context_metadata.get("source_chars", 0),
-                "context_resolution_sha256": context_metadata.get("resolution_sha256"),
-                "context_mode": context_metadata.get("mode"),
-                "context_reused": context_metadata.get("reused", False),
-                "context_cache_hit": context_metadata.get("cache_hit", False),
-                "context_fingerprint": context_metadata.get("context_fingerprint"),
-                "previous_context_fingerprint": context_metadata.get(
-                    "previous_context_fingerprint"
-                ),
-                "context_snapshot_sha256": context_metadata.get("context_snapshot_sha256"),
-                "context_handoff_bytes": context_metadata.get("context_handoff_bytes", 0),
-                "context_handoff_tokens_estimate": context_metadata.get(
-                    "context_handoff_tokens_estimate", 0
-                ),
-                "context_delta_bytes": context_metadata.get("context_delta_bytes", 0),
-                "context_delta_tokens_estimate": context_metadata.get(
-                    "context_delta_tokens_estimate", 0
-                ),
-                "context_changed_ref_count": context_metadata.get("changed_ref_count", 0),
-                "context_removed_ref_count": context_metadata.get("removed_ref_count", 0),
-                "jit_body_sha256": context_metadata.get("jit_body_sha256"),
-                "jit_body_bytes": context_metadata.get("jit_body_bytes", 0),
-                "jit_delta_sha256": context_metadata.get("jit_delta_sha256"),
-                "jit_delta_bytes": context_metadata.get("jit_delta_bytes", 0),
-            }
-        )
-    if failure_code:
-        payload["failure_code"] = failure_code
-    if correction is not None:
-        payload.update(
-            {
-                "correction_sha256": correction.canonical_hash(),
-                "original_result_sha256": correction.original_result_sha256,
-                "correction_attempt": correction.correction_attempt,
-            }
-        )
-    if result is not None:
-        payload.update(
-            {
-                "worker_session_id": result.worker_identity.internal_session_id,
-                "worker_agent_id": result.worker_identity.agent_id,
-                "worker_bot": result.worker_identity.host_agent_id,
-                "worker_role": result.worker_identity.role_profile,
-                "result_bytes": len(result.canonical_json().encode("utf-8")),
-                "result_sha256": result.canonical_hash(),
-                "failure_code": result.failure_code,
-                "retryable": result.retryable,
-                "correction_of_hash": result.correction_of_hash,
-                "correction_attempt": result.correction_attempt,
-            }
-        )
-    return payload
-
-
-def _resolve_worker_context(
-    home: Path, packet: contracts.WorkerTaskPacket
-) -> tuple[list[contracts.WorkerContextResolution], dict[str, Any]]:
-    resolved = worker_protocol.resolve_context_refs(home, packet)
-    return resolved, worker_protocol.context_metadata(resolved, home=home)
-
-
-def _context_event_payload(
-    binding: HermesBinding,
-    packet: contracts.WorkerTaskPacket,
-    metadata: dict[str, Any],
-    *,
-    status: str = "resolved",
-    failure_code: str | None = None,
-) -> dict[str, Any]:
-    payload = {
-        **_identity_fields(binding),
-        "task_id": packet.task_id,
-        "parent_session_id": packet.parent_session_id,
-        "packet_sha256": packet.canonical_hash(),
-        "status": status,
-        "context_ref_count": metadata.get("resolved_count", 0),
-        "context_visible_chars": metadata.get("visible_chars", 0),
-        "context_visible_bytes": metadata.get("visible_bytes", 0),
-        "context_visible_tokens_estimate": metadata.get("visible_tokens_estimate", 0),
-        "context_source_chars": metadata.get("source_chars", 0),
-        "context_resolution_sha256": metadata.get("resolution_sha256"),
-        "context_snapshot_sha256": metadata.get("context_snapshot_sha256"),
-        "context_mode": metadata.get("mode"),
-        "context_reused": metadata.get("reused", False),
-        "context_cache_hit": metadata.get("cache_hit", False),
-        "context_fingerprint": metadata.get("context_fingerprint"),
-        "previous_context_fingerprint": metadata.get("previous_context_fingerprint"),
-        "context_handoff_bytes": metadata.get("context_handoff_bytes", 0),
-        "context_handoff_tokens_estimate": metadata.get("context_handoff_tokens_estimate", 0),
-        "context_delta_bytes": metadata.get("context_delta_bytes", 0),
-        "context_delta_tokens_estimate": metadata.get("context_delta_tokens_estimate", 0),
-        "context_changed_ref_count": metadata.get("changed_ref_count", 0),
-        "context_removed_ref_count": metadata.get("removed_ref_count", 0),
-        "jit_body_sha256": metadata.get("jit_body_sha256"),
-        "jit_body_bytes": metadata.get("jit_body_bytes", 0),
-        "jit_delta_sha256": metadata.get("jit_delta_sha256"),
-        "jit_delta_bytes": metadata.get("jit_delta_bytes", 0),
-    }
-    if failure_code:
-        payload["failure_code"] = failure_code
-    return payload
-
-
-def _append_context_resolution(
-    home: Path,
-    binding: HermesBinding,
-    packet: contracts.WorkerTaskPacket,
-    metadata: dict[str, Any],
-) -> None:
-    payload = _context_event_payload(binding, packet, metadata)
-    payload["context_refs"] = metadata["refs"]
-    _append_event(
-        home,
-        binding,
-        contracts.LifecycleEventType.TASK_CONTEXT_RESOLVED,
-        payload,
-        key=f"{packet.task_id}:context:{metadata['resolution_sha256']}",
-    )
-    autoinject._append_telemetry(
-        home, binding.host_session_id, "hermes_worker_context_resolved", payload
-    )
-
-
-def _unavailable_result(packet: contracts.WorkerTaskPacket) -> contracts.WorkerResultPacket:
-    return contracts.WorkerResultPacket(
-        task_id=packet.task_id,
-        worker_identity=contracts.AgentIdentity(
-            agent_id=f"unavailable:{packet.requested_role}",
-            internal_session_id="unavailable",
-            host_agent_id=f"Brain-{packet.requested_role.title()}",
-            parent_agent_id=None,
-            role_profile=packet.requested_role,
-            model="unknown",
-            provider="hermes",
-            created_at=packet.driver_identity.created_at,
-        ),
-        status="failed",
-        failure_code="WORKER_UNAVAILABLE",
-        retryable=True,
-        limitations=["persistent worker profile was not configured"],
-    ).validate()
-
-
-def prepare_worker_task(
-    home: Path | str,
-    binding: HermesBinding,
-    packet_data: dict[str, Any],
-    *,
-    allow_terminal_reprepare: bool = False,
-) -> dict[str, Any]:
-    """Validate and resolve a task before a host invokes its worker."""
-    if binding.bot_role not in contracts.COORDINATOR_ROLES:
-        return {
-            **_response_base(binding, "worker_task_prepare"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    home_path = Path(home)
-    try:
-        packet = contracts.WorkerTaskPacket.from_dict(packet_data)
-        existing = worker_protocol.lookup_task(home_path, packet.task_id, packet.canonical_hash())
-        if (
-            existing
-            and existing.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
-            and not allow_terminal_reprepare
-        ):
-            return {
-                **_response_base(binding, "worker_task_prepare"),
-                "status": "terminal_noop",
-                "state": existing["state"],
-                "duplicate": True,
-                "terminal_noop": True,
-                "task_id": packet.task_id,
-                "packet_sha256": packet.canonical_hash(),
-            }
-        _register_binding(home_path, binding)
-        handoff = worker_protocol.prepare_context_handoff(
-            home_path, packet, host=binding.session.host
-        )
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_prepare"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-    try:
-        registration = worker_protocol.register_task(
-            home_path,
-            packet.task_id,
-            packet.canonical_hash(),
-            session_id=binding.host_session_id,
-            dispatch_payload=packet_data,
-        )
-        if (
-            registration.get("duplicate")
-            and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
-        ):
-            return {
-                **_response_base(binding, "worker_task_prepare"),
-                "status": "prepared",
-                "state": registration["state"],
-                "duplicate": True,
-                "task_id": packet.task_id,
-                "packet_sha256": packet.canonical_hash(),
-                "context_metadata": worker_protocol.handoff_metadata(handoff),
-                "context_handoff": handoff,
-            }
-        worker_protocol.record_worker_event(
-            home_path,
-            packet.task_id,
-            packet.canonical_hash(),
-            "delivered",
-            session_id=binding.host_session_id,
-            host=binding.session.host,
-        )
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_prepare"),
-            "status": "failed",
-            "failure_code": exc.code,
-            "task_id": packet.task_id,
-        }
-    return {
-        **_response_base(binding, "worker_task_prepare"),
-        "status": "prepared",
-        "task_id": packet.task_id,
-        "packet_sha256": packet.canonical_hash(),
-        "context_metadata": worker_protocol.handoff_metadata(handoff),
-        "context_handoff": handoff,
-    }
-
-
-def request_worker_task(
-    home: Path | str,
-    binding: HermesBinding,
-    packet_data: dict[str, Any],
-    result_data: dict[str, Any] | None = None,
-    context_handoff_data: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Create and correlate one bounded task; never execute delegated work locally."""
-    if binding.bot_role not in contracts.COORDINATOR_ROLES:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    try:
-        packet = contracts.WorkerTaskPacket.from_dict(packet_data)
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-    home_path = Path(home)
-    try:
-        existing = worker_protocol.lookup_task(home_path, packet.task_id, packet.canonical_hash())
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": exc.code,
-            "task_id": packet.task_id,
-        }
-    if existing and existing.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": str(existing["state"]).lower(),
-            "duplicate": True,
-            "terminal_noop": True,
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-        }
-    # T3.1 §4: check the PARENT (dispatching) session's budget state before
-    # spawning; a HARD cap fails the dispatch instead of creating the task.
-    parent_budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
-    if parent_budget.get("state") == "HARD":
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": "BUDGET_EXCEEDED",
-        }
-    _register_binding(home_path, binding)
-    try:
-        if context_handoff_data is None:
-            context_handoff = worker_protocol.prepare_context_handoff(
-                home_path, packet, host=binding.session.host
-            )
-        else:
-            context_handoff = worker_protocol.validate_context_handoff(
-                home_path, packet, context_handoff_data
-            )
-        context_metadata = worker_protocol.handoff_metadata(context_handoff)
-    except contracts.WorkerPacketError as exc:
-        base = _worker_payload(binding, packet, status="failed", failure_code=exc.code)
-        for event_type, suffix in (
-            (contracts.LifecycleEventType.TASK_CREATED, "created"),
-            (contracts.LifecycleEventType.TASK_ASSIGNED, "assigned"),
-        ):
-            _append_event(home_path, binding, event_type, base, key=f"{packet.task_id}:{suffix}")
-        context_failure = _context_event_payload(
-            binding,
-            packet,
-            {
-                "resolved_count": 0,
-                "visible_chars": 0,
-                "source_chars": 0,
-                "resolution_sha256": "",
-            },
-            status="failed",
-            failure_code=exc.code,
-        )
-        _append_event(
-            home_path,
-            binding,
-            contracts.LifecycleEventType.TASK_CONTEXT_RESOLVED,
-            context_failure,
-            key=f"{packet.task_id}:context-failed:{exc.code}",
-        )
-        _append_event(
-            home_path,
-            binding,
-            contracts.LifecycleEventType.WORKER_FAILED,
-            base,
-            key=f"{packet.task_id}:context-failed",
-        )
-        autoinject._append_telemetry(
-            home_path, binding.host_session_id, "hermes_worker_lifecycle", base
-        )
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": exc.code,
-            "task_id": packet.task_id,
-        }
-
-    try:
-        registration = worker_protocol.register_task(
-            home_path,
-            packet.task_id,
-            packet.canonical_hash(),
-            session_id=binding.host_session_id,
-            dispatch_payload=packet_data,
-        )
-        duplicate_terminal = bool(
-            registration.get("duplicate")
-            and registration.get("state") in contracts.WorkerLifecycle.TERMINAL_STATES
-        )
-        if not duplicate_terminal:
-            worker_protocol.record_worker_event(
-                home_path,
-                packet.task_id,
-                packet.canonical_hash(),
-                "worker_started",
-                session_id=binding.host_session_id,
-                host=binding.session.host,
-            )
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": exc.code,
-            "task_id": packet.task_id,
-        }
-    if duplicate_terminal:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": str(registration["state"]).lower(),
-            "duplicate": True,
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-        }
-    autoinject._append_telemetry(
-        home_path,
-        binding.host_session_id,
-        "handoff_sent",
-        {
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-            "state": contracts.WorkerLifecycle.SUBMITTED,
-        },
-    )
-    base = _worker_payload(binding, packet, context_metadata=context_metadata)
-    _append_event(
-        home_path,
-        binding,
-        contracts.LifecycleEventType.TASK_CREATED,
-        base,
-        key=f"{packet.task_id}:created",
-    )
-    _append_event(
-        home_path,
-        binding,
-        contracts.LifecycleEventType.TASK_ASSIGNED,
-        base,
-        key=f"{packet.task_id}:assigned",
-    )
-    _append_context_resolution(home_path, binding, packet, context_metadata)
-    _append_event(
-        home_path,
-        binding,
-        contracts.LifecycleEventType.WORKER_STARTED,
-        base,
-        key=f"{packet.task_id}:started",
-    )
-    autoinject._append_telemetry(
-        home_path,
-        binding.host_session_id,
-        "handoff_received",
-        {
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-            "state": contracts.WorkerLifecycle.WORKING,
-        },
-    )
-    autoinject._append_telemetry(
-        home_path,
-        binding.host_session_id,
-        "handoff_accepted",
-        {
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-            "state": contracts.WorkerLifecycle.WORKING,
-        },
-    )
-    if result_data is None:
-        result = _unavailable_result(packet)
-    else:
-        try:
-            result = contracts.WorkerResultPacket.from_dict(result_data)
-            if result.task_id != packet.task_id:
-                raise contracts.WorkerPacketError("MALFORMED_RESULT", "task_id does not correlate")
-            if result.worker_identity.role_profile != packet.requested_role:
-                raise contracts.WorkerPacketError(
-                    "UNAUTHORIZED_WORKER", "result role does not match requested role"
-                )
-        except contracts.WorkerPacketError as exc:
-            unavailable = _unavailable_result(packet)
-            result = contracts.WorkerResultPacket(
-                **{**unavailable.__dict__, "failure_code": exc.code}
-            ).validate()
-    if worker_protocol.event_terminal_state(result.status):
-        # `result.status` is a lifecycle event key here, exactly as core consumes it
-        # (`_WORKER_EVENT_STATES[result_packet.status]`), so map it rather than comparing it to
-        # lifecycle states: the two vocabularies differ in case and only the mapping is
-        # authoritative.
-        # Transport capability gap, by owner decision 2026-09-22. Hermes carries no
-        # authenticated completion-authority mechanism: it never admits an attempt, so no
-        # admission token exists to check, and terminal lifecycle evidence is authority-bearing
-        # (it sets a task's terminal state and participates in writer release). It therefore
-        # fails closed here, in the transport, with an explicit code rather than through a
-        # transport-specific exception inside Brain Core. Ordinary non-terminal reporting below
-        # is unaffected. Later Hermes adapter work can satisfy the same Brain-owned authority
-        # contract through its own transport implementation.
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": "COMPLETION_AUTHORITY_UNAVAILABLE",
-            "task_id": packet.task_id,
-            "transport": binding.session.host,
-        }
-    try:
-        event_payload = {
-            **json.loads(result.canonical_json()),
-            "result_sha256": result.canonical_hash(),
-        }
-        worker_protocol.record_worker_event(
-            home_path,
-            packet.task_id,
-            packet.canonical_hash(),
-            result.status,
-            payload=event_payload,
-            session_id=binding.host_session_id,
-            host=binding.session.host,
-        )
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_task_request"),
-            "status": "failed",
-            "failure_code": exc.code,
-            "task_id": packet.task_id,
-        }
-    autoinject._append_telemetry(
-        home_path,
-        binding.host_session_id,
-        "handoff_result",
-        {
-            "task_id": packet.task_id,
-            "packet_sha256": packet.canonical_hash(),
-            "state": result.status,
-            "evidence_hash": result.canonical_hash(),
-        },
-    )
-    result_evidence = _review_evidence(result, result_data if isinstance(result_data, dict) else {})
-    result_payload = _worker_payload(
-        binding, packet, result, result.status, context_metadata=context_metadata
-    )
-    if result_evidence is not None:
-        result_payload["evidence"] = result_evidence
-    result_wire = json.loads(result.canonical_json())
-    if result_evidence is not None:
-        result_wire["evidence"] = result_evidence
-    _append_event(
-        home_path,
-        binding,
-        contracts.LifecycleEventType.RESULT_RETURNED,
-        result_payload,
-        key=f"{packet.task_id}:returned",
-    )
-    autoinject._append_telemetry(
-        home_path, binding.host_session_id, "hermes_worker_lifecycle", result_payload
-    )
-    return {
-        **_response_base(binding, "worker_task_request"),
-        "status": result.status,
-        "failure_code": result.failure_code,
-        "task_id": packet.task_id,
-        "packet_bytes": len(packet.canonical_json().encode("utf-8")),
-        "packet_sha256": packet.canonical_hash(),
-        "result_sha256": result.canonical_hash(),
-        "context_metadata": context_metadata,
-        "context_handoff": context_handoff,
-        "result": result_wire,
-    }
-
-
-def handle_worker_event(
-    home: Path | str,
-    binding: HermesBinding,
-    event_data: dict[str, Any],
-) -> dict[str, Any]:
-    """Apply a worker transport event without running a model."""
-    try:
-        event = dict(event_data)
-        # Same capability gap as request_worker_task: Hermes has no authenticated completion
-        # authority, so it cannot author terminal lifecycle evidence through the bridge either.
-        if worker_protocol.event_terminal_state(
-            str(event.get("event") or event.get("type") or event.get("status") or "")
-        ):
-            return {
-                **_response_base(binding, "worker_event"),
-                "status": "failed",
-                "failure_code": "COMPLETION_AUTHORITY_UNAVAILABLE",
-                "transport": binding.session.host,
-            }
-        event.setdefault("session_id", binding.host_session_id)
-        result = worker_protocol.process_worker_event(Path(home), event)
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_event"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-    safe = {
-        key: result.get(key)
-        for key in (
-            "task_id",
-            "state",
-            "lease_expires_at",
-            "accepted_at",
-            "settled_at",
-            "packet_sha256",
-            "duplicate",
-        )
-    }
-    event_kind = str(
-        event_data.get("event") or event_data.get("type") or event_data.get("status") or ""
-    )
-    telemetry_kind = (
-        "handoff_accepted"
-        if event_kind.casefold()
-        in {
-            "accepted",
-            "worker_accepted",
-            "started",
-            "worker_started",
-            "working",
-        }
-        else (
-            "handoff_result"
-            if event_kind.casefold()
-            in {
-                "completed",
-                "worker_completed",
-                "task_completed",
-                "failed",
-                "worker_failed",
-                "task_failed",
-                "rejected",
-                "worker_rejected",
-                "cancelled",
-                "canceled",
-                "worker_cancelled",
-                "worker_canceled",
-            }
-            else "handoff_received"
-        )
-    )
-    autoinject._append_telemetry(Path(home), binding.host_session_id, telemetry_kind, safe)
-    return {**_response_base(binding, "worker_event"), "status": "ok", **safe}
-
-
 _REVIEW_EVIDENCE_MAX_BYTES = 4_096
-
-
-def _bounded_review_evidence(evidence: Any) -> Any:
-    if evidence is None:
-        return None
-    if isinstance(evidence, dict):
-        tests = evidence.get("tests")
-        if set(evidence) == {"tests"} and isinstance(tests, list) and len(tests) <= 16:
-            valid_tests = all(
-                isinstance(item, dict)
-                and set(item).issubset({"name", "command", "exit_code"})
-                and type(item.get("exit_code")) is int
-                and any(key in item for key in ("name", "command"))
-                and all(
-                    isinstance(item[key], str) and 0 < len(item[key]) <= 512
-                    for key in ("name", "command")
-                    if key in item
-                )
-                for item in tests
-            )
-            candidate = (
-                {"tests": tests}
-                if valid_tests
-                and any(type(item["exit_code"]) is int and item["exit_code"] == 0 for item in tests)
-                else None
-            )
-        elif (
-            set(evidence).issubset({"diff_sha256", "diff_hash"})
-            and worker_protocol._is_sha256(evidence.get("diff_sha256"))
-            and (
-                "diff_hash" not in evidence
-                or evidence.get("diff_hash") == evidence.get("diff_sha256")
-            )
-        ):
-            candidate = {"diff_sha256": evidence["diff_sha256"]}
-        elif set(evidence).issubset({"diff_hash"}) and worker_protocol._is_sha256(
-            evidence.get("diff_hash")
-        ):
-            candidate = {"diff_sha256": evidence["diff_hash"]}
-        else:
-            candidate = None
-    elif isinstance(evidence, list) and evidence and len(evidence) <= 16:
-        candidate = []
-        for item in evidence:
-            if not isinstance(item, dict) or set(item) - {"diff_sha256", "diff_hash"}:
-                candidate = None
-                break
-            sha = item.get("diff_sha256") or item.get("diff_hash")
-            if not worker_protocol._is_sha256(sha):
-                candidate = None
-                break
-            if (
-                "diff_sha256" in item
-                and "diff_hash" in item
-                and item["diff_sha256"] != item["diff_hash"]
-            ):
-                candidate = None
-                break
-            candidate.append({"diff_sha256": sha})
-    else:
-        candidate = None
-    if candidate is None:
-        return None
-    if len(worker_protocol.canonical_json(candidate).encode("utf-8")) > _REVIEW_EVIDENCE_MAX_BYTES:
-        return None
-    return candidate
-
-
-def _review_evidence(result: contracts.WorkerResultPacket, result_data: dict[str, Any]) -> Any:
-    evidence = _bounded_review_evidence(result_data.get("evidence"))
-    if (
-        evidence is None
-        and result.evidence_refs
-        and all(worker_protocol._is_sha256(ref) for ref in result.evidence_refs)
-    ):
-        evidence = _bounded_review_evidence([{"diff_sha256": ref} for ref in result.evidence_refs])
-    return evidence
-
-
-def review_worker_result(
-    home: Path | str,
-    binding: HermesBinding,
-    result_data: dict[str, Any],
-    approved: bool = True,
-    evidence: Any = None,
-) -> dict[str, Any]:
-    if binding.bot_role not in contracts.COORDINATOR_ROLES:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    if type(approved) is not bool:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "PROTOCOL_ERROR",
-        }
-    try:
-        result = contracts.WorkerResultPacket.from_dict(result_data)
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-    preliminary_evidence = (
-        _bounded_review_evidence(evidence)
-        if evidence is not None
-        else _review_evidence(result, result_data)
-    )
-    if (
-        approved
-        and preliminary_evidence is None
-        and (
-            not worker_protocol._is_sha256(result_data.get("packet_sha256"))
-            or not worker_protocol._is_sha256(result_data.get("result_sha256"))
-        )
-    ):
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "SETTLEMENT_REJECTED",
-        }
-    packet_sha256 = result_data.get("packet_sha256")
-    result_sha256 = result_data.get("result_sha256")
-    if (
-        not isinstance(packet_sha256, str)
-        or not isinstance(result_sha256, str)
-        or not worker_protocol._is_sha256(packet_sha256)
-        or not worker_protocol._is_sha256(result_sha256)
-        or result_sha256 != result.canonical_hash()
-    ):
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "PROTOCOL_ERROR",
-        }
-    binding_error = worker_protocol.verify_result_binding(
-        Path(home), result.task_id, packet_sha256, result_sha256
-    )
-    if binding_error is not None:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": binding_error,
-        }
-    owner_session = worker_protocol.task_owner_session(Path(home), result.task_id, packet_sha256)
-    if owner_session != binding.host_session_id:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    review_evidence = (
-        _bounded_review_evidence(evidence)
-        if evidence is not None
-        else _review_evidence(result, result_data)
-    )
-    if approved and review_evidence is None:
-        return {
-            **_response_base(binding, "worker_result_review"),
-            "status": "failed",
-            "failure_code": "SETTLEMENT_REJECTED",
-        }
-    payload = {
-        **_identity_fields(binding),
-        "task_id": result.task_id,
-        "worker_session_id": result.worker_identity.internal_session_id,
-        "worker_agent_id": result.worker_identity.agent_id,
-        "worker_role": result.worker_identity.role_profile,
-        "result_bytes": len(result.canonical_json().encode("utf-8")),
-        "result_sha256": result.canonical_hash(),
-        "correction_of_hash": result.correction_of_hash,
-        "correction_attempt": result.correction_attempt,
-        "reviewed": True,
-        "approved": bool(approved),
-        "status": "reviewed" if approved else "rejected",
-        "evidence": review_evidence,
-    }
-    _append_event(
-        Path(home),
-        binding,
-        contracts.LifecycleEventType.RESULT_REVIEWED,
-        payload,
-        key=f"{result.task_id}:review:{int(approved)}:{result.canonical_hash()}",
-    )
-    settled = False
-    settlement_failure: str | None = None
-    if approved:
-        try:
-            worker_protocol.settle_task(
-                Path(home),
-                result.task_id,
-                approved=True,
-                evidence=review_evidence,
-            )
-            settled = True
-        except contracts.WorkerPacketError as exc:
-            settlement_failure = exc.code
-    payload["settled"] = settled
-    if settlement_failure:
-        payload["settlement_failure"] = settlement_failure
-    if settled:
-        autoinject._append_telemetry(
-            Path(home),
-            binding.host_session_id,
-            "handoff_settled",
-            {
-                "task_id": result.task_id,
-                "packet_sha256": result_data.get("packet_sha256", ""),
-                "settled": True,
-            },
-        )
-    autoinject._append_telemetry(
-        Path(home), binding.host_session_id, "hermes_worker_result_reviewed", payload
-    )
-    return {
-        **_response_base(binding, "worker_result_review"),
-        "status": payload["status"],
-        "task_id": result.task_id,
-        "result_sha256": result.canonical_hash(),
-        "settled": settled,
-        "settlement_failure": settlement_failure,
-    }
-
-
-def request_worker_correction(
-    home: Path | str,
-    binding: HermesBinding,
-    packet_data: dict[str, Any],
-    result_data: dict[str, Any],
-    reason: str,
-    requested_changes: list[str] | None = None,
-    evidence_requirements: list[str] | None = None,
-    correction_attempt: int = 1,
-) -> dict[str, Any]:
-    """Reject one result and return a bounded same-task correction packet."""
-    if binding.bot_role not in contracts.COORDINATOR_ROLES:
-        return {
-            **_response_base(binding, "worker_result_correction"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    try:
-        packet = contracts.WorkerTaskPacket.from_dict(packet_data)
-        result = contracts.WorkerResultPacket.from_dict(result_data)
-        if packet.task_id != result.task_id:
-            raise contracts.WorkerPacketError("MALFORMED_RESULT", "task_id does not correlate")
-        correction = contracts.WorkerCorrectionPacket(
-            task_id=packet.task_id,
-            parent_session_id=packet.parent_session_id,
-            worker_identity=result.worker_identity,
-            reviewer_identity=_agent_identity(binding),
-            original_result_sha256=result.canonical_hash(),
-            reason=reason,
-            requested_changes=requested_changes or [],
-            evidence_requirements=evidence_requirements or [],
-            correction_attempt=correction_attempt,
-        ).validate()
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_result_correction"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-
-    review_data = {
-        **result_data,
-        "packet_sha256": packet.canonical_hash(),
-        "result_sha256": result.canonical_hash(),
-    }
-    rejected = review_worker_result(home, binding, review_data, approved=False)
-    if rejected.get("status") != "rejected":
-        return rejected
-    payload = {
-        **_identity_fields(binding),
-        "task_id": correction.task_id,
-        "parent_session_id": correction.parent_session_id,
-        "worker_session_id": correction.worker_identity.internal_session_id,
-        "worker_agent_id": correction.worker_identity.agent_id,
-        "worker_role": correction.worker_identity.role_profile,
-        "original_result_sha256": correction.original_result_sha256,
-        "correction_sha256": correction.canonical_hash(),
-        "correction_attempt": correction.correction_attempt,
-        "requested_change_count": len(correction.requested_changes),
-        "evidence_requirement_count": len(correction.evidence_requirements),
-        "status": "requested",
-    }
-    _append_event(
-        Path(home),
-        binding,
-        contracts.LifecycleEventType.RESULT_CORRECTION_REQUESTED,
-        payload,
-        key=f"{correction.task_id}:correction:{correction.correction_attempt}:{correction.canonical_hash()}",
-    )
-    autoinject._append_telemetry(
-        Path(home), binding.host_session_id, "hermes_worker_result_correction_requested", payload
-    )
-    return {
-        **_response_base(binding, "worker_result_correction"),
-        "status": "correction_requested",
-        "task_id": correction.task_id,
-        "original_result_sha256": correction.original_result_sha256,
-        "correction_sha256": correction.canonical_hash(),
-        "correction": json.loads(correction.canonical_json()),
-    }
-
-
-def return_corrected_worker_result(
-    home: Path | str,
-    binding: HermesBinding,
-    packet_data: dict[str, Any],
-    original_result_data: dict[str, Any],
-    correction_data: dict[str, Any],
-    corrected_result_data: dict[str, Any],
-    context_handoff_data: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Validate, hash, and return one corrected result for final review."""
-    if binding.bot_role not in contracts.COORDINATOR_ROLES:
-        return {
-            **_response_base(binding, "worker_result_corrected"),
-            "status": "failed",
-            "failure_code": "UNAUTHORIZED_COORDINATOR",
-        }
-    try:
-        packet = contracts.WorkerTaskPacket.from_dict(packet_data)
-        original = contracts.WorkerResultPacket.from_dict(original_result_data)
-        correction = contracts.WorkerCorrectionPacket.from_dict(correction_data)
-        corrected = contracts.WorkerResultPacket.from_dict(corrected_result_data)
-        original_hash = original.canonical_hash()
-        if packet.task_id != original.task_id or packet.task_id != corrected.task_id:
-            raise contracts.WorkerPacketError("MALFORMED_RESULT", "task_id does not correlate")
-        if correction.task_id != packet.task_id:
-            raise contracts.WorkerPacketError(
-                "MALFORMED_CORRECTION", "correction task_id does not correlate"
-            )
-        if correction.original_result_sha256 != original_hash:
-            raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "correction original hash does not match"
-            )
-        if correction.parent_session_id != packet.parent_session_id:
-            raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "correction parent session does not correlate"
-            )
-        reviewer = correction.reviewer_identity
-        if (
-            reviewer.agent_id != binding.agent_id
-            or reviewer.internal_session_id != binding.brain_session_id
-            or reviewer.host_agent_id != binding.bot_name
-            or reviewer.role_profile != binding.bot_role
-        ):
-            raise contracts.WorkerPacketError(
-                "UNAUTHORIZED_COORDINATOR", "correction reviewer does not match binding"
-            )
-        if corrected.correction_of_hash != original_hash:
-            raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "corrected result does not cite original hash"
-            )
-        if corrected.correction_attempt != correction.correction_attempt:
-            raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "correction attempt does not correlate"
-            )
-        if corrected.status != "completed":
-            raise contracts.WorkerPacketError(
-                "MALFORMED_RESULT", "corrected result must have completed status"
-            )
-        if (
-            corrected.worker_identity.host_agent_id != correction.worker_identity.host_agent_id
-            or corrected.worker_identity.role_profile != correction.worker_identity.role_profile
-        ):
-            raise contracts.WorkerPacketError(
-                "CORRECTION_MISMATCH", "corrected worker identity does not correlate"
-            )
-        task = worker_protocol.lookup_task(Path(home), packet.task_id, packet.canonical_hash())
-        if task is None:
-            raise contracts.WorkerPacketError("ORPHAN_TASK", "unknown worker task")
-        if task["state"] != contracts.WorkerLifecycle.COMPLETED:
-            raise contracts.WorkerPacketError(
-                "INVALID_TRANSITION", "corrected result requires COMPLETED task"
-            )
-        owner_session = worker_protocol.task_owner_session(
-            Path(home), packet.task_id, packet.canonical_hash()
-        )
-        if owner_session != binding.host_session_id:
-            raise contracts.WorkerPacketError(
-                "UNAUTHORIZED_COORDINATOR", "correction binding is not task owner"
-            )
-        binding_error = worker_protocol.verify_result_binding(
-            Path(home), packet.task_id, packet.canonical_hash(), original_hash
-        )
-        if binding_error is not None:
-            raise contracts.WorkerPacketError(binding_error, "original result is not durable")
-        if context_handoff_data is None:
-            context_handoff = worker_protocol.prepare_context_handoff(
-                Path(home), packet, host=binding.session.host
-            )
-        else:
-            context_handoff = worker_protocol.validate_context_handoff(
-                Path(home), packet, context_handoff_data
-            )
-        context_metadata = worker_protocol.handoff_metadata(context_handoff)
-    except contracts.WorkerPacketError as exc:
-        return {
-            **_response_base(binding, "worker_result_corrected"),
-            "status": "failed",
-            "failure_code": exc.code,
-        }
-
-    payload = _worker_payload(
-        binding,
-        packet,
-        corrected,
-        "corrected",
-        context_metadata=context_metadata,
-        correction=correction,
-    )
-    _append_event(
-        Path(home),
-        binding,
-        contracts.LifecycleEventType.RESULT_CORRECTED,
-        payload,
-        key=f"{packet.task_id}:corrected:{correction.correction_attempt}:{corrected.canonical_hash()}",
-    )
-    _append_event(
-        Path(home),
-        binding,
-        contracts.LifecycleEventType.RESULT_RETURNED,
-        payload,
-        key=f"{packet.task_id}:corrected-returned:{correction.correction_attempt}:{corrected.canonical_hash()}",
-    )
-    autoinject._append_telemetry(
-        Path(home), binding.host_session_id, "hermes_worker_result_corrected", payload
-    )
-    return {
-        **_response_base(binding, "worker_result_corrected"),
-        "status": "completed",
-        "task_id": packet.task_id,
-        "packet_sha256": packet.canonical_hash(),
-        "result_sha256": corrected.canonical_hash(),
-        "correction_sha256": correction.canonical_hash(),
-        "context_metadata": context_metadata,
-        "context_handoff": context_handoff,
-        "result": json.loads(corrected.canonical_json()),
-    }
 
 
 def _injection_attribution(
@@ -1567,154 +473,6 @@ def _visibility_task(
         return None, {}
 
 
-def _model_candidates(payload: dict[str, Any], binding: HermesBinding) -> list[dict[str, Any]]:
-    """Parse bounded host metadata without letting Hermes choose a model."""
-    raw: Any = None
-    supplied = False
-    for key in _MODEL_CANDIDATE_KEYS:
-        if key in payload:
-            raw = payload[key]
-            supplied = True
-            break
-    if not supplied or raw is None:
-        return [{"provider": binding.provider, "model": binding.model}]
-    if isinstance(raw, dict):
-        raw = raw.get("candidates", raw.get("models"))
-    if not isinstance(raw, list):
-        raise model_routing.ModelRoutingError(
-            "MALFORMED_ROUTING_INPUT", "candidate metadata must be a list"
-        )
-    if len(raw) > model_routing.MAX_CANDIDATES:
-        raise model_routing.ModelRoutingError(
-            "ROUTING_INPUT_TOO_LARGE", "candidate list exceeds bound"
-        )
-    candidates: list[dict[str, Any]] = []
-    for value in raw:
-        if not isinstance(value, dict):
-            raise model_routing.ModelRoutingError(
-                "MALFORMED_CANDIDATE", "candidate must be an object"
-            )
-        candidate = dict(value)
-        if "cost_class" not in candidate and "cost" in candidate:
-            candidate["cost_class"] = candidate["cost"]
-        availability = candidate.pop("availability", None)
-        if isinstance(availability, dict):
-            for name in ("available", "provider_available", "model_available"):
-                if name in availability and name not in candidate:
-                    candidate[name] = availability[name]
-        elif availability is not None and "available" not in candidate:
-            candidate["available"] = availability
-        candidates.append(candidate)
-    return candidates
-
-
-def _route_model(
-    home: Path,
-    binding: HermesBinding,
-    payload: dict[str, Any],
-    task: str,
-) -> tuple[model_routing.ModelDecision | None, str | None]:
-    if not task:
-        return None, "NO_TASK"
-    try:
-        decision = model_routing.route_model(
-            task,
-            _model_candidates(payload, binding),
-            role=binding.bot_role,
-            bot_role=binding.bot_role,
-            task_id=_first_text(payload, "task_id"),
-            brain_session_id=binding.brain_session_id,
-            host_session_id=binding.host_session_id,
-            project_id=binding.project_id,
-            bot_name=binding.bot_name,
-            policy_profile=payload.get("policy_profile", "default"),
-            home=home,
-            repo_root=binding.repo_root,
-            files_touched=payload.get(
-                "files_touched", payload.get("files", payload.get("repo_files", ()))
-            ),
-            capability_requirements=payload.get(
-                "capability_requirements", payload.get("required_capabilities", ())
-            ),
-            risk_class=payload.get("risk_class"),
-            risk_level=payload.get("risk_level"),
-            risk_score=payload.get("risk_score"),
-            user_criticality=payload.get("user_criticality"),
-            minimum_tier=payload.get("minimum_tier"),
-            max_tier=payload.get("max_tier"),
-            max_cost_class=payload.get("max_cost_class", "high"),
-            premium_justification=payload.get(
-                "premium_justification", payload.get("premium_reason")
-            ),
-            repeated_failure=bool(payload.get("repeated_failure", False)),
-            ambiguity=bool(payload.get("ambiguity", False)),
-            min_quality_score=payload.get("min_quality_score"),
-        )
-        return decision, None
-    except model_routing.ModelRoutingError as exc:
-        return None, _bounded_text(str(exc), _MODEL_ROUTING_MAX_ERROR_CHARS)
-    except Exception:
-        return None, "BRAIN_ROUTING_UNAVAILABLE"
-
-
-def _model_identity(
-    provider: str | None, model: str | None, tier: str | None
-) -> dict[str, str] | None:
-    if not provider or not model:
-        return None
-    return {
-        "provider": _bounded_text(provider, _ATTRIBUTION_FIELD_MAX_CHARS),
-        "model": _bounded_text(model, _ATTRIBUTION_FIELD_MAX_CHARS),
-        "tier": _bounded_text(tier or "", _ATTRIBUTION_FIELD_MAX_CHARS),
-    }
-
-
-def _model_decision_event_payload(
-    binding: HermesBinding, decision: model_routing.ModelDecision
-) -> dict[str, Any]:
-    """Return the bounded, task-text-free lifecycle representation."""
-    return {
-        "routing_event": "model_decision",
-        "decision_id": decision.decision_id,
-        "task_hash": decision.task_hash,
-        "candidate_set_hash": decision.candidate_set_hash,
-        "selected_provider": decision.selected_provider,
-        "selected_model": decision.selected_model,
-        "selected_tier": decision.selected_tier,
-        "original_selected_provider": decision.original_selected_provider,
-        "original_selected_model": decision.original_selected_model,
-        "original_selected_tier": decision.original_selected_tier,
-        "fallback_provider": decision.fallback_provider,
-        "fallback_model": decision.fallback_model,
-        "fallback_tier": decision.selected_tier if decision.fallback_used else None,
-        "selected_identity": _model_identity(
-            decision.selected_provider, decision.selected_model, decision.selected_tier
-        ),
-        "original_identity": _model_identity(
-            decision.original_selected_provider,
-            decision.original_selected_model,
-            decision.original_selected_tier,
-        ),
-        "fallback_identity": _model_identity(
-            decision.fallback_provider, decision.fallback_model, decision.selected_tier
-        ),
-        "fallback_used": decision.fallback_used,
-        "role": binding.bot_role,
-        "session_id": binding.host_session_id,
-        "brain_session_id": binding.brain_session_id,
-        "project_id": binding.project_id,
-        "risk_class": decision.risk_class,
-        "risk_score": decision.risk_score,
-        "economic_class": decision.economic_class,
-        "reason": decision.reason_code,
-        "reason_code": decision.reason_code,
-        "status": decision.status,
-        "failure_code": decision.failure_code,
-        "routing_error": decision.routing_error,
-        "model_decision": decision.to_dict(),
-    }
-
-
 def _estimate_resident_load(home: Path, objects: list[vmem.SessionObject], model: str) -> int:
     total = 0
     for o in objects:
@@ -1730,165 +488,37 @@ def _estimate_resident_load(home: Path, objects: list[vmem.SessionObject], model
     return total
 
 
-def model_switch_preflight(
-    home: Path | str,
-    session_id: str,
-    target_provider: str,
-    target_model: str,
-    current_provider: str | None = None,
-    current_model: str | None = None,
-    *,
-    task_id: str | None = None,
-    binding: HermesBinding | None = None,
-) -> dict[str, Any]:
-    """Execute model-switch preflight (Deep Upgrade Plan U6 §7.4, literal order 1-8).
-
-    1. Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000);
-    2. Resolve provider cache_scope from config/v2.toml (model or account; default model);
-    3. If model-scoped: mark prefix cache cold (set cache cold flag / cache_read_tokens = 0);
-    4. Recompute resident load with T0.6 estimator (contracts.estimate_tokens);
-    5. Above 85% of target capacity, reclaim to that threshold using evict_to_budget;
-    6. Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW);
-    7. Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0);
-    8. Send / proceed. Never compare pressure against the previous model's capacity.
-    """
-    home_path = Path(home)
-
-    # Step 1: Resolve target context_tokens from config/v2.toml [models].<id> (default 128_000)
-    target_capacity = 128_000
+def _refresh_host_model_context(home: Path, session_id: str, provider: str, model: str) -> None:
+    """Rebound Brain cache/VMem to the host-chosen context size, never select a model."""
+    state = _load_vmem_cache_state(home, session_id)
+    prior = (state.get("last_provider"), state.get("last_model"))
+    if prior[0] is None or prior == (provider, model):
+        return
+    config = home / "config" / "v2.toml"
+    capacity = 128_000
     cache_scope = "model"
-    v2_toml = home_path / "config" / "v2.toml"
-    if v2_toml.is_file():
-        try:
-            v2_data = tomllib.loads(v2_toml.read_text(encoding="utf-8"))
-            models_cfg = v2_data.get("models")
-            if isinstance(models_cfg, dict):
-                m_entry = models_cfg.get(target_model) or models_cfg.get("default")
-                if isinstance(m_entry, dict) and "context_tokens" in m_entry:
-                    val = m_entry["context_tokens"]
-                    if isinstance(val, (int, float)) and val > 0:
-                        target_capacity = int(val)
-            providers_cfg = v2_data.get("providers")
-            if isinstance(providers_cfg, dict):
-                p_entry = providers_cfg.get(target_provider) or providers_cfg.get("default")
-                if isinstance(p_entry, dict) and "cache_scope" in p_entry:
-                    val = str(p_entry["cache_scope"]).strip().lower()
-                    if val in ("model", "account"):
-                        cache_scope = val
-        except Exception:
-            pass
-
-    # Step 2: Resolve cache scope from config/v2.toml [providers].<id>.cache_scope (default model)
-    # (resolved above as cache_scope)
-
-    # Step 3: If model-scoped: mark prefix cache cold (set cache cold flag / cache_read_tokens = 0)
-    cache_cold = False
-    if cache_scope == "model":
-        cache_cold = True
-        state = _load_vmem_cache_state(home_path, session_id)
-        state["last_cache_read_tokens"] = 0
-        state["last_provider"] = target_provider
-        state["last_model"] = target_model
-        _save_vmem_cache_state(home_path, session_id, state)
-
-    # Step 4: Recompute resident load with T0.6 estimator (contracts.estimate_tokens)
-    store = vmem.VMemStore(home_path, session_id)
-    resident_objects = [
-        o
-        for o in store.list_objects()
-        if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
-    ]
-    load = _estimate_resident_load(home_path, resident_objects, target_model)
-    load_before = load
-
-    # Step 5: reclaim against the target model's 85% capacity threshold.
-    reclaimed_objects = []
-    reclaim_threshold = int(target_capacity * 0.85)
-    if load > reclaim_threshold:
-        reclaimed_objects = store.evict_to_budget(max_tokens=reclaim_threshold)
-        resident_after = [
-            o
-            for o in store.list_objects()
-            if o.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
-        ]
-        load = _estimate_resident_load(home_path, resident_after, target_model)
-
-    # Step 6: Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW)
-    if load > target_capacity:
-        return {
-            "status": "INPUT_REQUIRED",
-            "error": "CONTEXT_OVERFLOW",
-            "reason": "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
-            "target_capacity": target_capacity,
-            "load": load,
-            "step": 6,
-        }
-
-    # Step 7: Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0)
-    transition_telemetry = {
-        "kind": "MODEL_ROUTE_TRANSITION",
-        "session": session_id,
-        "current_provider": current_provider,
-        "current_model": current_model,
-        "target_provider": target_provider,
-        "target_model": target_model,
-        "target_capacity": target_capacity,
-        "cache_scope": cache_scope,
-        "cache_cold": cache_cold,
-        "load_before": load_before,
-        "load_after": load,
-        "reclaimed_count": len(reclaimed_objects),
-    }
-    autoinject._append_telemetry(
-        home_path, session_id, "MODEL_ROUTE_TRANSITION", transition_telemetry
-    )
-
-    rollout_stage = "SHADOW"
-    if v2_toml.is_file():
-        try:
-            v2_raw = tomllib.loads(v2_toml.read_text(encoding="utf-8"))
-            st = v2_raw.get("rollout", {}).get("brainstem", "SHADOW")
-            if st in decisions._ROLLOUT_STAGES:
-                rollout_stage = st
-        except Exception:
-            pass
-
-    with contextlib.suppress(Exception):
-        decisions.record(
-            home_path,
-            kind="routing",
-            session_id=session_id,
-            task_id=task_id,
-            chosen={"provider": target_provider, "model": target_model},
-            alternatives=(
-                [{"provider": current_provider, "model": current_model}] if current_model else []
-            ),
-            propensity=1.0,
-            randomized=False,
-            policy_version="v2.3",
-            stage=rollout_stage,
-            inputs={
-                "target_capacity": target_capacity,
-                "cache_scope": cache_scope,
-                "load": load,
-                "transition": (
-                    f"{current_provider}/{current_model}->{target_provider}/{target_model}"
-                ),
-            },
+    if config.is_file():
+        data = tomllib.loads(config.read_text(encoding="utf-8"))
+        entry = data.get("models", {}).get(model) or data.get("models", {}).get("default")
+        if isinstance(entry, dict) and isinstance(entry.get("context_tokens"), int):
+            capacity = max(1, entry["context_tokens"])
+        provider_entry = data.get("providers", {}).get(provider) or data.get("providers", {}).get(
+            "default"
         )
-
-    # Step 8: Send / proceed. Never compare pressure against the previous model's capacity.
-    return {
-        "status": "ok",
-        "proceed": True,
-        "target_provider": target_provider,
-        "target_model": target_model,
-        "target_capacity": target_capacity,
-        "cache_scope": cache_scope,
-        "cache_cold": cache_cold,
-        "load": load,
-        "reclaimed_count": len(reclaimed_objects),
-    }
+        if isinstance(provider_entry, dict) and provider_entry.get("cache_scope") == "account":
+            cache_scope = "account"
+    if cache_scope == "model":
+        state["last_cache_read_tokens"] = 0
+    state["previous_rendered_context"] = None
+    _save_vmem_cache_state(home, session_id, state)
+    store = vmem.VMemStore(home, session_id)
+    resident = [
+        obj
+        for obj in store.list_objects()
+        if obj.residency_state in (vmem.ResidencyState.RESIDENT, vmem.ResidencyState.FAULTED_IN)
+    ]
+    if _estimate_resident_load(home, resident, model) > int(capacity * 0.85):
+        store.evict_to_budget(max_tokens=int(capacity * 0.85))
 
 
 def _vmem_context(
@@ -2211,53 +841,17 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     _register_binding(home, binding)
     task = _first_text(payload, "task", "user_message", "prompt")
     turn_id = _first_text(payload, "turn_id", default="") or None
-    current_provider = (
-        payload.get("provider") or payload.get("selected_provider") or binding.provider
-    )
-    current_model = payload.get("model") or payload.get("selected_model") or binding.model
-    state = _load_vmem_cache_state(home, binding.host_session_id)
-    last_prov = state.get("last_provider")
-    last_mod = state.get("last_model")
-    if (
-        last_prov is not None
-        and last_mod is not None
-        and (current_provider != last_prov or current_model != last_mod)
-    ):
-        preflight_res = model_switch_preflight(
-            home,
-            binding.host_session_id,
-            target_provider=current_provider,
-            target_model=current_model,
-            current_provider=last_prov,
-            current_model=last_mod,
-            binding=binding,
-        )
-        if preflight_res.get("status") == "INPUT_REQUIRED":
-            return {
-                **_response_base(binding, "pre_llm_call"),
-                "status": "INPUT_REQUIRED",
-                "error": "CONTEXT_OVERFLOW",
-                "reason": "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
-                "preflight": preflight_res,
-            }
+    provider = _first_text(payload, "provider", "selected_provider", default=binding.provider)
+    model = _first_text(payload, "model", "selected_model", default=binding.model)
+    with contextlib.suppress(Exception):
+        _refresh_host_model_context(home, binding.host_session_id, provider, model)
 
     vmem_context = _vmem_context(home, binding, task, payload=payload)
-    # T3.1: HARD budget determination for this turn. Hermes exposes no
-    # pre_tool_call blocking primitive (see report), so the only action
-    # taken here is the exact tail warning line plus one decision record.
-    budget = governor.check_budget(home, binding.host_session_id, binding.bot_role)
-    budget_is_hard = budget.get("state") == "HARD"
     selected_routes, routing_error = _route_task(home, task) if task else ([], False)
     visibility_plan, hydrated_bodies = (
         _visibility_task(home, task, binding.host_session_id, binding.project_id)
         if task
         else (None, {})
-    )
-    model_decision, model_routing_error = _route_model(home, binding, payload, task)
-    model_event_payload = (
-        _model_decision_event_payload(binding, model_decision)
-        if model_decision is not None
-        else None
     )
     lifecycle = autoinject.BrainLifecycle(home, binding.session)
     decision = lifecycle.prepare_injection(
@@ -2274,44 +868,21 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
     visible_packet = packet if packet and mode in {"advisory", "active"} else None
     enforced_visible = visibility_plan is not None and visibility_plan.get("mode") == "enforced"
     if enforced_visible and hydrated_bodies:
-        specialist_text = "\n\n".join(
-            hydrated_bodies[skill_id] for skill_id in sorted(hydrated_bodies)
+        specialist_text = "\n\n".join(hydrated_bodies[k] for k in sorted(hydrated_bodies))
+        visible_packet = (
+            f"{visible_packet}\n\n{specialist_text}" if visible_packet else specialist_text
         )
-        if visible_packet:
-            visible_packet = f"{visible_packet}\n\n{specialist_text}"
-        else:
-            visible_packet = specialist_text
     prefix = injection_slots.assemble_prefix(
-        home=home,
-        project_id=binding.project_id or "default",
-        role=binding.bot_role,
+        home=home, project_id=binding.project_id or "default", role=binding.bot_role
     )
     prefix_drift = injection_slots.record_and_check_prefix_drift(
         home, binding.host_session_id, prefix
     )
     tail = injection_slots.assemble_tail(
         delta_context=visible_packet,
-        hot_context_refs=(
-            vmem_context.get("rendered_text") if isinstance(vmem_context, dict) else None
-        ),
+        hot_context_refs=vmem_context.get("rendered_text"),
         hydrated_skills=hydrated_bodies if enforced_visible else None,
-        budget_warning=_BUDGET_HARD_LINE if budget_is_hard else None,
     )
-    if budget_is_hard:
-        with contextlib.suppress(Exception):
-            decisions.record(
-                home,
-                kind="budget",
-                session_id=binding.host_session_id,
-                task_id=turn_id,
-                chosen={"decision": "BLOCK", "state": "HARD"},
-                alternatives=["ALLOW"],
-                propensity=1.0,
-                randomized=False,
-                policy_version=_BUDGET_POLICY_VERSION,
-                stage=_budget_rollout_stage(home),
-                inputs={"used": budget.get("used", 0), "cap": budget.get("cap", 0)},
-            )
     reason = decision.reason.value if decision.reason is not None else None
     attribution = _injection_attribution(binding, task, turn_id, decision)
     event_type = (
@@ -2337,14 +908,6 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "selected_routes": selected_routes,
         "visibility_plan": visibility_plan,
         "routing_error": routing_error,
-        "model_decision_id": model_decision.decision_id if model_decision else None,
-        "model_routing_status": model_decision.status if model_decision else "fail_open",
-        "model_routing_error": model_routing_error,
-        "model_selected_provider": model_decision.selected_provider if model_decision else None,
-        "model_selected_model": model_decision.selected_model if model_decision else None,
-        "model_selected_tier": model_decision.selected_tier if model_decision else None,
-        "model_reason_code": model_decision.reason_code if model_decision else None,
-        "model_fallback_used": model_decision.fallback_used if model_decision else False,
         "vmem_context_chars": vmem_context.get("context_chars", 0),
         "vmem_context_tokens": vmem_context.get("context_tokens", 0),
         "vmem_context_changed": vmem_context.get("context_changed", False),
@@ -2369,79 +932,18 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         home,
         binding.host_session_id,
         "hermes_pre_llm_call",
-        {
-            **event_payload,
-            "project_id": binding.project_id,
-            "bot_name": binding.bot_name,
-            "bot_role": binding.bot_role,
-        },
+        {**event_payload, "bot_name": binding.bot_name, "bot_role": binding.bot_role},
     )
-    if model_event_payload is not None and model_decision is not None:
-        _append_event(
-            home,
-            binding,
-            contracts.LifecycleEventType.DECISION,
-            model_event_payload,
-            key=f"{turn_id or 'no-turn'}:{model_decision.decision_id}",
-        )
-        autoinject._append_telemetry(
-            home,
-            binding.host_session_id,
-            "model_routing_decision",
-            model_event_payload,
-        )
-        autoinject._append_telemetry(
-            home,
-            binding.host_session_id,
-            "hermes_model_decision",
-            model_event_payload,
-        )
-        if model_decision.fallback_used:
-            autoinject._append_telemetry(
-                home,
-                binding.host_session_id,
-                "model_fallback_used",
-                model_event_payload,
-            )
-        if model_decision.selected_provider and model_decision.selected_model:
-            invocation_started = {
-                **_identity_fields(binding),
-                "routing_event": "model_invocation_started",
-                "decision_id": model_decision.decision_id,
-                "task_hash": model_decision.task_hash,
-                "turn_id": turn_id,
-                "selected_identity": _model_identity(
-                    model_decision.selected_provider,
-                    model_decision.selected_model,
-                    model_decision.selected_tier,
-                ),
-                "fallback_used": model_decision.fallback_used,
-                "fallback_reason": model_decision.fallback_reason,
-            }
-            _append_event(
-                home,
-                binding,
-                contracts.LifecycleEventType.DECISION,
-                invocation_started,
-                key=f"start:{turn_id or 'no-turn'}:{model_decision.decision_id}",
-            )
-            autoinject._append_telemetry(
-                home,
-                binding.host_session_id,
-                "model_invocation_started",
-                invocation_started,
-            )
     return {
         **_response_base(binding, "pre_llm_call"),
         "status": "ok",
-        "budget_state": budget.get("state"),
         "turn_id": turn_id,
         "decision": decision.decision.value,
         "reason": reason,
         "attribution": attribution,
         "prefix": prefix,
-        "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
-        "prefix_drift": 1 if prefix_drift else 0,
+        "prefix_sha256": event_payload["prefix_sha256"],
+        "prefix_drift": event_payload["prefix_drift"],
         "tail": tail,
         "selected_ids": decision.selected_ids,
         "packet": visible_packet,
@@ -2457,24 +959,6 @@ def _handle_pre_llm(home: Path, binding: HermesBinding, payload: dict[str, Any])
         "vmem_context_tokens": vmem_context.get("context_tokens", 0),
         "vmem_context_changed": vmem_context.get("context_changed", False),
         "vmem_faulted_in_ids": vmem_context.get("faulted_in_ids", []),
-        "model_routing_status": model_decision.status if model_decision else "fail_open",
-        "model_routing_error": model_routing_error,
-        "model_decision": model_decision.to_dict() if model_decision else None,
-        "selected_provider": model_decision.selected_provider if model_decision else None,
-        "selected_model": model_decision.selected_model if model_decision else None,
-        "selected_tier": model_decision.selected_tier if model_decision else None,
-        "reason_code": model_decision.reason_code if model_decision else None,
-        "fallback_used": model_decision.fallback_used if model_decision else False,
-        "fallback_provider": model_decision.fallback_provider if model_decision else None,
-        "fallback_model": model_decision.fallback_model if model_decision else None,
-        "fallback_reason": model_decision.fallback_reason if model_decision else None,
-        "original_selected_provider": (
-            model_decision.original_selected_provider if model_decision else None
-        ),
-        "original_selected_model": (
-            model_decision.original_selected_model if model_decision else None
-        ),
-        "original_selected_tier": model_decision.original_selected_tier if model_decision else None,
     }
 
 
@@ -2553,116 +1037,71 @@ def _bounded_invocation_value(value: Any) -> Any:
 def _handle_api_lifecycle(
     home: Path, binding: HermesBinding, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Record bounded model invocation facts without retaining response content."""
+    """Record host-observed invocation identity and usage, never a Brain model choice."""
     _register_binding(home, binding)
     usage = payload.get("usage")
-    if isinstance(usage, dict):
-        cache_read = usage.get("cache_read_tokens")
-        if cache_read is not None and isinstance(cache_read, (int, float)):
-            state = _load_vmem_cache_state(home, binding.host_session_id)
-            state["last_cache_read_tokens"] = int(cache_read)
-            _save_vmem_cache_state(home, binding.host_session_id, state)
+    if isinstance(usage, dict) and type(usage.get("cache_read_tokens")) in (int, float):
+        state = _load_vmem_cache_state(home, binding.host_session_id)
+        state["last_cache_read_tokens"] = int(usage["cache_read_tokens"])
+        _save_vmem_cache_state(home, binding.host_session_id, state)
     event = _first_text(payload, "event", default="api_request_error")
-    selected_raw = payload.get("selected_identity")
-    if isinstance(selected_raw, dict):
-        selected = _model_identity(
-            selected_raw.get("provider"), selected_raw.get("model"), selected_raw.get("tier")
-        )
-    else:
-        selected = _model_identity(
-            payload.get("selected_provider"),
-            payload.get("selected_model"),
-            payload.get("selected_tier"),
-        )
     actual_raw = payload.get("actual_identity")
-    if isinstance(actual_raw, dict):
-        actual = _model_identity(
-            actual_raw.get("provider"), actual_raw.get("model"), actual_raw.get("tier")
-        )
-    else:
-        actual = _model_identity(
-            payload.get("actual_provider", payload.get("provider")),
-            payload.get("actual_model", payload.get("model")),
-            None,
-        )
-    event_payload: dict[str, Any] = {
+    provider = (
+        actual_raw.get("provider")
+        if isinstance(actual_raw, dict)
+        else payload.get("actual_provider", payload.get("provider", binding.provider))
+    )
+    model = (
+        actual_raw.get("model")
+        if isinstance(actual_raw, dict)
+        else payload.get("actual_model", payload.get("model", binding.model))
+    )
+    response_model = payload.get("response_model")
+    if isinstance(response_model, str) and response_model:
+        model = response_model
+    actual = {
+        "provider": _bounded_text(provider, _ATTRIBUTION_FIELD_MAX_CHARS),
+        "model": _bounded_text(model, _ATTRIBUTION_FIELD_MAX_CHARS),
+    }
+    observed: dict[str, Any] = {
         **_identity_fields(binding),
-        "routing_event": f"model_{event}",
         "lifecycle_event": event,
-        "decision_id": _bounded_text(payload.get("decision_id"), _ATTRIBUTION_FIELD_MAX_CHARS),
         "turn_id": _bounded_text(payload.get("turn_id"), _ATTRIBUTION_FIELD_MAX_CHARS),
         "api_request_id": _bounded_text(
             payload.get("api_request_id"), _ATTRIBUTION_FIELD_MAX_CHARS
         ),
-        "selected_identity": selected,
         "actual_identity": actual,
-        "response_model": _bounded_text(
-            payload.get("response_model"), _ATTRIBUTION_FIELD_MAX_CHARS
-        ),
+        "response_model": _bounded_text(response_model, _ATTRIBUTION_FIELD_MAX_CHARS),
         "status": _bounded_text(
-            payload.get("status") or ("completed" if event == "post_api_request" else "failed"),
-            64,
+            payload.get("status") or ("completed" if event == "post_api_request" else "failed"), 64
         ),
     }
-    if payload.get("fallback_used"):
-        fallback = payload.get("fallback_identity")
-        original = payload.get("original_selected_identity")
-        event_payload["fallback_used"] = True
-        event_payload["fallback_identity"] = _model_identity(
-            fallback.get("provider") if isinstance(fallback, dict) else None,
-            fallback.get("model") if isinstance(fallback, dict) else None,
-            fallback.get("tier") if isinstance(fallback, dict) else None,
-        )
-        event_payload["fallback_reason"] = _bounded_text(
-            payload.get("fallback_reason"), _ATTRIBUTION_FIELD_MAX_CHARS
-        )
-        event_payload["original_selected_identity"] = _model_identity(
-            original.get("provider") if isinstance(original, dict) else None,
-            original.get("model") if isinstance(original, dict) else None,
-            original.get("tier") if isinstance(original, dict) else None,
-        )
-    for name in ("usage", "cost", "failure_code"):
-        if payload.get(name) is not None:
-            event_payload[name] = (
-                _bounded_invocation_value(payload[name])
-                if name in {"usage", "cost"}
-                else _bounded_text(payload[name], _ATTRIBUTION_FIELD_MAX_CHARS)
+    for field in ("usage", "cost", "failure_code"):
+        if payload.get(field) is not None:
+            observed[field] = (
+                _bounded_invocation_value(payload[field])
+                if field in {"usage", "cost"}
+                else _bounded_text(payload[field], _ATTRIBUTION_FIELD_MAX_CHARS)
             )
-    key = ":".join(
-        [
-            event_payload["decision_id"] or "no-decision",
-            event_payload["api_request_id"] or event_payload["turn_id"] or "no-request",
-            event,
-        ]
-    )
     _append_event(
         home,
         binding,
-        contracts.LifecycleEventType.DECISION,
-        event_payload,
-        key=key,
+        contracts.LifecycleEventType.MODEL_INVOCATION_OBSERVED,
+        observed,
+        key=f"{observed['api_request_id'] or observed['turn_id']}:{event}",
     )
-    telemetry_kind = (
+    kind = (
         "model_invocation_completed" if event == "post_api_request" else "model_invocation_failed"
     )
     autoinject._append_telemetry(
         home,
         binding.host_session_id,
-        telemetry_kind,
-        {**event_payload, "bot_name": binding.bot_name, "bot_role": binding.bot_role},
+        kind,
+        {**observed, "bot_name": binding.bot_name, "bot_role": binding.bot_role},
     )
-    if event_payload.get("fallback_used"):
-        autoinject._append_telemetry(
-            home,
-            binding.host_session_id,
-            "model_fallback_used",
-            {**event_payload, "bot_name": binding.bot_name, "bot_role": binding.bot_role},
-        )
     return {
         **_response_base(binding, event),
-        "status": event_payload["status"],
-        "decision_id": event_payload["decision_id"] or None,
-        "selected_identity": selected,
+        "status": observed["status"],
         "actual_identity": actual,
     }
 
@@ -2805,6 +1244,13 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"adapter_version": ADAPTER_VERSION, "event": "unknown", "status": "fail_open"}
     event = _first_text(payload, "event", default="unknown")
+    if event in _RETIRED_EVENTS:
+        return {
+            "adapter_version": ADAPTER_VERSION,
+            "event": event,
+            "status": "failed",
+            "failure_code": "ORCHESTRATION_REMOVED",
+        }
     if event not in _SUPPORTED_EVENTS:
         return {"adapter_version": ADAPTER_VERSION, "event": event, "status": "fail_open"}
     home_path = Path(home)
@@ -2825,109 +1271,17 @@ def handle_request(home: Path | str, payload: object) -> dict[str, Any]:
             return {**_response_base(binding, "session_before_compact"), "status": "ok"}
         if event == "writeback":
             return _handle_writeback(home_path, binding, payload)
-        if event == "worker_event":
-            worker_event = payload.get("worker_event")
-            if not isinstance(worker_event, dict):
-                worker_event = payload
-            return handle_worker_event(home_path, binding, worker_event)
-        if event == "worker_task_prepare":
-            packet = payload.get("packet")
-            if not isinstance(packet, dict):
-                return {
-                    **_response_base(binding, event),
-                    "status": "failed",
-                    "failure_code": "MALFORMED_TASK",
-                }
-            return prepare_worker_task(
-                home_path,
-                binding,
-                packet,
-                allow_terminal_reprepare=payload.get("purpose") == "correction",
-            )
         if event == "post_api_request":
             return _handle_api_lifecycle(home_path, binding, payload)
         if event == "api_request_error":
             return _handle_api_lifecycle(home_path, binding, payload)
-        if event == "worker_task_request":
-            packet = payload.get("packet")
-            if not isinstance(packet, dict):
-                return {
-                    **_response_base(binding, event),
-                    "status": "failed",
-                    "failure_code": "MALFORMED_TASK",
-                }
-            return request_worker_task(
-                home_path,
-                binding,
-                packet,
-                payload.get("result"),
-                payload.get("context_handoff"),
-            )
-        if event == "worker_result_review":
-            result = payload.get("result")
-            if not isinstance(result, dict):
-                return {
-                    **_response_base(binding, event),
-                    "status": "failed",
-                    "failure_code": "MALFORMED_RESULT",
-                }
-            return review_worker_result(
-                home_path,
-                binding,
-                result,
-                payload.get("approved", True),
-                payload.get("evidence"),
-            )
-        if event == "worker_result_correction":
-            packet = payload.get("packet")
-            result = payload.get("result")
-            if not isinstance(packet, dict) or not isinstance(result, dict):
-                return {
-                    **_response_base(binding, event),
-                    "status": "failed",
-                    "failure_code": "MALFORMED_CORRECTION",
-                }
-            return request_worker_correction(
-                home_path,
-                binding,
-                packet,
-                result,
-                _first_text(payload, "reason"),
-                payload.get("requested_changes"),
-                payload.get("evidence_requirements"),
-                payload.get("correction_attempt", 1),
-            )
-        if event == "worker_result_corrected":
-            packet = payload.get("packet")
-            original = payload.get("original_result")
-            correction = payload.get("correction")
-            corrected = payload.get("result")
-            if not all(
-                isinstance(value, dict) for value in (packet, original, correction, corrected)
-            ):
-                return {
-                    **_response_base(binding, event),
-                    "status": "failed",
-                    "failure_code": "MALFORMED_CORRECTION",
-                }
-            assert isinstance(packet, dict)
-            assert isinstance(original, dict)
-            assert isinstance(correction, dict)
-            assert isinstance(corrected, dict)
-            return return_corrected_worker_result(
-                home_path,
-                binding,
-                packet,
-                original,
-                correction,
-                corrected,
-                payload.get("context_handoff"),
-            )
         if event == "handoff_create":
             return _handle_handoff_create(home_path, binding, payload)
         if event == "handoff_read":
             return _handle_handoff_read(home_path, binding, payload)
-        return _handle_session_end(home_path, binding, payload)
+        if event == "session_end":
+            return _handle_session_end(home_path, binding, payload)
+        return {"adapter_version": ADAPTER_VERSION, "event": event, "status": "fail_open"}
     except contracts.HandoffError as exc:
         return {
             "adapter_version": ADAPTER_VERSION,

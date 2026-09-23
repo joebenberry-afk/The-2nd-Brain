@@ -1,26 +1,10 @@
-"""
-Tests for Repository Intelligence & Driver/Worker Plane (Plan §3 P1.1, P1.2, P2.4).
+"""Retained repository symbol/dependency index behavior."""
 
-Tests:
-1. Incremental AST and symbol indexing (processes dirty files only).
-2. Symbol lookup and file dependency queries.
-3. Strict worker concurrency limit enforcement (max 2 concurrent workers).
-4. Structured worker assignment & result lifecycle.
-"""
-
-import pytest
-
-from second_brain.errors import BrainError
-from second_brain.repository_intelligence import (
-    RepositoryIntelligence,
-    WorkerPlaneManager,
-    WorkerResultPacket,
-    WorkerStatus,
-)
+from second_brain.repository_intelligence import RepositoryIntelligence
 
 
-class TestRepositoryIntelligenceAndWorkerPlane:
-    """Proves durable repository intelligence and worker control plane (§4 R8)."""
+class TestRepositoryIntelligence:
+    """Proves durable incremental source indexing."""
 
     def test_incremental_ast_and_symbol_indexing(self, brain_home, tmp_path):
         repo_dir = tmp_path / "repo"
@@ -76,55 +60,3 @@ class TestRepositoryIntelligenceAndWorkerPlane:
 
         new_syms = intel.find_symbol("new_fn")
         assert len(new_syms) == 1
-
-    def test_worker_concurrency_ceiling_enforcement(self, brain_home):
-        session_id = "sess-worker-01"
-        plane = WorkerPlaneManager(brain_home, session_id, max_concurrent_workers=2)
-
-        # Spawn worker 1 (Active = 1)
-        w1 = plane.spawn_worker("Subtask 1: Parse AST")
-        assert plane.active_worker_count() == 1
-
-        # Spawn worker 2 (Active = 2)
-        w2 = plane.spawn_worker("Subtask 2: Run linters")
-        assert plane.active_worker_count() == 2
-
-        # Spawn worker 3 -> Exceeds max 2 -> Raises BrainError
-        with pytest.raises(BrainError, match="Worker concurrency ceiling reached"):
-            plane.spawn_worker("Subtask 3: Overflow task")
-
-        # Complete worker 1 -> Active drops to 1
-        plane.complete_worker(
-            WorkerResultPacket(
-                worker_id=w1.worker_id,
-                session_id=session_id,
-                status=WorkerStatus.COMPLETED,
-                summary="AST parsed successfully",
-                findings=["Found 12 classes"],
-                tokens_used=120,
-            )
-        )
-        assert plane.active_worker_count() == 1
-
-        # Now worker 3 can spawn safely
-        w3 = plane.spawn_worker("Subtask 3: Run tests")
-        assert plane.active_worker_count() == 2
-
-        # Clean up worker 2 & 3
-        plane.complete_worker(
-            WorkerResultPacket(
-                worker_id=w2.worker_id,
-                session_id=session_id,
-                status=WorkerStatus.COMPLETED,
-                summary="Linters passed",
-            )
-        )
-        plane.complete_worker(
-            WorkerResultPacket(
-                worker_id=w3.worker_id,
-                session_id=session_id,
-                status=WorkerStatus.COMPLETED,
-                summary="Tests passed",
-            )
-        )
-        assert plane.active_worker_count() == 0

@@ -2,7 +2,7 @@
   "name": "second-brain-observability",
   "version": "0.2.0",
   "private": true,
-  "description": "Second Brain harness integration extension with OMP-first lifecycle, retrieval, routing, worker-context, visibility, and telemetry support.",
+  "description": "Second Brain OMP memory, context, approved skill and telemetry adapter.",
   "license": "UNLICENSED",
   "scripts": {
     "lint": "eslint .",

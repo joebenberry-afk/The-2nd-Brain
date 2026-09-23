@@ -367,20 +367,20 @@ def _native_prompt(
     if arm == "baseline":
         prompt = (
             common
-            + f"Reproduce the standard full-worker workflow. Launch {first} as the default task "
-            "worker with access_intent mutating, wait for terminal completion and cleanup, then "
-            f"launch {second} with the same contract. Do not overlap writers. Each worker must "
+            + f"Reproduce the native-worker baseline. Launch {first} with the host's default "
+            "task profile; wait for native completion, then launch "
+            f"{second} with the same profile. Do not overlap writes. Each worker must "
             f"execute exactly this approved operation once and return its observed_settings: "
-            f"`{macro_command}`. No controller execution. Mutating admission covers only "
-            "derived cache writes. No other shell commands are permitted."
+            f"`{macro_command}`. No Brain admission is requested. "
+            "No other shell commands are permitted."
         )
         return prompt, []
     prompt = (
         common
         + "Follow the complete supplied candidate skill. The study launcher verified the skill and "
         "input configuration hashes immediately before this run. Execute the approved owned macro "
-        f"once in the controller through bash: `{macro_command}`. Then launch two read-only Scouts "
-        f"in one batch: {first} and {second}, both with access_intent read_only. Give both the "
+        f"once in the parent session through bash: `{macro_command}`. Then launch two native "
+        f"read-only Scouts in one batch: {first} and {second}. Give both the "
         "actual computed observed_settings and its provenance as bounded context. They must verify "
         "the four requested keys are present and return those actual values without reopening "
         "inputs, rerunning the macro, shell commands, edits, or further workers. Never substitute "
@@ -737,13 +737,6 @@ def _native_acceptance(
         errors.append("native dispatch did not contain the exact two expected worker IDs")
     if len({item.get("name") for item in items}) != len(items):
         errors.append("native worker dispatch IDs were not unique")
-    for item in items:
-        if arm == "candidate" and (
-            item.get("agent") != "scout" or item.get("access_intent") != "read_only"
-        ):
-            errors.append("candidate worker access intent differs from protocol")
-        if arm == "baseline" and item.get("access_intent") != "mutating":
-            errors.append("baseline worker access intent differs from protocol")
 
     macro_calls = [call for call in calls if call.get("name") == "bash"]
     exact_macro_calls = [

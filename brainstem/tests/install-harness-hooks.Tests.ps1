@@ -12,10 +12,21 @@ Describe "Harness hook configuration preservation" {
         [IO.File]::WriteAllText($settingsFile, ($initial | ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding $false))
         try {
             $env:CLAUDE_CONFIG_DIR = $homeDir
-            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-claude-code-hooks.ps1") -RepoRoot $repo
+            Push-Location $repo
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-claude-code-hooks.ps1") -RepoRoot "."
+            } finally {
+                Pop-Location
+            }
             $LASTEXITCODE | Should Be 0
             $actual = Get-Content $settingsFile -Raw -Encoding UTF8 | ConvertFrom-Json
             $actual.mcpServers.existing.description | Should Be $description
+            $command = $actual.hooks.SessionStart[0].hooks[0].command
+            $command -match '^"([^"]+)" -NoProfile ' | Should Be $true
+            $trusted = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::System)) "WindowsPowerShell\v1.0\powershell.exe"
+            $matches[1] | Should Be $trusted
+            $command -match ' -File "([^"]+)"$' | Should Be $true
+            $matches[1] | Should Be (Join-Path $repo "brainstem\adapters\claude-code\scripts\run-hook.ps1")
             ($actual.permissions.allow -join ",") | Should Be "Read"
         } finally {
             $env:CLAUDE_CONFIG_DIR = $previousHome
@@ -52,6 +63,9 @@ count = ctypes.c_int()
 argv = split(command, ctypes.byref(count))
 try:
     assert Path(argv[count.value - 1]).is_file()
+    system_dir = ctypes.create_unicode_buffer(32768)
+    assert ctypes.windll.kernel32.GetSystemDirectoryW(system_dir, len(system_dir))
+    assert argv[0].casefold() == str(Path(system_dir.value) / "WindowsPowerShell" / "v1.0" / "powershell.exe").casefold()
 finally:
     free = ctypes.windll.kernel32.LocalFree
     free.argtypes = [ctypes.c_void_p]
@@ -66,6 +80,75 @@ finally:
             $LASTEXITCODE | Should Be 0
         } finally {
             Remove-Item -Recurse -Force $homeDir
+        }
+    }
+    It "upgrades a managed Codex block without changing other tables" {
+        $homeDir = Join-Path $env:TEMP ("sb-codex-upgrade-" + [guid]::NewGuid().ToString("N"))
+        $sourceDir = Join-Path $homeDir "Brain Source"
+        $hookDir = Join-Path $sourceDir "brainstem\codex-hooks"
+        New-Item -ItemType Directory -Path $hookDir -Force | Out-Null
+        Copy-Item (Join-Path $repo "brainstem\codex-hooks\run.ps1") $hookDir
+        $configFile = Join-Path $homeDir "config.toml"
+        $legacy = @'
+display_name = "preserve"
+[hooks]
+# BEGIN second-brain-codex-hooks (Phase 0C SHADOW; managed by install-codex-hooks.ps1)
+SessionStart = [{ hooks = [{ type = "command", command = "powershell -File legacy.ps1", async = false }] }]
+# END second-brain-codex-hooks
+[hooks.state]
+enabled = false
+'@
+        [IO.File]::WriteAllText($configFile, $legacy, (New-Object Text.UTF8Encoding $false))
+        try {
+            Push-Location $sourceDir
+            try {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-codex-hooks.ps1") -RepoRoot "." -CodexHome $homeDir | Out-Null
+            } finally {
+                Pop-Location
+            }
+            $LASTEXITCODE | Should Be 0
+            $updated = [IO.File]::ReadAllText($configFile)
+            $updated | Should Match '\[hooks\.state\]\s*enabled = false'
+            $updated | Should Not Match 'command = "powershell '
+            $updated -match 'command = ("(?:\\.|[^"\\])*")' | Should Be $true
+            $command = $matches[1] | ConvertFrom-Json
+            $command -match ' -File "([^"]+)"$' | Should Be $true
+            $matches[1] | Should Be (Join-Path $sourceDir "brainstem\codex-hooks\run.ps1")
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-codex-hooks.ps1") -RepoRoot $sourceDir -CodexHome $homeDir | Out-Null
+            $LASTEXITCODE | Should Be 0
+            [IO.File]::ReadAllText($configFile) | Should Be $updated
+        } finally {
+            Remove-Item -Recurse -Force $homeDir
+        }
+    }
+    It "installs rendered Antigravity hooks without PATH executable lookup" {
+        $fixture = Join-Path $env:TEMP ("sb-agy-settings-" + [guid]::NewGuid().ToString("N"))
+        $source = Join-Path $fixture "Brain Source\brainstem\adapters\antigravity"
+        $plugins = Join-Path $fixture "plugins"
+        $previousHome = $env:SECOND_BRAIN_HOME
+        New-Item -ItemType Directory -Path $source -Force | Out-Null
+        Copy-Item (Join-Path $repo "brainstem\adapters\antigravity\*") $source -Recurse
+        try {
+            $env:SECOND_BRAIN_HOME = Join-Path $fixture "Brain Source"
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-antigravity-adapter.ps1") -Target App -PluginsDir $plugins | Out-Null
+            $LASTEXITCODE | Should Be 0
+            $installed = Join-Path $plugins "second-brain-adapter"
+            $hooksFile = Join-Path $installed "hooks.json"
+            $hooks = (Get-Content $hooksFile -Raw -Encoding UTF8 | ConvertFrom-Json).'second-brain'
+            $trusted = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::System)) "WindowsPowerShell\v1.0\powershell.exe"
+            $commands = @($hooks.PreInvocation[0].command, $hooks.PostInvocation[0].command,
+                $hooks.PostToolUse[0].hooks[0].command, $hooks.Stop[0].command)
+            foreach ($command in $commands) {
+                $command.StartsWith("`"$trusted`" -ExecutionPolicy Bypass -File `"$(Join-Path $installed 'scripts\run-hook.ps1')`" -Event ") | Should Be $true
+            }
+            (Test-Path (Join-Path $installed "scripts\run-hook.ps1")) | Should Be $true
+            $hash = (Get-FileHash $hooksFile).Hash
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\install-antigravity-adapter.ps1") -Target App -PluginsDir $plugins | Out-Null
+            $LASTEXITCODE | Should Be 0
+            (Get-FileHash $hooksFile).Hash | Should Be $hash
+        } finally {
+            $env:SECOND_BRAIN_HOME = $previousHome
+            Remove-Item -Recurse -Force $fixture
         }
     }
 }

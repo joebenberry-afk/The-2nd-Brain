@@ -189,7 +189,7 @@ describe("T2.3 Cache Breakpoints and Model-Switch Preflight", () => {
     expect(runVmemClaimPagesSyncMock).not.toHaveBeenCalled();
   });
 
-  it("test_model_switch_preflight_order", async () => {
+  it("host-selected model changes recheck Brain context without blocking native requests", async () => {
     runVmemEvictSyncMock.mockReturnValue({ ok: true, evictedCount: 2, evictedTokens: 200 });
 
     const handlers = new Map<string, Handler>();
@@ -225,22 +225,22 @@ describe("T2.3 Cache Breakpoints and Model-Switch Preflight", () => {
     );
     expect(tightResult).toBeUndefined(); // proceed successfully
 
-    // Scenario B: Switch to test-model-overflow (capacity 5 tokens). Load > 5 even after reclaim.
+    // A host-selected model's tiny context can exceed Brain's local reclaim
+    // capacity. Brain reports the limitation but cannot refuse the host request.
     runVmemEvictSyncMock.mockReturnValue({ ok: true, evictedCount: 0, evictedTokens: 0 });
     const overflowPayload = {
       provider: "test-provider",
       model: "test-model-overflow",
-      messages: [{ role: "user", content: "x".repeat(500) }], // ~125 tokens > 5
+      messages: [{ role: "user", content: "x".repeat(500) }],
     };
+    const originalMessages = structuredClone(overflowPayload.messages);
     const result = handlers.get("before_provider_request")!({
       type: "before_provider_request",
       payload: overflowPayload,
-    }, ctx) as Record<string, unknown>;
+    }, ctx);
+    expect(result).toBeUndefined();
+    expect(overflowPayload.messages).toEqual(originalMessages);
 
-    // Step 6: assert fit fails -> returns INPUT_REQUIRED(CONTEXT_OVERFLOW)
-    expect(result).toBeDefined();
-    expect(result.status).toBe("INPUT_REQUIRED");
-    expect(result.error).toBe("CONTEXT_OVERFLOW");
   });
 
   it("test_hard_capacity_forces_eviction_ignoring_net", async () => {

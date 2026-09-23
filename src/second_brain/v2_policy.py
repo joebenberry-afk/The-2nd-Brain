@@ -81,6 +81,7 @@ _SECTION_KEYS = {
     ),
     "admission": frozenset({"min_score"}),
     "retrieval": frozenset({"max_candidates", "top_k", "token_budget"}),
+    # Accept only these two retired keys from older homes; never read them.
     "brainstem": frozenset({"context_char_budget", "worker_slots", "premium_model_turns"}),
     "learning": frozenset({"surprise_threshold"}),
     "culture": frozenset(),
@@ -120,7 +121,7 @@ _REQUIRED_KEYS = {
     "rollout": _SECTION_KEYS["rollout"],
     "admission": frozenset({"min_score"}),
     "retrieval": frozenset({"max_candidates", "top_k", "token_budget"}),
-    "brainstem": frozenset({"context_char_budget", "worker_slots", "premium_model_turns"}),
+    "brainstem": frozenset({"context_char_budget"}),
     "learning": frozenset({"surprise_threshold"}),
     "culture": frozenset(),
     "frontier": frozenset({"min_importance"}),
@@ -180,8 +181,6 @@ class V2Policy:
     retrieval_top_k: int
     retrieval_token_budget: int
     context_char_budget: int
-    worker_slots: int
-    premium_model_turns: int
     surprise_threshold: float
     frontier_min_importance: float
     verification_floor: str
@@ -210,8 +209,6 @@ class V2Policy:
             ("retrieval.top_k", self.retrieval_top_k),
             ("retrieval.token_budget", self.retrieval_token_budget),
             ("brainstem.context_char_budget", self.context_char_budget),
-            ("brainstem.worker_slots", self.worker_slots),
-            ("brainstem.premium_model_turns", self.premium_model_turns),
         ):
             _positive_int(value, name)
         if self.retrieval_top_k > self.retrieval_max_candidates:
@@ -282,10 +279,6 @@ def load_policy(home: Path) -> V2Policy:
         retrieval_token_budget=_positive_int(retrieval["token_budget"], "retrieval.token_budget"),
         context_char_budget=_positive_int(
             brainstem["context_char_budget"], "brainstem.context_char_budget"
-        ),
-        worker_slots=_positive_int(brainstem["worker_slots"], "brainstem.worker_slots"),
-        premium_model_turns=_positive_int(
-            brainstem["premium_model_turns"], "brainstem.premium_model_turns"
         ),
         surprise_threshold=_bounded_float(
             learning["surprise_threshold"], "learning.surprise_threshold"

@@ -21,7 +21,7 @@ Kinds:
 |---|---|
 | session_start | reason, cwd, model |
 | prime_tool_surface | all_tools_count, active_tools_count, all_tools, active_tools (Phase R6; emitted alongside session_start only when the host exposes getAllTools/getActiveTools) |
-| before_agent_start | prompt_chars, role?, driver_contract_injected? |
+| before_agent_start | prompt_chars |
 | turn_start | turn |
 | context | messages |
 | tool_call | tool, id, command? (bash only), input_bytes; target_sha256? (read target hash only) |
@@ -34,12 +34,11 @@ Kinds:
 | vmem_hot_context | resident_count, evicted_count, resident_tokens (Phase R3; null when the vmem call failed) |
 | session_shutdown | reason |
 | rtd_shadow | tool, id, size, threshold, would_trigger, reason, original_chars?, visible_chars?, saved_chars?, artifact_ref?, command_class?, error_status?, distilled? (P3-F additive) |
-| lean_kernel | decision, reason, role, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; P3-D) |
+| lean_kernel | decision, reason, skill_status, mode, eval_source, kernel_chars, dedup_hit (v=2; approved Lean content only) |
 | extension_error | error (string, truncated) |
 | assistant_usage | provider, model, response_id?, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
 | provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
 | provider_response_meta | provider, model, status?, headers? [{key, value_sha256}] (v=3; P3-B) |
-| orchestrator_policy_violation | violation, model, detected_by, blocked |
 | autoinject_shadow_decision | decision, reason, packet_tokens, latency_ms, candidate_count, selected_count, delivery_id, packet_sha256, mode, model_visible, result_patch, emit_index, cache_hit, handler_returned_message, cli_packet_chars, cli_stdout_chars (mode = resolved host mode; model_visible = true when this decision path is the model-visible custom-message injection path (advisory/active), false for shadow (decide+record only, never model-visible); result_patch = patch returned; emit_index = emit ordinal per session+task key, 1 = spawning emit; cache_hit = served from the emit cache without a new spawn; handler_returned_message = this run returned the patch; cli_packet_chars / cli_stdout_chars = parsed packet text length / raw CLI stdout length — Phase C5/C7 instrumentation) |
 | codex_hook_shadow_decision | decision, reason, packet_tokens, delivery_id, candidate_count, selected_count (logged by brainstem/codex-hooks/run.ps1 to codex-hooks.jsonl) |
 | brain_packet_delivered | packet_id, item_count, packet_tokens, delivery_count, canonical_packet_hash, model_visible, delivery_prepared (Python AutoInject pipeline, `second_brain/autoinject.py`; model_visible = false and delivery_prepared = true — the Python event is the PREPARED/delivery-ledger state, NOT host insertion; actual model-visible injection happens via the host adapter custom-message path) |
@@ -50,19 +49,8 @@ Kinds:
 | hermes_post_tool_call | obj_id, object_kind, tool_name, tool_call_id?, turn_id?, status, result_sha256, result_chars, original_result_chars, original_result_bytes, original_result_sha256, artifact_ref, recovery_handle, visible_result_chars, visible_result_bytes, reduction_ratio, distilled, evicted_count, residency_state, vmem_budget_tokens, project_id, bot_name, bot_role, repo_root, branch_id; raw result content is never stored in telemetry (Hermes adapter) |
 | hermes_writeback_candidate | memory_id, project_id, status, evidence_count, title_sha256, observation_sha256, bot_name, bot_role (Hermes adapter; canonical memory holds the explicit writeback) |
 | hermes_session_finalized | brain_session_id, checkpoint_ok (Hermes adapter) |
-| model_routing_decision | decision_id, task_hash, candidate_set_hash, selected_provider, selected_model, selected_tier, reason_code, status, fallback_used; bounded identity/selection metadata only (Hermes adapter) |
-| model_fallback_used | decision_id, selected_provider, selected_model, selected_tier, original_selected_provider, original_selected_model, fallback_provider, fallback_model, reason_code; bounded model identity metadata only (Hermes adapter) |
-| model_invocation_started | decision_id, selected_provider, selected_model, selected_tier, turn_id; bounded identity metadata only (Hermes adapter) |
-| model_invocation_completed | lifecycle_event, decision_id, turn_id, api_request_id, selected_identity, actual_identity, response_model, status, usage?, cost?; bounded metrics only, never response/task content (Hermes adapter) |
-| model_invocation_failed | lifecycle_event, decision_id, turn_id, api_request_id, selected_identity, actual_identity, response_model, status, failure_code?, usage?, cost?; bounded metrics only, never error/task content (Hermes adapter) |
-| hermes_worker_lifecycle | task_id, parent_session_id, worker_session_id?, worker_agent_id?, worker_role?, project_id, repo_root, fanout, fanout_index, depth, packet_bytes, packet_sha256, context_ref_count?, context_resolution_sha256?, context_visible_chars?, context_visible_bytes?, context_visible_tokens_estimate?, context_mode?, context_reused?, context_cache_hit?, context_fingerprint?, previous_context_fingerprint?, context_snapshot_sha256?, context_handoff_bytes?, context_handoff_tokens_estimate?, context_delta_bytes?, context_delta_tokens_estimate?, jit_body_sha256?, jit_body_bytes?, jit_delta_sha256?, jit_delta_bytes?, result_bytes?, result_sha256?, correction_of_hash?, correction_attempt?, status, failure_code?, retryable?; bounded canonical task/result/context metadata only (Hermes adapter) |
-| hermes_worker_context_resolved | task_id, parent_session_id, packet_sha256, status, context_ref_count, context_visible_chars, context_visible_bytes, context_visible_tokens_estimate, context_source_chars, context_resolution_sha256, context_snapshot_sha256, context_mode, context_reused, context_cache_hit, context_fingerprint, previous_context_fingerprint?, context_handoff_bytes, context_handoff_tokens_estimate, context_delta_bytes, context_delta_tokens_estimate, changed_ref_count, removed_ref_count, jit_body_sha256, jit_body_bytes, jit_delta_sha256, jit_delta_bytes, refs [{ref_sha256, kind, content_sha256, content_chars, visible_chars, truncated}], failure_code?; hashes/sizes only, never context content (Hermes adapter) |
-| hermes_worker_result_reviewed | task_id, worker_session_id, worker_agent_id, worker_role, result_bytes, result_sha256, correction_of_hash?, correction_attempt?, reviewed, approved, status (Hermes adapter) |
-| hermes_worker_result_correction_requested | task_id, parent_session_id, worker_session_id, worker_agent_id, worker_role, original_result_sha256, correction_sha256, correction_attempt, requested_change_count, evidence_requirement_count, status (Hermes adapter) |
-| hermes_worker_result_corrected | task_id, parent_session_id, worker_session_id, worker_agent_id, worker_role, packet_sha256, packet_bytes, context_ref_count?, context_resolution_sha256?, context_mode?, context_reused?, context_cache_hit?, context_fingerprint?, previous_context_fingerprint?, context_snapshot_sha256?, context_handoff_bytes?, context_handoff_tokens_estimate?, context_delta_bytes?, context_delta_tokens_estimate?, jit_body_sha256?, jit_body_bytes?, jit_delta_sha256?, jit_delta_bytes?, original_result_sha256, correction_sha256, correction_attempt, result_bytes, result_sha256, status, failure_code?, retryable?; bounded canonical correction/result/context metadata only (Hermes adapter) |
-| omp_worker_context_handoff | task_id, packet_sha256, worker_agent, worker_role, parent_role, parent_session_id, context_ref_count, context_source_bytes, context_source_tokens, context_handoff_bytes, context_handoff_tokens, context_delta_bytes, context_delta_tokens, context_mode, context_fingerprint, context_reused, context_cache_hit; bounded hashes/sizes only, never context content (OMP task tool bridge) |
-| omp_worker_context_failure | task_id, worker_agent, failure_code; bounded failure metadata only (OMP task tool bridge) |
-| omp_worker_child_result | task_id, packet_sha256, child_omp_agent_id, child_omp_session_file?, worker_agent, worker_model?, status; bounded child correlation metadata only (OMP task tool bridge) |
+| model_invocation_completed | lifecycle_event, turn_id, api_request_id, actual_identity, response_model, status, usage?, cost?; host-observed metrics only, never Brain model selection |
+| model_invocation_failed | lifecycle_event, turn_id, api_request_id, actual_identity, response_model, status, failure_code?, usage?, cost?; host-observed error metadata |
 
 Field names are snake_case and stable across schema versions; new fields are
 additive.
@@ -129,44 +117,14 @@ gains ADDITIVE fields (absent in shadow mode, never raw content):
   (`measureContent(content, includeSerializedChars=false)`), and
   `serializedChars` is recorded as 0 (never consumed by RTD).
 
-## Phase 1 addition (Sol minimal-orchestrator, 2026-08-15)
+## Historical execution telemetry (read-only vocabulary)
 
-`orchestrator_policy_violation` records are a privacy-safe detection fallback
-for the Sol minimal-orchestrator policy
-(`brainstem/policies/sol-minimal-orchestrator.md`). Fields are **bounded and
-enumerated only**:
-
-- `violation` — one of `direct_execution`, `undue_context_gather`,
-  `concurrency_overflow`, `wrong_tier`, `rediscovery`, `scope_drift`,
-  `evidence_gap`;
-- `model` — provider/id string or null (never a free-text label);
-- `detected_by` — one of `manual`, `runtime_guard`, `telemetry_audit`;
-- `blocked` — boolean.
-
-No free-text fields (no action description, note, reason, prompt, command, or
-payload). The pure sensor builder exists for future/manual use and is
-**NOT WIRED**: no extension hook emits this kind yet, and no automatic prompt
-inspection is performed.
-
-## Driver-Orchestration addition (2026-08-15)
-
-`before_agent_start` gains two OPTIONAL additive fields (absent when the
-emitting extension does not provide them — old records and other emitters are
-unaffected):
-
-- `role` — agent role of the active model for the session, one of
-  `hard_orchestrator` | `driver` | `worker` | `normal` (enumerated; resolution
-  per `brainstem/policies/driver-orchestration.md`, precedence
-  hard_orchestrator > driver > worker > normal);
-- `driver_contract_injected` — driver-role sessions only: `true` when the
-  driver-orchestration contract was appended to the system prompt for this
-  turn, `false` when the base prompt already carried the contract marker (or
-  no prompt patch was produced). Absent for every non-driver role.
-
-Both fields are snake_case and additive under the schema rule "new fields are
-additive"; the Python validator (`src/second_brain/telemetry.py`) requires no
-change (unknown/extra fields are ignored; only `v`, `kind`, `session`, `ts`
-are checked).
+Older records may contain `orchestrator_policy_violation`, `stop_*`,
+`omp_worker_*`, `hermes_worker_*`, `model_routing_decision`, or
+`driver_contract_injected`. The current extension and adapters do not emit
+those kinds or treat them as execution authority. They remain decodable
+historical evidence; their presence is not proof of worker settlement or
+model-visible delivery.
 
 
 ## Phase R3 addition — VMem compaction-boundary bookkeeping (2026-08-19)
@@ -196,71 +154,21 @@ Working Set catalog's tool names don't match Prime's real tool names, and
 
 ## Phase P3-B addition — economics instrumentation (2026-08-16)
 
-## Phase P3-D addition — lean runtime adapter (2026-08-16)
+## Approved Lean runtime context
 
-`lean_kernel` records are emitted by the Prime extension on every
-`before_agent_start` lean decision (P3-D adapter, `src/lean-code.ts`,
-plan §8). One record per decision, additive v=2, privacy-safe (enumerated
-values + character counts only — never kernel text or prompt content):
+`lean_kernel` records describe approved skill-content injection without
+assigning a coordinator role or choosing a model. `decision` is `inject` or
+`omit`; `reason` is a bounded state such as `active`, `advisory`, `off`,
+`unsupported-profile`, or `skill-missing`. `skill_status` records the
+resolved lifecycle, `mode`/`eval_source` the explicit evaluation setting,
+`kernel_chars` the approved section length, and `dedup_hit` whether that
+section was already present. No skill body or prompt content is persisted.
+The exact approved canonical skill bytes are a separate consumption-time
+authorization obligation; telemetry does not grant it.
 
-- `decision` — `inject` (a kernel patch was produced) | `omit` (no patch).
-- `reason` — enumerated:
-  - `active` — skill lifecycle status is `active`; kernel injected for
-    driver/worker sessions;
-  - `advisory` — `SECOND_BRAIN_LEAN=advisory` eval mode forced injection for
-    driver/worker even though the skill is candidate/shadow (P3-E candidate
-    arms without promotion; retired always wins over advisory — §26.1);
-  - `off` — env `SECOND_BRAIN_LEAN=off`, or lifecycle state not active
-    (candidate/shadow default = measurement only; retired = disabled), or
-    the base prompt was absent (never invent a prompt);
-  - `role` — session role is `hard_orchestrator` (Sol, never injected, §8.3)
-    or `normal` (kernel inert for non-code roles);
-  - `skill-missing` — skill file missing/unreadable/without a parsable
-    `# Runtime Kernel` section; fail-open (no patch, bounded
-    `extension_error` also recorded, no invented policy text).
-- `role` — agent role at decision time (`hard_orchestrator` | `driver` |
-  `worker` | `normal`).
-- `skill_status` — resolved lifecycle status (`active` | `shadow` |
-  `candidate` | `retired`) or null when the file is missing.
-- `mode` — resolved eval gate value (lowercased) or null when inert:
-  env `SECOND_BRAIN_LEAN=advisory|off` OVERRIDES; otherwise
-  `config/skills.toml [lean] eval = "advisory" | "off"` applies (read per
-  event, same live-flip pattern as AutoInject's `config/autoinject.toml
-  [autoinject] mode`); absent env+file => null (inert). An unrecognized env
-  value falls through to the file; an invalid file value is treated as
-  absent; an unreadable config file is fail-open (inert + one bounded
-  `extension_error`).
-- `eval_source` — `env` (SECOND_BRAIN_LEAN won) | `file` (skills.toml won) |
-  null (no gate active). Added for the P3-E re-run so the analysis can prove
-  which gate produced the recorded mode.
-- `kernel_chars` — character length of the canonical `# Runtime Kernel`
-  section (0 when unavailable).
-- `dedup_hit` — true when the base prompt already carried the stable marker
-  `second-brain-lean-code-kernel` (no re-injection; plan §8.4). A record with
-  `decision=omit` and reason `active`/`advisory` together with `dedup_hit=true`
-  means the lifecycle wanted injection but the marker was already present.
-
-Kernel source is the canonical skill file ONLY (`skills/<level>/lean-code/
-SKILL.md`, level = active > shadow > candidates > retired, mirroring
-`src/second_brain/paths.py` SKILL_LEVEL_DIRS). The kernel text is never
-duplicated as a TS constant and is cached in-process keyed by resolved path +
-mtime/size (plan §8.6). Marginal overhead estimate: `kernel_chars // 4` input
-tokens (host AutoInject estimation convention); the REAL per-turn cost comes
-from live `assistant_usage` deltas in P3-E paired runs.
-
-Real model-facing ordering (verified against Prime v0.7.2 SDK assembly —
-`runner.ts` emitBeforeAgentStart, `agent-session.ts`
-_appendBeforeAgentStartMessages/_applyPreparedSystemPrompt, `messages.ts`
-convertToLlm): the extension's `systemPrompt` patch (base -> driver contract
--> lean kernel -> recall brief, when recall fires) becomes the session system
-prompt; the AutoInject packet is a separate custom message that the host
-pushes AFTER the current user task and maps to a `user`-role message. The
-plan §7.4 ideal ordering (stable base -> stable kernel -> dynamic Brain
-context delta -> task/tool evidence) is satisfied for the kernel (system
-prompt precedes all messages); the dynamic AutoInject packet's position is
-host-determined (after the task) and is NOT faked here.
-
-
+Provider usage/response records below report observed native identity and
+supported counters. They do not route a model, reserve agent capacity, or
+authorize native execution.
 
 Additive schema v3 records emitted by the Prime extension (`sensors.ts` /
 `index.ts`) from the provider hooks proven live in Phase A:
@@ -292,13 +200,10 @@ Two gaps are recorded here rather than assumed away:
    identifiable: the usage allowlist (`hermes_adapter.py:_bounded_invocation_value`) filters nested
    usage keys, but `api_request_id` is carried at the record's top level and is accepted here. What
    remains unproven is whether those two names ever describe the same billable response.
-2. `governor.check_budget` fails **open** when accounting is unavailable: it returns
-   `state: OK` together with `used: None` and `error: ACCOUNTING_UNAVAILABLE`
-   (`governor.check_budget`). The diagnostic is explicit, but a caller that branches on `state`
-   alone proceeds unmeasured. A record without a numeric `total_tokens` reaches that branch
-   (`_session_total_tokens` raises on unknown usage), which is the state for Claude Code records —
-   so the cap cannot protect sessions driven through that adapter. This is a policy question, not a
-   silent default, and it is left as recorded rather than changed here.
+2. Missing or malformed usage remains unknown. The passive
+   `governor._session_total_tokens` reader raises on absent or unidentifiable
+   usage rather than reporting a factual zero. No native task admission or
+   agent-spend cap is advertised by this accounting path.
 
 - Fields: `provider`, `model`, `input_tokens`, `output_tokens`,
   `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `cost_total`.
@@ -319,8 +224,8 @@ Metadata ONLY — never payload content:
 - `message_count` — number of messages in the payload;
 - `payload_keys` — sorted top-level payload key names;
 - `system_prefix_sha` — sha256 of the JSON serialization of the stable
-  prefix: the messages preceding the LAST user message (the provider-cache
-  prefix portion; the whole messages array when no user message exists);
+  prefix: messages preceding the FIRST user message (the stable system
+  section; the whole messages array when no user message exists);
 - `tool_surface_sha` — sha256 of the serialized `tools` surface; absent when
   the payload has no tools.
 
@@ -345,11 +250,12 @@ correlate `cacheRead`/`cacheWrite` with prefix stability (plan §5.4).
   event is **authoritative** for actual model visibility (advisory/active =
   true, shadow = false).
 
-## Live registry and P4 operations (2026-08-29)
+## Historical registry vocabulary and retained P4 operations
 
-The Python telemetry registry is the authoritative allowlist for records
-currently emitted by Prime, OMP, and the local P4 operations. Every kind below
-uses schema v2 unless marked v3:
+The Python registry accepts the following old and current kinds so archived
+JSONL remains readable. Inclusion does not imply a current producer or any
+execution authority. New runtime producers are the retained memory, context,
+usage and maintenance events described above:
 
 | kind | version | kind | version |
 |---|---:|---|---:|

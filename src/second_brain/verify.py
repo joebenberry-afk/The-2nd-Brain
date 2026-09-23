@@ -21,7 +21,6 @@ absent config falls back to the documented defaults (safe default).
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import subprocess
 import tempfile
@@ -439,7 +438,9 @@ def evaluate_accuracy_gate(
     effective_approval = (
         "approved"
         if approval_required and approval_state == "approved"
-        else "required" if approval_required else "not_required"
+        else "required"
+        if approval_required
+        else "not_required"
     )
     if unresolved_requirements:
         completion_allowed = False
@@ -481,7 +482,9 @@ def evaluate_accuracy_gate(
     verification_reason_codes = (
         [str(item) for item in raw_verification_reasons]
         if isinstance(raw_verification_reasons, list)
-        else [independent_reason] if independent_reason else []
+        else [independent_reason]
+        if independent_reason
+        else []
     )
     effective_model_id = model_id
     if not effective_model_id and independent_verification:
@@ -490,25 +493,6 @@ def evaluate_accuracy_gate(
             or independent_verification.get("model")
             or independent_verification.get("verifier_model_id")
         )
-    if not effective_model_id:
-        try:
-            db_path = db.db_path(Path(home))
-            if db_path.is_file():
-                conn_d = db.connect(db_path)
-                try:
-                    row_d = conn_d.execute(
-                        "SELECT chosen_json FROM decisions WHERE session_id = ? AND kind ="
-                        " 'routing' ORDER BY created_at DESC LIMIT 1",
-                        (session_id,),
-                    ).fetchone()
-                    if row_d and row_d[0]:
-                        d_info = json.loads(row_d[0])
-                        effective_model_id = d_info.get("model") or d_info.get("selected_model")
-                finally:
-                    conn_d.close()
-        except Exception:
-            pass
-
     if effective_model_id and isinstance(effective_model_id, str) and effective_model_id.strip():
         try:
             home_path = Path(home)
@@ -521,8 +505,8 @@ def evaluate_accuracy_gate(
                     now_str = datetime.now(UTC).isoformat()
                     conn_o.execute(
                         (
-                            'INSERT OR IGNORE INTO model_profiles (model_id, fa'
-                            'mily, capabilities, first_seen_at)\n               '
+                            "INSERT OR IGNORE INTO model_profiles (model_id, fa"
+                            "mily, capabilities, first_seen_at)\n               "
                             "            VALUES (?, ?, '', ?)"
                         ),
                         (
@@ -541,10 +525,10 @@ def evaluate_accuracy_gate(
                     f1_float = 1.0 if completion_allowed else 0.0
                     conn_o.execute(
                         (
-                            'INSERT INTO model_skill_outcomes\n                 '
-                            '          (model_id, skill_name, task_hash, succes'
-                            's, noise, f1, session_id, created_at)\n            '
-                            '               VALUES (?, ?, ?, ?, 0, ?, ?, ?)'
+                            "INSERT INTO model_skill_outcomes\n                 "
+                            "          (model_id, skill_name, task_hash, succes"
+                            "s, noise, f1, session_id, created_at)\n            "
+                            "               VALUES (?, ?, ?, ?, 0, ?, ?, ?)"
                         ),
                         (
                             effective_model_id,

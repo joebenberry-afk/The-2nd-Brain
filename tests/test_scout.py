@@ -1,4 +1,4 @@
-"""Tests for Scout: evidence map, pre-pass, command builder (Phase 6)."""
+"""Deterministic repository pre-pass and evidence map behavior."""
 
 import subprocess
 
@@ -188,55 +188,3 @@ def test_write_evidence_map_suffix_collision(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# scout_command
-# ---------------------------------------------------------------------------
-
-
-def test_scout_command_shape(tmp_path):
-    repo = _make_repo(tmp_path)
-    map_path = tmp_path / "maps" / "evidence.md"
-    cmd = scout.scout_command(repo, "fix the widget", map_path)
-    assert cmd[0] == "bash"
-    assert "C:/Tools/prime-agent/prime-agent.sh" in cmd
-    assert "-p" in cmd
-    assert "-t" in cmd and "ipython,bash" in cmd
-    assert "--model" in cmd and "deepseek/deepseek-v4-flash" in cmd
-    assert "--cwd" in cmd and str(repo) in cmd
-    assert "--offline" in cmd
-    assert "--daemon-socket" in cmd
-    prompt = cmd[-1]
-    assert "fix the widget" in prompt
-    assert str(map_path) in prompt
-    assert "read-only" in prompt.lower()
-
-
-def test_scout_command_unique_daemon_socket(tmp_path):
-    repo = _make_repo(tmp_path)
-    map_path = tmp_path / "m.md"
-    a = scout.scout_command(repo, "t", map_path)
-    b = scout.scout_command(repo, "t", map_path)
-    socket_a = a[a.index("--daemon-socket") + 1]
-    socket_b = b[b.index("--daemon-socket") + 1]
-    assert socket_a.startswith("\\\\.\\pipe\\scout-")
-    assert socket_a != socket_b
-
-
-def test_scout_command_ext_optional(tmp_path):
-    repo = _make_repo(tmp_path)
-    map_path = tmp_path / "m.md"
-    plain = scout.scout_command(repo, "t", map_path)
-    assert "-e" not in plain
-    with_ext = scout.scout_command(repo, "t", map_path, ext="C:/ext")
-    assert "-e" in with_ext and "C:/ext" in with_ext
-
-
-def test_scout_command_no_shell_injection(tmp_path):
-    repo = _make_repo(tmp_path)
-    map_path = tmp_path / "m.md"
-    nasty = 'weird "quoted" `tick` $(sub) ; rm -rf / & stuff {braces}'
-    cmd = scout.scout_command(repo, nasty, map_path)
-    assert isinstance(cmd, list)
-    assert cmd[-1] == scout.SCOUT_PROMPT_TEMPLATE.replace("{task}", nasty).replace(
-        "{map_path}", str(map_path)
-    )
-    assert "rm -rf" not in " ".join(cmd[:8])  # never reaches the argv prefix

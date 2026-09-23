@@ -312,6 +312,7 @@ def test_tier_from_bound_observed_events(brain_home):
         == "T1"
     )
 
+    # Historical worker telemetry remains readable but cannot activate an execution tier.
     marked = capabilities.observe(
         brain_home,
         harness_id,
@@ -319,7 +320,7 @@ def test_tier_from_bound_observed_events(brain_home):
         version=host_version,
         config_binding=config_binding,
     )
-    assert marked == ("subagents",)
+    assert marked == ()
     assert (
         capabilities.harness_tier(
             brain_home,
@@ -327,7 +328,7 @@ def test_tier_from_bound_observed_events(brain_home):
             host_version=host_version,
             config_binding=config_binding,
         )
-        == "T2"
+        == "T1"
     )
 
 
@@ -340,7 +341,7 @@ def test_stale_unbound_and_declared_capabilities_stay_conservative(brain_home):
         version="1.0",
         config_binding="config-a",
     )
-    capabilities.declare(brain_home, harness_id, "subagents", True, version="2.0")
+    capabilities.declare(brain_home, harness_id, "model_rewrite", True, version="2.0")
 
     assert capabilities.harness_tier(brain_home, harness_id) == "T0"
     profile = capabilities.snapshot(
@@ -351,7 +352,7 @@ def test_stale_unbound_and_declared_capabilities_stay_conservative(brain_home):
     )
     assert capabilities.tier_from_snapshot(profile) == "T0"
     assert profile["capabilities"]["tool_events"]["status"] == "unavailable"
-    assert profile["capabilities"]["subagents"]["status"] == "declared"
+    assert profile["capabilities"]["model_rewrite"]["status"] == "declared"
     assert (
         capabilities.harness_tier(
             brain_home,
@@ -365,7 +366,7 @@ def test_stale_unbound_and_declared_capabilities_stay_conservative(brain_home):
 
 def test_capability_matrix_uses_current_bound_observations(brain_home):
     harness_id = "matrix-harness"
-    capabilities.declare(brain_home, harness_id, "subagents", True)
+    capabilities.declare(brain_home, harness_id, "model_rewrite", True)
     capabilities.observe(
         brain_home,
         harness_id,
@@ -380,7 +381,7 @@ def test_capability_matrix_uses_current_bound_observations(brain_home):
     assert missing["tier"] == "T0"
     assert missing["supported_count"] == 0
     assert missing["capabilities"]["tool_events"]["status"] == "unavailable"
-    assert missing["capabilities"]["subagents"]["status"] == "declared"
+    assert missing["capabilities"]["model_rewrite"]["status"] == "declared"
 
     current = capabilities.generate_capability_matrix(
         brain_home,
@@ -417,21 +418,10 @@ def test_observe_is_idempotent_upsert(brain_home):
     assert second["evidence"]["event_kind"] == "assistant_usage"
 
 
-def test_feature_degrades_to_lower_tier_behavior(brain_home):
-    """Bound observations authorize behavior; denial removes that authority."""
+def test_observed_feature_degrades_on_explicit_denial(brain_home):
     harness_id = "antigravity"
     host_version = "1.0"
     config_binding = "config-a"
-    assert (
-        capabilities.tier_behavior(
-            brain_home,
-            harness_id,
-            host_version=host_version,
-            config_binding=config_binding,
-        )
-        == capabilities.TIER_BEHAVIOR["T0"]
-    )
-
     capabilities.observe(
         brain_home,
         harness_id,
@@ -439,26 +429,6 @@ def test_feature_degrades_to_lower_tier_behavior(brain_home):
         version=host_version,
         config_binding=config_binding,
     )
-    capabilities.observe(
-        brain_home,
-        harness_id,
-        "omp_worker_context_handoff",
-        version=host_version,
-        config_binding=config_binding,
-    )
-    assert (
-        capabilities.tier_behavior(
-            brain_home,
-            harness_id,
-            host_version=host_version,
-            config_binding=config_binding,
-        )
-        == capabilities.TIER_BEHAVIOR["T2"]
-    )
-
-    # Explicit denial on the T2-trigger capability degrades caller-visible
-    # behavior to T1 (tool_events remains observed for this host).
-    capabilities.declare(brain_home, harness_id, "subagents", False)
     assert (
         capabilities.tier_behavior(
             brain_home,
@@ -468,9 +438,6 @@ def test_feature_degrades_to_lower_tier_behavior(brain_home):
         )
         == capabilities.TIER_BEHAVIOR["T1"]
     )
-    assert capabilities.list_capabilities(brain_home, harness_id)["subagents"]["supported"] is False
-
-    # Removing the remaining T1-trigger capability degrades to the T0 floor.
     capabilities.declare(brain_home, harness_id, "tool_events", False)
     assert (
         capabilities.tier_behavior(
@@ -505,7 +472,7 @@ def test_unknown_capability_never_assumed(brain_home):
     # harness also reads back unsupported/unknown, never true.
     capabilities.declare(brain_home, "populated-harness", "session_events", True)
     other_state = capabilities.list_capabilities(brain_home, "populated-harness")
-    assert other_state["budget_enforcement"]["supported"] is None
+    assert other_state["cache_telemetry"]["supported"] is None
 
 
 def test_declare_rejects_non_bool_supported(brain_home):
@@ -515,8 +482,8 @@ def test_declare_rejects_non_bool_supported(brain_home):
 
 
 def test_declare_persists_explicit_false_distinct_from_never_recorded(brain_home):
-    capabilities.declare(brain_home, "h", "budget_enforcement", False, version="1.0")
-    row = capabilities.list_capabilities(brain_home, "h")["budget_enforcement"]
+    capabilities.declare(brain_home, "h", "prompt_injection", False, version="1.0")
+    row = capabilities.list_capabilities(brain_home, "h")["prompt_injection"]
     assert row["supported"] is False
     assert row["version"] == "1.0"
     # Distinct from a capability never declared/observed at all:
@@ -526,7 +493,7 @@ def test_declare_persists_explicit_false_distinct_from_never_recorded(brain_home
 def test_cli_v2_harness_capabilities_json_output_shape(brain_home, capsys):
     from second_brain import cli
 
-    capabilities.declare(brain_home, "cli-harness", "subagents", True, version="2.0")
+    capabilities.declare(brain_home, "cli-harness", "prompt_injection", True, version="2.0")
     capabilities.observe(
         brain_home,
         "cli-harness",
@@ -537,7 +504,7 @@ def test_cli_v2_harness_capabilities_json_output_shape(brain_home, capsys):
     capabilities.observe(
         brain_home,
         "cli-harness",
-        "omp_worker_context_handoff",
+        "brain_packet_delivered",
         version="2.0",
         config_binding="cli-config",
     )
@@ -562,12 +529,12 @@ def test_cli_v2_harness_capabilities_json_output_shape(brain_home, capsys):
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["harness_id"] == "cli-harness"
-    assert payload["tier"] == "T2"
-    assert payload["tier_behavior"] == capabilities.TIER_BEHAVIOR["T2"]
+    assert payload["tier"] == "T1"
+    assert payload["tier_behavior"] == capabilities.TIER_BEHAVIOR["T1"]
     assert set(payload["capabilities"]) == capabilities.KNOWN_CAPABILITIES
-    assert payload["capabilities"]["subagents"]["supported"] is True
-    assert payload["capabilities"]["subagents"]["status"] == "observed"
-    assert payload["capabilities"]["subagents"]["version"] == "2.0"
+    assert payload["capabilities"]["prompt_injection"]["supported"] is True
+    assert payload["capabilities"]["prompt_injection"]["status"] == "observed"
+    assert payload["capabilities"]["prompt_injection"]["version"] == "2.0"
 
     # Read-only: no DB mutation beyond the earlier declare/observe calls.
     before = capabilities.list_capabilities(brain_home, "cli-harness")

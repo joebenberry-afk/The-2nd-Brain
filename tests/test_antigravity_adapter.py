@@ -39,7 +39,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import cli, lean_runtime, semantic, working_set
+from second_brain import cli, frontier, lean_runtime, semantic, skillforge, working_set
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE_SKILL = REPO_ROOT / "skills" / "candidates" / "lean-code" / "SKILL.md"
@@ -617,6 +617,12 @@ def _seed_lean_skill(brain: Path, level: str) -> None:
     target = brain / "skills" / level / "lean-code"
     target.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CANDIDATE_SKILL, target / "SKILL.md")
+    if level in ("active", "shadow"):
+        skillforge.set_status(target / "SKILL.md", level)
+    if level != "retired":
+        frontier.frontier_review(
+            brain, "skill-lean-code-promotion", "skill", "high", "reviewer", "approve"
+        )
     lean_runtime.reset_lean_kernel_cache()
 
 

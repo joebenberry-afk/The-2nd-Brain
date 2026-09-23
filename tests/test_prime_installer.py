@@ -81,3 +81,45 @@ def test_missing_source_does_not_delete_installed_extension(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert installed.read_bytes() == b"keep me"
+
+
+def test_extension_candidate_manifest_detects_source_installed_and_inventory_drift(
+    tmp_path: Path,
+) -> None:
+    import sys
+
+    generator = ROOT / "scripts" / "generate_omp_deployment_manifest.py"
+    source = tmp_path / "source"
+    installed = tmp_path / "installed"
+    (source / "src").mkdir(parents=True)
+    installed.mkdir()
+    (source / "src" / "index.ts").write_bytes(b"one\n")
+    (installed / "index.ts").write_bytes(b"one\n")
+    manifest = tmp_path / "candidate.json"
+
+    def invoke(*mode: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(generator),
+                *mode,
+                "--source-root",
+                str(source),
+                "--installed-root",
+                str(installed),
+                "--manifest",
+                str(manifest),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert invoke("--write").returncode == 0
+    assert invoke("--check").returncode == 0
+    assert invoke("--write").returncode != 0  # prior subject is never overwritten
+    (installed / "budget-bridge.ts").write_bytes(b"retired controller")
+    assert invoke("--check").returncode != 0
+    (installed / "budget-bridge.ts").unlink()
+    (source / "src" / "index.ts").write_bytes(b"changed\n")
+    assert invoke("--check").returncode != 0

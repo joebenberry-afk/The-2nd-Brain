@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import cli, lean_runtime
+from second_brain import cli, frontier, lean_runtime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANONICAL_LEAN_SKILL = REPO_ROOT / "skills" / "candidates" / "lean-code" / "SKILL.md"
@@ -35,6 +35,9 @@ def _seed_lean_skill(home: Path) -> None:
     target_skill = home / "skills" / "candidates" / "lean-code"
     target_skill.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CANONICAL_LEAN_SKILL, target_skill / "SKILL.md")
+    frontier.frontier_review(
+        home, "skill-lean-code-promotion", "skill", "high", "reviewer", "approve"
+    )
 
     target_cfg = home / "config" / "skills.toml"
     target_cfg.parent.mkdir(parents=True, exist_ok=True)

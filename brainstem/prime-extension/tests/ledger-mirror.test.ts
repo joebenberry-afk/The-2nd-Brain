@@ -224,8 +224,6 @@ describe("index.ts wiring — every lifecycle event mirrors one ledger record", 
       },
     } as unknown as ExtensionAPI;
     factory(pi, {
-      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
-      ompRoutingRunner: async () => ({ decision: null }),
       ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
     });
     return handlers;
