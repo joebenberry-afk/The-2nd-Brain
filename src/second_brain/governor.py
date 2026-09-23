@@ -152,15 +152,18 @@ class SessionTokens:
     source_kind: str | None = None
 
     # Core token fields (from assistant_usage and Hermes usage events). A
-    # source-reported null is retained; the zero default preserves the
-    # historical value for fields never exposed by a session.
-    input_tokens: int | None = 0
-    output_tokens: int | None = 0
-    cache_read_tokens: int | None = 0
-    cache_write_tokens: int | None = 0
-    total_tokens: int | None = 0
+    # counter the host never reported is UNKNOWN, never zero: a session that
+    # exposed no counters reads back as None, and `token_usage_seen` /
+    # `model_turns` say how many observations carried a usable counter at all.
+    # A host-reported explicit zero stays 0 — it is a measurement, not absence.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    total_tokens: int | None = None
     cost_total: float | None = None
     cost_total_seen: int = 0  # How many assistant_usage records had cost_total
+    token_usage_seen: int = 0  # How many observations reported >=1 numeric counter
 
     # Derived metrics (§4.1)
     context_window: int | None = None
@@ -179,9 +182,10 @@ class SessionTokens:
     brain_packets_shadow: int = 0  # model_visible=false (not counted in delivered value)
     retrieval_result_tokens: int = 0
 
-    # Role tokens split (§4.1)
-    driver_tokens: int = 0
-    worker_tokens: int = 0
+    # Role tokens split (§4.1). None means "this role's total is unknown",
+    # which is not the same claim as a measured zero.
+    driver_tokens: int | None = None
+    worker_tokens: int | None = None
 
     # Cache and optimization metrics (§4.1)
     autoinject_cache_hits: int = 0
@@ -357,8 +361,10 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 if "context_window" in record:
                     tokens.context_window = record["context_window"]
 
-                # Aggregate tokens (HONESTY: only count reported values;
-                # explicit null remains distinguishable from a zero).
+                # Aggregate tokens (HONESTY: only count reported values; a field
+                # the host never reported stays None rather than becoming a
+                # fabricated zero, and an explicit host zero stays 0).
+                reported_counter = False
                 for field in (
                     "input_tokens",
                     "output_tokens",
@@ -371,8 +377,11 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                         current = getattr(tokens, field)
                         setattr(tokens, field, (current or 0) + value)
                         numeric_usage_fields.add(field)
+                        reported_counter = True
                     elif value is None and field in usage and field not in numeric_usage_fields:
                         setattr(tokens, field, None)
+                if reported_counter:
+                    tokens.token_usage_seen += 1
                 if "compaction_tokens" in usage:
                     value = usage["compaction_tokens"]
                     if isinstance(value, int) and not isinstance(value, bool):
@@ -460,13 +469,12 @@ def parse_telemetry_session(session_jsonl_path: Path) -> SessionTokens:
                 if "compaction_tokens" in record:
                     tokens.compaction_tokens += record["compaction_tokens"]
 
-    # Derived role totals retain the historical integer surface. A null
-    # source total contributes no known tokens; it is not converted in the
-    # source field itself.
+    # Derived role totals: an unknown source total stays None (unknown), never
+    # a fabricated zero. The source field itself is untouched.
     if tokens.role == "driver":
-        tokens.driver_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
+        tokens.driver_tokens = tokens.total_tokens
     elif tokens.role == "worker":
-        tokens.worker_tokens = tokens.total_tokens if tokens.total_tokens is not None else 0
+        tokens.worker_tokens = tokens.total_tokens
 
     if tokens.autoinject_cache_hits + tokens.autoinject_cache_misses > 0:
         total_decisions = tokens.autoinject_cache_hits + tokens.autoinject_cache_misses
@@ -542,16 +550,24 @@ def attribute_roles(sessions: list[SessionTokens]) -> dict[str, int]:
       - driver_turns, driver_input_tokens, driver_output_tokens, etc.
       - worker_turns, worker_input_tokens, worker_output_tokens, etc.
       - unknown_turns (sessions with no role)
+      - driver_unknown_token_sessions / worker_unknown_token_sessions: sessions
+        whose token total the host never reported. The token sums above cover
+        only known values, so a reader can tell "measured zero" from "unknown".
+
+    A session with an unknown total contributes its turns but no token sum and
+    is counted in the corresponding *_unknown_token_sessions field instead.
     """
     result = {
         "driver_turns": 0,
         "driver_input_tokens": 0,
         "driver_output_tokens": 0,
         "driver_total_tokens": 0,
+        "driver_unknown_token_sessions": 0,
         "worker_turns": 0,
         "worker_input_tokens": 0,
         "worker_output_tokens": 0,
         "worker_total_tokens": 0,
+        "worker_unknown_token_sessions": 0,
         "unknown_turns": 0,
     }
 
@@ -566,15 +582,16 @@ def attribute_roles(sessions: list[SessionTokens]) -> dict[str, int]:
             continue
 
         result[f"{role_key}_turns"] += session.model_turns
+        if session.total_tokens is None:
+            result[f"{role_key}_unknown_token_sessions"] += 1
+            continue
         result[f"{role_key}_input_tokens"] += (
             session.input_tokens if session.input_tokens is not None else 0
         )
         result[f"{role_key}_output_tokens"] += (
             session.output_tokens if session.output_tokens is not None else 0
         )
-        result[f"{role_key}_total_tokens"] += (
-            session.total_tokens if session.total_tokens is not None else 0
-        )
+        result[f"{role_key}_total_tokens"] += session.total_tokens
 
     return result
 
