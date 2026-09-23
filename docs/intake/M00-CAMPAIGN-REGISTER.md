@@ -43,6 +43,8 @@ candidate manifest is a byte comparison, never protected approval.
 | SEC-HOOK-02 | No general retirement | Retained hooks/process executable trust: `OPEN`. |
 | SB-PROMPT-002 / 003 | Worker task-context renderer retired | Project-ID model-visible sinks remain subject to validation; retrieved content has no instruction authority: `OPEN` for integrated proof. |
 | SEC-DEP-01 | No security waiver | Current dev lockfile advisory state: `OPEN` until assessed. |
+| Aggregate usage reader | No orchestration subject | `OPEN` (retained, pre-existing): `governor.parse_telemetry_session` reports `0` for counters a completed invocation omitted (`usage={}`), against the module's own honesty rule; the strict `_session_total_tokens` reader raises. Recorded, not waived, not fixed in this removal candidate. |
+| `scripts/run_p3_promotion_campaign.py` | Not an orchestration subject | Retained operator-invoked evaluation harness (operator-frozen model env; no Brain admission/lease/settlement; vendor CLI owns permissions). Scope-boundary header added; any future Brain-authority reach from it is a defect. |
 | #2a/#2b, #6, DOC-14 | Agent reservation/admission retired | Schema/recovery, honest passive usage and missing DOC-14 source: `OPEN` where applicable. |
 
 An `OPEN` retained HIGH blocks qualification; no row treats removal as an
@@ -84,6 +86,20 @@ tracked pack: `docs/intake/m00-evidence/orchestrator-removal-gate-20260923.md`
   **2108 passed / 1 skipped / 0 failed** under a disposable home, extension
   `tsc --noEmit` and ESLint clean, extension suite **26 files / 600 tests
   passed**; every disposable home was still empty afterwards.
+- Directly executed refusal and retained-path checks (exact commands and
+  outputs in the evidence document §2.1): all five retired CLI families exit 2
+  with `ORCHESTRATION_REMOVED` and leave an absent/nonexistent home untouched;
+  `init` → `remember` → `recall` → `autoinject shadow` all succeed in a
+  disposable home with no task admission involved.
+- Independent review: a read-only implementation verifier returned
+  `UNDEMONSTRATED` (its agent type could not execute commands) while
+  confirming statically that the retired modules are gone and no alternate
+  switch remains; a read-only security pass independently reproduced the
+  aggregate-usage coercion and classified the promotion campaign script as
+  operator-invoked evaluation. Further child spawns are refused by the
+  **installed production extension**
+  (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`), so independent runtime
+  coverage stays partial and is reported as such.
 - Complete the source/config/test/docs cutover, then run isolated Python/TS,
   package and DB checks with hashes tied to exact candidate bytes.
 - Check native single/batch task, hub, model, tool, cancellation and memory
