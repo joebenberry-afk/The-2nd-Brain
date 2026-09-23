@@ -1748,6 +1748,20 @@ class LedgerRehydrator:
     ) -> dict[str, Any]:
         store = self._store
         assert store._conn is not None
+        # Rehydration projects durable event payloads into recovered state, so it
+        # must stand on verified evidence exactly as replay does: a projection
+        # built from an unverified chain would present tampered history as
+        # recovered memory. Fail closed before reading any payload.
+        integrity = store.integrity()
+        if not integrity["seq_contiguous"]:
+            raise BrainError("rehydrate rejected: seq not contiguous")
+        if integrity["orphan_parents"]:
+            raise BrainError("rehydrate rejected: orphan parent_event_id")
+        if not integrity["hash_chain_ok"]:
+            raise BrainError("rehydrate rejected: hash chain broken")
+        digests_ok, bad_objects = store._verify_object_digests()
+        if not digests_ok:
+            raise BrainError(f"rehydrate rejected: object digest failures {bad_objects}")
         segments = [
             dict(r) for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
         ]

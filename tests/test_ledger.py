@@ -35,6 +35,7 @@ def _ev(
     payload: dict | None = None,
     ignorable: bool = False,
     segment: str | None = "seg-1",
+    artifact_sha256: str | None = None,
 ) -> BrainLifecycleEvent:
     return BrainLifecycleEvent(
         seq=seq,
@@ -50,7 +51,7 @@ def _ev(
         surface_visibility=SurfaceVisibility.RAW_ONLY,
         ignorable=ignorable,
         payload=payload or {},
-        artifact_sha256=None,
+        artifact_sha256=artifact_sha256,
         source_event_ids=[],
     )
 
@@ -1344,6 +1345,10 @@ def test_continuation_capsule_from_events(store) -> None:
 
 def test_rehydrate_levels_and_dedupe(store) -> None:
     store.open_segment("startup")
+    # The artifact is bound when the event is appended, exactly as the tool flow
+    # does. The envelope digest covers artifact_sha256, so a post-append rewrite
+    # would leave a ledger that no longer verifies.
+    digest = store.add_object(b"exact artifact bytes", mime="text/plain", role="artifact")
     store.append_events(
         [
             _ev(1, "task", LifecycleEventType.USER_TASK, payload={"task_sha256": "abc"}),
@@ -1353,13 +1358,10 @@ def test_rehydrate_levels_and_dedupe(store) -> None:
                 LifecycleEventType.DECISION,
                 payload={"decision": "use X", "rationale": "because Y"},
                 parent="task",
+                artifact_sha256=digest,
             ),
         ]
     )
-    digest = store.add_object(b"exact artifact bytes", mime="text/plain", role="artifact")
-    # attach the artifact to the decision event via direct update (mirror of tool flow)
-    store._conn.execute("UPDATE events SET artifact_sha256 = ? WHERE event_id = 'dec'", (digest,))
-    store._conn.commit()
     store.open_segment("compact")
 
     rh = ledger_mod.LedgerRehydrator(store)
@@ -1775,3 +1777,22 @@ def test_single_session_id_scheme(brain_home, monkeypatch) -> None:
         assert identity.internal_session_id == expected
         assert not identity.internal_session_id.startswith("is-")
         assert len(identity.internal_session_id) == 64  # full sha256 hex digest
+
+
+def test_rehydrate_refuses_tampered_chain(store) -> None:
+    """A projection built from an unverified chain must not be presented as recovered memory."""
+    _seed(store, 3)
+    # Control: an intact ledger rehydrates.
+    assert ledger_mod.LedgerRehydrator(store).rehydrate(3)["events"]
+    assert store.integrity()["hash_chain_ok"] is True
+
+    # Tamper with a stored payload without touching the recorded chain.
+    store._conn.execute(
+        "UPDATE events SET payload_json = ? WHERE event_id = ?",
+        ('{"agent_id": "forged"}', "e-2"),
+    )
+    store._conn.commit()
+    assert store.integrity()["hash_chain_ok"] is False
+
+    with pytest.raises(BrainError, match="hash chain broken"):
+        ledger_mod.LedgerRehydrator(store).rehydrate(3)
