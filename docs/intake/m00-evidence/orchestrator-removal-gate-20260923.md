@@ -53,6 +53,47 @@ installed `omp v18.2.11` CLI read-only (`--help`). The full native
 `task → worker → completion` / `batch → workers` differential control required
 by `M00-NATIVE-ORCH-01` was **not** executed here; it remains `OPEN`.
 
+### 2.1 Refusals and retained path, executed directly
+
+| Command (disposable home) | Observed |
+| --- | --- |
+| `brainctl --home <absent> worker-plane spawn s t --json` | exit 2, `{"status":"failed","failure_code":"ORCHESTRATION_REMOVED"}`; path still absent after |
+| `brainctl --home <absent> worker-plane lease-release-settled --attempt old --apply` | exit 2, same refusal; path still absent |
+| `brainctl --home <absent> stop decide --session s --task-id t` | exit 2, same refusal; path still absent |
+| `brainctl --home <absent> governor check-budget --session s --json` | exit 2, same refusal; path still absent |
+| `brainctl --home <absent> governor reserve-budget --session s --task-id t` | exit 2, same refusal; path still absent |
+| `brainctl --home <empty dir> governor check-budget --session s --json` | exit 2; the empty home gained **no** entries |
+| `init`, then `remember "migration order is numeric" --evidence <repo>/notes.txt:1-1` | exit 0, `mem-e373dc2d650d` |
+| `recall "migration order numeric"` | exit 0, `[VERIFIED_CURRENT] migration order is numeric` |
+| `autoinject shadow --task … --session e2e-s1 --agent e2e-agent --cwd <repo> --json` | exit 0, `decision: INJECT`, `candidate_ids [mem-e373dc2d650d]`, `delivery_id del-40a130ed3c63d76e16757517` |
+
+So memory write, retrieval and AutoInject delivery still work end to end with
+no Brain task admission anywhere in the path, and the retired command families
+refuse before creating state.
+
+### 2.2 Independent review of this subject
+
+Two read-only reviewers were run against `ce15820`.
+
+- A read-only implementation-verifier returned **UNDEMONSTRATED**: its agent
+  type had no process-execution tool, so it could not run any command. Its
+  static pass did confirm the retired Python/extension modules are gone, found
+  no alternate activation switch, and raised one item — `scripts/run_p3_promotion_campaign.py`
+  still launches an external `agy` agent with a caller-frozen model and an
+  optional `--dangerously-skip-permissions` (see §5 disposition).
+- A read-only security-reviewer pass independently reproduced the
+  `governor` aggregate-usage coercion (§5, `OPEN`) and classified the promotion
+  campaign script as operator-invoked external evaluation rather than a Brain
+  control sink.
+- **Environment limitation, stated plainly**: further `task`-type child spawns
+  from this session are refused by the **installed production extension** with
+  `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` (its own documented
+  stock-route behaviour — it cannot confirm settlement for a child on this
+  host). That is the installed legacy runtime, not this candidate, and it
+  prevented a third independent worker from being spawned for runtime proof;
+  the executed evidence above is therefore author-executed and the independent
+  runtime claim is limited to the security reviewer's own smoke.
+
 ## 3. What was removed (active surface)
 
 - **Python**: `worker_protocol`, `worker_recovery`, `runtime_lineage`,
@@ -99,10 +140,13 @@ by `M00-NATIVE-ORCH-01` was **not** executed here; it remains `OPEN`.
 - **Cross-home isolation**: a native session id reused against a different
   Brain home cannot render another home's VMem context
   (`tests/test_cache_breakpoints.py::test_same_native_session_id_cannot_reuse_another_home_context`).
-- **Passive usage honesty**: duplicate observations of one identified billable
-  response are charged once, unidentified ones in full, missing usage raises
-  instead of reporting zero, and episode correlation excludes another root
-  (`tests/test_governor.py`).
+- **Passive usage honesty (scoped)**: for the strict accounting reader used by
+  limits and admission — `governor._session_total_tokens` — duplicate
+  observations of one identified billable response are charged once,
+  unidentified ones in full, and absent/mismatched usage raises instead of
+  reporting a factual zero; episode correlation excludes another root
+  (`tests/test_governor.py`). This claim does **not** cover the aggregate
+  display reader; see the `OPEN` finding in §5.
 - **Historical data preservation**: an unresolved pre-24 writer holder blocks
   the upgrade without mutating rows or schema and repeats deterministically; a
   terminal writer row keeps its original identity through the physical-lease
@@ -114,7 +158,7 @@ by `M00-NATIVE-ORCH-01` was **not** executed here; it remains `OPEN`.
   install/rollback path and candidate byte-drift detection are covered by
   `tests/test_prime_installer.py`.
 
-## 5. Historical subjects retained as data
+## 5. Historical subjects retained as data, and retained evaluation
 
 Migrations `0014`, `0022`–`0028`, worker task/receipt/outbox/reservation rows
 and the sealed `docs/integrations/omp-host-patch-2026-09-19*` records are
@@ -122,6 +166,43 @@ untouched and unclaimed. Old worker/STOP/budget telemetry remains decodable
 vocabulary, not a current producer or execution guarantee. P4 qualification
 retains its memory/session/cache/backup scenarios; the two repository
 worker-plane scenarios are retired and reported as retired, not passed.
+
+`scripts/run_p3_promotion_campaign.py` is **retained** as an operator-invoked
+evaluation harness, not a Brain control sink: it selects no model of its own
+(the model slug and effort come from operator-frozen `P3_AGY_MODEL` /
+`P3_AGY_EFFORT`), passes no Brain admission, lease or settlement, and the
+external vendor CLI owns its own permissions. It does launch an external `agy`
+process and can forward `--dangerously-skip-permissions` when the operator sets
+`P3_AGY_SKIP_PERMISSIONS`. A scope-boundary header was added at the top of the
+file and its "This script is an ORCHESTRATOR" self-description was replaced
+with "drives an evaluation campaign"; the executable body is unchanged. Any
+future finding that Brain authority is reachable from this script is a defect,
+not a feature.
+
+Stale derived bytecode for the five removed modules
+(`host_protocol`, `model_routing`, `runtime_lineage`, `worker_protocol`,
+`worker_recovery` under `src/second_brain/__pycache__/`) was deleted; those
+files are gitignored and rebuildable.
+
+### Open retained finding (pre-existing, not introduced by this removal)
+
+`governor.SessionTokens` declares its core counters as `int | None` with a `0`
+default, and `parse_telemetry_session` leaves them at `0` when a record omits
+them — so a **completed** invocation whose payload is `usage={}` reads back as
+`input_tokens 0 / output_tokens 0 / total_tokens 0 / cache_read_tokens 0`,
+even though the module's own HONESTY RULE (`governor.py:1-11`) says an absent
+field must be reported absent, never coerced to `0`. Reproduced independently
+by the security reviewer and by the author; `git show ce15820 --
+src/second_brain/governor.py` touches no such default line and the parent
+commit already carried five of them, so the behaviour pre-dates this removal.
+
+Disposition: recorded as an `OPEN` retained accounting-honesty obligation
+(unknown usage must stay unknown on the reader surface too). It is **not**
+fixed here, because correcting it changes a retained reporting contract used
+by economics/ROI readers and their tests, which is outside the removal scope;
+it is listed as a blocker rather than waived. The strict
+`_session_total_tokens` reader does raise on the same file.
+
 
 ## 6. Honest limits
 
@@ -136,6 +217,13 @@ worker-plane scenarios are retired and reported as retired, not passed.
   `SEC-INTEGRITY-01`, `SEC-SKILL-01`/`SB-PROMOTION-004`, `FSUPD-01`/`FSPATH-03`,
   `SEC-HOOK-02`, `SEC-DEP-01` (current lockfile advisories), project-ID
   prompt sinks. Removal of the worker route is not a fix verdict for them.
+- **Aggregate usage reader coerces unknown to zero** (§5) — `OPEN`, retained,
+  pre-existing.
+- **Independent runtime review is partial**: the read-only implementation
+  verifier had no execution tool and returned `UNDEMONSTRATED`; the security
+  reviewer's independent smoke is the only non-author runtime check, and the
+  installed production extension refused further child spawns (see §2.2). The
+  executed refusal/retained-path evidence in §2.1 is author-executed.
 - **Retired, not proved**: `M00-CORD-01/02`, `SB-ORCH-001`, worker-only clauses
   of `#3/#4/#5`, `FSLNCH-02`.
 - The tracked evidence pack also carries controller-era files

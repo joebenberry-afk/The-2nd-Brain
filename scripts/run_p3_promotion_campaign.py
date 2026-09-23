@@ -1,7 +1,19 @@
 """P3 Promotion Campaign Orchestrator — REAL external Antigravity agents only.
 
-This script is an ORCHESTRATOR. It can never implement task solutions and can
-never invent economics:
+Scope boundary (2026-09-23, orchestrator-removal mandate): this is an
+operator-invoked EVALUATION harness, not a Second Brain execution controller.
+Brain selects no model, admits no task, grants no tool and owns no lifecycle
+here: the executable, the frozen model slug/effort (`P3_AGY_MODEL`,
+`P3_AGY_EFFORT`) and any permission-skipping flag (`P3_AGY_SKIP_PERMISSIONS`)
+come from the operator's frozen environment, and the external vendor CLI owns
+its own permissions. Brain contributes passive telemetry and the Lean
+environment toggle only. It never uses Brain worker/admission/lease/settlement
+paths, and its output is evaluation evidence only — never a Brain lifecycle
+guarantee. If the removed orchestrator is ever reachable from here, that is a
+defect to fix, not a feature.
+
+This script drives an evaluation campaign. It can never implement task
+solutions and can never invent economics:
 
 - task prompts come from the frozen fixture `TASK.md`;
 - every arm is executed by a REAL external Antigravity agent process (`agy`);
