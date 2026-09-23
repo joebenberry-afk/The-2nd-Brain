@@ -1,0 +1,8 @@
+# Raw arm streams for native-noninterference-20260923.json
+# sha256 of each file as committed. Verify with:
+#   git cat-file blob HEAD:docs/intake/m00-evidence/native-noninterference-20260923/<name> | sha256sum
+ae117e093f8380a31a7e06391d144f3fa84799eccb64b34cdc17893c5eb9da52  brain_off_batch.jsonl  174098 bytes
+145963ba31b6200acce01e595a5f8b448c1f4ce663cd93b1db84639f7b728794  brain_off_single.jsonl  41427 bytes
+d6ea6afc8d5faf99b71365c13752feae13ce0549f8e5613df57678177f629ff8  brain_on_batch.jsonl  56219 bytes
+57fe290c153d4722664b35581c72030d7122d15c9d4bb93583633dd4b3f87155  brain_on_single.jsonl  38334 bytes
+2d8d81aab5ee31e4f52381a8fa86d82de7030e723e3ba3e2d7a3a881c6ac1f53  installed_build_single.jsonl  69618 bytes

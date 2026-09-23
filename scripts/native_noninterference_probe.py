@@ -158,7 +158,7 @@ def run_arm(
     *,
     prompt: str,
     extension: Path | None,
-    brain_home: Path,
+    brain_home: Path | None,
     brain_python: Path,
     model: str,
     omp: str,
@@ -185,6 +185,7 @@ def run_arm(
     env.pop("PYTHONHOME", None)
     env.pop("PYTHONPATH", None)
     if extension is not None:
+        assert brain_home is not None
         cmd += ["-e", str(extension)]
         env["SECOND_BRAIN_HOME"] = str(brain_home)
         env["SECOND_BRAIN_PYTHON"] = str(brain_python)
@@ -316,43 +317,53 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     extension = Path(args.extension)
     installed = Path(args.installed) if args.installed else None
-    brain_home = Path(tempfile.mkdtemp(prefix="ni-brain-home-"))
     workdir = Path(tempfile.mkdtemp(prefix="ni-arms-"))
+    stamp = time.strftime("%Y%m%d")
+    # Every arm gets its own disposable brain home, and each arm's raw stream is
+    # copied beside the JSON. A single shared home could not attribute extension
+    # activity to an arm (the installed control also writes there), and a payload
+    # that only points at temp files is not evidence a later session can open.
+    stream_dir = out_dir / f"native-noninterference-{stamp}"
+    stream_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
-    try:
-        for name, prompt, ext in build_arms(extension, installed):
-            print(f"[arm] {name} extension={ext}", file=sys.stderr)
-            results.append(
-                run_arm(
-                    name,
-                    prompt=prompt,
-                    extension=ext,
-                    brain_home=brain_home,
-                    brain_python=Path(args.brain_python),
-                    model=args.model,
-                    omp=args.omp,
-                    timeout=args.timeout,
-                    workdir=workdir,
-                )
+    for name, prompt, ext in build_arms(extension, installed):
+        print(f"[arm] {name} extension={ext}", file=sys.stderr)
+        home = Path(tempfile.mkdtemp(prefix=f"ni-brain-home-{name}-")) if ext else None
+        try:
+            row = run_arm(
+                name,
+                prompt=prompt,
+                extension=ext,
+                brain_home=home,
+                brain_python=Path(args.brain_python),
+                model=args.model,
+                omp=args.omp,
+                timeout=args.timeout,
+                workdir=workdir,
             )
-        # Brain activity check: a loaded extension that never ran would make the
-        # clean result meaningless, so record what the disposable home received.
-        home_files = sorted(
-            str(p.relative_to(brain_home)) for p in brain_home.rglob("*") if p.is_file()
-        )
-    finally:
-        if not args.keep_home:
-            shutil.rmtree(brain_home, ignore_errors=True)
+            if home is not None:
+                # Does the extension actually run in THIS arm? A loaded but inert
+                # extension would make a clean result meaningless.
+                row["brain_home_files"] = sorted(
+                    str(f.relative_to(home)) for f in home.rglob("*") if f.is_file()
+                )[:40]
+            stream = Path(str(row["raw_path"]))
+            archived = stream_dir / f"{name}.jsonl"
+            if stream.is_file():
+                shutil.copyfile(stream, archived)
+                row["raw_stream"] = str(archived.relative_to(out_dir.parent.parent))
+        finally:
+            if home is not None and not args.keep_home:
+                shutil.rmtree(home, ignore_errors=True)
+        results.append(row)
 
-    stamp = time.strftime("%Y%m%d")
     payload = {
         "probe": "native-noninterference",
         "date": stamp,
         "model": args.model,
         "extension": str(extension),
         "installed_control": str(installed) if installed else None,
-        "brain_home_files": home_files[:40],
         "arm_workdir": str(workdir),
         "arms": results,
         "verdicts": verdicts(results),
