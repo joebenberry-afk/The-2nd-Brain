@@ -11,6 +11,7 @@ source authoritative or current — that is what the revision and the verdict co
 
 | Copy | Origin tree / path | Revision | sha256 | Scope it supports |
 | --- | --- | --- | --- | --- |
+| `orchestrator-removal-gate-20260923.md` | this tree → `docs/intake/m00-evidence/` (authored here) | `ce15820` | see `git cat-file blob ce15820:…` | the 2026-09-23 removal gate: exact subject digest, executed Python/extension gates, removed active surface, retained proofs, honest limits |
 | `replay-authority.md` | `.worktrees/m00.3-producer-guard` → `outputs/reports/m00.3-replay-authority-20260922/REPORT.md` | `9a32a9b` (report frozen at `f6e817f`) | `114b4cef…115db` | #3-R.2/#3-R.4 corrected replay expectation, the 8 cases, mutation sensitivity, the read-only finding under #4 |
 | `mutation-evidence.json` | same tree → `…/mutation-evidence.json` | `b5f809f` | `a22b899d…1018` | guard-removal 5/8 failed, reconstruction-removal 7/8 failed, exact byte restoration, baseline hashes |
 | `vitest-full-transcript.txt` | same tree → `…/vitest-full-transcript.txt` | `9a32a9b` | `2c642bdc…12ec` | extension suite 771/771 including the replay cases and per-case identity lines |
@@ -21,11 +22,16 @@ source authoritative or current — that is what the revision and the verdict co
 | `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `637b0710…60a3` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
 | `ten-worker-sequence.json` | same tree → `…/ten-worker-sequence.json` | `9a32a9b` | `8d690425…6aab` | raw observations behind the ten-worker sequence (10 × `COMPLETED`/`released`, 1 result each) |
 
+All rows other than the removal-gate entry are **historical evidence for their
+own dated subjects** and for the retired orchestration surface; the 2026-09-23
+removal mandate retires those subjects rather than marking them proved, and
+none of those copies describes the current candidate.
+
 Also referenced and **not** copied here, with their retrieval route:
 
 | Reference | Where it lives | Route |
 | --- | --- | --- |
-| `Second_Brain_M00_OneShot_Closure_Mandate.md` | `docs/intake/` in the **main checkout only** | read from the main tree; **corrected 2026-09-22** — an independent verifier found this file absent from the candidate (`docs/intake/` here holds only the register and this pack), so an earlier version of this row over-claimed that it was tracked in this worktree |
+| `Second_Brain_M00_OneShot_Closure_Mandate.md` | `docs/intake/` **in this candidate since 2026-09-23** (earlier: main checkout only) | read from this tree; the 2026-09-23 revision re-scopes it as the orchestrator-removal mandate, and the former native-profile contract it carried is now historical evidence inside that file |
 | `M00.3_Phase_A_Host_Authority_Continuation.md` | `docs/requirements/` in `main` only | absent from this branch; read from the main checkout |
 | `schema-bootstrap-20260921/QUALIFICATION.md` | `outputs/reports/` in `main` only (gitignored) | read from the main checkout; the #2b debt list it carries is restated in `schema-authority.md` §8 |
 | `m00.2-p2-lease-and-manifest-20260921/REPORT.md` | `outputs/reports/` in `main` only | read from the main checkout |
