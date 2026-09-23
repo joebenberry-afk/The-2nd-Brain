@@ -11,7 +11,10 @@ source authoritative or current — that is what the revision and the verdict co
 
 | Copy | Origin tree / path | Revision | sha256 | Scope it supports |
 | --- | --- | --- | --- | --- |
-| `orchestrator-removal-gate-20260923.md` | this tree → `docs/intake/m00-evidence/` (authored here) | `ce15820` | see `git cat-file blob ce15820:…` | the 2026-09-23 removal gate: exact subject digest, executed Python/extension gates, removed active surface, retained proofs, honest limits |
+| `retained-high-closure-20260923.md` | this tree → `docs/intake/m00-evidence/` (authored here) | `968862a` | `62331bbb744708f2…` | the closure-packet gates on this subject (Python/TS/Pester/audit results), the interpreter-binding trap, and the owner decisions the packet cannot make |
+| `high-dispositions-20260923.md` | this tree → `docs/intake/m00-evidence/` (authored here) | `968862a` | `2df1c1a5dbb607c0…` | per-finding evidence, refuted clauses, residuals and dispositions for the retained HIGHs; method and evidence limits |
+| `native-noninterference-20260923.json` | this tree → probe output from `scripts/native_noninterference_probe.py` | `968862a` | `d2f93702826555c2…` | raw five-arm host differential (Brain off/on × single/batch + pre-removal control), per-arm markers and the recorded verdicts |
+| `orchestrator-removal-gate-20260923.md` | this tree → `docs/intake/m00-evidence/` (authored here) | `ce15820` (measured subject); file also carries a forward pointer added at `968862a` | `f3d8becd4da332e6…` at `968862a` | the 2026-09-23 removal gate: exact subject digest, executed Python/extension gates, removed active surface, retained proofs, honest limits. Its measured subject is still `ce15820` |
 | `replay-authority.md` | `.worktrees/m00.3-producer-guard` → `outputs/reports/m00.3-replay-authority-20260922/REPORT.md` | `9a32a9b` (report frozen at `f6e817f`) | `114b4cef…115db` | #3-R.2/#3-R.4 corrected replay expectation, the 8 cases, mutation sensitivity, the read-only finding under #4 |
 | `mutation-evidence.json` | same tree → `…/mutation-evidence.json` | `b5f809f` | `a22b899d…1018` | guard-removal 5/8 failed, reconstruction-removal 7/8 failed, exact byte restoration, baseline hashes |
 | `vitest-full-transcript.txt` | same tree → `…/vitest-full-transcript.txt` | `9a32a9b` | `2c642bdc…12ec` | extension suite 771/771 including the replay cases and per-case identity lines |
@@ -22,10 +25,11 @@ source authoritative or current — that is what the revision and the verdict co
 | `ownership-edges.json` | same tree → `…/ownership-edges.json` | `b5f809f` | `637b0710…60a3` | raw observations behind the #5 edge matrix (quarantine, `WORKTREE_WRITER_BUSY`, duplicate/conflict, cancellation) |
 | `ten-worker-sequence.json` | same tree → `…/ten-worker-sequence.json` | `9a32a9b` | `8d690425…6aab` | raw observations behind the ten-worker sequence (10 × `COMPLETED`/`released`, 1 result each) |
 
-All rows other than the removal-gate entry are **historical evidence for their
-own dated subjects** and for the retired orchestration surface; the 2026-09-23
-removal mandate retires those subjects rather than marking them proved, and
-none of those copies describes the current candidate.
+The three `…-20260923` closure entries and the removal-gate entry describe
+**current** subjects. All other rows are **historical evidence for their own
+dated subjects** and for the retired orchestration surface; the 2026-09-23
+removal mandate retires those subjects rather than marking them proved, and none
+of those copies describes the current candidate.
 
 Also referenced and **not** copied here, with their retrieval route:
 
