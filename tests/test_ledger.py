@@ -490,21 +490,30 @@ def test_replay_rejects_broken_lineage_pointer(tmp_path) -> None:
             s.replay(["e-1", "ghost"])
 
 
-def test_replay_detects_payload_tamper_via_compare(tmp_path) -> None:
-    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as s:
-        _seed(s, 3)
-        captured = s.replay(["e-1", "e-2", "e-3"])
-        conn = sqlite3.connect(s.dbfile)
-        row = conn.execute("SELECT payload_json FROM events WHERE seq = 2").fetchone()
-        payload = json.loads(row[0])
-        payload["task"] = "tampered"
-        conn.execute("UPDATE events SET payload_json = ? WHERE seq = 2", (json.dumps(payload),))
-        conn.commit()
-        conn.close()
-        replayed = s.replay(["e-1", "e-2", "e-3"])
-        divergence = ledger_mod.compare_projection(captured, replayed)
-        assert divergence is not None
-        assert "payload differs" in divergence
+def test_replay_rejects_a_tampered_checkpointed_event(tmp_path, capsys) -> None:
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as store:
+        _seed(store, 3)
+        assert store.integrity()["hash_chain_verified_through_seq"] == 3
+        conn = sqlite3.connect(store.dbfile)
+        try:
+            row = conn.execute("SELECT payload_json FROM events WHERE seq = 2").fetchone()
+            payload = json.loads(row[0])
+            payload["task"] = "tampered"
+            conn.execute("UPDATE events SET payload_json = ? WHERE seq = 2", (json.dumps(payload),))
+            conn.commit()
+        finally:
+            conn.close()
+        with pytest.raises(BrainError, match="hash chain"):
+            store.replay(["e-1", "e-2", "e-3"])
+        from second_brain import cli
+
+        status = cli.main(
+            ["--home", str(tmp_path), "ledger", "verify", HOST, "--lineage", "e-1,e-2,e-3"]
+        )
+        report = json.loads(capsys.readouterr().out)
+        assert status == 1
+        assert report["integrity"]["hash_chain_ok"] is False
+        assert report["replay_ok"] is False
 
 
 def test_replay_rejects_missing_object(tmp_path) -> None:

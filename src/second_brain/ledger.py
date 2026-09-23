@@ -996,11 +996,11 @@ class LedgerStore:
                 bad.append(obj["sha256"][:12])
         return (not bad, bad)
 
-    def integrity(self) -> dict[str, Any]:
-        """Seq contiguity, orphan parents, schema version, and an incremental hash-chain
-        check (plan T6.3): verification resumes from
-        ``ledger_meta['last_verified_seq']`` (default 0) rather than re-hashing every
-        event on every call.
+    def integrity(self, *, full_chain: bool = False) -> dict[str, Any]:
+        """Seq contiguity, orphan parents, schema version, and hash-chain integrity.
+
+        Ordinary checks resume from ``last_verified_seq`` (plan T6.3). Replay sets
+        ``full_chain`` to distrust that mutable watermark and verify from genesis.
 
         Object payloads are NOT
         re-hashed here — ``read_object()`` digest-verifies on every read,
@@ -1026,14 +1026,18 @@ class LedgerStore:
             ).fetchone()[0]
         )
 
-        last_verified_row = self._conn.execute(
-            "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
-        ).fetchone()
-        last_verified_seq = int(last_verified_row[0]) if last_verified_row is not None else 0
-        seed_row = self._conn.execute(
-            "SELECT prev_hash FROM events WHERE seq = ?", (last_verified_seq,)
-        ).fetchone()
-        running_prev_hash = seed_row[0] if seed_row is not None else _GENESIS_HASH
+        if full_chain:
+            last_verified_seq = 0
+            running_prev_hash = _GENESIS_HASH
+        else:
+            last_verified_row = self._conn.execute(
+                "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
+            ).fetchone()
+            last_verified_seq = int(last_verified_row[0]) if last_verified_row is not None else 0
+            seed_row = self._conn.execute(
+                "SELECT prev_hash FROM events WHERE seq = ?", (last_verified_seq,)
+            ).fetchone()
+            running_prev_hash = seed_row[0] if seed_row is not None else _GENESIS_HASH
 
         hash_chain_ok = True
         hash_chain_break_seq: int | None = None
@@ -1052,7 +1056,7 @@ class LedgerStore:
             running_prev_hash = erow["prev_hash"]
             verified_through = int(erow["seq"])
 
-        if hash_chain_ok:
+        if hash_chain_ok and not full_chain:
             self._conn.execute(
                 "INSERT OR REPLACE INTO ledger_meta (key, value) VALUES ('last_verified_seq', ?)",
                 (str(verified_through),),
@@ -1288,16 +1292,17 @@ class LedgerStore:
         """Independent replay (plan §9.10): fresh-connection semantics via this store's
         own connection + validation, reconstructing the root->leaf lineage projection.
 
-        Detects seq gaps, orphan parents, object failures, and payload tampering
-        (seq/payload mismatch is detected by the projection hash comparison in
-        compare_projection).
+        Detects seq gaps, orphan parents, object failures, and in-place payload
+        edits against the existing payload-only chain, without trusting its watermark.
         """
         assert self._conn is not None
-        integrity = self.integrity()
+        integrity = self.integrity(full_chain=True)
         if not integrity["seq_contiguous"]:
             raise BrainError("replay rejected: seq not contiguous")
         if integrity["orphan_parents"]:
             raise BrainError("replay rejected: orphan parent_event_id")
+        if not integrity["hash_chain_ok"]:
+            raise BrainError("replay rejected: hash chain broken")
         digests_ok, bad_objects = self._verify_object_digests()
         if not digests_ok:
             raise BrainError(f"replay rejected: object digest failures {bad_objects}")
