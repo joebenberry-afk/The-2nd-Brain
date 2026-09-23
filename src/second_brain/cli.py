@@ -3703,7 +3703,7 @@ def cmd_ledger(args) -> int:
         return 0
     if cmd == "verify":
         with ledger.LedgerStore(home, args.host_session_id).open() as store:
-            integrity = store.integrity()
+            integrity = store.integrity(full_chain=True)
             lineage = args.lineage.split(",") if args.lineage else []
             replay_error = ""
             try:
