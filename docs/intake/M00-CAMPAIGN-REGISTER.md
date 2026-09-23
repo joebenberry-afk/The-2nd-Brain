@@ -43,13 +43,43 @@ candidate manifest is a byte comparison, never protected approval.
 | SEC-HOOK-02 | No general retirement | Retained hooks/process executable trust: `OPEN`. |
 | SB-PROMPT-002 / 003 | Worker task-context renderer retired | Project-ID model-visible sinks remain subject to validation; retrieved content has no instruction authority: `OPEN` for integrated proof. |
 | SEC-DEP-01 | No security waiver | Current dev lockfile advisory state: `OPEN` until assessed. |
-| Aggregate usage reader | No orchestration subject | `OPEN` (retained, pre-existing): `governor.parse_telemetry_session` reports `0` for counters a completed invocation omitted (`usage={}`), against the module's own honesty rule; the strict `_session_total_tokens` reader raises. Recorded, not waived, not fixed in this removal candidate. |
+| Aggregate usage reader | Retained accounting honesty | **FIXED + regression-tested** (`M00-FINAL` §1): counters the host never reported read as `None`/`null`/`-` with `token_usage_seen` coverage, explicit host zeros stay `0`, and `attribute_roles` counts unknown totals in `*_unknown_token_sessions`; `economics.verdict` already drops pairs with unknown tokens. Previously coerced to `0`. |
 | `scripts/run_p3_promotion_campaign.py` | Not an orchestration subject | Retained operator-invoked evaluation harness (operator-frozen model env; no Brain admission/lease/settlement; vendor CLI owns permissions). Scope-boundary header added; any future Brain-authority reach from it is a defect. |
 | #2a/#2b, #6, DOC-14 | Agent reservation/admission retired | Schema/recovery, honest passive usage and missing DOC-14 source: `OPEN` where applicable. |
 
 An `OPEN` retained HIGH blocks qualification; no row treats removal as an
 historical PASS. The original September 21 audit and former M00 negative
 results remain unchanged.
+
+### M00-NATIVE-ORCH-01 — native non-interference (boundary test, not development)
+
+**Recast 2026-09-23:** this is no longer an orchestration-development
+requirement. Its surviving purpose is to prove that enabling Second Brain does
+not materially interfere with, replace, redirect, constrain, or corrupt the
+native harness's own agent/orchestration behavior. Brain has and claims **no**
+orchestration authority: coordinator custody, worker lifecycle, worker
+budgets, model routing and Brain STOP remain retired permanently and are never
+re-opened by this packet.
+
+Method: same harness/version/config/model, one deterministic task family, a
+Brain-`off` baseline and a Brain-`on` candidate, then compare only what the
+host itself reports — task creation, agent spawning, parent/child relations,
+host-observable completion/settlement, errors/refusals, outputs, and relevant
+timing/resource measurements. Native lifecycle telemetry is observation, never
+settlement authority. The desired result is **Brain added no orchestration
+authority and native behavior stayed native**, not "Brain controls spawning
+correctly".
+
+Status: `OPEN / NOT PROVEN` — no real host differential has been executed
+against the frozen candidate yet (only a read-only installed-CLI probe). The
+observable checks that used to accompany this criterion (native `task`, single
+and batch workers, concurrency, `hub`/steering, workpool, cancellation,
+restart/revival, no injected coordinator contract, no Brain role gate, no
+Brain reservation before dispatch, no Brain credential or settlement receipt
+required, unchanged model selection, enabled memory/context for parent and
+children, clear refusal of explicitly enabled retired operations, and matched
+controls) are all still valid *observations* of non-interference; none of them
+requires or authorizes building Brain orchestration.
 
 ### Test-retirement mapping
 

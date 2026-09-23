@@ -65,14 +65,17 @@ class TestSessionTokensBasic:
     """Basic SessionTokens parsing tests."""
 
     def test_empty_session(self, brain_home):
-        """Parsing an empty session file."""
+        """Parsing an empty session file: no counters were reported, so the
+        totals are unknown (None) — not a measured zero."""
         _write_session(brain_home, "empty", [])
         tokens = governor.parse_telemetry_session(
             brain_home / "telemetry" / "agent-performance" / "empty.jsonl"
         )
         assert tokens.session_id == "empty"
         assert tokens.model_turns == 0
-        assert tokens.total_tokens == 0
+        assert tokens.total_tokens is None
+        assert tokens.token_usage_seen == 0
+        assert tokens.usage_observations == 0
 
     def test_basic_usage(self, brain_home):
         """Parse a session with basic assistant_usage."""
@@ -368,8 +371,9 @@ class TestRoleAttribution:
         assert tokens.input_tokens is None
         assert tokens.output_tokens is None
         assert tokens.total_tokens is None
-        assert tokens.driver_tokens == 0
+        assert tokens.driver_tokens is None
         assert attribution["driver_turns"] == 1
+        assert attribution["driver_unknown_token_sessions"] == 1
         assert attribution["driver_input_tokens"] == 0
         assert attribution["driver_output_tokens"] == 0
         assert attribution["driver_total_tokens"] == 0
@@ -866,7 +870,7 @@ class TestExtendedSection41Metrics:
         assert tokens.context_window == 128000
         assert tokens.context_peak == 45
         assert tokens.driver_tokens == 1200
-        assert tokens.worker_tokens == 0
+        assert tokens.worker_tokens is None  # role is driver: worker total unknown
 
         # Tool bytes
         assert tokens.tool_calls == 1
@@ -1072,3 +1076,82 @@ def test_episode_correlation_does_not_include_another_root(brain_home):
         root_parent_session_id=ledger.internal_session_id("root-b"),
     )
     assert governor._episode_host_sessions(brain_home, root) == {root, child}
+
+
+def test_unreported_counters_are_unknown_never_zero(brain_home):
+    """HONESTY RULE: a counter the host never reported is unknown, and an
+    explicit host zero stays a measured zero."""
+    session = "unknown-vs-zero"
+    _write_session(
+        brain_home,
+        session,
+        [
+            _rec("assistant_usage", session=session, response_id="r-missing"),
+            _rec(
+                "assistant_usage",
+                session=session,
+                response_id="r-zero",
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            ),
+        ],
+    )
+    tokens = governor.parse_telemetry_session(
+        brain_home / "telemetry" / "agent-performance" / f"{session}.jsonl"
+    )
+    # The first observation reported nothing: those counters stay unknown.
+    assert tokens.input_tokens == 0  # only from the explicit zero observation
+    assert tokens.output_tokens == 0
+    assert tokens.total_tokens == 0
+    assert tokens.model_turns == 2
+    assert tokens.token_usage_seen == 1  # one of the two observations had counters
+    assert tokens.cost_total is None
+    assert tokens.cost_total_seen == 0
+
+
+def test_partial_counter_reporting_keeps_unknown_fields_absent(brain_home):
+    session = "partial-counters"
+    _write_session(
+        brain_home,
+        session,
+        [
+            _rec("assistant_usage", session=session, response_id="p1", input_tokens=7),
+            _rec("assistant_usage", session=session, response_id="p2", total_tokens=11),
+        ],
+    )
+    tokens = governor.parse_telemetry_session(
+        brain_home / "telemetry" / "agent-performance" / f"{session}.jsonl"
+    )
+    assert tokens.input_tokens == 7
+    assert tokens.total_tokens == 11
+    assert tokens.output_tokens is None
+    assert tokens.cache_read_tokens is None
+    assert tokens.cache_write_tokens is None
+    assert tokens.token_usage_seen == 2
+
+
+def test_usage_report_surface_marks_unknown_instead_of_zero(brain_home, capsys):
+    from second_brain import cli
+
+    session = "report-unknown"
+    _write_session(
+        brain_home,
+        session,
+        [_rec("assistant_usage", session=session, response_id="only-observation")],
+    )
+    assert (
+        cli.main(["--home", str(brain_home), "governor", "report", "--session", session, "--json"])
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    row = next(item for item in payload if item["session_id"] == session)
+    assert row["total_tokens"] is None
+    assert row["input_tokens"] is None
+    assert row["token_usage_seen"] == 0
+    assert row["model_turns"] == 1
+
+    assert cli.main(["--home", str(brain_home), "governor", "report", "--session", session]) == 0
+    text = capsys.readouterr().out
+    line = next(line for line in text.splitlines() if line.startswith(session))
+    assert "-" in line  # unknown rendered explicitly, never as a measured 0

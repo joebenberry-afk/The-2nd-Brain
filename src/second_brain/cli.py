@@ -3735,6 +3735,7 @@ def cmd_governor(args) -> int:
                     "total_tokens": session.total_tokens,
                     "cost_total": session.cost_total,
                     "cost_total_seen": session.cost_total_seen,
+                    "token_usage_seen": session.token_usage_seen,
                     "context_peak": session.context_peak,
                     "model_turns": session.model_turns,
                     "tool_calls": session.tool_calls,
@@ -3754,7 +3755,11 @@ def cmd_governor(args) -> int:
                 output.append(d)
             print(json.dumps(output, indent=2, default=str))
         else:
-            # Table output
+            # Table output. `-` marks a counter the host never reported: it is
+            # unknown, deliberately not rendered as a measured zero.
+            def counter(value: object) -> str:
+                return "-" if value is None else str(value)
+
             print(
                 f"{'Session':<16} {'Provider':<10} {'Model':<20} {'Turns':<6} "
                 f"{'Input':<8} {'Output':<8} {'Total':<8} {'Context':<8}"
@@ -3767,8 +3772,8 @@ def cmd_governor(args) -> int:
                 ctx = str(session.context_peak) if session.context_peak else "-"
                 print(
                     f"{s_id:<16} {prov:<10} {mod:<20} {session.model_turns:<6} "
-                    f"{session.input_tokens:<8} {session.output_tokens:<8} "
-                    f"{session.total_tokens:<8} {ctx:<8}"
+                    f"{counter(session.input_tokens):<8} {counter(session.output_tokens):<8} "
+                    f"{counter(session.total_tokens):<8} {ctx:<8}"
                 )
 
         return 0

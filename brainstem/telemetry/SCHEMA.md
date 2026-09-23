@@ -200,10 +200,19 @@ Two gaps are recorded here rather than assumed away:
    identifiable: the usage allowlist (`hermes_adapter.py:_bounded_invocation_value`) filters nested
    usage keys, but `api_request_id` is carried at the record's top level and is accepted here. What
    remains unproven is whether those two names ever describe the same billable response.
-2. Missing or malformed usage remains unknown. The passive
-   `governor._session_total_tokens` reader raises on absent or unidentifiable
-   usage rather than reporting a factual zero. No native task admission or
-   agent-spend cap is advertised by this accounting path.
+2. Missing or malformed usage remains unknown, on every reader surface:
+   - the strict `governor._session_total_tokens` reader raises on absent or
+     unidentifiable usage rather than reporting a factual zero;
+   - the aggregate reader `governor.parse_telemetry_session` leaves a counter
+     the host never reported as `None` (`SessionTokens.input_tokens` etc.),
+     keeps an explicit host `0` as `0`, and exposes coverage through
+     `token_usage_seen` (observations that reported at least one counter) and
+     `model_turns`; `attribute_roles` counts a session with an unknown total in
+     `*_unknown_token_sessions` instead of adding a zero;
+   - `brainctl governor report` prints `null` in JSON and `-` in the table for
+     an unknown counter, never a fabricated `0`.
+   No native task admission or agent-spend cap is advertised by this
+   accounting path.
 
 - Fields: `provider`, `model`, `input_tokens`, `output_tokens`,
   `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `cost_total`.

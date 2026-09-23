@@ -204,24 +204,30 @@ Stale derived bytecode for the five removed modules
 `worker_recovery` under `src/second_brain/__pycache__/`) was deleted; those
 files are gitignored and rebuildable.
 
-### Open retained finding (pre-existing, not introduced by this removal)
+### Resolved in this packet: aggregate usage coerced unknown to zero
 
-`governor.SessionTokens` declares its core counters as `int | None` with a `0`
-default, and `parse_telemetry_session` leaves them at `0` when a record omits
-them — so a **completed** invocation whose payload is `usage={}` reads back as
-`input_tokens 0 / output_tokens 0 / total_tokens 0 / cache_read_tokens 0`,
-even though the module's own HONESTY RULE (`governor.py:1-11`) says an absent
-field must be reported absent, never coerced to `0`. Reproduced independently
-by the security reviewer and by the author; `git show ce15820 --
-src/second_brain/governor.py` touches no such default line and the parent
-commit already carried five of them, so the behaviour pre-dates this removal.
+`governor.SessionTokens` previously defaulted its core counters to `0` and
+`parse_telemetry_session` left them there when a record omitted them, so a
+completed invocation whose payload was `usage={}` read back as four zero
+counters — against the module's own honesty rule and the mandate's
+"unknown usage recorded as unknown". Independently reproduced by the security
+reviewer and by the author.
 
-Disposition: recorded as an `OPEN` retained accounting-honesty obligation
-(unknown usage must stay unknown on the reader surface too). It is **not**
-fixed here, because correcting it changes a retained reporting contract used
-by economics/ROI readers and their tests, which is outside the removal scope;
-it is listed as a blocker rather than waived. The strict
-`_session_total_tokens` reader does raise on the same file.
+Fix (`M00-FINAL` step 1): the five core counters and the derived role totals
+now default to `None`; only host-reported numeric values are summed; an
+explicit host `0` stays a measured `0`; a new `token_usage_seen` count exposes
+coverage; `attribute_roles` counts unknown-total sessions in
+`*_unknown_token_sessions` instead of adding a zero; and `brainctl governor
+report` prints `null`/`-` for unknown. `economics.verdict` already skips pairs
+whose tokens are `None`, so an unknown total now drops the pair instead of
+entering the statistic as zero.
+
+Regression tests: `tests/test_governor.py`
+(`test_unreported_counters_are_unknown_never_zero`,
+`test_partial_counter_reporting_keeps_unknown_fields_absent`,
+`test_usage_report_surface_marks_unknown_instead_of_zero`,
+`test_empty_session`, `test_role_attribution_handles_explicit_null_counters`).
+Full suite on the amended subject: **2112 passed, 1 skipped, 0 failed**.
 
 
 ## 6. Honest limits
@@ -237,8 +243,9 @@ it is listed as a blocker rather than waived. The strict
   `SEC-INTEGRITY-01`, `SEC-SKILL-01`/`SB-PROMOTION-004`, `FSUPD-01`/`FSPATH-03`,
   `SEC-HOOK-02`, `SEC-DEP-01` (current lockfile advisories), project-ID
   prompt sinks. Removal of the worker route is not a fix verdict for them.
-- **Aggregate usage reader coerces unknown to zero** (§5) — `OPEN`, retained,
-  pre-existing.
+- **Aggregate usage reader coerced unknown to zero** — **fixed and
+  regression-tested** in this packet (§5); reported here as resolved, not
+  waived.
 - **Independent runtime review is partial**: the read-only implementation
   verifier had no execution tool and returned `UNDEMONSTRATED`; the security
   reviewer's independent smoke is the only non-author runtime check, and the
