@@ -6,7 +6,8 @@ parent `4d74719`, plus the changes listed in §3. Companion records:
 - [`high-dispositions-20260923.md`](high-dispositions-20260923.md) — per-finding
   evidence and disposition.
 - [`native-noninterference-20260923.json`](native-noninterference-20260923.json) —
-  raw probe payload, arm-by-arm.
+  probe payload, arm-by-arm, with the per-arm raw streams archived in
+  [`native-noninterference-20260923/`](native-noninterference-20260923/).
 - [`orchestrator-removal-gate-20260923.md`](orchestrator-removal-gate-20260923.md) —
   the earlier frozen-subject (`ce15820`) gate. That record still describes its
   own subject; this packet does not rewrite it.
@@ -49,7 +50,7 @@ that only the parent process inherits.
 | Extension suite | `npx vitest run` | **26 files / 600 tests passed**, matching the frozen-subject count |
 | Installer/rollback | `Invoke-Pester brainstem/tests/install-prime-extension.Tests.ps1` | **20 passed / 0 failed**, including the two new post-swap cases |
 | Dev advisories | `npm audit --package-lock-only` in `brainstem/prime-extension` | before: 1 high + 2 moderate; after: **0 high** + 2 moderate (dev-only, deferred) |
-| Native non-interference | `python scripts/native_noninterference_probe.py --installed …` | 5 arms; **8/8 recorded verdicts true**; sensitivity control refused with 13 markers |
+| Native non-interference | `python scripts/native_noninterference_probe.py --installed …` | 5 arms; **eight acceptance verdicts true plus a ninth sensitivity value**; control refused with 13 markers; candidate arms wrote 14/18 brain-home files, Brain-off arms 0 |
 | Probe self-test | `python scripts/native_noninterference_probe.py --self-test` | extractor detects a known-refusal sample (exit 0) |
 
 Provenance note for the Python suite: this pytest build emits no final summary
@@ -62,9 +63,9 @@ packet adds.
 
 | File | Change |
 |---|---|
-| `src/second_brain/ledger.py` | `LedgerRehydrator.rehydrate` verifies chain, sequence, parents and object digests before projecting payloads; fails closed (14 added lines). |
+| `src/second_brain/ledger.py` | `LedgerRehydrator.rehydrate` verifies chain, sequence, parents and object digests **inside one SQLite snapshot** and fails closed before projecting payloads; the snapshot closes the window a concurrent writer could otherwise slip through between check and read. |
 | `tests/test_ledger.py` | New `test_rehydrate_refuses_tampered_chain`; `_ev` accepts `artifact_sha256` so the level-3 fixture binds the artifact at append time instead of rewriting a chained column. |
-| `scripts/native_noninterference_probe.py` | New, explicitly invoked host differential with a self-tested extractor; disposable brain home per run. |
+| `scripts/native_noninterference_probe.py` | New, explicitly invoked host differential with a self-tested extractor; **one disposable brain home per arm** with a per-arm file inventory, and each arm's raw stream archived beside the payload. |
 | `scripts/install-prime-extension.ps1` | Post-swap re-verification of the installed tree with restore-on-mismatch; the reported manifest hash is now the installed tree's. |
 | `brainstem/tests/install-prime-extension.Tests.ps1` | Two cases exercising the post-swap branch (fresh install must not be left in place; previous extension must come back byte-identically). |
 | `brainstem/prime-extension/package-lock.json` | `js-yaml` 4.3.1 → 4.3.2 (transitive dev dependency of `@eslint/eslintrc`, inside its declared `^4.3.0` range). |
@@ -87,9 +88,19 @@ packet adds.
 - **Open and blocking until decided:** `SEC-AUTH-01`, `SEC-AUTH-02` — reproduced
   on retained paths, not fixable by a candidate-local edit.
 - **Observations, not proven rows:** `hub`/steering, workpool,
-  cancellation/restart timing and model selection were not exercised by the
-  probe. No retained candidate file touches them, but the probe did not measure
-  them, so they stay listed as observations.
+  cancellation/restart timing, child completion and model selection were not
+  exercised by the probe. The arm `final` texts are host replies while the
+  subagents were still running asynchronously, so they are not completion
+  evidence. No retained candidate file touches those surfaces, but the probe did
+  not measure them.
+- **Independently reviewed, and corrected where the review disagreed.** Two
+  read-only reviewers ran against this packet: a security reviewer that
+  reproduced both authorization findings with commands and refuted an earlier
+  calibration claim, and an implementation verifier (no execution device, so its
+  execution verdicts are `UNDEMONSTRATED`) that independently reconciled the raw
+  streams, judged the fixture correction sound, and found three wording defects —
+  all fixed. Every gate count here remains author-executed; see §9 of the
+  disposition record.
 
 ## 5. Owner decisions this packet cannot make
 

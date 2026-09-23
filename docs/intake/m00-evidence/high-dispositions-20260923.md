@@ -72,13 +72,25 @@ Residuals that remain true:
   SEC-AUTH-01 — and is **not** a candidate-local change.
 - **Rehydration projection was unverified (fixed in this packet).**
   `LedgerRehydrator.rehydrate` projected durable event payloads into recovered
-  state without any chain check, unlike `replay`. It now verifies the chain
-  before reading a payload and fails closed on non-contiguous seq, orphan
-  parents, a broken chain, or failing object digests
-  (`src/second_brain/ledger.py`, `rehydrate`).
+  state without any chain check, unlike `replay`. It now verifies inside a
+  single snapshot — the same `BEGIN`/release pattern `replay` uses — and fails
+  closed before projecting on non-contiguous seq, orphan parents, a broken
+  chain, or failing object digests (`src/second_brain/ledger.py`, `rehydrate`).
+  The snapshot matters: verification and projection must not be able to read
+  different rows, because a concurrent writer committing between the check and
+  the read would otherwise be projected as verified.
   `test_rehydrate_refuses_tampered_chain` tampers a stored payload, asserts
   `hash_chain_ok` is false, and asserts rehydrate refuses with "hash chain
   broken"; the intact-ledger control still rehydrates. `[executed]`
+- **Independent reproduction of that fix** `[executed]`: the read-only verifier
+  wrote its own scratch check (no test helpers, its own ledger, its own
+  two-connection tamper) but had no execution device; the driver ran it with the
+  candidate interpreter and the result was `intact: recovered original payload`
+  and `tampered: rehydrate rejected: hash chain broken`, exit 0. The verifier's
+  snippet as written left its writer connection open, which fails only on
+  Windows temp cleanup — a defect in the snippet, not the product. The
+  verify-then-project *interleaving* itself is not integration-tested; the code
+  closes the window structurally rather than by test.
 
 A legacy test shortcut was corrected as part of this: `test_rehydrate_levels_and_dedupe`
 attached an artifact by rewriting the stored `artifact_sha256` column after
@@ -142,18 +154,30 @@ Surviving route `scripts/install-prime-extension.ps1` +
 
 ## 4. SEC-HOOK-02 — hook and process executable trust
 
-The managed hook route is **closed**: every installed hook command binds the
-absolute `System32` PowerShell plus an absolute runner path, the installers
-refuse when that path is missing, and the Pester suite pins exactly that. `[read]`
+**Partly closed, and the residual is inside the hook route — corrected after
+independent review.** Every installed hook command binds the absolute `System32`
+PowerShell plus an absolute runner path, the installers refuse when that path is
+missing, and the Pester suite pins exactly that. What that closes is the
+`PATH`/cwd hijack of the *outer* command. `[read]`
 
-Residual that remains true (**deferred, reclassified low**): bare
-search-path resolution survives in non-hook subprocesses —
-`envsteward.py:421` (bare `powershell`), `shutil.which("brainctl")` in the
-Hermes adapter, install-time `& agy` / `& git`, and the `SECOND_BRAIN_PYTHON`
-override honored by all three runners. Blast radius is the same user's own
-`PATH` and environment; it is not a privilege boundary on this host. Named
-remediation if wanted later: absolute-path resolution plus env pinning in those
-subprocesses, tested the same way the hook route is.
+It does **not** close the interpreter the hook executes: both retained hook
+runners resolve Python from the environment —
+`brainstem/adapters/claude-code/scripts/run-hook.ps1:21` (`SECOND_BRAIN_PYTHON`,
+else `<brain home>\.venv\Scripts\python.exe`) invoked at `:46`, and
+`brainstem/codex-hooks/run.ps1:25,36` the same way. So the residual is a
+hook-execution path, not a non-hook one; an earlier draft of this record
+classified it as non-hook and that was wrong. Both runners already clear
+`PYTHONHOME`/`PYTHONPATH` before invoking, so the repo's interpreter-pollution
+class is handled. `[read]`
+
+Blast radius stays same-user: whoever can set that variable can already run code
+as that user, and no privilege boundary is crossed on this host. Bounded
+mitigation if wanted later: require an absolute, existing interpreter path and
+prefer the home venv, tested the same way the outer command is pinned. Not
+applied now because it does not close the channel and the runners are live
+integration. The remaining bare-name resolutions (`envsteward.py:421` bare
+`powershell`, `shutil.which("brainctl")`, install-time `& agy` / `& git`) are
+separate, also same-user, and also deferred.
 
 ## 5. SEC-DEP-01 — dev dependency advisories
 
@@ -185,21 +209,34 @@ development-only (the lock marks them `dev`).
 string inequality between two caller-supplied session ids plus caller hashes
 compared against caller hashes (`fresh_verifier.py:91-140`). `[read]`
 
-Retained sinks that keep this live: a self-asserted green completion verdict
-plus its `accuracy_gate` ledger row; an unauthenticated insert of `success=1`
-rows into `model_skills_outcomes`/`model_profiles` under a caller-chosen
-`model_id` (`verify.py:489-535`), whose consumers are the cross-model policy
-display and `scripts/calibrate_risk.py`, which fits weights back into
-`config/verification.toml`.
+Retained sinks that keep this live, as independently reproduced: a
+self-asserted green completion verdict plus its `accuracy_gate` ledger row, and
+an unauthenticated insert of `success=1` rows into
+`model_skills_outcomes`/`model_profiles` under a caller-chosen `model_id`
+(`verify.py:489-539`). Exercised consumers after a self-authored green gate:
+`models report` (outcomes=3, successes=2) and `models policy`, whose verification
+list then included the caller's own `self-claimed-model` with success_rate 0.667.
+
+**Correction (independent review refuted an earlier draft of this record).** That
+draft also claimed `scripts/calibrate_risk.py` fits weights from these verdicts
+back into `config/verification.toml`. That is wrong twice over, and the reviewer
+showed it by execution: the calibrator returns `sample_count=0` and writes
+default `[risk_weights] 1.0` because its collector samples session capsules and
+agent-performance telemetry, not the gate ledger or model outcomes; and the
+gate's own risk assessment reads `repo/config/verification.toml` ahead of
+`$SECOND_BRAIN_HOME` (`risk.py:53-76`), while the calibrator writes the
+disposable home's config. The calibration amplification is withdrawn; the
+verdict-to-outcome sinks above are the retained blast radius.
 
 What the removal *did* change: the pre-removal `brainctl stop` consumed
-`completion_allowed` from a gate file; in this candidate `stop` is an inert
-refusal (`cli.py:4437-4447`). The strongest sink is gone, the finding is not.
+`completion_allowed` from a gate file; in this candidate `stop` exits 2 with
+`ORCHESTRATION_REMOVED` (`cli.py:4435-4450`), reproduced. The strongest sink is
+gone, the finding is not.
 
 Named remediation: an approval/verification channel the agent under governance
 cannot author — signed approval, host-provided token, or operator-only
 credential — plus a consumer change so unauthenticated verdicts cannot write
-outcome or calibration data. That is architecture, not a candidate-local edit.
+outcome data. That is architecture, not a candidate-local edit.
 **Owner decision required: accept at the M00 release boundary or keep blocking.**
 
 ## 7. SEC-AUTH-02 — origin, grade and trusted-memory authority
@@ -211,10 +248,15 @@ through (choices `OBSERVED|TESTED|VERIFIED`, `cli.py:643-651`), with
 `authority_ceiling="project_rule"` from unauthenticated input, and
 `tests/test_cli.py:99-103` pins that contract as current behavior. `[read]`
 
-Blast radius on a retained path: a model-visible packet can be admitted as
-`CURRENT / HIGH` with a `project_rule` ceiling that outranks legitimate advisory
-memories and exempts the item from the retrieval holdout
-(`src/second_brain/autoinject.py:1214-1218`).
+Blast radius on a retained path, independently reproduced: a `remember --grade
+VERIFIED` with no evidence yields origin `USER_AUTHORED`, ceiling `project_rule`
+and zero sources; its model-visible semantic and policy packets are admitted
+`CURRENT / HIGH` with score 1.035 against an advisory comparator's 0.828, and the
+forged item escapes the retrieval holdout (`autoinject.py:1214-1218`; the
+reviewer's holdout probe reported the canary bypassed at epsilon=1 while an
+isolated advisory still landed in `HOLDOUT`). Supplying `--evidence` captures a
+git path and source SHA but does **not** change the grade, origin or ceiling —
+so evidence is optional and decorative for authority purposes. `[executed]`
 
 Named remediation: record the *claimed* grade separately from any authenticated
 grade, and stop a caller-declared ceiling from both outranking and bypassing the
@@ -230,35 +272,91 @@ sensitivity control that loads the **pre-removal build installed on this host**.
 Every arm used `--no-session`, an empty temp project directory, and a disposable
 `SECOND_BRAIN_HOME`; no arm could read or write live Brain state.
 
-Results (raw event streams and the JSON payload are beside this file as
+Results (each arm's full raw event stream is archived beside this file in
+`native-noninterference-20260923/`, and the summary payload is
 `native-noninterference-20260923.json`):
 
-| Arm | task calls | spawned | refused | interference markers | final |
-|---|---|---|---|---|---|
-| `brain_off_single` | 1 | `ProbeSonic` | — | 0 | `RESULT ProbeSonic` |
-| `brain_on_single` | 1 | `ProbeSonic` | — | 0 | `RESULT ProbeSonic` |
-| `brain_off_batch` | 1 (2 tasks) | `ProbeA`, `ProbeB` | — | 0 | `RESULT 0` |
-| `brain_on_batch` | 1 (2 tasks) | `ProbeA`, `ProbeB` | — | 0 | `RESULT 2` |
-| `installed_build_single` (control) | 1 | — | `Probe` | 13 × `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` | refused |
+| Arm | task calls | spawned | refused | markers | brain-home files | final |
+|---|---|---|---|---|---|---|
+| `brain_off_single` | 1 | `ProbeSonic` | — | 0 | 0 | `RESULT ProbeSonic` |
+| `brain_on_single` | 1 | `ProbeSonic` | — | 0 | 14 | `RESULT ProbeSonic` |
+| `brain_off_batch` | 1 (2 tasks) | `ProbeA`, `ProbeB` | — | 0 | 0 | `RESULT 0` |
+| `brain_on_batch` | 1 (2 tasks) | `ProbeA`, `ProbeB` | — | 0 | 18 | `RESULT 2` |
+| `installed_build_single` (control) | 1 | — | `ProbeSonic` | 13 × `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` | 9 | `RESULT BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` |
 
-Machine verdicts recorded by the probe, all true: single spawn succeeds; batch
-spawn succeeds; no Brain settlement permission needed; no
-`UNAUTHORIZED_COORDINATOR`; no worker-admission requirement; no budget
-reservation prerequisite; no coordinator instruction injection; Brain-`on`
-spawn semantics equal Brain-`off`; **probe sensitivity demonstrated**.
+Eight acceptance verdicts are recorded true (single spawn, batch spawn, no
+settlement permission, no `UNAUTHORIZED_COORDINATOR`, no worker admission, no
+budget reservation prerequisite, no coordinator instruction injection, Brain-on
+spawn semantics equal Brain-off), and a **ninth recorded value**, the sensitivity
+control, is true as well. Count them as eight plus sensitivity, not "9/9".
 
 Sensitivity is the important half: the same prompt, model and probe against the
 *pre-removal* build is refused with 13 settlement markers, so "zero markers" in
 the candidate arms is a measurement, not an insensitive probe. The extractor is
-itself self-tested (`--self-test`) against a known-refusal sample.
+itself self-tested (`--self-test`) against a known-refusal sample. `[executed]`
 
-Brain activity is also confirmed, not assumed: the disposable home received 29
-files during the Brain-`on` arms, including `db/brain.sqlite`, per-session
-ledgers and `state/extension-runtime-ready.json`. A silently disabled extension
-cannot produce that, so the clean result is not "Brain was off".
+Brain activity is confirmed **per arm**, not in aggregate: each extension-enabled
+arm now runs against its own disposable home and the payload records that arm's
+inventory. The candidate arms wrote 14 and 18 files (including `db/brain.sqlite`,
+per-session ledgers and `state/extension-runtime-ready.json`) while both
+Brain-off arms wrote **0**, and the installed control wrote 9 into its own home.
+An earlier draft measured one shared home after the whole loop, which could not
+attribute activity to a candidate arm; the verifier caught that insufficiency and
+it is now fixed in both the harness and this record. `[executed]`
+
+Read the per-arm `final` column as the host's reply text, **not** as child
+completion evidence: in these runs the task-tool end records carry
+`results: []` with the subagents still `running` asynchronously, which is why the
+batch arms report `RESULT 0` and `RESULT 2` differently. The probe proves spawn
+acceptance and absence of interference markers; it does not prove child
+completion, timing or cancellation.
 
 Not covered by this probe: `hub`/steering, workpool, cancellation/restart
 timing, and model selection. They are native host surfaces that no retained
 candidate file touches (the removal deleted the bridges that did), but this
 probe did not exercise them, so they stay listed as observations rather than
 proven rows.
+
+## 9. Independent review record
+
+Two read-only workers ran against the packet after it was written.
+
+**`AuthzReproducer` (security reviewer, executed).** Independently reproduced
+both authorization findings in disposable homes and confirmed the subject bytes
+(`git diff --name-status 968862a HEAD -- <authorization paths>` empty, the
+candidate interpreter importing the candidate source). It reproduced a green
+CRITICAL gate from entirely self-authored inputs (including
+`human_approval_for_irreversible`) with ledger and outcome writes, exercised
+`models report`/`models policy` afterwards, confirmed `stop` exits 2
+`ORCHESTRATION_REMOVED`, and reproduced SEC-AUTH-02's optional evidence, forged
+authority, ranking advantage and holdout bypass. It also **refuted** this
+record's calibration claim, which §6 now withdraws with its reasoning. It agreed
+both findings stay OPEN pending a non-agent-controlled channel.
+
+**`PacketVerifier` (implementation verifier, read-only, no execution device).**
+Its per-claim execution verdicts are `UNDEMONSTRATED` and must not be read as
+confirmation — it could not run pytest, Pester, git or the probe. What it did
+deliver: an independent reconciliation of the five archived raw streams against
+the JSON summaries (one task call per arm, the reported names, four spawn
+acknowledgements, one refusal, zero selected markers in candidate arms, 13
+control-marker occurrences; all eight verdicts recomputed true); a judgement
+that the corrected level-3 fixture still defends its artifact assertions
+(`digest_verified`, exact excerpt, real object bytes) rather than having been
+weakened to pass a new gate; a source-level judgement that the new Pester cases
+would fail if the post-swap verification were removed, so they discriminate;
+and three wording defects, all corrected here: the hook-route misclassification
+(§4), the aggregate brain-activity attribution (§8, now per arm), and raw
+streams living only in temp files (§8, now archived).
+
+**What the driver changed because of review:** the rehydration snapshot (§1),
+per-arm homes and stream archiving in the probe (§8), the hook-route
+classification (§4), the calibration withdrawal (§6), the reproduced
+SEC-AUTH-02 numbers (§7), and the wording of the verdict count (§8).
+
+**Still not done, and why:** the verifier asked for a mutant/pre-change Pester
+comparison to rule out an unrelated early failure satisfying its two new cases —
+not run, because it needs the pre-packet installer materialised in scratch; the
+source-level discriminator argument above is the current basis. And no second
+party has executed the full suites: both reviewers lacked execution devices, so
+every count in this record remains author-executed. That is an environment
+limitation, reported rather than smoothed over.

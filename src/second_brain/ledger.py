@@ -1751,185 +1751,196 @@ class LedgerRehydrator:
         # Rehydration projects durable event payloads into recovered state, so it
         # must stand on verified evidence exactly as replay does: a projection
         # built from an unverified chain would present tampered history as
-        # recovered memory. Fail closed before reading any payload.
-        integrity = store.integrity()
-        if not integrity["seq_contiguous"]:
-            raise BrainError("rehydrate rejected: seq not contiguous")
-        if integrity["orphan_parents"]:
-            raise BrainError("rehydrate rejected: orphan parent_event_id")
-        if not integrity["hash_chain_ok"]:
-            raise BrainError("rehydrate rejected: hash chain broken")
-        digests_ok, bad_objects = store._verify_object_digests()
-        if not digests_ok:
-            raise BrainError(f"rehydrate rejected: object digest failures {bad_objects}")
-        segments = [
-            dict(r) for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
-        ]
-        event_where: list[str] = []
-        params: list[Any] = []
-        if segment is not None:
-            event_where.append("segment_id = ?")
-            params.append(segment)
-        if from_seq is not None:
-            event_where.append("seq >= ?")
-            params.append(from_seq)
-        if to_seq is not None:
-            event_where.append("seq <= ?")
-            params.append(to_seq)
-        where = f" WHERE {' AND '.join(event_where)}" if event_where else ""
-        rows = store._conn.execute(f"SELECT * FROM events{where} ORDER BY seq", params).fetchall()
-        events = [_row_to_event(r) for r in rows]
-
-        if level == 1:
-            content: dict[str, Any] = {
-                "level": 1,
-                "pointer": {
-                    "session": store._host_session_id,
-                    "segments": [
-                        {
-                            "segment_id": s["segment_id"],
-                            "index": s["idx"],
-                            "start_seq": s["start_seq"],
-                            "end_seq": s["end_seq"],
-                            "active": bool(s["active"]),
-                        }
-                        for s in segments
-                    ],
-                    "event_range": (
-                        {"from": events[0].seq, "to": events[-1].seq} if events else None
-                    ),
-                },
-                "citation": f"segments/{segment or 'all'}/events",
-            }
-        elif level == 2:
-
-            def matches_decision(e: BrainLifecycleEvent) -> bool:
-                if decision is None:
-                    return True
-                if e.event_id == decision:
-                    return True
-                # T-G6-F2: match payload decision_id too (event_id first)
-                payload_id = e.payload.get("decision_id")
-                if payload_id is not None and str(payload_id) == decision:
-                    return True
-                return isinstance(payload_id, str) and decision in payload_id
-
-            decisions = [
-                e
-                for e in events
-                if e.event_type in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
-                and matches_decision(e)
+        # recovered memory, and one read across a concurrent writer could mix
+        # verified and unverified rows. Verify and project in one snapshot.
+        owns_snapshot = not store._conn.in_transaction
+        if owns_snapshot:
+            store._conn.execute("BEGIN")
+        try:
+            integrity = store.integrity()
+            if not integrity["seq_contiguous"]:
+                raise BrainError("rehydrate rejected: seq not contiguous")
+            if integrity["orphan_parents"]:
+                raise BrainError("rehydrate rejected: orphan parent_event_id")
+            if not integrity["hash_chain_ok"]:
+                raise BrainError("rehydrate rejected: hash chain broken")
+            digests_ok, bad_objects = store._verify_object_digests()
+            if not digests_ok:
+                raise BrainError(f"rehydrate rejected: object digest failures {bad_objects}")
+            segments = [
+                dict(r)
+                for r in store._conn.execute("SELECT * FROM segments ORDER BY idx").fetchall()
             ]
-            content = {
-                "level": 2,
-                "evidence_packets": [
-                    {
-                        "event_id": e.event_id,
-                        "seq": e.seq,
-                        "decision": (
-                            e.payload.get("decision")
-                            or e.payload.get("title")
-                            or e.payload.get("summary")
-                        ),
-                        "rationale": (
-                            e.payload.get("rationale")
-                            or e.payload.get("guidance")
-                            or e.payload.get("observation")
-                        ),
-                        "evidence_refs": e.source_event_ids or [],
-                        "segment_id": e.segment_id,
-                    }
-                    for e in decisions
-                ],
-            }
-        elif level == 3:
-            artifacts: list[dict[str, Any]] = []
-            for e in events:
-                if not e.artifact_sha256:
-                    continue
-                try:
-                    data = store.read_object(e.artifact_sha256)
-                    artifacts.append(
-                        {
-                            "event_id": e.event_id,
-                            "sha256": e.artifact_sha256,
-                            "size": len(data),
-                            "excerpt": data[:2000].decode("utf-8", errors="replace"),
-                            "digest_verified": True,
-                        }
-                    )
-                except BrainError as exc:
-                    artifacts.append(
-                        {
-                            "event_id": e.event_id,
-                            "sha256": e.artifact_sha256,
-                            "digest_verified": False,
-                            "error": str(exc),
-                        }
-                    )
-            content = {
-                "level": 3,
-                "events": [
-                    {
-                        "seq": e.seq,
-                        "event_id": e.event_id,
-                        "event_type": e.event_type.value,
-                        "timestamp": e.timestamp,
-                        "segment_id": e.segment_id,
-                        "agent_id": e.agent_id,
-                        "parent_event_id": e.parent_event_id,
-                        "payload": e.payload,
-                        "source_event_ids": e.source_event_ids,
-                    }
-                    for e in events
-                ],
-                "artifacts": artifacts,
-            }
-        elif level == 4:
-            content = {
-                "level": 4,
-                "session": store._host_session_id,
-                "segments": segments,
-                "agents": [
-                    dict(r)
-                    for r in store._conn.execute(
-                        "SELECT * FROM agents ORDER BY created_at"
-                    ).fetchall()
-                ],
-                "epochs": [
-                    dict(r)
-                    for r in store._conn.execute(
-                        "SELECT * FROM request_epochs ORDER BY start_seq"
-                    ).fetchall()
-                ],
-                "events": [
-                    {
-                        "seq": e.seq,
-                        "event_id": e.event_id,
-                        "event_type": e.event_type.value,
-                        "timestamp": e.timestamp,
-                        "segment_id": e.segment_id,
-                        "agent_id": e.agent_id,
-                        "parent_event_id": e.parent_event_id,
-                        "surface_visibility": e.surface_visibility.value,
-                        "ignorable": e.ignorable,
-                        "payload": e.payload,
-                        "artifact_sha256": e.artifact_sha256,
-                        "source_event_ids": e.source_event_ids,
-                    }
-                    for e in events
-                ],
-            }
-        else:
-            raise BrainError(f"unknown rehydration level: {level}")
+            event_where: list[str] = []
+            params: list[Any] = []
+            if segment is not None:
+                event_where.append("segment_id = ?")
+                params.append(segment)
+            if from_seq is not None:
+                event_where.append("seq >= ?")
+                params.append(from_seq)
+            if to_seq is not None:
+                event_where.append("seq <= ?")
+                params.append(to_seq)
+            where = f" WHERE {' AND '.join(event_where)}" if event_where else ""
+            rows = store._conn.execute(
+                f"SELECT * FROM events{where} ORDER BY seq", params
+            ).fetchall()
+            events = [_row_to_event(r) for r in rows]
 
-        rid = _rehydration_id(content)
-        if rid in self._seen or rid in self._manifest_rehydrations():
-            return {"rehydration_id": rid, "deduplicated": True}
-        self._seen.add(rid)
-        self._note_rehydration(rid)
-        content["rehydration_id"] = rid
-        return content
+            if level == 1:
+                content: dict[str, Any] = {
+                    "level": 1,
+                    "pointer": {
+                        "session": store._host_session_id,
+                        "segments": [
+                            {
+                                "segment_id": s["segment_id"],
+                                "index": s["idx"],
+                                "start_seq": s["start_seq"],
+                                "end_seq": s["end_seq"],
+                                "active": bool(s["active"]),
+                            }
+                            for s in segments
+                        ],
+                        "event_range": (
+                            {"from": events[0].seq, "to": events[-1].seq} if events else None
+                        ),
+                    },
+                    "citation": f"segments/{segment or 'all'}/events",
+                }
+            elif level == 2:
+
+                def matches_decision(e: BrainLifecycleEvent) -> bool:
+                    if decision is None:
+                        return True
+                    if e.event_id == decision:
+                        return True
+                    # T-G6-F2: match payload decision_id too (event_id first)
+                    payload_id = e.payload.get("decision_id")
+                    if payload_id is not None and str(payload_id) == decision:
+                        return True
+                    return isinstance(payload_id, str) and decision in payload_id
+
+                decisions = [
+                    e
+                    for e in events
+                    if e.event_type in (LifecycleEventType.DECISION, LifecycleEventType.FINDING)
+                    and matches_decision(e)
+                ]
+                content = {
+                    "level": 2,
+                    "evidence_packets": [
+                        {
+                            "event_id": e.event_id,
+                            "seq": e.seq,
+                            "decision": (
+                                e.payload.get("decision")
+                                or e.payload.get("title")
+                                or e.payload.get("summary")
+                            ),
+                            "rationale": (
+                                e.payload.get("rationale")
+                                or e.payload.get("guidance")
+                                or e.payload.get("observation")
+                            ),
+                            "evidence_refs": e.source_event_ids or [],
+                            "segment_id": e.segment_id,
+                        }
+                        for e in decisions
+                    ],
+                }
+            elif level == 3:
+                artifacts: list[dict[str, Any]] = []
+                for e in events:
+                    if not e.artifact_sha256:
+                        continue
+                    try:
+                        data = store.read_object(e.artifact_sha256)
+                        artifacts.append(
+                            {
+                                "event_id": e.event_id,
+                                "sha256": e.artifact_sha256,
+                                "size": len(data),
+                                "excerpt": data[:2000].decode("utf-8", errors="replace"),
+                                "digest_verified": True,
+                            }
+                        )
+                    except BrainError as exc:
+                        artifacts.append(
+                            {
+                                "event_id": e.event_id,
+                                "sha256": e.artifact_sha256,
+                                "digest_verified": False,
+                                "error": str(exc),
+                            }
+                        )
+                content = {
+                    "level": 3,
+                    "events": [
+                        {
+                            "seq": e.seq,
+                            "event_id": e.event_id,
+                            "event_type": e.event_type.value,
+                            "timestamp": e.timestamp,
+                            "segment_id": e.segment_id,
+                            "agent_id": e.agent_id,
+                            "parent_event_id": e.parent_event_id,
+                            "payload": e.payload,
+                            "source_event_ids": e.source_event_ids,
+                        }
+                        for e in events
+                    ],
+                    "artifacts": artifacts,
+                }
+            elif level == 4:
+                content = {
+                    "level": 4,
+                    "session": store._host_session_id,
+                    "segments": segments,
+                    "agents": [
+                        dict(r)
+                        for r in store._conn.execute(
+                            "SELECT * FROM agents ORDER BY created_at"
+                        ).fetchall()
+                    ],
+                    "epochs": [
+                        dict(r)
+                        for r in store._conn.execute(
+                            "SELECT * FROM request_epochs ORDER BY start_seq"
+                        ).fetchall()
+                    ],
+                    "events": [
+                        {
+                            "seq": e.seq,
+                            "event_id": e.event_id,
+                            "event_type": e.event_type.value,
+                            "timestamp": e.timestamp,
+                            "segment_id": e.segment_id,
+                            "agent_id": e.agent_id,
+                            "parent_event_id": e.parent_event_id,
+                            "surface_visibility": e.surface_visibility.value,
+                            "ignorable": e.ignorable,
+                            "payload": e.payload,
+                            "artifact_sha256": e.artifact_sha256,
+                            "source_event_ids": e.source_event_ids,
+                        }
+                        for e in events
+                    ],
+                }
+            else:
+                raise BrainError(f"unknown rehydration level: {level}")
+
+            rid = _rehydration_id(content)
+            if rid in self._seen or rid in self._manifest_rehydrations():
+                return {"rehydration_id": rid, "deduplicated": True}
+            self._seen.add(rid)
+            self._note_rehydration(rid)
+            content["rehydration_id"] = rid
+            return content
+        finally:
+            if owns_snapshot:
+                store._conn.rollback()
 
     def _manifest_rehydrations(self) -> set[str]:
         try:

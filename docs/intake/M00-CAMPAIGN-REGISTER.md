@@ -40,7 +40,7 @@ candidate manifest is a byte comparison, never protected approval.
 | SEC-SKILL-01 / SB-PROMOTION-004 | None of approved skill consumption | Consumption-time byte binding **refuted** on every retained route (Python + TS); approval-record authority `DEFERRED` to the SEC-AUTH-01 channel. |
 | FSUPD-01 / FSPATH-03 | Patched-host activation/rollback retired without qualification | Literal defect retired with the file; surviving installer: post-swap installed-tree verification `FIXED + Pester-tested`, path containment `DEFERRED (operator-chosen)`, protected approval `DEFERRED (blocked)`. |
 | FSLNCH-02 | Patched-host launcher retired; original seal retained | No current patched launcher to qualify. |
-| SEC-HOOK-02 | No general retirement | Managed hook route **closed and pinned by Pester**; non-hook search-path resolution `DEFERRED — LOW` (same-user blast radius). |
+| SEC-HOOK-02 | No general retirement | Outer hook command **pinned to the absolute System32 PowerShell and Pester-covered**; the hook's own interpreter still comes from `SECOND_BRAIN_PYTHON` (`run-hook.ps1:21,46`, `codex-hooks/run.ps1:25,36`) and bare-name resolution survives in other subprocesses: `DEFERRED — LOW`, same-user blast radius, mitigation named in §4 of the disposition record. |
 | SB-PROMPT-002 / 003 | Worker task-context renderer retired | Project-ID model-visible sinks remain subject to validation; retrieved content has no instruction authority: `OPEN` for integrated proof. |
 | SEC-DEP-01 | No security waiver | Dev-only: `js-yaml` HIGH `FIXED` by lockfile bump (audit `high: 0`); two `vitest`/`@vitest/mocker` moderates `DEFERRED` with named semver-major remediation. |
 | Aggregate usage reader | Retained accounting honesty | **FIXED + regression-tested** (`M00-FINAL` §1): counters the host never reported read as `None`/`null`/`-` with `token_usage_seen` coverage, explicit host zeros stay `0`, and `attribute_roles` counts unknown totals in `*_unknown_token_sessions`; `economics.verdict` already drops pairs with unknown tokens. Previously coerced to `0`. |
@@ -162,17 +162,23 @@ Executed evidence for this packet:
 - Gates on this subject: ruff clean, pyright `0 errors`, Python **2113 passed /
   1 skipped / 0 failed**, extension `tsc --noEmit` and ESLint exit 0 with
   vitest **26 files / 600 tests passed**, installer+rollback Pester **20/20**.
-- Native non-interference differential **executed**: five arms, 8/8 recorded
-  verdicts true, and a pre-removal sensitivity control that refuses the same
-  spawn — so the clean candidate result is a measurement, not an insensitive
-  probe. `hub`/steering, workpool, cancellation and model selection remain
-  observations.
+- Native non-interference differential **executed**: five arms, eight acceptance
+  verdicts true plus a ninth sensitivity value, per-arm brain-home inventories
+  (candidate arms 14/18 files, Brain-off arms 0), archived raw streams, and a
+  pre-removal control that refuses the same spawn — so the clean candidate result
+  is a measurement, not an insensitive probe. `hub`/steering, workpool,
+  cancellation, child completion and model selection remain observations.
 - Fixed in this packet: unverified ledger rehydration (fail-closed + regression
   test), installer post-swap installed-tree verification (restore on mismatch,
   Pester-covered), `js-yaml` dev-dependency HIGH (lockfile only; the sibling
   worktree's installed tree was verified untouched).
 - Dispositioned per finding in the table above. Still blocking until the owner
   decides: `SEC-AUTH-01`, `SEC-AUTH-02`.
+- Independently reviewed by a security reviewer (reproduced both authorization
+  findings with commands, refuted an earlier calibration claim) and an
+  implementation verifier (read-only, no execution device; independently
+  reconciled the archived raw streams and found three wording defects, all
+  corrected). Every gate count in this ledger remains author-executed.
 - Environment note for the next session: Python gates must address the candidate
   interpreter by **absolute path**. A relative `.venv/Scripts/python.exe` here
   reaches the main checkout's venv, and child processes then import a sibling
