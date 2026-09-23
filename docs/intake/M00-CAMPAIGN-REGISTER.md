@@ -63,23 +63,33 @@ results remain unchanged.
 The user's earlier Python run reported 2,373 passed / 7 skipped / 8 failed;
 that is prior-subject evidence, not this candidate's result. The seventh
 skip is the POSIX write-bit test on Windows ACLs, retained for POSIX; six
-governed-subprocess skips are retired with the removed engine. A subsequent
-candidate-local full run before later edits observed two failures: stale
-live-file successor identity and the retired P4 worker scenario; both were
-dispositioned as above. Final suite and native harness evidence must be
-attached to the frozen source before qualification.
+governed-subprocess skips are retired with the removed engine. The seven
+reported Hermes failures and the one historical-canary failure belonged to
+retired subjects and were dispositioned above, not re-pinned. On the frozen
+removal commit the retained suites are green
+(`orchestrator-removal-gate-20260923.md`); that is a candidate-local result,
+not production or qualification.
 
 ### Gate and preservation ledger
 
-- Test-home audit and subprocess origin pinning precede the suite. A previous
+Executed evidence for the frozen removal commit `ce15820` is recorded in the
+tracked pack: `docs/intake/m00-evidence/orchestrator-removal-gate-20260923.md`
+(exact subject digest, commands, results, limits).
+
+- Test-home audit and subprocess origin pinning preceded the suite. A previous
   real-home telemetry contact was observed read-only; no before-state exists,
   so canonical write preservation cannot be retrospectively proved. Do not
   restore, migrate, or mutate live state to disguise the gap.
+- Frozen-subject results: ruff clean, pyright `0 errors`, Python
+  **2108 passed / 1 skipped / 0 failed** under a disposable home, extension
+  `tsc --noEmit` and ESLint clean, extension suite **26 files / 600 tests
+  passed**; every disposable home was still empty afterwards.
 - Complete the source/config/test/docs cutover, then run isolated Python/TS,
   package and DB checks with hashes tied to exact candidate bytes.
 - Check native single/batch task, hub, model, tool, cancellation and memory
   consumer behavior through the real host surface. Static proof alone does
-  not establish those interactions.
+  not establish those interactions. Only a read-only installed-CLI probe was
+  performed; `M00-NATIVE-ORCH-01` stays `OPEN`.
 - Freeze a local commit stack preserving pre-existing attribution. Independent
   read-only review must see the actual candidate plus results. A material
   correction invalidates affected checks and requires a new subject.
