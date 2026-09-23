@@ -35,7 +35,7 @@ All Python runs used a fresh disposable `SECOND_BRAIN_HOME` plus
 | --- | --- |
 | `.venv/Scripts/python -m ruff check <changed files>` / `ruff format` | clean (`All checks passed!`; format: unchanged after normalization) |
 | `.venv/Scripts/python -m pyright` | `0 errors, 0 warnings, 0 informations` |
-| `.venv/Scripts/python -m pytest -q -rs` | **2108 passed, 1 skipped, 0 failed** (`rc 0`); skip = `tests/test_immune.py:563` "POSIX write bits are not Windows ACLs" |
+| `.venv/Scripts/python -m pytest -q -o addopts= -rs` | **2109 passed, 1 skipped, 0 failed** (`rc 0`, 599 s); skip = `tests/test_immune.py:563` "POSIX write bits are not Windows ACLs" |
 | `bunx tsc --noEmit` (extension) | exit 0 |
 | `bunx eslint src tests` (extension) | exit 0 |
 | `bunx vitest run --config vitest.candidate.config.ts` | **26 files passed, 600 tests passed**, 21.11 s |
@@ -64,35 +64,55 @@ by `M00-NATIVE-ORCH-01` was **not** executed here; it remains `OPEN`.
 | `brainctl --home <absent> governor reserve-budget --session s --task-id t` | exit 2, same refusal; path still absent |
 | `brainctl --home <empty dir> governor check-budget --session s --json` | exit 2; the empty home gained **no** entries |
 | `init`, then `remember "migration order is numeric" --evidence <repo>/notes.txt:1-1` | exit 0, `mem-e373dc2d650d` |
-| `recall "migration order numeric"` | exit 0, `[VERIFIED_CURRENT] migration order is numeric` |
-| `autoinject shadow --task … --session e2e-s1 --agent e2e-agent --cwd <repo> --json` | exit 0, `decision: INJECT`, `candidate_ids [mem-e373dc2d650d]`, `delivery_id del-40a130ed3c63d76e16757517` |
+| `recall "migration order numeric"` with `SECOND_BRAIN_PROJECT=demo` | exit 0, `[VERIFIED_CURRENT] migration order is numeric` |
+| `autoinject shadow --task … --session e2e-s1 --agent e2e-agent --cwd <repo> --json` with `SECOND_BRAIN_PROJECT=demo` | exit 0, `decision: INJECT`, `candidate_ids [mem-e373dc2d650d]`, `delivery_id del-40a130ed3c63d76e16757517`, `project_resolution: env` |
+| Same `recall` / `autoinject shadow` **without** a project identity | exit 0, `NO_INJECTION WRONG_PROJECT` / `decision: NO_INJECTION`, `delivery_id: null` |
 
 So memory write, retrieval and AutoInject delivery still work end to end with
 no Brain task admission anywhere in the path, and the retired command families
 refuse before creating state.
 
+The project identity matters and is part of the claim: a project-scoped memory
+is only delivered when the session resolves to that project, and with no
+explicit identity (or a `default`/`unknown` resolution) the reader abstains
+fail-closed (`NO_INJECTION WRONG_PROJECT`) rather than leaking another
+project's memory. Both directions were reproduced independently by the
+security reviewer in fresh disposable homes (`mem-30b4fd1e617a`,
+`del-457a62282219fa256c7da37a`), and the disposable homes were emptied
+afterwards in every case.
+
 ### 2.2 Independent review of this subject
 
-Two read-only reviewers were run against `ce15820`.
+Two independent read-only reviewers ran against `ce15820` (the test-coverage
+addition in `1d7800a` is later and only adds one Hermes usage-honesty test).
 
-- A read-only implementation-verifier returned **UNDEMONSTRATED**: its agent
-  type had no process-execution tool, so it could not run any command. Its
-  static pass did confirm the retired Python/extension modules are gone, found
-  no alternate activation switch, and raised one item — `scripts/run_p3_promotion_campaign.py`
-  still launches an external `agy` agent with a caller-frozen model and an
-  optional `--dangerously-skip-permissions` (see §5 disposition).
-- A read-only security-reviewer pass independently reproduced the
-  `governor` aggregate-usage coercion (§5, `OPEN`) and classified the promotion
-  campaign script as operator-invoked external evaluation rather than a Brain
-  control sink.
+- **Security review (independent, with execution)** — *CONFIRMED for the
+  exercised surface*: it reproduced, in its own disposable homes with
+  `PYTHONHOME`/`PYTHONPATH` sanitized, `ORCHESTRATION_REMOVED` for the five OMP
+  operations, six Hermes events and `brainctl worker-plane` (exit 2) with no
+  home state created; independently reproduced both retained-path directions
+  (default/unresolved project → `NO_INJECTION WRONG_PROJECT`, no delivery id;
+  explicit `SECOND_BRAIN_PROJECT` → `recall` VERIFIED_CURRENT and `shadow`
+  INJECT with a delivery id); ran
+  `pytest -q tests/test_migration_chain.py tests/test_autoinject.py tests/test_ledger.py tests/test_vmem.py tests/test_handoff.py`
+  → **205 passed** (`-o addopts=`), exit 0, disposable home empty; and
+  independently reproduced the aggregate-usage coercion below. It also
+  **read but did not re-run** the author's full-suite counts, and found the
+  Hermes observer tests did not cover absent/partial usage — a gap closed in
+  `1d7800a` by `test_usage_absent_or_partial_is_never_fabricated`.
+- **Implementation verifier (read-only, no execution tool)** — returned
+  **UNDEMONSTRATED** because its agent type could not run commands. Its static
+  pass nonetheless confirmed the retired Python/extension modules are gone and
+  no alternate activation switch remains, and raised the
+  `scripts/run_p3_promotion_campaign.py` disposition now recorded in §5.
 - **Environment limitation, stated plainly**: further `task`-type child spawns
   from this session are refused by the **installed production extension** with
   `BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE` (its own documented
   stock-route behaviour — it cannot confirm settlement for a child on this
   host). That is the installed legacy runtime, not this candidate, and it
-  prevented a third independent worker from being spawned for runtime proof;
-  the executed evidence above is therefore author-executed and the independent
-  runtime claim is limited to the security reviewer's own smoke.
+  prevented spawning a third worker for an independent full-suite re-run; the
+  full-suite counts above therefore remain author-executed, while the refusal,
+  retained-path and targeted-suite checks have independent execution.
 
 ## 3. What was removed (active surface)
 
