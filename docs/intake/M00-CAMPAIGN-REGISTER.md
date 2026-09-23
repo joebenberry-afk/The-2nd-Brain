@@ -1,5 +1,113 @@
 # M00 campaign register
 
+## Current acceptance contract — native profile (2026-09-23)
+
+**Current label: `M00_NATIVE_PROFILE_CANDIDATE`. Qualification: NOT PROVEN.**
+**Governed orchestration: `DEFERRED_UNSUPPORTED_NATIVE_PROFILE`. Production activation: NOT PERFORMED.**
+
+Owner-authorized governance/scope revision, not technical closure. This section and
+`Second_Brain_M00_OneShot_Closure_Mandate.md` in this directory define one native-profile
+acceptance contract and must be included in the same candidate commit. The source baseline
+for this documentation revision is `18c9372b56c1801511b6103abb3c4dfe192eaf73`; it is not
+a frozen or qualified native implementation. This revision changes documents only.
+No native bypass, default, refusal behavior, migration or runtime qualification is claimed.
+
+Supported profile to qualify: harness orchestration **NATIVE**; Brain governed orchestration
+**DISABLED / UNSUPPORTED**; Brain memory/context/evidence and other enabled features
+**separately qualified**. M00 remains baseline closure and roadmap admission, not a
+new orchestration security platform. OMP owns spawning, recursion, concurrency,
+roles, model selection and lifecycle unless a separately enabled, non-blocking routing
+feature is explicitly under test.
+
+### Current requirement/finding dispositions
+
+This table supersedes the native-profile applicability and next-action fields in the
+historical record below. It does not rewrite a test result, close a HIGH, or establish
+safe disabled behavior without evidence. Mixed findings remain OPEN for every retained
+subject; an uncertain clause remains blocking until its subject is resolved.
+
+| ID / clause | Native-profile status | Verdict / retained obligation |
+| --- | --- | --- |
+| M00-CORD-01 | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` | **NOT PROVEN**. Protected root authority, issuer custody, positive credential issuance and root/child qualification leave only the native acceptance path. Original criteria and adverse evidence remain below for future governed qualification. |
+| M00-CORD-02 / M00.4 protected issuer and custody | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` | **NOT PROVEN**. Normalized authenticated lineage, restart/rebind and protected channel criteria remain governed-track requirements, not M01 obligations. |
+| #3-P / #3-C / #3-R.1–4 / ADM / #4 / #5: governed issuance, completion and settlement | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` for exclusively governed clauses | Preserve existing evidence and consumer guards; positive Brain admission/credentials, reservations, settlement and governed replay are not prerequisites for ordinary native OMP. Any path still able to corrupt memory/evidence or mutate protected state remains an OPEN native security obligation. |
+| SB-ORCH-001 | Governed effective-grant enforcement: `DEFERRED_UNSUPPORTED_NATIVE_PROFILE`; native non-interference: `OPEN` | Brain must not gate native tasks by role/grant. No read-only enforcement claim follows from an agent name; any enabled Brain feature relying on that claim needs its own evidence. |
+| SEC-AUTH-01 | `OPEN` for approval records, activation, skills and other non-orchestration authorization; worker-issuer-only clauses deferred | Caller-mintable approval remains unresolved. Do not defer the finding as a whole or treat hashes as approval authority. |
+| SEC-AUTH-02 | `OPEN` for trusted-memory/evidence authority; worker settlement/observer authority solely used for governed dispatch deferred | Native lifecycle observations must not mint trusted-memory authority or promote model/journal assertions into authenticated facts. |
+| SEC-INTEGRITY-01 | `OPEN` | Retain authorship/provenance, ledger integrity, replay and migration-anchor obligations; previous candidate repairs do not establish independent closure. |
+| SEC-SKILL-01 | `OPEN` | Retain passing evaluation, protected approval/review, exact consumed bytes and required-dependency binding. |
+| SB-PROMOTION-004 | `OPEN` | Retain promotion authorization and reviewed-content/dependency binding; local content consistency is not protected approval. |
+| FSUPD-01 | `OPEN` | Retain protected approval, stage/installed-byte binding, partial-failure and operational rollback evidence; corrected script still needs exact-subject independent acceptance. |
+| SEC-HOOK-02 | `OPEN` | Retain executable/configuration/environment and transitive dependency trust. |
+| #2a / #2b; migration, backup and recovery | Retain exact-subject evidence; final native candidate gate `OPEN` | Do not reopen a proven narrow fix or inherit broader closure. Verify fresh create, reopen, idempotency, interruption, compatible recovery and rollback; preserve historical leases and data. |
+| #6 measurement/accounting and ledger operations | `OPEN` for final integrated qualification; native-spawn enforcement deferred | Preserve truthful episode/descendant attribution, billable retry dedupe, provenance and unknown usage. Brain reservation/cap enforcement must not gate native spawning. Independent provider/account limits remain unchanged. |
+| Baseline/source/runtime identity | `OPEN` for final native subject | Identify exact source, dependency, loaded host/extension, configuration and schema identities; historical hashes are not current qualification. |
+| Memory/recall/context/evidence | `OPEN` for native-profile qualification | Prove enabled behavior for parent and workers, integrity and safe integration, not just enabled flags. |
+| M00-NATIVE-ORCH-01 | `OPEN` | **NOT PROVEN**. All applicable criteria below require evidence from the exact native candidate. |
+| Integrated suite and independent acceptance | `OPEN` | Prior full-Python timeout/six failures remain adverse evidence. Freeze final bytes and obtain independent reduced-scope acceptance; no percentage or unqualified M00 success claim. |
+| DOC-14 | `NOT_YET_AUTHORED / SOURCE_UNAVAILABLE` retained | Do not recreate missing clauses or mark unseen requirements satisfied. |
+
+### M00-NATIVE-ORCH-01 — native harness orchestration non-interference
+
+Each criterion is currently **OPEN / NOT PROVEN**:
+
+1. A main OMP session can invoke native `task`.
+2. A single native worker spawns and completes.
+3. A native batch spawns multiple workers and completes.
+4. Native concurrency behavior remains functional.
+5. Native `hub` messaging and steering remain functional.
+6. Workpool operates where configured; unavailable configurations are explicitly recorded, not counted as PASS.
+7. Native cancellation and completion lifecycle operate without Brain permission.
+8. Restart/revival remains OMP-owned and is not blocked by Brain governed rebind.
+9. No Brain coordinator/driver contract is inserted into the parent prompt.
+10. No Brain driver/worker/hard-orchestrator role check gates ordinary spawning.
+11. No Brain budget reservation is required before native dispatch.
+12. No Brain worker credential is issued merely because OMP spawns a child.
+13. No Brain settlement receipt is required for OMP completion or worker reuse.
+14. OMP model selection is unchanged unless separately enabled non-blocking routing is under test.
+15. Explicitly enabled Brain memory/recall/context works for both parent and workers.
+16. Explicit governed operations refuse clearly as UNSUPPORTED or DISABLED without privileged effects; ordinary native task use is not misclassified as governed and is not blocked by `UNAUTHORIZED_COORDINATOR`.
+17. Matched Brain-disabled and Brain-enabled/native controls show no material orchestration difference beyond documented, explicitly enabled Brain features.
+
+Evidence must include actual `task -> worker -> completion` and
+`batch -> multiple workers -> completion` through OMP's native launch/extension path.
+Use OMP 18.2.11 for the requested campaign run and record its actual version, source/build,
+loaded entrypoints and configuration in the evidence identity; the semantic requirement
+is not version-specific. Fixtures, source review and direct Python calls are supplementary,
+not substitutes for the real-path claim. Record actual commands, outcomes, identities and
+the differential control. Native lifecycle telemetry is observation, never settlement authority.
+
+### Execution order and finish condition
+
+`M00-SCOPE` (paired contract revision) -> `M00-NATIVE` (default-native inertness and safe
+explicit refusal) -> `M00-NATIVE-ORCH-01` (real-path qualification) -> `M00-HIGH`
+(individual applicable findings) -> `M00-INTEGRATED` (frozen applicable suites) ->
+`M00-REVIEW` (independent exact-subject acceptance) -> native-profile acceptance.
+
+The current authorization is **contract revision only**. Product work, test campaigns,
+commits and activation are not performed by this revision. Keep these two documents
+together in the next authorized candidate commit. Do not move code or create a new
+subsystem merely to express deferral. Later implementation must make dormant governed
+code inert in the shipping native path; evidence of safe disabling is itself blocking.
+
+Use `M00_NATIVE_PROFILE_QUALIFIED` only after reproducible baseline identity, applicable
+non-orchestration HIGH closure or explicitly evidenced safe-disabled disposition,
+working memory/context/evidence, native non-interference, default-disabled governed
+behavior, explicit unsupported-operation refusal, migration/recovery/rollback, frozen
+integrated suites and independent acceptance all pass. Continue to report
+`GOVERNED_ORCHESTRATION: UNSUPPORTED / DEFERRED`. Qualification is not production
+activation; owner activation remains separately authorized.
+
+### Historical record boundary
+
+Everything below is preserved historical evidence and earlier instructions/status,
+not a second active native acceptance contract. Earlier imperatives to finish #4/#5,
+obtain custody, reserve before spawning, or use `M00_CANDIDATE_QUALIFIED` apply only
+to their historical/governed subject and are superseded for the native profile above.
+The D2 negative result remains unchanged: launch failed before any child executed,
+and no custody was established. Deferral does not convert that result into PASS.
+Historical production/identity assertions are dated observations, not refreshed live facts.
+
 Maintained across the M00 one-shot closure campaign. One row per requirement/finding. Evidence is
 reused only for its exact subject and claim; later evidence supersedes earlier status only for the
 same measured subject.
@@ -1163,3 +1271,860 @@ re-approval of the successor identity after a legitimate extension/source change
 decision to leave `contracts._calibration_pairs` and `scripts/run_paired_economics.py` outside the
 budget book — they answer different questions (chars-per-token calibration, study economics) and
 already dedupe by usage identity.
+
+## M00-CORD-01 — root coordinator from authenticated runtime lineage (2026-09-22)
+
+**Required invariant.** Coordinator authority MUST bind to the authenticated root execution
+identity of an episode. Model, provider, display name, role text, and caller-supplied
+`coordinator` flags MUST NOT independently grant it. M00 supports root coordinator and worker
+only; delegated/subtree coordinators are out of scope. Root binding must commit before
+dispatch/reservation, survive a proven continuation, and never be recreated by a worker when
+the binding is absent or corrupt.
+
+| Boundary | Current mechanism | M00 disposition |
+| --- | --- | --- |
+| Root/child observation | Extension `index.ts:595-606,1076-1092` follows native transcript breadcrumbs; `:3990-3993` obtains the current session and root | Useful correlation, not authenticated against a same-user process that can alter transcripts or call the CLI |
+| Role creation | `index.ts:1605-1608` resolves `ctx.model` against `driver-orchestrator.ts` model lists; `worker-context-bridge.ts:210-226` sends `role`, model, and session ID on stdin | Model is metadata, not an authority source; adding `gpt-6-sol` to an allowlist is not this fix |
+| Admission check | `omp_adapter.py:69-95` accepts payload `role` and synthesizes an identity; `contracts.py:666-697` checks its `role_profile` against `COORDINATOR_ROLES` | Self-declared role can both reject a real root and accept a worker; replace only after host origin is authenticated |
+| Durable worker record | `worker_protocol.py:808-954` writes the attempt under `BEGIN IMMEDIATE`, records `host_session_id`, and returns its callback credential | Transactionality/exclusion exist, but no authenticated episode-coordinator binding precedes issuance |
+| Budget and release | `governor.py:1184-1263` reserves by session/task/episode; `worker_protocol.py:1435-1441` releases on authenticated settlement and cleanup | Preserve these separate guards; a caller-supplied session ID must not become coordinator authority |
+| Other host / review | `hermes_adapter.py:524-529,613-618,1062-1067,1214-1219,1295-1300` and `contracts.py:861-863` use declared role checks | Do not silently exempt Hermes or reclassify its worker as root |
+| Recovery | `index.ts:1990-2013` reconstructs tracking from journal; `worker_protocol.py:855-865` accepts exact read-only duplicate attempts | Journal reconstruction is not authenticated rebind; missing coordinator identity must refuse privileged work |
+
+**M00-CORD-02 — harness/version-independent semantics.** Brain Core MUST derive
+coordinator authority from a normalized runtime-lineage contract, never from a
+harness version/class name, model, provider, or adapter-selected role. The contract is
+`episode_id`, `runtime_instance_id`, `parent_runtime_instance_id` (null for root),
+`root_runtime_instance_id`, and optional `attempt_id` (a worker execution, not a
+fabricated root attempt). The adapter translates host lineage into these identifiers
+and supplies separately authenticated provenance; it may not assert that an actor is
+coordinator. Core binds the proven root runtime instance once per episode and compares
+the authenticated caller against that immutable binding for coordinator-only actions.
+Workers carry the root identifier for correlation, never its authority. Recovery
+requires proof that the resumed instance continues that binding, not a name/role guess.
+Binding must commit before privileged admission or reservation; concurrent first
+admissions resolve to one immutable root. Missing, corrupt, or unauthenticated lineage
+refuses privileged work. The OMP adapter's native session ID maps to
+`runtime_instance_id` and its root to `root_runtime_instance_id`; those OMP details
+must not be encoded in the Core authority predicate. A repeated normalized lineage
+must yield the same decision under different OMP versions and under different
+harness adapters. No OpenCode/Hermes adapter can be declared qualified merely by
+passing the same fixture through a synthetic translator.
+
+**Current blocker, not waived.** The installed OMP 18.2.9 `ExtensionContext`
+(`src/extensibility/extensions/types.ts:428-520`) exposes a read-only session manager, model,
+and bounded async-job snapshot, but no authenticated root/child actor proof or protected
+issuer channel. The candidate bridge advertises `authenticated_observation_source:false`,
+`effective_tool_grant:false`, `execution_census:false`
+(`brainstem/prime-extension/bridge/brain-host-bridge.ts:251-269`). The executable admission
+reproduction in `outputs/reports/m00.3-admission-issuance-20260922/REPORT.md:7-35`
+shows a caller can send `role=driver`, obtain the callback token, and complete its own
+attempt. Transcript paths, role flags, and a first-writer-wins row cannot authenticate that
+caller. Same-user agent shell access can invoke the CLI directly. This mandate prohibits
+provisioning the required separate OS identity/ACL/service or changing production; no
+candidate-local model allowlist, JSON flag, shared secret, or DB claim resolves it.
+
+**Gate:** `M00-CORD-01` OPEN / `M00_PARTIAL_EXTERNAL_BLOCKER`. The owner selected
+the **protected host API** route, with no OS-account provisioning. The selected API must
+provide host-origin root/child identity and an issuer channel inaccessible to agent-controlled
+shell/CLI; selection does not mean OMP 18.2.9 already provides it. The installed context
+interface above does not expose those capabilities, and a same-user process can still invoke
+the existing CLI. Once the protected route exists, implement durable binding, one predicate,
+worker propagation, restart proof, race/spoof matrix, and paired DeepSeek/GPT-6 Sol
+reservation regressions. No production activation or historical approval change occurred.
+Jev's bounded option comparison selected the protected-host-boundary approach over a model
+allowlist or transcript-only first-writer binding (supplementary decision input, not a
+security proof).
+
+### M00.4-A host-boundary investigation (OMP 18.2.9; no coordinator behavior changed)
+
+The normalized producer contract is `TrustedRuntimeLineage { episode_id, runtime_id,
+parent_runtime_id|null, root_runtime_id, spawn_id|null, issuer_id, issuer_generation,
+sequence, attestation }`. A trusted host-side `TrustedLineageIssuer` alone may report
+`root_created`, `child_spawned`, `runtime_rebound`, or `runtime_terminated`; Brain Core
+validates the registered issuer and lineage before binding authority. CLI fields and
+role labels are untrusted. This refines the identifiers in M00-CORD-02; neither an
+OMP-specific ID nor a bus frame itself constitutes attestation.
+
+| Boundary | Observed seam | Consequence |
+| --- | --- | --- |
+| Root session | Installed `session-manager.ts:1490-1510` mints the session header; `sdk.ts:3441-3474` registers the runtime before constructing its prompt | The registration point can observe a root candidate, but an opaque transcript/session header does not authenticate its caller |
+| Structured child | `structured-subagent.ts:632-656` reserves the child ID, `:485-487` supplies parent agent ID; `executor.ts:3708-3801` carries child ID, parent, depth, and shared observability bus into SDK construction | Parent and child are known before first child prompt; the host may issue a private spawn record there, then bind it to the exact registered runtime |
+| Runtime reuse | `agent-registry.ts:146-176` provides a registration/CAS against an exact parked ref; `sdk.ts:3454-3477` can reclaim a dead ref or revive one | Runtime ID alone cannot identify a generation. Rebind must check the exact ref and issuer generation; delayed revivals and reclaimed IDs cannot inherit authority |
+| Public events | `extensions/types.ts:1501-1502` exposes `pi.events`; `extensions/loader.ts:179-197,438-453,490-513` gives extensions the shared mutable `EventBus`; `utils/event-bus.ts:3-49` permits emitting lifecycle frames | Internal origin of the normal lifecycle event does **not** make the bus an authenticated source |
+
+The event boundary was exercised without modifying source: an extension loaded by the
+installed loader called `pi.events.emit("task:subagent:lifecycle",
+{id:"forged-child",status:"started",parentToolCallId:"forged-parent"})`; a listener on
+the same bus received that exact frame. This demonstrates an extension can synthesize
+an equivalent accepted *bus event*, not that it forged a yet-unimplemented protected
+attestation. A model-facing shell/CLI already reaches the admission route as separately
+reproduced above; do not assume arbitrary extension loading into an existing session
+from that shell without a separate proof.
+
+**Smallest replaceable host seam:** add a private, typed issuer hook at SDK runtime
+registration, paired with structured-child allocation/parent capture and exact-ref
+revival/termination transitions. It must authenticate its producer independently of
+`pi.events`, transcript fields, SDK caller-supplied role/parent options, and CLI input;
+issue monotonic generation/sequence-bound attestations; and expose semantic capability
+discovery to the adapter. A host SDK embedder can supply options, so registration alone
+is not a protected principal. No installed extension-context API currently supplies
+the required issuer custody, and same-user shell access makes a file/DB/shared-secret
+shim insufficient by itself. Until a host implementation demonstrates a channel
+inaccessible to agent-controlled execution and a verifier for the attestation, advertise
+lineage capability unavailable and refuse privileged admission. Do not infer protection
+from an in-process event bus, model label, or proposed interface. M00.4-A remains
+investigated, not implemented; M00-CORD-01 remains blocked, production unchanged.
+
+### M00.4-B — issuer custody, trusted bootstrap, verifier contract (design only)
+
+**Threat boundary and observed gap.** Model/tool input, public CLI, public event-bus
+producers, and SDK identity options are untrusted. The accepted #4 requirement also
+demands protection against parent/worker execution; arbitrary hostile extension code
+running in the same unrestricted host process is a stronger adversary that an
+unexported module, private field, in-process callback, or ordinary process split does
+not exclude. Installed OMP loads project-local extensions without a trust gate
+(`extensions/types.ts:461-519`), exposes the mutable shared bus (`:1501-1502`), and
+offers no protected lineage issuer in `ExtensionContext` (`:428-520`). The current
+Brain CLI admission sends the issued callback token back to its caller
+(`omp_adapter.py:69-139`); the disposable reproduction is recorded above. Neither
+same-user files/pipes nor source/manifest hashes establish a caller boundary. No
+existing trusted supervisory issuer-bootstrap path has been identified in this
+installed host/candidate; `host_protocol.py:325-367` verifies *static advertisement
+bytes* against a qualified identity, not a runtime signer or the process presenting
+an operation. Thus hostile in-process extensions and same-user CLI access remain
+explicit unsatisfied custody conditions, not silently excluded threats.
+
+**Proposed authority chain, contingent on a protected supervisory channel.**
+1. A supervisor outside agent/extension-controlled execution authorizes an episode
+   launch and registers an issuer identity plus verifier material with Brain through
+   a separately authenticated administrative path. A public CLI/SDK payload cannot
+   register or replace that identity or present its own verification key. The current
+   code has no demonstrated path with this property; do not implement a pretend
+   bootstrap from configuration text or the existing advertisement digest.
+2. The supervisor's root-launch record, *not* `parent=null`, model, or SDK `agentKind`,
+   identifies the sole root candidate. A successful exact runtime registration
+   (`sdk.ts:3441-3477`) binds it to episode, runtime object/generation, and issuer.
+   Registration failure or interrupted persistence creates no coordinator binding.
+3. Structured-child allocation (`structured-subagent.ts:632-656`) takes the actual
+   allocating session/ref as parent; its root comes from that ref's previously verified
+   lineage. On successful exact child registration, compare the allocation/spawn
+   record to the registered ref (`executor.ts:3708-3801,3829-3861`). Never certify
+   caller-supplied `parentAgentId`, `agentId`, root, or `taskDepth` by signing them.
+   A child learns lineage for accounting only; it cannot acquire root authority.
+4. Revival uses the exact parked-ref CAS and the same proven logical lineage but a
+   new execution generation (`agent-registry.ts:167-176`; `executor.ts:3880-3919`).
+   Reclaimed IDs, mismatched ref/session, overlapping generations, termination, or
+   incomplete registration invalidate old execution evidence. Monotonic issuer
+   generation and sequence cannot be reset by replayed JSON.
+5. The issuer attests host-owned facts in the normalized `TrustedRuntimeLineage`
+   envelope from M00.4-A, with explicit event kind, recipient=Brain, purpose=lineage,
+   and exact runtime generation. The verifier first authenticates a previously
+   registered issuer and its active generation; then checks integrity, purpose,
+   recipient, episode, root/parent consistency, runtime identity, event ordering,
+   and current registration. **Authentic lineage ≠ coordinator eligibility ≠
+   authorization of a particular operation.** Core permits a coordinator-only
+   admission/reservation only if the request arrives through the protected channel
+   for the currently bound root execution and matches the intended episode/runtime
+   and operation; a copied root attestation presented by a child or public CLI is
+   insufficient. Duplicate evidence is idempotent, conflicting evidence refuses.
+   Bind the root once in the existing Brain state transaction before issuing an
+   attempt credential or reserving budget; preserve current ownership/receipt guards.
+   Missing/stale/unverifiable evidence fails closed and a retry cannot mint a second
+   authority. No JWT framework or parallel authority database is proposed.
+
+**Exact candidate patch scope after custody/bootstrap authorization, not applied:**
+
+| File / seam | Minimal intended edit | Revert |
+| --- | --- | --- |
+| Host `src/task/structured-subagent.ts:632-656`, `src/task/executor.ts:3708-3801,3880-3919` | Host-owned parent/spawn capture and generation-checked rebound, not user option certification | Revert isolated host patch; preserve existing task behavior |
+| Host `src/sdk.ts:3441-3477`, `src/registry/agent-registry.ts:146-176,191-217` | Bind exact registered ref to supervised launch/spawn records and lifecycle generation, expose protected producer only if custody proven | Revert isolated host patch; existing registry CAS remains |
+| Candidate `brainstem/prime-extension/bridge/brain-host-bridge.ts:22-46,232-269` | Advertise semantic trusted-lineage capability only on verified protected route; map OMP fields to normalized facts, never become issuer | Revert candidate bridge change |
+| Candidate `src/second_brain/host_protocol.py:27-87,325-440,445-557` | Add capability negotiation and registered-issuer envelope verification separate from static advertisement qualification | Revert candidate protocol change and its migration |
+| Candidate `src/second_brain/omp_adapter.py:69-139`, `src/second_brain/worker_protocol.py:808-954`, `src/second_brain/governor.py:1184-1263` | Replace role-only authorization with verified current-root operation; atomically commit immutable root binding before issuance/reservation using existing state/transactions | Revert candidate adapter/core/schema changes via supported DB rollback; never downgrade live state |
+
+The host edit cannot safely be a candidate bridge alone: extension code shares host
+privileges. A protected producer/verifier may require a genuinely isolated supervisor
+or host facility inaccessible to agent and hostile extension execution. The owner
+has not authorized installed-host changes, accounts/ACLs/elevation, or production
+changes. Without a proven existing protected supervisory path, this remains a
+conditional patch map, **not implementation-ready custody**.
+
+**Disposable adversarial matrix (planned, not executed):** legitimate supervised root
+and genuine child; caller-selected root/parent options; forged public lifecycle
+frame; self-registered issuer/key; child presenting authentic root evidence; replay
+across episodes and runtimes; duplicate delivery without second grant; stale evidence
+after revival and reused ID; absent issuer; failed registration and interruption
+between registration and durable binding; conflicting sequence/generation; unchanged
+authority after role/model/version-label changes. Positive controls must reach
+the real admission/reservation sink; negative controls verify no credential, reservation,
+or binding. Fault injection checks rollback and retry idempotency. Use only disposable
+fixtures under already authorized limits; do not patch the installed host or spend on
+provider-backed tests for this design packet.
+
+**Next executable boundary:** first obtain a concrete protected supervisory issuer
+and Brain bootstrap/verifier channel, with demonstrated access denial for agent CLI
+and, if in scope, hostile in-process extensions. Only then authorize candidate host
+and product-code edits plus the matrix above and an independent review through an
+already-permitted route. `UNAUTHORIZED_COORDINATOR` must not be bypassed to procure
+a reviewer; no independent review occurred in this packet. M00-CORD-01 remains
+`BLOCKED` / `M00_PARTIAL_EXTERNAL_BLOCKER`; coordinator behavior and production
+activation unchanged.
+
+### M00.4-C local access/custody preflight (not a vertical slice)
+
+The separately supplied `docs/intake/execution-preflight.json` describes a **Linux**
+session without the Windows candidate checkout; its `BLOCKED_SOURCE_ACCESS` verdict
+does not describe this workstation. Here the candidate register, Brain source, tests,
+and installed OMP 18.2.9 source are readable. The remote SHA in that record is not
+substituted for local candidate bytes. Engineering permission is recorded in the
+owner's M00.4-C instruction; it is not a runtime credential.
+
+Local source review finds `--trusted-extension` resolves explicit paths and disables
+normal extension discovery (`main.ts:1597-1614,2148-2170`), but it does not isolate
+agent tool/eval execution or protect an issuer/Brain verifier. The candidate has no
+existing restricted-token/AppContainer/protected-supervisor route in the inspected
+Brain/extension sources. Native disposable same-user probe: a parent Bun process wrote
+only `nonsecret-fixture` to an OS-temp file, spawned another Bun process under user
+`Joseph`, and the child read it successfully (exit 0); the temp directory was removed.
+That proves a same-user *file* is not custody here; it does not prove whether a
+separately configured Windows isolation profile could satisfy the full requirement.
+
+**Result:** source access is available in this session, but no protected issuer
+enrollment, root launch, runtime-bound privileged request route, or verifier custody
+has been demonstrated. A private signer, trusted-extension allowlist, or same-user
+file/pipe must not be promoted to a working vertical slice. Candidate host/Brain
+runtime edits, fixture admission, adversarial matrix, native containment
+qualification, and independent review remain **not performed**. The next dependency
+is a permitted, demonstrably isolated agent executor plus protected supervisor/Brain
+state and IPC (or an existing host facility with equivalent guarantees), including
+actor binding when root and child share a process. This packet does not authorize
+global OS changes or an installed-host patch. M00-CORD-01 remains blocked.
+
+### M00.4-C continuation — fixture-qualified component only (2026-09-22)
+
+Candidate: `.worktrees/m00.3-producer-guard` (not installed). Added
+`src/second_brain/runtime_lineage.py`, control migration
+`src/second_brain/migrations/0028_runtime_lineage.sql`, and
+`tests/test_runtime_lineage.py`; updated `tests/test_migration_chain.py`.
+Rollback: revert these candidate files and the test edit; on disposable databases
+restore a pre-0028 backup rather than dropping tables from a live database.
+
+`verify_lineage` checks an HMAC fixture envelope against an independently supplied
+issuer ID/key/generation, recipient, purpose, episode, exact actor runtime,
+request ID, and runtime generation. It rejects unenrolled identity, altered
+fields, copied evidence with the wrong actor, and stale generations under the
+supplied fixture context. `register_lineage` joins the **existing control DB**
+transaction, refuses conflicting root/runtime records, checks registered child
+parentage, and supports duplicate evidence and rollback on interruption.
+`require_root_actor` refuses a registered child's coordinator claim.
+The caller must first authenticate the actor, verify the envelope, and hold a
+write transaction; this component does not establish or enforce that caller
+boundary on its own. No issuer enrollment API or CLI admission bypass was added.
+
+Evidence: `tests/test_runtime_lineage.py` and `tests/test_migration_chain.py`
+**9 passed** with candidate interpreter and `PYTHONHOME`/`PYTHONPATH` removed;
+`ruff check` and `pyright` on the candidate verifier passed (test import style
+subsequently corrected). This is **candidate component verification under fixture
+trust assumptions**, not protected bootstrap, native caller authentication,
+genuine-child qualification, or admission/reservation integration. No independent
+review was obtained. The first test invocation without clearing the environment
+resolved migration files from a different tree and failed 5/7; the corrected
+candidate interpreter run initially failed only because the migration-chain test
+expected no version after 27, then passed 9/9 after covering 28.
+
+Still blocked: M00.4-B selects a protected supervisory channel but identifies
+no implementable existing mechanism for protected issuer enrollment, signer
+custody, authenticated actor context, or trust-state integrity against the
+same-user caller and hostile in-process extensions. A trusted-extension allowlist
+and ordinary same-user file were not qualified; no restricted-token or
+AppContainer experiment was performed because neither is the selected route.
+The awaited host integration cannot safely pass actor identity or issuer key
+through the public CLI/extension bus; connecting this verifier to that route
+would manufacture authority. Runtime rebound/termination, monotonic sequence,
+atomic coupling to credential issuance/reservation, and the root/child vertical
+slice remain unimplemented dependencies of that protected route. Existing role
+admission remains unsafe and is not declared qualified. `M00-CORD-01` stays
+`BLOCKED` / `M00_PARTIAL_EXTERNAL_BLOCKER`; production and leases untouched.
+
+### M00.4-C next bounded component checkpoint (2026-09-22)
+
+Candidate HEAD `901ab302f37ca06b3dac0c4057d7c88adbb9bda6`,
+worktree `.worktrees/m00.3-producer-guard`; uncommitted changes are
+`src/second_brain/runtime_lineage.py`,
+`src/second_brain/migrations/0028_runtime_lineage.sql`,
+`src/second_brain/governor.py`, `src/second_brain/worker_protocol.py`,
+`tests/test_runtime_lineage.py`, `tests/test_runtime_lineage_rebind.py`,
+`tests/test_migration_chain.py`, and this register. Existing
+`tmp_t03_probe.txt` was not touched.
+
+Migration 0028 was qualified through `db.migrate` on fresh disposable
+databases and a version-27 disposable predecessor carrying a synthetic
+outstanding attempt, task metadata, and unresolved reservation. Those
+rows survive migration/reopen; `db.connect` reports foreign keys enabled
+on the checked connections (0028 itself defines no foreign keys).
+Duplicate registration is idempotent; conflicting registration refuses
+without `REPLACE`. The original interruption test injects a Python
+rollback; a new owned child process calls the actual verifier and
+registration function, exits with `os._exit(0)` before commit, and
+reopen finds no binding. This is process-exit recovery, not power-loss
+or hostile direct-file-write qualification.
+
+`runtime_rebound` now compares the active exact predecessor and
+generation under the registration transaction, advances the active
+runtime one generation, and retains the immutable episode root.
+Stale, worker-origin, and competing continuations refuse; two disposable
+writer connections racing from one generation produce one winner.
+The existing unresolved reservation survives and can be reconciled
+after continuation. Model/provider fields do not enter the authority
+predicate. This proves only fixture-signed continuation against
+fixture-supplied actor context; no native exact-ref revival is proven.
+Termination and reclaimed-ID invalidation remain open.
+
+The public unauthenticated `reserve_budget` and
+`admit_worker_attempt` routes now refuse **new work for an episode
+already present in `episode_roots`** under their own `BEGIN IMMEDIATE`
+transaction. Existing exact-reservation consumption remains available.
+This is a negative fail-closed candidate increment, **not positive
+authority-to-reservation or authority-to-issuance coupling**: there is
+no protected actor channel to supply the positive route, and a
+same-user caller with direct database access can still corrupt or
+fabricate trust state. Other legacy unbound episodes retain their
+existing role-based admission behavior and are not qualified by this
+work. A prior verified envelope cannot be promoted to an authorized
+reservation Boolean.
+
+Author-run result: focused migration, lineage, budget lifecycle, and
+writer admission tests **71 passed**; `ruff check` and targeted
+`pyright` on changed Python files **passed**. Workspace-wide
+`pyright` separately reported two existing optional-member errors at
+`tests/test_brain_schema.py:516`; not changed here. Fixture testing
+does not establish custody or native qualification. Independent
+review was not obtained through an authorized route. Rollback:
+revert the candidate code/tests/register edits; for disposable
+version-28 databases restore a consistent pre-28 backup, never
+delete live tables or downgrade canonical state.
+
+Custody dependency remains the M00.4-B protected supervisory issuer
+bootstrap and private producer/Brain request channel, bound to the
+actual host runtime ref, inaccessible to model-controlled root/child
+execution and hostile same-process extensions; the verifier/trust DB
+must resist direct modification by that caller. The installed OMP
+context does not expose this channel; making it requires a protected
+host capability or an isolated supervisor beyond the authorized
+candidate-local edits. No selected implementable Windows primitive
+was recorded in M00.4-B, so no substitute file/restricted-token/
+AppContainer mechanism was silently introduced. No installed-host
+change, production enrollment, lease release, activation, push,
+merge, or tag. `M00-CORD-01` remains
+`BLOCKED` / `M00_PARTIAL_EXTERNAL_BLOCKER`.
+
+### M00.4-D disposable Windows custody experiment (2026-09-22)
+
+Separately authorized fixture-only scope; **no candidate product code
+changed** and the prior 71-test component gate was not rerun.
+Supervisor: current non-elevated Python process; target: a restricted
+version of its own primary token made by `CreateRestrictedToken` with
+`DISABLE_MAX_PRIVILEGE` and a `BUILTIN\Users` restricting SID.
+`IsTokenRestricted` returned true. A second `Everyone` restricting
+SID was tried only to isolate executable access. Only OS-temp
+`brain-custody-*` objects received ACL changes; neither existing
+desktop nor window station permissions were changed.
+
+Control: unrestricted `CreateProcessAsUserW` launched the system
+`cmd.exe` and wrote `baseline` to the fixture allowed directory
+(exit 0). Unrestricted supervisor read the fixture issuer file.
+The restricting-SID token, impersonated on the fixture thread with
+`RevertToSelf` in `finally`, read the explicitly permitted fixture
+file; reading the issuer file and writing the trust file each failed
+with access denied (Python errno 13), and `OpenProcess` for
+`PROCESS_VM_READ|PROCESS_VM_WRITE|PROCESS_DUP_HANDLE` against the
+supervisor PID failed with Win32 error 5. Trust-file contents
+remained unchanged. This probes that token's object access checks;
+it does **not** prove a launched restricted executor can operate.
+
+Launch attempt: `CreateProcessAsUserW` returned a process handle for
+the `BUILTIN\Users` token, but the restricted `cmd.exe`/`whoami.exe`
+ended during initialization with `0xC0000022` (access denied),
+including a newly created fixture desktop. The `Everyone` variant
+ended `0xC0000142` (DLL initialization failed); impersonation also
+denied reading system executable/DLL files under that variant.
+Attempting a **named** new window station returned Win32 error 5;
+Microsoft documents naming stations as administrators-only. An
+unnamed fixture-owned station and newly created desktop allowed
+process creation, but the target still ended `0xC0000022` before its
+permitted `echo` operation. The precise startup access failure
+inside this process has **not** been isolated; do not attribute it
+to a specific ACL or privilege without further evidence.
+
+Verdict: **NO EXECUTABLE CUSTODY DEMONSTRATION**. The allowed target
+operation did not complete, so no pipe/request channel, root/child
+separation, generation expiry, bootstrap defense, Bun/Python tool
+route, hostile-extension defense, or general same-user defense was
+tested. The direct token impersonation denials are narrower evidence
+only. Next prerequisite is a reproducible non-elevated restricted
+target that starts on a fixture-owned desktop while preserving the
+protected-object denials; otherwise a separately authorized
+isolation capability. No privilege escalation, alternate unrestricted
+fallback for the target, installed-host change, or production
+activation. Fixture processes terminated; owned objects/handles
+are cleaned after recording these results. `M00-CORD-01` remains
+blocked; independent acceptance absent.
+
+### M00.4-D restricted-token launch-viability A/B/C (2026-09-22)
+
+Owner-authorized **disposable fixture-only** continuation on the 18.2.10
+host; no product, installed OMP, canonical Brain, account, service,
+production ACL, or tracing change. A separate non-elevated Python fixture
+supervisor created `C:\Users\Public\Documents\brain-custody-abc-37_itcg_`
+and a restricted version of its primary token with
+`DISABLE_MAX_PRIVILEGE` and `BUILTIN\Users` (`S-1-5-32-545`) as its
+restricting SID; `IsTokenRestricted` was true. The fixture root granted
+Users RX, `work` and `temp` granted Users M, the fixture issuer file
+granted only the ordinary user and SYSTEM full access, and the fixture
+trust file granted Users read but not write. These ACLs were changed
+**only inside the newly created fixture directory**. `CreateProcessAsUserW`
+used the absolute system `cmd.exe`, a noninheriting-handle launch, a
+15-second child wait, and `GetExitCodeProcess`; no privileged tracing.
+
+| Run | Working directory | Environment | Window station / desktop | Creation; PID | Child exit; command completed |
+| --- | --- | --- | --- | --- | --- |
+| A | fixture `work` | inherited | inherited | success; 33772 | `0xC0000022`; no |
+| B | fixture `work` | explicit Unicode block with `SystemRoot`, `windir`, `SystemDrive`, `COMSPEC`, system `PATH`, and fixture `TEMP`/`TMP` | inherited | success; 46376 | `0xC0000022`; no |
+| C | fixture `work` | same as B | new unnamed station `Service-0x0-ab735$` and new desktop `CustodyFixtureabadc41634` | success; 684 | `0xC0000022`; no |
+
+For C the fixture station DACL granted the ordinary user `0x37f`
+and restricting Users `0x123`; the fixture desktop DACL granted the
+ordinary user `0x1ff` and restricting Users `0xc3`. The station and
+desktop handles were closed after the children exited. These are the
+**tested rights**, not a finding that they are sufficient for startup.
+`CreateProcessAsUserW` succeeding in all three runs did not mean any
+child initialized sufficiently to complete `cmd.exe /d /c exit 0`.
+There is no evidence identifying the particular denied startup resource.
+
+Stop condition fired at C. No permitted-write command, post-launch
+issuer read, trust write, supervisor VM read/write, or handle-duplication
+check was attempted under this configuration; the *earlier*
+impersonation denials above are not a substitute for simultaneous
+runnable-process denials. No Bun/Python target, actor binding, root/child
+authority, request channel, reservation coupling, or OMP integration
+was tested. The three exited child handles and station/desktop were
+closed, and the fixture directory and probe script were removed;
+the fixture removal check returned true. Jev supplementary
+claim-versus-evidence audit verified the negative custody conclusion
+and contradicted claims that the current directory was isolated as
+cause or that runnable execution plus four denials were proved.
+Independent agent review was attempted but the coordinator returned
+`UNAUTHORIZED_COORDINATOR`; no independent review is claimed.
+Verdict: **NO EXECUTABLE CUSTODY DEMONSTRATION**. Startup access tracing
+would require separate authorization; it was not invoked.
+`M00-CORD-01` remains **BLOCKED**.
+
+### M00.4-D token-construction localization D0 (2026-09-22)
+
+Separately authorized non-elevated, disposable continuation. The A/B/C
+experiment above was not rerun. A new fixture under
+`C:\Users\Public\Documents\brain-custody-token-4omqccpq` reproduced
+Run C's fixture ACL design: Users RX on the root, Users M on `work`
+and `temp`, ordinary user/SYSTEM only on the fixture issuer file,
+and Users read but not write on the fixture trust file. It used
+an explicit Unicode environment with fixture `TEMP`/`TMP`, fixture
+`work` cwd, and a new unnamed station
+`Service-0x0-ab735$`/desktop `CustodyFixture0df2dd66b3`.
+The station granted owner `0x37f` and Users `0x123`; the desktop
+granted owner `0x1ff` and Users `0xc3`. No existing object ACL,
+global policy, account, service, installed host, product code, or
+canonical Brain state was changed.
+
+**D0:** `CreateRestrictedToken` with `DISABLE_MAX_PRIVILEGE`,
+zero disabled SIDs and zero restricting SIDs.
+`IsTokenRestricted` returned **false** for this privilege-stripped
+token. `CreateProcessAsUserW` for absolute system
+`cmd.exe /d /c exit 0` succeeded (PID 14880); after waiting,
+`GetExitCodeProcess` returned `0x00000000`. With the **same D0 token
+and configuration**, `cmd.exe /d /c echo
+custody-control>permitted-output.txt` succeeded (PID 34176,
+exit `0x00000000`) and the fixture file contained
+`custody-control`. No handles were inherited.
+
+Direct impersonated D0-token access checks then returned
+**allowed**, not denied, for all protected operations:
+issuer-secret read, trust-state write access request,
+supervisor `PROCESS_VM_READ`, `PROCESS_VM_WRITE`, and
+`PROCESS_DUP_HANDLE`. The trust file was not modified and its
+contents remained unchanged. These checks establish that this
+*runnable* privilege-only variant **does not** provide custody;
+they are not a launched-child attack demonstration. The exact
+startup denial in earlier restricting-SID runs remains unidentified.
+In particular, D0 versus C does not isolate the choice of
+`BUILTIN\Users` from the presence of *any* restricting SID.
+
+The instruction to **stop at the first runnable configuration**
+fired at D0; D1 (deny-only groups), D2 (`S-1-5-12` restricting SID),
+and optional D3 (SAFER) were **not run**. No claim about their
+behavior or about the unique cause of C's failure follows.
+The two D0 children exited, station/desktop/token handles closed,
+and the entire fixture, including the probe script, was removed
+(removal check true). Jev's supplementary audit supported the
+D0 launch fact and rejected D0 custody, but marked the asserted
+unique cause of the earlier failure unsupported; deterministic
+results above govern. No Bun/Python, actor binding, root/child,
+request-channel, reservation, OMP integration, elevation, or
+startup tracing was attempted. **M00-CORD-01 remains BLOCKED**.
+
+### M00 continuation — schema authority and replay integrity (2026-09-22)
+
+Candidate remains `.worktrees/m00.3-producer-guard`; HEAD
+`18c9372b56c1801511b6103abb3c4dfe192eaf73` consists of
+`901ab302f37ca06b3dac0c4057d7c88adbb9bda6` plus #2b commit
+`3b744ac` and replay commit `18c9372`. The earlier lineage work and
+this register remain uncommitted; this is **not** a frozen or
+independently executed final bundle.
+
+**#2b correction to the earlier row:** the strict-prefix, public VMem
+reader, separate-process first-open, and content-change idempotency
+witness tests were already committed (`tests/test_brain_schema.py`).
+`VMemStore._init_db` now uses the authority's `component_shape` to choose
+only registered additive columns and refuses unsupported shapes.
+The first neighborhood run caught a real concurrent WAL transition
+failure in VMem; it now calls the existing bounded `db.ensure_wal`
+helper. A reviewer found a late-import schema-cache regression:
+Ledger-first import left an empty fifteen-column VMem predecessor
+accepted without four required columns. A disposable subprocess
+reproduced 15 → 15 and an assertion failure. `brain_schema.register`
+now invalidates both derived caches under an `RLock`; cache construction
+and publication share that lock, while stale explicit registry
+snapshots neither read nor publish the current cache. The same
+subprocess then observed 15 → 19 and `component_shape == current`.
+One cold-process regression covers late import, stale snapshots,
+migration and reopen; an unsupported VMem column is refused and
+preserved. The separate-process race test passed in five subsequent
+isolated invocations. Author-executed neighborhood suite
+(`test_brain_schema`, `test_vmem`, `test_vmem_coverage`,
+`test_vmem_live_integration`, `test_ledger`, `test_governor`,
+`test_backup`, `test_migrations_property`, `test_db`,
+`test_writer_admission`, `test_cleanup_t61`, `test_contracts`,
+`test_worker_recovery`) passed. Read-only independent source review
+rejected the initial cache edit twice, then accepted the bounded
+correction; it did **not** run these tests. #2b is evidenced in this
+working candidate, not independently executed or cumulatively accepted.
+
+**SEC-INTEGRITY-01 partial increment:** `LedgerStore.replay` now
+requires a full-from-genesis chain check that ignores the mutable
+`last_verified_seq` watermark. Its tampered-checkpointed-event test
+failed before this change (`DID NOT RAISE BrainError`) and passed
+after. The CLI `ledger verify` now also requests full-chain integrity:
+a disposable real CLI smoke returned exit 0 with
+`integrity.hash_chain_ok:true` / `replay_ok:true` on the clean event,
+then exit 1 with both fields false after a checkpointed payload was
+altered. The default incremental `integrity()` and `checkpoint_ledger`
+still trust the mutable watermark. This increment does **not** repair
+the payload-only chain or provide versioned full-envelope migration.
+**SEC-INTEGRITY-01 stays OPEN.**
+
+**Authority and identity correction:** the separate installed
+structural-role extension `index.ts` hashes
+`0412eac3b857952a32bed1c311f622324b1224a90f8e8df0b1a9774a08947a84`;
+the older `qualified-v2` source hashes
+`42b57b41c531a3a9f113e7e28531b24d540609808b6e8ee3d5fefe9410b75a41`.
+The role branch `brain/structural-coordinator-role` at `cc4cbb8`
+classifies an unlisted root model as driver, but transcript-path
+ancestry does **not** authenticate an episode actor or protect
+credential issuance. Candidate `omp_adapter._prepare_worker_context`
+still consumes a caller-supplied role and returns the attempt token;
+the host bridge advertises neither an authenticated observation source
+nor an execution census. Independent read-only evidence audit marked
+the structural role claim PASS **only for functional classification**,
+authenticated M00-CORD-01 FAIL, and positive protected admission
+UNDEMONSTRATED. Jev's supplementary claim audit agreed with that
+separation (two verified, two contradicted); neither substitutes for
+runtime proof. D0 remains runnable but without custody. **M00-CORD-01,
+#4 and the cumulative candidate gate remain BLOCKED/OPEN.** Production
+activation, lease recovery and canonical-state migration were not
+performed by this continuation; the installed extension is no longer
+identical to the older historical digest, so the old register statement
+that deployed extension bytes are unchanged is historical, not a
+current preservation observation.
+
+**HIGH-finding source correction:** the original clauses for
+`SEC-INTEGRITY-01`, `FSUPD-01`, `SEC-SKILL-01`/
+`SB-PROMOTION-004`, and `SEC-HOOK-02` are in the main tree's ignored
+`outputs/reports/security-audit-20260921/REPORT.md:25-28`, for older
+audited subjects. The earlier register citation to
+`docs/requirements/M00.3_Phase_A_Host_Authority_Continuation.md:201-202`
+does not resolve (that file ends at line 109); no closure follows from
+the corrected provenance. These four HIGH gates remain open on the
+candidate until their exact conditions are independently established.
+
+### M00.4-D — disposable OMP 18.2.10 host-copy preflight
+
+The owner authorized changes **only** in an isolated, disposable OMP
+source copy, not the installed runtime, production state, accounts,
+services, elevation, or machine-wide ACLs. The source package is
+`C:\Users\assas\.bun\install\global\node_modules\@oh-my-pi\pi-coding-agent`
+(`package.json` version `18.2.10`); its `omp` bin points to
+`dist/cli.js`, whereas the copied source entry is `src/cli.ts`.
+
+Driver created
+`C:\Users\assas\AppData\Local\Temp\m00-host-18210-rLR6Ei` with a copied
+`package.json`, 1,505 source files (17.0 MiB), and the source-mode docs
+index. Its sibling/vendor dependencies are junctioned to the installed
+global `node_modules` tree and were treated as inputs, not OS-enforced
+read-only objects; the copied host is the only `pi-coding-agent` on
+its module lookup path. Source SHA-256 comparison covered all 1,505 files:
+zero mismatches. Installed and copied `src/sdk.ts` both hash
+`25aa43f60b8e7b04993897b3a6d9dc177972c831418bd91369b2e696719bead7`.
+With cwd at the disposable stage, `USERPROFILE` and `HOME` set to its
+`userhome`, `LOCALAPPDATA` set under that home, `PI_CONFIG_DIR=m00-stage`,
+and no inherited `XDG_DATA_HOME`, `PYTHONHOME`, or `PYTHONPATH`, the
+actual invocation `C:\Users\assas\.bun\bin\bun.exe
+<stage>\global\node_modules\@oh-my-pi\pi-coding-agent\src\cli.ts
+--version` exited 0 and printed `omp/18.2.10`; stderr empty with
+`PI_DEBUG_STARTUP=1`. The stage home has a new `.bun` cache and `.omp`
+agent directory. This proves launchability of the copied **source**
+subject without a provider call, not child execution, an issuer, or
+custody. The package's build scripts require missing monorepo siblings;
+the prebuilt `dist/cli.js` was neither copied nor rebuilt. Free
+physical memory before launch was 1,408,500 KiB.
+
+Independent read-only host-source research identified the SDK
+registration and structured-child allocation points but no protected
+issuer. Independent architecture review found extension factories and
+tools execute in the unrestricted host address space; private TS
+fields, host-source hooks, signatures whose key shares that process,
+and same-user subprocesses cannot deny a hostile in-process extension
+the issuer/state. The only tested runnable restricted child (D0)
+retained issuer read, trust-state write, process VM read/write and
+handle-duplication access. The denying variants did not start the
+executable (`0xC0000022`); denial without runnable work is not custody
+proof. Review proposes one bounded **unperformed** D2
+restricted-token parent/worker canary with fixture-only objects as
+the next falsification, requiring separate authorization beyond the
+source-copy grant. No protected API was added to the copy: that would
+claim a boundary the permitted launch cannot establish.
+`M00-CORD-01` and the cumulative qualification remain OPEN.
+
+### Candidate-local HIGH repairs and limits (2026-09-22)
+
+**SEC-INTEGRITY-01 candidate:** shared schema v3 adds a domain-separated
+SHA-256 chain over all stored event-envelope columns; integrity and
+checkpoint verify from genesis rather than trusting `last_verified_seq`,
+and replay rejects a broken chain before projection. The v1/v2 transition
+checks the old payload chain where present, snapshots committed predecessor
+data, retains historical event cells, marks derived pre-migration provenance
+as unauthenticated, and commits the new column/origin/version atomically.
+New events have a NULL archived `prev_hash`; v3 reopen does not repair
+missing envelope hashes. A v2 predecessor, interruption before commit,
+snapshot readback, new append, reopen and VMem-only v2 upgrade passed
+focused tests. Headerless ledger history was reproduced as incorrectly
+adopted by VMem before the authority guard, then refused without restamping.
+Metadata-only event tampering and forged watermark regressions failed
+before the candidate fix and pass afterward. The ledger/schema suites
+passed 88/88; VMem 70/70; migration-chain 8/8; Ruff check passed and
+Pyright reported zero errors/warnings. Unkeyed hashes provide consistency,
+not authenticated authorship or protection against a writer who can
+rewrite DB, hashes and snapshots. This is candidate-local evidence, not
+independent HIGH closure or production migration.
+
+**SEC-HOOK-02 scoped candidate repair:** managed Claude, Codex, and
+Antigravity templates/installer commands bind the system PowerShell
+executable and absolute installed runner script. Codex replaces its own
+single marker block instead of retaining an old bare executable; unrelated
+TOML is preserved. The disposable `agy plugin install` and App copy
+were both checked against target script/hook hashes; repeat install was
+idempotent. Native CMD invocations from a hostile cwd and PATH returned
+`{}` without executing the hostile `powershell.cmd` or project runner.
+Pester installer suite passed 4/4. A read-only static reviewer accepted
+scoped managed-command identity, not arbitrary unmanaged hooks,
+uncontrolled transitive subprocesses, or cumulative M00 acceptance.
+Disposable hook/plugin smoke fixtures were removed; no real user hook
+configuration was installed.
+
+**JeV supplementary audit:** given the focused test outputs, source
+hashing behavior, and host-copy custody result, JeV assigned probability
+0.81 to the *candidate-local tamper-evidence improvement* and 0.03 to
+*complete M00 qualification including protected issuer custody*. This
+judgment cannot replace deterministic checks or independent acceptance.
+`M00-CORD-01`, remaining HIGH findings and the cumulative M00 gate stay
+OPEN; production activation and canonical-state changes remain unperformed.
+
+### Subsequent candidate repair and adverse review (2026-09-22)
+
+**SEC-INTEGRITY-01:** the independent static ledger reviewer found a
+SQLite-affinity mismatch on append and an unbound retained legacy-origin
+marker. Both were reproduced as focused red regressions. Append now hashes
+the stored values returned by SQLite; migrated v3 origins bind the prior
+origin text by digest. The focused ledger/schema/VMem suites passed with
+these corrections. This is tamper evidence, not authenticated authorship;
+old v1 writers must be quiesced for a rollout. Native v3 manifest rebuild,
+copied-ledger origin and external authorship remain unaccepted.
+
+**SEC-SKILL-01 / SB-PROMOTION-004:** independent read-only review of the
+earlier candidate returned FAIL. It found an approved status line could be
+rewritten to model-visible instructions without changing the normalized
+hash; unapproved descriptors and Python/TS Lean kernel/nudge bypassed the
+hydration gate. The status-line attack was reproduced red, then fixed by
+normalizing only complete lifecycle values; it now refuses the changed
+body. Descriptors and both Lean consumers now check current reviewed text
+before exposing it. The Python Lean cache-hit regression alters the body
+without changing mtime/size and is refused; TS warm-cache and missing
+review regressions refuse. The review also found no passing evaluation
+record or required-dependency binding, and frontier approvals can be
+self-minted by a same-user agent. Those obligations and SEC-AUTH-01 remain
+OPEN; local content consistency is not protected approval. Re-review of
+the corrected bytes is requested; the adverse verdict is retained for its
+earlier subject.
+
+**FSUPD-01:** independent read-only review of the earlier activation script
+returned FAIL: approval-record TOCTOU, governed preflight only after
+installation, overwrite of a preexisting sealed production record,
+unchecked manifest-generator identity, and no same-user Windows custody
+in the private TEMP stage. The candidate now captures each approval
+record once, checks generator identity, preflights the approved host/
+extension surface before backup or install, refuses an existing production
+evidence destination, and targets a new candidate evidence directory.
+Six disposable activation tests passed, including preflight refusal,
+sealed-record preservation, install and rollback. The actual historical
+APPROVED-SUCCESSOR record refuses this changed script with exit 1 and
+creates no pack; no production file was touched. Same-user staging,
+approval-minting authority, external races, compatible operational
+rollback and fresh owner approval remain OPEN. No production activation
+was attempted. Re-review of corrected bytes is requested.
+
+**Focused integration checks:** Python pytest selection covering skill,
+promotion, adapters, Lean, activation, ledger, schema and VMem passed
+(396 tests; the `-q` runner printed 396 dots). TS Vitest candidate config
+passed 62 targeted Lean/cache/injection-placement tests. Ruff check,
+Pyright (0 errors/warnings), ESLint and `tsc --noEmit` passed. The
+whole 2,375-collected Python suite did not complete: prior run timed
+out after six failures. Five named failures arise when tests reset a
+schema version while the user-owned uncommitted `0028_runtime_lineage.sql`
+table remains present; the successor identity test detects a stale
+historical approval subject. These are not waived as green.
+
+**Supplementary JeV:** on focused checks, earlier adverse reviews, and
+the host-copy D0 custody result, JeV returned 0.89 for *candidate-local
+fail-closed improvements* and 0.02 for *complete M00 qualification*.
+Neither number closes a HIGH or substitutes independent execution.
+`SB-ORCH-001`, `SEC-AUTH-01/02`, `M00-CORD-01`, and the cumulative M00
+gate remain OPEN. D2 restricted-token parent/worker canary requires
+separate owner authorization; no real approval, canonical-state write,
+production install or activation was performed.
+
+### Final candidate-only checks and stop boundary (2026-09-22)
+
+**FSUPD-01:** a later independent static review still returned FAIL for
+the intermediate activation script: its manifest inherited only the
+predecessor's partial hash inventory and could consume an ambient delta.
+The candidate now derives all 13 governed host and every approved extension
+binding from the approved hash map, supplies an explicit empty delta, and
+checks manifest schema, runtime roots, counts, and each sealed/installed/bound
+hash after generator write/check. It then rechecks the governed installation.
+A disposable negative test with the real generator refuses an unapproved
+extension source and rolls back; the activation suite passes 9/9.
+This correction has **not** received a new independent acceptance review.
+The historical approval still refuses the changed activation script before
+creating a pack (exit 1); the candidate production-evidence destination
+remains absent. No real host install or production activation was attempted.
+
+**SEC-SKILL-01 / SB-PROMOTION-004:** the same-reviewed-text lifecycle/status
+gate and Hermes/Lean consumption regressions pass locally. A requested
+independent re-review of these corrected bytes could not complete because
+the reviewer provider returned HTTP 429. Missing independently established
+passing evaluation and dependency binding, plus caller-mintable frontier
+approval, remain open; local consistency must not be called protected
+approval.
+
+**Final checks:** a focused Python selection of activation, skill,
+Skill Forge, Lean, adapters, ledger and VMem passed 293/293. The full
+candidate Vitest run passed 37 files and 787 tests. Ruff check, Pyright
+(0 errors/warnings), ESLint and `tsc --noEmit` passed after the latest
+code changes. The prior whole-Python-suite timeout and its six failures
+remain adverse evidence, not a green full-suite claim. No changes were
+made to the user-owned runtime-lineage migration or historical approval.
+
+**Disposition:** `M00_PARTIAL_EXTERNAL_BLOCKER`, not candidate-qualified.
+`M00-CORD-01`, `SB-ORCH-001`, `SEC-AUTH-01/02`, the unresolved
+`SEC-INTEGRITY-01` authorship/provenance, `SEC-SKILL-01` evaluation and
+protected review, `FSUPD-01` protected approval/staging and operational
+rollback, transitive `SEC-HOOK-02`, and final integrated independent
+acceptance remain OPEN. Owner action: authorize the separate disposable D2
+restricted-token parent/worker canary and provide a non-agent-controlled
+host capability and approval/receipt issuer for the *exact* candidate
+subject. A fresh review and compatible candidate bundle are then required;
+neither the source-copy grant nor local hashes authorize activation.
+
+### Authorized disposable D2 custody canary (2026-09-22)
+
+The owner authorized the previously recorded D2 only, with fixture-owned
+objects and a stop-on-failure boundary. Probe SHA-256
+`01d024d1db96685f80d096bf620162edd1860a0692f76e9beca06cbe6fa56150`
+ran from `C:\Users\Public\Documents\brain-m00-d2-rQF8yy`. The probe
+constructed a `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` token with
+one restricting SID, `S-1-5-12`; `IsTokenRestricted` returned true.
+The fixture alone received the owner/restricting-SID file ACLs and an
+unnamed fixture window station/desktop with the previously recorded
+`0x37f`/`0x123` and `0x1ff`/`0xc3` rights. The first attempt with a named
+station returned Win32 error 5 at `CreateWindowStationW`; after using
+the previously tested unnamed-station pattern, station and desktop
+creation succeeded, but `CreateProcessAsUserW` returned Win32 error 5
+(`ERROR_ACCESS_DENIED`) before a child PID was produced. No command ran,
+no permitted work output was written, and no child-origin issuer read,
+trust write, supervisor-memory access, or handle-duplication attempt
+occurred. This is **D2 launch failure, not custody proof**; the denied
+startup resource was not isolated. Both attempts closed their token
+and station/desktop handles. The entire disposable fixture and probe
+were removed (`fixture_removed: true`).
+
+The authorized D2 path stops here: no D1/D3 variant, startup tracing,
+new isolation framework, production/canonical mutation or authority
+claim. `M00-CORD-01` and all previously listed HIGH and acceptance gates
+remain OPEN. A protected non-agent-controlled issuer/channel remains
+necessary; a restricted token that cannot launch is not an alternative.
+
+### Existing host/platform authority capability assessment (read-only)
+
+OMP 18.2.10's disposable **source** copy was inspected, not patched or
+executed for this assessment. Extensions are imported and their factories
+called in the host process (`src/extensibility/extensions/loader.ts:416-452`);
+the extension API exposes the host namespace (`types.ts:1198-1199`).
+Structured children are built by `createAgentSession` in the same process
+(`src/task/executor.ts:3783-3805,3829-3833`), while
+`AgentRegistry.register` replaces a ref by ID without an issuer check
+(`src/registry/agent-registry.ts:146-165`). The context's async-job snapshot
+(`src/extensibility/extensions/types.ts:428-445`) supports correlation,
+not authenticated root, child, request or generation facts. The candidate
+bridge accordingly advertises `authenticated_observation_source:false`,
+`effective_tool_grant:false`, and `execution_census:false`
+(`brainstem/prime-extension/bridge/brain-host-bridge.ts:251-269`).
+This is a bounded 18.2.10 source/API conclusion, not a proof about all
+future OMP releases or every bundled-only code path.
+
+Windows named pipes can expose a peer **process** ID, but their DACL grants
+access by token, not by OMP's in-process root/worker identity
+(Microsoft: `https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid`;
+`https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights`).
+A same-user, in-process hostile extension can act as the same OMP process;
+a pipe, private JS state, native module key in that same address space, or
+host-side registry string cannot independently distinguish it. Windows
+AppContainer isolates an *entire application process*, rather than
+protecting one component inside it
+(`https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation`).
+Process VM read/write and handle duplication are explicit process rights
+(`https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights`);
+D0 observed them allowed, while D2 never launched. AppContainer deployment
+plus a distinct trusted supervisor would be a new, separately authorized
+host/process architecture and still needs OMP-origin lineage proof. No
+currently demonstrated, already-exposed host or authorized platform
+primitive supplies the full protected issuer/channel.
+
+**Decision boundary:** freeze restricted-token trials. Do not promote a
+same-process native signer, same-user broker token, named pipe, or OS PID
+to protected M00 authority. An upstream OMP primitive is useful only if
+it also establishes custody against model-controlled extensions; SDK
+hooks alone cannot do so. Under the present grant, report protected
+coordinator issuance **unsupported on this host configuration**, keep
+privileged delegation fail-closed, and retain `M00_PARTIAL_EXTERNAL_BLOCKER`.
+Whether to change M00 acceptance to permit an explicitly unsupported
+capability is an owner decision, not an inferred HIGH closure. No new
+isolation experiment, enrollment, or production change occurred.
