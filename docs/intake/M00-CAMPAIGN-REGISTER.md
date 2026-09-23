@@ -83,23 +83,24 @@ tracked pack: `docs/intake/m00-evidence/orchestrator-removal-gate-20260923.md`
   so canonical write preservation cannot be retrospectively proved. Do not
   restore, migrate, or mutate live state to disguise the gap.
 - Frozen-subject results: ruff clean, pyright `0 errors`, Python
-  **2108 passed / 1 skipped / 0 failed** under a disposable home, extension
+  **2109 passed / 1 skipped / 0 failed** under a disposable home, extension
   `tsc --noEmit` and ESLint clean, extension suite **26 files / 600 tests
   passed**; every disposable home was still empty afterwards.
 - Directly executed refusal and retained-path checks (exact commands and
   outputs in the evidence document §2.1): all five retired CLI families exit 2
   with `ORCHESTRATION_REMOVED` and leave an absent/nonexistent home untouched;
   `init` → `remember` → `recall` → `autoinject shadow` all succeed in a
-  disposable home with no task admission involved.
-- Independent review: a read-only implementation verifier returned
-  `UNDEMONSTRATED` (its agent type could not execute commands) while
-  confirming statically that the retired modules are gone and no alternate
-  switch remains; a read-only security pass independently reproduced the
-  aggregate-usage coercion and classified the promotion campaign script as
-  operator-invoked evaluation. Further child spawns are refused by the
-  **installed production extension**
-  (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`), so independent runtime
-  coverage stays partial and is reported as such.
+  disposable home with no task admission involved, and correctly abstain
+  (`NO_INJECTION WRONG_PROJECT`) when no project identity resolves.
+- Independent review: an independent read-only security pass **reproduced**
+  the refusals, both retained-path directions, a 205-test targeted subset and
+  the aggregate-usage finding in its own disposable homes; a read-only
+  implementation verifier returned `UNDEMONSTRATED` (its agent type could not
+  execute commands) while confirming statically that the retired modules are
+  gone and no alternate switch remains. The full-suite counts remain
+  author-executed: further child spawns are refused by the **installed
+  production extension** (`BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE`),
+  so independent coverage is partial and is reported as such.
 - Complete the source/config/test/docs cutover, then run isolated Python/TS,
   package and DB checks with hashes tied to exact candidate bytes.
 - Check native single/batch task, hub, model, tool, cancellation and memory

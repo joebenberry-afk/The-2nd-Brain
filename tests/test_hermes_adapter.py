@@ -891,6 +891,46 @@ def test_brain_lifecycle_events_correlate_identity_and_bound_metrics(
     assert "raw_response" not in json.dumps(lifecycle)
 
 
+def test_usage_absent_or_partial_is_never_fabricated(brain_home: Path) -> None:
+    """An observation records only what the host reported; nothing is invented."""
+    binding = hermes_adapter.resolve_binding(brain_home, _start_payload(session="usage-honesty"))
+    without_usage = hermes_adapter.handle_request(
+        brain_home,
+        _start_payload(session="usage-honesty")
+        | {"event": "post_api_request", "status": "completed", "response_model": "m1"},
+    )
+    assert without_usage["status"] == "completed"
+    _, events = _ledger_rows(brain_home, binding.host_session_id)
+    observed = [
+        json.loads(row["payload_json"])
+        for row in events
+        if row["event_type"] == "model_invocation_observed"
+    ]
+    assert observed and all("usage" not in row for row in observed)
+
+    partial = hermes_adapter.handle_request(
+        brain_home,
+        _start_payload(session="usage-honesty")
+        | {
+            "event": "post_api_request",
+            "status": "completed",
+            "usage": {"cache_read_tokens": 7, "raw_response": "must not be retained"},
+        },
+    )
+    assert partial["status"] == "completed"
+    telemetry_path = (
+        brain_home
+        / "telemetry"
+        / "agent-performance"
+        / f"{hermes_adapter.telemetry_stem(binding.host_session_id)}.jsonl"
+    )
+    records = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines()]
+    observed = [record for record in records if record.get("kind") == "model_invocation_completed"]
+    assert observed[-1]["usage"] == {"cache_read_tokens": 7}
+    assert "raw_response" not in json.dumps(records)
+    assert observed[-1]["actual_identity"]["model"] == binding.model
+
+
 def test_real_post_tool_hook_stores_bounded_vmem_evicts_and_faults_in(brain_home: Path) -> None:
     first_payload = {
         **_start_payload(session="vmem-runtime"),
