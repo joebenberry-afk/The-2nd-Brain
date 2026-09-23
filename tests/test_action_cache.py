@@ -1,11 +1,11 @@
 """Tests for Proof-Carrying Action Cache (Plan §7)."""
 
 import json
-import os
 import subprocess
 import sys
 import time
 
+from conftest import clean_python_env
 from second_brain.action_cache import (
     ActionCacheStore,
     ActionProof,
@@ -333,7 +333,7 @@ class TestActionCacheCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert stats_res.returncode == 0
         stats = json.loads(stats_res.stdout)
@@ -354,7 +354,7 @@ class TestActionCacheCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert inv_res.returncode == 0
         assert "Invalidated 1 entries" in inv_res.stdout

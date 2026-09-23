@@ -4,14 +4,14 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PreInvocation",
+        "command": "\"<POWERSHELL_EXE>\" -ExecutionPolicy Bypass -File \"<RUN_PS1>\" -Event PreInvocation",
         "timeout": 30
       }
     ],
     "PostInvocation": [
       {
         "type": "command",
-        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PostInvocation",
+        "command": "\"<POWERSHELL_EXE>\" -ExecutionPolicy Bypass -File \"<RUN_PS1>\" -Event PostInvocation",
         "timeout": 30
       }
     ],
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event PostToolUse",
+            "command": "\"<POWERSHELL_EXE>\" -ExecutionPolicy Bypass -File \"<RUN_PS1>\" -Event PostToolUse",
             "timeout": 30
           }
         ]
@@ -30,7 +30,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event Stop",
+        "command": "\"<POWERSHELL_EXE>\" -ExecutionPolicy Bypass -File \"<RUN_PS1>\" -Event Stop",
         "timeout": 30
       }
     ]

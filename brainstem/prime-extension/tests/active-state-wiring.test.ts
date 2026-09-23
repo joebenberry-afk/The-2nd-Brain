@@ -37,6 +37,7 @@ import factory from "../src/index";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 let tmp: string;
+const savedHome = process.env.SECOND_BRAIN_HOME;
 
 beforeEach(async () => {
   tmp = await mkdtemp(join(tmpdir(), "sb-active-state-wiring-"));
@@ -70,7 +71,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  delete process.env.SECOND_BRAIN_HOME;
+  if (savedHome === undefined) delete process.env.SECOND_BRAIN_HOME;
+  else process.env.SECOND_BRAIN_HOME = savedHome;
   // Drain any still-in-flight fire-and-forget telemetry writes before
   // removing the temp dir (avoids a Windows ENOTEMPTY/ENOENT/EPERM race
   // between a lingering append() and rm(), independent of test correctness).

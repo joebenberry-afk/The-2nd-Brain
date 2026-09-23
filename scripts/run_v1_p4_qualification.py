@@ -50,8 +50,6 @@ SCENARIO_NAMES = (
     "cross_session_continuity",
     "harness_isolation",
     "harness_switch",
-    "driver_worker",
-    "failed_worker",
     "malformed_state",
     "stale_state",
     "token_pressure",
@@ -916,191 +914,7 @@ def scenario_harness_switch(ctx: Ctx, home: Path, shared: dict[str, Any]) -> dic
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7-8: driver_worker / failed_worker
-# ---------------------------------------------------------------------------
-
-
-def scenario_driver_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dict[str, Any]:
-    # repository_intelligence.WorkerPlaneManager writes telemetry kinds
-    # ("worker_spawned"/"worker_completed") that predate the P4 telemetry
-    # contract and are not in telemetry.KNOWN_KINDS (a pre-existing gap in
-    # that P1-era module, out of this task's scope). A dedicated home keeps
-    # that unrelated non-conformance out of the P4 telemetry surface the
-    # independent verifier audits, without hiding or altering any real
-    # command output below.
-    name = "driver_worker"
-    dedicated = home_root / name
-    sess = "q8-driver-worker"
-    commands = []
-    evidence_refs = []
-
-    cr = run_cli(ctx, name, ["init"], home=dedicated, label="init")
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
-    home = dedicated
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "spawn", sess, "qualification_real_subtask_implement_helper", "--json"],
-        home=home,
-        label="spawn",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    spawn_payload = json_stdout(cr)
-    assert spawn_payload["spawned"] is True, spawn_payload
-    worker_id = spawn_payload["worker_id"]
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "status", sess, "--json"],
-        home=home,
-        label="status-active",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    status_active = json_stdout(cr)
-    assert status_active["active_workers"] == 1, status_active
-
-    cr = run_cli(
-        ctx,
-        name,
-        [
-            "worker-plane",
-            "complete",
-            sess,
-            worker_id,
-            "--status",
-            "COMPLETED",
-            "--summary",
-            "qualification_task_complete",
-            "--json",
-        ],
-        home=home,
-        label="complete",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    complete_payload = json_stdout(cr)
-    assert complete_payload["status"] == "COMPLETED", complete_payload
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "status", sess, "--json"],
-        home=home,
-        label="status-after",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    status_after = json_stdout(cr)
-    assert status_after["active_workers"] == 0, status_after
-
-    metrics = {
-        "worker_id": worker_id,
-        "spawned": True,
-        "completed_status": "COMPLETED",
-        "active_workers_during": status_active["active_workers"],
-        "active_workers_after": status_after["active_workers"],
-        "provider_tokens": None,
-        "wall_time_ms": None,
-        "background_model_calls": 0,
-    }
-    return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
-
-
-def scenario_failed_worker(ctx: Ctx, home_root: Path, shared: dict[str, Any]) -> dict[str, Any]:
-    # See scenario_driver_worker: isolated in its own home for the same
-    # pre-existing worker-plane telemetry-schema reason.
-    name = "failed_worker"
-    dedicated = home_root / name
-    sess = "q8-failed-worker"
-    commands = []
-    evidence_refs = []
-
-    cr = run_cli(ctx, name, ["init"], home=dedicated, label="init")
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    assert cr.record["returncode"] == 0, cr.stderr.decode("utf-8", "replace")
-    home = dedicated
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "spawn", sess, "qualification_real_subtask_reproduce_failure", "--json"],
-        home=home,
-        label="spawn",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    spawn_payload = json_stdout(cr)
-    worker_id = spawn_payload["worker_id"]
-
-    cr = run_cli(
-        ctx,
-        name,
-        [
-            "worker-plane",
-            "complete",
-            sess,
-            worker_id,
-            "--status",
-            "FAILED",
-            "--summary",
-            "qualification_real_failure",
-            "--finding",
-            "reproduced_real_error",
-            "--json",
-        ],
-        home=home,
-        label="complete-failed",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    complete_payload = json_stdout(cr)
-    assert complete_payload["status"] == "FAILED", complete_payload
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "status", sess, "--json"],
-        home=home,
-        label="status-after-fail",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    status_after = json_stdout(cr)
-    retryable = status_after["active_workers"] < status_after["max_concurrent_workers"]
-
-    cr = run_cli(
-        ctx,
-        name,
-        ["worker-plane", "spawn", sess, "qualification_retry_after_real_failure", "--json"],
-        home=home,
-        label="retry-spawn",
-    )
-    commands.append(cr.record)
-    evidence_refs.append(cr.record["stdout_ref"])
-    retry_payload = json_stdout(cr)
-    assert retry_payload["spawned"] is retryable, retry_payload
-
-    metrics = {
-        "worker_id": worker_id,
-        "completed_status": "FAILED",
-        "retryable": retryable,
-        "retry_spawned": retry_payload["spawned"],
-        "provider_tokens": None,
-        "wall_time_ms": None,
-        "background_model_calls": 0,
-    }
-    return make_result(name, evidence_refs=evidence_refs, commands=commands, metrics=metrics)
-
-
-# ---------------------------------------------------------------------------
-# Scenario 9-10: malformed_state / stale_state
+# Scenario 7-8: malformed_state / stale_state
 # ---------------------------------------------------------------------------
 
 
@@ -1830,8 +1644,6 @@ SCENARIO_FUNCS: tuple[tuple[str, Any], ...] = (
     ("cross_session_continuity", scenario_cross_session_continuity),
     ("harness_isolation", scenario_harness_isolation),
     ("harness_switch", scenario_harness_switch),
-    ("driver_worker", scenario_driver_worker),
-    ("failed_worker", scenario_failed_worker),
     ("malformed_state", scenario_malformed_state),
     ("stale_state", scenario_stale_state),
     ("token_pressure", scenario_token_pressure),
@@ -1846,7 +1658,7 @@ SCENARIO_FUNCS: tuple[tuple[str, Any], ...] = (
 
 
 def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
-    """Run all 18 real P4 qualification scenarios; return the manifest dict.
+    """Run all 16 retained P4 qualification scenarios; return the manifest dict.
 
     Every raw artifact this run produces (subprocess captures, seeded
     fixtures, evidence snapshots) is written under `out_dir`. The manifest
@@ -1922,7 +1734,7 @@ def run_qualification(out_dir: Path, repo: Path) -> dict[str, Any]:
     scenarios: list[dict[str, Any]] = []
     for scenario_name, fn in SCENARIO_FUNCS:
         try:
-            if scenario_name in ("brain_off", "brain_on", "driver_worker", "failed_worker"):
+            if scenario_name in ("brain_off", "brain_on"):
                 result = fn(ctx, homes_dir, shared)
             else:
                 result = fn(ctx, shared_home, shared)

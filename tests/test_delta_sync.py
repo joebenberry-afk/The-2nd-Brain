@@ -1,13 +1,12 @@
 """Tests for Delta Sync & Compact Invalidation (Plan §8)."""
 
 import json
-import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
+from conftest import clean_python_env
 from second_brain.delta_sync import (
     DeltaSyncEngine,
     DeltaType,
@@ -272,6 +271,8 @@ class TestDeltaSyncCLI:
                 sys.executable,
                 "-m",
                 "second_brain",
+                "--home",
+                str(tmp_path),
                 "delta-sync",
                 "diff",
                 str(base_file),
@@ -280,7 +281,7 @@ class TestDeltaSyncCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert diff_res.returncode == 0
         delta_data = json.loads(diff_res.stdout)
@@ -293,6 +294,8 @@ class TestDeltaSyncCLI:
                 sys.executable,
                 "-m",
                 "second_brain",
+                "--home",
+                str(tmp_path),
                 "delta-sync",
                 "apply",
                 str(base_file),
@@ -301,7 +304,7 @@ class TestDeltaSyncCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert apply_res.returncode == 0
         updated_data = json.loads(apply_res.stdout)
@@ -349,7 +352,7 @@ class TestDeltaSyncCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
+            env=clean_python_env(),
         )
         data = json.loads(result.stdout)
         expected = compute_memory_delta(None, target, home=tmp_path)
@@ -369,7 +372,7 @@ class TestDeltaSyncCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": str(Path("src").resolve())},
+            env=clean_python_env(),
         )
         assert second.returncode == 0
         assert json.loads(second.stdout)[0]["delta_type"] == "UNCHANGED"

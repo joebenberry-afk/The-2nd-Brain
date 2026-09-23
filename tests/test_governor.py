@@ -1,14 +1,13 @@
 """Tests for the Token Governor module."""
 
 import json
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from conftest import clean_python_env
 from second_brain import governor
 
 
@@ -164,19 +163,39 @@ class TestSessionTokensBasic:
         assert tokens.cost_total == pytest.approx(0.025)
         assert tokens.cost_total_seen == 2
         assert tokens.model_turns == 3
+
+
 class TestUsageObservationIdentity:
     """One billable response is one charge, however many times it is observed."""
 
     def test_repeat_observation_of_one_response_is_counted_once(self, brain_home):
         records = [
-            _rec("assistant_usage", response_id="resp-1", input_tokens=100, output_tokens=50,
-                 total_tokens=150, cost_total=0.25),
+            _rec(
+                "assistant_usage",
+                response_id="resp-1",
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                cost_total=0.25,
+            ),
             # Same response observed again (delivery retry / second observation point).
-            _rec("assistant_usage", response_id="resp-1", input_tokens=100, output_tokens=50,
-                 total_tokens=150, cost_total=0.25),
+            _rec(
+                "assistant_usage",
+                response_id="resp-1",
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                cost_total=0.25,
+            ),
             # A genuinely distinct billed request must still count in full.
-            _rec("assistant_usage", response_id="resp-2", input_tokens=10, output_tokens=5,
-                 total_tokens=15, cost_total=0.05),
+            _rec(
+                "assistant_usage",
+                response_id="resp-2",
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+                cost_total=0.05,
+            ),
         ]
         _write_session(brain_home, "dedupe", records)
         tokens = governor.parse_telemetry_session(
@@ -204,7 +223,6 @@ class TestUsageObservationIdentity:
         assert tokens.usage_observations == 2
         assert tokens.usage_repeat_observations == 0
         assert tokens.usage_unidentified_observations == 2
-
 
 
 class TestDerivedMetrics:
@@ -679,7 +697,7 @@ class TestCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
 
         assert result.returncode == 0
@@ -704,7 +722,7 @@ class TestCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
 
         assert result.returncode == 0
@@ -729,7 +747,7 @@ class TestCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         profiles = json.loads(result.stdout)
@@ -754,7 +772,7 @@ class TestCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         profile = json.loads(result.stdout)
@@ -777,7 +795,7 @@ class TestCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         assert "SECOND_BRAIN_GOVERNOR_AUTOINJECT=1" in result.stdout
@@ -1005,423 +1023,52 @@ class TestCacheEpochAttribution:
         assert tokens.cache_epochs == []
 
 
-class TestCheckBudget:
-    """T3.1 hard/soft budget caps: governor.check_budget."""
+def test_passive_usage_deduplicates_only_identified_responses(brain_home):
+    session = "usage-identities"
+    _write_session(
+        brain_home,
+        session,
+        [
+            _rec("assistant_usage", session=session, response_id="r1", total_tokens=10),
+            _rec("assistant_usage", session=session, response_id="r1", total_tokens=10),
+            _rec("assistant_usage", session=session, total_tokens=5),
+            _rec("assistant_usage", session=session, total_tokens=5),
+        ],
+    )
+    assert governor._session_total_tokens(brain_home, session) == 20
 
-    def test_ok_below_soft_threshold(self, brain_home):
-        """Usage below cap * soft_ratio is OK."""
-        records = [
-            _rec(
-                "assistant_usage",
-                session="budget-ok",
-                input_tokens=100,
-                output_tokens=100,
-                total_tokens=200,
-            )
-        ]
-        _write_session(brain_home, "budget-ok", records)
-        result = governor.check_budget(brain_home, "budget-ok", "driver")
-        assert result == {
-            "state": "OK",
-            "used": 200,
-            "cap": 400000,
-            "outstanding": 0,
-            "available": 399800,
-        }
 
-    def test_soft_cap_at_boundary(self, brain_home):
-        """Usage exactly at cap * soft_ratio is SOFT (>= boundary)."""
-        # worker cap defaults to 120000; soft_ratio 0.8 -> soft threshold 96000.
-        records = [_rec("assistant_usage", session="budget-soft", total_tokens=96000)]
-        _write_session(brain_home, "budget-soft", records)
-        result = governor.check_budget(brain_home, "budget-soft", "worker")
-        assert result == {
-            "state": "SOFT",
-            "used": 96000,
-            "cap": 120000,
-            "outstanding": 0,
-            "available": 24000,
-        }
+def test_passive_usage_reports_missing_or_wrong_identity_as_unknown(brain_home):
+    with pytest.raises(FileNotFoundError):
+        governor._session_total_tokens(brain_home, "never-observed")
+    _write_session(
+        brain_home,
+        "wrong",
+        [
+            _rec("assistant_usage", session="different", total_tokens=20),
+        ],
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        governor._session_total_tokens(brain_home, "wrong")
 
-    def test_soft_cap_just_below_boundary_is_ok(self, brain_home):
-        """One token below the soft threshold stays OK."""
-        records = [
-            _rec(
-                "assistant_usage",
-                session="budget-soft-under",
-                total_tokens=95999,
-            )
-        ]
-        _write_session(brain_home, "budget-soft-under", records)
-        result = governor.check_budget(brain_home, "budget-soft-under", "worker")
-        assert result["state"] == "OK"
 
-    def test_hard_cap_at_boundary(self, brain_home):
-        """Usage exactly at cap is HARD (>= boundary)."""
-        records = [_rec("assistant_usage", session="budget-hard", total_tokens=120000)]
-        _write_session(brain_home, "budget-hard", records)
-        result = governor.check_budget(brain_home, "budget-hard", "worker")
-        assert result == {
-            "state": "HARD",
-            "used": 120000,
-            "cap": 120000,
-            "outstanding": 0,
-            "available": 0,
-        }
+def test_episode_correlation_does_not_include_another_root(brain_home):
+    from second_brain import ledger
 
-    def test_worker_role_uses_worker_cap(self, brain_home):
-        """role == 'worker' caps at worker_tokens, not session_tokens."""
-        result = governor.check_budget(brain_home, "no-telemetry-worker", "worker")
-        assert result["cap"] == 120000
-
-    def test_non_worker_role_uses_session_cap(self, brain_home):
-        """Any non-'worker' role caps at session_tokens."""
-        result = governor.check_budget(brain_home, "no-telemetry-driver", "driver")
-        assert result["cap"] == 400000
-
-    def test_missing_telemetry_fails_open_without_factual_zero(self, brain_home):
-        """Unavailable accounting is explicit while the governor remains fail-open.
-
-        A session with no telemetry at all is *unknown* here, not a factual zero -- this reader
-        reports what it can prove. Admission has the same input and must still decide, so
-        ``reserve_budget`` reads a session with no recorded history as a resolved zero; the
-        distinction is deliberate and pinned by
-        ``test_a_session_without_telemetry_is_unknown_to_the_reader_and_zero_to_admission``.
-        """
-        result = governor.check_budget(brain_home, "never-existed", "driver")
-        assert result == {
-            "state": "OK",
-            "used": None,
-            "cap": 400000,
-            "outstanding": 0,
-            "available": None,
-            "error": "ACCOUNTING_UNAVAILABLE",
-        }
-
-    @pytest.mark.parametrize("identity", ["missing", "null"])
-    def test_usage_without_session_identity_is_accounting_unavailable(self, brain_home, identity):
-        """Malformed usage cannot become factual cap consumption."""
-        record = _rec("assistant_usage", total_tokens=500000)
-        if identity == "missing":
-            del record["session"]
-        else:
-            record["session"] = None
-        _write_session(brain_home, f"{identity}-usage-session", [record])
-
-        assert governor.check_budget(brain_home, f"{identity}-usage-session", "driver") == {
-            "state": "OK",
-            "used": None,
-            "cap": 400000,
-            "outstanding": 0,
-            "available": None,
-            "error": "ACCOUNTING_UNAVAILABLE",
-        }
-
-    def test_malformed_config_falls_back_to_defaults(self, brain_home):
-        """Malformed governor.toml never raises; defaults apply."""
-        (brain_home / "config" / "governor.toml").write_text("not valid toml [[[", encoding="utf-8")
-        result = governor.check_budget(brain_home, "malformed-cfg", "worker")
-        assert result["cap"] == 120000
-
-    def test_custom_budget_config_overrides_defaults(self, brain_home):
-        """[budgets] in governor.toml overrides the hardcoded defaults."""
-        (brain_home / "config" / "governor.toml").write_text(
-            "[budgets]\nsession_tokens = 1000\nworker_tokens = 500\nsoft_ratio = 0.5\n",
-            encoding="utf-8",
-        )
-        records = [_rec("assistant_usage", session="budget-custom", total_tokens=500)]
-        _write_session(brain_home, "budget-custom", records)
-        result = governor.check_budget(brain_home, "budget-custom", "driver")
-        assert result == {
-            "state": "SOFT",
-            "used": 500,
-            "cap": 1000,
-            "outstanding": 0,
-            "available": 500,
-        }
-
-    def test_descendant_usage_counts_toward_parent(self, brain_home):
-        """A worker session rooted at the parent contributes its total_tokens
-        to the parent's `used` via the parent's root_parent_session_id link
-        in the descendant's own ledger.sqlite `sessions` row."""
-        from second_brain import contracts, ledger
-
-        parent_host_id = "parent-session-descendant-test"
-        child_host_id = "child-worker-session-descendant-test"
-        parent_internal = ledger.internal_session_id(parent_host_id)
-
-        _write_session(
-            brain_home,
-            parent_host_id,
-            [
-                _rec(
-                    "assistant_usage",
-                    total_tokens=1000,
-                    session=parent_host_id,
-                )
-            ],
-        )
-        _write_session(
-            brain_home,
-            child_host_id,
-            [
-                _rec(
-                    "assistant_usage",
-                    total_tokens=2500,
-                    session=child_host_id,
-                )
-            ],
-        )
-
-        with ledger.LedgerStore(brain_home, child_host_id, host="hermes").open(
-            create=True
-        ) as store:
-            store.create_session(
-                contracts.BrainSessionIdentity(
-                    internal_session_id=ledger.internal_session_id(child_host_id),
-                    host="hermes",
-                    host_session_id=child_host_id,
-                    project_id="default",
-                    created_at="2026-08-18T10:00:00.000Z",
-                    status="active",
-                    pinned=False,
-                    schema_version=1,
-                    root_parent_session_id=parent_internal,
-                )
-            )
-
-        result = governor.check_budget(brain_home, parent_host_id, "driver")
-        assert result["used"] == 3500  # 1000 (own) + 2500 (descendant)
-
-    def test_unrelated_sibling_session_not_counted(self, brain_home):
-        """A ledger session with a DIFFERENT root_parent_session_id must
-        never leak into this parent's usage total."""
-        from second_brain import contracts, ledger
-
-        parent_host_id = "parent-session-unrelated-test"
-        other_host_id = "other-unrelated-parent-test"
-        stray_host_id = "stray-child-of-other-parent"
-
-        _write_session(
-            brain_home,
-            parent_host_id,
-            [_rec("assistant_usage", session=parent_host_id, total_tokens=10)],
-        )
-        _write_session(
-            brain_home,
-            stray_host_id,
-            [_rec("assistant_usage", session=stray_host_id, total_tokens=99999)],
-        )
-
-        with ledger.LedgerStore(brain_home, stray_host_id, host="hermes").open(
-            create=True
-        ) as store:
-            store.create_session(
-                contracts.BrainSessionIdentity(
-                    internal_session_id=ledger.internal_session_id(stray_host_id),
-                    host="hermes",
-                    host_session_id=stray_host_id,
-                    project_id="default",
-                    created_at="2026-08-18T10:00:00.000Z",
-                    status="active",
-                    pinned=False,
-                    schema_version=1,
-                    root_parent_session_id=ledger.internal_session_id(other_host_id),
-                )
-            )
-
-        result = governor.check_budget(brain_home, parent_host_id, "driver")
-        assert result["used"] == 10
-
-    def test_a_repeated_observation_of_one_response_is_charged_once(self, brain_home):
-        """The spending gate charges per billable response, not per telemetry row.
-
-        The same response observed twice must not move a threshold, while a genuinely distinct
-        request is still charged in full. Without the identity rule the used value here would be
-        25, which crosses the soft ratio and would report SOFT instead of OK.
-        """
-        (brain_home / "config" / "governor.toml").write_text(
-            "[budgets]\nsession_tokens = 30\nworker_tokens = 30\nsoft_ratio = 0.8\n",
-            encoding="utf-8",
-        )
-        session_id = "identity-budget"
-        _write_session(
-            brain_home,
-            session_id,
-            [
-                _rec("assistant_usage", session=session_id, response_id="resp-1", total_tokens=10),
-                _rec("assistant_usage", session=session_id, response_id="resp-1", total_tokens=10),
-                _rec("assistant_usage", session=session_id, response_id="resp-2", total_tokens=5),
-            ],
-        )
-        _write_ledger_session(brain_home, session_id, project_id="project-one")
-        assert governor.check_budget(brain_home, session_id, "driver") == {
-            "state": "OK",
-            "used": 15,
-            "cap": 30,
-            "outstanding": 0,
-            "available": 15,
-        }
-
-    def test_unidentified_observations_are_charged_in_full(self, brain_home):
-        """No identity means no proof of a repeat, so both are charged (the honest direction)."""
-        (brain_home / "config" / "governor.toml").write_text(
-            "[budgets]\nsession_tokens = 30\nworker_tokens = 30\nsoft_ratio = 0.8\n",
-            encoding="utf-8",
-        )
-        session_id = "identity-less-budget"
-        _write_session(
-            brain_home,
-            session_id,
-            [
-                _rec("assistant_usage", session=session_id, total_tokens=20),
-                _rec("assistant_usage", session=session_id, total_tokens=20),
-            ],
-        )
-        _write_ledger_session(brain_home, session_id, project_id="project-one")
-        # Charged twice (40 > cap) — a wrong dedupe here would report OK at 20 and let the
-        # session spend past its ceiling.
-        assert governor.check_budget(brain_home, session_id, "driver") == {
-            "state": "HARD",
-            "used": 40,
-            "cap": 30,
-            "outstanding": 0,
-            "available": -10,
-        }
-
-    def test_independent_roots_nested_worker_duplicate_resume_and_old_home(self, brain_home):
-        """A/B/C scope, nested A usage, duplicate rows, resume, and old history."""
-        from second_brain import ledger
-
-        (brain_home / "config" / "governor.toml").write_text(
-            "[budgets]\nsession_tokens = 100\nworker_tokens = 40\nsoft_ratio = 0.8\n",
-            encoding="utf-8",
-        )
-        root_a = "root-a"
-        child_a = "root-a-child"
-        nested_a = "root-a-nested-child"
-        root_b = "root-b"
-        root_c = "root-c"
-        historical = "historical-high-usage-root"
-        for session_id, total in (
-            (root_a, 10),
-            (child_a, 15),
-            (nested_a, 40),
-            (root_b, 5),
-            (root_c, 90),
-            (historical, 500),
-        ):
-            _write_session(
-                brain_home,
-                session_id,
-                [_rec("assistant_usage", session=session_id, total_tokens=total)],
-            )
-
-        _write_ledger_session(brain_home, root_a, project_id="project-one")
-        _write_ledger_session(brain_home, root_b, project_id="project-one")
-        _write_ledger_session(brain_home, root_c, project_id="project-two")
-        _write_ledger_session(brain_home, historical, project_id="project-one")
-        root_a_internal = ledger.internal_session_id(root_a)
-        _write_ledger_session(
-            brain_home,
-            child_a,
-            project_id="project-one",
-            root_parent_session_id=root_a_internal,
-        )
-        nested_db = _write_ledger_session(
-            brain_home,
-            nested_a,
-            project_id="project-one",
-            root_parent_session_id=root_a_internal,
-        )
-
-        duplicate_dir = brain_home / "state" / "sessions" / "duplicate-nested-row"
-        duplicate_dir.mkdir(parents=True)
-        shutil.copy2(nested_db, duplicate_dir / "ledger.sqlite")
-
-        # The episode witness: 10 (root) + 15 (child) + 40 (nested) = 65, with the duplicate
-        # nested ledger row and the second root ledger both contributing nothing new.
-        expected_a = {"state": "OK", "used": 65, "cap": 100, "outstanding": 0, "available": 35}
-        assert governor.check_budget(brain_home, root_a, "driver") == expected_a
-        _write_ledger_session(brain_home, root_a, project_id="project-one")
-        assert governor.check_budget(brain_home, root_a, "driver") == expected_a
-        assert governor.check_budget(brain_home, root_b, "driver") == {
-            "state": "OK",
-            "used": 5,
-            "cap": 100,
-            "outstanding": 0,
-            "available": 95,
-        }
-        assert governor.check_budget(brain_home, root_c, "driver") == {
-            "state": "SOFT",
-            "used": 90,
-            "cap": 100,
-            "outstanding": 0,
-            "available": 10,
-        }
-        # A nested session resolves the ROOT episode's book: 65 of the 40-token worker cap, so
-        # the answer is over budget rather than a comfortable 40 of 40 from its own usage alone.
-        assert governor.check_budget(brain_home, nested_a, "worker") == {
-            "state": "HARD",
-            "used": 65,
-            "cap": 40,
-            "outstanding": 0,
-            "available": -25,
-        }
-
-    def test_raw_telemetry_identity_is_not_lost_to_sanitized_sidecar(self, brain_home):
-        session_id = "worker.child"
-        _write_session(
-            brain_home,
-            session_id,
-            [_rec("assistant_usage", session=session_id, total_tokens=12)],
-        )
-        _write_session(
-            brain_home,
-            "worker-child",
-            [
-                _rec("session_start", session=session_id),
-                _rec("assistant_usage", session=session_id, total_tokens=8),
-            ],
-        )
-
-        assert governor.check_budget(brain_home, session_id, "worker") == {
-            "state": "OK",
-            "used": 20,
-            "cap": 120000,
-            "outstanding": 0,
-            "available": 119980,
-        }
-
-    def test_malformed_telemetry_fails_open_with_diagnostic(self, brain_home):
-        telemetry_dir = brain_home / "telemetry" / "agent-performance"
-        telemetry_dir.mkdir(parents=True, exist_ok=True)
-        (telemetry_dir / "malformed.jsonl").write_text("{not-json}\n", encoding="utf-8")
-
-        assert governor.check_budget(brain_home, "malformed", "worker") == {
-            "state": "OK",
-            "used": None,
-            "cap": 120000,
-            "outstanding": 0,
-            "available": None,
-            "error": "ACCOUNTING_UNAVAILABLE",
-        }
-
-    def test_unreadable_ledger_fails_open_with_diagnostic(self, brain_home):
-        _write_session(
-            brain_home,
-            "healthy-session",
-            [_rec("assistant_usage", session="healthy-session", total_tokens=10)],
-        )
-        corrupt_dir = brain_home / "state" / "sessions" / "corrupt-ledger"
-        corrupt_dir.mkdir(parents=True)
-        (corrupt_dir / "ledger.sqlite").write_bytes(b"not sqlite")
-
-        assert governor.check_budget(brain_home, "healthy-session", "driver") == {
-            "state": "OK",
-            "used": None,
-            "cap": 400000,
-            "outstanding": None,
-            "available": None,
-            "error": "ACCOUNTING_UNAVAILABLE",
-        }
+    root = "root-a"
+    child = "child-a"
+    unrelated = "child-b"
+    _write_ledger_session(brain_home, root, project_id="one")
+    _write_ledger_session(
+        brain_home,
+        child,
+        project_id="one",
+        root_parent_session_id=ledger.internal_session_id(root),
+    )
+    _write_ledger_session(
+        brain_home,
+        unrelated,
+        project_id="two",
+        root_parent_session_id=ledger.internal_session_id("root-b"),
+    )
+    assert governor._episode_host_sessions(brain_home, root) == {root, child}

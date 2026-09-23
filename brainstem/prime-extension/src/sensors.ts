@@ -12,7 +12,6 @@
  * Schema: brainstem/telemetry/SCHEMA.md (v=2). Field names are snake_case.
  */
 import { createHash } from "node:crypto";
-import type { AgentRole } from "./driver-orchestrator";
 
 /** Maximum length of stored bash command text (privacy rule). */
 export const BASH_COMMAND_MAX_CHARS = 500;
@@ -272,31 +271,12 @@ export function sessionStart(
 export interface BeforeAgentStartRecord extends BaseRecord {
   kind: "before_agent_start";
   prompt_chars: number;
-  /**
-   * Agent role of the active model for this session: hard_orchestrator |
-   * driver | worker | normal (additive, schema v2; absent when not provided).
-   */
-  role?: AgentRole;
-  /**
-   * Driver role only: whether the driver-orchestration contract was appended
-   * to the system prompt for this turn (additive; present for driver-role
-   * sessions, absent otherwise).
-   */
-  driver_contract_injected?: boolean;
 }
 
-export function beforeAgentStart(
-  session: string,
-  prompt: unknown,
-  role?: AgentRole,
-  driverContractInjected?: boolean,
-): BeforeAgentStartRecord {
-  const record = base("before_agent_start", session, {
+export function beforeAgentStart(session: string, prompt: unknown): BeforeAgentStartRecord {
+  return base("before_agent_start", session, {
     prompt_chars: typeof prompt === "string" ? prompt.length : 0,
   }) as unknown as BeforeAgentStartRecord;
-  if (role !== undefined) record.role = role;
-  if (driverContractInjected !== undefined) record.driver_contract_injected = driverContractInjected;
-  return record;
 }
 
 export interface TurnStartRecord extends BaseRecord {
@@ -766,64 +746,6 @@ export function sessionShutdown(session: string, reason: unknown): SessionShutdo
   }) as unknown as SessionShutdownRecord;
 }
 
-/** Enumerated Sol orchestrator-policy violation codes (policy §13). */
-export const ORCHESTRATOR_VIOLATIONS = [
-  "direct_execution",
-  "undue_context_gather",
-  "concurrency_overflow",
-  "wrong_tier",
-  "rediscovery",
-  "scope_drift",
-  "evidence_gap",
-] as const;
-
-/** Enumerated detector identities for orchestrator violations. */
-export const ORCHESTRATOR_DETECTORS = ["manual", "runtime_guard", "telemetry_audit"] as const;
-
-export interface OrchestratorPolicyViolationRecord extends BaseRecord {
-  kind: "orchestrator_policy_violation";
-  /** Enumerated code; unknown values are coerced to "unknown", never free text. */
-  violation: string;
-  /** Provider/id string or null (see modelToString). */
-  model: string | null;
-  /** Enumerated detector id; unknown values are coerced to "unknown". */
-  detected_by: string;
-  /** Whether the action was blocked (hard enforcement) or only recorded (advisory). */
-  blocked: boolean;
-}
-
-/**
- * Privacy-safe, report-only builder for orchestrator-policy violations.
- *
- * BOUNDED FIELDS ONLY: enumerated violation code, model id, enumerated
- * detector, blocked flag. No free text (no action description, prompt,
- * command, note, reason, or payload) ever enters the record.
- *
- * NOT WIRED: this sensor is available for manual/future use; no extension
- * hook emits it today and no automatic prompt inspection is performed.
- */
-export function orchestratorPolicyViolation(
-  session: string,
-  violation: unknown,
-  model: unknown,
-  detectedBy: unknown,
-  blocked: unknown,
-): OrchestratorPolicyViolationRecord {
-  const violationValue =
-    typeof violation === "string" && (ORCHESTRATOR_VIOLATIONS as readonly string[]).includes(violation)
-      ? violation
-      : "unknown";
-  const detector =
-    typeof detectedBy === "string" && (ORCHESTRATOR_DETECTORS as readonly string[]).includes(detectedBy)
-      ? detectedBy
-      : "unknown";
-  return base("orchestrator_policy_violation", session, {
-    violation: violationValue,
-    model: modelToString(model),
-    detected_by: detector,
-    blocked: blocked === true,
-  }) as unknown as OrchestratorPolicyViolationRecord;
-}
 
 export interface ExtensionErrorRecord extends BaseRecord {
   kind: "extension_error";
@@ -918,18 +840,16 @@ export function autoinjectShadowDecision(
 
 // ---------------------------------------------------------------------------
 // P3-D lean runtime adapter sensor (plan §8, SCHEMA.md `lean_kernel`).
-// Privacy-safe: enumerated decisions/reasons/roles/status + mode value +
-// character counts only — never kernel text or prompt content.
+// Privacy-safe: bounded decisions/reasons/status + mode and counts only —
+// never kernel text, model role or prompt content.
 // ---------------------------------------------------------------------------
 
 export interface LeanKernelRecord extends BaseRecord {
   kind: "lean_kernel";
   /** inject = kernel patch produced; omit = no patch. */
   decision: "inject" | "omit";
-  /** Enumerated: active | advisory | off | role | skill-missing. */
+  /** Bounded decision reason; absent authority is never inferred from a role. */
   reason: string;
-  /** Agent role at decision time (driver-orchestration vocabulary). */
-  role: string;
   /** Resolved skill lifecycle status (null when the file is missing). */
   skill_status: string | null;
   /** Resolved eval gate value (env advisory/off, else file [lean] eval) or null. */
@@ -947,7 +867,6 @@ export function leanKernel(
   fields: {
     decision: "inject" | "omit";
     reason: string;
-    role: string;
     skill_status: string | null;
     mode: string | null;
     eval_source: "env" | "file" | null;
@@ -959,7 +878,6 @@ export function leanKernel(
     ...base("lean_kernel", session, {}),
     decision: fields.decision,
     reason: fields.reason,
-    role: fields.role,
     skill_status: fields.skill_status,
     mode: fields.mode,
     eval_source: fields.eval_source,
@@ -1082,7 +1000,7 @@ export interface ProviderRequestMetaRecord extends BaseRecord {
   request_bytes: number;
   message_count: number;
   payload_keys: string[];
-  /** sha256 of the stable prefix (messages before the last user message). */
+  /** sha256 of stable system/context messages before the first user turn. */
   system_prefix_sha?: string;
   /** sha256 of the serialized tool surface; absent when the payload has no tools. */
   tool_surface_sha?: string;
@@ -1114,10 +1032,10 @@ export interface ProviderRequestMetaRecord extends BaseRecord {
  * of the stable system/messages prefix and the tool surface. NEVER the
  * payload content itself.
  *
- * `system_prefix_sha` = sha256 of the JSON serialization of the messages
- * preceding the LAST user message (the stable provider-cache prefix); when
- * there is no user message the whole messages array is fingerprinted. This
- * detects stable-prefix epochs busted by system-prompt/tool-schema changes.
+ * `system_prefix_sha` fingerprints messages preceding the FIRST user message
+ * (or all messages if none). Prior conversation is native task state, not a
+ * Brain prefix change; counting it would misattribute normal cache churn to
+ * Brain in the passive economics report.
  */
 export interface LeanProviderEvidence {
   marker: string;
@@ -1211,7 +1129,7 @@ export function providerRequestMeta(
     }
   }
   let prefix = messages;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
+  for (let i = 0; i < messages.length; i += 1) {
     if (isUserMessage(messages[i])) {
       prefix = messages.slice(0, i);
       break;
@@ -1226,27 +1144,6 @@ export function providerRequestMeta(
   return baseV3("provider_request_meta", session, extra) as unknown as ProviderRequestMetaRecord;
 }
 
-export interface ModelRouteTransitionRecord extends BaseRecord {
-  v: 3;
-  kind: "MODEL_ROUTE_TRANSITION";
-  current_provider: string | null;
-  current_model: string | null;
-  target_provider: string | null;
-  target_model: string | null;
-  target_capacity: number;
-  cache_scope: string;
-  cache_cold: boolean;
-  load_before: number;
-  load_after: number;
-  reclaimed_count?: number;
-}
-
-export function modelRouteTransition(
-  session: string,
-  extra: Omit<ModelRouteTransitionRecord, "v" | "ts" | "kind" | "session">,
-): ModelRouteTransitionRecord {
-  return baseV3("MODEL_ROUTE_TRANSITION", session, extra as Record<string, unknown>) as unknown as ModelRouteTransitionRecord;
-}
 
 /** Header entries permitted into telemetry: cache/rate-limit diagnostics only. */
 export const RESPONSE_HEADER_ALLOWLIST: readonly RegExp[] = [

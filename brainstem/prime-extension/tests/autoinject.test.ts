@@ -297,8 +297,6 @@ describe("index.ts wiring (real factory, fake ExtensionAPI)", () => {
       },
     } as unknown as ExtensionAPI;
     factory(pi, {
-      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
-      ompRoutingRunner: async () => ({ decision: null }),
       ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
     });
     return { handlers, api: pi };
@@ -434,8 +432,6 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
       },
     } as unknown as ExtensionAPI;
     factory(pi, {
-      budgetRunner: async () => ({ state: "OK", used: 0, cap: 400000 }),
-      ompRoutingRunner: async () => ({ decision: null }),
       ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
     });
     return handlers;
@@ -536,7 +532,7 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     expect(advisoryRunMock).not.toHaveBeenCalled();
   });
 
-  it("advisory worker role returns a bare { message } patch (FIX 1)", async () => {
+  it("advisory native recipient receives a message without a host prompt", async () => {
     process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-w-"));
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
     const handlers = loadFactory();
@@ -548,7 +544,7 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     });
     const result = await handlers.get("before_agent_start")!(
       { prompt: "adaptive fan-out policy" },
-      ctx, // deepseek-v4-flash -> worker role
+      ctx,
     );
     expect(result).toEqual({
       message: {
@@ -560,30 +556,8 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     });
   });
 
-  it("advisory orchestrator role merges message with the Sol systemPrompt (FIX 1)", async () => {
-    process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-o-"));
-    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
-    process.env.ORCHESTRATOR_MODELS = "openai-codex/gpt-5.6-sol";
-    const handlers = loadFactory();
-    advisoryRunMock.mockResolvedValueOnce({
-      customType: AUTOINJECT_CUSTOM_TYPE,
-      content: "packet-text",
-      display: true,
-      details: { delivery_id: "del-1", packet_tokens: 10 },
-    });
-    const solCtx = {
-      cwd: "C:/work",
-      model: { id: "openai-codex/gpt-5.6-sol" },
-      sessionManager: ctx.sessionManager,
-    } as unknown as ExtensionContext;
-    const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, solCtx);
-    expect(result).toBeDefined();
-    const r = result as Record<string, unknown>;
-    expect(typeof r.systemPrompt).toBe("string"); // Sol contract present
-    expect((r.message as Record<string, unknown>).content).toBe("packet-text");
-  });
 
-  it("advisory driver role merges message with the driver contract (FIX 1)", async () => {
+  it("advisory context survives composition with the host's base prompt", async () => {
     process.env.SECOND_BRAIN_HOME = await mkdtemp(joinTmp(tmpdir(), "sb-ai-d-"));
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
     const handlers = loadFactory();
@@ -602,7 +576,8 @@ describe("index.ts wiring — advisory mode (real factory, fake ExtensionAPI)", 
     const result = await handlers.get("before_agent_start")!({ prompt: "adaptive fan-out" }, driverCtx);
     expect(result).toBeDefined();
     const r = result as Record<string, unknown>;
-    expect(typeof r.systemPrompt).toBe("string"); // driver contract appended
+    expect(String(r.systemPrompt)).toContain("base prompt");
+    expect(String(r.systemPrompt)).not.toContain("second-brain-driver-orchestration-contract");
     expect((r.message as Record<string, unknown>).content).toBe("packet-text");
   });
 });

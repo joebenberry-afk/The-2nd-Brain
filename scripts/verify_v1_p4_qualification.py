@@ -48,8 +48,6 @@ REQUIRED_SCENARIOS = frozenset(
         "cross_session_continuity",
         "harness_isolation",
         "harness_switch",
-        "driver_worker",
-        "failed_worker",
         "malformed_state",
         "stale_state",
         "token_pressure",

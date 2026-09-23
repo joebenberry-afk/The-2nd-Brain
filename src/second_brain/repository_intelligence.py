@@ -1,51 +1,20 @@
 """
-Repository Intelligence & Driver/Worker Plane Management (Plan §3 P1.1, P1.2, P2.4, P2.6).
+Repository Intelligence: durable incremental symbol and dependency index.
 
 Capabilities:
 1. P2.4: Durable incremental AST, symbol, and module dependency index.
    - Preserves symbols, classes, functions, and import graphs in SQLite.
    - Incremental update: processes dirty files only based on SHA256/mtime.
-2. P1.1 / P1.2: Driver/Worker Concurrency Plane.
-   - Hard-enforces worker concurrency ceiling (default max 2 concurrent workers).
-   - Structured assignment packets and delta result packets.
-   - Spawns recorded into session ledger.
 """
 
 from __future__ import annotations
 
 import ast
 import hashlib
-import json
 import sqlite3
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
-
-from . import artifacts, telemetry
-from .errors import BrainError
-
-
-def _append_telemetry(home: Path, session_id: str, kind: str, payload: dict[str, Any]) -> None:
-    try:
-        t_dir = telemetry.telemetry_dir(home)
-        t_dir.mkdir(parents=True, exist_ok=True)
-        safe_stem = (
-            "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in session_id) or "anon"
-        )
-        record = {
-            "v": 2,
-            "kind": kind,
-            "session": session_id,
-            "timestamp": datetime.now(UTC).isoformat(),
-            **payload,
-        }
-        with (t_dir / f"{safe_stem}.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
-
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS repo_files (
@@ -68,67 +37,9 @@ CREATE TABLE IF NOT EXISTS repo_dependencies (
     imported_symbol TEXT,
     PRIMARY KEY (source_file, imported_module, imported_symbol)
 );
-CREATE TABLE IF NOT EXISTS worker_plane (
-    worker_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    subtask TEXT NOT NULL,
-    status TEXT NOT NULL,
-    assigned_at TEXT NOT NULL,
-    completed_at TEXT,
-    result_ref TEXT
-);
 CREATE INDEX IF NOT EXISTS idx_sym_name ON repo_symbols (symbol_name);
 CREATE INDEX IF NOT EXISTS idx_dep_source ON repo_dependencies (source_file);
-CREATE INDEX IF NOT EXISTS idx_worker_status ON worker_plane (session_id, status);
 """
-
-DEFAULT_MAX_WORKERS = 2
-
-
-class WorkerStatus(StrEnum):
-    QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-
-
-@dataclass
-class WorkerAssignmentPacket:
-    """Minimal assignment packet for worker dispatch (§3 P1.2)."""
-
-    worker_id: str
-    session_id: str
-    subtask: str
-    target_files: list[str] = field(default_factory=list)
-    relevant_symbols: list[str] = field(default_factory=list)
-    context_capsule: str = ""
-    created_at: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "worker_id": self.worker_id,
-            "session_id": self.session_id,
-            "subtask": self.subtask,
-            "target_files": self.target_files,
-            "relevant_symbols": self.relevant_symbols,
-            "context_capsule": self.context_capsule,
-            "created_at": self.created_at,
-        }
-
-
-@dataclass
-class WorkerResultPacket:
-    """Structured result packet returned by worker to driver (§3 P1.2)."""
-
-    worker_id: str
-    session_id: str
-    status: WorkerStatus
-    summary: str
-    findings: list[str] = field(default_factory=list)
-    delta_patches: dict[str, str] = field(default_factory=dict)
-    tokens_used: int = 0
-    completed_at: str = ""
 
 
 class RepositoryIntelligence:
@@ -272,126 +183,3 @@ class RepositoryIntelligence:
                 (rel_path,),
             ).fetchall()
             return [dict(r) for r in rows]
-
-
-class WorkerPlaneManager:
-    """Driver/Worker Plane Concurrency and Packet Broker (§3 P1.1, P1.2)."""
-
-    def __init__(
-        self,
-        home: Path | str,
-        session_id: str,
-        max_concurrent_workers: int = DEFAULT_MAX_WORKERS,
-    ) -> None:
-        self.home = Path(home)
-        self.session_id = session_id
-        self.max_concurrent_workers = max_concurrent_workers
-        self._dbfile = self.home / "state" / "repo_intel" / "repo_intel.sqlite"
-        self._dbfile.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _init_db(self) -> None:
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-
-    def active_worker_count(self) -> int:
-        """Count currently running workers in this session."""
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM worker_plane WHERE session_id = ? AND status = ?",
-                (self.session_id, WorkerStatus.RUNNING.value),
-            ).fetchone()
-            return int(row[0]) if row else 0
-
-    def spawn_worker(
-        self,
-        subtask: str,
-        *,
-        target_files: list[str] | None = None,
-        relevant_symbols: list[str] | None = None,
-        context_capsule: str = "",
-    ) -> WorkerAssignmentPacket:
-        """
-        Spawn a worker if under concurrency limit; raise BrainError if limit exceeded (§3 P1.1).
-        """
-        active = self.active_worker_count()
-        if active >= self.max_concurrent_workers:
-            raise BrainError(
-                f"Worker concurrency ceiling reached ({active}/{self.max_concurrent_workers}). "
-                "Queue or wait for running workers."
-            )
-
-        now = datetime.now(UTC).isoformat()
-        digest = hashlib.sha256(f"{self.session_id}:{subtask}:{now}".encode()).hexdigest()[:12]
-        worker_id = f"worker-{digest}"
-
-        packet = WorkerAssignmentPacket(
-            worker_id=worker_id,
-            session_id=self.session_id,
-            subtask=subtask,
-            target_files=target_files or [],
-            relevant_symbols=relevant_symbols or [],
-            context_capsule=context_capsule,
-            created_at=now,
-        )
-
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.execute(
-                "INSERT INTO worker_plane "
-                "(worker_id, session_id, subtask, status, assigned_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (worker_id, self.session_id, subtask, WorkerStatus.RUNNING.value, now),
-            )
-            conn.commit()
-
-        # Telemetry record for worker spawn
-        _append_telemetry(
-            self.home,
-            self.session_id,
-            "worker_spawned",
-            {
-                "worker_id": worker_id,
-                "subtask_sha": hashlib.sha256(subtask.encode()).hexdigest()[:12],
-                "active_workers": active + 1,
-            },
-        )
-        return packet
-
-    def complete_worker(self, result: WorkerResultPacket) -> None:
-        """Record worker completion and store structured findings (§3 P1.2)."""
-        now = datetime.now(UTC).isoformat()
-        result_json = json.dumps(
-            {
-                "summary": result.summary,
-                "findings": result.findings,
-                "delta_patches": result.delta_patches,
-                "tokens_used": result.tokens_used,
-            }
-        )
-        stored = artifacts.store_text(
-            self.home, result_json, kind="worker_result", session=self.session_id
-        )
-        artifacts.add_ref(
-            self.home, stored["hash"], owner=f"repository_intelligence:{self.session_id}"
-        )
-
-        with sqlite3.connect(self._dbfile, timeout=5.0) as conn:
-            conn.execute(
-                "UPDATE worker_plane SET status = ?, completed_at = ?, result_ref = ? "
-                "WHERE worker_id = ?",
-                (result.status.value, now, stored["hash"], result.worker_id),
-            )
-            conn.commit()
-
-        # Record worker completion in telemetry
-        _append_telemetry(
-            self.home,
-            self.session_id,
-            "worker_completed",
-            {
-                "worker_id": result.worker_id,
-                "status": result.status.value,
-                "tokens_used": result.tokens_used,
-            },
-        )

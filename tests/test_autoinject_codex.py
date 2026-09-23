@@ -109,12 +109,16 @@ def test_windows_hook_preserves_unicode_project_scope_and_unknown_counts(tmp_pat
     cwd_dir.mkdir()
     registry.add_project(home, cwd_dir, project_id="proj-a")
     env = {
-        **os.environ,
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"}
+    }
+    env.update({
         "SECOND_BRAIN_HOME": str(home),
         "SECOND_BRAIN_PYTHON": sys.executable,
         "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
         "PYTHONIOENCODING": "cp1252",
-    }
+    })
     payload = {
         "session_id": "unicode-hook",
         "hook_event_name": "UserPromptSubmit",

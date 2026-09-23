@@ -1,3 +1,10 @@
+> **Historical execution record only (2026-09-20).** The 2026-09-23
+> orchestrator-removal mandate supersedes every installation, launcher,
+> worker-settlement and rollback instruction below for current candidates.
+> `scripts/run-omp-patched.ps1` and the host-patch campaign are retired from
+> active tooling; do not run these commands against production. Sealed records
+> preserve the original subject, not authorization for new bytes.
+
 # OMP shipping candidate — activation and rollback card
 
 Status: executed for the accepted candidate. Pre-activation acceptance

@@ -12,8 +12,6 @@ Never identify a project solely by directory name.
 from __future__ import annotations
 
 import hashlib
-import os
-import stat
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -54,80 +52,6 @@ class Project:
     repo_intelligence: str
     verification_policy: str
     active: bool
-
-
-@dataclass(frozen=True)
-class WorktreeIdentity:
-    """Canonical identity of one registered project's concrete Git worktree."""
-
-    project_id: str
-    worktree_id: str
-    root: str
-
-
-def _git_path(repo_path: str | Path, *args: str) -> Path:
-    path = Path(repo_path).expanduser().resolve()
-    if not path.is_dir():
-        raise BrainError(f"Git worktree path does not exist: {path}")
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(path), *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise BrainError(f"Could not inspect Git worktree {path}") from exc
-    lines = result.stdout.strip().splitlines()
-    value = lines[0] if result.returncode == 0 and lines else ""
-    if not value:
-        raise BrainError(f"Could not resolve Git worktree identity for {path}")
-    resolved = Path(value).expanduser()
-    return (resolved if resolved.is_absolute() else path / resolved).resolve()
-
-
-def _canonical_path_key(path: Path) -> str:
-    return os.path.normcase(str(path.resolve()))
-
-
-def resolve_registered_worktree(
-    home: Path | str, project_id: str, repo_path: str | Path
-) -> WorktreeIdentity:
-    """Resolve a concrete Git worktree and prove it belongs to an exact project.
-
-    Linked worktrees share a Git common directory with the registered root, but
-    retain distinct filesystem directory identities. Renames preserve exclusion.
-    """
-    conn = db.connect(db.db_path(Path(home)))
-    try:
-        row = conn.execute(
-            "SELECT id,repo_path,active FROM projects WHERE id=?", (project_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None or not bool(row["active"]) or not row["repo_path"]:
-        raise BrainError(f"No active registered project matches {project_id!r}")
-
-    registered_root = _git_path(row["repo_path"], "rev-parse", "--show-toplevel")
-    candidate_root = _git_path(repo_path, "rev-parse", "--show-toplevel")
-    registered_common = _git_path(registered_root, "rev-parse", "--git-common-dir")
-    candidate_common = _git_path(candidate_root, "rev-parse", "--git-common-dir")
-    if _canonical_path_key(registered_common) != _canonical_path_key(candidate_common):
-        raise BrainError("Worktree is outside the registered project")
-    try:
-        physical = candidate_root.stat()
-    except OSError as exc:
-        raise BrainError("Could not inspect physical worktree identity") from exc
-    if not stat.S_ISDIR(physical.st_mode) or physical.st_ino <= 0 or physical.st_dev < 0:
-        raise BrainError("Physical worktree identity is unavailable")
-    worktree_id = hashlib.sha256(
-        f"worktree:{physical.st_dev}:{physical.st_ino}".encode()
-    ).hexdigest()
-    return WorktreeIdentity(
-        project_id=str(row["id"]),
-        worktree_id=worktree_id,
-        root=_canonical_path_key(candidate_root),
-    )
 
 
 def utcnow() -> str:

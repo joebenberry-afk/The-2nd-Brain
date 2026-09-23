@@ -1,11 +1,6 @@
-"""Scout: isolated read-only repository explorer (plan §22/§23/§102).
+"""Deterministic repository discovery and evidence map generation.
 
-Scout runs as a separate agent process so its exploration does not pollute the
-main context. This module provides the Python side: the Evidence Map template
-(plan §23), a deterministic cheap pre-pass (git state, RepoWise freshness, term
-match candidates via ripgrep), the map writer, and the prime-agent command
-builder. The actual spawn (:func:`run_scout`) is used live by the parent; unit
-tests exercise everything around it.
+The pre-pass and evidence map do not spawn an agent or select a model.
 """
 
 from __future__ import annotations
@@ -16,7 +11,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 
 from . import registry
@@ -46,25 +40,6 @@ SECTION_TITLES: dict[str, str] = {
     "recommended_next_read": "Recommended Next Read",
     "source_freshness": "Source Freshness",
 }
-
-SCOUT_PROMPT_TEMPLATE = """You are Scout, a read-only repository explorer for The Second Brain.
-
-TASK: {task}
-
-MANDATE:
-- Explore the repository in the current working directory READ-ONLY.
-- Fill in the Evidence Map file at {map_path} IN PLACE. Keep its section
-  structure; replace each "(fill me)" placeholder with concrete findings.
-- Do NOT modify any other file. Do NOT create files. Do NOT run tests,
-  builds, or any command with side effects.
-- Tool priority: RepoWise first (when available), then ripgrep (rg), then
-  ast-grep, then direct reads.
-- Be concise and concrete: file:line references, symbol names, exact test ids.
-- If a section has nothing concrete, leave its "(fill me)" placeholder.
-
-FINAL REPLY: reply with exactly one line:
-{map_path}|<one-line summary>
-"""
 
 RG_EXCLUDES: tuple[str, ...] = (
     "node_modules",
@@ -327,76 +302,3 @@ def write_evidence_map(repo: Path, task: str, prepass: dict, out_dir: Path) -> P
 
 
 # ---------------------------------------------------------------------------
-# Scout agent command + spawn
-# ---------------------------------------------------------------------------
-
-
-def scout_command(
-    repo: Path,
-    task: str,
-    map_path: Path,
-    model: str = "deepseek/deepseek-v4-flash",
-    ext: str | None = None,
-) -> list[str]:
-    """Build the prime-agent invocation for the Scout run (no shell)."""
-    # Plain replacement (not str.format): task text may contain braces.
-    prompt = SCOUT_PROMPT_TEMPLATE.replace("{task}", task).replace("{map_path}", str(map_path))
-    command = [
-        "bash",
-        "C:/Tools/prime-agent/prime-agent.sh",
-        "-p",
-        "-t",
-        "ipython,bash",
-        "--model",
-        model,
-        "--cwd",
-        str(repo),
-        "--offline",
-        "--daemon-socket",
-        rf"\\.\pipe\scout-{uuid.uuid4().hex}",
-    ]
-    if ext is not None:
-        command += ["-e", ext]
-    command.append(prompt)
-    return command
-
-
-def run_scout(
-    home: Path,
-    target: str | Path,
-    task: str,
-    model: str = "deepseek/deepseek-v4-flash",
-    out_dir: Path | None = None,
-    ext: str | None = None,
-) -> dict:
-    """Full Scout spawn (used live by the parent; not covered by unit tests)."""
-    repo = resolve_repo(home, target)
-    prepass = deterministic_prepass(repo, task)
-    output_dir = Path(out_dir) if out_dir is not None else Path(home) / "outputs" / "evidence-maps"
-    map_path = write_evidence_map(repo, task, prepass, output_dir)
-    command = scout_command(repo, task, map_path, model=model, ext=ext)
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME")
-    }
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=900,
-            env=env,
-            errors="replace",
-        )
-        rc, stdout, stderr = result.returncode, result.stdout, result.stderr
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        rc, stdout, stderr = -1, "", f"scout spawn failed: {exc}"
-    return {
-        "map_path": str(map_path),
-        "rc": rc,
-        "stdout_tail": stdout[-2000:],
-        "stderr_tail": stderr[-2000:],
-        "command": command,
-        "prepass": prepass,
-    }

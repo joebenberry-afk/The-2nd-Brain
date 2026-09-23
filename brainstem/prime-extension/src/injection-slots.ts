@@ -18,6 +18,13 @@
 
 import { createHash } from "node:crypto";
 
+const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/** A project identifier is data, never arbitrary model-visible instruction text. */
+function projectIdForPrompt(value: unknown): string {
+  return typeof value === "string" && PROJECT_ID_RE.test(value) ? value : "default";
+}
+
 /**
  * T1.6 memory commands (PREFIX component 3).
  *
@@ -94,29 +101,25 @@ export function assemblePrefix(options: AssemblePrefixOptions): string {
   }
 
   // (4) Project identity line
-  const proj = (options.projectId || "default").trim();
+  const proj = projectIdForPrompt(options.projectId);
   parts.push(`Project: ${proj}`);
 
   return parts.join("\n\n");
 }
 
-/** Stable dedup marker for the PREFIX "extras" block (T1.6 memory commands +
- * project identity line) -- mirrors LEAN_KERNEL_MARKER / DRIVER_CONTRACT_MARKER
- * (lean-code.ts / driver-orchestrator.ts): never inject the block twice. */
+/** Stable dedup marker for memory commands and project identity.
+ * Like the approved Lean marker, it prevents duplicate recipient context. */
 export const PREFIX_EXTRAS_MARKER = "second-brain-prefix-extras";
 
 /**
- * Deliver the T1.6 memory commands + project identity line (PREFIX
- * components 3-4) into a base system prompt. Returns undefined when the
- * base is undefined/empty (never invent a prompt, matching
- * appendLeanKernel/appendDriverContract) and returns the base UNCHANGED
- * when it already contains PREFIX_EXTRAS_MARKER (dedup: PREFIX is
- * session-constant, never duplicated across turns).
+ * Append stable memory commands and a validated project ID to a host prompt.
+ * Undefined/empty bases stay unchanged; the marker prevents duplicate
+ * recipient context on later turns.
  */
 export function appendPrefixExtras(base: string | undefined, projectId: string): string | undefined {
   if (base === undefined || base.trim() === "") return undefined;
   if (base.includes(PREFIX_EXTRAS_MARKER)) return base;
-  const proj = (projectId || "default").trim();
+  const proj = projectIdForPrompt(projectId);
   const extras = [MEMORY_COMMANDS_TEXT.trim(), `Project: ${proj}`].filter(Boolean).join("\n\n");
   return `${base}\n\n[${PREFIX_EXTRAS_MARKER}]\n${extras}`;
 }

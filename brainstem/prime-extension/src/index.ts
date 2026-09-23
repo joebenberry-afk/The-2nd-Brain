@@ -1,70 +1,29 @@
 /**
- * The Second Brain OS — Phase 2 observability extension (Prime Agent).
+ * Second Brain's OMP adapter: memory, context, skills and passive evidence.
  *
- * MEASUREMENT FIRST, plus the Phase 1 minimal-orchestrator guard and the thin
- * OMP -> Second Brain model-routing handoff. Observes lifecycle events and
- * appends JSONL telemetry to <brain-home>/telemetry/agent-performance/<session>.jsonl.
- * For Sol orchestrator-model sessions only, it blocks direct execution tools
- * (bash/edit/websearch) and injects the Sol contract as a systemPrompt addendum.
- * Brain routing may replace only provider/model fields exposed by an OMP request.
- *
- * Safety invariants:
- *  - Measurement handlers return undefined except direct handlers whose runtime
- *    contract consumes a replacement: before_agent_start, context,
- *    before_provider_request, and message_end.
- *  - tool_call handlers do not mutate event.input; the task bridge returns a
- *    validated replacement only through the supported ToolCallEventResult.input.
- *  - Every handler is wrapped in try/catch; on error an `extension_error`
- *    record is appended best-effort and nothing is thrown into the session.
- *    Guard failures FAIL OPEN (recorded, never blocking) so measurement can
- *    never disturb the agent session.
- *  - Writes are fire-and-forget: append() is never awaited on the critical
- *    path and storage never throws.
- *
- * Schema: brainstem/telemetry/SCHEMA.md (v=2). Privacy rules are enforced in
- * src/sensors.ts (counts/sizes only; bash command text truncated to 500).
+ * The native host owns agents, models, tools and task lifecycle. This
+ * extension never authorizes, rewrites or settles host execution.
+ * Measurement failures do not interrupt the host; protected Brain data
+ * writes and compaction checkpoints keep their own authorization boundaries.
  */
 import type {
   AgentEndEvent,
-  AsyncJobLifecycleObservation,
   BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
-  MessageEndMessage,
   PrimeEvent,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
-  ToolCallEvent,
-  ToolCallEventResult,
-  ToolResultEvent,
   TurnEndEvent,
   TurnStartEvent,
 } from "../types/prime";
 import { createHash } from "node:crypto";
-import {
-  createNativeSettlementObserver,
-  nativeJobIdForAgent,
-  type NativeAsyncJobSnapshot,
-  type NativeSubagentLifecycleFrame,
-} from "./native-settlement";
 import { execFile } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
-import { setTimeout as scheduleObserverExpiry, clearTimeout as cancelObserverExpiry } from "node:timers";
 import { StringDecoder } from "node:string_decoder";
 import { loadConfig, loadRereadAvoidance, resolveBrainHome } from "./config";
-import {
-  buildPolicyBlockRecord,
-  isOrchestratorModel,
-  loadOrchestratorGuardConfig,
-  orchestratorPolicyFor,
-} from "./orchestrator-guard";
-import {
-  appendDriverContract,
-  loadDriverOrchestratorConfig,
-  resolveAgentRole,
-} from "./driver-orchestrator";
 import {
   buildBrainBrief,
   buildRecallQuery,
@@ -115,7 +74,6 @@ import {
 import { runP4Pulse, runP4PulseSync } from "./p4-mirror";
 import {
   mirrorExtensionError,
-  mirrorEventSync,
   mirrorFireAndForget,
   runLedgerCheckpoint,
   runLedgerSegmentRollover,
@@ -131,36 +89,6 @@ import {
   type DirEnsurer,
 } from "./storage";
 import {
-  ompRoutingRecord,
-  runOmpRouting,
-  type OmpModelCandidate,
-  type OmpRoutingDecision,
-  type OmpRoutingOptions,
-  type OmpRoutingResult,
-} from "./routing-bridge";
-import {
-  type BudgetCheckOptions,
-  type BudgetCheckResult,
-  type BudgetRunner,
-  type BudgetState,
-  BUDGET_HARD_LINE,
-  cancelBudget,
-  consumeBudget,
-  reserveBudget,
-  runBudgetCheck,
-  type BudgetCanceller,
-  type BudgetConsumer,
-  type BudgetReserver,
-} from "./budget-bridge";
-export {
-  type BudgetCheckOptions,
-  type BudgetCheckResult,
-  type BudgetRunner,
-  type BudgetState,
-  BUDGET_HARD_LINE,
-  runBudgetCheck,
-};
-import {
   OMP_VISIBILITY_MAX_INJECTED_CHARS,
   ompVisibilityRecord,
   runOmpVisibility,
@@ -168,91 +96,8 @@ import {
   type OmpVisibilityOptions,
   type OmpVisibilityResult,
 } from "./visibility-bridge";
-import {
-  OMP_WORKER_CONTEXT_MAX_TEXT_CHARS,
-  renderOmpWorkerContext,
-  runOmpWorkerContext,
-  type OmpWorkerContextOptions,
-  type OmpWorkerContextResult,
-} from "./worker-context-bridge";
-import {
-  runOmpWorkerResult,
-  type OmpWorkerResultOptions,
-  type OmpWorkerResultOutcome,
-} from "./worker-result-bridge";
-import {
-  runOmpWorkerBind,
-  runOmpWorkerDispatchFailed,
-  runOmpWorkerLifecycle,
-  type OmpWorkerBindOptions,
-  type OmpWorkerCallbackResult,
-  type OmpWorkerDispatchFailedOptions,
-  type OmpWorkerLifecycleOptions,
-} from "./worker-lifecycle-bridge";
-import {
-  STOP_CONTROL_COMMAND,
-  StopBoundaryState,
-  extractTextContent,
-  parseStopDecisionOutput,
-  rewriteSessionPlaceholders,
-  rewriteStopControlCommand,
-  stopControlIdentity,
-  stopEvidenceMatches,
-  type StopControlIdentity,
-} from "./stop-boundary";
 
 
-/**
- * Sol minimal-orchestrator contract, injected as a systemPrompt addendum for
- * Sol-model sessions only (via the before_agent_start guard below).
- *
- * Condensed from docs/orchestration/SOL_MINIMAL_ORCHESTRATOR.md (canonical
- * source: brainstem/policies/sol-minimal-orchestrator.md). Kept under 1500
- * words; embedded here so the installed extension copy stays self-contained.
- *
- * NOTE: the extension context exposes no rlmDepth, so a subagent spawned
- * WITH a Sol model would also be guarded. That is acceptable: workers run
- * cheaper models by policy; only the orchestrator role uses Sol.
- */
-const SOL_ORCHESTRATOR_CONTRACT = `You are Sol, the minimal-cost ORCHESTRATOR. You do NOT execute work; you delegate it and read results.
-
-ROLE: understand the user's request from information already in your context; decide what information or work is required; delegate to the most appropriate worker; read returned evidence; audit for correctness, contradictions, missing proof, and scope drift; request corrections when necessary; make the final decision; return a concise synthesis.
-
-ALLOWED: read the user's request; read information already in your active context; read concise worker reports, focused patches/diffs, and test summaries; compare two worker reports; identify contradictions, missing evidence, and scope drift; judge whether a claim is sufficiently proven; reject a worker result; ask a worker to correct or verify; choose the next worker; decide escalation; make architecture/product decisions on collected evidence; stop when the goal is satisfied.
-
-FORBIDDEN (MUST delegate instead): searching the repository, enumerating files, grep/ripgrep, inspecting source files, browsing the web, executing shell commands or Python, querying databases, inspecting telemetry, running tests/benchmarks/builds, editing files, writing production code, creating patches, trial-and-error debugging, dependency discovery, investigating logs, broad code review, manual call-graph tracing, spawning several subagents merely to gain confidence.
-
-CRITICAL RULE: if you think "I need to inspect/check/search/verify/find...", the next action is normally to DELEGATE that exact information request to one worker. You MUST delegate. If more information is required, delegate.
-
-INFORMATION BOUNDARY: consume only information already handed to you: the user's request, your context, and worker evidence packages. A referenced-but-not-loaded file is delegated.
-
-WORKER SELECTION (cheapest competent first): Qwen 3.5 (local/cheap) for inventory, discovery, references, config mapping, static inspection, telemetry stats, doc-vs-code checks, mechanical refactors, low-risk tests, first-pass validation; DeepSeek V4 Flash (cheap/fast) for moderate implementation, targeted debugging, code comparison, patch review, contained fixes, small designs, performance analysis, stronger tests, second-pass review; GPT-5.6 Luna (premium) for cross-cutting changes, high correctness, failed cheaper workers, architecture-boundary issues, migration/compat, production-critical final validation. Never select by prestige. Escalate only when a worker is insufficient, uncertain, or failed, or the task becomes correctness-critical.
-
-CONCURRENCY: default 1 active worker; at most 2 when work is genuinely independent; NEVER 3+.
-
-WORKER TASK PACKET (every delegation):
-## Objective — one precise result required
-## Why — one/two sentences: what decision this enables
-## Scope — exact subsystem/files if already known
-## Constraints — what must not be changed
-## Required Evidence — what proof must be returned
-## Deliverable — the exact output you need
-Never hand workers the whole project history.
-
-WORKER RETURN CONTRACT (require this shape):
-## Result — Pass / Fail / Partial / Implemented
-## What I Found — concise factual findings
-## Evidence — path:line / symbol / command+observed result
-## Changes — only if changes were requested
-## Tests — exact tests and results
-## Risks / Uncertainty — anything not proven
-## Recommended Next Step — one concise recommendation
-
-AUDIT (5 checks, then decide): (1) Did the worker answer the exact assigned question? (2) Is the claim supported by evidence? (3) Did the worker change anything outside scope? (4) Are the tests strong enough to prove the change? (5) Does the result contradict existing verified information?
-
-CORRECTION LOOP: all five pass -> accept. One fails -> send a narrow correction task to the SAME worker (do not redo the work yourself). Escalate only after two failures, or when the flaw indicates the task is beyond the worker, the task is correctness-critical, or evidence is contradictory.
-
-FINAL RESPONSE: conclusion, important evidence, material caveats, next action if needed. No giant retelling of worker activity, raw logs, or unverified speculation. Keep your reasoning and output compact.`;
 
 interface NativeSessionIdentity {
   id: string;
@@ -266,8 +111,6 @@ interface NativeSessionIdentityResult extends NativeSessionIdentity {
 
 const SESSION_IDENTITY_CUSTOM_TYPE = "brain.session-identity";
 const SESSION_IDENTITY_VERSION = 1;
-/** Stock-host channel carrying per-subagent lifecycle frames (task/executor.ts). */
-const NATIVE_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
 const nativeIdentityCache = new WeakMap<object, Map<string, NativeSessionIdentityResult>>();
 
 function readNativeHeader(file: string): Record<string, unknown> {
@@ -778,29 +621,9 @@ export interface ExtensionOptions {
    * still happens with the existing delivery-only shape).
    */
   autoinjectPacketPreserver?: RtdPreserver;
-  /** OMP worker Context Capsule seam; production uses the bounded Brain CLI bridge. */
-  ompWorkerContextRunner?: (options: OmpWorkerContextOptions) => Promise<OmpWorkerContextResult>;
-  /** OMP worker-result -> T4.1 lifecycle seam; production uses the bounded Brain CLI bridge. */
-  ompWorkerResultRunner?: (options: OmpWorkerResultOptions) => Promise<OmpWorkerResultOutcome>;
-  ompWorkerBindRunner?: (options: OmpWorkerBindOptions) => Promise<OmpWorkerCallbackResult>;
-  ompWorkerLifecycleRunner?: (options: OmpWorkerLifecycleOptions) => Promise<OmpWorkerCallbackResult>;
-  ompWorkerDispatchFailedRunner?: (
-    options: OmpWorkerDispatchFailedOptions,
-  ) => Promise<OmpWorkerCallbackResult>;
-  ompRoutingRunner?: (options: OmpRoutingOptions) => Promise<OmpRoutingResult>;
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
   rereadHintRunner?: RereadHintRunner;
-  /** Budget check runner seam; production uses governor check-budget CLI bridge. */
-  budgetRunner?: BudgetRunner;
-  /** Budget reservation runner seam; production uses the governor reserve-budget bridge. */
-  budgetReserver?: BudgetReserver;
-  /** Budget reservation consumer seam; production uses the governor consume bridge. */
-  budgetConsumer?: BudgetConsumer;
-  /** Budget reservation cancellation seam; production uses the governor cancel bridge. */
-  budgetCanceller?: BudgetCanceller;
-  /** Test seam to pre-seed session budget states. */
-  sessionBudgetStates?: Map<string, BudgetState>;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -864,8 +687,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   let store: TelemetryStore | null = null;
   const pendingRereads = new Map<string, { path: string }>();
-  const readySessions = new Set<string>();
-  const capabilityReportedSessions = new Set<string>();
   const activeStateTouchedSessions = new Set<string>();
   const lastToolResultBytes = new Map<string, number>();
   const lastContextProvider = new Map<string, string | null>();
@@ -902,7 +723,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       home: config.home ?? "",
       hostSessionId: sessionId,
       cwd: opts.cwd,
-      parentSessionId: workerRootSessions.get(sessionId),
+      parentSessionId: nativeRootSessions.get(sessionId),
       record: {
         kind,
         fields,
@@ -920,1723 +741,35 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     });
   };
   let currentTurnIndex = 0;
-  let latestRoutingDecision: OmpRoutingDecision | null = null;
-  let latestRoutingSession: string | null = null;
-  const routingCache = new Map<string, Promise<OmpRoutingResult>>();
   const visibilityCache = new Map<string, Promise<OmpVisibilityResult>>();
-  const stopStates = new Map<string, StopBoundaryState>();
-  const stopControlCalls = new Map<string, {
-    session: string; command: string; originalCommand: string;
-    identity: StopControlIdentity | undefined; parentSession: string;
-  }>();
-  let stopRejections = 0;
-  const rejectStopEvidence = (session: string, reason: string): void => {
-    if (stopRejections >= 128) return;
-    stopRejections += 1;
-    getStore(session)?.append({
-      v: 2, ts: new Date().toISOString(), kind: "stop_evidence_rejected", session,
-      reason_code: reason,
-    });
-  };
   // Child HOST session -> canonical native transcript root; never prompt/header-derived.
-  const workerRootSessions = new Map<string, string>();
-  const workerAncestrySessions = new Set<string>();
-  // Spawn progress binds native job ids to packets; async-result and hub
-  // deliveries later settle those same correlations.
-  const pendingWorkerJobs = new Map<
-    string,
-    {
-      taskId: string;
-      packetSha256: string;
-      parentSessionId: string;
-      agent: string;
-      agentId: string;
-      /** True when the key is the agent id because no manager job id was resolvable. */
-      keyedByAgentFallback: boolean;
+  const nativeRootSessions = new Map<string, string>();
+  const nativeAncestrySeen = new Set<string>();
+  const recordNativeRootSession = (session: string, ctx: ExtensionContext): void => {
+    if (nativeAncestrySeen.has(session)) return;
+    nativeAncestrySeen.add(session);
+    if (nativeAncestrySeen.size > 1024) {
+      const oldest = nativeAncestrySeen.values().next().value;
+      if (oldest !== undefined) nativeAncestrySeen.delete(oldest);
     }
-  >();
-  interface WorkerAdmission {
-    taskId: string;
-    attemptId: string;
-    packetSha256: string;
-    projectId: string;
-    worktreeId: string | null;
-    accessIntent: "read_only" | "mutating";
-    callbackToken?: string;
-    parentSessionId: string;
-    agent: string;
-    toolCallId: string;
-    sourceIndex: number;
-    lifecycleRevision: number;
-    callbackChain: Promise<boolean>;
-    nativeAttemptId?: string;
-    nativeJobId?: string | null;
-    agentId?: string;
-    hostGeneration?: number;
-    cleanupAccepted: boolean;
-  }
-  const workerAdmissionsByTask = new Map<string, WorkerAdmission>();
-  const workerAdmissionsBySource = new Map<string, WorkerAdmission>();
-  const workerObservationDisposers = new Map<string, () => void>();
-  // Native settlement identities for stock hosts: one per admitted spawn, minted once
-  // and reused across observations so durable bindings stay consistent. The epoch
-  // distinguishes host processes; the counter orders attempts inside this process.
-  const nativeExecutionEpoch = `${process.pid}-${Date.now().toString(36)}`;
-  const nativeAttemptIdentities = new Map<string, { nativeAttemptId: string; generation: number }>();
-  let nativeAttemptGeneration = 0;
-  const nativeAttemptIdentityFor = (
-    session: string,
-    toolCallId: string,
-    sourceIndex: number,
-  ): { nativeAttemptId: string; generation: number } | undefined => {
-    if (!Number.isInteger(sourceIndex) || sourceIndex < 0) return undefined;
-    const key = JSON.stringify([session, toolCallId, sourceIndex]);
-    let identity = nativeAttemptIdentities.get(key);
-    if (identity === undefined) {
-      nativeAttemptGeneration += 1;
-      identity = {
-        nativeAttemptId: `${nativeExecutionEpoch}:${nativeAttemptGeneration}`,
-        generation: nativeAttemptGeneration,
-      };
-      nativeAttemptIdentities.set(key, identity);
-    }
-    return identity;
-  };
-  const workerObserverExpiry = new Map<string, NodeJS.Timeout>();
-  const disposeWorkerObserver = (key: string): void => {
-    const expiry = workerObserverExpiry.get(key);
-    if (expiry) cancelObserverExpiry(expiry);
-    workerObserverExpiry.delete(key);
-    const disposer = workerObservationDisposers.get(key);
-    disposer?.();
-    if (workerObservationDisposers.get(key) === disposer) workerObservationDisposers.delete(key);
-  };
-  const pendingWorkerTaskIds = new Set<string>();
-  const journalWorkerEvent = (session: string, customType: string, data: unknown): void => {
-    try {
-      pi.appendEntry?.(customType, data);
-    } catch (error) {
-      getStore(session)?.append(sensors.extensionError(session, error));
-    }
-  };
-  // Retain correlation until durable acceptance; claims serialize observers.
-  const takePendingWorkerJob = (
-    jobId: string,
-    session: string,
-  ) => pendingWorkerJobs.get(JSON.stringify([session, jobId]));
-  // A settled hub job can be re-observed by repeated `hub jobs`/`wait` polls;
-  // report each worker's completion exactly once.
-  const reportedWorkerTaskIds = new Set<string>();
-  const workerCompletionsInFlight = new Set<string>();
-  const observedWorkerTaskIds = new Set<string>();
-  const rememberWorkerIdentity = (set: Set<string>, id: string): void => {
-    set.add(id);
-    if (set.size > 1024) {
-      const oldest = set.values().next().value;
-      if (oldest !== undefined) set.delete(oldest);
-    }
-  };
-  // A child the harness dispatched outside the `task` tool (an eval-spawned
-  // agent, for example) never passes Brain admission, so no pending correlation
-  // exists for it. Surface each such job once instead of dropping it silently;
-  // this records the bypass, it does not block the dispatch.
-  //
-  // Absence of a pending correlation is not by itself proof of bypass: a worker
-  // that WAS admitted can still be delivered unattributed, for example when the
-  // async-result envelope names a job the spawn binding never registered. The
-  // signal therefore requires positive evidence — a session in which Brain
-  // admitted no worker at all can have no admitted child, so anything delivered
-  // there necessarily bypassed admission. Sessions that did admit workers
-  // under-report rather than accuse an admitted worker of bypassing.
-  const reportedBypassedWorkerJobs = new Set<string>();
-  const admittedWorkerSessions = new Set<string>();
-  const reportBypassedWorkerJob = (
-    session: string,
-    jobId: string,
-    agentId: unknown,
-    status: unknown,
-    detectedVia: string,
-  ): void => {
-    if (jobId === "" || jobId.length > 512) return;
-    if (admittedWorkerSessions.has(session)) return;
-    const key = JSON.stringify([session, jobId]);
-    if (reportedBypassedWorkerJobs.has(key)) return;
-    rememberWorkerIdentity(reportedBypassedWorkerJobs, key);
-    getStore(session)?.append(
-      ompRoutingRecord("omp_worker_admission_bypassed", session, {
-        session,
-        job_id: jobId,
-        agent_id:
-          typeof agentId === "string" && agentId.length > 0 && agentId.length <= 512 ? agentId : null,
-        status: typeof status === "string" ? status : null,
-        detected_via: detectedVia,
-      }),
-    );
-  };
-  const establishWorkerRootSession = (session: string, ctx: ExtensionContext): void => {
-    if (workerAncestrySessions.has(session)) return;
-    rememberWorkerIdentity(workerAncestrySessions, session);
     try {
       const rootSession = resolveNativeRootSessionId(ctx);
       if (rootSession === undefined || rootSession === session) return;
-      if (!workerRootSessions.has(session) && workerRootSessions.size >= 1024) {
-        const oldest = workerRootSessions.keys().next().value;
+      if (!nativeRootSessions.has(session) && nativeRootSessions.size >= 1024) {
+        const oldest = nativeRootSessions.keys().next().value;
         if (oldest !== undefined) {
-          workerRootSessions.delete(oldest);
-          workerAncestrySessions.delete(oldest);
+          nativeRootSessions.delete(oldest);
+          nativeAncestrySeen.delete(oldest);
         }
       }
-      workerRootSessions.set(session, rootSession);
+      nativeRootSessions.set(session, rootSession);
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
     }
   };
-  const workerRecoverySessions = new Set<string>();
   const environmentTaskHashes = new Map<string, string>();
-  const stopStateFor = (session: string): StopBoundaryState => {
-    const existing = stopStates.get(session);
-    if (existing) return existing;
-    const created = new StopBoundaryState();
-    stopStates.set(session, created);
-    return created;
-  };
   const rereadRunner = options.rereadHintRunner ?? runRereadHint;
-  const routingRunner = options.ompRoutingRunner ?? runOmpRouting;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
-  const workerContextRunner = options.ompWorkerContextRunner ?? runOmpWorkerContext;
-  const workerResultRunner = options.ompWorkerResultRunner ?? runOmpWorkerResult;
-  const workerBindRunner = options.ompWorkerBindRunner ?? runOmpWorkerBind;
-  const workerLifecycleRunner = options.ompWorkerLifecycleRunner ?? runOmpWorkerLifecycle;
-  const workerDispatchFailedRunner = options.ompWorkerDispatchFailedRunner ?? runOmpWorkerDispatchFailed;
-  const sessionBudgetStates = options.sessionBudgetStates ?? new Map<string, BudgetState>();
-  const budgetRunner = options.budgetRunner ?? runBudgetCheck;
-  const budgetReserver = options.budgetReserver ?? reserveBudget;
-  const budgetConsumer = options.budgetConsumer ?? consumeBudget;
-  const budgetCanceller = options.budgetCanceller ?? cancelBudget;
-  // Cancellation carries typed evidence and is never a local assumption: when the bridge
-  // reports `cancelled: false` the capacity is *still spoken for*, so the failure is recorded
-  // and the reservation stays an open liability instead of restoring headroom locally.
-  const cancelReservation = async (session: string, taskId: string, reason: string): Promise<void> => {
-    try {
-      const result = await budgetCanceller({
-        home: config.home ?? "",
-        sessionId: session,
-        taskId,
-        reason,
-        evidence: "proven_unused",
-      });
-      if (result.refused) {
-        getStore(session)?.append(sensors.extensionError(session, `RESERVATION_CANCEL_REFUSED:${result.refused}`));
-      } else if (result.error) {
-        getStore(session)?.append(sensors.extensionError(session, result.error));
-      }
-    } catch (error) {
-      getStore(session)?.append(sensors.extensionError(session, error));
-    }
-  };
-  // Consumption is fail-soft and idempotent: the reservation is freed only when the
-  // attempt is finished and cleaned up (or was never dispatched), and a failure here is
-  // recorded rather than allowed to fail the completion.
-  const consumeReservation = async (session: string, taskId: string, consumedBy: string): Promise<void> => {
-    try {
-      const result = await budgetConsumer({
-        home: config.home ?? "",
-        sessionId: session,
-        taskId,
-        consumedBy,
-      });
-      if (result.error) getStore(session)?.append(sensors.extensionError(session, result.error));
-    } catch (error) {
-      getStore(session)?.append(sensors.extensionError(session, error));
-    }
-  };
-  const safeWorkerContextRunner = async (
-    workerOptions: OmpWorkerContextOptions,
-  ): Promise<OmpWorkerContextResult> => {
-    try {
-      return await workerContextRunner(workerOptions);
-    } catch {
-      return { ok: false, error: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" };
-    }
-  };
-
-  const workerRoleForAgent = (agent: unknown): string =>
-    typeof agent === "string" && agent.toLowerCase().includes("validator") ? "validator" : "worker";
-
-  // Tools a worker may hold without acquiring mutation capability.
-  const readOnlyNativeTools: Record<string, true> = {
-    read: true, grep: true, glob: true, web_search: true, ast_grep: true, yield: true,
-  };
-
-  // Trusted worker capability classification, mirroring the harness agent roster:
-  // scouts and reviewers cannot mutate, general workers can. Agents absent from
-  // both tables are unclassified and therefore fail closed.
-  const readOnlyWorkerAgents: Record<string, true> = {
-    scout: true, reviewer: true, "security-reviewer": true, validator: true,
-    "technical-librarian": true, "evidence-auditor": true,
-    "implementation-verifier": true, "system-architect": true,
-  };
-  const mutatingWorkerAgents: Record<string, true> = {
-    task: true, sonic: true, "feature-implementer": true,
-    "integration-engineer": true, "performance-engineer": true,
-  };
-
-  // The OMP `task` schema has no `access_intent` field, so the harness can never
-  // transmit one. Intent is therefore derived from trusted classification, while
-  // an explicit declaration — when a caller can supply one — may only escalate:
-  // a mutating worker is never downgraded to read_only, and mutation capability
-  // evidence (tools outside the read-only set) escalates too.
-  const classifyWorkerAccessIntent = (
-    item: Record<string, unknown>,
-  ): { intent: "read_only" | "mutating"; source: "declared" | "derived" } | { block: string } => {
-    const agent =
-      typeof item.agent === "string" && item.agent.trim() !== ""
-        ? item.agent.trim().toLowerCase()
-        : "task";
-    const readOnlyAgent = Object.hasOwn(readOnlyWorkerAgents, agent);
-    if (!readOnlyAgent && !Object.hasOwn(mutatingWorkerAgents, agent)) {
-      return { block: "BRAIN_WORKER_AGENT_UNCLASSIFIED" };
-    }
-    const requested = item.access_intent;
-    if (requested !== undefined && requested !== "read_only" && requested !== "mutating") {
-      return { block: "BRAIN_WORKER_ACCESS_INTENT_INVALID" };
-    }
-    if (requested === "read_only" && !readOnlyAgent) {
-      return { block: "BRAIN_WORKER_ACCESS_INTENT_DOWNGRADE" };
-    }
-    const escalates =
-      Array.isArray(item.tools) &&
-      item.tools.some(
-        (name) => typeof name !== "string" || !Object.hasOwn(readOnlyNativeTools, name),
-      );
-    const intent: "read_only" | "mutating" =
-      !readOnlyAgent || requested === "mutating" || escalates ? "mutating" : "read_only";
-    return { intent, source: requested === undefined ? "derived" : "declared" };
-  };
-
-  /**
-   * Which settlement source can observe an admitted attempt:
-   *  - `host_api`: the patched host's `ctx.observeAsyncJobLifecycle` observer;
-   *  - `native_lifecycle`: stock hosts that publish `task:subagent:lifecycle`
-   *    frames and a read-only async-job snapshot;
-   *  - `null`: neither exists, so mutating dispatch must stay refused.
-   *
-   * Precedence: the patched 18.1.17 observer, then the versioned attempt-settlement
-   * capability (which reports `releasePermitted` only after proven cleanup), then the
-   * stock lifecycle frames. The frame-only source cannot prove cleanup, so it records
-   * `cleanupComplete:false` and the durable lease stays held/quarantined — it is a
-   * degraded diagnostic path, never a release.
-   */
-  const settlementSourceFor = (
-    ctx: ExtensionContext,
-  ): "host_api" | "attempt_settlement" | "native_lifecycle" | null => {
-    if (typeof ctx.observeAsyncJobLifecycle === "function") return "host_api";
-    if (typeof ctx.observeAttemptSettlement === "function") return "attempt_settlement";
-    if (typeof pi.events?.on === "function" && typeof ctx.getAsyncJobSnapshot === "function") {
-      return "native_lifecycle";
-    }
-    return null;
-  };
-
-  /**
-   * What this host can actually be observed doing, decided from the live context
-   * rather than from a version string. Brain's features are capability-gated:
-   * a host that cannot prove settlement keeps memory, retrieval, injection and
-   * read-only work, and refuses mutating delegation (fail-closed).
-   */
-  const hostCapabilities = (ctx: ExtensionContext) => {
-    const settlementObservation = typeof ctx.observeAsyncJobLifecycle === "function";
-    const attemptSettlement = typeof ctx.observeAttemptSettlement === "function";
-    const lifecycleFrames = typeof pi.events?.on === "function";
-    const asyncJobSnapshot = typeof ctx.getAsyncJobSnapshot === "function";
-    const cleanupBackedRelease = settlementObservation || attemptSettlement;
-    return {
-      worker_spawn: true,
-      lifecycle_observation: lifecycleFrames || settlementObservation,
-      settlement_observation: settlementObservation,
-      attempt_settlement_observation: attemptSettlement,
-      cancellation_observation: asyncJobSnapshot,
-      // Only the patched observers report executor settlement plus proven cleanup.
-      // The frame-only path records cleanupComplete:false, which leaves the durable
-      // writer lease held/quarantined with no release.
-      cleanup_backed_release: cleanupBackedRelease,
-      mutating_delegation: cleanupBackedRelease,
-      read_only_delegation: lifecycleFrames || asyncJobSnapshot,
-      structured_usage: true,
-    };
-  };
-
-  const releaseUndispatchedAdmission = async (
-    admission: WorkerAdmission,
-    failureCode: string,
-  ): Promise<boolean> => {
-    if (admission.nativeAttemptId !== undefined) return false;
-    for (const pending of pendingWorkerJobs.values()) {
-      if (pending.taskId === admission.taskId) return false;
-    }
-    if (
-      admission.accessIntent === "mutating" &&
-      (admission.worktreeId === null || admission.callbackToken === undefined)
-    ) return false;
-    try {
-      const receipt = await workerDispatchFailedRunner({
-        home: config.home ?? "",
-        sessionId: admission.parentSessionId,
-        taskId: admission.taskId,
-        packetSha256: admission.packetSha256,
-        attemptId: admission.attemptId,
-        projectId: admission.projectId,
-        worktreeId: admission.worktreeId,
-        callbackToken: admission.callbackToken,
-        failureCode,
-      });
-      if (!receipt.ok) {
-        getStore(admission.parentSessionId)?.append(sensors.extensionError(
-          admission.parentSessionId,
-          receipt.error ?? receipt.failureCode ?? "BRAIN_DISPATCH_FAILURE_NOT_ACKNOWLEDGED",
-        ));
-        return false;
-      }
-      admission.cleanupAccepted = true;
-      pendingWorkerTaskIds.delete(admission.taskId);
-      workerAdmissionsByTask.delete(admission.taskId);
-      workerAdmissionsBySource.delete(
-        JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
-      );
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-dispatch-failed-accepted", {
-        session: admission.parentSessionId,
-        taskId: admission.taskId,
-        attemptId: admission.attemptId,
-        failureCode,
-      });
-      await consumeReservation(admission.parentSessionId, admission.taskId, failureCode);
-      return true;
-    } catch {
-      getStore(admission.parentSessionId)?.append(sensors.extensionError(
-        admission.parentSessionId, "BRAIN_DISPATCH_FAILURE_UNAVAILABLE",
-      ));
-      return false;
-    }
-  };
-
-  const observeWorkerAttempt = async (
-    admission: WorkerAdmission,
-    observation: Readonly<AsyncJobLifecycleObservation>,
-    ctx: ExtensionContext,
-  ): Promise<boolean> => {
-    const dropped = (reason: string, detail?: unknown): false => {
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-dropped", {
-        session: admission.parentSessionId, taskId: admission.taskId,
-        attemptId: admission.attemptId, nativeAttemptId: observation.nativeAttemptId,
-        nativeJobId: observation.jobId, agentId: observation.agentId,
-        generation: observation.generation, revision: observation.revision,
-        lifecycleRevision: admission.lifecycleRevision,
-        boundNativeAttemptId: admission.nativeAttemptId,
-        boundNativeJobId: admission.nativeJobId,
-        boundAgentId: admission.agentId, boundGeneration: admission.hostGeneration,
-        reason, detail,
-      });
-      return false;
-    };
-    if (
-      observation.type !== "task" ||
-      observation.sourceToolCallId !== admission.toolCallId ||
-      observation.sourceIndex !== admission.sourceIndex ||
-      !observation.agentId
-    ) {
-      return dropped("source-binding-mismatch");
-    }
-    if (
-      admission.nativeAttemptId !== undefined &&
-      (admission.nativeAttemptId !== observation.nativeAttemptId ||
-        admission.nativeJobId !== observation.jobId ||
-        admission.agentId !== observation.agentId ||
-        admission.hostGeneration !== observation.generation)
-    ) {
-      return dropped("native-binding-mismatch");
-    }
-    const binding: OmpWorkerBindOptions = {
-      home: config.home ?? "",
-      sessionId: admission.parentSessionId,
-      taskId: admission.taskId,
-      packetSha256: admission.packetSha256,
-      attemptId: admission.attemptId,
-      projectId: admission.projectId,
-      worktreeId: admission.worktreeId ?? "",
-      callbackToken: admission.callbackToken ?? "",
-      hostGeneration: observation.generation,
-      nativeAttemptId: observation.nativeAttemptId,
-      nativeJobId: observation.jobId,
-      agentId: observation.agentId,
-    };
-    if (admission.nativeAttemptId === undefined) {
-      let bound: OmpWorkerCallbackResult;
-      try {
-        bound = await workerBindRunner(binding);
-      } catch (error) {
-        return dropped("bind-rpc-threw", error instanceof Error ? error.message : String(error));
-      }
-      if (!bound.ok) return dropped(bound.error ?? bound.failureCode ?? "bind-rejected", bound);
-      admission.nativeAttemptId = observation.nativeAttemptId;
-      admission.nativeJobId = observation.jobId;
-      admission.agentId = observation.agentId;
-      admission.hostGeneration = observation.generation;
-      if (observation.jobId !== null) {
-        pendingWorkerJobs.set(JSON.stringify([admission.parentSessionId, observation.jobId]), {
-          taskId: admission.taskId,
-          packetSha256: admission.packetSha256,
-          parentSessionId: admission.parentSessionId,
-          agent: admission.agent,
-          agentId: observation.agentId,
-          keyedByAgentFallback: false,
-        });
-        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-job-pending", {
-          session: admission.parentSessionId,
-          jobId: observation.jobId,
-          accessIntent: admission.accessIntent,
-          toolCallId: admission.toolCallId,
-          sourceIndex: admission.sourceIndex,
-          taskId: admission.taskId,
-          attemptId: admission.attemptId,
-          packetSha256: admission.packetSha256,
-          parentSessionId: admission.parentSessionId,
-          agent: admission.agent,
-          agentId: observation.agentId,
-          hostGeneration: observation.generation,
-          nativeAttemptId: observation.nativeAttemptId,
-          projectId: admission.projectId,
-          worktreeId: admission.worktreeId,
-        });
-      }
-    }
-    if (observation.revision <= admission.lifecycleRevision) {
-      dropped("revision-already-accepted");
-      return true;
-    }
-    // Keep one immutable payload and sequence for both the original RPC and its
-    // sole reconciliation resend. Brain authenticates attempt + sequence and
-    // compares the canonical receipt SHA before acknowledging a duplicate.
-    const sequence = observation.revision;
-    const payload: OmpWorkerLifecycleOptions = {
-      ...binding,
-      sequence,
-      outcome:
-        observation.status === "completed"
-          ? "completed"
-          : observation.status === "failed"
-            ? "failed"
-            : observation.status === "cancelled"
-              ? "cancelled"
-              : null,
-      executorSettled: observation.executorSettled,
-      cleanupComplete: observation.cleanupComplete,
-    };
-    const evidence = {
-      session: admission.parentSessionId, taskId: admission.taskId,
-      attemptId: admission.attemptId, lifecycleSequence: sequence,
-      nativeAttemptId: observation.nativeAttemptId, nativeJobId: observation.jobId,
-      agentId: observation.agentId, generation: observation.generation,
-      sourceToolCallId: observation.sourceToolCallId, sourceIndex: observation.sourceIndex,
-      revision: observation.revision, outcome: payload.outcome,
-      executorSettled: payload.executorSettled, cleanupComplete: payload.cleanupComplete,
-      packetSha256: admission.packetSha256, projectId: admission.projectId,
-      worktreeId: admission.worktreeId,
-    };
-    const invoke = async (reconciliation: boolean): Promise<OmpWorkerCallbackResult> => {
-      const startedAt = Date.now();
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-started", {
-        ...evidence, reconciliation, startedAt,
-      });
-      try {
-        const result = await workerLifecycleRunner(payload);
-        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-returned", {
-          ...evidence, reconciliation, elapsedMs: Date.now() - startedAt, result,
-        });
-        return result;
-      } catch (error) {
-        journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rpc-threw", {
-          ...evidence, reconciliation, elapsedMs: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        getStore(admission.parentSessionId)?.append(sensors.extensionError(admission.parentSessionId, error));
-        return { ok: false, error: "BRAIN_WORKER_CALLBACK_UNAVAILABLE" };
-      }
-    };
-    let lifecycle = await invoke(false);
-    let acceptanceWasUnknown = false;
-    if (!lifecycle.ok && lifecycle.status !== "rejected") {
-      acceptanceWasUnknown = true;
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-ack-unknown", {
-        ...evidence, result: lifecycle,
-        reconciliation: "identical-payload-resend-with-server-receipt-sha-check",
-      });
-      lifecycle = await invoke(true);
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-reconciliation", {
-        ...evidence,
-        outcome: lifecycle.ok ? "unknown-then-reconciled" : "incomplete",
-        result: lifecycle,
-      });
-    }
-    if (!lifecycle.ok) {
-      journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-rejected", {
-        ...evidence, acceptanceWasUnknown, result: lifecycle,
-        error: lifecycle.error ?? lifecycle.failureCode ?? "REJECTED",
-      });
-      return false;
-    }
-    admission.lifecycleRevision = observation.revision;
-    journalWorkerEvent(admission.parentSessionId, "second-brain.worker-lifecycle-accepted", {
-      session: admission.parentSessionId,
-      taskId: admission.taskId,
-      attemptId: admission.attemptId,
-      lifecycleSequence: sequence,
-      nativeAttemptId: observation.nativeAttemptId,
-      nativeJobId: observation.jobId,
-      agentId: observation.agentId,
-      hostGeneration: observation.generation,
-      status: observation.status,
-      executorSettled: observation.executorSettled,
-      cleanupComplete: observation.cleanupComplete,
-    });
-    if (observation.status !== "running") {
-      await emitWorkerCompletion(admission.parentSessionId, ctx, {
-        task_id: admission.taskId,
-        packet_sha256: admission.packetSha256,
-        child_omp_agent_id: observation.agentId,
-        child_omp_session_file: null,
-        worker_agent: admission.agent,
-        worker_model: null,
-        status: observation.status,
-      }, "");
-    }
-    if (observation.executorSettled && observation.cleanupComplete) {
-      admission.cleanupAccepted = true;
-      void consumeReservation(admission.parentSessionId, admission.taskId, "cleanup-complete");
-      pendingWorkerTaskIds.delete(admission.taskId);
-      for (const [key, job] of pendingWorkerJobs) if (job.taskId === admission.taskId) pendingWorkerJobs.delete(key);
-      const sourceKey = JSON.stringify([
-        admission.parentSessionId,
-        admission.toolCallId,
-        admission.sourceIndex,
-      ]);
-      if (workerAdmissionsBySource.get(sourceKey) === admission) {
-        workerAdmissionsBySource.delete(sourceKey);
-      }
-      if (reportedWorkerTaskIds.has(admission.taskId)) {
-        workerAdmissionsByTask.delete(admission.taskId);
-      }
-      const stillPending = Array.from(workerAdmissionsBySource.values()).some(
-        (candidate) =>
-          candidate.parentSessionId === admission.parentSessionId &&
-          candidate.toolCallId === admission.toolCallId &&
-          candidate.accessIntent === "mutating" &&
-          !candidate.cleanupAccepted,
-      );
-      if (!stillPending) {
-        const observerKey = JSON.stringify([admission.parentSessionId, admission.toolCallId]);
-        disposeWorkerObserver(observerKey);
-      }
-    }
-    return true;
-  };
-
-  const prepareWorkerTaskInput = async (
-    event: ToolCallEvent,
-    ctx: ExtensionContext,
-    session: string,
-  ): Promise<ToolCallEventResult | undefined> => {
-    if (event.toolName !== "task") return undefined;
-    const rootSession = workerRootSessions.get(session) ?? session;
-    if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
-      getStore(session)?.append(
-        ompRoutingRecord("omp_worker_context_failure", session, {
-          task_id: "omp-budget-blocked",
-          failure_code: "BUDGET_EXCEEDED",
-        }),
-      );
-      return { block: true, reason: BUDGET_HARD_LINE };
-    }
-    const input = event.input;
-    const batchItems = Array.isArray(input.tasks) ? input.tasks : [];
-    const items: Array<Record<string, unknown>> =
-      batchItems.filter((item): item is Record<string, unknown> => item != null && typeof item === "object");
-    if (batchItems.length !== items.length) {
-      return { block: true, reason: "P3.2 worker context requires object task items" };
-    }
-    if (items.length === 0 && typeof input.task === "string") {
-      items.push(input);
-    }
-    if (items.length === 0) return undefined;
-    if (typeof event.toolCallId !== "string" || event.toolCallId.length === 0) {
-      return { block: true, reason: "BRAIN_WORKER_DISPATCH_ID_REQUIRED" };
-    }
-    if (items.some((item) => typeof item.task !== "string" || item.task.trim() === "")) {
-      return { block: true, reason: "P3.2 worker context requires a non-empty task" };
-    }
-    const workerAccess: Array<{ intent: "read_only" | "mutating"; source: "declared" | "derived" }> =
-      [];
-    for (const item of items) {
-      const classified = classifyWorkerAccessIntent(item);
-      if ("block" in classified) return { block: true, reason: classified.block };
-      workerAccess.push(classified);
-    }
-    const hasMutating = workerAccess.some((entry) => entry.intent === "mutating");
-    // Mutating delegation is fail-closed: it needs a settlement source that can
-    // prove executor settlement and cleanup. The frame-only `native_lifecycle`
-    // path cannot prove either, so admitting mutating work there leaves the writer
-    // lease held/quarantined with no release path (observed on omp/18.2.8).
-    // Read-only delegation, memory, retrieval and injection are unaffected.
-    const capabilities = hostCapabilities(ctx);
-    const settlementSource = hasMutating ? settlementSourceFor(ctx) : null;
-    if (hasMutating && !capabilities.cleanup_backed_release) {
-      return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
-    }
-    const projectId = resolvedProjectIdForSession(session) ?? resolveProject();
-    if (typeof projectId !== "string" || projectId.trim() === "") {
-      return { block: true, reason: "BRAIN_WORKER_PROJECT_ID_REQUIRED" };
-    }
-    const taskIds = items.map((_, index) => `omp-${taskSha256(JSON.stringify([session, event.toolCallId, index]))}`);
-    const reservations = taskIds.filter((id) => !pendingWorkerTaskIds.has(id));
-    if (pendingWorkerTaskIds.size + reservations.length > 1024) {
-      return { block: true, reason: "BRAIN_WORKER_PENDING_LIMIT" };
-    }
-    for (const id of reservations) pendingWorkerTaskIds.add(id);
-    const batch = batchItems.length > 0;
-    const modelId = sensors.modelToString(ctx.model) ?? "unknown";
-    const provider = typeof ctx.model?.provider === "string" ? ctx.model.provider : "unknown";
-    const guardCfg = loadOrchestratorGuardConfig();
-    const role = resolveAgentRole(modelId, loadDriverOrchestratorConfig(), guardCfg.orchestratorModels);
-    const augmented: Array<Record<string, unknown>> = [];
-    const preparedAdmissions: WorkerAdmission[] = [];
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      const rawTask = item.task as string;
-      const task = rawTask.slice(0, OMP_WORKER_CONTEXT_MAX_TEXT_CHARS);
-      const taskId = taskIds[index];
-      const accessIntent: "read_only" | "mutating" = workerAccess[index].intent;
-      // Reserve-before-dispatch: capacity is checked and reserved in one Brain-side
-      // transaction before the first budget-consuming step of this dispatch. A refusal
-      // blocks the dispatch, records no admission, and never releases writer ownership.
-      const budgetReservation = await budgetReserver({
-        home: config.home ?? "",
-        sessionId: session,
-        taskId,
-        role: "worker",
-      });
-      if (budgetReservation.blocksDispatch) {
-        for (const id of reservations) pendingWorkerTaskIds.delete(id);
-        getStore(session)?.append(
-          ompRoutingRecord("omp_worker_budget_refused", session, {
-            task_id: taskId,
-            failure_code: budgetReservation.reason ?? "BUDGET_EXHAUSTED",
-          }),
-        );
-        return {
-          block: true,
-          reason: `BRAIN_WORKER_BUDGET_${budgetReservation.reason ?? "EXHAUSTED"}`,
-        };
-      }
-      if (budgetReservation.error) {
-        getStore(session)?.append(sensors.extensionError(session, budgetReservation.error));
-      }
-      const result = await safeWorkerContextRunner({
-        home: config.home ?? "",
-        sessionId: session,
-        taskId,
-        task,
-        scope: ctx.cwd,
-        completionCondition:
-          typeof input.completion_condition === "string"
-            ? input.completion_condition
-            : "Return bounded evidence for the delegated task",
-        projectId,
-        accessIntent,
-        cwd: ctx.cwd,
-        role,
-        provider,
-        model: modelId,
-        workerRole: workerRoleForAgent(item.agent),
-        depth: typeof input.depth === "number" ? input.depth : 0,
-        contextRefs: Array.isArray(input.context_refs) ? input.context_refs.filter((ref): ref is string => typeof ref === "string") : undefined,
-      });
-      if (
-        !result.ok ||
-        result.contextHandoff === undefined ||
-        result.contextMetadata === undefined ||
-        result.taskId !== taskId ||
-        result.attemptId === undefined ||
-        result.packetSha256 === undefined ||
-        result.projectId !== projectId ||
-        result.accessIntent !== accessIntent ||
-        (accessIntent === "mutating" &&
-          (typeof result.worktreeId !== "string" || result.callbackToken === undefined))
-      ) {
-        await Promise.all(
-          preparedAdmissions.map((admission) =>
-            releaseUndispatchedAdmission(admission, "OMP_BATCH_PREPARATION_FAILED"),
-          ),
-        );
-        // This item reserved before the call and never became an admission, so nothing else
-        // will free it: a preparation failure must return its capacity, or repeated failures
-        // would exhaust the role cap without a single worker running. The capacity is returned
-        // as *cancelled unused* -- this branch runs before any native dispatch, and the typed
-        // `proven_unused` evidence is what the Brain requires to refund it. A failed
-        // cancellation is recorded and leaves the reservation as an open liability.
-        await cancelReservation(session, taskId, "OMP_BATCH_PREPARATION_FAILED");
-        for (const id of reservations) pendingWorkerTaskIds.delete(id);
-        const reason = result.error ?? "P3.2 worker context preparation failed";
-        getStore(session)?.append(
-          ompRoutingRecord("omp_worker_context_failure", session, {
-            task_id: taskId,
-            worker_agent: typeof item.agent === "string" ? item.agent : "default",
-            failure_code: reason,
-          }),
-        );
-        return { block: true, reason };
-      }
-      const admission: WorkerAdmission = {
-        taskId,
-        attemptId: result.attemptId,
-        packetSha256: result.packetSha256,
-        projectId,
-        worktreeId: result.worktreeId ?? null,
-        accessIntent,
-        ...(result.callbackToken ? { callbackToken: result.callbackToken } : {}),
-        parentSessionId: session,
-        agent: typeof item.agent === "string" ? item.agent : "default",
-        toolCallId: event.toolCallId,
-        sourceIndex: index,
-        lifecycleRevision: 0,
-        callbackChain: Promise.resolve(true),
-        cleanupAccepted: accessIntent === "read_only",
-      };
-      preparedAdmissions.push(admission);
-      journalWorkerEvent(session, "second-brain.worker-admission-pending", {
-        session,
-        taskId,
-        attemptId: admission.attemptId,
-        packetSha256: admission.packetSha256,
-        projectId: admission.projectId,
-        worktreeId: admission.worktreeId,
-        accessIntent: admission.accessIntent,
-        parentSessionId: session,
-        agent: admission.agent,
-        toolCallId: event.toolCallId,
-        sourceIndex: index,
-      });
-      workerAdmissionsByTask.set(taskId, admission);
-      rememberWorkerIdentity(admittedWorkerSessions, session);
-      workerAdmissionsBySource.set(JSON.stringify([session, event.toolCallId, index]), admission);
-      const metadata = result.contextMetadata;
-      const metadataRecord = {
-        task_id: taskId,
-        packet_sha256: result.packetSha256 ?? null,
-        worker_agent: typeof item.agent === "string" ? item.agent : "default",
-        worker_role: workerRoleForAgent(item.agent),
-        parent_role: role,
-        attempt_id: result.attemptId,
-        access_intent: accessIntent,
-        access_intent_source: workerAccess[index].source,
-        project_id: result.projectId,
-        worktree_id: result.worktreeId,
-        parent_session_id: session,
-        context_ref_count: metadata.resolved_count,
-        context_source_bytes: metadata.visible_bytes ?? 0,
-        context_source_tokens: metadata.visible_tokens_estimate ?? 0,
-        context_handoff_bytes: metadata.context_handoff_bytes,
-        context_handoff_tokens: metadata.context_handoff_tokens_estimate,
-        context_delta_bytes: metadata.context_delta_bytes,
-        context_delta_tokens: metadata.context_delta_tokens_estimate,
-        context_mode: metadata.mode,
-        context_fingerprint: metadata.context_fingerprint,
-        context_reused: metadata.reused,
-        context_cache_hit: metadata.cache_hit,
-      };
-      getStore(session)?.append(ompRoutingRecord("omp_worker_context_handoff", session, metadataRecord));
-      mirror(session, "task_context_resolved", metadataRecord, { cwd: ctxCwd(ctx) });
-      // Own marker must be first: raw task text may quote marker-shaped data.
-      // The context envelope is appended only when it carries facts; an empty
-      // envelope is prompt cost with no retrieved content.
-      const contextBlock = renderOmpWorkerContext(result.contextHandoff);
-      // Read-only workers cannot write through the sandbox, so a report routed to
-      // a file (local://-style) fails and is then pasted into the parent context
-      // anyway (observed 2026-09-21: two recon workers reported rejected writes).
-      const inlineReturnNote =
-        result.accessIntent === "read_only"
-          ? "\n\n[SECOND_BRAIN_WORKER_NOTE] Return your report as your final message; do not rely on writing files."
-          : "";
-      augmented.push({
-        ...item,
-        task: `[SECOND_BRAIN_WORKER_TASK task_id=${taskId} packet_sha256=${result.packetSha256 ?? ""} parent_session_id=${session}]\n${rawTask}${contextBlock === "" ? "" : `\n\n${contextBlock}`}${inlineReturnNote}`,
-      });
-    }
-    if (hasMutating) {
-      let resolveObserverLifetime: () => void;
-      let rejectObserverLifetime: (error: Error) => void;
-      const observerLifetime = new Promise<void>((resolve, reject) => {
-        resolveObserverLifetime = resolve;
-        rejectObserverLifetime = reject;
-      });
-      void observerLifetime.catch(() => undefined);
-      const observe = (observation: Readonly<AsyncJobLifecycleObservation>) => {
-        const admission = workerAdmissionsBySource.get(
-          JSON.stringify([session, event.toolCallId, observation.sourceIndex]),
-        );
-        if (!admission || admission.accessIntent !== "mutating") {
-          journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
-            session, nativeAttemptId: observation.nativeAttemptId,
-            revision: observation.revision, sourceIndex: observation.sourceIndex,
-            reason: !admission ? "admission-missing" : "not-mutating",
-          });
-          return false;
-        }
-        admission.callbackChain = admission.callbackChain
-          .catch((error: unknown) => {
-            journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-threw", {
-              session, taskId: admission.taskId, attemptId: admission.attemptId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            return false;
-          })
-          .then(() => {
-            journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-started", {
-              session, taskId: admission.taskId, attemptId: admission.attemptId,
-              nativeAttemptId: observation.nativeAttemptId, agentId: observation.agentId,
-              generation: observation.generation, sourceToolCallId: observation.sourceToolCallId,
-              sourceIndex: observation.sourceIndex, revision: observation.revision,
-              lifecycleRevision: admission.lifecycleRevision, status: observation.status,
-              executorSettled: observation.executorSettled, cleanupComplete: observation.cleanupComplete,
-            });
-            return observeWorkerAttempt(admission, observation, ctx);
-          });
-        return admission.callbackChain;
-      };
-      const hostObserver = ctx.observeAsyncJobLifecycle;
-      let disposer: (() => void) | undefined;
-      if (settlementSource === "host_api" && typeof hostObserver === "function") {
-        disposer = hostObserver(observe, { sourceToolCallId: event.toolCallId });
-      } else if (settlementSource === "attempt_settlement") {
-        const observeSettlement = ctx.observeAttemptSettlement;
-        if (typeof observeSettlement === "function") {
-          disposer = observeSettlement(
-            (snapshot) => {
-              journalWorkerEvent(session, "second-brain.worker-settlement-observed", {
-                session, ...snapshot,
-              });
-              if (snapshot.capabilityVersion !== 1 || snapshot.sourceIndex === null) {
-                const reason = snapshot.capabilityVersion !== 1 ? "unsupported-capability" : "source-index-missing";
-                journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
-                  session, nativeAttemptId: snapshot.attemptId, revision: snapshot.revision, reason,
-                });
-                return Promise.reject(new Error(`BRAIN_WORKER_OBSERVATION_INCOMPLETE:${reason}`));
-              }
-              const sourceIndex = snapshot.sourceIndex;
-              const sourceAdmission = workerAdmissionsBySource.get(
-                JSON.stringify([session, event.toolCallId, sourceIndex]),
-              );
-              if (sourceAdmission?.accessIntent === "read_only") {
-                journalWorkerEvent(session, "second-brain.worker-lifecycle-dropped", {
-                  session, nativeAttemptId: snapshot.attemptId, revision: snapshot.revision,
-                  sourceIndex, reason: "not-mutating",
-                });
-                // A read-only sibling is not a writer receipt, but it is still part of
-                // this call: returning the subscription lifetime keeps an incomplete
-                // writer group observable to the host drain instead of letting the
-                // adapter's standalone catch swallow the rejection. The host records
-                // this only as subscription work - it never releases ownership, and
-                // the read-only snapshot is never treated as a writer receipt.
-                return observerLifetime;
-              }
-              // No outcome may be reported before the host accepted a result: an
-              // unaccepted snapshot is still running work, and claiming completion
-              // there would mark the durable task COMPLETED ahead of acceptance.
-              const outcome: "completed" | "failed" | "cancelled" | "running" =
-                !snapshot.resultAccepted
-                  ? "running"
-                  : snapshot.outcome === "failed"
-                    ? "failed"
-                    : snapshot.outcome === "cancelled"
-                      ? "cancelled"
-                      : "completed";
-              const observation: AsyncJobLifecycleObservation = {
-                jobId: snapshot.jobId ?? snapshot.agentId,
-                generation: snapshot.generation,
-                nativeAttemptId: snapshot.attemptId,
-                type: "task",
-                agentId: snapshot.agentId,
-                sourceToolCallId: snapshot.parentToolCallId ?? event.toolCallId,
-                sourceIndex,
-                status: outcome,
-                // Execution settled when the result is accepted; cleanup is proven only
-                // at the host's release boundary. A failed cleanup is never a release.
-                executorSettled: snapshot.resultAccepted,
-                cleanupComplete: snapshot.releasePermitted,
-                revision: snapshot.revision,
-              };
-              return Promise.resolve(observe(observation)).then(result => {
-                journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-finished", {
-                  session, nativeAttemptId: observation.nativeAttemptId,
-                  revision: observation.revision, result,
-                });
-                if (!result) throw new Error("BRAIN_WORKER_LIFECYCLE_NOT_ACCEPTED");
-                // The RPC chain has returned; retain this subscription until every
-                // prepared writer is acknowledged, or expiry explicitly refuses it.
-                // observeWorkerAttempt itself never awaits this lifetime promise.
-                return observerLifetime;
-              }, (error: unknown) => {
-                journalWorkerEvent(session, "second-brain.worker-lifecycle-chain-threw", {
-                  session, nativeAttemptId: observation.nativeAttemptId,
-                  revision: observation.revision,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-                throw error;
-              });
-            },
-            { sourceToolCallId: event.toolCallId },
-          );
-        }
-      } else if (settlementSource === "native_lifecycle") {
-        // Stock hosts expose no attempt-scoped observer API; derive the same facts
-        // from the supported lifecycle frames plus the read-only job snapshot.
-        const events = pi.events;
-        const snapshot = ctx.getAsyncJobSnapshot;
-        if (typeof events?.on === "function" && typeof snapshot === "function") {
-          disposer = createNativeSettlementObserver({
-            sourceToolCallId: event.toolCallId,
-            // Frame-only evidence never proves cleanup on stock hosts.
-            cleanupProvenByFrame: false,
-            source: {
-              subscribe: (handler) => {
-                const bus = pi.events;
-                if (typeof bus?.on !== "function") return () => {};
-                const detach = bus.on(NATIVE_SUBAGENT_LIFECYCLE_CHANNEL, (frame: unknown) =>
-                  handler((frame ?? {}) as NativeSubagentLifecycleFrame),
-                );
-                return typeof detach === "function" ? detach : () => {};
-              },
-              snapshot: () => {
-                try {
-                  return (snapshot.call(ctx, { recentLimit: 20 }) ?? null) as NativeAsyncJobSnapshot | null;
-                } catch {
-                  return null;
-                }
-              },
-            },
-            attemptIdentity: (sourceIndex) =>
-              nativeAttemptIdentityFor(session, event.toolCallId, sourceIndex),
-            emit: async (observation) => observe(observation),
-            onUnresolved: (detail) => {
-              getStore(session)?.append(
-                ompRoutingRecord("omp_worker_settlement_unresolved", session, {
-                  toolCallId: event.toolCallId,
-                  sourceIndex: detail.sourceIndex,
-                  agentId: detail.agentId,
-                  reason: detail.reason,
-                }),
-              );
-            },
-          });
-        }
-      }
-      if (!disposer) {
-        await Promise.all(
-          preparedAdmissions.map((admission) =>
-            releaseUndispatchedAdmission(admission, "OMP_SETTLEMENT_CAPABILITY_UNAVAILABLE"),
-          ),
-        );
-        return { block: true, reason: "BRAIN_WORKER_SETTLEMENT_CAPABILITY_UNAVAILABLE" };
-      }
-      const nativeDisposer = disposer;
-      workerObservationDisposers.set(JSON.stringify([session, event.toolCallId]), () => {
-        const incomplete = preparedAdmissions.filter(
-          admission => admission.accessIntent === "mutating" && !admission.cleanupAccepted,
-        );
-        if (incomplete.length > 0) {
-          journalWorkerEvent(session, "second-brain.worker-observer-incomplete", {
-            session, sourceToolCallId: event.toolCallId,
-            attempts: incomplete.map(admission => ({
-              taskId: admission.taskId, attemptId: admission.attemptId,
-              nativeAttemptId: admission.nativeAttemptId, sourceIndex: admission.sourceIndex,
-              lifecycleRevision: admission.lifecycleRevision,
-            })),
-          });
-          rejectObserverLifetime(new Error("BRAIN_WORKER_OBSERVER_DETACHED_BEFORE_ACCEPTANCE"));
-        } else {
-          journalWorkerEvent(session, "second-brain.worker-observer-complete", {
-            session, sourceToolCallId: event.toolCallId,
-          });
-          resolveObserverLifetime();
-        }
-        nativeDisposer();
-      });
-    }
-    if (batch) return { input: { ...input, tasks: augmented } };
-    return { input: { ...input, task: String(augmented[0].task ?? "") } };
-  };
-  const emitWorkerCompletion = async (
-    session: string,
-    ctx: ExtensionContext,
-    fields: {
-      task_id: string;
-      packet_sha256: string;
-      child_omp_agent_id: string | null;
-      child_omp_session_file: string | null;
-      worker_agent: string;
-      worker_model: string | null;
-      status: "completed" | "failed" | "cancelled";
-    },
-    summaryText: string,
-  ): Promise<void> => {
-    const admission = workerAdmissionsByTask.get(fields.task_id);
-    if (!admission || admission.packetSha256 !== fields.packet_sha256 || admission.parentSessionId !== session) {
-      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_ATTEMPT_BINDING_UNAVAILABLE"));
-      return;
-    }
-    if ((admission.agentId !== undefined && fields.child_omp_agent_id !== admission.agentId) ||
-        (admission.accessIntent === "mutating" && admission.agentId === undefined)) {
-      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
-      return;
-    }
-    if (reportedWorkerTaskIds.has(fields.task_id) || workerCompletionsInFlight.has(fields.task_id)) return;
-    workerCompletionsInFlight.add(fields.task_id);
-    if (!observedWorkerTaskIds.has(fields.task_id)) {
-      rememberWorkerIdentity(observedWorkerTaskIds, fields.task_id);
-      getStore(session)?.append(ompRoutingRecord("omp_worker_child_result", session, fields));
-    }
-    try {
-      // The host journal is recovery input, not a Brain acceptance receipt.
-      journalWorkerEvent(session, "second-brain.worker-result-pending", {
-        session,
-        attemptId: admission.attemptId,
-        fields,
-        summary: summaryText.slice(0, 2048),
-      });
-      const outcome = await workerResultRunner({
-        home: config.home ?? "",
-        sessionId: session,
-        taskId: fields.task_id,
-        attemptId: admission.attemptId,
-        packetSha256: fields.packet_sha256,
-        status: fields.status,
-        workerAgent: fields.worker_agent,
-        workerModel: fields.worker_model ?? "",
-        summary: summaryText.slice(0, 2048),
-        childOmpAgentId: fields.child_omp_agent_id ?? "",
-        hostGeneration: admission.hostGeneration,
-        nativeAttemptId: admission.nativeAttemptId,
-        nativeJobId: admission.nativeJobId,
-        // The attempt's bearer authority, forwarded host-to-host. It is deliberately not added
-        // to the host journal above, the child context, or any diagnostic.
-        callbackToken: admission.callbackToken,
-      });
-      if (!outcome.ok) throw new Error(outcome.error ?? "BRAIN_WORKER_RESULT_NOT_ACCEPTED");
-      rememberWorkerIdentity(reportedWorkerTaskIds, fields.task_id);
-      if (admission.accessIntent === "read_only" || admission.cleanupAccepted) {
-        pendingWorkerTaskIds.delete(fields.task_id);
-        workerAdmissionsByTask.delete(fields.task_id);
-        workerAdmissionsBySource.delete(
-          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
-        );
-      }
-      journalWorkerEvent(session, "second-brain.worker-result-accepted", {
-        session,
-        taskId: fields.task_id,
-        attemptId: admission.attemptId,
-      });
-      // A read-only attempt has no cleanup transition to wait for, so its reservation is
-      // freed at acceptance; a mutating attempt keeps its accounting until the cleanup
-      // facts arrive. Consumption is idempotent, so a later cleanup call is a no-op.
-      if (admission.cleanupAccepted) {
-        void consumeReservation(session, fields.task_id, "accepted-with-cleanup");
-      }
-      mirror(session, "worker_completed", fields, { cwd: ctxCwd(ctx) });
-    } catch (error) {
-      getStore(session)?.append(sensors.extensionError(session, error));
-    } finally {
-      workerCompletionsInFlight.delete(fields.task_id);
-    }
-  };
-  const recoverWorkerResults = async (session: string, ctx: ExtensionContext): Promise<void> => {
-    if (workerRecoverySessions.has(session)) return;
-    rememberWorkerIdentity(workerRecoverySessions, session);
-    const pending = new Map<string, { fields: Parameters<typeof emitWorkerCompletion>[2]; summary: string }>();
-    let recoveryLimited = false;
-    for (const entry of ctx.sessionManager?.getEntries?.() ?? []) {
-      if (entry === null || typeof entry !== "object" || !("type" in entry) || entry.type !== "custom" ||
-          !("customType" in entry) || !("data" in entry)) continue;
-      const data = entry.data;
-      if (data === null || typeof data !== "object" || !("session" in data) || data.session !== session) continue;
-      if (
-        entry.customType === "second-brain.worker-admission-pending" &&
-        "taskId" in data && typeof data.taskId === "string" &&
-        "attemptId" in data && typeof data.attemptId === "string" &&
-        "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
-        "projectId" in data && typeof data.projectId === "string" &&
-        "accessIntent" in data && (data.accessIntent === "read_only" || data.accessIntent === "mutating") &&
-        "parentSessionId" in data && typeof data.parentSessionId === "string" &&
-        "agent" in data && typeof data.agent === "string" &&
-        "toolCallId" in data && typeof data.toolCallId === "string" &&
-        "sourceIndex" in data && typeof data.sourceIndex === "number" &&
-        ("worktreeId" in data && (data.worktreeId === null || typeof data.worktreeId === "string"))
-      ) {
-        const admission: WorkerAdmission = {
-          taskId: data.taskId,
-          attemptId: data.attemptId,
-          packetSha256: data.packetSha256,
-          projectId: data.projectId,
-          worktreeId: data.worktreeId,
-          accessIntent: data.accessIntent,
-          parentSessionId: data.parentSessionId,
-          agent: data.agent,
-          toolCallId: data.toolCallId,
-          sourceIndex: data.sourceIndex,
-          lifecycleRevision: 0,
-          callbackChain: Promise.resolve(true),
-          cleanupAccepted: data.accessIntent === "read_only",
-        };
-        workerAdmissionsByTask.set(admission.taskId, admission);
-        workerAdmissionsBySource.set(
-          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
-          admission,
-        );
-        pendingWorkerTaskIds.add(admission.taskId);
-        continue;
-      }
-      if (
-        entry.customType === "second-brain.worker-lifecycle-accepted" &&
-        "taskId" in data && typeof data.taskId === "string" &&
-        "attemptId" in data && typeof data.attemptId === "string"
-      ) {
-        const admission = workerAdmissionsByTask.get(data.taskId);
-        if (!admission || admission.attemptId !== data.attemptId) continue;
-        if ("nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
-            data.nativeAttemptId.length > 0 && data.nativeAttemptId.length <= 512 &&
-            "nativeJobId" in data && (data.nativeJobId === null ||
-              (typeof data.nativeJobId === "string" && data.nativeJobId.length > 0 && data.nativeJobId.length <= 512)) &&
-            "agentId" in data && typeof data.agentId === "string" &&
-            data.agentId.length > 0 && data.agentId.length <= 512 &&
-            "hostGeneration" in data && typeof data.hostGeneration === "number" &&
-            Number.isInteger(data.hostGeneration) && data.hostGeneration >= 0) {
-          admission.nativeAttemptId = data.nativeAttemptId;
-          admission.nativeJobId = data.nativeJobId;
-          admission.agentId = data.agentId;
-          admission.hostGeneration = data.hostGeneration;
-        }
-        if (!("executorSettled" in data) || data.executorSettled !== true ||
-            !("cleanupComplete" in data) || data.cleanupComplete !== true) continue;
-        admission.cleanupAccepted = true;
-        void consumeReservation(admission.parentSessionId, admission.taskId, "cleanup-complete-recovered");
-        pendingWorkerTaskIds.delete(admission.taskId);
-        if (reportedWorkerTaskIds.has(admission.taskId)) {
-          workerAdmissionsByTask.delete(admission.taskId);
-        }
-        workerAdmissionsBySource.delete(
-          JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
-        );
-        continue;
-      }
-      if (entry.customType === "second-brain.worker-job-pending" &&
-          "jobId" in data && typeof data.jobId === "string" && data.jobId.length > 0 && data.jobId.length <= 512 &&
-          "agentId" in data && typeof data.agentId === "string" && data.agentId.length > 0 && data.agentId.length <= 512 &&
-          "taskId" in data && typeof data.taskId === "string" && data.taskId.length <= 512 &&
-          "packetSha256" in data && typeof data.packetSha256 === "string" && /^[0-9a-f]{64}$/.test(data.packetSha256) &&
-          "agent" in data && typeof data.agent === "string" && data.agent.length <= 512) {
-        const key = JSON.stringify([session, data.jobId]);
-        if (pendingWorkerJobs.has(key)) continue;
-        if (pendingWorkerJobs.size >= 1024 ||
-            (!pendingWorkerTaskIds.has(data.taskId) && pendingWorkerTaskIds.size >= 1024)) {
-          recoveryLimited = true;
-          continue;
-        }
-        pendingWorkerTaskIds.add(data.taskId);
-        // Legacy journal entries predate the flag: the observer path keyed by the real
-        // manager id, the progress path keyed by the agent id. An entry whose recorded
-        // job id IS its agent id cannot be told apart, so it takes the conservative
-        // case — the delivery must name the agent before it settles.
-        const recordedFallback =
-          "keyedByAgentFallback" in data ? data.keyedByAgentFallback === true : undefined;
-        const keyedByAgentFallback =
-          recordedFallback === true ||
-          (recordedFallback === undefined && data.jobId === data.agentId);
-        pendingWorkerJobs.set(key, {
-          taskId: data.taskId, packetSha256: data.packetSha256, parentSessionId: session, agent: data.agent,
-          agentId: data.agentId,
-          keyedByAgentFallback,
-        });
-        const admission = workerAdmissionsByTask.get(data.taskId);
-        if (
-          admission && admission.packetSha256 === data.packetSha256 &&
-          "attemptId" in data && data.attemptId === admission.attemptId
-        ) {
-          admission.nativeJobId = data.jobId;
-          admission.agentId = data.agentId;
-          if ("nativeAttemptId" in data && typeof data.nativeAttemptId === "string" &&
-              "hostGeneration" in data && typeof data.hostGeneration === "number") {
-            admission.nativeAttemptId = data.nativeAttemptId;
-            admission.hostGeneration = data.hostGeneration;
-          }
-        }
-        continue;
-      }
-      if (
-        entry.customType === "second-brain.worker-result-accepted" &&
-        "taskId" in data && typeof data.taskId === "string" &&
-        "attemptId" in data && typeof data.attemptId === "string"
-      ) {
-        pending.delete(data.taskId);
-        const admission = workerAdmissionsByTask.get(data.taskId);
-        if (!admission || admission.attemptId !== data.attemptId) continue;
-        rememberWorkerIdentity(reportedWorkerTaskIds, data.taskId);
-        if (admission.accessIntent === "read_only" || admission.cleanupAccepted) {
-          pendingWorkerTaskIds.delete(data.taskId);
-          workerAdmissionsByTask.delete(data.taskId);
-          workerAdmissionsBySource.delete(
-            JSON.stringify([admission.parentSessionId, admission.toolCallId, admission.sourceIndex]),
-          );
-          for (const [key, job] of pendingWorkerJobs) if (job.taskId === data.taskId) pendingWorkerJobs.delete(key);
-        }
-        continue;
-      }
-      if (entry.customType !== "second-brain.worker-result-pending" || !("fields" in data)) continue;
-      const f = data.fields;
-      if (f === null || typeof f !== "object" ||
-          !("task_id" in f) || typeof f.task_id !== "string" || f.task_id.length > 512 ||
-          !("packet_sha256" in f) || typeof f.packet_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(f.packet_sha256) ||
-          !("status" in f) || (f.status !== "completed" && f.status !== "failed" && f.status !== "cancelled") ||
-          !("worker_agent" in f) || typeof f.worker_agent !== "string") continue;
-      if (!("attemptId" in data) || data.attemptId !== workerAdmissionsByTask.get(f.task_id)?.attemptId) continue;
-      if (reportedWorkerTaskIds.has(f.task_id)) continue;
-      if (!pending.has(f.task_id) && pending.size >= 1024) {
-        recoveryLimited = true;
-        continue;
-      }
-      pending.set(f.task_id, {
-        fields: {
-          task_id: f.task_id, packet_sha256: f.packet_sha256, status: f.status, worker_agent: f.worker_agent,
-          child_omp_agent_id: "child_omp_agent_id" in f && typeof f.child_omp_agent_id === "string" ? f.child_omp_agent_id : null,
-          child_omp_session_file: "child_omp_session_file" in f && typeof f.child_omp_session_file === "string" ? f.child_omp_session_file : null,
-          worker_model: "worker_model" in f && typeof f.worker_model === "string" ? f.worker_model : null,
-        },
-        summary: "summary" in data && typeof data.summary === "string" ? data.summary.slice(0, 2048) : "",
-      });
-    }
-    // Bound work at each native resume; overflow stays in the journal, not lost.
-    if (pending.size > 128 || recoveryLimited) {
-      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RECOVERY_LIMIT"));
-      workerRecoverySessions.delete(session);
-    }
-    for (const { fields, summary } of [...pending.values()].slice(0, 128)) {
-      rememberWorkerIdentity(observedWorkerTaskIds, fields.task_id);
-      await emitWorkerCompletion(session, ctx, fields, summary);
-    }
-  };
-  const WORKER_TASK_MARKER_RE = /\[SECOND_BRAIN_WORKER_TASK task_id=([^\s\]]+) packet_sha256=([0-9a-f]{64})(?: parent_session_id=([^\s\]]+))?\]/;
-  const recordWorkerChildResults = async (
-    event: ToolResultEvent,
-    ctx: ExtensionContext,
-    session: string,
-  ): Promise<void> => {
-    if (event.toolName !== "task") return;
-    if (event.isError) {
-      const preflightRejected = event.details != null &&
-        typeof event.details === "object" &&
-        (event.details as Record<string, unknown>).preflightRejected === true;
-      const count = Array.isArray(event.input.tasks) ? event.input.tasks.length : 1;
-      for (let index = 0; index < count; index += 1) {
-        const sourceKey = JSON.stringify([session, event.toolCallId, index]);
-        const admission = workerAdmissionsBySource.get(sourceKey);
-        if (!admission) continue;
-        if (admission.accessIntent === "mutating" || preflightRejected) {
-          await releaseUndispatchedAdmission(
-            admission,
-            preflightRejected ? "OMP_TASK_PREFLIGHT_REJECTED" : "OMP_TASK_DISPATCH_FAILED",
-          );
-        }
-      }
-      const observerKey = JSON.stringify([session, event.toolCallId]);
-      const hasBoundAttempt = Array.from(workerAdmissionsBySource.values()).some(
-        (admission) =>
-          admission.parentSessionId === session &&
-          admission.toolCallId === event.toolCallId &&
-          admission.accessIntent === "mutating",
-      );
-      if (!hasBoundAttempt) {
-        disposeWorkerObserver(observerKey);
-      }
-    }
-    if (event.details == null || typeof event.details !== "object") return;
-    await recoverWorkerResults(session, ctx);
-    const details = event.details as Record<string, unknown>;
-    // Background spawns (this OMP version's default for the generic `task`
-    // agent, confirmed live) return `results: []` on the spawning tool_result
-    // and instead expose the marker-embedded task text via `progress[]`.
-    // Bind the actual manager job id to packet identity and expected child id;
-    // rendered output and agent-name equality are not correlation sources.
-    const rawProgress = details.progress;
-    if (Array.isArray(rawProgress)) {
-      // One snapshot per batch: it names both ids (`id` plus `agentId`) for running
-      // and recent jobs, which is the only authoritative agent -> manager-job map
-      // the stock host exposes (the hub serializer drops agentId).
-      const asyncJobSnapshot: unknown =
-        typeof ctx.getAsyncJobSnapshot === "function" ? ctx.getAsyncJobSnapshot() : null;
-      for (const rawEntry of rawProgress) {
-        if (rawEntry == null || typeof rawEntry !== "object") continue;
-        const entry = rawEntry as Record<string, unknown>;
-        const agentId = typeof entry.id === "string" ? entry.id : undefined;
-        // This OMP version reports the manager job as `entry.id` and leaves
-        // `entry.jobId` null (verified live 2026-09-21), so the manager id is
-        // RESOLVED, never guessed from the agent id: a background job can already
-        // hold the agent id, which pushes this spawn's manager id to `<id>-2`, and a
-        // guessed key would then settle whichever other worker owns that id.
-        const managerJobId =
-          typeof entry.jobId === "string"
-            ? entry.jobId
-            : (nativeJobIdForAgent(asyncJobSnapshot, agentId ?? "") ?? undefined);
-        // An unresolvable manager id falls back to the agent id, and such an entry is
-        // settled only when the delivery NAMES the agent: the id alone is not identity,
-        // because a job already holding that id pushes another spawn onto it.
-        const keyedByAgentFallback = managerJobId === undefined;
-        const jobId = managerJobId ?? agentId;
-        const entryTask = typeof entry.task === "string" ? entry.task : "";
-        const marker = entryTask.match(WORKER_TASK_MARKER_RE);
-        if (agentId === undefined || agentId.length === 0 || agentId.length > 512 ||
-            jobId === undefined || jobId.length === 0 || jobId.length > 512 ||
-            marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
-        const admission = workerAdmissionsByTask.get(marker[1]);
-        if (!admission || admission.parentSessionId !== session ||
-            admission.toolCallId !== event.toolCallId || admission.sourceIndex !== entry.index) {
-          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_SOURCE_MISMATCH"));
-          continue;
-        }
-        if (admission.accessIntent === "mutating") continue;
-        if (reportedWorkerTaskIds.has(marker[1])) continue;
-        if ((admission.agentId !== undefined && admission.agentId !== agentId) ||
-            (admission.nativeJobId !== undefined && admission.nativeJobId !== jobId)) {
-          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
-          continue;
-        }
-        const key = JSON.stringify([session, jobId]);
-        if (pendingWorkerJobs.has(key)) continue;
-        if (pendingWorkerJobs.size >= 1024 ||
-            (!pendingWorkerTaskIds.has(marker[1]) && pendingWorkerTaskIds.size >= 1024)) {
-          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_PENDING_LIMIT"));
-          continue;
-        }
-        admission.agentId = agentId;
-        admission.nativeJobId = jobId;
-        pendingWorkerTaskIds.add(marker[1]);
-        pendingWorkerJobs.set(key, {
-          taskId: marker[1],
-          packetSha256: marker[2],
-          parentSessionId: marker[3] ?? session,
-          agent: typeof entry.agent === "string" ? entry.agent : "unknown",
-          agentId,
-          keyedByAgentFallback,
-        });
-        journalWorkerEvent(session, "second-brain.worker-job-pending", {
-          session, jobId, attemptId: admission.attemptId, ...pendingWorkerJobs.get(key),
-        });
-      }
-    }
-    const rawResults = details.results;
-    if (!Array.isArray(rawResults)) return;
-    for (const rawResult of rawResults) {
-      if (rawResult == null || typeof rawResult !== "object") continue;
-      const result = rawResult as Record<string, unknown>;
-      const taskText = typeof result.task === "string" ? result.task : "";
-      const marker = taskText.match(WORKER_TASK_MARKER_RE);
-      if (marker === null || (marker[3] !== undefined && marker[3] !== session)) continue;
-      const admission = workerAdmissionsByTask.get(marker[1]);
-      if (!admission || admission.parentSessionId !== session ||
-          admission.toolCallId !== event.toolCallId || admission.sourceIndex !== result.index) {
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_SOURCE_MISMATCH"));
-        continue;
-      }
-      if (result.aborted !== true && typeof result.abortReason !== "string" && event.isError !== true &&
-          (typeof result.exitCode !== "number" || !Number.isFinite(result.exitCode))) continue;
-      const status =
-        result.aborted === true || typeof result.abortReason === "string"
-          ? "cancelled"
-          : event.isError === true || (typeof result.exitCode === "number" && result.exitCode !== 0)
-            ? "failed"
-            : "completed";
-      const agentId = typeof result.id === "string" ? result.id : null;
-      const firstBlock = Array.isArray(event.content) ? event.content[0] : undefined;
-      const summaryText =
-        firstBlock != null && typeof firstBlock === "object" && "text" in firstBlock && typeof firstBlock.text === "string"
-          ? firstBlock.text
-          : "";
-      await emitWorkerCompletion(
-        session,
-        ctx,
-        {
-          task_id: marker[1],
-          packet_sha256: marker[2],
-          child_omp_agent_id: agentId,
-          child_omp_session_file: typeof result.sessionFile === "string" ? result.sessionFile : null,
-          worker_agent: typeof result.agent === "string" ? result.agent : "unknown",
-          worker_model: typeof result.resolvedModel === "string" ? result.resolvedModel : null,
-          status,
-        },
-        summaryText,
-      );
-    }
-  };
-  /** Observe explicit hub delivery using the same durable settlement as auto-delivery. */
-  const recordAsyncWorkerCompletions = async (
-    event: ToolResultEvent,
-    ctx: ExtensionContext,
-    session: string,
-  ): Promise<void> => {
-    if (event.toolName !== "hub" || event.details == null || typeof event.details !== "object") return;
-    const rawJobs = (event.details as Record<string, unknown>).jobs;
-    if (!Array.isArray(rawJobs)) return;
-    await recoverWorkerResults(session, ctx);
-    for (const rawJob of rawJobs) {
-      if (rawJob == null || typeof rawJob !== "object") continue;
-      const job = rawJob as Record<string, unknown>;
-      if (job.type !== "task" || !["completed", "failed", "cancelled"].includes(String(job.status))) continue;
-      const jobId = typeof job.id === "string" ? job.id : undefined;
-      if (jobId === undefined) continue;
-      const pending = takePendingWorkerJob(jobId, session);
-      if (pending === undefined) {
-        reportBypassedWorkerJob(session, jobId, job.agentId, job.status, "hub_job_snapshot");
-        continue;
-      }
-      // The snapshot names the worker as `agentId` on some paths and as
-      // `agentUrlId` when the job carries a structured result — the live stock
-      // shape for `task` jobs (verified 2026-09-21). When either is present it
-      // must name the worker this entry is bound to; otherwise the entry is not
-      // settled, because a job that already holds the agent id pushes another
-      // spawn's manager id onto it and the id alone would then attribute the
-      // completion to the wrong worker.
-      const namedAgent =
-        typeof job.agentId === "string"
-          ? job.agentId
-          : typeof job.agentUrlId === "string"
-            ? job.agentUrlId
-            : undefined;
-      if (namedAgent === undefined && pending.keyedByAgentFallback) {
-        // No manager job id was resolvable for this spawn, so the key is the agent id
-        // and a delivery that names no agent cannot prove which worker settled.
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_UNVERIFIED"));
-        continue;
-      }
-      if (namedAgent !== undefined && namedAgent !== pending.agentId) {
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
-        continue;
-      }
-      const status = job.status === "completed" ? "completed" : job.status === "cancelled" ? "cancelled" : "failed";
-      const summaryText =
-        typeof job.resultText === "string"
-          ? job.resultText
-          : typeof job.errorText === "string"
-            ? job.errorText
-            : "";
-      await emitWorkerCompletion(
-        pending.parentSessionId,
-        ctx,
-        {
-          task_id: pending.taskId,
-          packet_sha256: pending.packetSha256,
-          child_omp_agent_id: pending.agentId,
-          child_omp_session_file: null,
-          worker_agent: pending.agent,
-          worker_model: typeof job.resolvedModel === "string" ? job.resolvedModel : null,
-          status,
-        },
-        summaryText,
-      );
-    }
-  };
-  let structuredAsyncUnavailableReported = false;
-  /** Native delivery metadata is authoritative; rendered text is summary only. */
-  const recordAsyncResultDeliveries = async (
-    message: MessageEndMessage,
-    ctx: ExtensionContext,
-  ): Promise<void> => {
-    if (message.role !== "custom" || message.customType !== "async-result") return;
-    const details = message.details;
-    if (details === null || typeof details !== "object" || !("jobs" in details) || !Array.isArray(details.jobs)) {
-      throw new Error("BRAIN_WORKER_RESULT_MALFORMED_ENVELOPE");
-    }
-    if (details.jobs.length > 128) throw new Error("BRAIN_WORKER_RESULT_ENVELOPE_TOO_LARGE");
-    const session = resolveAndJournalSessionId(ctx);
-    await recoverWorkerResults(session, ctx);
-    let summary = typeof message.content === "string" ? message.content.slice(0, 2048) : "";
-    if (Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (summary.length >= 2048) break;
-        if (part !== null && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-          summary += part.text.slice(0, 2048 - summary.length);
-        }
-      }
-    }
-    for (const job of details.jobs) {
-      if (job === null || typeof job !== "object" || job.type !== "task" ||
-          typeof job.jobId !== "string" || job.jobId.length > 512) continue;
-      const pending = takePendingWorkerJob(job.jobId, session);
-      if (pending === undefined) {
-        reportBypassedWorkerJob(session, job.jobId, job.agentId, job.status, "async_result_envelope");
-        continue;
-      }
-      if (pending.parentSessionId !== session) continue;
-      if (typeof job.status !== "string" || typeof job.agentId !== "string" ||
-          job.agentId.length === 0 || job.agentId.length > 512) {
-        if (!structuredAsyncUnavailableReported) {
-          structuredAsyncUnavailableReported = true;
-          getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_STRUCTURED_ASYNC_UNAVAILABLE"));
-        }
-        continue;
-      }
-      if (job.agentId !== pending.agentId) {
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_MISMATCH"));
-        continue;
-      }
-      if (pending.keyedByAgentFallback && job.jobId !== pending.agentId) {
-        // The envelope names both ids, so a fallback-keyed entry is settled only when
-        // the manager id it carries is the agent id it was keyed by; anything else
-        // means the manager renamed this spawn and the id belongs to another worker.
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_AGENT_ID_UNVERIFIED"));
-        continue;
-      }
-      const status = job.status === "completed" || job.status === "failed" || job.status === "cancelled" ? job.status : undefined;
-      if (status === undefined) {
-        getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_RESULT_INVALID_STATUS"));
-        continue;
-      }
-      await emitWorkerCompletion(pending.parentSessionId, ctx, {
-        task_id: pending.taskId,
-        packet_sha256: pending.packetSha256,
-        child_omp_agent_id: job.agentId,
-        child_omp_session_file: null,
-        worker_agent: pending.agent,
-        worker_model: null,
-        status,
-      }, summary);
-    }
-  };
-  const mirrorWorkerContextReceipt = (
-    prompt: string,
-    session: string,
-    ctx: ExtensionContext,
-  ): void => {
-    const marker = prompt.match(WORKER_TASK_MARKER_RE);
-    if (marker === null) return;
-    const rootSession = workerRootSessions.get(session) ?? null;
-    if (rootSession === null) {
-      getStore(session)?.append(sensors.extensionError(session, "BRAIN_WORKER_ANCESTRY_UNVERIFIED"));
-    }
-    mirror(
-      session,
-      "task_context_resolved",
-      {
-        task_id: marker[1],
-        packet_sha256: marker[2],
-        parent_session_id: rootSession,
-        worker_session_id: session,
-        status: "child_received",
-      },
-      { cwd: ctxCwd(ctx) },
-    );
-  };
-
-  const modelCandidates = (ctx: ExtensionContext): OmpModelCandidate[] => {
-    const model = ctx.model as (Record<string, unknown> & { provider?: unknown; id?: unknown }) | undefined;
-    const raw = model?.candidates ?? model?.availableModels ?? model?.models;
-    if (!Array.isArray(raw)) return [];
-    return raw.filter(
-      (candidate): candidate is OmpModelCandidate =>
-        candidate != null &&
-        typeof candidate === "object" &&
-        typeof (candidate as Record<string, unknown>).provider === "string" &&
-        typeof (candidate as Record<string, unknown>).model === "string",
-    );
-  };
-
-  const routingOptions = (
-    session: string,
-    task: string,
-    ctx: ExtensionContext,
-    role: string,
-  ): OmpRoutingOptions => {
-    const model = ctx.model;
-    const budgetState = sessionBudgetStates.get(session);
-    return {
-      home: config.home ?? "",
-      task,
-      sessionId: session,
-      projectId: process.env.SECOND_BRAIN_PROJECT ?? ctxCwd(ctx) ?? "",
-      role,
-      provider: typeof model?.provider === "string" ? model.provider : "",
-      model: typeof model?.id === "string" ? model.id : "",
-      cwd: ctxCwd(ctx),
-      candidates: modelCandidates(ctx),
-      ...(budgetState === "SOFT" ? { minimumTier: "efficient" } : {}),
-    };
-  };
-
-  const ensureRoutingDecision = async (
-    session: string,
-    task: string,
-    ctx: ExtensionContext,
-    role: string,
-  ): Promise<OmpRoutingResult> => {
-    const taskHash = taskSha256(task);
-    const key = `${session}:${currentTurnIndex}:${taskHash}`;
-    const existing = routingCache.get(key);
-    if (existing) return existing;
-    latestRoutingDecision = null;
-    const promise = routingRunner(routingOptions(session, task, ctx, role))
-      .then((result) => {
-        if (result.decision) {
-          latestRoutingDecision = result.decision;
-          latestRoutingSession = session;
-          getStore(session)?.append(
-            ompRoutingRecord("omp_routing_decision", session, {
-              decision_id: result.decision.decision_id,
-              task_hash: result.decision.task_hash,
-              selected_provider: result.decision.selected_provider,
-              selected_model: result.decision.selected_model,
-              selected_tier: result.decision.selected_tier,
-              fallback_used: result.decision.fallback_used,
-              reason_code: result.decision.reason_code,
-              status: result.decision.status,
-            }),
-          );
-          mirror(session, "decision", {
-            routing_event: "model_decision",
-            decision_id: result.decision.decision_id,
-            task_hash: result.decision.task_hash,
-            selected_provider: result.decision.selected_provider,
-            selected_model: result.decision.selected_model,
-            fallback_used: result.decision.fallback_used,
-          }, { cwd: ctxCwd(ctx), agentId: sensors.modelToString(ctx.model) ?? "omp" });
-          if (
-            result.decision.status === "selected" &&
-            result.decision.selected_provider &&
-            result.decision.selected_model &&
-            !readySessions.has(session)
-          ) {
-            readySessions.add(session);
-            getStore(session)?.append(ompRoutingRecord("OMP_SECOND_BRAIN_READY", session, {
-              decision_id: result.decision.decision_id,
-              task_hash: result.decision.task_hash,
-            }));
-            const emit = (pi as unknown as { emit?: (event: string, payload: unknown) => void }).emit;
-            if (typeof emit === "function") emit.call(pi, "OMP_SECOND_BRAIN_READY", {
-              decision_id: result.decision.decision_id,
-              session,
-            });
-          }
-        }
-        return result;
-      })
-      .catch(() => ({ decision: null, error: "BRAIN_ROUTING_UNAVAILABLE" }));
-    routingCache.set(key, promise);
-    return promise;
-  };
-
   const ensureVisibilityPlan = (
     session: string,
     task: string,
@@ -2794,24 +927,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
-    establishWorkerRootSession(session, ctx);
+    recordNativeRootSession(session, ctx);
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
     void runShadowAutoInject({
       home: config.home ?? "",
       session,
       task: "",
-      agentId: sensors.modelToString(ctx.model) ?? "prime",
+      agentId: session,
       cwd: typeof ctx.cwd === "string" ? ctx.cwd : undefined,
       cfg: loadAutoInjectHostConfig(config.home),
       append: (record) => getStore(session)?.append(record),
     });
-    const modelId = sensors.modelToString(ctx.model) ?? "unknown";
-    const role = resolveAgentRole(
-      modelId,
-      loadDriverOrchestratorConfig(),
-      loadOrchestratorGuardConfig().orchestratorModels,
-    );
     const environment = runEnvironmentAssessmentSync({
       home: config.home ?? "",
       hostSessionId: session,
@@ -2844,11 +971,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         host: "prime",
         reason: event.reason,
         cwd: typeof ctx.cwd === "string" ? ctx.cwd : null,
-        model: modelId,
-        agent_id: modelId,
-        role_profile: role,
-        provider: modelId.split("/")[0] ?? "unknown",
-        host_agent_id: modelId,
+        model: sensors.modelToString(ctx.model),
+        agent_id: session,
+        provider: typeof ctx.model?.provider === "string" ? ctx.model.provider : null,
+        host_agent_id: session,
         environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
         environment_hash: environment.ok ? environment.environmentHash ?? null : null,
         environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
@@ -2858,7 +984,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // Project attribution: session_started is the first mirrored event, so
       // the auto-init of the session ledger receives the host cwd (when known)
       // and `ledger init --cwd` resolves project_id via the AutoInject ladder.
-      { agentId: modelId, cwd: ctxCwd(ctx) },
+      { agentId: session, cwd: ctxCwd(ctx) },
     );
     // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
     try {
@@ -2916,21 +1042,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 
-  // before_agent_start: measurement + role resolution + contract injection.
-  // Roles (brainstem/policies/driver-orchestration.md): hard_orchestrator
-  // (Sol — strict contract, unchanged), driver (deepseek-v4-pro / gpt-5.6-luna
-  // by default — driver contract APPENDED to the full current system prompt),
-  // worker / normal (measurement-only, never get the driver contract). The
-  // record always carries the resolved role; driver-role sessions also carry
-  // driver_contract_injected (true when the contract was appended).
-  // Phase 14 recall: for non-Sol sessions when enabled (default OFF), ONE
-  // bounded Brain recall appends the Brain Brief AFTER the driver contract in
-  // a single patch (patched is the composition base). Sol-model sessions get
-  // the condensed orchestrator contract (recall must NOT double-inject for
-  // Sol). Guard failures fail open: the record is still appended and no patch
-  // is returned. Default OFF recall = driver sessions get the contract
-  // synchronously, everyone else returns undefined (zero behavior change,
-  // zero spawns).
+  // before_agent_start composes approved, low-authority knowledge for the
+  // current native recipient without appointing a coordinator or changing
+  // the host's model, tools or task lifecycle.
   // Phase 0D: SHADOW (fire-and-forget, never injects) vs ADVISORY/ACTIVE
   // (awaited; may return a LOW-AUTHORITY custom_message patch). The packet
   // text carries "authority: advisory" from the contracts renderer — never
@@ -2939,18 +1053,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     session: string,
     event: BeforeAgentStartEvent,
     context: ExtensionContext,
-    roleProfile: string,
   ): AdvisoryAutoInjectCall => ({
     home: config.home ?? "",
     session,
     task: typeof event.prompt === "string" ? event.prompt : "",
-    agentId: sensors.modelToString(context.model) ?? "prime",
+    agentId: session,
     cwd: typeof context.cwd === "string" ? context.cwd : undefined,
     projectId: resolvedProjectIdForSession(session) ?? resolveProject(),
     cfg: loadAutoInjectHostConfig(config.home),
-    roleProfile,
     append: (record) => getStore(session)?.append(record),
   });
+
 
   /** Merge a custom_message patch into any existing handler result. */
   function withMessage<T extends { systemPrompt?: string } | undefined>(
@@ -3039,24 +1152,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return primary; // incompatible existing custom message shape -> fail open, keep it unchanged
   }
 
-  /** T3.1: merge the hard budget warning into the TAIL custom message slot. */
-  function mergeBudgetWarningMessage(primary: unknown, warning: string): unknown {
-    if (primary === undefined || primary === null) {
-      return { content: warning, details: { budget_warning: true } };
-    }
-    if (typeof primary === "object" && "content" in primary && typeof primary.content === "string") {
-      const primaryDetails =
-        "details" in primary && typeof primary.details === "object" && primary.details !== null
-          ? primary.details
-          : {};
-      return {
-        ...primary,
-        content: `${primary.content}\n\n${warning}`,
-        details: { ...primaryDetails, budget_warning: true },
-      };
-    }
-    return primary;
-  }
 
   /** T3.4: merge the lean opportunity injection (NUDGE / FULL) into the TAIL custom message slot. */
   function mergeLeanMessage(primary: unknown, leanText: string): unknown {
@@ -3085,44 +1180,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     let environmentTask: EnvironmentAssessmentResult | undefined;
     try {
       session = resolveAndJournalSessionId(ctx);
-      establishWorkerRootSession(session, ctx);
-      // Publish this host's capability set once per session. Brain features are
-      // capability-gated, not version-gated: the file records what this host can
-      // be observed doing, so a degraded host is visible in state instead of only
-      // as a refusal at dispatch time. Host state, not a session event, so no
-      // telemetry record is added.
-      if (config.home && !capabilityReportedSessions.has(session)) {
-        capabilityReportedSessions.add(session);
-        try {
-          // Per-session evidence, never one mutable "current" claim: any probe or
-          // test context that resolves this home could otherwise publish a
-          // capability set for the host it is not running on (observed
-          // 2026-09-21: a fixture session wrote cleanup_backed_release:true into
-          // the single live file, contradicting the real host).
-          const dir = join(config.home, "state", "host-capabilities");
-          mkdirSync(dir, { recursive: true });
-          const name = `${createHash("sha256").update(session, "utf8").digest("hex").slice(0, 16)}.json`;
-          writeFileSync(
-            join(dir, name),
-            JSON.stringify(
-              { reported_at: new Date().toISOString(), session, ...hostCapabilities(ctx) },
-              null,
-              2,
-            ),
-          );
-        } catch {
-          // advisory only; a write failure never blocks a session
-        }
-      }
-      const modelId = sensors.modelToString(ctx.model) ?? undefined;
-      const guardCfg = loadOrchestratorGuardConfig();
-      const role = resolveAgentRole(
-        modelId,
-        loadDriverOrchestratorConfig(),
-        guardCfg.orchestratorModels,
-      );
-      await recoverWorkerResults(session, ctx);
-      mirrorWorkerContextReceipt(typeof event.prompt === "string" ? event.prompt : "", session, ctx);
+      recordNativeRootSession(session, ctx);
       const environmentPrompt = typeof event.prompt === "string" ? event.prompt : "";
       const taskHash = taskSha256(environmentPrompt);
       if (taskHash && environmentTaskHashes.get(session) !== taskHash) {
@@ -3140,15 +1198,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           );
         }
       }
-      // Phase 0C/0D: SHADOW = fire-and-forget (never returns a patch);
-      // ADVISORY/ACTIVE = awaited and may append a low-authority
-      // custom_message (packet carries "authority: advisory"). The message
-      // is returned on EVERY role path (Phase C3 FIX 1): orchestrator and
-      // driver merge it with their systemPrompt patch, worker/normal return
-      // a bare { message } result — the host appends it as a model-visible
-      // role:"custom" entry (SDK runner.ts emitBeforeAgentStart: messages
-      // are collected from every handler result and inserted as custom
-      // messages; _appendBeforeAgentStartMessages builds role:"custom").
+      // AutoInject contributes low-authority context for any native recipient;
+      // the host appends the returned message after this turn's user text.
       // Phase C10 (verifier): the BRANCH decision MUST read the same cfg as
       // the records — config.home is required so config/autoinject.toml
       // [autoinject] mode is honored (env-only cfg made the live flip
@@ -3197,7 +1248,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }
       aiCfg = loadAutoInjectHostConfig(config.home);
       if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
-        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx, role));
+        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
         // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
         // (delivery_id + packet_tokens) is the structured, non-transcript
         // reference already computed by messageFromOutcome (autoinject.ts)
@@ -3249,7 +1300,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           }
         }
       } else {
-        void runShadowAutoInject(autoinjectCall(session, event, ctx, role));
+        void runShadowAutoInject(autoinjectCall(session, event, ctx));
       }
       if (config.home && taskText.trim().length > 0) {
         try {
@@ -3295,30 +1346,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         // it MUST carry the cwd or project_id resolves to ''.
         { cwd: ctxCwd(ctx) },
       );
-      const budgetCheck = await budgetRunner({
-        home: config.home ?? "",
-        sessionId: session,
-        role,
-      }).catch(() => ({ state: "OK" as const, used: null, cap: 0, error: "ACCOUNTING_UNAVAILABLE" }));
-      sessionBudgetStates.set(session, budgetCheck.state);
-      if (budgetCheck.error) getStore(session)?.append(sensors.extensionError(session, budgetCheck.error));
-      const task = typeof event.prompt === "string" ? event.prompt.slice(0, 2048) : "";
-      if (task.length > 0) {
-        await ensureRoutingDecision(session, task, ctx, role);
-      }
-      // P3-D lean runtime adapter (plan §8): decide + record BEFORE the
-      // branch points so every path emits exactly ONE lean_kernel record.
-      // Sol resolves omit/role here and is never injected (the guard branch
-      // returns before any kernel could be applied). The dedup check runs
-      // against the pre-patch base; appendLeanKernel re-checks the assembled
-      // prompt (contract + kernel) when applying.
+      // The approved Lean kernel is optional knowledge, not an agent-role policy.
+      // Dedup against the host's original system prompt before adding stable context.
       const promptValue = typeof ctx.getSystemPrompt === "function" ? ctx.getSystemPrompt() : undefined;
       const base = Array.isArray(promptValue)
         ? promptValue.join("\n\n")
         : typeof promptValue === "string"
           ? promptValue
           : undefined;
-      const lean = decideLeanRuntime({ home: config.home ?? "", role, base });
+      const lean = decideLeanRuntime({ home: config.home ?? "", base });
       if (lean.error !== undefined) {
         getStore(session)?.append(sensors.extensionError(session, lean.error));
       }
@@ -3326,7 +1362,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         sensors.leanKernel(session, {
           decision: lean.decision,
           reason: lean.reason,
-          role,
           skill_status: lean.skillStatus,
           mode: lean.mode,
           eval_source: lean.evalSource,
@@ -3338,16 +1373,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         marker: `[${LEAN_KERNEL_MARKER}]`,
         kernel: lean.kernel,
       });
-      // T2.4 (injection-slots): the session-constant PREFIX slot is the
-      // lean kernel + the two T1.6 memory commands + the project identity
-      // line (skill descriptors are added when a global descriptor source
-      // is wired). checkPrefixDrift seeds the baseline sha256 on the FIRST
-      // before_agent_start call for a session (effectively "session start"
-      // in this host's event model, since session_start carries no task/
-      // role yet) and flags prefix_drift=1 on every later call whose
-      // recomputed PREFIX differs byte-for-byte — mirrored (not the
-      // telemetry store, so existing fixed-record-count assertions are
-      // untouched) only when drift actually occurs.
+      // Hash the session-constant prefix so later drift is observable.
       const prefix = assemblePrefix({
         projectId: resolvedProjectIdForSession(session) ?? resolveProject(),
         leanKernel: lean.decision === "inject" && lean.placement !== "tail" ? lean.kernel : undefined,
@@ -3361,47 +1387,18 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           { cwd: ctxCwd(ctx) },
         );
       }
-      if (isOrchestratorModel(modelId, guardCfg)) {
-        getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt, role));
-        return withMessage({ systemPrompt: SOL_ORCHESTRATOR_CONTRACT }, mergeActiveStateMessage(aiMessage, activeMessage));
-      }
-      let patched = role === "driver" ? appendDriverContract(base) : base;
-      const driverContractInjected = role === "driver" && patched !== undefined && patched !== base;
-      getStore(session)?.append(
-        sensors.beforeAgentStart(
-          session,
-          event.prompt,
-          role,
-          role === "driver" ? driverContractInjected : undefined,
-        ),
-      );
-      // P3-D: apply the kernel AFTER the stable role/base context (driver
-      // contract) and BEFORE the dynamic recall brief / AutoInject packet
-      // (plan §7.4 ordering — the kernel lives in the systemPrompt patch;
-      // the AutoInject packet is a separate custom message appended by the
-      // host after the task; real assembly order is documented in
-      // src/lean-code.ts). appendLeanKernel dedups on the stable marker and
-      // never invents a prompt (undefined base stays undefined).
+      let patched = base;
+      getStore(session)?.append(sensors.beforeAgentStart(session, event.prompt));
+      // Stable approved Lean context precedes dynamic recall and AutoInject.
+      // Never invent a prompt when the host did not provide one.
       if (lean.decision === "inject" && lean.kernel !== undefined && lean.placement !== "tail") {
         const merged = appendLeanKernel(patched, lean.kernel);
         if (merged !== patched) {
           patched = merged;
         }
       }
-      // T2.4: deliver the remaining PREFIX components (the two T1.6 memory
-      // commands + the project identity line) into the same systemPrompt
-      // patch, right after the lean kernel -- PREFIX order is kernel,
-      // skill descriptors (not yet wired on the TS side, see report),
-      // T1.6 commands, project line. PREFIX must be session-constant on
-      // EVERY session (Core Rule), so this is unconditional whenever a
-      // real base prompt exists -- never gated on whether the driver
-      // contract or lean kernel already modified `patched` (a worker/
-      // normal-role turn that gets no other patch still needs PREFIX
-      // delivered). appendPrefixExtras itself never invents a prompt
-      // (returns undefined when base is undefined/empty) and dedups on
-      // its own stable marker, so this is only ever delivered once per
-      // accumulated base, exactly like the lean kernel and driver
-      // contract above it.
+      // Append memory commands and project identity once to the stable prefix.
+      // Dynamic recall stays in the turn message below.
       const withExtras = appendPrefixExtras(
         patched,
         resolvedProjectIdForSession(session) ?? resolveProject(),
@@ -3409,13 +1406,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (withExtras !== undefined) {
         patched = withExtras;
       }
-      // T2.4: the recall brief is dynamic per-turn content (hot-context
-      // refs), so it belongs in the TAIL message slot appended after the
-      // latest user message -- never in systemPrompt (PREFIX must stay
-      // session-constant/byte-stable; see injection-slots.ts / the
-      // prefix-drift check above). Evaluated independently of the
-      // driver-contract/lean-kernel systemPrompt patch below, so a recall
-      // miss (no rows, spawn failure) never drops that patch.
+      // Recall is dynamic per-turn context, never a change to the stable prefix.
+      // A miss must not discard approved Lean or memory-command context.
       const recallCfg = loadRecallGateConfig();
       let turnMessage: unknown = mergeActiveStateMessage(aiMessage, activeMessage);
       // The CLI needs keywords, not the prompt: it keeps up to eight query
@@ -3429,15 +1421,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           turnMessage = mergeRecallBriefMessage(turnMessage, brief);
         }
       }
-      if (sessionBudgetStates.get(session) === "HARD") {
-        turnMessage = mergeBudgetWarningMessage(turnMessage, BUDGET_HARD_LINE);
-      }
       if (lean.decision === "inject" && lean.kernel !== undefined && lean.placement === "tail") {
         turnMessage = mergeLeanMessage(turnMessage, lean.kernel);
       }
-      if (role === "driver" && patched !== undefined) {
-        return withMessage({ systemPrompt: patched }, turnMessage);
-      }
+      // Only independently enabled memory/context patches may change this prompt.
       if (patched !== undefined && patched !== base) {
         return withMessage({ systemPrompt: patched }, turnMessage);
       }
@@ -3448,18 +1435,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } catch {
         // storage failed too — measurement must not crash the session.
       }
-      // Phase C3 FIX 1 hardening: a packet already computed by the pipeline
-      // is NEVER dropped by a later handler failure (role resolution, config
-      // load, prompt getter). Return it bare in advisory/active; shadow/off
-      // keep returning undefined (aiMessage is undefined there).
-      let message = mergeActiveStateMessage(aiMessage, activeMessage);
-      if (sessionBudgetStates.get(session) === "HARD") {
-        message = mergeBudgetWarningMessage(message, BUDGET_HARD_LINE);
-      }
-      if (
-        message !== undefined &&
-        (aiCfg.mode === "advisory" || aiCfg.mode === "active" || sessionBudgetStates.get(session) === "HARD")
-      ) {
+      // A later failure never discards an already prepared advisory context message.
+      const message = mergeActiveStateMessage(aiMessage, activeMessage);
+      if (message !== undefined && (aiCfg.mode === "advisory" || aiCfg.mode === "active")) {
         return { message };
       }
     }
@@ -3628,19 +1606,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return undefined;
   });
 
-  // ---------------------------------------------------------------------------
-  // P3-B economics instrumentation (plan §5.1/§5.4/§5.5; schema v3 records).
-  // Privacy (plan §25): provider_request_meta / provider_response_meta persist
-  // keys, counts, sizes, and sha256 hashes ONLY — never payload text, tool
-  // output, or raw header values. All three handlers are fail-open and
-  // fire-and-forget like every other measurement handler. The two read-only
-  // These hooks are direct registrations: the provider-request return value
-  // is the supported OMP payload replacement contract.
-  // ---------------------------------------------------------------------------
+  // Provider hooks observe native model identity and bounded request metadata.
+  // Only Brain context paging may replace message content; provider/model
+  // selection is always the host's choice.
 
   let providerRequestSeq = 0;
-  let lastEffectiveProvider: string | null = null;
-  let lastEffectiveModel: string | null = null;
   const leanProviderEvidence = new Map<string, sensors.LeanProviderEvidence>();
   const payloadIdentity = (
     payload: unknown,
@@ -3670,51 +1640,17 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const original = event.payload;
       const identity = payloadIdentity(original, ctx);
       let effective = original;
-      const selected = latestRoutingSession === session ? latestRoutingDecision : null;
-      let handoffFailure: string | undefined;
-      if (selected?.status === "selected" && selected.selected_provider && selected.selected_model) {
-        const originalObject =
-          original != null && typeof original === "object"
-            ? original as Record<string, unknown>
-            : null;
-        const hasProvider = typeof originalObject?.provider === "string";
-        const hasModel = typeof originalObject?.model === "string";
-        if (originalObject && hasProvider && hasModel) {
-          effective = {
-            ...originalObject,
-            provider: selected.selected_provider,
-            model: selected.selected_model,
-          };
-        } else if (
-          originalObject &&
-          hasModel &&
-          !hasProvider &&
-          identity.provider === selected.selected_provider
-        ) {
-          effective = { ...originalObject, model: selected.selected_model };
-        } else {
-          handoffFailure = "OMP_PROVIDER_NOT_REPRESENTABLE";
-          getStore(session)?.append(ompRoutingRecord("omp_routing_handoff_failure", session, {
-            decision_id: selected.decision_id,
-            task_hash: selected.task_hash,
-            reason: handoffFailure,
-            original_provider: identity.provider,
-            original_model: identity.model,
-          }));
-        }
-      }
-      const effectiveIdentity = payloadIdentity(effective, ctx);
 
-      // T2.3 Model-switch preflight (Deep Upgrade Plan U6 §7.4, literal order 1-8)
+      // Host-chosen model changes require re-evaluating Brain context capacity.
       const prevProv = lastProvider.get(session);
       const prevMod = lastModel.get(session);
       const isSwitch =
         prevMod !== undefined &&
-        (effectiveIdentity.provider !== prevProv || effectiveIdentity.model !== prevMod);
+        (identity.provider !== prevProv || identity.model !== prevMod);
 
       if (isSwitch) {
-        const targetModel = effectiveIdentity.model ?? "default";
-        const targetProvider = effectiveIdentity.provider ?? "default";
+        const targetModel = identity.model ?? "default";
+        const targetProvider = identity.provider ?? "default";
 
         // Step 1 & 2 (T2.6): resolve target context_tokens (config/v2.toml
         // [models].<id>, default 128_000) and cache scope (config/v2.toml
@@ -3740,18 +1676,15 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         for (const msg of messages) {
           load += estimateTokens(msg, targetModel, config.home ?? undefined);
         }
-        const loadBefore = load;
 
         // Step 5: If load > target capacity * 0.85: run T2.0/T2.1 reclaim
         const reclaimThreshold = Math.floor(targetCapacity * 0.85);
-        let reclaimedCount = 0;
         if (load > reclaimThreshold) {
           const reclaimResult = runVmemEvictSync({
             home: config.home ?? "",
             hostSessionId: session,
             budgetTokens: reclaimThreshold,
           });
-          reclaimedCount = reclaimResult.evictedCount ?? 0;
           if (reclaimResult.evictedTokens !== undefined && reclaimResult.evictedTokens > 0) {
             load = Math.max(0, load - reclaimResult.evictedTokens);
           } else {
@@ -3762,8 +1695,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
               cfg: loadContextPagingConfig(config.home),
             });
             if (paged.messages !== undefined) {
-              payloadObj.messages = paged.messages;
-              effective = { ...payloadObj };
+              effective = { ...payloadObj, messages: paged.messages };
             }
             load = 0;
             for (const msg of (paged.messages ?? messages)) {
@@ -3772,75 +1704,26 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           }
         }
 
-        // Step 6: Assert fit: if still load > target capacity: return INPUT_REQUIRED(CONTEXT_OVERFLOW)
+        // Brain cannot refuse a native model request. If its context cannot
+        // fit, leave the host payload intact and report the limitation.
         if (load > targetCapacity) {
-          return {
-            status: "INPUT_REQUIRED",
-            error: "CONTEXT_OVERFLOW",
-            reason: "INPUT_REQUIRED(CONTEXT_OVERFLOW)",
-            target_capacity: targetCapacity,
-            load,
-          };
+          getStore(session)?.append(sensors.extensionError(session, "BRAIN_CONTEXT_OVERFLOW"));
+          effective = original;
         }
-
-        // Step 7: Emit MODEL_ROUTE_TRANSITION telemetry + decisions(kind="routing", propensity=1.0)
-        getStore(session)?.append(
-          sensors.modelRouteTransition(session, {
-            current_provider: prevProv ?? null,
-            current_model: prevMod ?? null,
-            target_provider: targetProvider,
-            target_model: targetModel,
-            target_capacity: targetCapacity,
-            cache_scope: cacheScope,
-            cache_cold: cacheCold,
-            load_before: loadBefore,
-            load_after: load,
-            reclaimed_count: reclaimedCount,
-          }),
-        );
-        mirror(
-          session,
-          "decision",
-          {
-            routing_event: "MODEL_ROUTE_TRANSITION",
-            kind: "routing",
-            propensity: 1.0,
-            current_provider: prevProv ?? null,
-            current_model: prevMod ?? null,
-            target_provider: targetProvider,
-            target_model: targetModel,
-          },
-          { cwd: ctxCwd(ctx), agentId: sensors.modelToString(ctx.model) ?? "omp" },
-        );
-
-        // Step 8: Send / proceed
       }
 
-      lastProvider.set(session, effectiveIdentity.provider);
-      lastModel.set(session, effectiveIdentity.model);
-      lastEffectiveProvider = effectiveIdentity.provider;
-      lastEffectiveModel = effectiveIdentity.model;
+      lastProvider.set(session, identity.provider);
+      lastModel.set(session, identity.model);
       getStore(session)?.append(
         sensors.providerRequestMeta(
           session,
-          effectiveIdentity.provider,
-          effectiveIdentity.model,
+          identity.provider,
+          identity.model,
           providerRequestSeq,
           effective,
           leanProviderEvidence.get(session),
         ),
       );
-      if (selected) {
-        getStore(session)?.append(ompRoutingRecord("omp_routing_invocation", session, {
-          decision_id: selected.decision_id,
-          task_hash: selected.task_hash,
-          selected_provider: selected.selected_provider,
-          selected_model: selected.selected_model,
-          effective_provider: effectiveIdentity.provider,
-          effective_model: effectiveIdentity.model,
-          handoff_failure: handoffFailure ?? null,
-        }));
-      }
       return effective === original ? undefined : effective;
     } catch (error) {
       try {
@@ -3860,33 +1743,11 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       const provider = headers["x-provider"] ?? headers["provider"];
       const model = headers["x-model"] ?? headers["model"];
       const contextIdentity = sensors.splitProviderModel(sensors.modelToString(ctx.model));
-      const actualProvider =
-        typeof provider === "string"
-          ? provider
-          : latestRoutingSession === session
-            ? lastEffectiveProvider
-            : contextIdentity.provider;
-      const actualModel =
-        typeof model === "string"
-          ? model
-          : latestRoutingSession === session
-            ? lastEffectiveModel
-            : contextIdentity.model;
+      const actualProvider = typeof provider === "string" ? provider : contextIdentity.provider;
+      const actualModel = typeof model === "string" ? model : contextIdentity.model;
       getStore(session)?.append(
         sensors.providerResponseMeta(session, actualProvider, actualModel, event.status, event.headers),
       );
-      const responseDecision = latestRoutingSession === session ? latestRoutingDecision : null;
-      if (responseDecision) {
-        getStore(session)?.append(ompRoutingRecord("omp_routing_response", session, {
-          decision_id: responseDecision.decision_id,
-          task_hash: responseDecision.task_hash,
-          selected_provider: responseDecision.selected_provider,
-          selected_model: responseDecision.selected_model,
-          actual_provider: actualProvider,
-          actual_model: actualModel,
-          status: event.status,
-        }));
-      }
     } catch (error) {
       try {
         getStore(session)?.append(sensors.extensionError(session, error));
@@ -3913,16 +1774,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         if (cr !== undefined) {
           lastCacheReadTokens.set(session, cr);
         }
-        const routed =
-          latestRoutingSession === session && lastEffectiveProvider && lastEffectiveModel
-            ? { provider: lastEffectiveProvider, model: lastEffectiveModel }
-            : null;
-        const model =
-          routed?.model ??
-          (typeof message.model === "string" ? message.model : (ctx.model?.id ?? null));
-        const provider =
-          routed?.provider ??
-          (typeof message.provider === "string" ? message.provider : (ctx.model?.provider ?? null));
+        const model = typeof message.model === "string" ? message.model : (ctx.model?.id ?? null);
+        const provider = typeof message.provider === "string" ? message.provider : (ctx.model?.provider ?? null);
         const record = sensors.assistantUsage(
           session,
           provider,
@@ -3931,18 +1784,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           message.responseId,
         );
         if (record) getStore(session)?.append(record);
-      }
-      // Native OMP 18.1.10 awaits extension handlers. Await settlement instead
-      // of abandoning its child process when the host finishes this turn.
-      if (message?.role === "custom" && message.customType === "async-result") {
-        return recordAsyncResultDeliveries(message, ctx).then(() => ({ message: event.message })).catch((error: unknown) => {
-          try {
-            getStore(session)?.append(sensors.extensionError(session, error));
-          } catch {
-            // storage failed too — measurement must not crash the session.
-          }
-          return { message: event.message };
-        });
       }
     } catch (error) {
       try {
@@ -3955,11 +1796,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   });
 
   /**
-   * Phase 14 / T2.4: run ONE bounded Brain recall for a substantial non-Sol
-   * prompt and return the rendered Brain Brief text for the TAIL message
-   * slot (appended after the latest user message, never merged into
-   * systemPrompt -- PREFIX must stay session-constant/byte-stable). Fail
-   * silent on every error path (never throws, never returns partial text).
+   * Return one bounded, low-authority Brain recall brief in the turn's TAIL
+   * message without changing the stable system prompt.
    */
   async function recallBrief(
     prompt: string,
@@ -3981,42 +1819,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     }
   }
 
-  // tool_call: read-only measurement + minimal-orchestrator guard, plus the
-  // narrow OMP task-dispatch Context Capsule bridge. Task input is replaced
-  // only for `task` calls after Brain prepares a bounded handoff; parent
-  // transcript content is never read or copied.
-  pi.on("tool_call", (event, ctx): ToolCallEventResult | Promise<ToolCallEventResult | undefined> | undefined => {
+  // Observe tool use; do not alter native dispatch or permissions.
+  pi.on("tool_call", (event, ctx) => {
     let session = "unknown";
     try {
       session = resolveAndJournalSessionId(ctx);
-      establishWorkerRootSession(session, ctx);
-      const rootSession = workerRootSessions.get(session) ?? session;
-      if (sessionBudgetStates.get(session) === "HARD" || sessionBudgetStates.get(rootSession) === "HARD") {
-        return { block: true, reason: BUDGET_HARD_LINE };
-      }
-      const command =
-        typeof event.input?.command === "string" ? event.input.command : "";
-      const isStopControl =
-        event.toolName === "bash" && STOP_CONTROL_COMMAND.test(command);
-      const rewrittenCommand =
-        isStopControl || rewriteSessionPlaceholders(command, session, rootSession) !== command
-          ? (isStopControl
-            ? rewriteStopControlCommand(command, session, rootSession)
-            : rewriteSessionPlaceholders(command, session, rootSession))
-          : command;
-      const stopState = stopStateFor(session);
-      if (stopState.shouldBlock(event.toolName) && !(isStopControl && stopControlIdentity(rewrittenCommand))) {
-        getStore(session)?.append({
-          v: 2,
-          ts: new Date().toISOString(),
-          kind: "stop_blocked",
-          session,
-          tool: event.toolName,
-          tool_call_id: event.toolCallId,
-          reason_code: stopState.current?.reason_code ?? "stop_boundary",
-        });
-        return { block: true, reason: "Second Brain STOP boundary is active" };
-      }
+      recordNativeRootSession(session, ctx);
       getStore(session)?.append(sensors.toolCall(session, event.toolName, event.toolCallId, event.input));
       mirror(
         session,
@@ -4024,51 +1832,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         {
           tool: event.toolName,
           input_bytes: sensors.byteLength(JSON.stringify(event.input ?? {})),
-          control_plane: isStopControl,
         },
         { cwd: ctxCwd(ctx) },
       );
-      const modelId = sensors.modelToString(ctx.model) ?? undefined;
-      const decision = orchestratorPolicyFor(modelId, event.toolName, loadOrchestratorGuardConfig());
-      if (decision.block) {
-        const violation = buildPolicyBlockRecord(
-          modelId,
-          event.toolName,
-          decision.reason,
-          new Date().toISOString(),
-        );
-        violation.session = session;
-        getStore(session)?.append(violation);
-        return { block: true, reason: decision.reason };
-      }
-      if (isStopControl) {
-        const key = `${session}\u0000${event.toolCallId}`;
-        const identity = stopControlIdentity(rewrittenCommand);
-        const targetRoot = identity ? workerRootSessions.get(identity.session) ?? identity.session : session;
-        const sessionFile = ctx?.sessionManager?.getSessionFile?.();
-        const applicable = identity !== undefined && typeof sessionFile === "string" &&
-          (identity.session === session || workerRootSessions.get(identity.session) === session) &&
-          (identity.parent === undefined || identity.parent === targetRoot) &&
-          (identity.worker === undefined || identity.worker === identity.session);
-        if (!stopControlCalls.has(key) && stopControlCalls.size >= 1024) {
-          const oldest = stopControlCalls.keys().next().value;
-          if (oldest !== undefined) stopControlCalls.delete(oldest);
-        }
-        stopControlCalls.set(key, {
-          session, command: rewrittenCommand, originalCommand: command,
-          identity: applicable && !stopControlCalls.has(key) ? identity : undefined, parentSession: targetRoot,
-        });
-      }
-      if (event.toolName === "task") {
-        return prepareWorkerTaskInput(event, ctx, session).catch((error) => {
-          try {
-            getStore(session)?.append(sensors.extensionError(session, error));
-          } catch {
-            // measurement must not disturb the session.
-          }
-          return { block: true, reason: "BRAIN_WORKER_CONTEXT_UNAVAILABLE" };
-        });
-      }
       const readPath = rereadPath(event.toolName, event.input ?? {});
       if (readPath && config.home) {
         const configuredMode = process.env.SECOND_BRAIN_REREAD_AVOIDANCE?.trim().toUpperCase();
@@ -4082,12 +1848,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
                 rereadReplacementAllowed(event.toolName, event.input ?? {})) {
               pendingRereads.set(`${session}\u0000${event.toolCallId}`, { path: readPath });
             }
-            return rewrittenCommand !== command ? { input: { ...event.input, command: rewrittenCommand } } : undefined;
+            return undefined;
           }).catch(() => undefined);
         }
-      }
-      if (rewrittenCommand !== command) {
-        return { input: { ...event.input, command: rewrittenCommand } };
       }
     } catch (error) {
       try {
@@ -4137,101 +1900,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           if (marker) rereadPatch = { content: [{ type: "text", text: marker }] };
         }
       }
-      const stopKey = `${session}\u0000${event.toolCallId}`;
-      const stopCall = stopControlCalls.get(stopKey);
-      const resultCommand = typeof event.input?.command === "string" ? event.input.command : "";
-      const isStopControl = stopCall !== undefined && event.toolName === "bash" &&
-        (resultCommand === stopCall.command || resultCommand === stopCall.originalCommand);
-      if (!isStopControl && (stopCall || (event.toolName === "bash" && STOP_CONTROL_COMMAND.test(resultCommand)))) {
-        rejectStopEvidence(session, "invocation_mismatch");
-        return undefined;
-      }
-      const stopState = stopStateFor(session);
-      if (stopState.shouldBlock(event.toolName) && !isStopControl) {
-        getStore(session)?.append({
-          v: 2,
-          ts: new Date().toISOString(),
-          kind: "stop_blocked_result",
-          session,
-          tool: event.toolName,
-          tool_call_id: event.toolCallId,
-        });
-        return undefined;
-      }
-      if (isStopControl) {
-        stopControlCalls.delete(stopKey);
-        const content = Array.isArray(event.content) ? event.content : [];
-        const stopText = extractTextContent(content);
-        getStore(session)?.append({
-          v: 2,
-          ts: new Date().toISOString(),
-          kind: "stop_control_result",
-          session,
-          tool_call_id: event.toolCallId,
-          content_item_count: content.length,
-          content_item_types: content.slice(0, 4).map((item) =>
-            item === null ? "null" : Array.isArray(item) ? "array" : typeof item,
-          ),
-          output_chars: stopText?.length ?? 0,
-        });
-        const evidence = parseStopDecisionOutput(stopText ?? "");
-        if (event.isError || !evidence || !stopCall.identity ||
-            stopCall.session !== session || !stopEvidenceMatches(evidence, stopCall.identity, stopCall.parentSession)) {
-          rejectStopEvidence(session, event.isError ? "tool_error" : !evidence ? "malformed_evidence" : "identity_mismatch");
-        } else if (evidence.decision !== "stop" || !stopStateFor(stopCall.identity.session).stopped) {
-          const targetState = stopStateFor(stopCall.identity.session);
-          targetState.accept(evidence);
-          const fields = {
-            stop_id: evidence.stop_id,
-            task_id: evidence.task_id,
-            session_id: evidence.session_id,
-            parent_session_id: evidence.parent_session_id,
-            worker_session_id: evidence.worker_session_id,
-            decision: evidence.decision,
-            reason_code: evidence.reason_code,
-            triggering_condition: evidence.triggering_condition,
-            verification_state: evidence.verification_state,
-            completion_condition_state: evidence.completion_condition_state,
-            final_substantive_event: evidence.final_substantive_event,
-            stop_boundary_seq:
-              typeof evidence.sequence === "number" ? evidence.sequence : null,
-            substantive_events_after_boundary: targetState.substantiveEventsAfterBoundary,
-            finalization_state:
-              evidence.decision === "stop" ? "execution_blocked" : "not_triggered",
-          };
-          getStore(stopCall.identity.session)?.append({
-            v: 2,
-            ts: new Date().toISOString(),
-            kind: evidence.decision === "stop" ? "stop_boundary" : "stop_not_triggered",
-            session: stopCall.identity.session,
-            ...fields,
-          });
-          if (evidence.decision === "stop") {
-            const finalization = mirrorEventSync({
-              home: config.home ?? "",
-              hostSessionId: stopCall.identity.session,
-              parentSessionId: stopCall.parentSession !== stopCall.identity.session ? stopCall.parentSession : undefined,
-              record: {
-                kind: "stop_finalized",
-                fields,
-                agentId: stopCall.identity.session,
-              },
-              cwd: ctxCwd(ctx),
-            });
-            if (!finalization.ok) {
-              getStore(session)?.append({
-                v: 2,
-                ts: new Date().toISOString(),
-                kind: "stop_finalization_error",
-                session,
-                error: finalization.error ?? "ledger append failed",
-              });
-            }
-          }
-        }
-      }
-      await recordWorkerChildResults(event, ctx, session);
-      await recordAsyncWorkerCompletions(event, ctx, session);
       const rtdCfg = loadRtdConfig(config.home);
       const eligibility = rtdEligibility(event.toolName, event.input, rtdCfg);
       // ONE shared measurement (Phase 3 correction); mirror reuses output_bytes.
@@ -4523,57 +2191,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   wire<SessionShutdownEvent>(
     "session_shutdown",
     (event, ctx, session) => {
-      for (const key of workerObservationDisposers.keys()) {
-        const [ownerSession, toolCallId] = JSON.parse(key) as unknown[];
-        if (ownerSession !== session) continue;
-        const awaitingCleanup = Array.from(workerAdmissionsBySource.values()).some(
-          (admission) => admission.parentSessionId === session &&
-            admission.toolCallId === toolCallId && admission.accessIntent === "mutating" &&
-            !admission.cleanupAccepted,
-        );
-        if (!awaitingCleanup) {
-          disposeWorkerObserver(key);
-        } else if (!workerObserverExpiry.has(key)) {
-          // Shutdown precedes host cancellation/reaping. Keep receipt consumers
-          // alive without awaiting them here (that would deadlock host disposal).
-          // Expiry only detaches observers: it never releases an unproven lease.
-          const expiry = scheduleObserverExpiry(() => {
-            if (workerObserverExpiry.get(key) !== expiry) return;
-            journalWorkerEvent(session, "second-brain.worker-observer-expired", {
-              session, sourceToolCallId: toolCallId, at: Date.now(),
-            });
-            disposeWorkerObserver(key);
-          }, 30_000);
-          expiry.unref();
-          workerObserverExpiry.set(key, expiry);
-        }
-      }
-      // Worker (child) sessions are disposed as part of their parent's cleanup
-      // boundary. The Brain CLI calls below are optional telemetry and block the
-      // event loop while a Python process starts, which delays the host's own
-      // disposal and therefore the settlement boundary the writer lease waits on.
-      // The host marks child sessions with `parentSession` in the session header.
-      const shutdownHeader = (() => {
-        try {
-          const header = ctx.sessionManager?.getHeader?.();
-          return header !== null && typeof header === "object"
-            ? (header as Record<string, unknown>)
-            : undefined;
-        } catch {
-          return undefined;
-        }
-      })();
-      const childSession = typeof shutdownHeader?.parentSession === "string" &&
-        shutdownHeader.parentSession.length > 0;
-      if (childSession) {
-        mirror(
-          session,
-          "worker_shutdown_telemetry_skipped",
-          { reason: event.reason ?? "normal" },
-          { ignorable: true, cwd: ctxCwd(ctx) },
-        );
-        return sensors.sessionShutdown(session, event.reason);
-      }
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (
         activeStateTouchedSessions.has(session) &&
@@ -4589,6 +2206,25 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
             sensors.extensionError(session, new Error(activeState.error ?? "active-state shutdown failed")),
           );
         }
+      }
+      activeStateTouchedSessions.delete(session);
+      // Required active-state persistence runs for every native recipient.
+      // Skip optional maintenance for a child so its shutdown cannot delay
+      // the host's own lifecycle; this is observation, not settlement.
+      let childSession = false;
+      try {
+        const header = ctx.sessionManager?.getHeader?.();
+        childSession = header !== null && typeof header === "object" &&
+          typeof (header as Record<string, unknown>).parentSession === "string";
+      } catch {
+        // No verified child marker: run ordinary local maintenance.
+      }
+      if (childSession) {
+        mirror(session, "session_inactive", {
+          reason: event.reason,
+          optional_maintenance_skipped: "native_child",
+        }, { ignorable: true, cwd: ctxCwd(ctx) });
+        return sensors.sessionShutdown(session, event.reason);
       }
       const environment = runEnvironmentAssessmentSync({
         home: config.home ?? "",

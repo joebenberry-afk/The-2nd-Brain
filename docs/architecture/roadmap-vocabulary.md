@@ -1,3 +1,9 @@
+> **Historical vocabulary reconciliation only.** The 2026-09-23
+> orchestrator-removal mandate and orchestration-free v3 roadmap supersede
+> controller, worker-plane, model-routing and Brain STOP rows below. Module
+> paths describe the former executed subject; some have been retired from
+> the current candidate. Do not use this table as an active feature inventory.
+
 # Roadmap Vocabulary Reconciliation (T6.4)
 
 This is a one-time reconciliation of the 37-item Second Brain roadmap vocabulary,
@@ -10,18 +16,12 @@ performed per plan task T6.4. Two documents have independently named the same 37
   (`outputs/reports/rc2/00-AUTHORITATIVE-CURRENT-STATUS-LEDGER.md`), whose
   `Requirement` column was populated independently across many qualification passes.
 
-For 34 of the 37 items the two names match exactly (or are trivial capitalization/
-punctuation variants treated as the same name). Three items diverge — `P3.3`,
-`P3.13`, `P3.16` — and are called out explicitly below. Per the plan, **the Scout
-Spec name is canonical** for all future documentation and new work; this table does
-not rename any historical status-ledger row text except where the ledger itself is
-updated in the same commit as this file (see the ledger's `Requirement` column for
-`P3.13` and `P3.16`, and the annotated `P3.3` entry).
+At the original reconciliation, 34 names matched and `P3.3`, `P3.13`,
+`P3.16` diverged. The following labels and status rows describe that dated
+ledger; they do not create current orchestration obligations.
 
-The `Owning Module(s)` column identifies the primary current Python/TypeScript
-module(s) implementing each item, determined by cross-referencing the status
-ledger's evidence citations against the qualification reports and reading the
-cited source modules directly (not guessed from naming alone).
+The `Owning Module(s)` column records the implementation at the time of the
+original reconciliation, not a current source inventory.
 
 | Item | Scout Spec Name | Repo Status-Ledger Name | Owning Module(s) | Notes |
 |---|---|---|---|---|

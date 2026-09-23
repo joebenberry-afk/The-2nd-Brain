@@ -1,174 +1,82 @@
-# Second Brain — M00 Native-Profile Closure Mandate
+# Second Brain — M00 Orchestrator Removal Mandate
 
-## Authority and bounded authorization
+**Authority:** Owner's 2026-09-23 removal direction and
+[`Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md`](Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md).
+This active contract and [`M00-CAMPAIGN-REGISTER.md`](M00-CAMPAIGN-REGISTER.md)
+must travel in the same candidate commit. Historical native/governed language below
+is evidence only; it does not authorize a second runtime.
+**Candidate status:** `M00_ORCHESTRATOR_REMOVAL_IN_PROGRESS`; qualification NOT PROVEN.
+**Production:** NOT ACTIVATED. No installed host/extension/config patch, canonical
+state migration, push, tag, or release publication is authorized.
 
-Owner-authorized acceptance amendment, 2026-09-23. This candidate-local mandate and
-[M00-CAMPAIGN-REGISTER.md](M00-CAMPAIGN-REGISTER.md) are one synchronized contract.
-The previous mandate exists only in the main checkout at
-`docs/intake/Second_Brain_M00_OneShot_Closure_Mandate.md`; this candidate did not contain
-that file. This document carries its complete text below for provenance and future
-exclusive governed-track criteria. The original main-checkout document is not edited.
-Both candidate documents must travel in the same authorized candidate commit.
+## Product boundary
 
-The active native contract below replaces the prior execution order, orchestration
-prerequisites and qualification label. The historical mandate is not a competing
-instruction to implement protected issuance or settlement before native qualification.
-Its non-orchestration integrity, schema, recovery, identity, review and preservation
-requirements remain applicable; mixed clauses are split by subject in the active table.
-This change cannot close a defect merely by changing its status vocabulary.
+Second Brain owns authorized memory, retrieval, approved knowledge/skills,
+automatic context injection, source/data provenance, delivery and compaction
+continuity, local compute/storage limits, and passive usage/cost evidence. The
+native harness owns agent/model/tool selection and all task execution, including
+delegation, retries, cancellation, completion, and STOP. Brain session and
+project IDs correlate observations; they do not grant execution authority.
 
-**This execution is DOCUMENTATION ONLY.** No source/config/runtime change, candidate
-qualification, commit, deployment or production activation is authorized by this
-revision task. The sequence below describes subsequent campaign work, not work executed
-here. Do not continue into product implementation under the historical one-shot autonomy.
+There is one shipping runtime. Remove coordinator prompts, role gates, model
+routing, worker/task admission, execution leases, budget reservations, lifecycle
+settlement/replay, host patching, and governed test switches, not merely their
+default activation. Retired CLI/transport operations may only refuse before
+state access. No future governed-track support promise survives this cutover.
 
-## Candidate execution safeguards retained for later authorized work
+The following protections remain in scope: trusted-memory and approval
+authorization, exact approved skill bytes/dependencies, ledger and migration
+integrity, project isolation, native permission decisions, observed usage
+honesty, host-hook executable trust, activation/copy/rollback integrity, and
+memory/context recovery. Historical worker rows and sealed host-patch records
+remain untouched; they are not proof of current execution guarantees.
 
-- Reuse the candidate; no new subsystem or file moves solely for a disposition. Preserve
-  governed code/research, lineage migration 0028, reservations, settlement and custody
-  evidence. Remove only their effects from ordinary native operation when implementing.
-- Default-native must be behaviorally inert for orchestration, not a cosmetic setting.
-  Brain role classification, coordinator contracts, admission, credentials, reservations
-  and settlement must not participate in ordinary native spawning/lifecycle. Explicit
-  unsupported governed operations must refuse before privileged effects. Disabling a
-  path must not disable authorization protecting memory, approvals, skills or activation.
-- Do not hand-edit derived state, change constitution, rewrite approvals, migrate canonical
-  databases, release historical leases, alter installed OMP/extension/configuration, or
-  perform production activation. No push, tag move, machine-wide accounts or services.
-- Preserve the existing resource envelope for later runs: one additional worktree at most,
-  512 MiB new reports/logs, dependency space accounted separately, 30-minute maximum per
-  test run, one heavy process tree at a time, no new heavy work below 1 GiB available RAM.
-  No provider-backed experiments or newly funded review calls without separate authority.
-- Use disposable homes and installations; bind interpreter/import roots and loaded code
-  to the actual candidate. Use consistent snapshots, not a lone live SQLite main file;
-  never delete WAL/SHM or bypass locks to manufacture evidence.
-- Keep identity, rollback and recovery gates: fresh create, reopen, migration idempotency,
-  interruption/restart, logical-data preservation, backup/restore and compatible bundle
-  restart. Refuse unsupported schema downgrade; preserve migration anchors and used == 65.
-- Keep accounting truthful without native-spawn enforcement: count billed retries and
-  descendants correctly, deduplicate the same billable request, preserve unknown usage
-  and provenance. Do not change independently authorized provider/account/global limits.
-- Run applicable integrated checks against frozen exact bytes; historical pass counts,
-  mocked host contexts and source review do not establish current real-path behavior.
-  Preserve adverse results, including the whole-Python timeout and six failures.
-- Obtain independent acceptance of that exact reduced-scope subject. Jev is supplementary,
-  not authorization or a substitute for deterministic checks and independent review.
-- Deliver the updated register, exact identities/load paths, commands/test IDs/outcomes,
-  native controls, applicable HIGH dispositions, independent review, preservation evidence,
-  resource ledger and proposed activation/rollback procedure. M01 execution remains unstarted.
+## Applicable findings and obligations
 
-## Current acceptance contract — native profile (2026-09-23)
+| Subject | Current disposition | Required evidence or blocker |
+|---|---|---|
+| M00-CORD-01/02, SB-ORCH-001, worker parts of #3/#4/#5 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | No reachable coordinator issuance, effective-grant admission, worker completion/settlement or test-only reactivation. Preserve historical negative evidence. |
+| SEC-AUTH-01 | `OPEN` for retained actions | Caller-authored verification action/approval must not become protected completion or publication authority. Worker issuer-only clause retired, not the finding. |
+| SEC-AUTH-02 | `OPEN` | Agent-callable remember/evidence paths must not mint `USER_AUTHORED`, `VERIFIED`, or policy-lane authority without authenticated approval. Worker settlement-only clause retired. |
+| SEC-INTEGRITY-01 | `OPEN` | Full-envelope ledger integrity, verified replay, migration and preservation; retired worker receipts stay historical. |
+| SEC-SKILL-01 / SB-PROMOTION-004 | `OPEN` | Consumption-time approved bytes, evaluation and dependency binding, protected promotion. |
+| FSUPD-01 / FSPATH-03 | `OPEN` for extension installation/rollback | Never infer approval from a mutable candidate manifest. Preserve backup, exact installed-byte and rollback protections; remove host-patch launch path. |
+| SEC-HOOK-02 | `OPEN` | Bound executable/configuration/environment trust on retained hooks and subprocesses. |
+| SB-PROMPT-002 / 003 | Project-ID sinks retained; worker-context renderer retired | Narrow IDs before model-visible text; no retrieved/context data gains instruction authority. Removal is not a general prompt-trust waiver. |
+| FSLNCH-02 | `RETIRED_BY_PRODUCT_SCOPE — NOT PROVEN` | Patched-host launcher removed; original seal and finding retained as history. |
+| SEC-DEP-01 | `OPEN` for dev toolchain reconciliation | Re-evaluate the current lockfile against the audited Vitest/js-yaml advisories. |
+| #2a/#2b, #6, DOC-14 | `OPEN` where retained | Fresh/reopen/idempotent/backup/recovery; passive billed-request dedupe/unknowns; missing DOC-14 clauses cannot be invented. |
 
-**Current label: `M00_NATIVE_PROFILE_CANDIDATE`. Qualification: NOT PROVEN.**
-**Governed orchestration: `DEFERRED_UNSUPPORTED_NATIVE_PROFILE`. Production activation: NOT PERFORMED.**
+No applicable HIGH is closed by relabeling its reproduction. The register
+records exact-subject evidence and test-retirement mapping; a reviewer must
+assess the frozen candidate rather than the prior HEAD or installed profile.
 
-Owner-authorized governance/scope revision, not technical closure. This section and
-`Second_Brain_M00_OneShot_Closure_Mandate.md` in this directory define one native-profile
-acceptance contract and must be included in the same candidate commit. The source baseline
-for this documentation revision is `18c9372b56c1801511b6103abb3c4dfe192eaf73`; it is not
-a frozen or qualified native implementation. This revision changes documents only.
-No native bypass, default, refusal behavior, migration or runtime qualification is claimed.
+## Finite removal gate and execution limits
 
-Supported profile to qualify: harness orchestration **NATIVE**; Brain governed orchestration
-**DISABLED / UNSUPPORTED**; Brain memory/context/evidence and other enabled features
-**separately qualified**. M00 remains baseline closure and roadmap admission, not a
-new orchestration security platform. OMP owns spawning, recursion, concurrency,
-roles, model selection and lifecycle unless a separately enabled, non-blocking routing
-feature is explicitly under test.
+1. Test and subprocess homes are disposable, origins pinned to this candidate;
+   retrospective real-home preservation uncertainty is reported honestly.
+2. No Brain orchestrator or alternate activation remains reachable. Legacy
+   refusals do not open state. Native task/hub/tool/model behavior is unaffected
+   in the actual qualified host path; useful memory/context/skills still work.
+3. Retained tests, migration/data-preservation checks, package checks, and
+   independent exact-candidate review pass. Report skips, retired tests,
+   historical-only evidence and remaining gaps separately.
+4. Applicable HIGHs are resolved against their retained subjects or the gate
+   remains blocked; source removal alone is not a release approval.
+5. One reviewable local commit/stack captures the complete candidate without
+   overwriting pre-existing author work. Production activation remains a
+   separate, explicit authorization.
 
-### Current requirement/finding dispositions
+Only after this finite gate may Stage 1 of the
+[`Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md`](Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md)
+begin in isolated development. No historical one-shot instruction below can
+start a coordinator, change production, or waive an open retained finding.
 
-This table supersedes the native-profile applicability and next-action fields in the
-historical record below. It does not rewrite a test result, close a HIGH, or establish
-safe disabled behavior without evidence. Mixed findings remain OPEN for every retained
-subject; an uncertain clause remains blocking until its subject is resolved.
+## Historical pre-removal mandate — superseded, not erased
 
-| ID / clause | Native-profile status | Verdict / retained obligation |
-| --- | --- | --- |
-| M00-CORD-01 | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` | **NOT PROVEN**. Protected root authority, issuer custody, positive credential issuance and root/child qualification leave only the native acceptance path. Original criteria and adverse evidence remain below for future governed qualification. |
-| M00-CORD-02 / M00.4 protected issuer and custody | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` | **NOT PROVEN**. Normalized authenticated lineage, restart/rebind and protected channel criteria remain governed-track requirements, not M01 obligations. |
-| #3-P / #3-C / #3-R.1–4 / ADM / #4 / #5: governed issuance, completion and settlement | `DEFERRED_UNSUPPORTED_NATIVE_PROFILE` for exclusively governed clauses | Preserve existing evidence and consumer guards; positive Brain admission/credentials, reservations, settlement and governed replay are not prerequisites for ordinary native OMP. Any path still able to corrupt memory/evidence or mutate protected state remains an OPEN native security obligation. |
-| SB-ORCH-001 | Governed effective-grant enforcement: `DEFERRED_UNSUPPORTED_NATIVE_PROFILE`; native non-interference: `OPEN` | Brain must not gate native tasks by role/grant. No read-only enforcement claim follows from an agent name; any enabled Brain feature relying on that claim needs its own evidence. |
-| SEC-AUTH-01 | `OPEN` for approval records, activation, skills and other non-orchestration authorization; worker-issuer-only clauses deferred | Caller-mintable approval remains unresolved. Do not defer the finding as a whole or treat hashes as approval authority. |
-| SEC-AUTH-02 | `OPEN` for trusted-memory/evidence authority; worker settlement/observer authority solely used for governed dispatch deferred | Native lifecycle observations must not mint trusted-memory authority or promote model/journal assertions into authenticated facts. |
-| SEC-INTEGRITY-01 | `OPEN` | Retain authorship/provenance, ledger integrity, replay and migration-anchor obligations; previous candidate repairs do not establish independent closure. |
-| SEC-SKILL-01 | `OPEN` | Retain passing evaluation, protected approval/review, exact consumed bytes and required-dependency binding. |
-| SB-PROMOTION-004 | `OPEN` | Retain promotion authorization and reviewed-content/dependency binding; local content consistency is not protected approval. |
-| FSUPD-01 | `OPEN` | Retain protected approval, stage/installed-byte binding, partial-failure and operational rollback evidence; corrected script still needs exact-subject independent acceptance. |
-| SEC-HOOK-02 | `OPEN` | Retain executable/configuration/environment and transitive dependency trust. |
-| #2a / #2b; migration, backup and recovery | Retain exact-subject evidence; final native candidate gate `OPEN` | Do not reopen a proven narrow fix or inherit broader closure. Verify fresh create, reopen, idempotency, interruption, compatible recovery and rollback; preserve historical leases and data. |
-| #6 measurement/accounting and ledger operations | `OPEN` for final integrated qualification; native-spawn enforcement deferred | Preserve truthful episode/descendant attribution, billable retry dedupe, provenance and unknown usage. Brain reservation/cap enforcement must not gate native spawning. Independent provider/account limits remain unchanged. |
-| Baseline/source/runtime identity | `OPEN` for final native subject | Identify exact source, dependency, loaded host/extension, configuration and schema identities; historical hashes are not current qualification. |
-| Memory/recall/context/evidence | `OPEN` for native-profile qualification | Prove enabled behavior for parent and workers, integrity and safe integration, not just enabled flags. |
-| M00-NATIVE-ORCH-01 | `OPEN` | **NOT PROVEN**. All applicable criteria below require evidence from the exact native candidate. |
-| Integrated suite and independent acceptance | `OPEN` | Prior full-Python timeout/six failures remain adverse evidence. Freeze final bytes and obtain independent reduced-scope acceptance; no percentage or unqualified M00 success claim. |
-| DOC-14 | `NOT_YET_AUTHORED / SOURCE_UNAVAILABLE` retained | Do not recreate missing clauses or mark unseen requirements satisfied. |
-
-### M00-NATIVE-ORCH-01 — native harness orchestration non-interference
-
-Each criterion is currently **OPEN / NOT PROVEN**:
-
-1. A main OMP session can invoke native `task`.
-2. A single native worker spawns and completes.
-3. A native batch spawns multiple workers and completes.
-4. Native concurrency behavior remains functional.
-5. Native `hub` messaging and steering remain functional.
-6. Workpool operates where configured; unavailable configurations are explicitly recorded, not counted as PASS.
-7. Native cancellation and completion lifecycle operate without Brain permission.
-8. Restart/revival remains OMP-owned and is not blocked by Brain governed rebind.
-9. No Brain coordinator/driver contract is inserted into the parent prompt.
-10. No Brain driver/worker/hard-orchestrator role check gates ordinary spawning.
-11. No Brain budget reservation is required before native dispatch.
-12. No Brain worker credential is issued merely because OMP spawns a child.
-13. No Brain settlement receipt is required for OMP completion or worker reuse.
-14. OMP model selection is unchanged unless separately enabled non-blocking routing is under test.
-15. Explicitly enabled Brain memory/recall/context works for both parent and workers.
-16. Explicit governed operations refuse clearly as UNSUPPORTED or DISABLED without privileged effects; ordinary native task use is not misclassified as governed and is not blocked by `UNAUTHORIZED_COORDINATOR`.
-17. Matched Brain-disabled and Brain-enabled/native controls show no material orchestration difference beyond documented, explicitly enabled Brain features.
-
-Evidence must include actual `task -> worker -> completion` and
-`batch -> multiple workers -> completion` through OMP's native launch/extension path.
-Use OMP 18.2.11 for the requested campaign run and record its actual version, source/build,
-loaded entrypoints and configuration in the evidence identity; the semantic requirement
-is not version-specific. Fixtures, source review and direct Python calls are supplementary,
-not substitutes for the real-path claim. Record actual commands, outcomes, identities and
-the differential control. Native lifecycle telemetry is observation, never settlement authority.
-
-### Execution order and finish condition
-
-`M00-SCOPE` (paired contract revision) -> `M00-NATIVE` (default-native inertness and safe
-explicit refusal) -> `M00-NATIVE-ORCH-01` (real-path qualification) -> `M00-HIGH`
-(individual applicable findings) -> `M00-INTEGRATED` (frozen applicable suites) ->
-`M00-REVIEW` (independent exact-subject acceptance) -> native-profile acceptance.
-
-The current authorization is **contract revision only**. Product work, test campaigns,
-commits and activation are not performed by this revision. Keep these two documents
-together in the next authorized candidate commit. Do not move code or create a new
-subsystem merely to express deferral. Later implementation must make dormant governed
-code inert in the shipping native path; evidence of safe disabling is itself blocking.
-
-Use `M00_NATIVE_PROFILE_QUALIFIED` only after reproducible baseline identity, applicable
-non-orchestration HIGH closure or explicitly evidenced safe-disabled disposition,
-working memory/context/evidence, native non-interference, default-disabled governed
-behavior, explicit unsupported-operation refusal, migration/recovery/rollback, frozen
-integrated suites and independent acceptance all pass. Continue to report
-`GOVERNED_ORCHESTRATION: UNSUPPORTED / DEFERRED`. Qualification is not production
-activation; owner activation remains separately authorized.
-
-
-## Historical mandate — preserved, superseded for native applicability
-
-The complete preceding mandate follows verbatim. Its sections 4, 6 and 7 preserve
-future governed-orchestration closure criteria; they are not native positive-issuance
-or settlement gates. Section 8 reservation enforcement is deferred for native spawning,
-while measurement/accounting remains applicable. Sections 1, 10 and the final resume
-instruction do not override this revision's bounded authorization, execution order or
-profile-specific finish condition. Non-orchestration authorization and integrity
-obligations, including those embedded in mixed sections, remain blocking.
-
-The archived starting hashes, environment failures and installed-state observations
-are historical; consult the register's later exact-subject evidence rather than
-rerunning obsolete repairs. No historical evidence is promoted by this amendment.
+The complete former mandate follows as dated evidence. Its governed-track
+acceptance criteria, old worktree identities, and instructions are not active
+requirements and are not retrospectively qualified by deletion.
 
 ---
 

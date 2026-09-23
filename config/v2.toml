@@ -20,8 +20,6 @@ token_budget = 1200
 
 [brainstem]
 context_char_budget = 12000
-worker_slots = 1
-premium_model_turns = 1
 
 [learning]
 surprise_threshold = 0.8

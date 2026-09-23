@@ -910,6 +910,15 @@ def test_windows_claude_launcher_captures_unicode_without_persisting_content(
         "hook_event_name": "UserPromptSubmit",
         "prompt": prompt,
     }
+    env = dict(os.environ)
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
+    env.update({
+        "SECOND_BRAIN_HOME": str(home),
+        "SECOND_BRAIN_PYTHON": sys.executable,
+        "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
+        "PYTHONIOENCODING": "cp1252",
+    })
     result = subprocess.run(
         [
             "powershell.exe",
@@ -922,13 +931,7 @@ def test_windows_claude_launcher_captures_unicode_without_persisting_content(
         ],
         input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         capture_output=True,
-        env={
-            **os.environ,
-            "SECOND_BRAIN_HOME": str(home),
-            "SECOND_BRAIN_PYTHON": sys.executable,
-            "SECOND_BRAIN_AUTOINJECT_MODE": "advisory",
-            "PYTHONIOENCODING": "cp1252",
-        },
+        env=env,
         timeout=30,
     )
     assert result.returncode == 0, result.stderr

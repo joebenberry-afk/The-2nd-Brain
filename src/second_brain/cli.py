@@ -331,7 +331,7 @@ def _parser() -> argparse.ArgumentParser:
     ais.add_parser(
         "omp-routing",
         parents=[home_parent],
-        help="OMP model-routing adapter: bounded JSON on stdin -> JSON on stdout",
+        help="OMP context and handoff adapter (retired routing requests refuse)",
     )
     awb = ais.add_parser(
         "writeback", parents=[home_parent], help="P0-G9 write-back: create an outcome candidate"
@@ -347,44 +347,8 @@ def _parser() -> argparse.ArgumentParser:
         help='JSON list of {"ref","kind"} source refs (default: [])',
     )
 
-    orch = sub.add_parser(
-        "orchestration",
-        parents=[home_parent],
-        help="P1 orchestration telemetry (Phase D; amendment §12/§22)",
-    )
-    ors = orch.add_subparsers(dest="orchestration_command", required=True)
-    orec = ors.add_parser(
-        "record",
-        parents=[home_parent],
-        help="record one orchestration counters event from JSON stdin; computes delegation_purity",
-    )
-    orec.add_argument("--session", default=None, help="session id for the telemetry file name")
-
-    stop = sub.add_parser(
-        "stop", parents=[home_parent], help="P3.6 bounded STOP decision and evidence"
-    )
-    stops = stop.add_subparsers(dest="stop_command", required=True)
-    sdecide = stops.add_parser("decide", parents=[home_parent], help="evaluate and record STOP")
-    sdecide.add_argument("--session", dest="host_session_id", required=True)
-    sdecide.add_argument("--task-id", required=True)
-    sdecide.add_argument("--parent-session-id", default="")
-    sdecide.add_argument("--worker-session-id", default="")
-    sdecide.add_argument("--stop-id", required=True)
-    sdecide.add_argument("--reason-code", required=True)
-    sdecide.add_argument("--triggering-condition", required=True)
-    sdecide.add_argument(
-        "--verification-state",
-        choices=("passed", "failed", "blocked", "unverified"),
-        required=True,
-    )
-    sdecide.add_argument(
-        "--completion-condition-state",
-        choices=("satisfied", "failed", "blocked", "unresolved"),
-        required=True,
-    )
-    sdecide.add_argument("--final-substantive-event", required=True)
-    sdecide.add_argument("--gate-file", type=Path, default=None)
-    sdecide.add_argument("--json", action="store_true")
+    sub.add_parser("stop", parents=[home_parent], help=argparse.SUPPRESS)
+    sub.add_parser("worker-plane", parents=[home_parent], help=argparse.SUPPRESS)
 
     led = sub.add_parser(
         "ledger", parents=[home_parent], help="P2 session ledger (plan §9/§9.10; Phase G)"
@@ -503,16 +467,13 @@ def _parser() -> argparse.ArgumentParser:
     aexp.add_argument("hash_prefix")
     ars.add_parser("list", parents=[home_parent], help="list stored artifacts")
 
-    sc = sub.add_parser("scout", parents=[home_parent], help="isolated repo explorer (Phase 6)")
+    sc = sub.add_parser("scout", parents=[home_parent], help="local repository evidence map")
     scs = sc.add_subparsers(dest="scout_command", required=True)
     srun = scs.add_parser(
-        "run", parents=[home_parent], help="run an isolated exploration -> Evidence Map"
+        "run", parents=[home_parent], help="run deterministic discovery -> Evidence Map"
     )
     srun.add_argument("target", help="repo path or registered project key")
     srun.add_argument("--task", required=True, help="exploration objective")
-    srun.add_argument("--model", default="deepseek/deepseek-v4-flash")
-    srun.add_argument("--no-agent", action="store_true", help="pre-pass only (no agent run)")
-    srun.add_argument("--ext", default=None, help="prime extension path to load (-e)")
     srun.add_argument(
         "--output", default=None, help="evidence maps dir (default outputs/evidence-maps)"
     )
@@ -1148,72 +1109,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     gov_prof.add_argument("--json", action="store_true", help="machine-readable output")
 
-    gov_budget = govs.add_parser(
+    for retired in (
         "check-budget",
-        parents=[home_parent],
-        help="T3.1: hard/soft session or worker token budget state",
-    )
-    gov_budget.add_argument("--session", required=True, help="host session id")
-    gov_budget.add_argument(
-        "--role", default="driver", help="role profile; 'worker' uses [budgets] worker_tokens"
-    )
-    gov_budget.add_argument("--json", action="store_true", help="machine-readable output")
-
-    gov_reserve = govs.add_parser(
         "reserve-budget",
-        parents=[home_parent],
-        help="atomically check capacity and reserve worker budget before dispatch",
-    )
-    gov_reserve.add_argument("--session", required=True, help="host session id")
-    gov_reserve.add_argument(
-        "--task-id", required=True, help="worker task the reservation belongs to"
-    )
-    gov_reserve.add_argument(
-        "--role", default="worker", help="role profile; 'worker' uses [budgets] worker_tokens"
-    )
-    gov_reserve.add_argument(
-        "--tokens", type=int, default=None, help="tokens to reserve (default: the role cap)"
-    )
-    gov_reserve.add_argument("--json", action="store_true", help="machine-readable output")
-
-    gov_consume = govs.add_parser(
         "consume-budget-reservation",
-        parents=[home_parent],
-        help="consume a budget reservation exactly once at completion",
-    )
-    gov_consume.add_argument("--session", required=True, help="host session id")
-    gov_consume.add_argument(
-        "--task-id", required=True, help="worker task the reservation belongs to"
-    )
-    gov_consume.add_argument("--consumed-by", default=None, help="why it was consumed")
-    gov_consume.add_argument("--json", action="store_true", help="machine-readable output")
-
-    gov_cancel = govs.add_parser(
         "cancel-budget-reservation",
-        parents=[home_parent],
-        help="return a reservation's capacity, only with proven-unused evidence",
-    )
-    gov_cancel.add_argument("--session", required=True, help="host session id")
-    gov_cancel.add_argument(
-        "--task-id", required=True, help="worker task the reservation belongs to"
-    )
-    gov_cancel.add_argument(
-        "--reason", default="PROVEN_UNUSED", help="why the capacity is being returned"
-    )
-    gov_cancel.add_argument(
-        "--evidence",
-        default="unproven",
-        help="must be 'proven_unused'; every other value is refused",
-    )
-    gov_cancel.add_argument("--json", action="store_true", help="machine-readable output")
-
-    gov_res_list = govs.add_parser(
         "budget-reservations",
-        parents=[home_parent],
-        help="outstanding (unconsumed) budget reservations, for restart reconciliation",
-    )
-    gov_res_list.add_argument("--session", default=None, help="filter to one host session")
-    gov_res_list.add_argument("--json", action="store_true", help="machine-readable output")
+    ):
+        govs.add_parser(retired, parents=[home_parent], help=argparse.SUPPRESS)
 
     fw = sub.add_parser(
         "firewall",
@@ -1394,100 +1297,6 @@ def _parser() -> argparse.ArgumentParser:
     ac_search.add_argument("--path", default=None, help="directory to search (default: brain home)")
     ac_search.add_argument("--max-matches", type=int, default=200, help="cap on returned matches")
     ac_search.add_argument("--json", action="store_true", help="output JSON")
-
-    wp = sub.add_parser(
-        "worker-plane",
-        parents=[home_parent],
-        help="Driver/Worker Plane concurrency guard & packet broker (Phase R7: "
-        "the actual Brain-owned enforcement point — Prime exposes no "
-        "extension hook for subagent/worker spawn, see "
-        "outputs/reports/rc4/07-worker-plane-live.md)",
-    )
-    wps = wp.add_subparsers(dest="worker_plane_command", required=True)
-
-    lease_inspect = wps.add_parser(
-        "lease-inspect", parents=[home_parent], help="worker lease inspection (read-only)"
-    )
-    lease_inspect.add_argument("--project", default=None)
-    lease_inspect.add_argument("--task-id", dest="task_id", default=None)
-    lease_inspect.add_argument("--attempt", dest="attempt_id", default=None)
-    lease_inspect.add_argument("--json", action="store_true", help="output JSON")
-
-    lease_quiesce = wps.add_parser(
-        "lease-quiesce", parents=[home_parent], help="record resource quiescence (never releases)"
-    )
-    lease_quiesce.add_argument("--attempt", dest="attempt_id", required=True)
-    lease_quiesce.add_argument("--resource", required=True)
-    lease_quiesce.add_argument("--method", required=True, help="how quiescence was established")
-    lease_quiesce.add_argument("--observation", required=True, help="what was observed")
-    lease_quiesce.add_argument("--actor", default="operator")
-    lease_quiesce.add_argument("--host-generation", dest="host_generation", default=None)
-    lease_quiesce.add_argument("--json", action="store_true")
-
-    lease_recover = wps.add_parser(
-        "lease-recover", parents=[home_parent], help="release only on authoritative evidence"
-    )
-    lease_recover.add_argument("--attempt", dest="attempt_id", required=True)
-    lease_recover.add_argument("--actor", default="operator")
-    lease_recover.add_argument("--host-generation", dest="host_generation", default=None)
-    lease_recover.add_argument("--executor-settled-evidence", dest="settled_evidence", default=None)
-    lease_recover.add_argument("--cleanup-evidence", dest="cleanup_evidence", default=None)
-    lease_recover.add_argument(
-        "--apply", action="store_true", help="perform the release (default: dry run)"
-    )
-    lease_settled = wps.add_parser(
-        "lease-release-settled",
-        parents=[home_parent],
-        help=(
-            "release an attempt whose recorded execution ended (terminal state, logical "
-            "outcome and a result row) — the strongest-evidence rule; attempts without a "
-            "recorded terminal stay refused"
-        ),
-    )
-    lease_settled.add_argument("--attempt", dest="attempt_id", required=True)
-    lease_settled.add_argument("--actor", default="operator")
-    lease_settled.add_argument(
-        "--apply", action="store_true", help="perform the release (default: dry run)"
-    )
-    lease_settled.add_argument("--json", action="store_true")
-    lease_recover.add_argument("--json", action="store_true")
-
-    wp_spawn = wps.add_parser(
-        "spawn", parents=[home_parent], help="spawn a worker if under the concurrency ceiling"
-    )
-    wp_spawn.add_argument("session_id", help="host session ID")
-    wp_spawn.add_argument("subtask", help="worker subtask description")
-    wp_spawn.add_argument("--target-files", nargs="*", default=None)
-    wp_spawn.add_argument("--relevant-symbols", nargs="*", default=None)
-    wp_spawn.add_argument("--context-capsule", default="")
-    wp_spawn.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
-    wp_spawn.add_argument("--json", action="store_true", help="output JSON")
-
-    wp_complete = wps.add_parser(
-        "complete", parents=[home_parent], help="record a worker's completion"
-    )
-    wp_complete.add_argument("session_id", help="host session ID")
-    wp_complete.add_argument("worker_id", help="worker ID returned by spawn")
-    wp_complete.add_argument(
-        "--status",
-        choices=["COMPLETED", "FAILED", "CANCELLED"],
-        default="COMPLETED",
-    )
-    wp_complete.add_argument("--summary", default="")
-    wp_complete.add_argument("--finding", dest="findings", action="append", default=[])
-    wp_complete.add_argument("--tokens-used", type=int, default=0)
-    wp_complete.add_argument("--json", action="store_true", help="output JSON")
-
-    wp_status = wps.add_parser(
-        "status", parents=[home_parent], help="show active worker count vs the ceiling"
-    )
-    wp_status.add_argument("session_id", help="host session ID")
-    wp_status.add_argument("--max-workers", type=int, default=None, help="concurrency ceiling")
-    wp_status.add_argument("--json", action="store_true", help="output JSON")
-    wp_reap = wps.add_parser(
-        "reap", parents=[home_parent], help="fail expired or unacknowledged worker tasks"
-    )
-    wp_reap.add_argument("--json", action="store_true", help="output JSON")
 
     # Phase R9: the "prepare" half of fresh-verifier plumbing already exists
     # as `second_brain verify <session_id> <repo>` (verify.build_verifier_brief,
@@ -3067,29 +2876,14 @@ def cmd_scout(args) -> int:
 
     home = _home(args)
     out_dir = Path(args.output) if args.output else None
-    if args.no_agent:
-        repo = scout.resolve_repo(home, args.target)
-        prepass = scout.deterministic_prepass(repo, args.task)
-        output_dir = out_dir or (home / "outputs" / "evidence-maps")
-        map_path = scout.write_evidence_map(repo, args.task, prepass, output_dir)
-        result = {"map_path": str(map_path), "prepass": prepass}
-    else:
-        result = scout.run_scout(
-            home,
-            args.target,
-            args.task,
-            model=args.model,
-            out_dir=out_dir,
-            ext=args.ext,
-        )
+    repo = scout.resolve_repo(home, args.target)
+    prepass = scout.deterministic_prepass(repo, args.task)
+    output_dir = out_dir or (home / "outputs" / "evidence-maps")
+    map_path = scout.write_evidence_map(repo, args.task, prepass, output_dir)
+    result = {"map_path": str(map_path), "prepass": prepass}
     print(f"Evidence map: {result['map_path']}")
-    if "rc" in result:
-        print(f"agent rc: {result['rc']}")
-        print((result.get("stdout_tail") or "").strip()[-400:])
-    else:
-        print("pre-pass only (no agent run)")
     print(json.dumps(result["prepass"], indent=1, default=str))
-    return 0 if result.get("rc", 0) == 0 else 1
+    return 0
 
 
 def cmd_capsule(args) -> int:
@@ -3426,7 +3220,7 @@ def _cmd_hermes_hook(home: Path) -> int:
 
 
 def _cmd_omp_routing(home: Path) -> int:
-    """OMP transport bridge; Brain owns all routing policy and selection."""
+    """OMP context and handoff bridge; routing requests refuse."""
     import json
 
     from . import contracts, omp_adapter
@@ -3503,84 +3297,6 @@ _ORCH_COUNTER_KEYS = (
     "fan_out_width",
     "recursion_depth",
 )
-
-
-def cmd_orchestration(args) -> int:
-    """P1 orchestration telemetry (plan §19/20 purity; amendment §12/§22).
-
-    `orchestration record --json-stdin`: reads ONE JSON event with the nine
-    counter fields, computes delegation_purity, appends a privacy-safe JSONL
-    record to telemetry/agent-performance/orchestration-<session>.jsonl.
-    Fail-open: malformed/missing/invalid input -> {"recorded": false,
-    "error": ...} with exit 0; only the nine counters are ever persisted
-    (no secrets, no arbitrary payload).
-    """
-    import json
-
-    from . import contracts
-    from . import telemetry as telemetry_mod
-
-    home = _home(args)
-    if args.orchestration_command != "record":
-        return 2
-    payload = None
-    try:
-        raw = sys.stdin.read()
-        payload = json.loads(raw) if raw.strip() else None
-    except Exception:  # fail-open
-        payload = None
-    session = args.session or (
-        str(payload.get("session"))
-        if isinstance(payload, dict) and payload.get("session")
-        else "unknown"
-    )
-    if not isinstance(payload, dict):
-        print(contracts.canonical_json({"recorded": False, "error": "expected one JSON object"}))
-        return 0
-    counters: dict[str, int] = {}
-    for key in _ORCH_COUNTER_KEYS:
-        value = payload.get(key, 0)
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            print(
-                contracts.canonical_json(
-                    {"recorded": False, "error": f"{key} must be a non-negative int"}
-                )
-            )
-            return 0
-        counters[key] = value
-    total = counters["driver_actions_total"]
-    if total > 0:
-        purity = (
-            1.0
-            - (counters["driver_execution_attempts"] + counters["emergency_execution_actions"])
-            / total
-        )
-        purity = round(purity, 6)
-    else:
-        purity = None  # no actions recorded -> not inferred, never fabricate
-    record = {
-        "v": 2,
-        "ts": datetime.now(UTC).isoformat(),
-        "kind": "orchestration_record",
-        "session": session,
-        "delegation_purity": purity,
-        **counters,
-    }
-    try:
-        tdir = telemetry_mod.telemetry_dir(home)
-        tdir.mkdir(parents=True, exist_ok=True)
-        stem = re.sub(r"[^A-Za-z0-9_-]", "-", session) or "unknown"
-        with open(tdir / f"orchestration-{stem}.jsonl", "a", encoding="utf-8") as f:
-            f.write(contracts.canonical_json(record) + "\n")
-    except Exception as exc:  # fail-open
-        print(contracts.canonical_json({"recorded": False, "error": str(exc)}))
-        return 0
-    print(
-        contracts.canonical_json(
-            {"recorded": True, "delegation_purity": purity, "session": session}
-        )
-    )
-    return 0
 
 
 def cmd_ledger(args) -> int:
@@ -3703,7 +3419,7 @@ def cmd_ledger(args) -> int:
         return 0
     if cmd == "verify":
         with ledger.LedgerStore(home, args.host_session_id).open() as store:
-            integrity = store.integrity(full_chain=True)
+            integrity = store.integrity()
             lineage = args.lineage.split(",") if args.lineage else []
             replay_error = ""
             try:
@@ -3764,104 +3480,6 @@ def cmd_ledger(args) -> int:
         print(contracts.canonical_json(out))
         return 0
     return 2
-
-
-def cmd_stop(args) -> int:
-    """P3.6 STOP decision using the existing requirement ledger and ledger store."""
-    from . import contracts, ledger
-
-    home = _home(args)
-    import json
-
-    check = working_set.check_requirements(home, args.host_session_id)
-    gate: dict[str, object] | None = None
-    if args.gate_file is not None:
-        try:
-            parsed_gate = json.loads(args.gate_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise BrainError(f"invalid accuracy gate file: {args.gate_file}") from exc
-        if not isinstance(parsed_gate, dict) or not isinstance(
-            parsed_gate.get("completion_allowed"), bool
-        ):
-            raise BrainError(f"invalid accuracy gate file: {args.gate_file}")
-        gate = parsed_gate
-    gate_blocked = gate is not None and gate["completion_allowed"] is False
-    gate_parent_session = str(gate.get("parent_session_id") or "") if gate else ""
-    gate_worker_session = str(gate.get("worker_session_id") or "") if gate else ""
-    verification_state = args.verification_state
-    completion_state = args.completion_condition_state
-    if check["blocks"]:
-        decision = "continue"
-        reason_code = "requirements_unresolved"
-    elif verification_state in {"failed", "blocked"} or completion_state in {"failed", "blocked"}:
-        decision = "stop"
-        reason_code = args.reason_code
-    elif gate_blocked:
-        decision = "continue"
-        reason_code = "accuracy_gate_blocked"
-    elif verification_state == "passed" and completion_state == "satisfied":
-        decision = "stop"
-        reason_code = args.reason_code
-    else:
-        decision = "continue"
-        reason_code = (
-            "verification_unresolved"
-            if verification_state != "passed"
-            else "completion_condition_unresolved"
-        )
-    continuation_forbidden = decision == "stop"
-    payload = {
-        "stop_id": args.stop_id,
-        "task_id": args.task_id,
-        "session_id": args.host_session_id,
-        "parent_session_id": args.parent_session_id or gate_parent_session,
-        "worker_session_id": args.worker_session_id or gate_worker_session,
-        "decision": decision,
-        "reason_code": reason_code,
-        "triggering_condition": args.triggering_condition,
-        "verification_state": verification_state,
-        "completion_condition_state": completion_state,
-        "final_substantive_event": args.final_substantive_event,
-        "material_total": check["material_total"],
-        "material_unverified": check["material_unverified"],
-        "continuation_forbidden": continuation_forbidden,
-        "accuracy_gate_id": gate.get("accuracy_gate_id") if gate else None,
-        "gate_risk_level": gate.get("risk_level") if gate else None,
-        "gate_ladder_id": gate.get("ladder_id") if gate else None,
-        "gate_completion_allowed": gate.get("completion_allowed") if gate else None,
-        "gate_decision_reason": gate.get("decision_reason") if gate else None,
-    }
-    event = contracts.BrainLifecycleEvent(
-        seq=0,
-        event_id=f"stop-{args.stop_id}",
-        internal_session_id=ledger.internal_session_id(args.host_session_id),
-        agent_id=args.worker_session_id or args.host_session_id,
-        event_type=contracts.LifecycleEventType.STOP_DECIDED,
-        timestamp=datetime.now(UTC).isoformat(),
-        surface_visibility=contracts.SurfaceVisibility.RAW_ONLY,
-        ignorable=False,
-        payload=payload,
-    )
-    with ledger.LedgerStore(home, args.host_session_id, host="prime").open(create=True) as store:
-        store.create_session(
-            contracts.BrainSessionIdentity(
-                internal_session_id=ledger.internal_session_id(args.host_session_id),
-                host="prime",
-                host_session_id=args.host_session_id,
-                project_id="",
-                created_at=event.timestamp,
-                status="active",
-                pinned=False,
-                schema_version=contracts.LEDGER_SCHEMA_VERSION,
-            )
-        )
-        seq = store.append_events([event])[0]
-    payload = {**payload, "sequence": seq}
-    if args.json:
-        print(contracts.canonical_json(payload))
-    else:
-        print(f"{decision}: {reason_code}")
-    return 0
 
 
 def cmd_session(args) -> int:
@@ -3982,7 +3600,7 @@ def cmd_autoinject(args) -> int:
 def cmd_heartbeat(args) -> int:
     import json
 
-    from . import heartbeat, telemetry, worker_protocol
+    from . import heartbeat, telemetry
 
     home = _home(args)
     result = heartbeat.HeartbeatCoordinator(home).run_if_due(
@@ -3991,9 +3609,6 @@ def cmd_heartbeat(args) -> int:
         args.repo,
         force=args.force,
     )
-    # Worker lease maintenance rides the same zero-token pulse as heartbeat.
-    with contextlib.suppress(Exception):
-        result["worker_reaped"] = worker_protocol.reap(home)
     with contextlib.suppress(OSError, ValueError):
         telemetry.append_record(
             home,
@@ -4021,7 +3636,7 @@ def cmd_heartbeat(args) -> int:
 def cmd_p4(args) -> int:
     import json
 
-    from . import p4, worker_protocol
+    from . import p4
 
     home = _home(args)
     result = p4.pulse(
@@ -4033,10 +3648,6 @@ def cmd_p4(args) -> int:
         force=args.force,
         emit_telemetry=args.emit_telemetry,
     )
-    # Prime invokes this command for session_start/turn_start. Reaping is
-    # local and fail-open just like the surrounding P4 bridge.
-    with contextlib.suppress(Exception):
-        result["worker_reaped"] = worker_protocol.reap(home)
     if args.json:
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     else:
@@ -4091,6 +3702,14 @@ def cmd_governor(args) -> int:
     import fnmatch
     import json
 
+    if args.governor_command in {
+        "check-budget",
+        "reserve-budget",
+        "consume-budget-reservation",
+        "cancel-budget-reservation",
+        "budget-reservations",
+    }:
+        return _removed_operation()
     home = _home(args)
 
     if args.governor_command == "report":
@@ -4250,102 +3869,6 @@ def cmd_governor(args) -> int:
         except KeyError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 2
-
-    if args.governor_command == "reserve-budget":
-        reservation = governor.reserve_budget(
-            home, args.session, args.task_id, args.role, args.tokens
-        )
-        if args.json:
-            print(json.dumps(reservation))
-        else:
-            print(
-                f"state={reservation['state']} reserved={reservation['reserved']} "
-                f"used={reservation['used']} cap={reservation['cap']} "
-                f"outstanding={reservation['outstanding']}"
-                + (f" reason={reservation['reason']}" if reservation.get("reason") else "")
-            )
-        # A refusal is a distinct outcome, not an error: exit 3 lets a caller fail closed
-        # without having to parse stdout.
-        return 0 if reservation["reserved"] else 3
-
-    if args.governor_command == "consume-budget-reservation":
-        consumed = governor.consume_budget_reservation(
-            home, args.session, args.task_id, args.consumed_by
-        )
-        if args.json:
-            print(json.dumps(consumed))
-        else:
-            print(f"consumed={consumed['consumed']}")
-        return 0
-
-    if args.governor_command == "cancel-budget-reservation":
-        cancelled = governor.cancel_budget_reservation(
-            home, args.session, args.task_id, args.reason, evidence=args.evidence
-        )
-        if args.json:
-            print(json.dumps(cancelled))
-        else:
-            print(
-                f"cancelled={cancelled['cancelled']} "
-                f"already_cancelled={cancelled['already_cancelled']}"
-                + (f" refused={cancelled['refused']}" if cancelled.get("refused") else "")
-            )
-        # A refusal is a distinct outcome, not an error: exit 4 says the capacity was NOT
-        # returned, so the caller keeps treating the reservation as an open liability.
-        return 0 if cancelled["cancelled"] else 4
-
-    if args.governor_command == "budget-reservations":
-        rows = governor.list_budget_reservations(home, args.session)
-        if args.json:
-            print(json.dumps({"reservations": rows}))
-        else:
-            for row in rows:
-                print(
-                    f"{row['session_id']} {row['task_id']} tokens={row['tokens']} "
-                    f"role={row['role']} at={row['created_at']}"
-                )
-        return 0
-
-    if args.governor_command == "check-budget":
-        result = governor.check_budget(home, args.session, args.role)
-        if args.json:
-            print(json.dumps(result))
-        else:
-            print(f"state={result['state']} used={result['used']} cap={result['cap']}")
-        # T3.1 §4: record the HARD/BLOCK determination once per invocation
-        # (Prime calls this CLI subcommand at most once per turn -- never
-        # per tool call -- so this satisfies "cache/dedupe per session+turn"
-        # without extra state).
-        if result["state"] == "HARD":
-            import tomllib
-
-            from . import decisions
-
-            stage = "SHADOW"
-            try:
-                v2_path = home / "config" / "v2.toml"
-                if v2_path.is_file():
-                    v2_raw = tomllib.loads(v2_path.read_text(encoding="utf-8"))
-                    candidate = (v2_raw.get("rollout") or {}).get("brainstem", "SHADOW")
-                    if candidate in decisions._ROLLOUT_STAGES:
-                        stage = candidate
-            except Exception:
-                pass
-            with contextlib.suppress(Exception):
-                decisions.record(
-                    home,
-                    kind="budget",
-                    session_id=args.session,
-                    task_id=None,
-                    chosen={"decision": "BLOCK", "state": "HARD"},
-                    alternatives=["ALLOW"],
-                    propensity=1.0,
-                    randomized=False,
-                    policy_version="v3.1",
-                    stage=stage,
-                    inputs={"used": result["used"], "cap": result["cap"]},
-                )
-        return 0
 
     return 2
 
@@ -4623,7 +4146,6 @@ def _code_search_git_tracked(target_dir: Path, pattern: str, max_matches: int) -
     a pure function of (target_dir's git tree, pattern, max_matches) —
     exactly what the Action Cache's git_tree_hash proof gate requires.
     """
-    import re
     import subprocess
 
     try:
@@ -4725,172 +4247,6 @@ def _action_cache_search(home: Path, args) -> int:
             file=sys.stderr,
         )
     return 0
-
-
-def cmd_worker_plane(args) -> int:
-    """
-    Phase R7: the actual Brain-owned enforcement point for the worker
-    concurrency ceiling. Prime's extension API (brainstem/prime-extension/
-    types/prime.d.ts) exposes 11 lifecycle events and none of them is a
-    spawn/subagent event — confirmed by exhaustive enumeration of the
-    PrimeEvent union, see outputs/reports/rc4/02-prime-live-callgraph.md.
-    WorkerPlaneManager.spawn_worker() already enforces the ceiling
-    correctly (SQLite bookkeeping + a raised BrainError over the limit,
-    tests/test_repository_intelligence_live.py::
-    test_worker_concurrency_ceiling_enforcement); before this pass nothing
-    outside its own module ever called it. This CLI subcommand makes it a
-    real, invokable enforcement surface — the same "Brain-owned layer
-    below the host" pattern as R5's action-cache search.
-    """
-    import json
-
-    from . import worker_protocol
-    from .repository_intelligence import (
-        DEFAULT_MAX_WORKERS,
-        WorkerPlaneManager,
-        WorkerResultPacket,
-        WorkerStatus,
-    )
-
-    home = _home(args)
-    if args.worker_plane_command in {
-        "lease-inspect",
-        "lease-quiesce",
-        "lease-recover",
-        "lease-release-settled",
-    }:
-        import json as _json
-
-        from . import worker_recovery
-
-        try:
-            if args.worker_plane_command == "lease-inspect":
-                payload = worker_recovery.inspect_attempt(
-                    home, project_id=args.project, task_id=args.task_id, attempt_id=args.attempt_id
-                )
-            elif args.worker_plane_command == "lease-quiesce":
-                payload = worker_recovery.record_quiescence(
-                    home,
-                    attempt_id=args.attempt_id,
-                    resource=args.resource,
-                    method=args.method,
-                    observation=args.observation,
-                    actor=args.actor,
-                    host_generation=args.host_generation,
-                )
-            elif args.worker_plane_command == "lease-release-settled":
-                payload = worker_recovery.release_settled_quarantine(
-                    home,
-                    attempt_id=args.attempt_id,
-                    actor=args.actor,
-                    dry_run=not args.apply,
-                )
-            else:
-                payload = worker_recovery.recover(
-                    home,
-                    attempt_id=args.attempt_id,
-                    actor=args.actor,
-                    host_generation=args.host_generation,
-                    executor_settled_evidence=_json.loads(args.settled_evidence)
-                    if args.settled_evidence
-                    else None,
-                    cleanup_evidence=_json.loads(args.cleanup_evidence)
-                    if args.cleanup_evidence
-                    else None,
-                    dry_run=not args.apply,
-                )
-        except Exception as exc:  # surfaced as a refusal, never as a release
-            name = getattr(exc, "code", type(exc).__name__)
-            payload = {
-                "refused": True,
-                "code": name,
-                "message": str(exc),
-                "detail": getattr(exc, "detail", {}),
-            }
-        if getattr(args, "json", False):
-            print(_json.dumps(payload, indent=2))
-        else:
-            print(_json.dumps(payload, indent=2))
-        return 0
-
-    if args.worker_plane_command == "reap":
-        error = None
-        try:
-            results = worker_protocol.reap(home)
-        except Exception as exc:
-            results = []
-            error = f"{type(exc).__name__}: {exc}"
-        output: dict[str, object] = {"reaped": results}
-        if error:
-            output["error"] = error
-        if args.json:
-            print(json.dumps(output, indent=2))
-        elif error:
-            print(f"worker-plane reap unavailable: {error}")
-        else:
-            for item in results:
-                print(f"{item['task_id']}: {item['action']} ({item['state']})")
-        return 0
-    requested_max = getattr(args, "max_workers", None)
-    max_workers = requested_max if requested_max is not None else DEFAULT_MAX_WORKERS
-    plane = WorkerPlaneManager(home, args.session_id, max_concurrent_workers=max_workers)
-
-    if args.worker_plane_command == "spawn":
-        try:
-            packet = plane.spawn_worker(
-                args.subtask,
-                target_files=args.target_files,
-                relevant_symbols=args.relevant_symbols,
-                context_capsule=args.context_capsule,
-            )
-        except BrainError as e:
-            if args.json:
-                print(json.dumps({"spawned": False, "error": str(e)}))
-            else:
-                print(f"Error: {e}", file=sys.stderr)
-            return 2
-        if args.json:
-            print(json.dumps({"spawned": True, **packet.to_dict()}, indent=2))
-        else:
-            print(f"Spawned {packet.worker_id} (session={args.session_id})")
-        return 0
-
-    if args.worker_plane_command == "complete":
-        # Nomenclature debt (owner note, 2026-09-22): this records a repository-intelligence
-        # worker_plane row. It is NOT authoritative execution terminal evidence and never reaches
-        # worker_protocol.record_worker_event or the strongest writer-release rule, and it cannot
-        # release a writer. The word "complete" is what made that confusing once; the rename is
-        # deliberately deferred so this change stays scoped.
-        plane.complete_worker(
-            WorkerResultPacket(
-                worker_id=args.worker_id,
-                session_id=args.session_id,
-                status=WorkerStatus(args.status),
-                summary=args.summary,
-                findings=args.findings,
-                tokens_used=args.tokens_used,
-            )
-        )
-        if args.json:
-            out = {"completed": True, "worker_id": args.worker_id, "status": args.status}
-            print(json.dumps(out))
-        else:
-            print(f"Completed {args.worker_id}: {args.status}")
-        return 0
-
-    if args.worker_plane_command == "status":
-        active = plane.active_worker_count()
-        if args.json:
-            print(
-                json.dumps(
-                    {"active_workers": active, "max_concurrent_workers": max_workers}, indent=2
-                )
-            )
-        else:
-            print(f"Active workers: {active}/{max_workers}")
-        return 0
-
-    return 2
 
 
 def cmd_fresh_verifier(args) -> int:
@@ -5065,8 +4421,29 @@ def cmd_restore(args) -> int:
     return 0
 
 
+def _removed_operation() -> int:
+    """Legacy command refusal before home resolution or state access."""
+    print('{"status":"failed","failure_code":"ORCHESTRATION_REMOVED"}')
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, unknown = parser.parse_known_args(argv)
+    if args.command in {"stop", "worker-plane"} or (
+        args.command == "governor"
+        and args.governor_command
+        in {
+            "check-budget",
+            "reserve-budget",
+            "consume-budget-reservation",
+            "cancel-budget-reservation",
+            "budget-reservations",
+        }
+    ):
+        return _removed_operation()
+    if unknown:
+        parser.error(f"unrecognized arguments: {' '.join(unknown)}")
     handlers = {
         "init": cmd_init,
         "doctor": cmd_doctor,
@@ -5082,7 +4459,6 @@ def main(argv: list[str] | None = None) -> int:
         "firewall": cmd_firewall,
         "vmem": cmd_vmem,
         "action-cache": cmd_action_cache,
-        "worker-plane": cmd_worker_plane,
         "fresh-verifier": cmd_fresh_verifier,
         "delta-sync": cmd_delta_sync,
         "cascade": cmd_cascade,
@@ -5122,9 +4498,7 @@ def main(argv: list[str] | None = None) -> int:
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
         "autoinject": cmd_autoinject,
-        "orchestration": cmd_orchestration,
         "ledger": cmd_ledger,
-        "stop": cmd_stop,
         "session": cmd_session,
     }
     try:

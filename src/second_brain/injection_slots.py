@@ -181,13 +181,11 @@ def assemble_tail(
     hot_context_refs: str | None = None,
     freshness_lines: str | None = None,
     hydrated_skills: Any = None,
-    budget_warning: str | None = None,
     lean_content: str | None = None,
 ) -> str:
     """Assemble the per-turn TAIL slot:
 
-    Contents: [BRAIN_CONTEXT_DELTA], hot-context refs (VMem), freshness lines,
-    Skill hydration bodies, T3.1 hard-budget warning, and T3.4 Lean opportunity content (if any).
+    Contents: context deltas, VMem refs, freshness, skills, and approved Lean content.
     """
     parts: list[str] = []
 
@@ -207,9 +205,6 @@ def assemble_tail(
     skills_text = format_hydrated_skills(hydrated_skills)
     if skills_text:
         parts.append(skills_text)
-
-    if budget_warning and budget_warning.strip():
-        parts.append(budget_warning.strip())
 
     if lean_content and lean_content.strip():
         parts.append(lean_content.strip())

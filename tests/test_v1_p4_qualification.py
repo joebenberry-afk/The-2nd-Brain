@@ -31,8 +31,6 @@ REQUIRED_SCENARIOS = {
     "cross_session_continuity",
     "harness_isolation",
     "harness_switch",
-    "driver_worker",
-    "failed_worker",
     "malformed_state",
     "stale_state",
     "token_pressure",
@@ -259,8 +257,7 @@ def test_qualification_manifest_has_all_required_scenarios(tmp_path):
 @pytest.fixture(scope="module")
 def qualified(tmp_path_factory):
     """Run the real qualification once and share it across the assertions
-    below (each real run drives ~20 subprocesses; sharing keeps the suite
-    fast without weakening any individual check)."""
+    below (each run drives the retained CLI scenarios in disposable homes)."""
     out_dir = tmp_path_factory.mktemp("q8-shared") / "out"
     manifest = run_qualification(out_dir, repo=REPO_ROOT)
     return manifest, out_dir

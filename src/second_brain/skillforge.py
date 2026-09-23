@@ -93,12 +93,13 @@ def _parse_sections(text: str) -> dict[str, str]:
     return sections
 
 
-def read_metadata(path: Path) -> dict[str, str]:
+def read_metadata(path: Path, *, text: str | None = None) -> dict[str, str]:
     """Read the small frontmatter subset used by lifecycle checks."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise BrainError(f"Could not read skill {path}: {exc}") from exc
+    if text is None:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise BrainError(f"Could not read skill {path}: {exc}") from exc
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
@@ -165,14 +166,20 @@ def skill_path(home: Path, name: str) -> Path | None:
     return None
 
 
-def lifecycle_content_hash(path: Path) -> str:
-    """Content hash that ignores the ``status:`` field. Directory/status
-    transitions between shadow -> candidate -> active are lifecycle
-    metadata, not content edits, so a single binding/approval/evaluation
-    must remain valid as a skill moves through the guarded path."""
-    content = path.read_text(encoding="utf-8")
-    normalized = re.sub(r"(?m)^status:\s*[^\r\n]+", "status: <lifecycle>", content, count=1)
+def lifecycle_content_hash_text(content: str) -> str:
+    """Hash exact skill text while ignoring only lifecycle status changes."""
+    normalized = re.sub(
+        r"(?m)^status:[ \t]*(?:shadow|candidate|active)[ \t]*$",
+        "status: <lifecycle>",
+        content,
+        count=1,
+    )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def lifecycle_content_hash(path: Path) -> str:
+    """Hash SKILL.md consistently across shadow, candidate and active moves."""
+    return lifecycle_content_hash_text(path.read_text(encoding="utf-8"))
 
 
 def artifact_binding(home: Path, name: str) -> dict[str, str]:

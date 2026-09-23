@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import autoinject, contracts, paths, router, skillforge
+from . import autoinject, contracts, frontier, paths, router, skillforge
 
 _MAX_SPECIALIST_SKILLS = 3
 _MAX_HYDRATED_BODY_CHARS = 4096
@@ -66,7 +66,7 @@ def eligible_skills(home: Path) -> list[dict]:
                 continue
             try:
                 content_hash: str | None = skillforge.lifecycle_content_hash(skill_path)
-            except OSError:
+            except (OSError, UnicodeError):
                 content_hash = None
             results.append(
                 {
@@ -77,6 +77,35 @@ def eligible_skills(home: Path) -> list[dict]:
                 }
             )
     return results
+
+
+def approved_content(home: Path, skill_id: str, body: str, skill_file: Path) -> bool:
+    """Check the returned text and lifecycle position against the current review."""
+    try:
+        level = next(
+            (
+                level
+                for level, directory in paths.SKILL_LEVEL_DIRS.items()
+                if skill_file == Path(home) / directory / skill_id / "SKILL.md"
+            ),
+            None,
+        )
+        if (
+            level is None
+            or skill_file != skillforge.skill_path(home, skill_id)
+            or skillforge.read_metadata(skill_file, text=body).get("status") != level
+        ):
+            return False
+        binding = skillforge.artifact_binding(home, skill_id)
+        review = frontier.latest_review(home, f"skill-{skill_id}-promotion")
+        return (
+            review is not None
+            and review.get("verdict") == "approve"
+            and binding["artifact_sha256"] == skillforge.lifecycle_content_hash_text(body)
+            and all(review.get(key) == value for key, value in binding.items())
+        )
+    except Exception:
+        return False
 
 
 def descriptors(home: Path) -> dict[str, dict]:
@@ -92,10 +121,12 @@ def descriptors(home: Path) -> dict[str, dict]:
         skill_path = item["path"]
         try:
             text = skill_path.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        except (OSError, UnicodeError):
+            continue
+        if not approved_content(home, item["skill_id"], text, skill_path):
+            continue
         try:
-            metadata = skillforge.read_metadata(skill_path)
+            metadata = skillforge.read_metadata(skill_path, text=text)
         except Exception:
             metadata = {}
         prefix = f"{metadata.get('name', item['skill_id'])} v{metadata.get('version', '?')}: "
@@ -168,11 +199,10 @@ def build_plan(
         else:
             rejected_skill_ids[skill_id] = "over_cap"
 
-    descriptor_refs = {skill_id: described[skill_id]["descriptor_ref"] for skill_id in eligible}
-    descriptor_chars = sum(len(described[skill_id]["descriptor_text"]) for skill_id in eligible)
+    descriptor_refs = {skill_id: item["descriptor_ref"] for skill_id, item in described.items()}
+    descriptor_chars = sum(len(item["descriptor_text"]) for item in described.values())
     descriptor_tokens = sum(
-        autoinject.token_estimate(described[skill_id]["descriptor_text"], home=home)
-        for skill_id in eligible
+        autoinject.token_estimate(item["descriptor_text"], home=home) for item in described.values()
     )
 
     avoided_full_chars = 0
@@ -262,12 +292,22 @@ def hydrate_plan(home: Path, plan: dict) -> tuple[dict, dict[str, str]]:
             continue
         try:
             body = current["path"].read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeError):
             unavailable_skill_ids[skill_id] = "read_failed"
             continue
         if len(body) > _MAX_HYDRATED_BODY_CHARS:
             unavailable_skill_ids[skill_id] = "body_too_large"
             continue
+        # Bind the exact text being returned, not a second read of mutable
+        # SKILL.md. A plan-time disk hash alone is not an approval.
+        body_hash = skillforge.lifecycle_content_hash_text(body)
+        if body_hash != current["content_hash"]:
+            unavailable_skill_ids[skill_id] = "stale_content_hash"
+            continue
+        if not approved_content(home, skill_id, body, current["path"]):
+            unavailable_skill_ids[skill_id] = "unapproved_content"
+            continue
+
         candidate_bodies[skill_id] = body
 
     hydrated_skill_ids: list[str] = []

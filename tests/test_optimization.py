@@ -359,6 +359,8 @@ def test_immutable_versions_and_corrupt_proposal_refuse(brain_home):
 
 def _run_cli(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
     return subprocess.run(
         [sys.executable, "-m", "second_brain", "--home", str(home), *args],

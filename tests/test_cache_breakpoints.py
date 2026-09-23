@@ -79,94 +79,48 @@ def test_paging_skipped_when_no_break_point(brain_home: Path) -> None:
     assert second_context.get("context_changed") is False
 
 
-def test_model_switch_preflight_order(brain_home: Path) -> None:
-    """When model changes, steps 1-8 execute in order; if load > target * 0.85, reclaim
-    runs;
-
-    if overflow, returns INPUT_REQUIRED(CONTEXT_OVERFLOW); emits MODEL_ROUTE_TRANSITION
-    + decision.
-    """
-    session_id = "hermes:Brain-Dev:model-switch-session"
-    store = vmem.VMemStore(brain_home, session_id)
-
-    # Store objects in VMem
-    for i in range(5):
-        store.store_object(
-            vmem.SessionObjectKind.TOOL_OBSERVATION,
-            title=f"result-{i}",
-            content=f"Observation content {i} " + ("w" * 800),
-            summary=f"Summary {i}",
-        )
-
-    # Scenario A: Normal switch where load is within capacity
-    result = hermes_adapter.model_switch_preflight(
-        brain_home,
-        session_id,
-        target_provider="test-provider",
-        target_model="test-model-large",
-        current_provider="test-provider",
-        current_model="test-model-small",
-    )
-    assert result["status"] == "ok"
-    assert result["proceed"] is True
-    assert result["cache_cold"] is True  # step 3: model-scoped provider marks cache cold
-    assert result["target_capacity"] == 128_000  # step 1: default 128_000
-
-    # Scenario B: Target capacity configured in config/v2.toml is tight, causing load > 0.85 * cap
-    # Write config/v2.toml with small context_tokens for 'test-model-tight' (e.g. 1000 tokens)
-    v2_toml = brain_home / "config" / "v2.toml"
-    v2_toml.parent.mkdir(parents=True, exist_ok=True)
-    v2_toml.write_text(
-        """
-[models.test-model-tight]
-context_tokens = 1000
-
-[providers.test-provider]
-cache_scope = "model"
-""",
-        encoding="utf-8",
-    )
-
-    result_tight = hermes_adapter.model_switch_preflight(
-        brain_home,
-        session_id,
-        target_provider="test-provider",
-        target_model="test-model-tight",
-        current_provider="test-provider",
-        current_model="test-model-large",
-    )
-    # Step 5 must run reclaim because initial load > 1000 * 0.85 = 850
-    assert result_tight["reclaimed_count"] > 0
-    assert result_tight["load"] <= 1000
-    # Scenario C: Context overflow when target capacity is smaller than minimal resident objects
-    # Store a pinned object that cannot be evicted
-    store.store_object(
+def test_host_model_change_rebounds_brain_context_without_blocking_request(
+    brain_home: Path,
+) -> None:
+    payload = _start_payload(session="host-model-change")
+    binding = hermes_adapter.resolve_binding(brain_home, payload)
+    store = vmem.VMemStore(brain_home, binding.host_session_id)
+    obj = store.store_object(
         vmem.SessionObjectKind.TOOL_OBSERVATION,
-        title="pinned-object",
-        content="Pinned critical content " + ("p" * 200),
+        title="recoverable context",
+        content="evidence " * 200,
+        summary="recoverable summary",
         pinned=True,
     )
-    v2_toml.write_text(
-        """
-[models.test-model-overflow]
-context_tokens = 10
-
-[providers.test-provider]
-cache_scope = "model"
-""",
+    first = hermes_adapter.handle_request(
+        brain_home,
+        payload
+        | {
+            "event": "pre_llm_call",
+            "task": "read recoverable context",
+            "turn_id": "first",
+        },
+    )
+    assert first["status"] == "ok"
+    (brain_home / "config" / "v2.toml").write_text(
+        "[models.tiny]\ncontext_tokens = 10\n[providers.test-provider]\ncache_scope = 'model'\n",
         encoding="utf-8",
     )
-    result_overflow = hermes_adapter.model_switch_preflight(
+    changed = hermes_adapter.handle_request(
         brain_home,
-        session_id,
-        target_provider="test-provider",
-        target_model="test-model-overflow",
-        current_provider="test-provider",
-        current_model="test-model-tight",
+        payload
+        | {
+            "event": "pre_llm_call",
+            "task": "read recoverable context",
+            "turn_id": "second",
+            "model": "tiny",
+        },
     )
-    assert result_overflow["status"] == "INPUT_REQUIRED"
-    assert result_overflow["error"] == "CONTEXT_OVERFLOW"
-    assert "INPUT_REQUIRED(CONTEXT_OVERFLOW)" in str(result_overflow.get("reason", ""))
+    assert changed["status"] == "ok"
+    assert "model_decision" not in changed
+    state = hermes_adapter._load_vmem_cache_state(brain_home, binding.host_session_id)
+    assert state["last_model"] == "tiny"
+    assert store.get_object(obj.obj_id) is not None
 
 
 def test_hard_capacity_forces_eviction_ignoring_net(brain_home: Path) -> None:
@@ -213,3 +167,29 @@ def test_hard_capacity_forces_eviction_ignoring_net(brain_home: Path) -> None:
     ]
     tokens_after = sum(o.token_estimate for o in resident_after)
     assert tokens_after < tokens_before
+
+
+def test_same_native_session_id_cannot_reuse_another_home_context(
+    brain_home: Path, tmp_path: Path, monkeypatch
+) -> None:
+    from conftest import make_brain
+
+    other_home = make_brain(tmp_path / "other-brain", monkeypatch)
+    payload = _start_payload(session="shared-host-session")
+    binding = hermes_adapter.resolve_binding(brain_home, payload)
+    vmem.VMemStore(brain_home, binding.host_session_id).store_object(
+        vmem.SessionObjectKind.TOOL_OBSERVATION,
+        title="A-only secret",
+        content="A-only secret content",
+        summary="A-only secret",
+    )
+    first = hermes_adapter.handle_request(
+        brain_home, payload | {"event": "pre_llm_call", "task": "recall", "turn_id": "a"}
+    )
+    assert first["status"] == "ok"
+    assert "A-only secret" in first["vmem_context"]["rendered_text"]
+    second = hermes_adapter.handle_request(
+        other_home, payload | {"event": "pre_llm_call", "task": "recall", "turn_id": "b"}
+    )
+    assert second["status"] == "ok"
+    assert "A-only secret" not in second["vmem_context"]["rendered_text"]

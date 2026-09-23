@@ -24,8 +24,6 @@ top_k = 3
 token_budget = 100
 [brainstem]
 context_char_budget = 1000
-worker_slots = 1
-premium_model_turns = 1
 [learning]
 surprise_threshold = 0.8
 [culture]
@@ -48,6 +46,12 @@ def _write_policy(home, text=_POLICY):
         (_POLICY + "\n[unexpected]\nactive = true\n", "unknown"),
         ("schema_version = 1\n", "missing required table"),
         (_POLICY.replace("min_score = 0.7", 'min_score = "bad"'), "between 0 and 1"),
+        (
+            _POLICY.replace(
+                "context_char_budget = 1000", "context_char_budget = 1000\nworker_control = 2"
+            ),
+            "unknown",
+        ),
     ],
 )
 def test_policy_rejects_unknown_missing_and_invalid_types(tmp_path, text, message):
@@ -62,7 +66,7 @@ def test_policy_rollout_is_immutable_and_stage_gate_is_strict(tmp_path):
     with pytest.raises(TypeError):
         policy.rollout["admission"] = v2_policy.RolloutStage.ACTIVE
     with pytest.raises(FrozenInstanceError):
-        policy.__setattr__("worker_slots", 2)
+        policy.__setattr__("context_char_budget", 2)
     assert (
         v2_policy.require_stage(policy, "admission", v2_policy.RolloutStage.SHADOW)
         is v2_policy.RolloutStage.SHADOW
@@ -88,3 +92,16 @@ def test_policy_accepts_current_model_and_provider_defaults(tmp_path):
     )
     policy = v2_policy.load_policy(tmp_path)
     assert policy.rollout["admission"] is v2_policy.RolloutStage.SHADOW
+
+
+def test_old_agent_resource_keys_are_ignored_without_relaxing_other_fields(tmp_path):
+    _write_policy(
+        tmp_path,
+        _POLICY.replace(
+            "context_char_budget = 1000",
+            'context_char_budget = 1000\nworker_slots = "obsolete"\npremium_model_turns = -1',
+        ),
+    )
+    policy = v2_policy.load_policy(tmp_path)
+    assert policy.context_char_budget == 1000
+    assert not hasattr(policy, "worker_slots")

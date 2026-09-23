@@ -1,36 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentRole, appendDriverContract, DRIVER_CONTRACT_MARKER } from "../src/driver-orchestrator";
 import { appendLeanKernel, LEAN_KERNEL_MARKER } from "../src/lean-code";
+import { appendPrefixExtras } from "../src/injection-slots";
 import { sha256Hex, providerRequestMeta } from "../src/sensors";
 
 describe("cache regression recovery: deterministic prefix stability", () => {
   const BASE_PROMPT = "You are Prime, an advanced AI coding assistant.";
-  const PRO_MODEL = { id: "deepseek-v4-pro", provider: "deepseek" };
-  const FLASH_MODEL = { id: "deepseek-v4-flash", provider: "deepseek" };
-  const CONFIG = { driverModels: ["deepseek-v4-pro"], workerModels: ["deepseek-v4-flash"] };
 
-  it("driver system prompt is 100% byte-identical across 10 consecutive turns", () => {
+  it("approved Lean and memory prefix remains byte-identical across turns", () => {
     let currentSystemPrompt = BASE_PROMPT;
     const prompts: string[] = [];
 
     for (let turn = 0; turn < 10; turn++) {
-      // Simulate Prime before_agent_start on turn N
-      // 1. Resolve role
-      const role = resolveAgentRole(PRO_MODEL.id, CONFIG, ["sol"]);
-      expect(role).toBe("driver");
-
-      // 2. Append driver contract (idempotent)
-      let patched = appendDriverContract(currentSystemPrompt);
-      expect(patched).toBeDefined();
-
-      // 3. Append lean kernel (simulating lean advisory/active)
+      // The host may supply either its original base or the prior patched
+      // prompt. Dedup must produce identical bytes in both cases.
       const kernel = "# Runtime Kernel\nPrefer minimal, targeted code edits.";
-      patched = appendLeanKernel(patched, kernel);
-      expect(patched).toBeDefined();
-
-      // The patched prompt must always contain markers
-      expect(patched!).toContain(DRIVER_CONTRACT_MARKER);
-      expect(patched!).toContain(LEAN_KERNEL_MARKER);
+      const patched = appendPrefixExtras(appendLeanKernel(currentSystemPrompt, kernel), "proj-test");
+      expect(patched).toContain(LEAN_KERNEL_MARKER);
+      expect(patched).toContain("Project: proj-test");
 
       prompts.push(patched!);
       // In Prime, currentSystemPrompt for subsequent turns might be base or patched
@@ -49,9 +35,9 @@ describe("cache regression recovery: deterministic prefix stability", () => {
   });
 
   it("provider request prefix sha is deterministic and invariant across consecutive turns", () => {
-    const systemPrompt = appendLeanKernel(
-      appendDriverContract(BASE_PROMPT),
-      "# Runtime Kernel\nPrefer minimal edits.",
+    const systemPrompt = appendPrefixExtras(
+      appendLeanKernel(BASE_PROMPT, "# Runtime Kernel\nPrefer minimal edits."),
+      "proj-test",
     )!;
 
     const messages: Array<{ role: string; content: string }> = [
@@ -87,17 +73,8 @@ describe("cache regression recovery: deterministic prefix stability", () => {
       messages,
       tools: [{ type: "function", function: { name: "bash" } }],
     });
-    expect(metaTurn2.system_prefix_sha).toBeDefined();
+    expect(metaTurn2.system_prefix_sha).toBe(metaTurn0.system_prefix_sha);
     expect(metaTurn2.tool_surface_sha).toBe(metaTurn0.tool_surface_sha);
   });
 
-  it("worker role (deepseek-v4-flash) receives no driver contract", () => {
-    const role = resolveAgentRole(FLASH_MODEL.id, CONFIG, ["sol"]);
-    expect(role).toBe("worker");
-
-    // Worker does not get appendDriverContract
-    const patched = role === "driver" ? appendDriverContract(BASE_PROMPT) : BASE_PROMPT;
-    expect(patched).toBe(BASE_PROMPT);
-    expect(patched).not.toContain(DRIVER_CONTRACT_MARKER);
-  });
 });

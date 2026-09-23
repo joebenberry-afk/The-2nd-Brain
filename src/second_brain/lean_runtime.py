@@ -734,6 +734,34 @@ def decide_lean_runtime(
             level="NOOP",
             placement="tail",
         )
+    # The mtime/size cache is a parsing optimization, never an authority cache.
+    # Re-read the source to bind both the returned kernel and nudge to the
+    # latest review, including edits that preserve mtime and size.
+    from . import skills
+
+    try:
+        current_text = Path(loaded["path"]).read_text(encoding="utf-8")
+        approved = (
+            skills.approved_content(home, LEAN_SKILL_NAME, current_text, Path(loaded["path"]))
+            and loaded["kernel"] == extract_runtime_kernel(current_text)
+            and loaded["nudge"] == (extract_runtime_nudge(current_text) or LEAN_NUDGE_TEXT)
+        )
+    except (OSError, UnicodeError):
+        approved = False
+    if not approved:
+        return LeanRuntimeOutcome(
+            decision="omit",
+            reason="unapproved_content",
+            mode=mode,
+            eval_source=source,
+            skill_status=loaded["status"],
+            kernel_chars=0,
+            dedup_hit=False,
+            error="lean-code skill content has no current matching approval",
+            kernel=None,
+            level="NOOP",
+            placement="tail",
+        )
 
     is_opportunity = (
         opportunity is True

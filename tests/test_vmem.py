@@ -1,7 +1,6 @@
 """Tests for Context Virtual Memory (VMem) and Session Residency (Plan §6)."""
 
 import json
-import os
 import sqlite3
 import subprocess
 import sys
@@ -9,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from conftest import clean_python_env
 from second_brain import db, semantic
 from second_brain.errors import BrainError
 from second_brain.paths import db_path
@@ -20,7 +20,7 @@ from second_brain.vmem import (
     resolve_object,
 )
 
-_CLEAN_ENV = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
+_CLEAN_ENV = clean_python_env()
 
 
 def test_vmem_store_uses_its_custom_home_calibration(tmp_path, monkeypatch) -> None:
@@ -600,7 +600,7 @@ class TestVMemCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert store_res.returncode == 0
         data = json.loads(store_res.stdout)
@@ -622,7 +622,7 @@ class TestVMemCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert list_res.returncode == 0
         items = json.loads(list_res.stdout)
@@ -644,7 +644,7 @@ class TestVMemCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert page_res.returncode == 0
         assert "Discovered cache optimization via CLI" in page_res.stdout

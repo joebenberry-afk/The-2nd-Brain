@@ -181,6 +181,12 @@ def test_each_version_adds_the_structures_it_promises(tmp_path: Path) -> None:
     finally:
         conn.close()
 
+    # 28: runtime bindings join the control database; neither table enrolls an issuer.
+    assert db.migrate(dbfile, migrations_dir=_chain(base, 28)) == [28]
+    assert {"runtime_lineage", "episode_roots"} <= _tables(dbfile)
+    assert {"issuer_generation", "runtime_generation", "evidence_sha256"} <= _columns(
+        dbfile, "runtime_lineage"
+    )
     assert db.pending_migrations(dbfile) == []
 
 
@@ -259,3 +265,169 @@ def test_an_interrupted_version_rolls_back_and_restarts_to_one_canonical_result(
     assert {"notification_event_key", "notification_pending", "notification_delivered_at"} <= (
         _columns(dbfile, "worker_task_meta")
     )
+
+
+def test_lineage_upgrade_preserves_existing_attempt_and_reservation(tmp_path: Path) -> None:
+    base = tmp_path / "upgrade-27"
+    base.mkdir()
+    dbfile = _db_at(base, 27)
+    conn = db.connect(dbfile)
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        conn.execute(
+            "INSERT INTO worker_tasks(task_id,state,lease_expires_at,packet_sha256,updated_at,"
+            "attempt_id,writer_ownership,host_session_id) VALUES(?,?,?,?,?,?,?,?)",
+            ("task", "working", "2026-12-01", "abc", "2026-09-22", "attempt", "held", "root"),
+        )
+        conn.execute(
+            "INSERT INTO worker_task_meta(task_id,session_id,updated_at) VALUES(?,?,?)",
+            ("task", "root", "2026-09-22"),
+        )
+        conn.execute(
+            "INSERT INTO budget_reservations("
+            "reservation_id,session_id,task_id,role,tokens,created_at,episode_id,"
+            "resolution,actual_tokens) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("reservation", "root", "task", "worker", 40, "2026-09-22", "episode", "unresolved", 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert db.migrate(dbfile) == [28]
+    assert db.migrate(dbfile) == []
+    conn = db.connect(dbfile)
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert tuple(
+            conn.execute(
+                "SELECT attempt_id,writer_ownership,host_session_id FROM worker_tasks "
+                "WHERE task_id='task'"
+            ).fetchone()
+        ) == ("attempt", "held", "root")
+        assert tuple(
+            conn.execute(
+                "SELECT tokens,resolution,actual_tokens FROM budget_reservations "
+                "WHERE reservation_id='reservation'"
+            ).fetchone()
+        ) == (40, "unresolved", 0)
+        assert (
+            conn.execute("SELECT session_id FROM worker_task_meta WHERE task_id='task'").fetchone()[
+                0
+            ]
+            == "root"
+        )
+    finally:
+        conn.close()
+
+
+def test_unresolved_historical_writer_blocks_upgrade_without_mutation(tmp_path: Path) -> None:
+    base = tmp_path / "unresolved-upgrade"
+    base.mkdir()
+    dbfile = _db_at(base, 23)
+    with db.connect(dbfile) as conn:
+        conn.execute(
+            "INSERT INTO worker_tasks("
+            "task_id,state,lease_expires_at,packet_sha256,updated_at,attempt_id,"
+            "access_intent,worktree_id,worktree_root,writer_ownership"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "unresolved",
+                "WORKING",
+                "2026-09-06",
+                "a" * 64,
+                "2026-09-05",
+                "attempt-unresolved",
+                "mutating",
+                "b" * 64,
+                "/historical/path",
+                "quarantined",
+            ),
+        )
+    before = _fingerprint(dbfile)
+    for _ in range(2):
+        with pytest.raises(db.MigrationError, match="unresolved historical holders"):
+            db.migrate(dbfile)
+        assert _versions(dbfile) == list(range(1, 24))
+        assert _fingerprint(dbfile) == before
+        with db.connect(dbfile) as conn:
+            row = conn.execute(
+                "SELECT attempt_id,writer_ownership FROM worker_tasks WHERE task_id='unresolved'"
+            ).fetchone()
+        assert tuple(row) == ("attempt-unresolved", "quarantined")
+
+
+def test_historical_lineage_rows_survive_reopen_and_idempotent_upgrade(tmp_path: Path) -> None:
+    base = tmp_path / "historical-lineage"
+    base.mkdir()
+    dbfile = _db_at(base, 27)
+    assert db.migrate(dbfile) == [28]
+    with db.connect(dbfile) as conn:
+        conn.execute(
+            "INSERT INTO runtime_lineage VALUES(?,?,?,?,?,?,?,?,?)",
+            ("episode", "root", None, "root", "issuer", 1, 1, 1, "a" * 64),
+        )
+        conn.execute(
+            "INSERT INTO episode_roots VALUES(?,?,?,?,?,?)",
+            ("episode", "root", "issuer", 1, "root", 1),
+        )
+    schema_before = _fingerprint(dbfile)
+    assert db.migrate(dbfile) == []
+    assert _fingerprint(dbfile) == schema_before
+    with db.connect(dbfile) as conn:
+        assert tuple(conn.execute("SELECT * FROM runtime_lineage").fetchone()) == (
+            "episode",
+            "root",
+            None,
+            "root",
+            "issuer",
+            1,
+            1,
+            1,
+            "a" * 64,
+        )
+        assert tuple(conn.execute("SELECT * FROM episode_roots").fetchone()) == (
+            "episode",
+            "root",
+            "issuer",
+            1,
+            "root",
+            1,
+        )
+
+
+def test_terminal_writer_history_keeps_identity_through_physical_upgrade(tmp_path: Path) -> None:
+    base = tmp_path / "terminal-upgrade"
+    base.mkdir()
+    dbfile = _db_at(base, 23)
+    with db.connect(dbfile) as conn:
+        conn.execute(
+            "INSERT INTO worker_tasks("
+            "task_id,state,lease_expires_at,packet_sha256,updated_at,attempt_id,"
+            "access_intent,worktree_id,worktree_root,writer_ownership"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                "terminal",
+                "COMPLETED",
+                "2026-09-06",
+                "a" * 64,
+                "2026-09-05",
+                "attempt-terminal",
+                "mutating",
+                "b" * 64,
+                "/historical/path",
+                "released",
+            ),
+        )
+    assert db.migrate(dbfile) == _above(23)
+    assert db.migrate(dbfile) == []
+    with db.connect(dbfile) as conn:
+        row = conn.execute(
+            "SELECT attempt_id,worktree_id,worktree_root,writer_ownership "
+            "FROM worker_tasks WHERE task_id='terminal'"
+        ).fetchone()
+        index_columns = [
+            info["name"]
+            for info in conn.execute("PRAGMA index_info(idx_worker_tasks_writer_physical)")
+        ]
+    assert tuple(row) == ("attempt-terminal", "b" * 64, "/historical/path", "released")
+    assert index_columns == ["worktree_id"]

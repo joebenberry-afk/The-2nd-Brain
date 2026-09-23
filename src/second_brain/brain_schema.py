@@ -40,11 +40,11 @@ from .errors import BrainError
 
 #: Canonical schema version of the shared database. Belongs to the *database*, not to a
 #: component: a component that needs a newer shape must migrate through this authority.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Versions this authority recognises as predecessors with a migration path. A database at
 #: one of these versions is left for its owning component to migrate, never re-stamped here.
-MIGRATABLE_VERSIONS = frozenset({1})
+MIGRATABLE_VERSIONS = frozenset({1, 2})
 
 #: The shared metadata and ownership table. Both components create it; this module is the
 #: only place that decides what may live in it.
@@ -272,9 +272,17 @@ def ensure(
         if own_missing:
             for statement in _statements(source[component].ddl):
                 conn.execute(statement)
+            # Adding a previously absent ledger to a VMem-only predecessor creates
+            # native v3 tables, not legacy events requiring a ledger migration.
+            if component == "ledger" and set(CANONICAL_TABLES["ledger"]).isdisjoint(
+                identity.tables
+            ):
+                _ensure_metadata(conn, source, header or {})
         return classify(conn, source)
 
     if identity.state == "partial":
+        if identity.has_rows and identity.tables & set(CANONICAL_TABLES["ledger"]):
+            raise BrainError("ledger missing schema_version header with existing data")
         if identity.has_rows and not _is_known_legacy_shape(conn, identity, source):
             # Known tables carrying data, no version header, and a shape this authority does
             # not recognise: fail closed rather than guess a migration. Adoption is allowed
@@ -325,6 +333,17 @@ def ensure(
     return final
 
 
+def complete_transition(conn: sqlite3.Connection, component: str) -> None:
+    """Advance a recognized predecessor only after its owning component migrated."""
+    source = components()
+    identity = classify(conn, source)
+    if identity.state != "legacy-version" or component not in source:
+        raise BrainError("shared schema: no supported predecessor to advance")
+    if component_shape(conn, component, source).state != "current":
+        raise BrainError("shared schema: component migration is incomplete")
+    _ensure_metadata(conn, source, {})
+
+
 def _ensure_metadata(
     conn: sqlite3.Connection,
     source: dict[str, Component],
@@ -349,6 +368,8 @@ def _ensure_metadata(
         value = str(SCHEMA_VERSION)
         if key not in existing:
             conn.execute(f"INSERT INTO {META_TABLE} (key,value) VALUES (?,?)", (key, value))
+        elif existing[key] != value:
+            conn.execute(f"UPDATE {META_TABLE} SET value=? WHERE key=?", (value, key))
 
 
 _CANONICAL_COLUMNS: dict[str, list[str]] = {}

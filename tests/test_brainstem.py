@@ -1,11 +1,8 @@
-"""Focused T7.4 Brainstem attention/intervention coordinator tests."""
+"""Brainstem recommendations affect Brain context, never host execution."""
 
 from __future__ import annotations
 
-import importlib.util
-import math
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -13,485 +10,144 @@ from second_brain import brainstem, capabilities, decisions
 from second_brain.errors import BrainError
 
 
-def test_brainstem_missing_signal_uses_conservative_default(brain_home: Path) -> None:
-    """Missing signals produce conservative, non-escalated defaults."""
-    empty_signals = brainstem.BrainstemSignals()
-    decision = brainstem.decide(brain_home, empty_signals)
-
-    assert decision.retrieve is False
-    assert decision.inject_budget == 500
-    assert decision.route_floor == "T0"
-    assert decision.evict is False
-    assert decision.verify_level == "targeted"
-    assert decision.scout_allowed is False
-    assert "CONSERVATIVE_DEFAULTS_APPLIED" in decision.reason_codes
-
-
-def test_brainstem_decision_is_deterministic(brain_home: Path) -> None:
-    """Identical signals produce identical decisions and reason codes."""
-    signals = brainstem.BrainstemSignals(
-        budget_tokens_used=1200,
-        budget_tokens_cap=2500,
-        budget_hard_cap=4000,
-        resident_tokens=7000,
-        context_token_limit=8000,
-        task_class="debugging",
-        risk_class="HIGH",
+def test_missing_signals_do_not_claim_retrieval_evidence(brain_home: Path) -> None:
+    result = brainstem.decide(brain_home, brainstem.BrainstemSignals())
+    assert result.retrieve is False
+    assert result.evict is False
+    assert result.inject_budget == 500
+    assert (
+        result.decision_ref
+        == decisions.list_decisions(brain_home, kind="brainstem")[-1]["decision_id"]
     )
-
-    dec1 = brainstem.decide(brain_home, signals)
-    dec2 = brainstem.decide(brain_home, signals)
-
-    assert dec1.retrieve == dec2.retrieve
-    assert dec1.inject_budget == dec2.inject_budget
-    assert dec1.route_floor == dec2.route_floor
-    assert dec1.evict == dec2.evict
-    assert dec1.verify_level == dec2.verify_level
-    assert dec1.scout_allowed == dec2.scout_allowed
-    assert dec1.reason_codes == dec2.reason_codes
-
-
-def test_brainstem_records_decision(brain_home: Path) -> None:
-    """Every brainstem decision is recorded in the decisions ledger with kind='brainstem'."""
-    signals = brainstem.BrainstemSignals(
-        task_class="implementation",
-        risk_class="LOW",
-        budget_tokens_cap=1500,
-    )
-    decision = brainstem.decide(brain_home, signals)
-
-    assert decision.decision_ref is not None
-    rows = decisions.list_decisions(brain_home, kind="brainstem")
-    assert len(rows) >= 1
-    logged = rows[-1]
-    assert logged["decision_id"] == decision.decision_ref
-    assert logged["kind"] == "brainstem"
-    assert logged["chosen"]["route_floor"] == decision.route_floor
-    assert logged["chosen"]["verify_level"] == decision.verify_level
-    assert logged["inputs"]["task_class"] == "implementation"
-
-
-def test_learned_override_cannot_bypass_budget_or_authority(brain_home: Path) -> None:
-    signals = brainstem.BrainstemSignals(
-        budget_tokens_used=1800,
-        budget_tokens_cap=2000,
-        budget_hard_cap=2500,
-        resident_tokens=1000,
-        context_token_limit=8000,
-        risk_class="HIGH",
-        task_class="implementation",
-    )
-
-    decision = brainstem.decide(
-        brain_home,
-        signals,
-        learned_override={
-            "inject_budget": 50000,
-            "verify_level": "none",
-            "route_floor": "cheap",
-        },
-    )
-
-    assert decision.inject_budget == 700
-    assert any(
-        "OVERRIDE_BUDGET_CAPPED_AT_APPLICABLE_LIMIT" in reason for reason in decision.reason_codes
-    )
-    assert decision.verify_level == "full"
-    assert "OVERRIDE_VERIFY_FLOOR_REJECTED" in decision.reason_codes
-    assert decision.route_floor == "T2"
-    assert "OVERRIDE_ROUTE_FLOOR_REJECTED" in decision.reason_codes
-
-
-def test_budget_nearly_exhausted_abstains(brain_home: Path) -> None:
-    decision = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            budget_tokens_used=2990,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=0,
-            context_token_limit=8000,
-        ),
-    )
-
-    assert decision.inject_budget == 0
-    assert "INJECTION_ABSTAINED_BELOW_USEFUL_MINIMUM:10" in decision.reason_codes
-
-
-@pytest.mark.parametrize("used", [3000, 3001])
-def test_budget_exhausted_or_over_abstains(brain_home: Path, used: int) -> None:
-    decision = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            budget_tokens_used=used,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=0,
-            context_token_limit=8000,
-        ),
-    )
-
-    assert decision.inject_budget == 0
-
-
-def test_explicit_zero_disables_allowance_but_missing_uses_policy_default(
-    brain_home: Path,
-) -> None:
-    missing = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(task_class="implementation"),
-    )
-    zero_operation = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(task_class="implementation", budget_tokens_cap=0),
-    )
-    zero_total = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(task_class="implementation", budget_hard_cap=0),
-    )
-    zero_context = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(task_class="implementation", context_token_limit=0),
-    )
-
-    assert missing.inject_budget == 500
-    assert zero_operation.inject_budget == 0
-    assert zero_total.inject_budget == 0
-    assert zero_context.inject_budget == 0
-    missing_override = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(),
-        learned_override={"inject_budget": 50000},
-    )
-
-    assert missing_override.inject_budget == 500
 
 
 @pytest.mark.parametrize(
-    ("signals", "expected"),
+    ("cap", "resident", "limit", "expected"),
     [
-        (
-            brainstem.BrainstemSignals(
-                budget_tokens_used=0,
-                budget_tokens_cap=300,
-                budget_hard_cap=3000,
-                resident_tokens=0,
-                context_token_limit=8000,
-            ),
-            300,
-        ),
-        (
-            brainstem.BrainstemSignals(
-                budget_tokens_used=2600,
-                budget_tokens_cap=2000,
-                budget_hard_cap=3000,
-                resident_tokens=0,
-                context_token_limit=8000,
-            ),
-            400,
-        ),
-        (
-            brainstem.BrainstemSignals(
-                budget_tokens_used=0,
-                budget_tokens_cap=2000,
-                budget_hard_cap=3000,
-                resident_tokens=6000,
-                context_token_limit=8000,
-            ),
-            400,
-        ),
-        (
-            brainstem.BrainstemSignals(
-                budget_tokens_used=0,
-                budget_tokens_cap=199,
-                budget_hard_cap=3000,
-                resident_tokens=0,
-                context_token_limit=8000,
-            ),
-            0,
-        ),
+        (300, 0, 8000, 300),
+        (199, 0, 8000, 0),
+        (2000, 6000, 8000, 400),
+        (2000, 6300, 8000, 0),
+        (0, 0, 8000, 0),
+        (2000, 0, 0, 0),
     ],
 )
-def test_budget_is_bounded_by_each_applicable_allowance(
-    brain_home: Path,
-    signals: brainstem.BrainstemSignals,
-    expected: int,
+def test_injection_is_bounded_only_by_brain_context(
+    brain_home: Path, cap: int, resident: int, limit: int, expected: int
 ) -> None:
-    assert brainstem.decide(brain_home, signals).inject_budget == expected
-
-
-def test_pressure_and_override_paths_obey_final_allowance(brain_home: Path) -> None:
-    pressure = brainstem.decide(
+    result = brainstem.decide(
         brain_home,
         brainstem.BrainstemSignals(
-            budget_tokens_used=2990,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=7000,
-            context_token_limit=8000,
+            budget_tokens_cap=cap,
+            resident_tokens=resident,
+            context_token_limit=limit,
+            task_class="implementation",
         ),
     )
-    override = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            budget_tokens_used=2300,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=1000,
-            context_token_limit=8000,
-        ),
-        learned_override={"inject_budget": 50000},
-    )
-    below_minimum_override = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            budget_tokens_used=0,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=0,
-            context_token_limit=8000,
-        ),
-        learned_override={"inject_budget": 199},
-    )
+    assert result.inject_budget == expected
+    assert result.evict is (resident * 5 >= limit * 4)
 
-    assert pressure.evict is True
-    assert pressure.inject_budget == 0
-    assert override.inject_budget == 700
-    assert below_minimum_override.inject_budget == 0
+
+def test_legacy_agent_spend_cannot_change_retrieval_or_model_choice(brain_home: Path) -> None:
+    signal = {
+        "budget_tokens_cap": 1000,
+        "resident_tokens": 0,
+        "context_token_limit": 8000,
+        "task_class": "implementation",
+    }
+    baseline = brainstem.decide(brain_home, signal)
+    legacy = brainstem.decide(
+        brain_home,
+        {
+            **signal,
+            "budget_tokens_used": 10**9,
+            "budget_hard_cap": 0,
+            "worker_pressure": 1.0,
+            "provider_quota_remaining": 0,
+        },
+        learned_override={"route_floor": "premium", "scout_allowed": True},
+    )
+    assert legacy.retrieve is baseline.retrieve is True
+    assert legacy.inject_budget == baseline.inject_budget == 1000
+    assert "route_floor" not in legacy.to_dict()
+    assert "scout_allowed" not in legacy.to_dict()
+
+
+def test_learning_cannot_exceed_context_or_lower_evidence_floor(brain_home: Path) -> None:
+    result = brainstem.decide(
+        brain_home,
+        brainstem.BrainstemSignals(
+            budget_tokens_cap=2000,
+            resident_tokens=6000,
+            context_token_limit=8000,
+            risk_class="HIGH",
+            task_class="implementation",
+        ),
+        learned_override={"inject_budget": 50000, "verify_level": "none"},
+    )
+    assert result.inject_budget == 400
+    assert result.verify_level == "full"
+    assert "OVERRIDE_VERIFY_FLOOR_REJECTED" in result.reason_codes
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("budget_tokens_used", -1),
-        ("budget_tokens_cap", math.inf),
-        ("budget_hard_cap", math.nan),
-        ("resident_tokens", True),
+        ("budget_tokens_cap", -1),
+        ("budget_tokens_cap", True),
+        ("resident_tokens", -1),
         ("context_token_limit", "8000"),
     ],
 )
-def test_budget_inputs_reject_invalid_token_counts(
-    brain_home: Path,
-    field: str,
-    value: object,
-) -> None:
+def test_invalid_context_measurements_refuse(brain_home: Path, field: str, value: object) -> None:
     with pytest.raises(BrainError):
-        brainstem.decide(
-            brain_home,
-            {field: value},
-        )
+        brainstem.decide(brain_home, {field: value})
 
 
-@pytest.mark.parametrize("value", [-1, math.inf, math.nan, True, "500"])
-def test_override_budget_rejects_invalid_token_counts(
-    brain_home: Path,
-    value: object,
-) -> None:
-    with pytest.raises(BrainError):
-        brainstem.decide(
-            brain_home,
-            brainstem.BrainstemSignals(),
-            learned_override={"inject_budget": value},
-        )
-
-
-@pytest.mark.parametrize("value", [math.inf, math.nan, True, "5", -1])
-def test_provider_quota_rejects_invalid_values(brain_home: Path, value: object) -> None:
-    with pytest.raises(BrainError):
-        brainstem.decide(
-            brain_home,
-            brainstem.BrainstemSignals(provider_quota_remaining=value),  # type: ignore[arg-type]
-        )
-
-
-def test_zero_or_unknown_quota_refuses_optional_actions(brain_home: Path) -> None:
-    unknown = brainstem.decide(
+def test_declared_host_support_cannot_qualify_injection(brain_home: Path) -> None:
+    capabilities.declare(brain_home, "host", "prompt_injection", True, version="v1")
+    result = brainstem.decide(
         brain_home,
-        brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=None),
+        brainstem.BrainstemSignals(task_class="implementation"),
+        host_context={"harness_id": "host", "host_version": "v1", "config_binding": "cfg"},
     )
-    exhausted = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            task_class="exploration",
-            risk_class="HIGH",
-            provider_quota_remaining=0,
-        ),
-        learned_override={"inject_budget": 50000, "scout_allowed": True},
-    )
-
-    assert unknown.scout_allowed is False
-    assert exhausted.inject_budget == 0
-    assert exhausted.scout_allowed is False
-    assert exhausted.route_floor == "T2"
-    assert exhausted.verify_level == "full"
+    assert result.inject_budget == 0
+    assert "INJECTION_ABSTAINED_CAPABILITY_UNOBSERVED" in result.reason_codes
 
 
-def _observed_host(brain_home: Path, *, harness_id: str = "host") -> dict[str, str]:
+def test_observed_prompt_injection_is_host_bound_not_execution_permission(brain_home: Path) -> None:
     capabilities.observe(
-        brain_home,
-        harness_id,
-        "brain_packet_delivered",
-        version="v1",
-        config_binding="cfg-a",
+        brain_home, "host", "brain_packet_delivered", version="v1", config_binding="cfg"
     )
-    capabilities.observe(
-        brain_home,
-        harness_id,
-        "omp_worker_context_handoff",
-        version="v1",
-        config_binding="cfg-a",
+    signals = brainstem.BrainstemSignals(
+        task_class="implementation",
+        budget_tokens_cap=700,
+        resident_tokens=0,
+        context_token_limit=8000,
     )
-    return {"harness_id": harness_id, "host_version": "v1", "config_binding": "cfg-a"}
-
-
-def test_current_observed_capabilities_authorize_optional_actions(brain_home: Path) -> None:
-    host = _observed_host(brain_home)
-    decision = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            budget_tokens_used=0,
-            budget_tokens_cap=2000,
-            budget_hard_cap=3000,
-            resident_tokens=0,
-            context_token_limit=8000,
-            task_class="exploration",
-            provider_quota_remaining=1,
-        ),
-        host_context=host,
-    )
-    assert decision.inject_budget == 2000
-    assert decision.scout_allowed is True
-
-
-@pytest.mark.parametrize(
-    "host",
-    [
-        {"harness_id": "declared", "host_version": "v1", "config_binding": "cfg-a"},
-        {"harness_id": "legacy", "host_version": "v1", "config_binding": "cfg-a"},
-        {"harness_id": "wrong-version", "host_version": "v2", "config_binding": "cfg-a"},
-        {"harness_id": "wrong-config", "host_version": "v1", "config_binding": "cfg-b"},
-        {"harness_id": "unknown", "host_version": "v1", "config_binding": "cfg-a"},
-    ],
-)
-def test_stale_declared_or_unknown_host_suppresses_optional_actions(
-    brain_home: Path, host: dict[str, str]
-) -> None:
-    if host["harness_id"] == "declared":
-        capabilities.declare(brain_home, host["harness_id"], "prompt_injection", True, version="v1")
-        capabilities.declare(brain_home, host["harness_id"], "subagents", True, version="v1")
-    elif host["harness_id"] == "legacy":
-        capabilities.observe(brain_home, host["harness_id"], "brain_packet_delivered")
-        capabilities.observe(brain_home, host["harness_id"], "omp_worker_context_handoff")
-    elif host["harness_id"] != "unknown":
-        _observed_host(brain_home, harness_id=host["harness_id"])
-
-    decision = brainstem.decide(
-        brain_home,
-        brainstem.BrainstemSignals(
-            task_class="exploration",
-            provider_quota_remaining=1,
-        ),
-        host_context=host,
-    )
-    assert decision.inject_budget == 0
-    assert decision.scout_allowed is False
-
-
-def test_capability_snapshot_is_replay_input(brain_home: Path) -> None:
-    host = _observed_host(brain_home)
-    signals = brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=1)
-    first = brainstem.decide(brain_home, signals, host_context=host, session_id="snapshot")
-    logged = decisions.list_decisions(brain_home, kind="brainstem")[-1]
-    capabilities.declare(brain_home, "host", "prompt_injection", False)
-    replay = brainstem.decide(
+    current = brainstem.decide(
         brain_home,
         signals,
-        capability_snapshot=logged["inputs"]["capability_snapshot"],
-        session_id="snapshot",
+        host_context={"harness_id": "host", "host_version": "v1", "config_binding": "cfg"},
     )
-    assert replay.to_dict() == first.to_dict()
-
-
-def test_capability_replay_rejects_label_only_support(brain_home: Path) -> None:
-    decision = brainstem.decide(
+    stale = brainstem.decide(
         brain_home,
-        brainstem.BrainstemSignals(
-            task_class="exploration", risk_class="HIGH", provider_quota_remaining=1
-        ),
-        capability_snapshot={
-            "harness_id": "unobserved",
-            "capabilities": {
-                "prompt_injection": {"status": "observed"},
-                "subagents": {"status": "observed"},
-            },
-        },
+        signals,
+        host_context={"harness_id": "host", "host_version": "v2", "config_binding": "cfg"},
     )
-    assert decision.inject_budget == 0
-    assert decision.scout_allowed is False
-    assert decision.route_floor == "T2"
-    assert decision.verify_level == "full"
+    assert current.inject_budget == 700
+    assert stale.inject_budget == 0
+    assert current.retrieve is stale.retrieve is True
+    assert "route_floor" not in current.to_dict()
 
 
-def test_capability_replay_cannot_change_host_scope(brain_home: Path) -> None:
-    host = _observed_host(brain_home)
-    prior = capabilities.snapshot(
-        brain_home,
-        **{key: value for key, value in host.items() if key != "harness_id"},
-        harness_id=host["harness_id"],
-    )
+def test_capability_snapshot_cannot_rebind_another_host(brain_home: Path) -> None:
+    host = {"harness_id": "host", "host_version": "v1", "config_binding": "cfg"}
+    snapshot = capabilities.snapshot(brain_home, **host)
     with pytest.raises(BrainError, match="does not match host context"):
         brainstem.decide(
             brain_home,
-            brainstem.BrainstemSignals(task_class="exploration", provider_quota_remaining=1),
-            host_context={**host, "harness_id": "different-host"},
-            capability_snapshot=prior,
+            brainstem.BrainstemSignals(task_class="implementation"),
+            host_context={**host, "harness_id": "other"},
+            capability_snapshot=snapshot,
         )
-
-
-def test_budget_invariant_across_bounded_ranges(brain_home: Path) -> None:
-    for hard_cap in (0, 10, 199, 200, 500):
-        for used in (0, 10, 200, 600):
-            for operation_cap in (0, 199, 200, 700):
-                decision = brainstem.decide(
-                    brain_home,
-                    brainstem.BrainstemSignals(
-                        budget_tokens_used=used,
-                        budget_tokens_cap=operation_cap,
-                        budget_hard_cap=hard_cap,
-                        resident_tokens=6200,
-                        context_token_limit=8000,
-                    ),
-                )
-                allowance = min(
-                    operation_cap,
-                    max(0, hard_cap - used),
-                    200,
-                )
-                assert 0 <= decision.inject_budget <= allowance
-                assert decision.inject_budget == 0 or decision.inject_budget >= 200
-
-
-def _load_brainstem_experiment() -> ModuleType:
-    path = Path(__file__).resolve().parents[1] / "scripts" / "run_brainstem_experiment.py"
-    spec = importlib.util.spec_from_file_location("run_brainstem_experiment", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_actual_experiment_caller_keeps_shadow_decisions_observational(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    experiment = _load_brainstem_experiment()
-    output = tmp_path / "brainstem-experiment.json"
-    monkeypatch.setattr(experiment, "OUTPUT_PATH", output)
-
-    manifest = experiment.run_brainstem_experiment()
-
-    assert output.is_file()
-    assert all(
-        scenario["decision"]["rollout_stage"] == "SHADOW" for scenario in manifest["scenarios"]
-    )
-    assert manifest["adversarial_override_proof"]["actual_budget"] == 500

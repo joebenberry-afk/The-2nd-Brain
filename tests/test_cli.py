@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from second_brain import semantic, working_set
 
 
@@ -35,6 +37,24 @@ def run_cli(
         timeout=120,
         input=stdin,
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("worker-plane", "spawn", "session", "task", "--json"),
+        ("worker-plane", "lease-release-settled", "--attempt", "old", "--apply"),
+        ("stop", "decide", "--session", "session", "--task-id", "task"),
+        ("governor", "check-budget", "--session", "session", "--json"),
+        ("governor", "reserve-budget", "--session", "session", "--task-id", "task"),
+    ],
+)
+def test_retired_cli_operations_refuse_without_state(tmp_path, command):
+    home = tmp_path / "unused-home"
+    result = run_cli(home, *command)
+    assert result.returncode == 2, result.stderr
+    assert json.loads(result.stdout)["failure_code"] == "ORCHESTRATION_REMOVED"
+    assert not (home / "db").exists()
 
 
 def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
@@ -249,189 +269,41 @@ def test_simplification_review_cli_persists_defer_and_deduplicates(tmp_path):
     assert (project / "simplification-debt.md").read_text(encoding="utf-8").count("DEBT-") == 1
 
 
-def _stop_args(session: str, task_id: str) -> tuple[str, ...]:
-    return (
-        "stop",
-        "decide",
-        "--session",
-        session,
-        "--task-id",
-        task_id,
-        "--parent-session-id",
-        "parent-1",
-        "--worker-session-id",
-        session,
-        "--stop-id",
-        f"stop-{task_id}",
-        "--reason-code",
-        "completion_proven",
-        "--triggering-condition",
-        "completion_condition_satisfied",
-        "--verification-state",
-        "passed",
-        "--completion-condition-state",
-        "satisfied",
-        "--final-substantive-event",
-        "task_result",
-        "--json",
-    )
-
-
-def test_stop_decide_allows_proven_completion_and_records_bounded_evidence(tmp_path):
-    home = tmp_path / "brain"
-    session = "omp-success"
-    assert (
-        run_cli(
-            home, "requirements", "add", session, "ship the task", "--importance", "critical"
-        ).returncode
-        == 0
-    )
-    assert (
-        run_cli(
-            home, "requirements", "evidence", session, "REQ-001", "focused test passed"
-        ).returncode
-        == 0
-    )
-    assert run_cli(home, "requirements", "status", session, "REQ-001", "verified").returncode == 0
-
-    result = run_cli(home, *_stop_args(session, "task-success"))
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["decision"] == "stop"
-    assert payload["stop_id"] == "stop-task-success"
-    assert payload["verification_state"] == "passed"
-    assert payload["completion_condition_state"] == "satisfied"
-    assert payload["continuation_forbidden"] is True
-
-    searched = run_cli(home, "ledger", "search", session, "--query", "stop_decided")
-    assert searched.returncode == 0
-    assert "completion_proven" in searched.stdout
-
-
-def test_stop_decide_does_not_false_positive_when_acceptance_is_unresolved(tmp_path):
-    home = tmp_path / "brain"
-    session = "omp-incomplete"
-    assert (
-        run_cli(
-            home, "requirements", "add", session, "ship the task", "--importance", "critical"
-        ).returncode
-        == 0
-    )
-
-    result = run_cli(home, *_stop_args(session, "task-incomplete"))
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["decision"] == "continue"
-    assert payload["reason_code"] == "requirements_unresolved"
-    assert payload["continuation_forbidden"] is False
-
-
-def test_stop_decide_stops_failed_or_blocked_work(tmp_path):
-    home = tmp_path / "brain"
-    session = "omp-blocked"
-    args = list(_stop_args(session, "task-blocked"))
-    args[args.index("--reason-code") + 1] = "verification_failed"
-    args[args.index("--triggering-condition") + 1] = "verification_failed"
-    args[args.index("--verification-state") + 1] = "failed"
-    args[args.index("--completion-condition-state") + 1] = "failed"
-    result = run_cli(home, *args)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["decision"] == "stop"
-    assert payload["continuation_forbidden"] is True
-
-
-def test_stop_decide_prefers_unresolved_requirements_over_failed_verification(tmp_path):
-    home = tmp_path / "brain"
-    session = "omp-requirements-first"
-    assert (
-        run_cli(
-            home, "requirements", "add", session, "ship the task", "--importance", "critical"
-        ).returncode
-        == 0
-    )
-    args = list(_stop_args(session, "task-requirements-first"))
-    args[args.index("--reason-code") + 1] = "verification_failed"
-    args[args.index("--triggering-condition") + 1] = "verification_failed"
-    args[args.index("--verification-state") + 1] = "failed"
-    args[args.index("--completion-condition-state") + 1] = "failed"
-    result = run_cli(home, *args)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["decision"] == "continue"
-    assert payload["reason_code"] == "requirements_unresolved"
-    assert payload["continuation_forbidden"] is False
-
-
-def test_verify_gate_blocks_stop_until_risk_actions_pass(tmp_path):
+def test_verify_gate_reports_failed_risk_action_without_native_stop(tmp_path):
     home = tmp_path / "brain"
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "README.md").write_text("# gate\n", encoding="utf-8")
     gate_file = tmp_path / "gate.json"
-    actions = [
-        "targeted_test=passed",
-        "typecheck_or_compile=passed",
-        "diff_sanity=passed",
-    ]
-    gate = run_cli(
+    actions = ["targeted_test=passed", "typecheck_or_compile=passed", "diff_sanity=passed"]
+    args = ("verify", "gate", "gate-cli", str(repo), "--file", "README.md", "--criticality", "LOW")
+    passed = run_cli(
         home,
-        "verify",
-        "gate",
-        "gate-cli",
-        str(repo),
-        "--file",
-        "README.md",
-        "--criticality",
-        "LOW",
-        "--action",
-        actions[0],
-        "--action",
-        actions[1],
-        "--action",
-        actions[2],
+        *args,
+        *(arg for action in actions for arg in ("--action", action)),
         "--out",
         str(gate_file),
         "--json",
     )
-    assert gate.returncode == 0, gate.stderr
-    payload = json.loads(gate.stdout)
-    assert payload["completion_allowed"] is True
+    assert passed.returncode == 0, passed.stderr
+    assert json.loads(passed.stdout)["completion_allowed"] is True
     assert gate_file.exists()
-
-    blocked_gate = dict(payload)
-    blocked_gate["completion_allowed"] = False
-    blocked_gate["decision_reason"] = "verification_actions_unresolved"
-    blocked_file = tmp_path / "blocked-gate.json"
-    blocked_file.write_text(json.dumps(blocked_gate), encoding="utf-8")
-    stop = run_cli(
+    failed_args = (*args[:2], "gate-cli-failed", *args[3:])
+    failed = run_cli(
         home,
-        "stop",
-        "decide",
-        "--session",
-        "gate-cli",
-        "--task-id",
-        "task-gate-cli",
-        "--stop-id",
-        "stop-gate-cli",
-        "--reason-code",
-        "completion_proven",
-        "--triggering-condition",
-        "completion_condition_satisfied",
-        "--verification-state",
-        "passed",
-        "--completion-condition-state",
-        "satisfied",
-        "--final-substantive-event",
-        "gate",
-        "--gate-file",
-        str(blocked_file),
+        *failed_args,
+        "--action",
+        "targeted_test=failed",
+        "--action",
+        actions[1],
+        "--action",
+        actions[2],
         "--json",
     )
-    assert stop.returncode == 0, stop.stderr
-    stop_payload = json.loads(stop.stdout)
-    assert stop_payload["decision"] == "continue"
-    assert stop_payload["reason_code"] == "accuracy_gate_blocked"
+    assert failed.returncode == 1, failed.stderr
+    verdict = json.loads(failed.stdout)
+    assert verdict["completion_allowed"] is False
+    assert "targeted_test" in verdict["failed_actions"]
 
 
 def test_independent_verifier_cli_binds_fresh_pass_to_high_gate(tmp_path):
@@ -769,61 +641,6 @@ def test_action_cache_search_non_git_dir_never_caches(tmp_path):
     r2 = run_cli(home, "action-cache", "search", "marker_value_xyz", "--path", str(plain), "--json")
     out2 = json.loads(r2.stdout)
     assert out2["hit"] is False
-
-
-def test_worker_plane_ceiling_block_complete_respawn(tmp_path):
-    """Phase R7: the required proof scenario end to end — spawn 2 (allowed),
-    spawn a 3rd (blocked), complete one, spawn a new one (allowed again).
-    Prime has no extension hook for subagent spawn (see
-    outputs/reports/rc4/02-prime-live-callgraph.md), so this CLI command is
-    the actual enforcement surface (outputs/reports/rc4/07-worker-plane-live.md)."""
-    home = tmp_path / "brain"
-    assert run_cli(home, "init").returncode == 0
-
-    r1 = run_cli(home, "worker-plane", "spawn", "sess-1", "task1", "--max-workers", "2", "--json")
-    assert r1.returncode == 0, r1.stderr
-    w1 = json.loads(r1.stdout)
-    assert w1["spawned"] is True
-    worker1_id = w1["worker_id"]
-
-    r2 = run_cli(home, "worker-plane", "spawn", "sess-1", "task2", "--max-workers", "2", "--json")
-    assert r2.returncode == 0, r2.stderr
-    assert json.loads(r2.stdout)["spawned"] is True
-
-    r3 = run_cli(home, "worker-plane", "spawn", "sess-1", "task3", "--max-workers", "2", "--json")
-    assert r3.returncode == 2  # blocked: ceiling reached
-    out3 = json.loads(r3.stdout)
-    assert out3["spawned"] is False
-    assert "ceiling" in out3["error"].lower()
-
-    r_status = run_cli(home, "worker-plane", "status", "sess-1", "--max-workers", "2", "--json")
-    assert json.loads(r_status.stdout) == {"active_workers": 2, "max_concurrent_workers": 2}
-
-    r_complete = run_cli(
-        home,
-        "worker-plane",
-        "complete",
-        "sess-1",
-        worker1_id,
-        "--status",
-        "COMPLETED",
-        "--summary",
-        "done",
-        "--json",
-    )
-    assert r_complete.returncode == 0, r_complete.stderr
-    assert json.loads(r_complete.stdout) == {
-        "completed": True,
-        "worker_id": worker1_id,
-        "status": "COMPLETED",
-    }
-
-    r_status2 = run_cli(home, "worker-plane", "status", "sess-1", "--max-workers", "2", "--json")
-    assert json.loads(r_status2.stdout)["active_workers"] == 1
-
-    r4 = run_cli(home, "worker-plane", "spawn", "sess-1", "task4", "--max-workers", "2", "--json")
-    assert r4.returncode == 0, r4.stderr
-    assert json.loads(r4.stdout)["spawned"] is True
 
 
 def test_fresh_verifier_record_parses_real_verdict_never_fabricates(tmp_path):

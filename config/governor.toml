@@ -31,10 +31,3 @@ prompt_compression = true          # Prompt compression (if available)
 # Note: unknown keys in this file will cause resolution to fail.
 # Keep only documented feature names above.
 
-[budgets]
-# T3.1 hard/soft budget caps: session_tokens caps non-worker roles,
-# worker_tokens caps role == "worker"; soft_ratio*cap is the SOFT
-# threshold. See governor.check_budget.
-session_tokens = 400000
-worker_tokens = 120000
-soft_ratio = 0.8

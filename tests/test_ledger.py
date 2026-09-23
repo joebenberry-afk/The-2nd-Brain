@@ -6,6 +6,7 @@ LIKE fallback, schema versioning, replay rejection of injected corruption,
 and tool-crash state classification.
 """
 
+import hashlib
 import json
 import sqlite3
 
@@ -254,6 +255,8 @@ def _legacy_ledger(home, version="2"):
         _seed(store, 3)
         dbfile = store.dbfile
     with sqlite3.connect(dbfile) as conn:
+        conn.execute("ALTER TABLE events DROP COLUMN envelope_hash")
+        conn.execute("DELETE FROM ledger_meta WHERE key='envelope_chain_origin'")
         conn.execute("ALTER TABLE events DROP COLUMN prev_hash")
         conn.execute("UPDATE ledger_meta SET value=? WHERE key='schema_version'", (version,))
         conn.execute("UPDATE events SET payload_json=? WHERE seq=2", ('{ "note": "雪 café" }',))
@@ -263,7 +266,6 @@ def _legacy_ledger(home, version="2"):
 
 @pytest.mark.parametrize("create,version", [(False, "1"), (True, "2")])
 def test_legacy_resume_preserves_history_and_labels_derived_chain(tmp_path, create, version):
-    import hashlib
 
     dbfile, original = _legacy_ledger(tmp_path, version)
     manifest_path = dbfile.parent / "manifest.json"
@@ -291,12 +293,12 @@ def test_legacy_resume_preserves_history_and_labels_derived_chain(tmp_path, crea
             reopened.append_events([_ev(0, "stop-proof", LifecycleEventType.STOP_DECIDED)])
     with sqlite3.connect(dbfile) as conn:
         rows = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
-        assert [row[:-1] for row in rows[:3]] == original
+        assert [row[:-2] for row in rows[:3]] == original
         assert [(row[0], row[1]) for row in rows[3:]] == [(4, "stop-proof")]
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     updated = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert updated == {**manifest, "schema_version": 2}
+    assert updated == {**manifest, "schema_version": 3}
 
 
 def _v1_chained_ledger(home):
@@ -304,6 +306,14 @@ def _v1_chained_ledger(home):
         _seed(store, 3)
         dbfile = store.dbfile
     with sqlite3.connect(dbfile) as conn:
+        conn.execute("ALTER TABLE events DROP COLUMN envelope_hash")
+        conn.execute("DELETE FROM ledger_meta WHERE key='envelope_chain_origin'")
+        running = "0" * 64
+        for seq, payload in conn.execute(
+            "SELECT seq,payload_json FROM events ORDER BY seq"
+        ).fetchall():
+            running = hashlib.sha256((running + payload).encode("utf-8")).hexdigest()
+            conn.execute("UPDATE events SET prev_hash=? WHERE seq=?", (running, seq))
         conn.execute("UPDATE ledger_meta SET value='1' WHERE key='schema_version'")
         conn.execute("UPDATE events SET prev_hash=NULL WHERE seq=3")
         original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
@@ -323,9 +333,9 @@ def test_v1_chained_resume_preserves_prefix_and_snapshots_unhashed_suffix(tmp_pa
             snapshot = store.read_object(origin["source_snapshot_sha256"])
     with sqlite3.connect(dbfile) as conn:
         rows = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
-        assert rows[:2] == original[:2]
-        assert [row[:-1] for row in rows] == [row[:-1] for row in original]
-        assert rows[2][-1] is not None
+        assert [row[:-1] for row in rows[:2]] == original[:2]
+        assert [row[:-2] for row in rows] == [row[:-1] for row in original]
+        assert rows[2][-2] is not None
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
@@ -339,6 +349,58 @@ def test_v1_chained_resume_preserves_prefix_and_snapshots_unhashed_suffix(tmp_pa
     with sqlite3.connect(restored) as conn:
         assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
         assert dict(conn.execute("SELECT key,value FROM ledger_meta"))["schema_version"] == "1"
+
+
+def test_v2_payload_chain_migrates_without_rewriting_old_events(tmp_path, monkeypatch):
+    with ledger_mod.LedgerStore(tmp_path, HOST, host="test").open(create=True) as store:
+        _seed(store, 3)
+        dbfile = store.dbfile
+    with sqlite3.connect(dbfile) as conn:
+        conn.execute("ALTER TABLE events DROP COLUMN envelope_hash")
+        conn.execute("DELETE FROM ledger_meta WHERE key='envelope_chain_origin'")
+        running = "0" * 64
+        for seq, payload in conn.execute(
+            "SELECT seq,payload_json FROM events ORDER BY seq"
+        ).fetchall():
+            running = hashlib.sha256((running + payload).encode("utf-8")).hexdigest()
+            conn.execute("UPDATE events SET prev_hash=? WHERE seq=?", (running, seq))
+        conn.execute("UPDATE ledger_meta SET value='2' WHERE key='schema_version'")
+        original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+    migrate = ledger_mod.LedgerStore._migrate_envelope_chain
+
+    def interrupted(store, **kwargs):
+        migrate(store, **kwargs)
+        raise KeyboardInterrupt("before v3 commit")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger_mod.LedgerStore, "_migrate_envelope_chain", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            ledger_mod.LedgerStore(tmp_path, HOST).open()
+    with sqlite3.connect(dbfile) as conn:
+        assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+        assert dict(conn.execute("SELECT key,value FROM ledger_meta"))["schema_version"] == "2"
+        assert conn.execute(
+            "SELECT value FROM ledger_meta WHERE key='envelope_chain_origin'"
+        ).fetchone() is None
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as store:
+        origin = store.integrity()["envelope_chain_origin"]
+        assert origin["origin"] == "derived_predecessor"
+        assert origin["legacy_schema_version"] == 2
+        assert origin["pre_migration_authenticity_verified"] is False
+        snapshot = store.read_object(origin["source_snapshot_sha256"])
+        backup = tmp_path / "v2-snapshot.sqlite"
+        backup.write_bytes(snapshot)
+        with sqlite3.connect(backup) as conn:
+            assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
+        store.append_events([_ev(0, "v3-event", LifecycleEventType.FINDING)])
+        assert store.integrity()["hash_chain_ok"] is True
+    with sqlite3.connect(dbfile) as conn:
+        rows = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
+        assert [row[:-1] for row in rows[:3]] == original
+        assert rows[3][-2] is None
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as store:
+        assert store.integrity()["envelope_chain_origin"] == origin
+        assert store.integrity()["hash_chain_verified_through_seq"] == 4
 
 
 @pytest.mark.parametrize("damage", ["prefix", "hole", "watermark"])
@@ -406,9 +468,9 @@ def test_legacy_concurrent_open_and_manifest_recovery(tmp_path, monkeypatch):
     with ThreadPoolExecutor(max_workers=2) as pool:
         origins = list(pool.map(reopen, [False, True]))
     assert origins[0] == origins[1]
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 3
     with sqlite3.connect(dbfile) as conn:
-        assert [row[:-1] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
+        assert [row[:-2] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
 
 
 def test_partial_chain_is_refused_without_overwriting_integrity(tmp_path):
@@ -416,10 +478,10 @@ def test_partial_chain_is_refused_without_overwriting_integrity(tmp_path):
         _seed(store, 3)
         dbfile = store.dbfile
     with sqlite3.connect(dbfile) as conn:
-        conn.execute("UPDATE events SET prev_hash=NULL WHERE seq=2")
+        conn.execute("UPDATE events SET envelope_hash=NULL WHERE seq=2")
         original = conn.execute("SELECT * FROM events ORDER BY seq").fetchall()
     for create in (False, True):
-        with pytest.raises(BrainError, match="hash chain is missing or malformed"):
+        with pytest.raises(BrainError, match="envelope hash chain is missing or malformed"):
             ledger_mod.LedgerStore(tmp_path, HOST).open(create=create)
     with sqlite3.connect(dbfile) as conn:
         assert conn.execute("SELECT * FROM events ORDER BY seq").fetchall() == original
@@ -441,7 +503,7 @@ def test_legacy_concurrent_migration_commits_one_origin(tmp_path):
         origins = list(pool.map(open_legacy, [False, True]))
     assert origins[0] == origins[1]
     with sqlite3.connect(dbfile) as conn:
-        assert [row[:-1] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
+        assert [row[:-2] for row in conn.execute("SELECT * FROM events ORDER BY seq")] == original
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM object_refs WHERE role='legacy-ledger-snapshot'"
@@ -1130,6 +1192,16 @@ def test_hash_chain_verified_on_append(store) -> None:
     assert result["hash_chain_break_seq"] is None
 
 
+def test_append_hashes_the_values_sqlite_actually_stores(store) -> None:
+    event = BrainLifecycleEvent.from_dict(
+        {**vars(_ev(1, "typed", LifecycleEventType.FINDING)), "timestamp": 1790000000}
+    )
+    assert event is not None
+    store.append_events([event])
+    assert store.integrity()["hash_chain_ok"] is True
+    assert store.replay(["typed"]).events[0].timestamp == "1790000000"
+
+
 def test_hash_chain_detects_in_place_edit(store) -> None:
     # checkpoint through seq 2, then append seq 3 UNVERIFIED by that checkpoint
     _seed(store, 2)
@@ -1153,42 +1225,49 @@ def test_hash_chain_detects_in_place_edit(store) -> None:
     assert second["hash_chain_break_seq"] == 3
 
 
-def test_integrity_incremental(store) -> None:
+def test_integrity_rechecks_checkpointed_history_and_ignores_forged_watermark(store) -> None:
     _seed(store, 3)
-    first = store.integrity()
-    assert first["hash_chain_ok"] is True
-    assert first["hash_chain_verified_through_seq"] == 3
+    assert store.integrity()["hash_chain_ok"] is True
+    with sqlite3.connect(store.dbfile) as conn:
+        conn.execute("UPDATE events SET payload_json=? WHERE seq=2", ('{"tampered":true}',))
+        conn.execute(
+            "INSERT OR REPLACE INTO ledger_meta (key,value) VALUES ('last_verified_seq','999')"
+        )
+    result = store.integrity()
+    assert result["hash_chain_ok"] is False
+    assert result["hash_chain_break_seq"] == 2
+    assert ledger_mod.checkpoint_ledger(store)["ok"] is False
 
-    conn = sqlite3.connect(store.dbfile)
-    persisted = conn.execute(
-        "SELECT value FROM ledger_meta WHERE key = 'last_verified_seq'"
-    ).fetchone()
-    conn.close()
-    assert persisted is not None and int(persisted[0]) == 3
+def test_envelope_metadata_tamper_refuses_replay_and_checkpoint(store) -> None:
+    _seed(store, 3)
+    assert store.integrity()["hash_chain_ok"] is True
+    with sqlite3.connect(store.dbfile) as conn:
+        conn.execute(
+            "UPDATE events SET timestamp='2026-09-22T00:00:00Z' WHERE seq=2"
+        )
+    result = store.integrity()
+    assert result["hash_chain_ok"] is False
+    assert result["hash_chain_break_seq"] == 2
+    assert ledger_mod.checkpoint_ledger(store)["ok"] is False
+    with pytest.raises(BrainError, match="hash chain"):
+        store.replay(["e-1", "e-2", "e-3"])
 
-    store.append_events(
-        [
-            _ev(4, "e-4", LifecycleEventType.USER_TASK, parent="e-3"),
-            _ev(5, "e-5", LifecycleEventType.USER_TASK, parent="e-4"),
-        ]
-    )
 
-    # Negative proof of incrementality: tamper an ALREADY-checkpointed row
-    # (seq=2, covered by the first integrity() call above) AFTER that
-    # checkpoint. If the second call re-verified from seq 1 it would catch
-    # this; genuinely incremental verification resumes from last_verified_seq
-    # forward only and must NOT catch it.
-    conn = sqlite3.connect(store.dbfile)
-    row = conn.execute("SELECT payload_json FROM events WHERE seq = 2").fetchone()
-    payload = json.loads(row[0])
-    payload["tampered"] = True
-    conn.execute("UPDATE events SET payload_json = ? WHERE seq = 2", (json.dumps(payload),))
-    conn.commit()
-    conn.close()
-
-    second = store.integrity()
-    assert second["hash_chain_ok"] is True
-    assert second["hash_chain_verified_through_seq"] == 5
+def test_migrated_chain_detects_legacy_origin_rewrite(tmp_path) -> None:
+    dbfile, _ = _legacy_ledger(tmp_path, "1")
+    with ledger_mod.LedgerStore(tmp_path, HOST).open() as store:
+        assert store.integrity()["hash_chain_ok"] is True
+        with sqlite3.connect(dbfile) as conn:
+            origin = json.loads(conn.execute(
+                "SELECT value FROM ledger_meta WHERE key='hash_chain_origin'"
+            ).fetchone()[0])
+            origin["preserved_chain_through_seq"] = 999
+            conn.execute(
+                "UPDATE ledger_meta SET value=? WHERE key='hash_chain_origin'",
+                (json.dumps(origin),),
+            )
+        with pytest.raises(BrainError, match="legacy origin"):
+            store.integrity()
 
 
 def test_purge_removes_artifact_refs_before_rmtree(tmp_path) -> None:

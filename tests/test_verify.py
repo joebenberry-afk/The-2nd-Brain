@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import risk, verify
+from second_brain import db, risk, verify
 from second_brain import working_set as ws
 from second_brain.errors import BrainError
 
@@ -622,3 +622,27 @@ def test_accuracy_gate_ignores_optional_environment_evidence():
     )
 
     assert "environment_steward" not in result["required_actions"]
+
+
+def test_explicit_observed_model_records_skill_outcome(brain_home, repo):
+    _commit_repo(repo)
+    result = verify.evaluate_accuracy_gate(
+        brain_home,
+        "gate-sess-001",
+        repo,
+        ["README.md"],
+        action_states={
+            action: "passed"
+            for action in verify.expand_ladder_actions(verify.DEFAULT_VERIFICATION_LADDER, "LOW")
+        },
+        model_id="observed-model-alpha",
+        skill_name="implementation",
+        task="implement feature",
+    )
+    assert result["completion_allowed"] is True
+    with db.connect(db.db_path(brain_home)) as conn:
+        row = conn.execute(
+            "SELECT skill_name, success, session_id FROM model_skill_outcomes WHERE model_id=?",
+            ("observed-model-alpha",),
+        ).fetchone()
+    assert tuple(row) == ("implementation", 1, "gate-sess-001")

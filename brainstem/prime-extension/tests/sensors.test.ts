@@ -38,19 +38,6 @@ describe("sensors: event -> record mapping", () => {
     expect(JSON.stringify(record)).not.toContain(prompt);
   });
 
-  it("before_agent_start -> additive role + driver_contract_injected fields (driver)", () => {
-    const record = sensors.beforeAgentStart(SESSION, "x", "driver", true);
-    expectBase(record, "before_agent_start");
-    expect(record.role).toBe("driver");
-    expect(record.driver_contract_injected).toBe(true);
-  });
-
-  it("before_agent_start -> role present without injected flag for non-driver roles", () => {
-    const record = sensors.beforeAgentStart(SESSION, "x", "worker");
-    expectBase(record, "before_agent_start");
-    expect(record.role).toBe("worker");
-    expect(record.driver_contract_injected).toBeUndefined();
-  });
 
   it("turn_start -> turn", () => {
     const record = sensors.turnStart(SESSION, 3);
@@ -618,42 +605,6 @@ describe("redactSensitiveCommand (SEC-08)", () => {
   });
 });
 
-describe("sensors: orchestrator_policy_violation (bounded fields, report-only)", () => {
-  it("maps enumerated violation code, model, detector, blocked flag", () => {
-    const record = sensors.orchestratorPolicyViolation(
-      SESSION,
-      "direct_execution",
-      { id: "gpt-5.6-sol", provider: "openai" },
-      "manual",
-      false,
-    );
-    expectBase(record, "orchestrator_policy_violation");
-    expect(record.violation).toBe("direct_execution");
-    expect(record.model).toBe("openai/gpt-5.6-sol");
-    expect(record.detected_by).toBe("manual");
-    expect(record.blocked).toBe(false);
-  });
-
-  it("blocks flag true when blocked===true, model null when model missing", () => {
-    const record = sensors.orchestratorPolicyViolation(SESSION, "wrong_tier", undefined, "telemetry_audit", true);
-    expect(record.model).toBeNull();
-    expect(record.blocked).toBe(true);
-  });
-
-  it("rejects free text and unknown codes: coerces to bounded 'unknown', never stores payload", () => {
-    const record = sensors.orchestratorPolicyViolation(
-      SESSION,
-      "ran: rm -rf --payload SECRET_VALUE_123",
-      { id: "gpt-5.6-sol" },
-      "human wrote a long note",
-      false,
-    );
-    expect(record.violation).toBe("unknown");
-    expect(record.detected_by).toBe("unknown");
-    expect(JSON.stringify(record)).not.toContain("SECRET_VALUE_123");
-    expect(JSON.stringify(record)).not.toContain("rm -rf");
-  });
-});
 
 describe("measureContent: one serialization, both metrics (Phase 3)", () => {
   it("string content: serializedChars = JSON char length, outputBytes = RAW string UTF-8 bytes", () => {
@@ -749,7 +700,7 @@ describe("measureContent modes (Phase 3 correction)", () => {
 
     const records: unknown[] = [
       sensors.sessionStart(SESSION, "startup", "/cwd", { id: "m", provider: "p" }),
-      sensors.beforeAgentStart(SESSION, "let me think step by step about this", "driver", true),
+      sensors.beforeAgentStart(SESSION, "let me think step by step about this"),
       sensors.turnStart(SESSION, 1),
       sensors.context(SESSION, [{ role: "assistant", content: "my reasoning was ..." }]),
       sensors.toolCall(SESSION, "bash", "call-1", { command: "echo hi" }),

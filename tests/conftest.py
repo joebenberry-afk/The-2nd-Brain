@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,6 +8,18 @@ import pytest
 from second_brain import db, paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def clean_python_env() -> dict[str, str]:
+    """Bind CLI children to this candidate without inherited interpreter state."""
+    if not Path(db.__file__).resolve().is_relative_to(REPO_ROOT / "src"):
+        raise RuntimeError("test runner imported Brain outside the candidate")
+    env = os.environ.copy()
+    for key in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
+        env.pop(key, None)
+    env.pop("SECOND_BRAIN_HOME", None)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    return env
 
 
 def make_brain(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:

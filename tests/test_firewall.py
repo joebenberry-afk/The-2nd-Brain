@@ -1,12 +1,12 @@
 """Tests for the Observation Firewall and deterministic reducers (Plan §5)."""
 
 import json
-import os
 import subprocess
 import sys
 
 import pytest
 
+from conftest import clean_python_env
 from second_brain import artifacts, firewall
 from second_brain.errors import BrainError
 
@@ -239,7 +239,7 @@ class TestFirewallCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         kinds = json.loads(result.stdout)
@@ -272,7 +272,7 @@ class TestFirewallCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         data = json.loads(result.stdout)
@@ -297,7 +297,7 @@ class TestFirewallCLI:
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""},
+            env=clean_python_env(),
         )
         assert result.returncode == 0
         assert result.stdout == raw_text
@@ -311,7 +311,7 @@ def test_firewall_cli_preserves_original_bytes(brain_home, tmp_path, from_stdin)
         source = tmp_path / "output.txt"
         source.write_bytes(original)
         args.append(str(source))
-    env = {**os.environ, "PYTHONHOME": "", "PYTHONPATH": ""}
+    env = clean_python_env()
     reduced = subprocess.run(
         [sys.executable, "-m", "second_brain", "firewall", *args, "--home", str(brain_home)],
         input=original if from_stdin else None,

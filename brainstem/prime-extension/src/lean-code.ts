@@ -1,57 +1,14 @@
 /**
- * P3-D Lean Code runtime adapter (plan §7-§8, Second Brain P3 Lean Code One
- * Shot Plan v2).
+ * Approved Lean Code skill injection for native knowledge consumers.
  *
- * The smallest runtime influence surface for the Lean Code doctrine: on
- * `before_agent_start` the extension may append the canonical "# Runtime
- * Kernel" section of the `lean-code` skill to the system prompt — for
- * code-capable implementation roles (driver, worker) ONLY.
- *
- * Lifecycle behavior (plan §8.2):
- *   candidate -> no runtime influence by default (measurement only);
- *   shadow    -> measurement/eval only; no live policy effect by default;
- *   active    -> inject the compact Runtime Kernel into driver/worker sessions;
- *   retired   -> no injection (plan §26.1: demotion/retirement disables the
- *                runtime behavior);
- *   missing/corrupt skill file -> FAIL OPEN: no patch, no invented text,
- *                bounded error surfaced for an `extension_error` record.
- *
- * Smallest reversible eval mode (plan §8.2 last para): env
- * `SECOND_BRAIN_LEAN=advisory` forces kernel injection for driver/worker
- * sessions even when the skill is still candidate/shadow — this is how P3-E
- * candidate-arm runs happen without promotion. `SECOND_BRAIN_LEAN=off` forces
- * inert. No second promotion hierarchy, no new config file.
- *
- * P3-E fix (2026-08-16): the env gate alone cannot reach daemon-spawned
- * children (the Prime daemon pins its startup env), so the eval gate is
- * FILE-BASED as well: `SECOND_BRAIN_LEAN` (advisory/off) OVERRIDES; else
- * `config/skills.toml` `[lean] eval = "advisory" | "off"` is read per event
- * (absent => inert) — same live-flip pattern as AutoInject's
- * `config/autoinject.toml [autoinject] mode`. Precedence:
- * env advisory/off > file advisory/off > inert. No daemon, no new file, no
- * second promotion hierarchy. The resolved mode + its source are recorded
- * on every lean_kernel record (`mode`, `eval_source`).
- *
- * Sol hard-orchestrator sessions NEVER get the kernel (plan §8.3): the
- * wiring returns before this module could inject, and this module also
- * refuses the role defensively.
- *
- * Kernel source: the canonical skill file ONLY (`skills/<level>/lean-code/
- * SKILL.md`, level resolved from the skill lifecycle dirs — active, shadow,
- * candidates, retired — mirroring `src/second_brain/paths.py`
- * SKILL_LEVEL_DIRS). The kernel text is NEVER duplicated as a TS constant;
- * it is parsed from the "# Runtime Kernel" section at runtime and cached
- * in-process keyed by resolved path + mtime/size (plan §8.6: no reread per
- * turn).
- *
- * Dedup (plan §8.4): stable marker `second-brain-lean-code-kernel`; the
- * injected block starts with `[second-brain-lean-code-kernel]` and the
- * append is a no-op when the base prompt already carries the marker, so one
- * assembled prompt never receives the kernel twice.
+ * Only the reviewed SKILL.md bytes supply the kernel. Candidate/shadow
+ * exposure requires the explicit advisory setting; active content can be
+ * injected normally. Dedup is recipient-prompt based and independent of
+ * native model, agent role or task lifecycle.
  */
-import { existsSync, readFileSync, statSync, type Stats } from "node:fs";
-import { join } from "node:path";
-import type { AgentRole } from "./driver-orchestrator";
+import { existsSync, readFileSync, readdirSync, statSync, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, relative, sep } from "node:path";
 
 /** Stable dedup marker (plan §8.4): never inject the kernel twice. */
 export const LEAN_KERNEL_MARKER = "second-brain-lean-code-kernel";
@@ -111,7 +68,6 @@ export type LeanReason =
   | "active"
   | "advisory"
   | "off"
-  | "role"
   | "skill-missing"
   | "noop"
   | LeanOpportunityReason
@@ -292,6 +248,51 @@ export function loadLeanKernel(home: string): LeanSkillCacheEntry {
   return entry;
 }
 
+/** Recheck the current review and exact source on every model-visible use.
+ * The mtime/size cache below is only a parsing optimization, not authority. */
+function approvedLeanText(home: string, skillPath: string, status: LeanSkillStatus): string | undefined {
+  try {
+    const text = readFileSync(skillPath, "utf8").replace(/\r\n?/g, "\n");
+    const normalized = text.replace(/^status:[ \t]*(?:shadow|candidate|active)[ \t]*$/m, "status: <lifecycle>");
+    const digest = createHash("sha256").update(normalized, "utf8").digest("hex");
+    const frontmatter = text.startsWith("---\n") ? text.slice(4).split("\n---", 1)[0] : "";
+    if (frontmatter.match(/^status:[ \t]*(.+)$/m)?.[1]?.trim() !== status) return undefined;
+    const version = frontmatter.match(/^version:[ \t]*(.+)$/m)?.[1]?.trim().replace(/^['"]|['"]$/g, "") ?? "unversioned";
+    const evalDir = join(home, "skills", "evals", LEAN_SKILL_NAME);
+    const manifest = createHash("sha256");
+    if (!existsSync(evalDir)) {
+      manifest.update("NO_EVAL_MANIFEST\n");
+    } else {
+      const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+        const file = join(dir, name);
+        return statSync(file).isDirectory() ? walk(file) : statSync(file).isFile() ? [file] : [];
+      });
+      for (const file of walk(evalDir).sort()) {
+        manifest.update(relative(evalDir, file).split(sep).join("/"), "utf8");
+        manifest.update(Buffer.from([0]));
+        manifest.update(readFileSync(file));
+      }
+    }
+    const reviewDir = join(home, "frontier");
+    const id = "skill-lean-code-promotion";
+    const reviews = readdirSync(reviewDir)
+      .filter((name) => name === `${id}.md` || new RegExp(`^${id}-[0-9]+\\.md$`).test(name))
+      .sort((a, b) => {
+        const sequence = (name: string): number => name === `${id}.md` ? -1 : Number(name.slice(id.length + 1, -3));
+        return sequence(a) - sequence(b);
+      });
+    if (reviews.length === 0) return undefined;
+    const review = JSON.parse(readFileSync(join(reviewDir, reviews[reviews.length - 1]), "utf8"));
+    return review.verdict === "approve"
+      && review.artifact_path === "skills/lean-code/SKILL.md"
+      && review.artifact_sha256 === digest
+      && review.artifact_version === version
+      && review.eval_manifest_sha256 === manifest.digest("hex") ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Decide the lean runtime behavior for one `before_agent_start` (pure
  * decision + fail-open load; never throws, never crashes the session).
@@ -433,7 +434,6 @@ export function applyLeanCooldown(
 
 export interface DecideLeanRuntimeOptions {
   home: string | null;
-  role: AgentRole;
   base: string | undefined;
   env?: Record<string, string | undefined>;
   sessionId?: string;
@@ -520,9 +520,6 @@ export function decideLeanRuntime(opts: DecideLeanRuntimeOptions): LeanRuntimeOu
     nudge,
   });
 
-  if (opts.role === "hard_orchestrator" || (opts.role !== "driver" && opts.role !== "worker")) {
-    return omit("role", null, 0, false, undefined, null, null);
-  }
 
   let mode: LeanEvalMode | null = null;
   let evalSource: "env" | "file" | null = null;
@@ -547,7 +544,7 @@ export function decideLeanRuntime(opts: DecideLeanRuntimeOptions): LeanRuntimeOu
   if (opts.home === null || opts.home.trim() === "") {
     return omit("skill-missing", null, 0, false, "brain home unavailable", mode, evalSource);
   }
-  const loaded = loadLeanKernel(opts.home);
+  let loaded = loadLeanKernel(opts.home);
   if (loaded.error !== undefined || loaded.kernel === undefined) {
     return omit("skill-missing", loaded.status, 0, false, loaded.error, mode, evalSource);
   }
@@ -559,6 +556,21 @@ export function decideLeanRuntime(opts: DecideLeanRuntimeOptions): LeanRuntimeOu
   if (!lifecycleActive && !advisory) {
     return omit("off", loaded.status, loaded.kernel.length, false, undefined, mode, evalSource, loaded.nudge);
   }
+  const reviewedText = approvedLeanText(opts.home, loaded.path, loaded.status);
+  if (reviewedText === undefined) {
+    return omit("unapproved-content", loaded.status, 0, false, "lean-code skill has no current matching approval", mode, evalSource);
+  }
+  // A file can change without changing its mtime/size. Use only the reviewed
+  // read for the emitted kernel and nudge, never the stale parsing cache.
+  loaded = {
+    ...loaded,
+    kernel: extractRuntimeKernel(reviewedText),
+    nudge: extractRuntimeNudge(reviewedText) ?? LEAN_NUDGE_TEXT,
+  };
+  if (loaded.kernel === undefined) {
+    return omit("skill-missing", loaded.status, 0, false, "approved lean-code skill has no kernel", mode, evalSource);
+  }
+
 
   const isOpportunity =
     opts.opportunity === true ||

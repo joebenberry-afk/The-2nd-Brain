@@ -1,13 +1,8 @@
-"""
-Fresh Verifier "record" plumbing (plan §15, Phase R9).
+"""Capture and parse external verification evidence without launching an agent.
 
-`brainstem/policies/verifier-role.md` states the contract but flags itself
-"no hard enforcement yet — Phase D2 will wire a fresh-verifier delegation
-path." The "prepare" half of that path already exists:
-`verify.build_verifier_brief()` (Phase 7) builds a real, deterministic,
-backward-reconstruction brief from a session's working set. This module is
-the missing other half: capturing what a genuinely fresh session actually
-returned, and parsing its verdict from that — never inventing one.
+`verify.build_verifier_brief()` builds a deterministic working-set brief.
+This module records an independently supplied raw response and parses its
+verdict; the native harness owns the verifier session and permissions.
 
 It never invents a verdict. `parse_verdict()` only ever reads a raw
 response that was actually produced, and returns UNPARSEABLE rather than
