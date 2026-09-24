@@ -60,6 +60,8 @@ completion-control exception is documented under [Trust and security](#trust-and
 
 ## Quick start
 
+Requires **Python 3.11+ and Git**. The hook/install examples below target Windows.
+
 The Brain home is a directory holding canonical knowledge plus its SQLite index. Clone
 into a **dedicated checkout used as its own home**, and set `SECOND_BRAIN_HOME` first so
 no existing home is touched.
