@@ -2,11 +2,18 @@
  * The standalone V3 OMP extension (brainstem/omp-v3/index.ts). It is tested here only because
  * this package owns the vitest setup; the extension imports nothing from this package.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import secondBrainV3, { matchCorrection, normalizePath, readBrief, viewKey } from "../../omp-v3/index";
+import secondBrainV3, {
+  EVENT_LOG_CAP_BYTES,
+  logToolEvent,
+  matchCorrection,
+  normalizePath,
+  readBrief,
+  viewKey,
+} from "../../omp-v3/index";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 let root = "";
@@ -120,5 +127,36 @@ describe("extension wiring (version-tolerant host surface)", () => {
     expect(await handlers.get("tool_result")!("not an object", null)).toBeUndefined();
     expect(await handlers.get("tool_result")!({ isError: true, content: "not an array" }, ctx("s3"))).toBeUndefined();
     expect(await handlers.get("session_before_compact")!(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("capture input (Brain-owned tool event log)", () => {
+  it("logs every tool result with the fields brain capture reads", async () => {
+    const toolResult = load().get("tool_result")!;
+    await toolResult(
+      { toolName: "bash", input: { command: "pytest -x" }, isError: true, content: [{ type: "text", text: "E   ImportError: no module" }] },
+      ctx("s9"),
+    );
+    await toolResult({ toolName: "bash", input: { command: "python -m pytest -x" }, isError: false, content: [] }, ctx("s9"));
+    await toolResult({ toolName: "read", input: { path: "a.py" }, content: [] }, ctx("s9"));
+    const dir = join(home, "state", "kb-events");
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    const lines = readFileSync(join(dir, files[0]), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatchObject({ v: 1, cwd: repo, tool: "bash", command: "pytest -x", ok: false, error: "E   ImportError: no module" });
+    expect(lines[1]).toMatchObject({ tool: "bash", command: "python -m pytest -x", ok: true, error: null });
+    expect(lines[2]).toMatchObject({ tool: "read", command: null, ok: true });
+  });
+
+  it("stops growing past the cap and never throws on odd events", () => {
+    const dir = join(home, "state", "kb-events");
+    logToolEvent(home, "s10", { toolName: "bash", input: { command: "x" } }, repo);
+    const file = join(dir, readdirSync(dir)[0]);
+    writeFileSync(file, "x".repeat(EVENT_LOG_CAP_BYTES + 1));
+    logToolEvent(home, "s10", { toolName: "bash", input: { command: "y" } }, repo);
+    expect(readFileSync(file, "utf8").length).toBe(EVENT_LOG_CAP_BYTES + 1);
+    expect(() => logToolEvent(home, "s10", "not an object", undefined)).not.toThrow();
+    expect(() => logToolEvent(file, "s10", { toolName: "bash" }, undefined)).not.toThrow();
   });
 });
