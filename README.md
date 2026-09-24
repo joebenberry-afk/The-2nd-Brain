@@ -7,8 +7,9 @@ remembers, finds and — at two well-defined moments — reminds.
 
 > **Status (2026-09-24):** V3 is complete in code and continuously tested (CI on every push).
 > The live qualification in OMP on the owner's machine has not been run yet — see
-> [the status report](docs/intake/2026-09-24-report-v3-status.md). The previous (M00/v2)
-> runtime is kept unchanged for one-command rollback.
+> [the status report](docs/intake/2026-09-24-report-v3-status.md). The V2 runtime (`2.0.0`,
+> activated 2026-09-24, [release notes](CHANGELOG.md)) stays in the tree unchanged, so going
+> back is one command.
 
 ## What V3 does
 
@@ -32,7 +33,8 @@ In your Brain checkout (the canonical home, e.g. `C:\Users\<you>\Documents\The-S
 ```powershell
 git status                                   # commit or stash local changes first
 git fetch origin
-git switch claude/new-session-nro2r6         # the V3 branch (or the branch it was merged into)
+git switch main
+git pull
 
 $env:PYTHONHOME = $null; $env:PYTHONPATH = $null
 .venv\Scripts\python.exe -m pip install -e .                 # installs .venv\Scripts\brain.exe

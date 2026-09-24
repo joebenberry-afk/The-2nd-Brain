@@ -11,6 +11,8 @@ build/
 dist/
 .pytest_cache/
 .ruff_cache/
+.hypothesis/
+.superpowers/
 
 # Node (Prime extension)
 node_modules/
@@ -67,6 +69,7 @@ memory/archive/
 # OS noise
 Thumbs.db
 Desktop.ini
+.DS_Store
 
 # RepoWise local index (derived)
 .repowise/

@@ -1,0 +1,2 @@
+schema 28 memories 116 stored_verified 19 stored_elevated 10 integrity ok
+effective_verified 0 effective_elevated 0 lane_policy_authorized 0

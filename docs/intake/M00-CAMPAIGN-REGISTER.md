@@ -2,15 +2,87 @@
 
 ## Active candidate: orchestrator removal (2026-09-23)
 
-**Status:** `M00_PARTIAL_EXTERNAL_BLOCKER` — every applicable HIGH is fixed,
-refuted or deferred to one external dependency (a non-agent-controlled
-approval/attestation issuer); NOT QUALIFIED; production NOT ACTIVATED. This register and
+**Status:** `M00_PRODUCTION_ACTIVATED / EXTERNAL_TRUST_ROOT_PENDING` (activated
+2026-09-24; owner decisions below). It does **not** mean every authority
+capability exists. This register and
 [`Second_Brain_M00_OneShot_Closure_Mandate.md`](Second_Brain_M00_OneShot_Closure_Mandate.md)
 form one acceptance contract under the
 [`Orchestrator Removal Mandate`](Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md).
 The orchestration-free v3 roadmap is
 [`Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md`](Second_Brain_V3_Orchestration_Free_Roadmap_2026-09-23.md).
 All older native/governed directions below are dated historical evidence.
+
+### M00 boundary decision (owner, 2026-09-24)
+
+The owner accepted the issuer-dependent items at the M00 boundary. The final
+record keeps four axes separate:
+
+| Axis | Status |
+|---|---|
+| Repository / code qualification | **QUALIFIED** — final code subject `80f3c54`: gates author-executed and independently executed (2156 passed / 1 skipped / 0 failed), and the independent security review found no blocking HIGH/MEDIUM authorization sink ([`m00-evidence/authority-closure-20260923.md`](m00-evidence/authority-closure-20260923.md) §6–§7) |
+| Independent issuer | **NOT AVAILABLE — EXTERNAL PRECONDITION**; tracked as [`EXTERNAL-TRUST-ROOT-WORK-ITEM.md`](EXTERNAL-TRUST-ROOT-WORK-ITEM.md), not as further M00 work |
+| Authority-dependent features | **FAIL-CLOSED / UNAVAILABLE**, per the capability table below |
+| Production activation | **ACTIVATED 2026-09-24**, owner-authorized, from [`m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md`](m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md). Live acceptance: 12/12 PASS; the independent live security check found no new HIGH/MEDIUM ([`m00-evidence/activation-20260924/ACTIVATION-RECORD.md`](m00-evidence/activation-20260924/ACTIVATION-RECORD.md)) |
+
+SEC-AUTH-01 and SEC-AUTH-02 are **closed as vulnerabilities**: when no
+independent authority exists, the candidate refuses rather than trusting a
+caller's claim. They are not closed as capabilities. Do not weaken those
+refusals to restore functionality. Only a reviewed issuer that meets the
+work item's acceptance criteria may re-enable them.
+
+| Capability held unavailable until an independent issuer exists | Current code behavior |
+|---|---|
+| VERIFIED memory issuance | `add_memory`/`curate` refuse with `VERIFIED_REQUIRES_ATTESTATION`; existing VERIFIED rows carry **at most TESTED** authority (`semantic.effective_evidence_grade`, used by every trust consumer and every grade display) |
+| Approval-bearing / CRITICAL completion | refused: `approval_state` stays `required`, `approval_attestation="unavailable"`, `completion_allowed=false` |
+| Authoritative model-success records | none exist: the gate writes none and `models record` refuses. The direct library API `crossmodel.record_skill_outcome` can still write **unauthenticated, non-authoritative** rows read only by informational `models` reports (recorded LOW caveat) |
+| Policy-authority promotion | effective ceiling is always `advisory`; the policy lane admits nothing; `curate` can only lower a ceiling |
+| Protected skill approval | **not available.** Skill delivery still works from an **unprotected** same-user review record, bound to the exact approved bytes (SEC-SKILL-01 residual, accepted at this boundary). No review record is protected approval |
+| Protected extension-install approval | **not available.** The installer is operator-invoked and byte-verified; a manifest is a byte comparison, never an approval |
+| Ledger signing | **not available.** The chain is unkeyed tamper-*evidence* (full envelope, genesis recomputation, replay/rehydrate refuse a broken chain), not a signature |
+
+Not demonstrated, so not claimed: independent approval, protected custody,
+and cryptographic signing.
+
+### Production baseline (2026-09-24)
+
+```text
+code baseline      = 749e9cd (.worktrees/qualified-m00, detached) / code-equivalent 80f3c54
+production schema  = 28
+external issuer    = unavailable
+authority features = degraded/refused as documented above
+```
+
+Extension `ce7fefa8…` (`index.ts 10a8662f…`); canonical `.venv` imports
+`qualified-m00`; 116 memories. Rollback path and the pre-activation backup:
+ACTIVATION-RECORD.md. OMP processes started before activation keep the old
+module until they restart.
+
+### M00 → V3 freeze boundary
+
+M00 is closed at the baseline above. The external trust root runs as a
+parallel track and is **not** on V3's critical path. V3 develops against
+`qualified-m00` as its parent: retrieval, memory architecture, context
+construction, semantic/lexical/hybrid search, storage/compaction,
+skills/reuse/learning, cross-project knowledge and harness-independent adapters.
+
+**Standing rule: orchestration must not creep back.** OMP, OpenCode and Hermes
+own execution, agents, models, tools, task admission, STOP, retries,
+cancellation and completion. No Brain component may admit, block, route, veto,
+continue or settle host agent work, under any name. A change that does is a
+defect to remove, not a feature to qualify.
+
+V3 items inherited from activation:
+
+1. **Remove the Antigravity Stop completion control** (pre-existing MEDIUM,
+   `adapters/antigravity.py:202-244`). Caller-writable requirements can turn
+   host `Stop` into `decision: "continue"`; that is a surviving instance of
+   the rule above.
+2. **Replace the stale Hermes integrator plugin** with the release copy (only
+   writeback and handoff_read), with an owner-approved gateway restart. Its
+   retired worker tools currently refuse inertly.
+3. **Keep the two accepted residuals non-authoritative:** direct
+   `crossmodel.record_skill_outcome` rows and unprotected skill-approval
+   records must never gain authoritative semantics in V3.
 
 ### Boundary and legacy behavior
 
