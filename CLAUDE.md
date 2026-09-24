@@ -42,6 +42,11 @@ On Linux these tests fail for platform reasons and pass on Windows — do not
   — executes a fake `.cmd` agent.
 - `tests/test_release_history.py::test_sealed_approval_records_still_bind_their_own_bytes`
   — sealed digests cover the Windows (CRLF) working-copy bytes.
+- `tests/test_release_history.py::test_original_budget_bridge_identity_is_recoverable_from_sealed_commit`
+  and `tests/test_economics.py::test_public_run_with_temporary_host_writes_real_shaped_artifacts`
+  — also fail on the V3 baseline `aca5b87` in the cloud (cause not investigated).
+- `tests/test_quiet_precheck_parity.py::test_same_decisions_under_bun` — the cloud's bun
+  has no `node:sqlite`.
 - `tests/test_repository_intelligence_live.py` — a real Linux defect: the
   incremental index skips a file whose mtime is within 1 ms of the stored one
   without hashing it, and Linux timestamps can be that coarse.

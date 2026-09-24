@@ -283,6 +283,40 @@ matching, scope isolation, poisoning fixtures, index rebuild from files.
 | O6 | CLI name `brain` (keep `brainctl` as an alias) |
 | O7 | Keep Python for the core with a lean entry point; no language rewrite now (§3.7) |
 
+## 11. Binding rules from the owner's follow-up review (2026-09-24)
+
+The owner accepted O1 and asked that the follow-up questions shape the build. These rules bind
+the implementation:
+
+1. **No conflict with the native harness.** The Brain never writes files into a user's project
+   repositories. Views live in the Brain home (`views/`, derived, gitignored) and reach the agent
+   only through hooks or `brain` commands. Adapters fail open. The Claude Code
+   `PostToolUseFailure` context channel is verified on the installed version before error push is
+   enabled there (issue #55889).
+2. **Not redundant with native memory.** Claude Code auto memory keeps per-repo, machine-local
+   notes; the Brain holds what native memory cannot: cross-project, cross-host, cross-machine,
+   evidence-graded, current-state records. `brain import-native` turns `MEMORY.md` entries into
+   deduplicated candidates, and the brief omits anything already present in the project's
+   `MEMORY.md`, so the same fact is never paid for twice. OMP native memory stays off unless the
+   owner enables a backend; then only one system is active per host.
+3. **Cross-project by design.** Projects declare `domains` in `projects/<id>/project.toml`;
+   `domain:<tag>` records are visible to every project that declares the tag. `brain q
+   --all-projects` searches everything the caller may see; `locator` records form the
+   cross-project source catalogue (RET-06); `brain share <id> --domain <tag>` is the only way a
+   project record widens its scope, and it is recorded. `private: true` records never leave the
+   machine.
+4. **Token budgets are hard limits.** Per-prompt push: 0 tokens by default. Session brief: ≤600
+   tokens, empty when nothing is current, stable text. Error correction: ≤80 tokens, one item.
+   Pull (`brain q`): ≤3 one-line results. Every limit is enforced in code and reported in
+   telemetry.
+5. **Technology (O7).** Python core with a stdlib-only lean path (`second_brain.kb` imports no
+   other Brain module on the hot path); SQLite FTS5 as a derived index; Markdown records in git;
+   hooks read precompiled views.
+6. **Original V3 features.** Kept: ARCH, SEC, MEM-01..05, RET-01/02/05/06, CTX-01..04, REU-02/03,
+   SKL-01..04, LRN-01/02/04, RES-01/02/04, PORT-01..04, VAL-01..05, E06. Deferred behind a
+   measured trigger: RET-03 semantic, RET-04, E03 ANN, E04 reranking, REU-01, REU-04, LRN-03/E05,
+   RES-03. E01 and E02 are answered.
+
 ## Sources
 
 - Letta, "Is a Filesystem All You Need?" — https://www.letta.com/blog/benchmarking-ai-agent-memory/
