@@ -1549,15 +1549,44 @@ def _body_text(home: Path, row: dict) -> str:
     return content
 
 
-def _file_hash(home: Path, row: dict) -> str:
-    """sha256 of the canonical markdown file (whole file: any edit changes it)."""
+def _memory_file_bytes(home: Path, row: dict) -> bytes | None:
     path = (
         Path(home) / row["body_path"] if row.get("body_path") else _v1_path(home, row["memory_id"])
     )
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return path.read_bytes()
     except OSError:
+        return None
+
+
+def _file_hash(home: Path, row: dict) -> str:
+    """sha256 of the canonical markdown file with line endings normalized to LF.
+
+    Any content edit changes it; a checkout that only rewrites line endings
+    (git core.autocrlf) does not, so such a checkout cannot silently hide the
+    memory from retrieval as "stale".
+    """
+    data = _memory_file_bytes(home, row)
+    if data is None:
         return ""
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def file_hash_matches(indexed_hash: str | None, home: Path, row: dict) -> bool:
+    """True when an indexed hash still describes the canonical file.
+
+    Accepts the current LF-normalized hash and the pre-normalization raw-bytes
+    hash, so an index built before normalization keeps working until the next
+    reindex rewrites it.
+    """
+    if not indexed_hash:
+        return False
+    data = _memory_file_bytes(home, row)
+    if data is None:
+        return False
+    if indexed_hash == hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest():
+        return True
+    return indexed_hash == hashlib.sha256(data).hexdigest()
 
 
 def _index_memory_row(conn: sqlite3.Connection, home: Path, row: dict, *, file_hash: str) -> None:
@@ -3032,7 +3061,7 @@ def _search_fts(
         row = dict(indexed)
         indexed_hash = row.pop("_indexed_file_hash")
         if canonical_home is None or (
-            indexed_hash and indexed_hash == _file_hash(canonical_home, row)
+            file_hash_matches(indexed_hash, canonical_home, row)
         ):
             row["file_hash"] = indexed_hash
             current_rows.append(row)

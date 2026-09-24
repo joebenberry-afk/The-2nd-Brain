@@ -592,7 +592,7 @@ class HybridCascadeRetriever:
             or version != row.get("current_version")
             or not isinstance(file_hash, str)
             or not file_hash
-            or file_hash != semantic._file_hash(home, row)
+            or not semantic.file_hash_matches(file_hash, home, row)
         ):
             return None
         score = cls._number(candidate.get("score"))
