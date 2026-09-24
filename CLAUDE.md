@@ -28,6 +28,12 @@ are Windows-only.
 The cloud VM has no OMP host, installed extension or live canonical Brain, so
 live `omp` runs and installed-runtime checks must run on the Windows machine.
 
+Retrieval evals undercount recall here: memories whose `memory_sources` point
+at files that exist only on the Windows machine (untracked `outputs/reports/…`
+under `C:\Users\…`) resolve `SOURCE_MISSING` and are withheld by the freshness
+gate. On the S2 case sets that is D09, D11 and H07 — cloud-only misses, not
+regressions. Compare against a cloud baseline run, not the Windows reports.
+
 On Linux these tests fail for platform reasons and pass on Windows — do not
 "fix" them by weakening assertions:
 - `tests/test_antigravity_adapter.py` — fixtures use `C:\work\…` repo paths.
