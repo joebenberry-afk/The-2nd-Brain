@@ -67,6 +67,14 @@ from .adapters import claude_code as _claude_code_adapter
 from .adapters import codex as _codex_adapter
 from .errors import BrainError
 
+# E01 measurement only (SECOND_BRAIN_E01_TRACE): one record per CLI process at
+# package-import completion, so a host adapter can split interpreter startup +
+# import from actual work. Inert unless the env var names a trace file.
+if os.environ.get("SECOND_BRAIN_E01_TRACE"):
+    from . import turn_bridge as _e01_trace
+
+    _e01_trace.trace("python_import_end", argv=sys.argv[1:3])
+
 
 def _parser() -> argparse.ArgumentParser:
     # --home is accepted both before and after the subcommand. SUPPRESS keeps
@@ -346,6 +354,47 @@ def _parser() -> argparse.ArgumentParser:
         default="[]",
         help='JSON list of {"ref","kind"} source refs (default: [])',
     )
+
+    tn = sub.add_parser(
+        "turn",
+        parents=[home_parent],
+        help="E01 turn bridge: one process for capsule+render+autoinject (measurement path)",
+    )
+    tns = tn.add_subparsers(dest="turn_command", required=True)
+    tprep = tns.add_parser(
+        "prepare",
+        parents=[home_parent],
+        help="capsule ensure + hot-context render + AutoInject decision, one JSON object",
+    )
+    tprep.add_argument("--session", dest="session_id", required=True)
+    tprep.add_argument("--task", required=True, help="task text (queried, never persisted)")
+    tprep.add_argument("--cwd", default=None, help="working directory for project resolution")
+    tprep.add_argument("--project", dest="project_id", default=None, help="project id override")
+    tprep.add_argument("--agent", dest="agent_id", default=None, help="host agent id")
+    tprep.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
+    tprep.add_argument("--role", dest="role_profile", default="worker", help="role profile")
+    tprep.add_argument("--objective", default=None, help="capsule objective (default: task text)")
+    tprep.add_argument(
+        "--next-action", default=None, help="capsule next action (default: task text)"
+    )
+    tprep.add_argument("--budget-tokens", dest="budget_tokens", type=int, default=256)
+    tprep.add_argument(
+        "--phases",
+        default=None,
+        help="comma-separated subset of capsule,render,autoinject (default: all)",
+    )
+    tprep.add_argument("--json", action="store_true", help="print one deterministic JSON object")
+    tserve = tns.add_parser(
+        "serve",
+        parents=[home_parent],
+        help="JSON-lines helper: one memory request per line (reused interpreter)",
+    )
+    tserve.add_argument("--max-requests", dest="max_requests", type=int, default=256)
+    tserve.add_argument("--max-lifetime-s", dest="max_lifetime_s", type=float, default=1800.0)
+    tserve.add_argument(
+        "--max-rss-bytes", dest="max_rss_bytes", type=int, default=256 * 1024 * 1024
+    )
+    tserve.add_argument("--json", action="store_true")
 
     sub.add_parser("stop", parents=[home_parent], help=argparse.SUPPRESS)
     sub.add_parser("worker-plane", parents=[home_parent], help=argparse.SUPPRESS)
@@ -2184,6 +2233,10 @@ def cmd_recall(args) -> int:
         role_profile="cli",
         session_id="brainctl-recall-" + hashlib.sha256(question.encode("utf-8")).hexdigest()[:16],
         cwd=str(Path.cwd()),
+        # A user-issued query: scope/status/authority/freshness still decide, but the
+        # automatic-injection relevance-abstention decision does not (an explicit
+        # "brainctl recall" is a request, not an unrequested injection).
+        explicit=True,
     )
     decision = autoinject.prepare_injection(home, intent, retrieval_text=question)
     if decision.decision is not contracts.InjectionDecision.INJECT:
@@ -3621,6 +3674,55 @@ def cmd_autoinject(args) -> int:
     return 0
 
 
+def cmd_turn(args) -> int:
+    """E01 turn bridge: batch the per-turn memory phases into one process.
+
+    `prepare` prints one JSON object (the batched capsule/render/autoinject
+    result); `serve` keeps the interpreter alive and answers JSON-lines
+    requests. Both are memory operations only — neither touches host
+    lifecycle, and both fail open per phase.
+    """
+    import json
+
+    from . import turn_bridge
+
+    home = _home(args)
+    if args.turn_command == "serve":
+        return turn_bridge.serve(
+            home,
+            max_requests=args.max_requests,
+            max_lifetime_s=args.max_lifetime_s,
+            max_rss_bytes=args.max_rss_bytes,
+        )
+    if args.turn_command != "prepare":
+        return 2
+    want, want_error = turn_bridge.phase_selection(
+        None if args.phases is None else args.phases.split(",")
+    )
+    if want_error is not None:
+        print(f"brainctl: error: invalid --phases: {args.phases}", file=sys.stderr)
+        return 2
+    result = turn_bridge.prepare_turn(
+        home,
+        session_id=args.session_id,
+        task=args.task,
+        cwd=args.cwd,
+        project_id=args.project_id,
+        agent_id=args.agent_id,
+        branch=args.branch,
+        role_profile=args.role_profile,
+        objective=args.objective,
+        next_action=args.next_action,
+        budget_tokens=args.budget_tokens,
+        want=want if want is not None else turn_bridge.PHASES,
+    )
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    # Exit 1 means "a phase failed, but the JSON is complete and valid": the
+    # client must still consume the phases that succeeded and retry only the
+    # failed ones (never discard a committed AutoInject delivery).
+    return 0 if result.get("ok") else 1
+
+
 def cmd_heartbeat(args) -> int:
     import json
 
@@ -4527,14 +4629,25 @@ def main(argv: list[str] | None = None) -> int:
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
         "autoinject": cmd_autoinject,
+        "turn": cmd_turn,
         "ledger": cmd_ledger,
         "session": cmd_session,
     }
+    e01 = os.environ.get("SECOND_BRAIN_E01_TRACE")
+    if e01:
+        from . import turn_bridge as _e01
+
+        _e01.trace("python_main_enter", command=args.command, argv=sys.argv[1:3])
     try:
-        return handlers[args.command](args)
+        code = handlers[args.command](args)
     except BrainError as exc:
         print(f"brainctl: error: {exc}", file=sys.stderr)
-        return 2
+        code = 2
+    if e01:
+        from . import turn_bridge as _e01_exit
+
+        _e01_exit.trace("python_main_exit", command=args.command, code=code)
+    return code
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { runVmemHotContext } from "./vmem";
+import { runVmemHotContext, type VmemHotContextResult } from "./vmem";
 export const ACTIVE_STATE_DEFAULT_TIMEOUT_MS = 5000;
 export const ACTIVE_STATE_MAX_TEXT_CHARS = 512;
 export const ACTIVE_STATE_DEFAULT_BUDGET = 256;
@@ -92,7 +92,9 @@ function updateArgs(options: ActiveStateOptions): string[] {
   return args;
 }
 
-function parseResult(stdout: string, expectedSession: string): ActiveStateResult {
+/** Parse one `capsule ensure --json` stdout payload. Shared by this direct
+ * bridge call and the batched turn bridge (E01). */
+export function parseActiveStateResult(stdout: string, expectedSession: string): ActiveStateResult {
   try {
     const parsed = JSON.parse(stdout) as JsonRecord;
     if (parsed.session_id !== expectedSession) {
@@ -130,7 +132,7 @@ function execute(
   };
   if (sync) {
     try {
-      return parseResult(String(execFileSync(python, args, execOptions)), options.hostSessionId);
+      return parseActiveStateResult(String(execFileSync(python, args, execOptions)), options.hostSessionId);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -141,7 +143,7 @@ function execute(
         resolve({ ok: false, error: error.message });
         return;
       }
-      resolve(parseResult(String(stdout), options.hostSessionId));
+      resolve(parseActiveStateResult(String(stdout), options.hostSessionId));
     });
   });
 }
@@ -176,16 +178,26 @@ export async function renderActiveState(options: {
     python: options.python,
     timeoutMs: options.timeoutMs ?? ACTIVE_STATE_DEFAULT_TIMEOUT_MS,
   });
+  return activeStateRenderResult(rendered, options.hostSessionId);
+}
+
+/** Map a hot-context render onto the active-state result shape. Shared by the
+ * direct bridge call and the batched turn bridge (E01), so both paths produce
+ * the same model-visible message for the same render. */
+export function activeStateRenderResult(
+  rendered: VmemHotContextResult,
+  hostSessionId: string,
+): ActiveStateRenderResult {
   if (!rendered.ok && rendered.error?.startsWith("no brain venv")) {
-    return { ok: true, sessionId: options.hostSessionId, renderedText: "" };
+    return { ok: true, sessionId: hostSessionId, renderedText: "" };
   }
   if (!rendered.ok) return { ok: false, error: rendered.error };
-  if (rendered.sessionId !== options.hostSessionId) {
+  if (rendered.sessionId !== hostSessionId) {
     return { ok: false, error: "active-state session mismatch" };
   }
   return {
     ok: true,
-    sessionId: options.hostSessionId,
+    sessionId: hostSessionId,
     renderedText: rendered.renderedText?.slice(0, 8192),
   };
 }

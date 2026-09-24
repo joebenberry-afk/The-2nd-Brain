@@ -1,0 +1,118 @@
+{
+ "inert": {
+  "n": 1,
+  "failures": 0,
+  "cold_ms": [
+   2870.5
+  ],
+  "warm_ms": [
+   4241.8
+  ],
+  "cold_median_ms": 2870.5,
+  "warm_median_ms": 4241.8,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "span_medians_ms": {}
+ },
+ "candidate-once": {
+  "n": 1,
+  "failures": 0,
+  "cold_ms": [
+   3427.9
+  ],
+  "warm_ms": [
+   5561.6
+  ],
+  "cold_median_ms": 3427.9,
+  "warm_median_ms": 5561.6,
+  "brain_visible_chars": [
+   495
+  ],
+  "memory_delivered": [
+   true
+  ],
+  "span_medians_ms": {
+   "before_agent_start.autoinject": 2.947,
+   "before_agent_start.hook": 704.656,
+   "before_agent_start.turn_bridge": 436.191,
+   "bg.environment_assessment": 1598.554,
+   "bg.ledger_mirror": 278.598,
+   "bg.p4_pulse": 314.358,
+   "bg.visibility_plan": 328.035,
+   "session_start.hook": 34.051,
+   "turn_bridge.once": 442.554
+  },
+  "cold_incremental_ms": 557.4,
+  "warm_incremental_ms": 1319.8
+ },
+ "candidate-helper-lazy": {
+  "n": 1,
+  "failures": 0,
+  "cold_ms": [
+   3617.4
+  ],
+  "warm_ms": [
+   15859.5
+  ],
+  "cold_median_ms": 3617.4,
+  "warm_median_ms": 15859.5,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "span_medians_ms": {
+   "before_agent_start.autoinject": 2.764,
+   "before_agent_start.hook": 5640.756,
+   "before_agent_start.turn_bridge": 5613.173,
+   "bg.environment_assessment": 1641.683,
+   "bg.ledger_mirror": 283.446,
+   "bg.p4_pulse": 283.404,
+   "bg.visibility_plan": 305.9,
+   "session_start.hook": 33.528,
+   "turn_bridge.helper_fallback": 0.004,
+   "turn_helper.request": 5000.163,
+   "turn_helper.start": 326.049
+  },
+  "cold_incremental_ms": 746.9,
+  "warm_incremental_ms": 11617.7
+ },
+ "candidate-helper-eager": {
+  "n": 1,
+  "failures": 0,
+  "cold_ms": [
+   3725.9
+  ],
+  "warm_ms": [
+   15482.1
+  ],
+  "cold_median_ms": 3725.9,
+  "warm_median_ms": 15482.1,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "span_medians_ms": {
+   "before_agent_start.autoinject": 2.671,
+   "before_agent_start.hook": 5467.631,
+   "before_agent_start.turn_bridge": 5381.445,
+   "bg.environment_assessment": 1741.595,
+   "bg.ledger_mirror": 298.755,
+   "bg.p4_pulse": 297.227,
+   "bg.visibility_plan": 314.235,
+   "session_start.hook": 36.759,
+   "turn_bridge.helper_fallback": 0.003,
+   "turn_helper.request": 5000.798,
+   "turn_helper.start": 449.885
+  },
+  "cold_incremental_ms": 855.4,
+  "warm_incremental_ms": 11240.3
+ }
+}

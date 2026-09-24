@@ -1,0 +1,60 @@
+{
+ "inert": {
+  "n": 2,
+  "failures": 0,
+  "cold_ms": [
+   2911.1,
+   2895.5
+  ],
+  "warm_ms": [
+   4302.7,
+   4366.6
+  ],
+  "cold_median_ms": 2903.3,
+  "warm_median_ms": 4334.6,
+  "brain_visible_chars": [
+   0,
+   0
+  ],
+  "memory_delivered": [
+   false,
+   false
+  ],
+  "span_medians_ms": {}
+ },
+ "candidate-current": {
+  "n": 2,
+  "failures": 0,
+  "cold_ms": [
+   4416.3,
+   4511.2
+  ],
+  "warm_ms": [
+   7955.1,
+   7316.3
+  ],
+  "cold_median_ms": 4463.8,
+  "warm_median_ms": 7635.7,
+  "brain_visible_chars": [
+   495,
+   495
+  ],
+  "memory_delivered": [
+   true,
+   true
+  ],
+  "span_medians_ms": {
+   "before_agent_start.autoinject": 410.555,
+   "before_agent_start.capsule_ensure": 309.06,
+   "before_agent_start.hook": 1303.005,
+   "before_agent_start.hot_context_render": 290.428,
+   "bg.environment_assessment": 1686.816,
+   "bg.ledger_mirror": 290.445,
+   "bg.p4_pulse": 284.76,
+   "bg.visibility_plan": 328.841,
+   "session_start.hook": 30.691
+  },
+  "cold_incremental_ms": 1560.5,
+  "warm_incremental_ms": 3301.1
+ }
+}

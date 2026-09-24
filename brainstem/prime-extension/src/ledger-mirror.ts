@@ -446,8 +446,11 @@ export async function mirrorEvent(options: MirrorOptions): Promise<MirrorResult>
  * extension_error on failure (fail-open, never blocks). */
 export function mirrorFireAndForget(
   options: MirrorOptions & { onError?: (error: string) => void },
-): void {
-  void mirrorEvent(options)
+): Promise<void> {
+  // Returns the (never-rejecting) chain so a caller that measures bridge
+  // latency can close its span when the mirror actually finished; callers
+  // that ignore the value keep the original fire-and-forget behavior.
+  return mirrorEvent(options)
     .then((result) => {
       if (!result.ok && options.onError) {
         try {
