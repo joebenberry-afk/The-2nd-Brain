@@ -14,6 +14,19 @@ before adding any Claude-facing adapter code — it maps what already exists
 (memory, retrieval, telemetry, ledger, Lean Code, evidence) so it isn't
 rebuilt.
 
+## V3 core (agent-native memory)
+
+V3 memory is `records/*.md` (canonical, one fact per file) plus the `brain` CLI
+(`second_brain.kb`, stdlib-only). The index (`db/kb.sqlite`) and per-project
+views (`views/`) are derived: `brain index`, `brain views`. Use it instead of
+re-discovering project facts: `brain q "<question>"` (≤3 lines), `brain show
+<id>`, `brain brief`; record a durable, evidenced learning with `brain add`
+(always a candidate; `brain promote` needs evidence). Supersede or retire with
+`brain supersede` / `brain retire` — never by editing status by hand. The
+legacy `memory/` files stay for the installed M00 runtime. Design and owner
+decisions: `docs/intake/2026-09-24-plan-v3-agent-native-redesign.md`; OMP is
+the only host in focus (`brainstem/omp-v3/`).
+
 ## Cloud sessions (Claude Code on the web)
 
 `.claude/settings.json` runs `scripts/cloud-session-setup.sh` at session start.
