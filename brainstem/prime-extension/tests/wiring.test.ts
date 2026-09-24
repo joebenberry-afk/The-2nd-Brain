@@ -488,11 +488,16 @@ describe("factory wiring (src/index.ts)", () => {
     writeFileSync(join(repo, "package.json"), "{}", "utf8");
     const ctx = makeCtx({ cwd: repo });
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     handlers.get("session_start")!({ reason: "startup" }, ctx);
     const started = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_started",
     );
     expect(started).toBeDefined();
+    // The session-start assessment waits until the session is idle.
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "session_start", hostSessionId: "wiring-test" }),
     );
@@ -554,9 +559,16 @@ describe("factory wiring (src/index.ts)", () => {
     const ctx = makeCtx({ cwd: repo });
     runEnvironmentAssessmentAsyncMock.mockImplementation(() => new Promise(() => undefined));
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     handlers.get("session_start")!({ reason: "startup" }, ctx);
-    // An unchanged repo fingerprint never re-assesses at a task boundary.
+    // Nothing runs during an active run; an unchanged repo fingerprint never
+    // re-assesses at a task boundary.
     await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
+    vi.advanceTimersByTime(60_000);
+    expect(runEnvironmentAssessmentAsyncMock).not.toHaveBeenCalled();
+    handlers.get("agent_end")!({ messages: [] }, ctx);
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
     expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledTimes(1);
     expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "session_start" }),
@@ -576,7 +588,7 @@ describe("factory wiring (src/index.ts)", () => {
     await settle();
   });
 
-  it("Task 7: session_start/turn_start queue a fire-and-forget P4 pulse and append its bounded heartbeat", async () => {
+  it("Task 7: the session-start P4 pulse waits for an idle session; turns never spawn one", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseMock.mockResolvedValue({
@@ -589,15 +601,36 @@ describe("factory wiring (src/index.ts)", () => {
       },
     });
 
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    expect(runP4PulseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hostSessionId: "wiring-test", event: "session_start", repo: "C:/work" }),
-    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      handlers.get("session_start")!({ reason: "startup" }, ctx);
+      await handlers.get("before_agent_start")!({ prompt: "first prompt" }, ctx);
+      handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+      // Nothing competes with host startup or an active agent run.
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
 
-    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
-    expect(runP4PulseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hostSessionId: "wiring-test", event: "turn_start", repo: "C:/work" }),
-    );
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      // A prompt arriving right after the run cancels the idle timer.
+      await handlers.get("before_agent_start")!({ prompt: "second prompt" }, ctx);
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
+
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      vi.advanceTimersByTime(4_999);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(runP4PulseMock).toHaveBeenCalledTimes(1);
+      expect(runP4PulseMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostSessionId: "wiring-test", event: "session_start", repo: "C:/work" }),
+      );
+      handlers.get("turn_start")!({ turnIndex: 1 }, ctx);
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
 
     await settle();
     const records = (await readFile(telemetryFile(), "utf8"))
@@ -1369,6 +1402,30 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     await waitForLines(1); // tool_result only — content is far too small to trigger rtd_shadow's distill path
     await settle();
     expect(runVmemStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("AutoInject delivery with VMem admission off preserves nothing (no awaited spawns for an unused artifact)", async () => {
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const packetText = "PACKET TEXT delivered while admission is off.";
+    runAdvisoryAutoInjectMock.mockResolvedValue({
+      customType: "brain.autoinject.packet",
+      content: packetText,
+      display: true,
+      details: { delivery_id: "del-no-admission", packet_tokens: 12 },
+    });
+    const preserve = vi.fn(async (raw: string) => ({ sha256: sha256Hex(raw), handle: "h" }));
+    const verify = vi.fn(async () => true);
+    const handlers = loadFactory({ autoinjectPacketPreserver: { preserve, verify } });
+
+    const result = (await handlers.get("before_agent_start")!({ prompt: "do the research task" }, makeCtx())) as
+      | { message?: { content?: string } }
+      | undefined;
+
+    expect(result?.message?.content).toContain(packetText);
+    expect(preserve).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(runVmemStoreMock).not.toHaveBeenCalled();
+    await settle();
   });
 
   it("real AutoInject delivery: preserve-before-admit fires, richer packetArtifactRef/packetSha256 metadata included on success", async () => {

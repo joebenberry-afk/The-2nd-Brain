@@ -510,6 +510,19 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=str(WORKTREE / "brainstem/prime-extension/src/index.ts"),
     )
     parser.add_argument("--candidate-python", default=str(WORKTREE / ".venv/Scripts/python.exe"))
+    parser.add_argument(
+        "--candidate-config-dir",
+        default=str(WORKTREE / "config"),
+        help="the candidate's shipped config; overlaid on every Brain arm's home so the run "
+        "measures the configuration that would be deployed, not the live home's",
+    )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=0.0,
+        help="idle pause before each run so a previous run's background children cannot "
+        "overlap the next host's startup",
+    )
     return parser.parse_args(argv)
 
 
@@ -542,6 +555,10 @@ def main(argv: list[str] | None = None) -> int:
         "prompts": {"cold": COLD_PROMPT, "warm": WARM_PROMPT},
         "arms": {name: ARM_SPECS[name] for name in selected},
         "candidate_python": args.candidate_python,
+        "candidate_config": {
+            path.name: arms._sha256(path, normalize_newlines=True)
+            for path in sorted(Path(args.candidate_config_dir).glob("*.toml"))
+        },
         "conditions": (
             "One fresh host process per run, two prompts per process (index 0 = cold, "
             "index 1 = warm), fresh corpus snapshot per run, trace file per run."
@@ -586,11 +603,13 @@ def main(argv: list[str] | None = None) -> int:
             if spec["brain"]:
                 home = run_dir / "home"
                 shutil.copytree(snapshot, home)
+                shutil.copytree(args.candidate_config_dir, home / "config", dirs_exist_ok=True)
                 env["SECOND_BRAIN_HOME"] = str(home)
                 env["SECOND_BRAIN_PYTHON"] = args.candidate_python
                 env["SECOND_BRAIN_PROJECT"] = args.project_id
                 env["SECOND_BRAIN_E01_TRACE"] = str(trace_path)
                 env.update(spec["env"])
+            time.sleep(args.settle_seconds)
             result = run_host(args.omp, tail, env, args.timeout, out / f"{arm}-{rep}.jsonl")
             raw = result.pop("raw")
             costs = prompt_costs(result["events"], result["launch_epoch_ms"])
