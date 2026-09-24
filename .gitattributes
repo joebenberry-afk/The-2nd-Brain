@@ -2,7 +2,11 @@
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+# Run by bash, including the Claude Code SessionStart hook on Windows.
+*.sh text eol=lf
 # Evidence copies are cited by digest: they must keep the exact bytes that were hashed, so no
 # end-of-line conversion is applied to this directory.
 docs/intake/m00-evidence/** -text
 docs/intake/m00-evidence/* -text
+# The V3 requirements baseline ships its own SHA256SUMS.txt.
+docs/intake/Second_Brain_V3_Requirements_2026-09-24/** -text
