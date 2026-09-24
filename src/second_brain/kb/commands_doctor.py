@@ -23,6 +23,7 @@ def handle_doctor(args: argparse.Namespace) -> int:
                 "errors": report.errors,
                 "warnings": report.warnings,
                 "sizes": report.sizes,
+                "runtime": report.runtime,
             }
             print(json.dumps(output, indent=2))
         else:
@@ -38,6 +39,9 @@ def handle_doctor(args: argparse.Namespace) -> int:
             print("\nsizes")
             for name, size_bytes in report.sizes.items():
                 print(f"  {name} {size_bytes}")
+            print("\nruntime")
+            for name, value in report.runtime.items():
+                print(f"  {name} {value}")
 
         # Exit 1 if there are errors, else 0
         return 1 if report.errors else 0
