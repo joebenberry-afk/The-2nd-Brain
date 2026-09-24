@@ -1,0 +1,4 @@
+Brain initialized at C:\Users\assas\Documents\The-Second-Brain
+Database ready: C:\Users\assas\Documents\The-Second-Brain\db\brain.sqlite (applied migrations [25, 26, 27, 28])
+Next steps: `brainctl doctor`, `brainctl project add <repo>`, `brainctl status`
+exit=0

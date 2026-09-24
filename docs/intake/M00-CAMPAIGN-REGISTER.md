@@ -2,9 +2,9 @@
 
 ## Active candidate: orchestrator removal (2026-09-23)
 
-**Status:** `M00_CODE_QUALIFIED / EXTERNAL_TRUST_ROOT_PENDING` (owner decision
-2026-09-24, below). It does **not** mean every authority capability exists.
-Production NOT ACTIVATED. This register and
+**Status:** `M00_PRODUCTION_ACTIVATED / EXTERNAL_TRUST_ROOT_PENDING` (activated
+2026-09-24; owner decisions below). It does **not** mean every authority
+capability exists. This register and
 [`Second_Brain_M00_OneShot_Closure_Mandate.md`](Second_Brain_M00_OneShot_Closure_Mandate.md)
 form one acceptance contract under the
 [`Orchestrator Removal Mandate`](Second_Brain_Orchestrator_Removal_Mandate_2026-09-23.md).
@@ -22,7 +22,7 @@ record keeps four axes separate:
 | Repository / code qualification | **QUALIFIED** — final code subject `80f3c54`: gates author-executed and independently executed (2156 passed / 1 skipped / 0 failed), and the independent security review found no blocking HIGH/MEDIUM authorization sink ([`m00-evidence/authority-closure-20260923.md`](m00-evidence/authority-closure-20260923.md) §6–§7) |
 | Independent issuer | **NOT AVAILABLE — EXTERNAL PRECONDITION**; tracked as [`EXTERNAL-TRUST-ROOT-WORK-ITEM.md`](EXTERNAL-TRUST-ROOT-WORK-ITEM.md), not as further M00 work |
 | Authority-dependent features | **FAIL-CLOSED / UNAVAILABLE**, per the capability table below |
-| Production activation | **Separate owner decision**; NOT PERFORMED. Prepared as [`m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md`](m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md): release worktree `.worktrees/qualified-m00` detached at `749e9cd`; install, migration, backup/restore and rollback rehearsed on disposable copies of production bytes (R1–R9 PASS) |
+| Production activation | **ACTIVATED 2026-09-24**, owner-authorized, from [`m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md`](m00-evidence/activation-prep-20260924/ACTIVATION-CARD.md). Live acceptance: 12/12 PASS; the independent live security check found no new HIGH/MEDIUM ([`m00-evidence/activation-20260924/ACTIVATION-RECORD.md`](m00-evidence/activation-20260924/ACTIVATION-RECORD.md)) |
 
 SEC-AUTH-01 and SEC-AUTH-02 are **closed as vulnerabilities**: when no
 independent authority exists, the candidate refuses rather than trusting a
@@ -42,6 +42,47 @@ work item's acceptance criteria may re-enable them.
 
 Not demonstrated, so not claimed: independent approval, protected custody,
 and cryptographic signing.
+
+### Production baseline (2026-09-24)
+
+```text
+code baseline      = 749e9cd (.worktrees/qualified-m00, detached) / code-equivalent 80f3c54
+production schema  = 28
+external issuer    = unavailable
+authority features = degraded/refused as documented above
+```
+
+Extension `ce7fefa8…` (`index.ts 10a8662f…`); canonical `.venv` imports
+`qualified-m00`; 116 memories. Rollback path and the pre-activation backup:
+ACTIVATION-RECORD.md. OMP processes started before activation keep the old
+module until they restart.
+
+### M00 → V3 freeze boundary
+
+M00 is closed at the baseline above. The external trust root runs as a
+parallel track and is **not** on V3's critical path. V3 develops against
+`qualified-m00` as its parent: retrieval, memory architecture, context
+construction, semantic/lexical/hybrid search, storage/compaction,
+skills/reuse/learning, cross-project knowledge and harness-independent adapters.
+
+**Standing rule: orchestration must not creep back.** OMP, OpenCode and Hermes
+own execution, agents, models, tools, task admission, STOP, retries,
+cancellation and completion. No Brain component may admit, block, route, veto,
+continue or settle host agent work, under any name. A change that does is a
+defect to remove, not a feature to qualify.
+
+V3 items inherited from activation:
+
+1. **Remove the Antigravity Stop completion control** (pre-existing MEDIUM,
+   `adapters/antigravity.py:202-244`). Caller-writable requirements can turn
+   host `Stop` into `decision: "continue"`; that is a surviving instance of
+   the rule above.
+2. **Replace the stale Hermes integrator plugin** with the release copy (only
+   writeback and handoff_read), with an owner-approved gateway restart. Its
+   retired worker tools currently refuse inertly.
+3. **Keep the two accepted residuals non-authoritative:** direct
+   `crossmodel.record_skill_outcome` rows and unprotected skill-approval
+   records must never gain authoritative semantics in V3.
 
 ### Boundary and legacy behavior
 
