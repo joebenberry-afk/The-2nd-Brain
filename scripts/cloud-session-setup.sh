@@ -25,6 +25,9 @@ export SECOND_BRAIN_HOME="$home"
 .venv/bin/python -m second_brain init >/dev/null
 .venv/bin/python scripts/cloud_corpus.py load
 .venv/bin/python -m second_brain memory reindex
+# V3 core: records/ is canonical; the index and per-project views are derived.
+.venv/bin/python -m second_brain.kb index >/dev/null
+.venv/bin/python -m second_brain.kb views >/dev/null
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     {
