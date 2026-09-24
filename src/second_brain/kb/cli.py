@@ -17,6 +17,7 @@ from . import (
     commands_capture,
     commands_doctor,
     commands_index,
+    commands_sync,
     commands_views,
     hooks,
 )
@@ -41,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands_views.register(sub, common)
     commands_capture.register(sub, common)
     commands_doctor.register(sub, common)
+    commands_sync.register(sub, common)
     hooks.register(sub, common)
     return parser
 
