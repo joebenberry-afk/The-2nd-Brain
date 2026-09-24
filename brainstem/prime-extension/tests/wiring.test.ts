@@ -56,21 +56,24 @@ vi.mock("../src/autoinject", async (importOriginal) => {
   return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
 });
 const runEnvironmentAssessmentMock = vi.hoisted(() => vi.fn());
-const runEnvironmentAssessmentAsyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/environment-mirror", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/environment-mirror")>();
   return {
     ...actual,
-    runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
-    runEnvironmentAssessment: runEnvironmentAssessmentAsyncMock,
+    runEnvironmentAssessment: runEnvironmentAssessmentMock,
   };
 });
 
 const runP4PulseMock = vi.hoisted(() => vi.fn());
-const runP4PulseSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: runP4PulseMock,
-  runP4PulseSync: runP4PulseSyncMock,
+}));
+
+// The optional shutdown maintenance is now started DETACHED; these wiring
+// tests assert the decision handed to that seam, never a real Python child.
+const startDetachedMaintenanceMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/detached-maintenance", () => ({
+  startDetachedShutdownMaintenance: startDetachedMaintenanceMock,
 }));
 
 // P3.16 skill-visibility wiring: control the visibility outcome directly
@@ -138,7 +141,7 @@ beforeEach(async () => {
   runAdvisoryAutoInjectMock.mockReset();
   runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
   runEnvironmentAssessmentMock.mockReset();
-  runEnvironmentAssessmentMock.mockReturnValue({
+  runEnvironmentAssessmentMock.mockImplementation(async () => ({
     ok: true,
     sessionId: "wiring-test",
     environmentStewardId: "envsteward-test",
@@ -146,17 +149,15 @@ beforeEach(async () => {
     mutationDetected: false,
     mutationClassification: "none",
     completionEligible: true,
-  });
-  // Background (session_start / task_boundary) assessments share the sync mock's
-  // configured result and call log unless a test overrides the async mock.
-  runEnvironmentAssessmentAsyncMock.mockReset();
-  runEnvironmentAssessmentAsyncMock.mockImplementation(async (options: unknown) =>
-    runEnvironmentAssessmentMock(options),
-  );
+  }));
   runP4PulseMock.mockReset();
   runP4PulseMock.mockResolvedValue({ ok: true, sessionId: "wiring-test" });
-  runP4PulseSyncMock.mockReset();
-  runP4PulseSyncMock.mockReturnValue({ ok: true, sessionId: "wiring-test" });
+  startDetachedMaintenanceMock.mockReset();
+  // The seam reports what it started; the wiring decision is what these tests
+  // assert, so the stub mirrors the requested assessment.
+  startDetachedMaintenanceMock.mockImplementation(
+    (options: { assessEnvironment: boolean }) => ({ environment: options.assessEnvironment, p4: true }),
+  );
   runOmpVisibilityMock.mockReset();
   runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
 });
@@ -481,7 +482,7 @@ describe("factory wiring (src/index.ts)", () => {
     expect(final.map((r) => r.kind)).toEqual(["session_start", "turn_end", "session_shutdown"]);
   });
 
-  it("consumes Environment Steward evidence at task and session boundaries", async () => {
+  it("consumes Environment Steward evidence at task boundaries and decides the shutdown assessment from the fingerprint", async () => {
     const handlers = loadFactory();
     const repo = join(tmp, "repo");
     mkdirSync(repo, { recursive: true });
@@ -522,32 +523,120 @@ describe("factory wiring (src/index.ts)", () => {
       expect.objectContaining({ phase: "task_boundary", repo, taskId: expect.any(String) }),
     );
 
-    runEnvironmentAssessmentMock.mockReturnValue({
-      ok: true,
-      sessionId: "wiring-test",
-      environmentStewardId: "envsteward-test",
-      environmentHash: "b".repeat(64),
-      mutationDetected: false,
-      mutationClassification: "none",
-      completionEligible: true,
-      evidence: { project_id: "project-a" },
-    });
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const inactive = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_inactive",
     );
-    expect(inactive?.[0]?.record?.fields?.environment_hash).toBe("b".repeat(64));
-    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "shutdown", hostSessionId: "wiring-test" }),
-    );
-    expect(runP4PulseSyncMock).toHaveBeenCalledWith(
+    // The shutdown record carries the DECISION, not an assessment result: the
+    // assessment now runs detached, after this record is already written.
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      maintenance: "detached",
+      environment_reassessed: false,
+    });
+    // The fingerprint has not moved since the task-boundary assessment and the
+    // deferred session-start job already ran: nothing new would be assessed.
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hostSessionId: "wiring-test",
-        event: "session_shutdown",
-        projectId: "project-a",
         repo,
+        projectId: undefined,
+        assessEnvironment: false,
       }),
     );
+    // The shutdown path never spawns an assessment of its own again.
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(2);
+    await settle();
+  });
+
+  it("session_shutdown re-assesses when the repo fingerprint moved past the last assessment", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+
+    // The repo moves AFTER the session-start assessment, and no task boundary
+    // observes it: only the shutdown decision can still catch the change.
+    writeFileSync(join(repo, "pyproject.toml"), "[project]\nname = 'moved'\n", "utf8");
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      maintenance: "detached",
+      environment_reassessed: true,
+    });
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repo, assessEnvironment: true }),
+    );
+    await settle();
+  });
+
+  it("session_shutdown re-assesses when the deferred session-start assessment never ran", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
+
+    // Shutdown inside the idle window: the session-start job is dropped before
+    // it ever ran, so the detached assessment is the session's only one.
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repo, assessEnvironment: true }),
+    );
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields?.environment_reassessed).toBe(true);
+    await settle();
+  });
+
+  it("child sessions never start the detached shutdown maintenance", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    // Native child identity: a real header shape (id/timestamp agree with the
+    // session id) that additionally names its parent.
+    const headerId = "native-child";
+    const ctx = makeCtx({
+      cwd: repo,
+      sessionManager: {
+        getSessionFile: () => join(tmp, "sessions", "child-wiring-test.jsonl"),
+        getSessionId: () => headerId,
+        getHeader: () => ({
+          type: "session", version: 1, id: headerId, timestamp: "2026-01-01T00:00:00.000Z",
+          parentSession: "root-canonical",
+        }),
+        getEntries: () => [],
+      },
+    });
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(startDetachedMaintenanceMock).not.toHaveBeenCalled();
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      optional_maintenance_skipped: "native_child",
+    });
     await settle();
   });
 
@@ -557,7 +646,8 @@ describe("factory wiring (src/index.ts)", () => {
     mkdirSync(repo, { recursive: true });
     writeFileSync(join(repo, "package.json"), "{}", "utf8");
     const ctx = makeCtx({ cwd: repo });
-    runEnvironmentAssessmentAsyncMock.mockImplementation(() => new Promise(() => undefined));
+    const never = Promise.withResolvers<never>();
+    runEnvironmentAssessmentMock.mockImplementation(() => never.promise);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     handlers.get("session_start")!({ reason: "startup" }, ctx);
@@ -565,22 +655,21 @@ describe("factory wiring (src/index.ts)", () => {
     // re-assesses at a task boundary.
     await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
     vi.advanceTimersByTime(60_000);
-    expect(runEnvironmentAssessmentAsyncMock).not.toHaveBeenCalled();
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
     handlers.get("agent_end")!({ messages: [] }, ctx);
     vi.advanceTimersByTime(5_000);
     vi.useRealTimers();
-    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledTimes(1);
-    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "session_start" }),
     );
 
     // A manifest change re-assesses in the background; the turn still returns.
     writeFileSync(join(repo, "package.json"), '{"name":"changed"}', "utf8");
     await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
-    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "task_boundary", repo }),
     );
-    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
     const kinds = mirrorFireAndForgetMock.mock.calls.map((call) => call[0]?.record?.kind);
     expect(kinds).toContain("session_started");
     expect(kinds).toContain("user_task");
@@ -642,62 +731,30 @@ describe("factory wiring (src/index.ts)", () => {
     expect(heartbeats[0].model_tokens_used).toBe(0);
   });
 
-  it("Task 7: session_shutdown persists heartbeat and fingerprint records before returning", async () => {
+  it("session_shutdown starts the detached P4 pulse and relays no pulse telemetry itself", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
-    runP4PulseSyncMock.mockReturnValue({
-      ok: true,
-      sessionId: "wiring-test",
-      heartbeat: {
-        mode: "shadow", event: "session_shutdown", due: true, ran: true, healthy: true,
-        db_ok: true, cache_pruned_count: 1, git_dirty: false, issue_codes: [],
-        latency_ms: 5, model_tokens_used: 0,
-      },
-      candidates: [{ candidate_id: "candidate-1", lifecycle_state: "candidate" }],
-      fingerprints: [
-        {
-          fingerprint_id: "fp-1", category: "PROMPT_BLOAT", scope_id: "project-a",
-          occurrence_count: 3, impact_score: 4.2, evidence_count: 2, evidence_hash: "a".repeat(64),
-        },
-      ],
+    const startedAt: string[] = [];
+    startDetachedMaintenanceMock.mockImplementation((options: { repo?: string }) => {
+      startedAt.push(options.repo ?? "");
+      return { environment: false, p4: true };
     });
-
-    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-
-    const records = readFileSync(telemetryFile(), "utf8")
-      .split("\n")
-      .filter((l) => l.trim().length > 0)
-      .map((l) => JSON.parse(l));
-    const heartbeat = records.find((r) => r.kind === "heartbeat_pulse");
-    const fingerprint = records.find((r) => r.kind === "bottleneck_fingerprint");
-    expect(heartbeat?.mode).toBe("shadow");
-    expect(heartbeat?.model_tokens_used).toBe(0);
-    expect(fingerprint?.fingerprint_id).toBe("fp-1");
-    expect(fingerprint?.evidence_hash).toBe("a".repeat(64));
-    // Privacy: the raw candidate dict (lifecycle_state, candidate_id, ...)
-    // is never serialized into telemetry by these sensors.
-    const serialized = JSON.stringify(records);
-    expect(serialized).not.toContain("candidate_id");
-    expect(serialized).not.toContain("lifecycle_state");
-    expect(records.map((r) => r.kind)).toContain("session_shutdown");
-  });
-
-  it("Task 7: a failed P4 pulse persists its error before shutdown returns", async () => {
-    const handlers = loadFactory();
-    const ctx = makeCtx();
-    runP4PulseSyncMock.mockReturnValue({ ok: false, sessionId: "wiring-test", error: "p4 pulse timed out" });
 
     // The handler drains the session's capsule-write barrier before persisting,
     // so the awaited call is the completion point (the writes are still final).
     await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
+    expect(startedAt).toEqual(["C:/work"]);
     const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l));
     expect(records.map((r) => r.kind)).toContain("session_shutdown");
-    const error = records.find((r) => r.kind === "extension_error" && r.error === "p4 pulse timed out");
-    expect(error).toBeDefined();
+    // Python's detached pulse writes its own heartbeat/fingerprint records:
+    // the TS sensors no longer see a result, and a spawn failure has no reader.
+    expect(records.map((r) => r.kind)).not.toContain("heartbeat_pulse");
+    expect(records.map((r) => r.kind)).not.toContain("bottleneck_fingerprint");
+    expect(records.find((r) => r.kind === "extension_error")).toBeUndefined();
   });
 
   it("ledger-cwd-ordering-fix: user_task as FIRST mirror forwards ctx.cwd (project attribution)", async () => {

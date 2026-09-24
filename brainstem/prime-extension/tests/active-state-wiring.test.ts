@@ -7,13 +7,13 @@ import type { ExtensionAPI, ExtensionContext } from "../types/prime";
 
 const ensureMock = vi.hoisted(() => vi.fn());
 const updateMock = vi.hoisted(() => vi.fn());
-const updateSyncMock = vi.hoisted(() => vi.fn());
+const detachedUpdateMock = vi.hoisted(() => vi.fn());
 const renderMock = vi.hoisted(() => vi.fn());
 const messageMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/active-state-mirror", () => ({
   runActiveStateEnsure: ensureMock,
   runActiveStateUpdate: updateMock,
-  runActiveStateUpdateSync: updateSyncMock,
+  startDetachedActiveStateUpdate: detachedUpdateMock,
   renderActiveState: renderMock,
   activeStateMessage: messageMock,
 }));
@@ -45,7 +45,7 @@ beforeEach(async () => {
   process.env.SECOND_BRAIN_HOME = tmp;
   ensureMock.mockReset();
   updateMock.mockReset();
-  updateSyncMock.mockReset();
+  detachedUpdateMock.mockReset();
   renderMock.mockReset();
   messageMock.mockReset();
   runOmpVisibilityMock.mockReset();
@@ -56,7 +56,7 @@ beforeEach(async () => {
   updateMock.mockResolvedValue({ ok: true, sessionId: "omp-session", changed: true });
   mkdirSync(join(tmp, "config"), { recursive: true });
   writeFileSync(join(tmp, "config", "autoinject.toml"), "[autoinject]\nmode = \"active\"\n");
-  updateSyncMock.mockReturnValue({ ok: true, sessionId: "omp-session", changed: true });
+  detachedUpdateMock.mockReturnValue(true);
   renderMock.mockResolvedValue({
     ok: true,
     sessionId: "omp-session",
@@ -164,7 +164,7 @@ describe("P3.1 active-state OMP lifecycle", () => {
     expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
       verification: { pre_compaction: "persisted" },
     }));
-    expect(updateSyncMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(detachedUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
       verification: { session_shutdown: "normal" },
     }));
   });

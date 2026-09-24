@@ -444,6 +444,16 @@ def _parser() -> argparse.ArgumentParser:
         "dropping the rest",
     )
     lapp.add_argument(
+        "--batch-file",
+        dest="batch_file",
+        default=None,
+        metavar="PATH",
+        help="read the JSON Lines batch from PATH instead of stdin (implies --batch; "
+        "the same validation, transaction and reporting). Used by the host's detached "
+        "shutdown flush, where no stdin survives the parent process. The file is "
+        "removed once its contents have been appended",
+    )
+    lapp.add_argument(
         "--init",
         action="store_true",
         help="create the session ledger first when it does not exist yet (idempotent; "
@@ -3487,7 +3497,35 @@ def _ledger_parse_batch_lines(raw: str) -> tuple[list[tuple[int, dict]], list[di
     return items, errors
 
 
-def _ledger_append_batch(args, home, store) -> tuple[list[int], list[dict], int]:
+def _ledger_batch_payload(args) -> str:
+    """The `ledger append --batch` JSON Lines payload.
+
+    ``--batch-file PATH`` (the host's detached shutdown flush: no stdin survives
+    the parent) is an alternative SOURCE for the identical batch path — same
+    validation, transaction and reporting as ``--batch`` on stdin. An unreadable
+    file is an operational failure (non-zero), never an empty batch.
+    """
+    path = getattr(args, "batch_file", None)
+    if not path:
+        return sys.stdin.read()
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BrainError(f"ledger append --batch-file unreadable: {exc}") from exc
+
+
+def _ledger_drop_handoff_file(args) -> None:
+    """Remove a consumed ``--batch-file`` handoff (best-effort, never fails the call)."""
+    path = getattr(args, "batch_file", None)
+    if not path:
+        return
+    with contextlib.suppress(OSError):
+        Path(path).unlink()
+
+
+def _ledger_append_batch(
+    args, store, raw: str
+) -> tuple[list[int], list[dict], int]:
     """Append JSON Lines events in ONE transaction; per-event failures reported.
 
     Same validation as single appends (``_ledger_normalize_event`` +
@@ -3503,7 +3541,7 @@ def _ledger_append_batch(args, home, store) -> tuple[list[int], list[dict], int]
     """
     from . import contracts, ledger
 
-    items, errors = _ledger_parse_batch_lines(sys.stdin.read())
+    items, errors = _ledger_parse_batch_lines(raw)
     events: list[contracts.BrainLifecycleEvent] = []
     line_of: dict[str, int] = {}
     seen: set[str] = set()
@@ -3599,7 +3637,8 @@ def cmd_ledger(args) -> int:
         )
         return 0
     if cmd == "append":
-        use_batch = bool(getattr(args, "batch", False))
+        # `--batch-file PATH` is the stdin-free source of the SAME batch path.
+        use_batch = bool(getattr(args, "batch", False)) or bool(getattr(args, "batch_file", None))
         if not args.stdin_json and not use_batch:
             print(contracts.canonical_json({"error": "--stdin-json or --batch required"}))
             return 2
@@ -3609,6 +3648,10 @@ def cmd_ledger(args) -> int:
         # The identity resolves BEFORE open(create=True): an unresolvable parent
         # must not leave a half-created ledger behind (same rule as `ledger init`).
         ensure_init = bool(getattr(args, "init", False))
+        # The batch payload is READ before the store opens, for the same reason:
+        # an unreadable --batch-file handoff must not create the session it
+        # could never fill.
+        batch_payload = _ledger_batch_payload(args) if use_batch else ""
         identity = _ledger_session_identity(home, args) if ensure_init else None
         store = ledger.LedgerStore(
             home, args.host_session_id, host=args.host if ensure_init else None
@@ -3619,7 +3662,7 @@ def cmd_ledger(args) -> int:
                 store.create_session(identity)
             if use_batch:
                 try:
-                    seqs, errors, skipped = _ledger_append_batch(args, home, store)
+                    seqs, errors, skipped = _ledger_append_batch(args, store, batch_payload)
                 except sqlite3.Error as exc:
                     # Operational DB failure (busy/locked, disk I/O, malformed
                     # image): NOT an event rejection. Fail the batch (non-zero)
@@ -3631,6 +3674,10 @@ def cmd_ledger(args) -> int:
                         {"appended": seqs, "errors": errors, "skipped": skipped}
                     )
                 )
+                # The batch came from the host's handoff file (if any): after the
+                # transaction, the file's contents are durable in the ledger and the
+                # file has no reader. A FAILED batch keeps it (diagnosis/replay).
+                _ledger_drop_handoff_file(args)
                 return 0
             try:
                 raw = sys.stdin.read()

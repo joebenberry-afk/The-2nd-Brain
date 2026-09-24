@@ -5,7 +5,9 @@
  * Mirrors host lifecycle events into the Brain session ledger by spawning the
  * Python control CLI, `<home>/.venv/Scripts/python.exe -m second_brain ledger
  * append --session <hostSessionId> --batch --init`, with cwd=<home>,
- * SECOND_BRAIN_HOME=<home>, PYTHONHOME/PYTHONPATH removed, 5s timeout.
+ * SECOND_BRAIN_HOME=<home>, PYTHONHOME/PYTHONPATH removed, 5s timeout. The
+ * terminal handoff is the one exception: its detached child is bounded by its own
+ * work, not by a timeout nobody is left to enforce.
  *
  * LedgerBatch: events are QUEUED per session and shipped as ONE batch spawn
  * (JSON Lines on stdin) instead of one spawn per event — a turn that mirrors
@@ -13,8 +15,10 @@
  * flushes at every boundary the host and the ledger already agree on
  * (turn_end / agent_ended / the compaction pair), when it reaches
  * MIRROR_BATCH_MAX_EVENTS, or after MIRROR_FLUSH_DEBOUNCE_MS idle. Terminal
- * kinds flush SYNCHRONOUSLY (the session worker may be torn down the moment
- * their handler returns), and `runLedgerCheckpoint` flushes the queue before
+ * kinds are HANDED OFF instead: the drained queue is written to a JSONL file
+ * under `<home>/state/tmp` and one DETACHED `ledger append --batch --batch-file`
+ * child owns that write, because the session worker is torn down the moment
+ * their handler returns. `runLedgerCheckpoint` still flushes the queue before
  * the checkpoint's own durability barrier.
  *
  * Ordering is preserved: one queue per session, one in-flight batch at a time,
@@ -27,8 +31,9 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { startDetachedBrainCommand } from "./detached-spawn";
 import { extensionError } from "./sensors";
 
 export const MIRROR_DEFAULT_TIMEOUT_MS = 5000;
@@ -59,8 +64,10 @@ export const MIRROR_FLUSH_KINDS: Record<string, true> = {
 /**
  * Terminal kinds whose process may exit as soon as the handler returns
  * (`session_shutdown` is a `final` handler: the SDK guarantees no further
- * event-loop turn). Their flush is SYNCHRONOUS — a debounce timer or an
- * unawaited promise would drop the session's last evidence on teardown.
+ * event-loop turn). Their flush is HANDED OFF — the drained batch goes to a
+ * detached `ledger append --batch-file` child, because a debounce timer, an
+ * unawaited promise, or a spawn the host waits for would all cost the session's
+ * last evidence either its durability (teardown) or the host's exit tail.
  */
 export const MIRROR_TERMINAL_FLUSH_KINDS: Record<string, true> = { session_inactive: true };
 /**
@@ -502,8 +509,9 @@ export function mirrorFireAndForget(
   const settled = enqueueMirrorEvent(options);
   const kind = options.record.kind;
   if (Object.hasOwn(MIRROR_TERMINAL_FLUSH_KINDS, kind)) {
-    // Final handler: the process may exit the moment this returns.
-    flushSessionSync(options.hostSessionId);
+    // Final handler: the process may exit the moment this returns, so the batch
+    // is handed to a DETACHED child instead of being spawned and waited for.
+    flushSessionDetached(options.hostSessionId);
     return settled;
   }
   scheduleFlush(
@@ -840,61 +848,61 @@ function runBatchAppend(
 }
 
 /**
- * Synchronous flush for terminal kinds. The session worker may be torn down as
- * soon as the shutdown handler returns, so this waits for the spawn (bounded by
- * the mirror timeout) rather than relying on a timer nobody can await. ONE
- * attempt: a retry here would double the block for a race the session has long
- * outgrown, and the failure is recorded either way.
+ * Detached terminal flush for terminal kinds. The session worker may be torn
+ * down as soon as the shutdown handler returns, so the batch must be handed to
+ * a process that outlives the host instead of waiting for a spawn that the host
+ * would have to survive. The queue is drained into a JSONL handoff file under
+ * `<home>/state/tmp` (unique name: the host may restart and flush again before
+ * a previous child read its own file) and one detached `ledger append --batch
+ * --batch-file` owns that write. Nothing else writes this session's stream
+ * after the drain, so the batch stays the session's last ledger write.
+ *
+ * ONE attempt, and no result to read: a batch that cannot be started (or whose
+ * child fails later) is reported through `onError` and otherwise dropped, which
+ * is the same bounded outcome as the previous single synchronous attempt.
+ *
+ * A pump already in flight owns its own earlier batch: the drain takes only the
+ * events queued after it (exactly like the previous synchronous flush), and
+ * nothing else writes this session's stream once the drain is done.
  */
-function flushSessionSync(hostSessionId: string): void {
+function flushSessionDetached(hostSessionId: string): void {
   const queue = mirrorQueues.get(hostSessionId);
   if (queue === undefined) return;
   clearQueueTimer(queue);
   const batch = queue.events.splice(0, queue.events.length);
   if (batch.length === 0) return;
-  const outcome = spawnBatchSync(queue, hostSessionId, batch);
-  if (outcome.ok) reportBatchEventErrors(batch, outcome.errors);
-  else reportBatchFailure(batch, outcome.error ?? "ledger batch append failed (shutdown)");
+  if (!startDetachedBatchAppend(queue, hostSessionId, batch)) {
+    reportBatchFailure(batch, "ledger batch append not started (shutdown)");
+  }
   for (const event of batch) event.settled();
 }
 
-function spawnBatchSync(
+/** Write the batch where the detached CLI can read it; `undefined` = not written. */
+function writeBatchHandoffFile(home: string, payload: string): string | undefined {
+  const file = join(home, "state", "tmp", `ledger-terminal-${randomUUID()}.jsonl`);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, payload, "utf8");
+    return file;
+  } catch {
+    return undefined; // unwritable home: nothing to hand off, fail open
+  }
+}
+
+function startDetachedBatchAppend(
   queue: SessionQueue,
   hostSessionId: string,
   batch: QueuedMirrorEvent[],
-): BatchOutcome {
+): boolean {
   const python = mirrorPython(queue.home, queue.python);
-  if (!existsSync(python)) return { ok: true, errors: [] };
-  const payload = `${batch.map((event) => event.json).join("\n")}\n`;
+  if (!existsSync(python)) return true; // no runtime -> silent no-op, like the pump
   const parent = batchParentSession(batch);
   // Same decision as the async pump: a batch that carries a new authoritative
-  // parent must re-run `--init` with it, or the ancestry is never persisted and
-  // the success path would cache a parent the CLI never validated.
+  // parent must re-run `--init` with it, or the ancestry is never persisted.
   const args = batchAppendArgs(hostSessionId, batch, flushNeedsInit(hostSessionId, parent));
-  let stdout: string;
-  try {
-    stdout = execFileSync(python, args, {
-      cwd: queue.home,
-      env: mirrorSpawnEnv(queue.home),
-      timeout: queue.timeoutMs ?? MIRROR_DEFAULT_TIMEOUT_MS,
-      windowsHide: true,
-      input: payload,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      errors: [],
-    };
-  }
-  const outcome = parseBatchOutput(stdout);
-  if (outcome.ok) {
-    initializedSessions.set(hostSessionId, parent ?? initializedSessions.get(hostSessionId));
-  }
-  return outcome;
+  const file = writeBatchHandoffFile(queue.home, `${batch.map((event) => event.json).join("\n")}\n`);
+  if (file === undefined) return false;
+  return startDetachedBrainCommand(python, [...args, "--batch-file", file], queue.home);
 }
 
 function eventIdOf(json: string): string | undefined {

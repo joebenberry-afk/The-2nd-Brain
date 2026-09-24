@@ -3,7 +3,7 @@
  * observation (Task 7; replaces the narrower radar-mirror.ts). Follows the
  * exact fail-open/venv/timeout/session-id-verification contract established
  * by radar-mirror.ts and environment-mirror.ts. */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -60,52 +60,13 @@ function parseResult(stdout: string, sessionId: string): P4PulseResult {
 }
 
 /**
- * Synchronous P4 pulse for `session_shutdown` only: the host worker may tear
- * down immediately after the event returns, so this cannot be fire-and-forget.
- * `--no-telemetry` always accompanies the call: Python composes and returns
- * the pulse but writes nothing itself, so the bounded TS sensors
- * (heartbeatPulse/bottleneckFingerprint) own every telemetry write this
- * bridge produces.
- */
-export function runP4PulseSync(options: P4PulseOptions): P4PulseResult {
-  const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");
-  if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
-  const args = [
-    "-m", "second_brain", "p4", "pulse",
-    "--event", options.event,
-    "--session", options.hostSessionId,
-    ...(options.repo ? ["--repo", options.repo] : []),
-    ...(options.projectId ? ["--project-id", options.projectId] : []),
-    ...(options.force ? ["--force"] : []),
-    "--no-telemetry",
-    "--json",
-  ];
-  try {
-    return parseResult(
-      String(
-        execFileSync(python, args, {
-          cwd: options.home,
-          env: p4Env(options.home),
-          timeout: options.timeoutMs ?? P4_DEFAULT_TIMEOUT_MS,
-          windowsHide: true,
-          maxBuffer: P4_MAX_OUTPUT_BYTES,
-        }),
-      ),
-      options.hostSessionId,
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      sessionId: options.hostSessionId,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-/**
  * Asynchronous P4 pulse for `session_start`/`turn_start`: queued
- * fire-and-forget, never blocks the host turn. Same `--no-telemetry`
- * contract as `runP4PulseSync`.
+ * fire-and-forget, never blocks the host turn. `--no-telemetry` always
+ * accompanies the call: Python composes and returns the pulse but writes
+ * nothing itself, so the bounded TS sensor (`heartbeatPulse`) owns the one
+ * telemetry write this bridge produces. Shutdown does not use this bridge at
+ * all — its pulse is detached and self-telemetring
+ * (`src/detached-maintenance.ts`).
  */
 export function runP4Pulse(options: P4PulseOptions): Promise<P4PulseResult> {
   const python = options.python ?? process.env.SECOND_BRAIN_PYTHON ?? join(options.home, ".venv", "Scripts", "python.exe");

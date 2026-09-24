@@ -1,8 +1,9 @@
-import { vi, beforeEach, describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { vi, beforeEach, describe, expect, it, type Mock } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
-const execFileSyncMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", () => ({ execFile: execFileMock, execFileSync: execFileSyncMock }));
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile: execFileMock, spawn: spawnMock }));
 const hotContextMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/vmem", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/vmem")>();
@@ -15,16 +16,20 @@ import {
   renderActiveState,
   runActiveStateEnsure,
   runActiveStateUpdate,
-  runActiveStateUpdateSync,
+  startDetachedActiveStateUpdate,
 } from "../src/active-state-mirror";
 
 function fakeChild() {
   return { stdin: { write: vi.fn(), end: vi.fn() } };
 }
 
+function fakeDetachedChild(): EventEmitter & { unref: Mock } {
+  return Object.assign(new EventEmitter(), { unref: vi.fn() });
+}
+
 beforeEach(() => {
   execFileMock.mockReset();
-  execFileSyncMock.mockReset();
+  spawnMock.mockReset();
   hotContextMock.mockReset();
 });
 describe("active-state lifecycle bridge", () => {
@@ -74,16 +79,51 @@ describe("active-state lifecycle bridge", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("persists shutdown state synchronously", () => {
-    execFileSyncMock.mockReturnValue(JSON.stringify({ session_id: "omp-1", changed: true }));
-    const result = runActiveStateUpdateSync({
+  it("hands the shutdown capsule update to a detached child instead of waiting for it", () => {
+    const child = fakeDetachedChild();
+    spawnMock.mockReturnValue(child);
+
+    const started = startDetachedActiveStateUpdate({
       home: "C:/brain",
       hostSessionId: "omp-1",
       verification: { session_shutdown: "normal" },
       python: "C:/brain/.venv/Scripts/python.exe",
     });
-    expect(result.ok).toBe(true);
-    expect(execFileSyncMock).toHaveBeenCalled();
+
+    expect(started).toBe(true);
+    expect(spawnMock).toHaveBeenCalledWith(
+      "C:/brain/.venv/Scripts/python.exe",
+      [
+        "-m", "second_brain", "capsule", "update", "omp-1",
+        "--verification-json", JSON.stringify({ session_shutdown: "normal" }),
+        "--json",
+      ],
+      expect.objectContaining({
+        cwd: "C:/brain",
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        env: expect.objectContaining({ SECOND_BRAIN_HOME: "C:/brain" }),
+      }),
+    );
+    expect(child.unref).toHaveBeenCalledTimes(1);
+    // Without a listener, a later spawn failure would be an uncaught exception.
+    expect(child.listenerCount("error")).toBe(1);
+  });
+
+  it("fails open when the detached capsule update cannot be started", () => {
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn EINVAL");
+    });
+
+    expect(
+      startDetachedActiveStateUpdate({
+        home: "C:/brain",
+        hostSessionId: "omp-1",
+        verification: { session_shutdown: "normal" },
+        python: "C:/brain/.venv/Scripts/python.exe",
+      }),
+    ).toBe(false);
   });
 
   it("rejects rendered state from a different session", async () => {

@@ -1,6 +1,7 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { startDetachedBrainCommand } from "./detached-spawn";
 
 import { runVmemHotContext, type VmemHotContextResult } from "./vmem";
 export const ACTIVE_STATE_DEFAULT_TIMEOUT_MS = 5000;
@@ -117,11 +118,10 @@ export function parseActiveStateResult(stdout: string, expectedSession: string):
 function execute(
   options: ActiveStateOptions,
   args: string[],
-  sync: boolean,
-): ActiveStateResult | Promise<ActiveStateResult> {
+): Promise<ActiveStateResult> {
   const python = pythonExe(options.home, options.python);
   if (!existsSync(python)) {
-    return { ok: true, sessionId: options.hostSessionId, changed: false };
+    return Promise.resolve({ ok: true, sessionId: options.hostSessionId, changed: false });
   }
   const execOptions = {
     cwd: options.home,
@@ -130,22 +130,15 @@ function execute(
     windowsHide: true,
     maxBuffer: 1024 * 1024,
   };
-  if (sync) {
-    try {
-      return parseActiveStateResult(String(execFileSync(python, args, execOptions)), options.hostSessionId);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  const { promise, resolve } = Promise.withResolvers<ActiveStateResult>();
+  execFile(python, args, execOptions, (error, stdout) => {
+    if (error) {
+      resolve({ ok: false, error: error.message });
+      return;
     }
-  }
-  return new Promise((resolve) => {
-    execFile(python, args, execOptions, (error, stdout) => {
-      if (error) {
-        resolve({ ok: false, error: error.message });
-        return;
-      }
-      resolve(parseActiveStateResult(String(stdout), options.hostSessionId));
-    });
+    resolve(parseActiveStateResult(String(stdout), options.hostSessionId));
   });
+  return promise;
 }
 
 export function runActiveStateEnsure(options: ActiveStateOptions): Promise<ActiveStateResult> {
@@ -153,15 +146,27 @@ export function runActiveStateEnsure(options: ActiveStateOptions): Promise<Activ
   args.push(boundedText(options.objective ?? ""));
   if (options.nextAction !== undefined) args.push("--next-action", boundedText(options.nextAction));
   args.push("--json");
-  return Promise.resolve(execute(options, args, false));
+  return execute(options, args);
 }
 
 export function runActiveStateUpdate(options: ActiveStateOptions): Promise<ActiveStateResult> {
-  return Promise.resolve(execute(options, updateArgs(options), false));
+  return execute(options, updateArgs(options));
 }
 
-export function runActiveStateUpdateSync(options: ActiveStateOptions): ActiveStateResult {
-  return execute(options, updateArgs(options), true) as ActiveStateResult;
+/**
+ * Hand the shutdown capsule update to a DETACHED child. `session_shutdown` is
+ * the host worker's last event: waiting for the spawn (the previous
+ * `execFileSync` update blocked every turn the host still had to serve) cost the
+ * exit tail for a write nobody reads. The caller starts it only after the
+ * session's capsule-write barrier is idle, so this is the last write that
+ * capsule receives.
+ *
+ * Returns whether the process was started; fail-open, no result to report.
+ */
+export function startDetachedActiveStateUpdate(options: ActiveStateOptions): boolean {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) return false;
+  return startDetachedBrainCommand(python, updateArgs(options), options.home);
 }
 
 export async function renderActiveState(options: {

@@ -71,12 +71,11 @@ import {
   renderActiveState,
   runActiveStateEnsure,
   runActiveStateUpdate,
-  runActiveStateUpdateSync,
+  startDetachedActiveStateUpdate,
 } from "./active-state-mirror";
 import {
   environmentFingerprint,
   runEnvironmentAssessment,
-  runEnvironmentAssessmentSync,
   type EnvironmentAssessmentOptions,
 } from "./environment-mirror";
 import {
@@ -85,7 +84,8 @@ import {
   type QuietPrecheckResult,
 } from "./quiet-precheck";
 import { createCapsuleWrites } from "./capsule-writes";
-import { runP4Pulse, runP4PulseSync } from "./p4-mirror";
+import { startDetachedShutdownMaintenance } from "./detached-maintenance";
+import { runP4Pulse } from "./p4-mirror";
 import {
   mirrorExtensionError,
   mirrorFireAndForget,
@@ -1081,8 +1081,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // runs only once the session has been idle for BOOT_IDLE_MS: never during
   // host startup and never while an agent run is active, so Brain's Python
   // processes do not compete with dispatch. A new run cancels a pending timer;
-  // its agent_end re-arms it. Shutdown drops anything still pending: its own
-  // synchronous path persists state.
+  // its agent_end re-arms it. Shutdown drops anything still pending — and
+  // reports it, because a dropped session-start assessment is exactly the case
+  // where the detached shutdown assessment must run despite an unchanged
+  // fingerprint.
   const BOOT_IDLE_MS = 5_000;
   const deferredBoot = new Map<
     string,
@@ -1122,11 +1124,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       armDeferredBoot(session);
     }
   };
-  const dropDeferredBoot = (session: string): void => {
+  const dropDeferredBoot = (session: string): boolean => {
     const pending = deferredBoot.get(session);
-    if (pending === undefined) return;
+    if (pending === undefined) return false;
     clearTimeout(pending.timer);
     deferredBoot.delete(session);
+    return pending.jobs.length > 0;
   };
 
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
@@ -2572,6 +2575,9 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    * capsule-write barrier before it runs (V3 S2 review fix), while the record
    * write itself stays synchronous (`appendFinal`) — Prime's daemon tears the
    * worker down right after the event, so an awaited write could lose it.
+   * The OPTIONAL maintenance this path used to run inline is now started
+   * detached (`src/detached-maintenance.ts`); what stays synchronous here is
+   * the persistence Prime would otherwise lose.
    */
   const sessionShutdownRecord = (
     event: SessionShutdownEvent,
@@ -2582,22 +2588,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // away with the session that started it (an orphaned helper also
     // self-exits on stdin EOF if this host dies without shutdown).
     if (turnBridgeEnabled) stopTurnHelpers("session_shutdown");
-    dropDeferredBoot(session);
+    const bootWorkDropped = dropDeferredBoot(session);
     const activeStateCfg = loadAutoInjectHostConfig(config.home);
     if (
       activeStateTouchedSessions.has(session) &&
       (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active")
     ) {
-      const activeState = runActiveStateUpdateSync({
+      // The capsule update is this session's LAST capsule write — the
+      // session's capsule-write barrier was drained before this shutdown record
+      // ran, so a quiet ensure can no longer land after it. It must still land
+      // itself, but the host must not wait for a spawn that measures ~250 ms on
+      // its exit path. Detached: Python owns the write, and the update's own
+      // failure has no reader (this is observation, not settlement).
+      startDetachedActiveStateUpdate({
         home: config.home ?? "",
         hostSessionId: session,
         verification: { session_shutdown: event.reason ?? "normal" },
       });
-      if (!activeState.ok) {
-        getStore(session)?.appendFinal(
-          sensors.extensionError(session, new Error(activeState.error ?? "active-state shutdown failed")),
-        );
-      }
     }
     activeStateTouchedSessions.delete(session);
     // Required active-state persistence runs for every native recipient.
@@ -2618,51 +2625,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       }, { ignorable: true, cwd: ctxCwd(ctx) });
       return sensors.sessionShutdown(session, event.reason);
     }
-    const environment = runEnvironmentAssessmentSync({
+    const repo = ctxCwd(ctx) ?? config.home ?? "";
+    // The optional per-shutdown work is the expensive part of this path
+    // (environment assessment ~1.4 s, P4 pulse ~250 ms, both measured): start
+    // each as a DETACHED Python process that outlives the host instead of
+    // blocking the host's teardown. The assessment is worth a process only
+    // when it would produce NEW evidence: the session-start one never ran (its
+    // deferred job was dropped above), or the repo's cheap fingerprint moved
+    // since the last assessment. The P4 pulse always runs; being detached it
+    // writes its own heartbeat/fingerprint telemetry (no `--no-telemetry`).
+    const fingerprint = environmentFingerprint(repo);
+    const maintenance = startDetachedShutdownMaintenance({
       home: config.home ?? "",
       hostSessionId: session,
-      repo: ctxCwd(ctx) ?? config.home ?? "",
-      phase: "shutdown",
+      repo,
+      projectId: resolvedProjectIdForSession(session),
+      assessEnvironment: bootWorkDropped || environmentFingerprints.get(session) !== fingerprint,
     });
-    const projectId =
-      environment.ok &&
-      environment.evidence &&
-      typeof environment.evidence.project_id === "string"
-        ? environment.evidence.project_id
-        : undefined;
-    // Task 7: one bounded P4 pulse — heartbeat always runs; Radar/
-    // fingerprints run only when `projectId` is known (gated inside
-    // p4.pulse() itself, mirrors the prior project_id-gated Radar call).
-    // No further event-loop turn is guaranteed for shutdown-derived telemetry.
-    const p4Result = runP4PulseSync({
-      home: config.home ?? "",
-      hostSessionId: session,
-      event: "session_shutdown",
-      repo: ctxCwd(ctx) ?? config.home ?? "",
-      projectId,
-    });
-    if (p4Result.ok) {
-      if (p4Result.heartbeat) {
-        getStore(session)?.appendFinal(sensors.heartbeatPulse(session, p4Result.heartbeat));
-      }
-      for (const fingerprint of p4Result.fingerprints ?? []) {
-        getStore(session)?.appendFinal(sensors.bottleneckFingerprint(session, fingerprint));
-      }
-    } else {
-      getStore(session)?.appendFinal(
-        sensors.extensionError(session, new Error(p4Result.error ?? "P4 pulse failed")),
-      );
-    }
     mirror(
       session,
       "session_inactive",
       {
         reason: event.reason,
-        environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
-        environment_hash: environment.ok ? environment.environmentHash ?? null : null,
-        environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
-        environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
-        environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
+        maintenance: "detached",
+        environment_reassessed: maintenance.environment,
       },
       { cwd: ctxCwd(ctx) },
     );

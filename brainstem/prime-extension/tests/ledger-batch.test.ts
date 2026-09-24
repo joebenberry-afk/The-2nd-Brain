@@ -7,17 +7,20 @@
  * the assertions are about argv, stdin payloads and spawn counts — the three
  * things the ledger and the measurement harness actually observe.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({
   execFile: execFileMock,
   execFileSync: execFileSyncMock,
+  spawn: spawnMock,
 }));
 
 import {
@@ -39,9 +42,14 @@ const OK_BATCH = '{"appended":[1],"errors":[],"skipped":0}';
 interface Spawn {
   args: string[];
   stdin: string;
+  /** Spawn options, for the detached path's own contract. */
+  options?: Record<string, unknown>;
+  /** Detached terminal flush: the handoff file and the bytes it held at spawn. */
+  handoff?: { path: string; payload: string };
 }
 
 let spawns: Spawn[] = [];
+let detachedChildren: Array<EventEmitter & { unref: Mock }> = [];
 let respond: (args: string[]) => { error?: Error; stdout?: string } = () => ({
   stdout: OK_BATCH,
 });
@@ -51,10 +59,12 @@ let holdNextSpawn = false;
 
 beforeEach(() => {
   spawns = [];
+  detachedChildren = [];
   held = [];
   holdNextSpawn = false;
   execFileMock.mockReset();
   execFileSyncMock.mockReset();
+  spawnMock.mockReset();
   resetMirrorInitCache();
   respond = () => ({ stdout: OK_BATCH });
   execFileMock.mockImplementation((_python, args, _opts, cb) => {
@@ -86,6 +96,20 @@ beforeEach(() => {
     if (outcome.error) throw outcome.error;
     return outcome.stdout ?? "";
   });
+  spawnMock.mockImplementation((_python, args, options) => {
+    const argv = args as string[];
+    const fileIndex = argv.indexOf("--batch-file");
+    const path = fileIndex >= 0 ? argv[fileIndex + 1]! : "";
+    spawns.push({
+      args: argv,
+      stdin: "",
+      options: options as Record<string, unknown>,
+      handoff: path ? { path, payload: readFileSync(path, "utf8") } : undefined,
+    });
+    const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    detachedChildren.push(child);
+    return child as never;
+  });
 });
 
 afterEach(() => {
@@ -100,8 +124,17 @@ async function fakeHome(): Promise<{ home: string; python: string }> {
   return { home, python: join(bin, "python.exe") };
 }
 
+/** Handoff files a detached flush left under <home>/state/tmp. */
+function handoffFiles(home: string): string[] {
+  try {
+    return readdirSync(join(home, "state", "tmp")).sort();
+  } catch {
+    return [];
+  }
+}
+
 function payloadLines(spawn: Spawn): Array<Record<string, unknown>> {
-  return spawn.stdin
+  return (spawn.handoff?.payload ?? spawn.stdin)
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -350,9 +383,9 @@ describe("LedgerBatch flush triggers", () => {
 });
 
 describe("LedgerBatch terminal flush (session shutdown)", () => {
-  it("session_inactive flushes SYNCHRONOUSLY: the promise is settled when the handler returns", async () => {
+  it("session_inactive hands the batch to a DETACHED append: the promise is settled when the handler returns", async () => {
     const { home, python } = await fakeHome();
-    const session = "shutdown-sync";
+    const session = "shutdown-detached";
     void mirrorFireAndForget({ home, hostSessionId: session, record: { kind: "tool_completed", fields: {} }, python });
     const settled = mirrorFireAndForget({
       home,
@@ -361,16 +394,30 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
       python,
     });
 
-    // No await: the spawn must already have happened for the process to be
+    // No await: the handoff must already be complete for the process to be
     // allowed to exit right after the final handler returns.
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    expect(execFileMock).not.toHaveBeenCalled();
-    const sync = spawns[spawns.length - 1];
-    expect(sync.args).toEqual([
+    expect(execFileSyncMock).not.toHaveBeenCalled(); // the blocking spawn is gone
+    expect(execFileMock).not.toHaveBeenCalled(); // and the async pump is not used either
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const handoff = spawns[spawns.length - 1];
+    expect(handoff.args).toEqual([
       "-m", "second_brain", "ledger", "append",
       "--session", session, "--batch", "--init", "--host", "prime",
+      "--batch-file", handoff.handoff?.path,
     ]);
-    expect(payloadLines(sync).map((event) => event.event_type)).toEqual([
+    expect(handoff.options).toEqual(
+      expect.objectContaining({
+        cwd: home,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        env: expect.objectContaining({ SECOND_BRAIN_HOME: home }),
+      }),
+    );
+    expect(detachedChildren[0]!.unref).toHaveBeenCalledTimes(1);
+    // Without a listener, a later spawn failure would be an uncaught exception.
+    expect(detachedChildren[0]!.listenerCount("error")).toBe(1);
+    expect(payloadLines(handoff).map((event) => event.event_type)).toEqual([
       "tool_completed",
       "session_inactive",
     ]);
@@ -378,9 +425,11 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
     await settled;
   });
 
-  it("a shutdown flush failure is recorded through onError (never throws, nothing pending)", async () => {
+  it("a shutdown flush that cannot be started is recorded through onError (never throws, nothing pending)", async () => {
     const { home, python } = await fakeHome();
-    respond = () => ({ error: new Error("spawn ENOENT") });
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
     const onError = vi.fn();
     const settled = mirrorFireAndForget({
       home,
@@ -392,10 +441,32 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
     expect(pendingMirrorEvents("shutdown-fail")).toBe(0);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(String(onError.mock.calls[0][0])).toContain("not mirrored");
+    expect(String(onError.mock.calls[0][0])).toContain("not started");
+    // The batch it could not start stays on disk: it is the only record of what
+    // the session was about to write.
+    expect(handoffFiles(home)).toHaveLength(1);
     await settled;
   });
 
-  it("a shutdown batch carrying a NEW parent re-runs --init with it (sync == async)", async () => {
+  it("a session with no Brain runtime is a silent no-op: no child, no handoff, no error", async () => {
+    const { home } = await fakeHome();
+    const onError = vi.fn();
+    const settled = mirrorFireAndForget({
+      home,
+      hostSessionId: "shutdown-no-venv",
+      record: { kind: "session_inactive", fields: {} },
+      python: join(home, "elsewhere", "python.exe"),
+      onError,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(handoffFiles(home)).toHaveLength(0);
+    expect(onError).not.toHaveBeenCalled();
+    expect(pendingMirrorEvents("shutdown-no-venv")).toBe(0);
+    await settled;
+  });
+
+  it("a shutdown batch carrying a NEW parent re-runs --init with it (detached == async)", async () => {
     const { home, python } = await fakeHome();
     const session = "shutdown-parent";
     // Parentless init, cached by the async path: the session key exists with no
@@ -409,10 +480,10 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
     expect(spawns[0].args).not.toContain("--parent-session");
     spawns = [];
 
-    // A batch-carried parent is the authoritative one: the SYNC shutdown flush
-    // must re-run --init with it, like the async pump does — otherwise the
-    // ancestry is never persisted while the success path caches it as if it had
-    // been validated.
+    // A batch-carried parent is the authoritative one: the DETACHED shutdown
+    // flush must re-run --init with it, like the async pump does — otherwise the
+    // ancestry is never persisted at all (and nothing can cache it afterwards:
+    // the host is exiting and there is no result to read).
     const settled = mirrorFireAndForget({
       home,
       hostSessionId: session,
@@ -420,12 +491,12 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
       record: { kind: "session_inactive", fields: { reason: "quit" } },
       python,
     });
-    const syncSpawn = spawns[spawns.length - 1];
-    expect(syncSpawn.args).toContain("--init");
-    expect(syncSpawn.args[syncSpawn.args.indexOf("--parent-session") + 1]).toBe("root-sync");
+    const detachedSpawn = spawns[spawns.length - 1];
+    expect(detachedSpawn.args).toContain("--init");
+    expect(detachedSpawn.args[detachedSpawn.args.indexOf("--parent-session") + 1]).toBe("root-sync");
     await settled;
 
-    // Validated once: a later terminal batch WITHOUT a parent must not re-init.
+    // Known-initialized: a later terminal batch WITHOUT a parent must not re-init.
     spawns = [];
     const later = mirrorFireAndForget({
       home,
@@ -435,6 +506,10 @@ describe("LedgerBatch terminal flush (session shutdown)", () => {
     });
     expect(spawns[spawns.length - 1].args).not.toContain("--init");
     await later;
+
+    // One file per handoff: a restarted host may flush again while an earlier
+    // child is still reading its own batch.
+    expect(handoffFiles(home)).toHaveLength(2);
   });
 });
 

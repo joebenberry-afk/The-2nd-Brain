@@ -34,12 +34,10 @@ vi.mock("../src/ledger-mirror", async (original) => ({
 vi.mock("../src/environment-mirror", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/environment-mirror")>()),
 
-  runEnvironmentAssessmentSync: () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
   runEnvironmentAssessment: async () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
 }));
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: async () => ({ ok: true }),
-  runP4PulseSync: () => ({ ok: true }),
 }));
 import fs from "node:fs";
 
