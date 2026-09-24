@@ -512,6 +512,42 @@ def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
     return intent.task_text
 
 
+_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+_SENTENCE_BREAK = re.compile(r"(?<=[.?!])\s+|\n+")
+_LEADING_LABEL = re.compile(r"^[A-Za-z][A-Za-z ]{0,20}:\s+")
+_MAX_FOCUS_QUESTIONS = 3
+
+
+def _focused_query_text(text: str, project_id: str | None) -> str | None:
+    """Deterministic task focus for instruction-heavy prompts (RET-02).
+
+    Keeps only explicit question sentences (outside fenced code), drops a leading
+    label such as ``Question:`` and the resolved project's own name tokens: the
+    project scope filter already encodes that identity, so as query terms they
+    only raise the lexical match requirement. Exact symbols inside the question
+    are kept verbatim. Returns None when there is no question or nothing
+    distinct from ``text`` remains.
+    """
+    prose = _FENCED_CODE.sub(" ", text)
+    questions = [
+        _LEADING_LABEL.sub("", sentence.strip())
+        for sentence in _SENTENCE_BREAK.split(prose)
+        if sentence.strip().endswith("?") and len(sentence.split()) >= 3
+    ][:_MAX_FOCUS_QUESTIONS]
+    if not questions:
+        return None
+    focus = " ".join(questions)
+    if project_id and project_id not in ("default", "unknown"):
+        names = sorted({t for t in re.split(r"[^a-z0-9]+", project_id.casefold()) if len(t) >= 3})
+        if names:
+            pattern = r"\b(?:" + "|".join(map(re.escape, names)) + r")\b"
+            focus = re.sub(pattern, " ", focus, flags=re.IGNORECASE)
+    focus = " ".join(focus.split())
+    if not focus or focus.casefold() == " ".join(text.split()).casefold():
+        return None
+    return focus
+
+
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
     """Apply the literal corpus admission policy before ranking/rendering.
 
@@ -949,6 +985,7 @@ def prepare_injection(
     query_text = (
         retrieval_text if retrieval_text is not None else _retrieval_query_text(home, intent)
     )
+    focused_text = _focused_query_text(query_text, intent.project_id)
     proj_filter = (
         intent.project_id
         if intent.project_id and intent.project_id not in ("default", "unknown")
@@ -957,44 +994,55 @@ def prepare_injection(
     unscoped_candidates: list[dict] = []
     try:
         db.migrate(db_path(home))
-        # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
-        cascade_res = _CASCADE.retrieve(
-            home,
-            query_text,
-            project_id=proj_filter,
-            top_k=_MAX_CANDIDATES,
-            lane=intent.lane,
-        )
-        if cascade_res.retrieval_error:
-            raise RuntimeError("semantic retrieval unavailable")
-        rows = [
-            m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-            for m in cascade_res.matches
-        ]
 
-        # The semantic project prefilter excludes domain memories whose
-        # project is unknown. Supplement known-project searches with the
-        # unscoped result; _valid_candidates remains the security boundary.
-        if proj_filter is not None:
-            unscoped_cascade = _CASCADE.retrieve(
+        def retrieve_rows(text: str) -> tuple[hybrid_retrieval.CascadeResult, list[dict]]:
+            # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
+            result = _CASCADE.retrieve(
                 home,
-                query_text,
-                project_id=None,
+                text,
+                project_id=proj_filter,
                 top_k=_MAX_CANDIDATES,
                 lane=intent.lane,
             )
-            if unscoped_cascade.retrieval_error:
+            if result.retrieval_error:
                 raise RuntimeError("semantic retrieval unavailable")
-            supplement = [
+            found = [
                 m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-                for m in unscoped_cascade.matches
+                for m in result.matches
             ]
-            seen_ids = {str(row.get("memory_id")) for row in rows}
-            rows.extend(
-                row
-                for row in supplement
-                if row.get("memory_id") and str(row["memory_id"]) not in seen_ids
-            )
+
+            # The semantic project prefilter excludes domain memories whose
+            # project is unknown. Supplement known-project searches with the
+            # unscoped result; _valid_candidates remains the security boundary.
+            if proj_filter is not None:
+                unscoped_cascade = _CASCADE.retrieve(
+                    home,
+                    text,
+                    project_id=None,
+                    top_k=_MAX_CANDIDATES,
+                    lane=intent.lane,
+                )
+                if unscoped_cascade.retrieval_error:
+                    raise RuntimeError("semantic retrieval unavailable")
+                supplement = [
+                    m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+                    for m in unscoped_cascade.matches
+                ]
+                seen_ids = {str(row.get("memory_id")) for row in found}
+                found.extend(
+                    row
+                    for row in supplement
+                    if row.get("memory_id") and str(row["memory_id"]) not in seen_ids
+                )
+            return result, found
+
+        # The full query runs first so every case it already answers is unchanged;
+        # the focused question query is tried only when it returns nothing.
+        cascade_res, rows = retrieve_rows(query_text)
+        if not rows and focused_text is not None:
+            cascade_res, rows = retrieve_rows(focused_text)
+            if rows:
+                query_mode = "idf_focused"
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
         _append_telemetry(

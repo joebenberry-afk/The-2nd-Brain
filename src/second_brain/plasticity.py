@@ -57,8 +57,7 @@ def _dbfile(home: Path) -> Path:
 
 
 def _ensure_migrated(home: Path) -> None:
-    if db.pending_migrations(_dbfile(home)):
-        db.migrate(_dbfile(home))
+    db.ensure_migrated(_dbfile(home))
 
 
 def _utility_path(home: Path) -> Path:

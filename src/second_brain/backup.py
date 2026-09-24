@@ -771,6 +771,7 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         dst_db = db_paths[DB_RELATIVE]
         dst_db.parent.mkdir(parents=True, exist_ok=True)
         _install_verified_file(dst_db, src_db, DB_RELATIVE, manifest.get("db", {}).get("sha256"))
+        db.forget_migration_state()
         _drop_stale_db_sidecars(db_paths)
         for rel, src, destination in plan:
             if not src.exists():
@@ -794,6 +795,7 @@ def restore_backup(home: Path, backup_dir: Path, *, force: bool = False) -> Path
         if not git_before:
             subprocess.run(["git", "init", "-q"], cwd=home, check=False)
     except Exception as exc:
+        db.forget_migration_state()
         if moved is not None:
             _rollback_aside(home, moved, existing)
         _remove_created_paths(home, state, db_paths, db_state, protected)

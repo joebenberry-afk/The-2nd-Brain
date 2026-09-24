@@ -1266,8 +1266,7 @@ class ActionCacheStore:
         conn.execute("DELETE FROM action_cache")
         conn.commit()
         dbfile = db.db_path(self.home)
-        if db.pending_migrations(dbfile):
-            db.migrate(dbfile)
+        db.ensure_migrated(dbfile)
         refs_conn = db.connect(dbfile)
         try:
             refs_conn.execute("DELETE FROM artifact_refs WHERE owner LIKE 'action_cache:%'")

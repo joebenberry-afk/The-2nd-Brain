@@ -266,8 +266,7 @@ def _dbfile(home: Path) -> Path:
 
 
 def _ensure_migrated(home: Path) -> None:
-    if db.pending_migrations(_dbfile(home)):
-        db.migrate(_dbfile(home))
+    db.ensure_migrated(_dbfile(home))
 
 
 def _version_created_at(home: Path, memory_id: str, version: int, fallback: str) -> str:
@@ -2432,10 +2431,7 @@ def _score_row(
                 b = reconsolidation.compute_base_level_activation(
                     Path(home), row.get("memory_id", "")
                 )
-                if b <= -10.0:
-                    p_need = 0.5
-                else:
-                    p_need = reconsolidation.compute_p_need(Path(home), row.get("memory_id", ""))
+                p_need = 0.5 if b <= -10.0 else reconsolidation.p_need_from_activation(b)
             except Exception:
                 p_need = 0.5
         if p_need is None:
@@ -2468,6 +2464,19 @@ def _rank_rows(
         else None
     )
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
+    if home is not None and ("freshness" in score_terms or "decision" in score_terms):
+        from . import reconsolidation
+
+        # One connection for every row's activation history instead of one per row.
+        pending = [str(r.get("memory_id") or "") for r in rows if r.get("_p_need") is None]
+        try:
+            activations = reconsolidation.base_level_activations(Path(home), pending)
+        except Exception:
+            activations = {}
+        for r in rows:
+            b = activations.get(str(r.get("memory_id") or ""))
+            if r.get("_p_need") is None and b is not None:
+                r["_p_need"] = 0.5 if b <= -10.0 else reconsolidation.p_need_from_activation(b)
     scored = []
     for index, row in enumerate(rows):
         row["_bm25"] = row.get("_bm25")
