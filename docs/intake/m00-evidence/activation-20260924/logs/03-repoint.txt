@@ -1,0 +1,11 @@
+Using Python 3.13.7 environment at: C:\Users\assas\Documents\The-Second-Brain\.venv
+Resolved 1 package in 2ms
+   Building second-brain @ file:///C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-m00
+      Built second-brain @ file:///C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-m00
+Prepared 1 package in 904ms
+Uninstalled 1 package in 15ms
+Installed 1 package in 9ms
+ - second-brain==2.0.0rc1 (from file:///C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-v2)
+ + second-brain==2.0.0rc1 (from file:///C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-m00)
+C:\Users\assas\Documents\The-Second-Brain\.worktrees\qualified-m00\src\second_brain\__init__.py C:\Users\assas\Documents\The-Second-Brain\.venv\Scripts\python.exe
+issuers 0 0 0
