@@ -19,6 +19,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/second_brain"]
 
+[tool.hatch.build.targets.sdist]
+include = ["src/second_brain", "pyproject.toml", "README.md", "VERSION", "CHANGELOG.md"]
+exclude = ["**/__pycache__/**", "*.pyc", "*.pyo"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
