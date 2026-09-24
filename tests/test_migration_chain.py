@@ -187,6 +187,10 @@ def test_each_version_adds_the_structures_it_promises(tmp_path: Path) -> None:
     assert {"issuer_generation", "runtime_generation", "evidence_sha256"} <= _columns(
         dbfile, "runtime_lineage"
     )
+
+    # 29: explicit cross-record supersession links (V3 MEM-03).
+    assert db.migrate(dbfile, migrations_dir=_chain(base, 29)) == [29]
+    assert "memory_supersessions" in _tables(dbfile)
     assert db.pending_migrations(dbfile) == []
 
 
@@ -293,7 +297,7 @@ def test_lineage_upgrade_preserves_existing_attempt_and_reservation(tmp_path: Pa
     finally:
         conn.close()
 
-    assert db.migrate(dbfile) == [28]
+    assert db.migrate(dbfile) == [28, 29]
     assert db.migrate(dbfile) == []
     conn = db.connect(dbfile)
     try:
@@ -360,7 +364,7 @@ def test_historical_lineage_rows_survive_reopen_and_idempotent_upgrade(tmp_path:
     base = tmp_path / "historical-lineage"
     base.mkdir()
     dbfile = _db_at(base, 27)
-    assert db.migrate(dbfile) == [28]
+    assert db.migrate(dbfile) == [28, 29]
     with db.connect(dbfile) as conn:
         conn.execute(
             "INSERT INTO runtime_lineage VALUES(?,?,?,?,?,?,?,?,?)",

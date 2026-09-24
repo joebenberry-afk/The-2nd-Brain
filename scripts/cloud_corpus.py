@@ -22,8 +22,9 @@ from pathlib import Path
 from second_brain import db, paths
 
 SEED = Path(__file__).with_name("cloud_corpus_seed.json")
-# Parent tables before children: memory_sources references memories.
-TABLES = ("projects", "memories", "memory_versions", "memory_sources")
+# Parent tables before children: memory_sources references memories,
+# memory_supersessions references memories.
+TABLES = ("projects", "memories", "memory_versions", "memory_sources", "memory_supersessions")
 
 
 def export(home: Path) -> int:
@@ -63,7 +64,7 @@ def load(home: Path) -> int:
             print("corpus already present; seed not loaded")
             return 0
         for table in TABLES:
-            rows = seed["tables"][table]
+            rows = seed["tables"].get(table) or []
             if not rows:
                 continue
             columns = sorted(rows[0])
@@ -75,7 +76,7 @@ def load(home: Path) -> int:
         conn.commit()
     finally:
         conn.close()
-    counts = ", ".join(f"{t}={len(seed['tables'][t])}" for t in TABLES)
+    counts = ", ".join(f"{t}={len(seed['tables'].get(t) or [])}" for t in TABLES)
     print(f"loaded seed exported {seed['exported_at']} (schema {seed['schema_version']}): {counts}")
     return 0
 

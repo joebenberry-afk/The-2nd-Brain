@@ -815,6 +815,33 @@ def _parser() -> argparse.ArgumentParser:
     msearch.add_argument(
         "--duplicates", action="store_true", help="return all near-duplicate versions (comparison)"
     )
+    msearch.add_argument(
+        "--as-of", dest="as_of", default=None, help="query memories at a point in time (ISO-8601)"
+    )
+    mretire = mms.add_parser(
+        "retire", parents=[home_parent], help="retire a memory (supersede/correct/invalidate)"
+    )
+    mretire.add_argument("memory_id")
+    mretire.add_argument(
+        "--by", dest="by", default=None, help="replacement memory id (omit to invalidate)"
+    )
+    mretire.add_argument(
+        "--kind",
+        dest="kind",
+        default=None,
+        choices=semantic.SUPERSESSION_KINDS,
+        help="supersedes (default with --by), corrects, or invalidates (default without --by)",
+    )
+    mretire.add_argument("--reason", required=True, help="reason for retirement")
+    mretire.add_argument(
+        "--effective-at",
+        dest="effective_at",
+        default=None,
+        help="when it became effective (ISO-8601)",
+    )
+    mretire.add_argument(
+        "--source-ref", dest="source_ref", default=None, help="optional source reference"
+    )
     mms.add_parser(
         "reindex", parents=[home_parent], help="rebuild the derived SQLite/FTS5 memory index"
     )
@@ -2406,6 +2433,7 @@ def cmd_memory(args) -> int:
             project_id=args.project_id,
             include_history=args.history,
             include_duplicates=args.duplicates,
+            as_of=args.as_of,
         )
         if not rows:
             print("No matching memories.")
@@ -2414,6 +2442,13 @@ def cmd_memory(args) -> int:
             # trust, not a stored claim no issuer attested (SEC-AUTH-02).
             grade = semantic.effective_evidence_grade(row)
             print(f"{row['memory_id']}  [{row['status']}/{grade}] {row['title']}")
+            # Print supersession info if present
+            if row.get("superseded_by") is not None or row.get("supersession_kind"):
+                kind = row.get("supersession_kind", "?")
+                new_id = row.get("superseded_by", "nothing")
+                eff_at = row.get("supersession_effective_at", "?")
+                reason = row.get("supersession_reason", "")
+                print(f"  superseded ({kind}) by {new_id} at {eff_at}: {reason}")
         conflicts = [r for r in rows if r.get("contradiction_with")]
         if conflicts:
             print()
@@ -2424,6 +2459,26 @@ def cmd_memory(args) -> int:
                     f"{', '.join(row['contradiction_with'])}  ({row['title']})"
                 )
         return 0
+    if args.memory_command == "retire":
+        try:
+            link = semantic.retire_memory(
+                home,
+                args.memory_id,
+                by=args.by,
+                kind=args.kind,
+                reason=args.reason,
+                effective_at=args.effective_at,
+                source_ref=args.source_ref,
+            )
+            old = args.memory_id
+            new = link.get("new_memory_id") or "none"
+            kind = link.get("kind")
+            eff_at = link.get("effective_at")
+            print(f"{old} retired ({kind}) -> {new} effective {eff_at}")
+            return 0
+        except semantic.BrainError as exc:
+            print(f"brainctl: error: {exc}", file=sys.stderr)
+            return 2
     if args.memory_command == "reindex":
         counts = semantic.reindex_all(home)
         print(
@@ -3523,9 +3578,7 @@ def _ledger_drop_handoff_file(args) -> None:
         Path(path).unlink()
 
 
-def _ledger_append_batch(
-    args, store, raw: str
-) -> tuple[list[int], list[dict], int]:
+def _ledger_append_batch(args, store, raw: str) -> tuple[list[int], list[dict], int]:
     """Append JSON Lines events in ONE transaction; per-event failures reported.
 
     Same validation as single appends (``_ledger_normalize_event`` +

@@ -62,6 +62,7 @@ ORIGIN_CLASSES: tuple[str, ...] = (
     "IMPORTED_FOREIGN",
 )
 AUTHORITY_CEILINGS: tuple[str, ...] = ("advisory", "project_rule", "policy")
+SUPERSESSION_KINDS: tuple[str, ...] = ("supersedes", "corrects", "invalidates")
 _AUTHORITY_RANK = {"advisory": 0, "project_rule": 1, "policy": 2}
 _PROJECT_RULE_ORIGINS = frozenset({"USER_AUTHORED", "LOCAL_REPO", "TRUSTED_TEST"})
 
@@ -161,6 +162,7 @@ def effective_authority_ceiling(row: dict) -> str:
     if not isinstance(claimed, str) or _AUTHORITY_RANK.get(claimed, 0) <= 0:
         return "advisory"
     return claimed if authority_attested(row.get("authority_attestation")) else "advisory"
+
 
 def effective_evidence_grade(row: dict) -> str:
     """Grade that may affect trust. Stored VERIFIED is a claim unless attested."""
@@ -1983,6 +1985,225 @@ def curate(
     return _row(home, memory_id) or {}
 
 
+def retire_memory(
+    home: Path,
+    memory_id: str,
+    *,
+    by: str | None = None,
+    kind: str | None = None,
+    reason: str,
+    effective_at: str | None = None,
+    source_ref: str | None = None,
+) -> dict:
+    """Mark a memory as superseded, corrected, or invalidated.
+
+    `kind` defaults to "supersedes" when `by` is given, "invalidates" when not.
+    `invalidates` requires `by is None`; other kinds require `by`.
+    `by == memory_id` is refused. The old row must have status in
+    (candidate, current, labile). The replacement (when given) must exist, be active,
+    and have evidence_grade != "REJECTED". Timestamps do not grant authority;
+    a weaker replacement triggers WEAKER_REPLACEMENT error. Scope must match or
+    be compatible. Returns the link row as a dict.
+    """
+    _ensure_migrated(home)
+    # Validate inputs
+    if not isinstance(reason, str) or not reason.strip():
+        raise BrainError("reason must be a non-empty string")
+    if by == memory_id:
+        raise BrainError("cannot retire a memory in favor of itself")
+
+    old_row = _row(home, memory_id)
+    if old_row is None:
+        raise BrainError(f"Unknown memory {memory_id!r}")
+
+    old_status = old_row.get("status")
+    if old_status not in ("candidate", "current", "labile"):
+        raise BrainError(
+            f"Cannot retire {memory_id}: already historical; retire its successor instead"
+        )
+
+    # Determine kind based on `by` parameter
+    eff_kind: str | None = kind
+    if by is not None:
+        if eff_kind is None:
+            eff_kind = "supersedes"
+        if eff_kind == "invalidates":
+            raise BrainError(
+                "invalidates kind requires by to be None; "
+                "cannot use 'invalidates' with a replacement"
+            )
+    else:
+        if eff_kind is None:
+            eff_kind = "invalidates"
+        if eff_kind != "invalidates":
+            raise BrainError(f"kind '{eff_kind}' requires 'by' to be provided")
+
+    if eff_kind not in SUPERSESSION_KINDS:
+        raise BrainError(f"kind must be one of {', '.join(SUPERSESSION_KINDS)}")
+
+    # Parse and validate effective_at
+    now = _utcnow()
+    recorded_at = now
+    if effective_at is not None:
+        try:
+            parsed = datetime.fromisoformat(effective_at.rstrip("Z"))
+        except (ValueError, AttributeError) as exc:
+            raise BrainError(
+                f"effective_at must be valid ISO-8601 (with or without trailing Z): "
+                f"{effective_at!r}"
+            ) from exc
+        # Normalize timezone-naive to UTC
+        parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        normalized_effective = parsed.isoformat()
+
+        # Refuse future times
+        now_dt = datetime.now(UTC)
+        if parsed > now_dt:
+            raise BrainError(f"effective_at cannot be in the future: {effective_at} > now")
+    else:
+        normalized_effective = recorded_at
+
+    # Validate and load replacement (if any)
+    new_row: dict | None = None
+    if by is not None:
+        new_row = _row(home, by)
+        if new_row is None:
+            raise BrainError(f"Unknown replacement memory {by!r}")
+
+        new_status = new_row.get("status")
+        if new_status not in ("candidate", "current", "labile"):
+            raise BrainError(f"Replacement {by} is not active; retire its successor instead")
+
+        new_grade = new_row.get("evidence_grade") or ""
+        if new_grade == "REJECTED":
+            raise BrainError(f"Replacement {by} has grade REJECTED")
+
+        # Authority compares effective grades: an unattested VERIFIED claim is
+        # TESTED here, so it can neither outrank nor block a TESTED record.
+        old_grade = effective_evidence_grade(old_row)
+        new_grade = effective_evidence_grade(new_row)
+        old_rank = _GRADE_RANK.get(old_grade, -2)
+        new_rank = _GRADE_RANK.get(new_grade, -2)
+        if new_rank < old_rank:
+            raise BrainError(
+                f"WEAKER_REPLACEMENT: cannot retire {old_grade} {memory_id} in favor of "
+                f"{new_grade} {by}; record a contradiction instead (MEM-04)"
+            )
+
+        # Check scope compatibility
+        old_scope = old_row.get("scope")
+        new_scope = new_row.get("scope")
+        if old_scope == "global" and new_scope != "global":
+            raise BrainError("SCOPE_MISMATCH: old memory is global; replacement must be global")
+        elif old_scope != "global" and new_scope != "global":
+            old_project = old_row.get("project_id")
+            if old_project and not _project_matches(new_row, old_project):
+                raise BrainError(
+                    f"SCOPE_MISMATCH: replacement {by} not visible in scope of {memory_id}"
+                )
+
+    # Write transaction
+    conn = db.connect(_dbfile(home))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # Insert the link row
+        conn.execute(
+            "INSERT INTO memory_supersessions "
+            "(old_memory_id, new_memory_id, kind, reason, effective_at, recorded_at, source_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (memory_id, by, eff_kind, reason, normalized_effective, recorded_at, source_ref),
+        )
+        # Update old memory status
+        updated = conn.execute(
+            "UPDATE memories SET status = 'superseded', updated_at = ? "
+            "WHERE memory_id = ? AND status IN ('candidate', 'current', 'labile')",
+            (now, memory_id),
+        )
+        if updated.rowcount != 1:
+            raise sqlite3.IntegrityError(f"{memory_id} changed status concurrently")
+        db.bump_memory_epoch(conn)
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not retire memory {memory_id}: {exc}") from exc
+    finally:
+        conn.close()
+
+    # Sync file metadata and reindex
+    _sync_file_metadata(
+        home, old_row["body_path"], grade=old_row["evidence_grade"], status="superseded"
+    )
+    _safe_index(home, memory_id)
+
+    # Return the link row as a dict
+    return {
+        "old_memory_id": memory_id,
+        "new_memory_id": by,
+        "kind": eff_kind,
+        "reason": reason,
+        "effective_at": normalized_effective,
+        "recorded_at": recorded_at,
+        "source_ref": source_ref,
+    }
+
+
+def supersession_of(home: Path, memory_id: str) -> dict | None:
+    """The link row whose old_memory_id matches, or None."""
+    conn = db.connect(_dbfile(home))
+    try:
+        row = conn.execute(
+            "SELECT old_memory_id, new_memory_id, kind, reason, effective_at, recorded_at, "
+            "source_ref FROM memory_supersessions WHERE old_memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def current_successor(home: Path, memory_id: str) -> str | None:
+    """Follow the chain of supersession links to the current record.
+
+    Returns the final id (when the chain ends in an active record),
+    None when the chain ends in an invalidates link or starts inactive.
+    Raises BrainError on loops (bounded at 64 hops).
+    """
+    _MAX_HOPS = 64
+    current_id = memory_id
+    visited = set()
+
+    for _ in range(_MAX_HOPS):
+        if current_id in visited:
+            raise BrainError(f"Loop detected in supersession chain starting from {memory_id}")
+        visited.add(current_id)
+
+        row = _row(home, current_id)
+        if row is None:
+            return None
+
+        # Check for outgoing link
+        link = supersession_of(home, current_id)
+        if link is not None:
+            # Follow the link
+            if link.get("kind") == "invalidates":
+                # Chain ends in invalidation
+                return None
+            new_id = link.get("new_memory_id")
+            if new_id is None:
+                # Should not happen if kind != invalidates, but be safe
+                return None
+            current_id = new_id
+        else:
+            # No link: this is the end of the chain
+            # Only return the id if it's active
+            if row.get("status") in ("candidate", "current", "labile"):
+                return current_id
+            else:
+                return None
+
+    raise BrainError(f"Supersession chain from {memory_id} exceeded {_MAX_HOPS} hops")
+
+
 def list_memories(
     home: Path,
     scope: str | None = None,
@@ -2903,6 +3124,7 @@ def search_memories(
     top_k: int | None = None,
     max_tokens: int | None = None,
     history_omissions: list[dict] | None = None,
+    as_of: str | None = None,
 ) -> list[dict]:
     """Search semantic memories (plan Phase 6 + Phase 7 hard filters).
 
@@ -2938,6 +3160,11 @@ def search_memories(
     the _CONTEXT_WINDOW_TOKENS assumption); explicit arguments override the
     config; absent/invalid config falls back to hardcoded defaults.
 
+    `as_of`: optional ISO-8601 timestamp. When given, returned rows are filtered
+    to those visible at that time (created_at <= as_of and either active or
+    superseded after that time). Archived rows are excluded. Rows carry an
+    `as_of` key. Records have no observed_at, so placement in time uses created_at.
+
     Known divergence: FTS5 matches word prefixes, so a substring in the
     middle of a word (e.g. "arc" inside "sidecar") matches the linear
     scan but not FTS5.
@@ -2949,6 +3176,21 @@ def search_memories(
     eff_top_k = top_k if top_k is not None else cfg.top_k
     eff_max_tokens = max_tokens if max_tokens is not None else cfg.max_tokens
     _ensure_migrated(home)
+
+    # Parse as_of if given
+    as_of_dt: datetime | None = None
+    normalized_as_of: str | None = None
+    if as_of is not None:
+        try:
+            parsed = datetime.fromisoformat(as_of.rstrip("Z"))
+        except (ValueError, AttributeError) as exc:
+            raise BrainError(f"as_of must be valid ISO-8601: {as_of!r}") from exc
+        parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        as_of_dt = parsed
+        normalized_as_of = parsed.isoformat()
+
+    # Run search with include_history if as_of is given
+    eff_include_history = include_history or as_of is not None
     conn = db.connect(_dbfile(home))
     try:
         if _fts_available(conn):
@@ -2956,14 +3198,14 @@ def search_memories(
             total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
             indexed = _fts_count(conn)
             if plan.expression is not None and (indexed > 0 or total == 0):
-                return _search_fts(
+                results = _search_fts(
                     conn,
                     plan.expression,
                     term,
                     query_terms=plan.terms,
                     msm_required=plan.required,
                     project_id=project_id,
-                    include_history=include_history,
+                    include_history=eff_include_history,
                     include_duplicates=include_duplicates,
                     score_terms=terms,
                     weights=cfg.weights,
@@ -2972,17 +3214,20 @@ def search_memories(
                     home=home,
                     history_omissions=history_omissions,
                 )
+                return _apply_as_of_filter(
+                    results, as_of_dt, normalized_as_of, include_history, home=home
+                )
             # Empty/small/non-ASCII queries and an unbuilt index use the
             # existing linear fallback.
     except sqlite3.Error:
         pass  # FTS path broken for any reason -> linear fallback below
     finally:
         conn.close()
-    return _search_linear(
+    results = _search_linear(
         home,
         term,
         project_id=project_id,
-        include_history=include_history,
+        include_history=eff_include_history,
         include_duplicates=include_duplicates,
         score_terms=terms,
         weights=cfg.weights,
@@ -2990,6 +3235,107 @@ def search_memories(
         max_tokens=eff_max_tokens,
         history_omissions=history_omissions,
     )
+    return _apply_as_of_filter(results, as_of_dt, normalized_as_of, include_history, home=home)
+
+
+def _apply_as_of_filter(
+    rows: list[dict],
+    as_of_dt: datetime | None,
+    normalized_as_of: str | None,
+    include_history: bool,
+    home: Path | None = None,
+) -> list[dict]:
+    """Apply as_of filtering and load supersession links.
+
+    When include_history or as_of is set, load all supersession links in one query
+    and annotate superseded rows with link info.
+    """
+    links: dict[str, dict] = {}
+    if rows and (as_of_dt is not None or include_history):
+        # Load all links in one query
+        memory_ids = [r.get("memory_id") for r in rows if r.get("memory_id")]
+        if memory_ids and home:
+            conn = db.connect(_dbfile(home))
+            try:
+                placeholders = ",".join("?" * len(memory_ids))
+                link_rows = conn.execute(
+                    f"SELECT old_memory_id, new_memory_id, kind, reason, effective_at "
+                    f"FROM memory_supersessions WHERE old_memory_id IN ({placeholders})",
+                    memory_ids,
+                ).fetchall()
+                links = {r["old_memory_id"]: dict(r) for r in link_rows}
+            except sqlite3.Error:
+                pass  # If link query fails, continue without link info
+            finally:
+                conn.close()
+
+    result: list[dict] = []
+    if as_of_dt is None:
+        # include_history only: annotate with link info
+        for row in rows:
+            mid = row.get("memory_id")
+            if row.get("status") == "superseded" and mid in links:
+                link = links[mid]
+                row["superseded_by"] = link.get("new_memory_id")
+                row["supersession_kind"] = link.get("kind")
+                row["supersession_reason"] = link.get("reason")
+                row["supersession_effective_at"] = link.get("effective_at")
+            result.append(row)
+    else:
+        # as_of filtering
+        for row in rows:
+            # Row must not be archived
+            if row.get("status") == "archived":
+                continue
+            # created_at must be <= as_of
+            created_str = row.get("created_at")
+            if created_str:
+                try:
+                    created_dt = datetime.fromisoformat(created_str.rstrip("Z"))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=UTC)
+                    else:
+                        created_dt = created_dt.astimezone(UTC)
+                    if created_dt > as_of_dt:  # type: ignore[operator]
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            # Keep if active OR if superseded and link effective_at > as_of
+            status = row.get("status")
+            if status in ("candidate", "current", "labile"):
+                result.append(row)
+                row["as_of"] = normalized_as_of
+                # Annotate with link info if present
+                mid = row.get("memory_id")
+                if mid in links:
+                    link = links[mid]
+                    row["superseded_by"] = link.get("new_memory_id")
+                    row["supersession_kind"] = link.get("kind")
+                    row["supersession_reason"] = link.get("reason")
+                    row["supersession_effective_at"] = link.get("effective_at")
+            elif status == "superseded":
+                mid = row.get("memory_id")
+                if mid in links:
+                    link = links[mid]
+                    link_effective = link.get("effective_at")
+                    if link_effective:
+                        try:
+                            link_eff_dt = datetime.fromisoformat(link_effective.rstrip("Z"))
+                            if link_eff_dt.tzinfo is None:
+                                link_eff_dt = link_eff_dt.replace(tzinfo=UTC)
+                            else:
+                                link_eff_dt = link_eff_dt.astimezone(UTC)
+                            # Keep if link effective_at > as_of
+                            if link_eff_dt > as_of_dt:  # type: ignore[operator]
+                                result.append(row)
+                                row["as_of"] = normalized_as_of
+                                row["superseded_by"] = link.get("new_memory_id")
+                                row["supersession_kind"] = link.get("kind")
+                                row["supersession_reason"] = link.get("reason")
+                                row["supersession_effective_at"] = link.get("effective_at")
+                        except (ValueError, TypeError):
+                            pass
+    return result
 
 
 def _filter_sql(project_id: str | None, include_history: bool) -> tuple[str, list[object]]:
@@ -3115,6 +3461,7 @@ def _search_fts(
         required = msm_required if msm_required is not None else math.ceil(0.5 * len(query_terms))
         rows = [row for row in rows if _query_term_hits(row, query_terms) >= required]
     rows = _partition_history(rows, include_history, history_omissions)
+
     # Phase 10: conflict map BEFORE dedupe (family collapse must not hide a
     # conflicting sibling; the surviving row carries the marker).
     conflicts = _contradiction_map(rows)
