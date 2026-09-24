@@ -224,6 +224,35 @@ def test_search_title_summary_body(brain_home):
         semantic.search_memories(brain_home, " ")
 
 
+def test_line_ending_rewrite_keeps_memory_retrievable(brain_home):
+    """A checkout that only converts LF to CRLF (git core.autocrlf) must not hide
+    the memory as stale; a real content edit still must."""
+    mid = _add(brain_home, title="WAL hygiene", body="stale sidecar frames")
+    path = brain_home / "memory" / "semantic" / f"{mid}.md"
+    original = path.read_bytes()
+    assert b"\r\n" not in original
+
+    path.write_bytes(original.replace(b"\n", b"\r\n"))
+    assert [r["memory_id"] for r in semantic.search_memories(brain_home, "sidecar")] == [mid]
+
+    path.write_bytes(original.replace(b"stale sidecar", b"edited sidecar"))
+    assert semantic.search_memories(brain_home, "sidecar") == []
+
+
+def test_legacy_raw_byte_index_hash_still_matches(brain_home):
+    """An index written before hash normalization (raw CRLF bytes) keeps matching."""
+    import hashlib
+
+    mid = _add(brain_home, title="WAL hygiene", body="stale sidecar frames")
+    path = brain_home / "memory" / "semantic" / f"{mid}.md"
+    crlf = path.read_bytes().replace(b"\n", b"\r\n")
+    path.write_bytes(crlf)
+    row = semantic._row(brain_home, mid)
+    assert row is not None
+    assert semantic.file_hash_matches(hashlib.sha256(crlf).hexdigest(), brain_home, row)
+    assert not semantic.file_hash_matches("0" * 64, brain_home, row)
+
+
 def test_project_search_retains_unknown_domain_for_fts_and_linear(brain_home, monkeypatch):
     mid = _add(
         brain_home,
