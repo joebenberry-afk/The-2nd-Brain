@@ -1,0 +1,9 @@
+{
+  "trigger_id": "codex-proposal-guard-63748fbfb27c-failure",
+  "matcher": {
+    "metric": "tests_failed",
+    "operator": ">",
+    "value": 0.0,
+    "window": 1
+  }
+}
