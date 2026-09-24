@@ -1,0 +1,465 @@
+{
+ "content_summary": [
+  {
+   "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "reasoning_effort",
+    "stream",
+    "stream_options",
+    "thinking",
+    "tools"
+   ],
+   "scalars": {
+    "max_tokens": 384000,
+    "model": "deepseek-flash",
+    "reasoning_effort": "low",
+    "stream": true
+   },
+   "messages": [
+    {
+     "role": "system",
+     "chars": 16939,
+     "sha256": "e1de70ee3f27a59e3339d517e638415859f9fb53d17c084f41dc94f4a5dd1422",
+     "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+    },
+    {
+     "role": "system",
+     "chars": 915,
+     "sha256": "1896881bcc78463155eb4c1e2082d08f855a1ceb028c4dd5763da50d7c072913",
+     "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+    },
+    {
+     "role": "user",
+     "chars": 190,
+     "sha256": "42d7817dc5a676fd7984759b864b23e37129a5833146693846ee031257612685",
+     "head": "<system-reminder>\nToday: 2026-09-24; current working directory: '<CWD>'. Do not repeat this information in your reply.\n</system-reminder>\nIn what order should d"
+    }
+   ],
+   "tools": [
+    {
+     "name": "read",
+     "chars": 1895,
+     "sha256": "bbd69957340ed568df579bf8c94c45cc325e8d994aba07b114396ea7eecf01b3"
+    },
+    {
+     "name": "bash",
+     "chars": 1463,
+     "sha256": "fd0c6ac6f21c589af7835987249b472400f08d115621aee38166e6688a7d624a"
+    },
+    {
+     "name": "edit",
+     "chars": 1647,
+     "sha256": "b6b9cbbdbead698e7fa192f18f8258902240f1a6b4b3638d3dd11b59d00364c8"
+    },
+    {
+     "name": "eval",
+     "chars": 2555,
+     "sha256": "3ceed6824901e00c331ce2f2a3b52c880b1ac0c83822ebfee6395be935c44b63"
+    },
+    {
+     "name": "glob",
+     "chars": 789,
+     "sha256": "ca019efd47d6cf9cd225494171b89eeea9183fb8bf6c70c2a2508041de612f8e"
+    },
+    {
+     "name": "grep",
+     "chars": 928,
+     "sha256": "0901b79e6d78a92f93e979f8d03d95ab57d7e87f8daea116f2842a6b605797ad"
+    },
+    {
+     "name": "find",
+     "chars": 1184,
+     "sha256": "07511bdc17f235576fefb6d2b2d086cac2a2f53e3743b5a0cb0171c6c5ece192"
+    },
+    {
+     "name": "task",
+     "chars": 4310,
+     "sha256": "ed3b85623426306d1bf4548d392ae3196abc8c242dca4a2b4a106f2e3690db13"
+    },
+    {
+     "name": "wait",
+     "chars": 513,
+     "sha256": "11b9dc3dd546acd0fdcdbc69590155d1856cbeca658907bcbd339333e0c8fb0a"
+    },
+    {
+     "name": "todo",
+     "chars": 1955,
+     "sha256": "8b972627751790b2330ad83502e946cf7634787243e0932c408c0e6fa39d815d"
+    },
+    {
+     "name": "web_search",
+     "chars": 920,
+     "sha256": "e3a2f3a3c1425bd303e7674a5d52f9b4a42c0d83ebc0380982043da441a027e5"
+    },
+    {
+     "name": "write",
+     "chars": 907,
+     "sha256": "d0b8ceee3de7d10cec187eadc6bf67a4e21a8a8a4833c771cb47f056044e7886"
+    }
+   ],
+   "fingerprint": "42acccf80c305c015bdb46edcfd638c5da8db9c7875857701c52951b6d351517"
+  },
+  {
+   "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "reasoning_effort",
+    "stream",
+    "stream_options",
+    "thinking",
+    "tools"
+   ],
+   "scalars": {
+    "max_tokens": 384000,
+    "model": "deepseek-flash",
+    "reasoning_effort": "low",
+    "stream": true
+   },
+   "messages": [
+    {
+     "role": "system",
+     "chars": 16939,
+     "sha256": "e1de70ee3f27a59e3339d517e638415859f9fb53d17c084f41dc94f4a5dd1422",
+     "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+    },
+    {
+     "role": "system",
+     "chars": 915,
+     "sha256": "1896881bcc78463155eb4c1e2082d08f855a1ceb028c4dd5763da50d7c072913",
+     "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+    },
+    {
+     "role": "user",
+     "chars": 190,
+     "sha256": "42d7817dc5a676fd7984759b864b23e37129a5833146693846ee031257612685",
+     "head": "<system-reminder>\nToday: 2026-09-24; current working directory: '<CWD>'. Do not repeat this information in your reply.\n</system-reminder>\nIn what order should d"
+    },
+    {
+     "role": "assistant",
+     "chars": 1,
+     "sha256": "946017479600cec25515b585328a025c52ae3e275e94450418121e1f09d402c9",
+     "head": "."
+    },
+    {
+     "role": "tool",
+     "chars": 783,
+     "sha256": "70875de8544bf940435fd47aabdf5c548906f0a2d9409763ccde9467635bbb33",
+     "head": "---\nname: migration\ndescription: Implement reversible compatibility-safe transitions. Use for schema, data, API, protocol, configuration, or dependency migratio"
+    },
+    {
+     "role": "tool",
+     "chars": 132,
+     "sha256": "be721e1fa6d5b3b35d98c941853570f5f7b48bdbb9392eeea642eeeb2f028cbf",
+     "head": "total 0\ndrwxrwxrwx 1 somebody somegroup 0 Sep 24 06:51 .\ndrwxrwxrwx 1 somebody somegroup 0 Sep 24 06:51 ..\n\n\nWall time: 0.07 seconds"
+    }
+   ],
+   "tools": [
+    {
+     "name": "read",
+     "chars": 1895,
+     "sha256": "bbd69957340ed568df579bf8c94c45cc325e8d994aba07b114396ea7eecf01b3"
+    },
+    {
+     "name": "bash",
+     "chars": 1463,
+     "sha256": "fd0c6ac6f21c589af7835987249b472400f08d115621aee38166e6688a7d624a"
+    },
+    {
+     "name": "edit",
+     "chars": 1647,
+     "sha256": "b6b9cbbdbead698e7fa192f18f8258902240f1a6b4b3638d3dd11b59d00364c8"
+    },
+    {
+     "name": "eval",
+     "chars": 2555,
+     "sha256": "3ceed6824901e00c331ce2f2a3b52c880b1ac0c83822ebfee6395be935c44b63"
+    },
+    {
+     "name": "glob",
+     "chars": 789,
+     "sha256": "ca019efd47d6cf9cd225494171b89eeea9183fb8bf6c70c2a2508041de612f8e"
+    },
+    {
+     "name": "grep",
+     "chars": 928,
+     "sha256": "0901b79e6d78a92f93e979f8d03d95ab57d7e87f8daea116f2842a6b605797ad"
+    },
+    {
+     "name": "find",
+     "chars": 1184,
+     "sha256": "07511bdc17f235576fefb6d2b2d086cac2a2f53e3743b5a0cb0171c6c5ece192"
+    },
+    {
+     "name": "task",
+     "chars": 4310,
+     "sha256": "ed3b85623426306d1bf4548d392ae3196abc8c242dca4a2b4a106f2e3690db13"
+    },
+    {
+     "name": "wait",
+     "chars": 513,
+     "sha256": "11b9dc3dd546acd0fdcdbc69590155d1856cbeca658907bcbd339333e0c8fb0a"
+    },
+    {
+     "name": "todo",
+     "chars": 1955,
+     "sha256": "8b972627751790b2330ad83502e946cf7634787243e0932c408c0e6fa39d815d"
+    },
+    {
+     "name": "web_search",
+     "chars": 920,
+     "sha256": "e3a2f3a3c1425bd303e7674a5d52f9b4a42c0d83ebc0380982043da441a027e5"
+    },
+    {
+     "name": "write",
+     "chars": 907,
+     "sha256": "d0b8ceee3de7d10cec187eadc6bf67a4e21a8a8a4833c771cb47f056044e7886"
+    }
+   ],
+   "fingerprint": "616513eab5a7a5337d9ff0161328e9af482839cd24dc9481252bcbdbfaafc6e1"
+  }
+ ],
+ "transport_summary": [
+  {
+   "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "reasoning_effort",
+    "stream",
+    "stream_options",
+    "thinking",
+    "tools"
+   ],
+   "scalars": {
+    "max_tokens": 384000,
+    "model": "deepseek-flash",
+    "reasoning_effort": "low",
+    "stream": true
+   },
+   "messages": [
+    {
+     "role": "system",
+     "chars": 16939,
+     "sha256": "e1de70ee3f27a59e3339d517e638415859f9fb53d17c084f41dc94f4a5dd1422",
+     "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+    },
+    {
+     "role": "system",
+     "chars": 915,
+     "sha256": "1896881bcc78463155eb4c1e2082d08f855a1ceb028c4dd5763da50d7c072913",
+     "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+    },
+    {
+     "role": "user",
+     "chars": 190,
+     "sha256": "42d7817dc5a676fd7984759b864b23e37129a5833146693846ee031257612685",
+     "head": "<system-reminder>\nToday: 2026-09-24; current working directory: '<CWD>'. Do not repeat this information in your reply.\n</system-reminder>\nIn what order should d"
+    }
+   ],
+   "tools": [
+    {
+     "name": "read",
+     "chars": 1895,
+     "sha256": "bbd69957340ed568df579bf8c94c45cc325e8d994aba07b114396ea7eecf01b3"
+    },
+    {
+     "name": "bash",
+     "chars": 1463,
+     "sha256": "fd0c6ac6f21c589af7835987249b472400f08d115621aee38166e6688a7d624a"
+    },
+    {
+     "name": "edit",
+     "chars": 1647,
+     "sha256": "b6b9cbbdbead698e7fa192f18f8258902240f1a6b4b3638d3dd11b59d00364c8"
+    },
+    {
+     "name": "eval",
+     "chars": 2555,
+     "sha256": "3ceed6824901e00c331ce2f2a3b52c880b1ac0c83822ebfee6395be935c44b63"
+    },
+    {
+     "name": "glob",
+     "chars": 789,
+     "sha256": "ca019efd47d6cf9cd225494171b89eeea9183fb8bf6c70c2a2508041de612f8e"
+    },
+    {
+     "name": "grep",
+     "chars": 928,
+     "sha256": "0901b79e6d78a92f93e979f8d03d95ab57d7e87f8daea116f2842a6b605797ad"
+    },
+    {
+     "name": "find",
+     "chars": 1184,
+     "sha256": "07511bdc17f235576fefb6d2b2d086cac2a2f53e3743b5a0cb0171c6c5ece192"
+    },
+    {
+     "name": "task",
+     "chars": 4310,
+     "sha256": "ed3b85623426306d1bf4548d392ae3196abc8c242dca4a2b4a106f2e3690db13"
+    },
+    {
+     "name": "wait",
+     "chars": 513,
+     "sha256": "11b9dc3dd546acd0fdcdbc69590155d1856cbeca658907bcbd339333e0c8fb0a"
+    },
+    {
+     "name": "todo",
+     "chars": 1955,
+     "sha256": "8b972627751790b2330ad83502e946cf7634787243e0932c408c0e6fa39d815d"
+    },
+    {
+     "name": "web_search",
+     "chars": 920,
+     "sha256": "e3a2f3a3c1425bd303e7674a5d52f9b4a42c0d83ebc0380982043da441a027e5"
+    },
+    {
+     "name": "write",
+     "chars": 907,
+     "sha256": "d0b8ceee3de7d10cec187eadc6bf67a4e21a8a8a4833c771cb47f056044e7886"
+    }
+   ],
+   "fingerprint": "42acccf80c305c015bdb46edcfd638c5da8db9c7875857701c52951b6d351517"
+  },
+  {
+   "keys": [
+    "max_tokens",
+    "messages",
+    "model",
+    "reasoning_effort",
+    "stream",
+    "stream_options",
+    "thinking",
+    "tools"
+   ],
+   "scalars": {
+    "max_tokens": 384000,
+    "model": "deepseek-flash",
+    "reasoning_effort": "low",
+    "stream": true
+   },
+   "messages": [
+    {
+     "role": "system",
+     "chars": 16939,
+     "sha256": "e1de70ee3f27a59e3339d517e638415859f9fb53d17c084f41dc94f4a5dd1422",
+     "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+    },
+    {
+     "role": "system",
+     "chars": 915,
+     "sha256": "1896881bcc78463155eb4c1e2082d08f855a1ceb028c4dd5763da50d7c072913",
+     "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+    },
+    {
+     "role": "user",
+     "chars": 190,
+     "sha256": "42d7817dc5a676fd7984759b864b23e37129a5833146693846ee031257612685",
+     "head": "<system-reminder>\nToday: 2026-09-24; current working directory: '<CWD>'. Do not repeat this information in your reply.\n</system-reminder>\nIn what order should d"
+    },
+    {
+     "role": "assistant",
+     "chars": 1,
+     "sha256": "ed18b0a9a4e8e4c8ff2f9b64417e1f20552b709e9e3eac95b8919b322a57b423",
+     "head": "."
+    },
+    {
+     "role": "tool",
+     "chars": 783,
+     "sha256": "0313939cc03bd565de2f05bef6cf2c597b6d8f5806df2885ed20a8ecd4d7c146",
+     "head": "---\nname: migration\ndescription: Implement reversible compatibility-safe transitions. Use for schema, data, API, protocol, configuration, or dependency migratio"
+    },
+    {
+     "role": "tool",
+     "chars": 132,
+     "sha256": "98bb53fcb4a45130753c1f53f6601192ff3469fcf3383bbb38a350c255c246fe",
+     "head": "total 0\ndrwxrwxrwx 1 somebody somegroup 0 Sep 24 06:51 .\ndrwxrwxrwx 1 somebody somegroup 0 Sep 24 06:51 ..\n\n\nWall time: 0.07 seconds"
+    }
+   ],
+   "tools": [
+    {
+     "name": "read",
+     "chars": 1895,
+     "sha256": "bbd69957340ed568df579bf8c94c45cc325e8d994aba07b114396ea7eecf01b3"
+    },
+    {
+     "name": "bash",
+     "chars": 1463,
+     "sha256": "fd0c6ac6f21c589af7835987249b472400f08d115621aee38166e6688a7d624a"
+    },
+    {
+     "name": "edit",
+     "chars": 1647,
+     "sha256": "b6b9cbbdbead698e7fa192f18f8258902240f1a6b4b3638d3dd11b59d00364c8"
+    },
+    {
+     "name": "eval",
+     "chars": 2555,
+     "sha256": "3ceed6824901e00c331ce2f2a3b52c880b1ac0c83822ebfee6395be935c44b63"
+    },
+    {
+     "name": "glob",
+     "chars": 789,
+     "sha256": "ca019efd47d6cf9cd225494171b89eeea9183fb8bf6c70c2a2508041de612f8e"
+    },
+    {
+     "name": "grep",
+     "chars": 928,
+     "sha256": "0901b79e6d78a92f93e979f8d03d95ab57d7e87f8daea116f2842a6b605797ad"
+    },
+    {
+     "name": "find",
+     "chars": 1184,
+     "sha256": "07511bdc17f235576fefb6d2b2d086cac2a2f53e3743b5a0cb0171c6c5ece192"
+    },
+    {
+     "name": "task",
+     "chars": 4310,
+     "sha256": "ed3b85623426306d1bf4548d392ae3196abc8c242dca4a2b4a106f2e3690db13"
+    },
+    {
+     "name": "wait",
+     "chars": 513,
+     "sha256": "11b9dc3dd546acd0fdcdbc69590155d1856cbeca658907bcbd339333e0c8fb0a"
+    },
+    {
+     "name": "todo",
+     "chars": 1955,
+     "sha256": "8b972627751790b2330ad83502e946cf7634787243e0932c408c0e6fa39d815d"
+    },
+    {
+     "name": "web_search",
+     "chars": 920,
+     "sha256": "e3a2f3a3c1425bd303e7674a5d52f9b4a42c0d83ebc0380982043da441a027e5"
+    },
+    {
+     "name": "write",
+     "chars": 907,
+     "sha256": "d0b8ceee3de7d10cec187eadc6bf67a4e21a8a8a4833c771cb47f056044e7886"
+    }
+   ],
+   "fingerprint": "1398f47a8060d73ad5a27f1a0128e6ad963a2421010003cb3a0f3bd5e7a6e794"
+  }
+ ],
+ "normalization": [
+  {
+   "paths": {
+    "<CWD>": 1
+   },
+   "transport": {},
+   "unlisted_transport_like_keys": []
+  },
+  {
+   "paths": {
+    "<CWD>": 1
+   },
+   "transport": {
+    "messages[*].tool_calls[*].id": 2,
+    "messages[*].tool_call_id": 2
+   },
+   "unlisted_transport_like_keys": []
+  }
+ ]
+}

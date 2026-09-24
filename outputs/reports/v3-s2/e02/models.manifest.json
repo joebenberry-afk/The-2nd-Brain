@@ -1,0 +1,65 @@
+{
+  "model_dir": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3_e02_models",
+  "models": {
+    "m2v-potion-8m": {
+      "files": [
+        {
+          "bytes": 297,
+          "name": "config.json",
+          "sha256": "f68ab920d7257faf6cbb4c8da5d96cc41dbbe7842b7043d92f0c2c3d3deef942"
+        },
+        {
+          "bytes": 30236760,
+          "name": "model.safetensors",
+          "sha256": "f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2"
+        },
+        {
+          "bytes": 291,
+          "name": "modules.json",
+          "sha256": "0858e4a5e4c99ece0f93eae7660195497a2667a7cfca3dc3223b68df19097056"
+        },
+        {
+          "bytes": 3832,
+          "name": "README.md",
+          "sha256": "c443abd613467a60e6d80a14e1bda7cdcc4d3129892ceaa85142d5152e1502ed"
+        },
+        {
+          "bytes": 446303,
+          "name": "tokenizer.json",
+          "sha256": "273ca9e28ec6990aea6206b0364443754d87e87a5dd28e94026ea9999ba3bf62"
+        }
+      ],
+      "kind": "model2vec",
+      "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3_e02_models\\m2v-potion-8m",
+      "repo": "minishlab/potion-base-8M",
+      "total_bytes": 30687483
+    },
+    "onnx-minilm-l6": {
+      "files": [
+        {
+          "bytes": 22972370,
+          "name": "onnx/model_quantized.onnx",
+          "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1"
+        },
+        {
+          "bytes": 711661,
+          "name": "tokenizer.json",
+          "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+        }
+      ],
+      "kind": "onnx",
+      "path": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3_e02_models\\onnx-minilm-l6",
+      "repo": "Xenova/all-MiniLM-L6-v2",
+      "total_bytes": 23684031
+    }
+  },
+  "versions": {
+    "huggingface-hub": "1.33.0",
+    "model2vec": "0.9.0",
+    "numpy": "2.5.3",
+    "onnxruntime": "1.30.0",
+    "platform": "win32",
+    "python": "3.13.7",
+    "tokenizers": "0.23.2"
+  }
+}
