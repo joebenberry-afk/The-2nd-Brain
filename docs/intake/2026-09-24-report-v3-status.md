@@ -31,10 +31,12 @@ is NOT_RUN**, and nothing here claims it.
 | OMP adapter (standalone, version-tolerant) + installer/rollback | `brainstem/omp-v3/`, `scripts/*omp-v3.ps1` | `brainstem/prime-extension/tests/omp-v3.test.ts` |
 | Claude Code adapter (frozen, not extended) | `kb/hooks.py`, `brainstem/adapters/claude-code-v3/` | `tests/test_kb_hooks.py` |
 | Security fixtures | — | `tests/test_kb_security.py` |
+| Fault fixtures | — | `tests/test_kb_faults.py` |
+| Skill export, duplicate review | `kb/skills_export.py`, `kb/consolidate.py` | `tests/test_kb_skills.py` |
 | Live comparison harness (`--arms native,v3`) | `scripts/v3_value_suite.py` | `tests/test_v3_value_suite.py` (home preparation only) |
 | CI | `.github/workflows/ci.yml` | green on every completed run of this branch |
 
-Test counts at the end of this work: V3 core 243 passed; value-suite unit tests 40 passed; OMP
+Test counts at the end of this work: V3 core and value-suite unit tests 324 passed; OMP
 extension suite 714 passed earlier in the session (the V3 extension's own tests since then: 9
 passed). Legacy full suite on this branch (MEM-03a state): 2273 passed; the failures are the
 documented Windows-only/cloud-only cases (see `CLAUDE.md`).
@@ -60,7 +62,7 @@ DEFERRED = held behind a measured trigger by owner decision; NOT_RUN = needs the
 |---|---|---|
 | ARCH-01 no host control | MET (code) · live NOT_RUN | adapters only add context; other events add nothing (`test_kb_hooks`, `omp-v3.test.ts`) |
 | ARCH-02 stable contracts | MET (code) | harness-neutral core; OMP adapter degrades on host shape changes (`omp-v3.test.ts`) |
-| ARCH-03 bounded failure | PARTIAL | adapters fail open, CLI errors exit non-zero; locked-DB / missing-interpreter fault fixtures not written |
+| ARCH-03 bounded failure | MET (fixtures) | corrupt/deleted index rebuilds, locked index → explicit error (exit 2), corrupt views fall back, adapters fail open (`test_kb_faults`) |
 | ARCH-04 no new infrastructure | MET | stdlib + SQLite + git; no daemon, server, GPU or model call |
 | PERF-01 no-benefit neutrality | MET by design · live NOT_RUN | zero per-prompt additions; one bounded brief per session (O2) |
 | PERF-02 latency | PARTIAL · live NOT_RUN | 62–67 ms per hook process (cloud); OMP adapter reads files in-process (not timed live) |
@@ -70,7 +72,7 @@ DEFERRED = held behind a measured trigger by owner decision; NOT_RUN = needs the
 | MEM-02 typed records | MET | 7 types, evidence, bi-temporal fields, claimed vs effective grade |
 | MEM-03 current state / as-of | MET | explicit supersession, as-of search, orchestration-removal fixture; applied to the live corpus |
 | MEM-04 contradictions visible | MET | `brain conflict`: both visible, marked, never pushed; weaker replacement refused |
-| MEM-05 durability | PARTIAL | atomic writes, write order + doctor detects half-written supersessions; crash-injection fixtures not written |
+| MEM-05 durability | MET (fixtures) | interrupted atomic write keeps the old record; crash between supersede writes detected by doctor (`test_kb_faults`) |
 | RET-01 scope before disclosure | MET | `test_kb_security` (views never cross projects; pull scope) |
 | RET-02 dilution | MET (legacy push path) | V3 has no per-prompt query; pull queries are agent-written |
 | RET-03 semantic | DEFERRED (D2) | E02: lexical at the ceiling; add sqlite-vec when a paraphrase class fails |
@@ -85,9 +87,9 @@ DEFERRED = held behind a measured trigger by owner decision; NOT_RUN = needs the
 | REU-02 freshness | MET | `path@blob` stale-evidence check (`review`, `doctor`) |
 | REU-03 no side-effect reuse | MET | nothing is cached or replayed |
 | REU-04 versioned caches | DEFERRED (D6) | |
-| SKL-01..03 portable skills | PARTIAL | procedures are records; exporting a proven procedure as an Agent Skills package is not built (legacy `skills/` unchanged) |
+| SKL-01..03 portable skills | MET (code) · native discovery live NOT_RUN | `brain export-skill`: current TESTED procedures → Agent Skills `SKILL.md` with applicability, evidence and an advisory footer (`test_kb_skills`) |
 | SKL-04 corrections | MET · live NOT_RUN | failure→fix capture, tested corrections pushed on matching errors |
-| LRN-01 consolidation | PARTIAL | inbox, dedupe, supersede/retire/conflict; no automated merging of existing near-duplicates |
+| LRN-01 consolidation | MET | inbox, dedupe, supersede/retire/conflict; `review` lists near-duplicates (live corpus: 2 genuine pairs) |
 | LRN-02 evidence checking | MET | promote needs evidence; stale evidence reported |
 | LRN-03 learned selectors | DEFERRED | |
 | LRN-04 bounded maintenance | MET | 5 MB event cap, 14-day retention, no background work |
@@ -113,5 +115,5 @@ DEFERRED = held behind a measured trigger by owner decision; NOT_RUN = needs the
    PORT-01 and VAL-01..04.
 3. After it passes and daily use shows no rollback: retire the legacy runtime (§5).
 
-Gaps worth doing next if the live run asks for them: fault-injection fixtures (ARCH-03, MEM-05),
-procedure → Agent Skills export (SKL-01..03), near-duplicate merge in review (LRN-01).
+Remaining PARTIAL items (PERF-02/03, RET-06, CTX-01, RES-02, PORT-04, VAL-01..04) close with the
+live run on the owner machine; nothing further is buildable without it.
