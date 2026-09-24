@@ -723,6 +723,25 @@ def _grade_confidence(
     return MemoryItemStatus.UNCERTAIN, Confidence.LOW
 
 
+def _closely_matches_if_uncertain(row: dict, plan: semantic.QueryMatchPlan) -> bool:
+    """Whether a row that would render as uncertain/low confidence is about the request.
+
+    Such a row reaches the model labeled ``status: uncertain`` / ``confidence: low``,
+    so contributing on a shared name is not enough: it must confirm more than half of
+    the request's content terms. "put V3 on GitHub for a Claude Code cloud session"
+    reached the Stop-hook memory on 'claude'/'code'/'session' alone while 'github'
+    and 'cloud' appear nowhere in it. Higher-grade rows and plans without term
+    evidence pass unchanged.
+    """
+    if not plan.terms:
+        return True
+    status, confidence = _grade_confidence(semantic.effective_evidence_grade(row), None, False)
+    if status is not MemoryItemStatus.UNCERTAIN or confidence is not Confidence.LOW:
+        return True
+    unexplained = plan.unexplained_content_terms(semantic._row_haystack_tokens(row))
+    return len(plan.content_terms()) > 2 * len(unexplained)
+
+
 def _canonical_line(text: str | None) -> str:
     """Collapse whitespace to the packet's deterministic one-line format."""
     return " ".join((text or "").split())
@@ -1121,7 +1140,12 @@ def prepare_injection(
                 return result, found, found
             _hydrate_bodies(home, found)
             plan = semantic.query_match_plan(home, text)
-            return result, found, semantic.contribution_filter(found, plan)
+            contributing = [
+                row
+                for row in semantic.contribution_filter(found, plan)
+                if _closely_matches_if_uncertain(row, plan)
+            ]
+            return result, found, contributing
 
         # The full query runs first so every case it already answers is unchanged.
         # The focused enquiry is tried when the full query contributes nothing:

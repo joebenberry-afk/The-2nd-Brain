@@ -340,6 +340,44 @@ def test_single_term_guard_abstains_on_a_generic_question_and_keeps_a_rare_one(
     assert rare.selected_ids == [corpus["lantern"]]
 
 
+@pytest.mark.parametrize(("grade", "side_mention_injects"), [("OBSERVED", False), ("TESTED", True)])
+def test_uncertain_memory_needs_the_request_to_be_about_it(
+    brain_home, grade: str, side_mention_injects: bool
+) -> None:
+    """An uncertain/low-confidence row must explain most of the request, not a name in it."""
+    stop_hook = semantic.add_memory(
+        brain_home,
+        "Claude Code Stop hook fires per-turn, not per-session",
+        "the Stop hook fires once per assistant turn; SessionEnd closes the session",
+        scope="project",
+        project_id=PROJECT,
+        grade=grade,
+    )
+    semantic.curate(brain_home, stop_hook, status="current")
+    for index in range(29):
+        _add(brain_home, f"Unrelated note {index}", f"filler text {index}")
+
+    about = _inject(
+        brain_home,
+        "Does the Claude Code Stop hook fire per turn or per session?",
+        session_id=f"s-about-{grade}",
+    )
+    assert about.decision is InjectionDecision.INJECT
+    assert about.selected_ids == [stop_hook]
+
+    side = _inject(
+        brain_home,
+        "put V3 on GitHub for a Claude Code cloud session",
+        session_id=f"s-side-{grade}",
+    )
+    if side_mention_injects:
+        assert side.decision is InjectionDecision.INJECT
+    else:
+        assert side.decision is InjectionDecision.NO_INJECTION
+        assert side.reason is NoInjectionReason.LOW_CONFIDENCE
+        assert stop_hook in side.candidate_ids
+
+
 def test_contribution_abstention_is_recorded_as_a_decision(brain_home) -> None:
     _overlap_corpus(brain_home)
     _inject(brain_home, "Reply with exactly: NB-OK-17. Do not use any tools.", session_id="s-rec")
