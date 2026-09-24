@@ -66,3 +66,7 @@ and timeouts retained. Fault injection: missing helper/interpreter, DB locked/un
 checkpoint failure, malformed response, concurrent project requests. Antigravity/Hermes lifecycle,
 offline and Linux: run where available, else NOT_RUN. Independent reviewer before the report.
 No install, reload, push, tag or deployment claim.
+
+## Held-out freeze
+
+`heldout/cases.jsonl` sha256 `add744f7d057bb9bb1d6185f9c92916b17d6131c9daa0568651606beedf8bb3f` (18 cases), frozen before any S2 tuning run. `dev/cases.jsonl` holds the exposed regressions and tuning cases.
