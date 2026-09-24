@@ -1,3 +1,57 @@
+# Changelog
+
+## 2.0.0 — 2026-09-24
+
+The V2 release closes the M00 baseline: a memory, retrieval, context and reuse
+system for coding agents, with OMP as the live-qualified primary integration.
+Agent execution and orchestration belong to the host, not Second Brain.
+
+### Release boundary
+
+- M00 production activation: release baseline `749e9cd`, code-equivalent
+  `80f3c54`, schema 28, all 116 production memories preserved.
+- The baseline's Python suite was independently reproduced:
+  **2,156 passed, 1 skipped, 0 failed**. Live acceptance passed all 12 checks.
+- This release packages that baseline with stable version metadata, repository
+  housekeeping and revised documentation. It does not update the installed
+  runtime or silently extend its qualification to every host.
+- Independent issuer, protected custody and ledger signing remain unavailable.
+  They are an external track, not a prerequisite for V3 development.
+
+### Capabilities and safety
+
+- Retain project-scoped memory, lexical/hybrid retrieval, bounded context,
+  source provenance, memory recovery, reusable skills and passive usage records.
+- Remove Brain worker orchestration, model routing, execution reservations and
+  settlement. Legacy orchestration commands return inert removal refusals.
+- Refuse caller-minted VERIFIED memories, critical approval and authoritative
+  model-success records. Existing unattested VERIFIED rows carry at most TESTED
+  trust; stored elevated ceilings resolve to advisory.
+- Preserve byte-bound skill consumption without claiming its same-user review
+  records are protected approvals.
+- Verify ledger replay/rehydration and staged/installed extension bytes; retain
+  honest unknown-usage accounting and schema migration/recovery checks.
+
+### Known boundaries
+
+- Claude Code and other adapter implementations are present; OMP qualification
+  does not establish equivalent live coverage or hosted/cloud readiness.
+- A pre-existing Antigravity Stop hook can veto completion. It remains a
+  documented MEDIUM boundary issue, not an activation-created finding.
+- Direct model-outcome library writes are unauthenticated/informational, skill
+  approval is unprotected, and the ledger chain is not cryptographically signed.
+- No universal token, cost or latency improvement is claimed.
+
+See the [M00 register](docs/intake/M00-CAMPAIGN-REGISTER.md),
+[activation record](docs/intake/m00-evidence/activation-20260924/ACTIVATION-RECORD.md)
+and [external trust-root work item](docs/intake/EXTERNAL-TRUST-ROOT-WORK-ITEM.md).
+
+## Historical development entries
+
+The entries below describe earlier subjects, including now-retired orchestration
+work. Their original “unreleased” labels are retained as historical records,
+not as the current release status.
+
 ## 2026-09-13 — Legacy CLI compaction recovery (unreleased)
 
 - Recover v1 ledgers with a verified hash-chain prefix and an unhashed suffix.
