@@ -10,6 +10,9 @@ Value, not delivery. Two classes of dev-grade tasks live in
 Arms (one host process per run, fresh Brain home, fresh repository copy as cwd):
 
 - ``native``    - ``--no-extensions``: the host as shipped.
+- ``v3``        - ``--no-extensions -e <worktree>/brainstem/omp-v3/index.ts`` against a fresh copy
+                  of the snapshot home plus the worktree's ``records/`` and ``projects/``, with
+                  views compiled and the run's cwd mapped to the project (agent-native V3).
 - ``candidate`` - ``--no-extensions -e <worktree>/brainstem/prime-extension/src/index.ts``
                   with a disposable snapshot home carrying the candidate's shipped
                   ``config/``, ``SECOND_BRAIN_PYTHON=<worktree venv>``,
@@ -53,11 +56,13 @@ WORKTREE = Path(__file__).resolve().parents[1]
 CANONICAL_HOME = WORKTREE.parents[1] if WORKTREE.parent.name == ".worktrees" else WORKTREE
 DEFAULT_TASKS = WORKTREE / "outputs/reports/v3-agent-experience/value/tasks.jsonl"
 CLASSES = ("memory", "no_benefit")
-ARM_CHOICES = ("native", "candidate", "m00")
+ARM_CHOICES = ("native", "candidate", "m00", "v3")
 USAGE_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "reasoningTokens")
 BRAIN_CUSTOM_PREFIX = "brain."
 #: The custom-message type the extension uses for the injected memory packet.
 INJECTED_CONTEXT_CUSTOM_TYPE = "brain.autoinject.packet"
+# Custom messages that carry memory into the model: the legacy packet and the V3 brief.
+INJECTED_CONTEXT_CUSTOM_TYPES = frozenset({INJECTED_CONTEXT_CUSTOM_TYPE, "brain.v3.brief"})
 
 #: Directories never copied into a run's cwd. ``memory``/``db``/``state``/``telemetry``
 #: are the Brain's own store (a run must not read answers out of the database it is
@@ -923,6 +928,48 @@ def build_arms(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
             "python": Path(args.m00_python),
             "config_dir": None,
         },
+        "v3": {
+            "extension": Path(args.v3_extension),
+            "python": Path(args.candidate_python),
+            "config_dir": None,
+            "v3": True,
+        },
+    }
+
+
+def prepare_v3_home(
+    home: Path, worktree: Path, project_id: str, cwd: Path, python: Path
+) -> dict[str, Any]:
+    """Give a run's Brain home the V3 records/projects and compiled views for its cwd.
+
+    Shared records only (``records/private`` stays on the machine that owns it). The run's
+    fresh repository copy is mapped to ``project_id`` by an extra manifest, so the brief the
+    extension reads is the one a real session in that project would get.
+    """
+    target = home / "records"
+    target.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in sorted((worktree / "records").glob("*.md")):
+        shutil.copy2(path, target / path.name)
+        copied += 1
+    shutil.copytree(worktree / "projects", home / "projects", dirs_exist_ok=True)
+    manifest = home / "projects" / "_value-suite" / "project.toml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        f'id = "{project_id}"\nname = "{project_id}"\npaths = ["{cwd.as_posix()}"]\n',
+        encoding="utf-8",
+    )
+    done = subprocess.run(
+        [str(python), "-m", "second_brain.kb", "views", "--home", str(home)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**clean_env(), "SECOND_BRAIN_HOME": str(home)},
+    )
+    return {
+        "records": copied,
+        "views_returncode": done.returncode,
+        "views_stderr": done.stderr[-500:],
     }
 
 
@@ -968,6 +1015,10 @@ def run_host(
         reset_home_deliveries(home)
         if spec["config_dir"] is not None:
             overlay = overlay_config(home, spec["config_dir"])
+        if spec.get("v3"):
+            overlay = {
+                "v3": prepare_v3_home(home, WORKTREE, args.project_id, cwd, spec["python"])
+            }
         env["SECOND_BRAIN_HOME"] = str(home)
         env["SECOND_BRAIN_PYTHON"] = str(spec["python"])
         env["SECOND_BRAIN_PROJECT"] = args.project_id
@@ -1042,7 +1093,7 @@ def measure_run(
         memory: any(
             memory in message["memory_ids"]
             for message in custom
-            if message["customType"] == INJECTED_CONTEXT_CUSTOM_TYPE
+            if message["customType"] in INJECTED_CONTEXT_CUSTOM_TYPES
         )
         for memory in task["memory_ids"]
     }
@@ -1372,6 +1423,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--candidate-config-dir",
         default=str(WORKTREE / "config"),
         help="the candidate branch's shipped config directory (applied over the snapshot home)",
+    )
+    ap.add_argument(
+        "--v3-extension",
+        default=str(WORKTREE / "brainstem/omp-v3/index.ts"),
+        help="the standalone V3 OMP extension (arm v3)",
     )
     ap.add_argument(
         "--m00-extension",
