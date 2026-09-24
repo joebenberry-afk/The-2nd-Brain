@@ -545,7 +545,10 @@ def supersede(
     new_grade = new_record.effective_grade
     old_grade = old_record.effective_grade
     if records.GRADE_RANK.get(new_grade, 0) < records.GRADE_RANK.get(old_grade, 0):
-        msg = f"WEAKER_REPLACEMENT: {new_grade} cannot replace {old_grade}"
+        msg = (
+            f"WEAKER_REPLACEMENT: {new_grade} cannot replace {old_grade}; "
+            "record the disagreement with `brain conflict` instead"
+        )
         raise RecordError(msg)
 
     # Check scope compatibility
@@ -574,16 +577,21 @@ def supersede(
         else:
             raise RecordError("SCOPE_MISMATCH: domain record requires global or domain replacement")
 
-    # Write new record first (with supersedes list)
+    # Write new record first (with supersedes list); a supersession resolves their conflict.
     new_supersedes = list(new_record.supersedes)
     if old_id not in new_supersedes:
         new_supersedes.append(old_id)
-    new_updated = records.replace(new_record, supersedes=tuple(new_supersedes))
+    new_updated = records.replace(
+        new_record,
+        supersedes=tuple(new_supersedes),
+        conflicts=tuple(c for c in new_record.conflicts if c != old_id),
+    )
     records.save(home, new_updated)
 
     # Write old record (mark as superseded)
     old_updated = records.replace(
         old_record,
+        conflicts=tuple(c for c in old_record.conflicts if c != by),
         status="superseded",
         superseded_by=by,
         supersession_kind=kind,
@@ -627,6 +635,40 @@ def retire(home: Path, record_id: str, *, reason: str, effective_at: str | None 
 
     views.compile_views(home)
     return updated
+
+
+def conflict(home: Path, a_id: str, b_id: str, *, reason: str) -> tuple[Record, Record]:
+    """Record that two active records disagree and evidence has not settled it (MEM-04).
+
+    Both stay visible and searchable; the brief marks them and neither is pushed as a
+    correction. Superseding one with the other resolves the pair.
+    """
+    if not reason.strip():
+        raise RecordError("conflict reason required")
+    if a_id == b_id:
+        raise RecordError("a record cannot conflict with itself")
+    a, b = records.load(home, a_id), records.load(home, b_id)
+    for rec in (a, b):
+        if not rec.active:
+            raise RecordError(f"{rec.id}: only active records can be in conflict")
+    note = f"{records.now_iso()} {reason.strip()}"
+    a_new = records.replace(
+        a,
+        conflicts=tuple(dict.fromkeys([*a.conflicts, b.id])),
+        extra={**a.extra, "conflict_note": note},
+    )
+    b_new = records.replace(
+        b,
+        conflicts=tuple(dict.fromkeys([*b.conflicts, a.id])),
+        extra={**b.extra, "conflict_note": note},
+    )
+    records.save(home, a_new)
+    records.save(home, b_new)
+    refresh(home)
+    from . import views
+
+    views.compile_views(home)
+    return a_new, b_new
 
 
 def edit(

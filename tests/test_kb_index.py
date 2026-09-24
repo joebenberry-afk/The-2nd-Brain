@@ -1337,3 +1337,38 @@ def test_edit_changes_description_never_standing(tmp_path: Path) -> None:
     index.retire(tmp_path, rec.id, reason="done")
     with pytest.raises(RecordError):
         index.edit(tmp_path, rec.id, type="fact")
+
+
+def test_conflict_keeps_both_visible_marks_brief_and_blocks_push(tmp_path: Path) -> None:
+    from second_brain.kb import doctor, views
+
+    a = _saved(
+        tmp_path,
+        title="Use port 8080",
+        type="correction",
+        trigger_errors=("address in use",),
+        status="current",
+        grade="TESTED",
+    )
+    b = _saved(tmp_path, title="Use port 9090", status="current", grade="TESTED")
+    with pytest.raises(RecordError):
+        index.conflict(tmp_path, a.id, a.id, reason="x")
+    with pytest.raises(RecordError):
+        index.conflict(tmp_path, a.id, b.id, reason=" ")
+    a2, b2 = index.conflict(tmp_path, a.id, b.id, reason="two runbooks disagree")
+    assert (a2.conflicts, b2.conflicts) == ((b.id,), (a.id,))
+    assert {h.record.id for h in index.search(tmp_path, "use port", None, limit=5)} == {a.id, b.id}
+    brief = views.render_brief([a2, b2], None)
+    assert f"(disputed by {b.id})" in brief and f"(disputed by {a.id})" in brief
+    assert views.correction_table([a2, b2]) == []
+    assert not [w for w in doctor.check(tmp_path).warnings if "conflict" in w]
+    old, new = index.supersede(tmp_path, b.id, by=a.id, reason="8080 verified")
+    assert new.conflicts == () and old.conflicts == ()
+    assert len(views.correction_table([new])) == 1
+
+
+def test_weaker_replacement_points_to_conflict(tmp_path: Path) -> None:
+    strong = _saved(tmp_path, title="Strong", grade="TESTED")
+    weak = _saved(tmp_path, title="Weak", grade="OBSERVED")
+    with pytest.raises(RecordError, match="brain conflict"):
+        index.supersede(tmp_path, strong.id, by=weak.id, reason="r")
