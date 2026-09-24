@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 packages = ["src/second_brain"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/second_brain", "pyproject.toml", "README.md", "VERSION", "CHANGELOG.md"]
+only-include = ["src/second_brain", "pyproject.toml", "README.md", "VERSION", "CHANGELOG.md"]
 exclude = ["**/__pycache__/**", "*.pyc", "*.pyo"]
 
 [tool.ruff]
