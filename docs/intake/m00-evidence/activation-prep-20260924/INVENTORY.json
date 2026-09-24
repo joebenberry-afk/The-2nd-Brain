@@ -1,0 +1,363 @@
+{
+  "schema_version": 1,
+  "record": "m00-activation-prep/inventory",
+  "generated_at_utc": "2026-09-24T06:38:13Z",
+  "generated_at_local": "2026-09-24T02:38:13-04:00",
+  "prepared_by": "ActivationPrep (subagent). PREPARATION ONLY - nothing was activated, installed, migrated or modified in production.",
+  "companion_record": "REHEARSAL.md (same directory) - executed rehearsal, rollback runbook, limits",
+
+  "production_access": {
+    "mode": "read-only",
+    "methods": [
+      "sqlite: opened canonical DB with URI 'file:<path>?mode=ro' plus PRAGMA query_only=ON; the disposable rehearsal copy was made with the sqlite backup API FROM that read-only connection (sqlite3.Connection.backup) into %TEMP%",
+      "hashing: Get-FileHash / hashlib.sha256 over files only",
+      "listing: directory enumeration and metadata reads",
+      "git: rev-parse / log / diff / status only (no add/commit/stash/reset/checkout)",
+      "sourcing: read installed extension .ts, installer/uninstaller .ps1, OMP config.yml, settings.json.bak, Claude/Codex/Antigravity hook configs, pyproject.toml, venv .pth/pyvenv.cfg",
+      "import probes: '<interpreter> -c \"import second_brain,sys;print(...)\"' with PYTHONHOME/PYTHONPATH stripped - imports only (second_brain/__init__.py imports only .paths; paths.ensure_layout() is a function, never called at import), no home access, no writes"
+    ],
+    "writes_to_production": "none",
+    "no_brainctl_against_canonical_home": true,
+    "all_migrate_or_cli_runs_used_a_disposable_SECOND_BRAIN_HOME_under_TEMP": true,
+    "scratch_root": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep/ (scripts, rehearsal homes, backups, JSON transcripts)"
+  },
+
+  "candidate": {
+    "worktree": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/m00.3-producer-guard",
+    "branch": "brain/m00.3-producer-guard",
+    "head": "749e9cda8d55000fab18b86ff4f941c695681c1d",
+    "code_subject": "80f3c54",
+    "code_subject_tree": "eaddf2ef198473f8581db48f1d1308e2b0f390c4",
+    "commits_after_code_subject": {
+      "count": 2,
+      "commits": ["692a870 brain(policy): record authority closure review and final gates", "749e9cd brain(policy): record the authority closure packet in the evidence manifest"],
+      "diff_vs_code_subject": ["M docs/intake/M00-CAMPAIGN-REGISTER.md", "M docs/intake/m00-evidence/MANIFEST.md", "M docs/intake/m00-evidence/authority-closure-20260923.md"],
+      "conclusion": "all post-80f3c54 changes are documentation only; code subject is 80f3c54"
+    },
+    "python": {
+      "venv_python": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/m00.3-producer-guard/.venv/Scripts/python.exe",
+      "version_seen": "3.13.7",
+      "package_version": "2.0.0-rc.1",
+      "editable_pth": "_editable_impl_second_brain.pth -> C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\src",
+      "import_probe": "module C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\src\\second_brain\\__init__.py"
+    },
+    "extension": {
+      "source_root": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/m00.3-producer-guard/brainstem/prime-extension",
+      "installer_manifest_scope": "top-level src/*.ts plus types/*.d.ts (install-prime-extension.ps1 Get-ExtensionManifest/ExpectedManifest)",
+      "file_count": 17,
+      "manifest_sha256": "ce7fefa86ad89a607dc29ad244eedfcf588a563335f79bb73ea90b1666544421",
+      "index_ts_sha256": "10a8662f299381621a92731a20c240169f988c76f811903bb0cc2ada4f685369",
+      "files": {
+        "active-state-mirror.ts": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08",
+        "autoinject.ts": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b",
+        "config.ts": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d",
+        "context-paging.ts": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94",
+        "environment-mirror.ts": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda",
+        "index.ts": "10a8662f299381621a92731a20c240169f988c76f811903bb0cc2ada4f685369",
+        "injection-slots.ts": "57c46c38090656bd4680b413b5557cf97cc3dabeb994bf6410dc88e259579a3a",
+        "lean-code.ts": "e690e53f05fdf4600a65b5cd90454eb1a3d0371dedd0de0386f476f291c1da05",
+        "ledger-mirror.ts": "f57651affdb9788889545e9a2fdadf46b21a170e2c11d0874fbe391a67293345",
+        "p4-mirror.ts": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff",
+        "recall-gate.ts": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
+        "rtd.ts": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab",
+        "sensors.ts": "d8f144e798826aac7d09bc00dc3929018d361a765c1d903b3c799a047cec5f76",
+        "storage.ts": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18",
+        "visibility-bridge.ts": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0",
+        "vmem.ts": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7",
+        "types/prime.d.ts": "de59906169bd9f2e5c46a3e9781db801c49e72aa88545ba9ff1bdd971ac11d6d"
+      },
+      "import_graph_check": {
+        "relative_imports": 15,
+        "unresolved": [],
+        "references_to_removed_modules": {},
+        "meaning": "the installed candidate tree is self-contained: no import points at a module the removal deleted"
+      }
+    }
+  },
+
+  "production": {
+    "what_runs_today": {
+      "omp_extension": "C:/Users/assas/.omp/agent/extensions/second-brain (auto-discovered by OMP; patched native-delegation hotfix of 2026-09-23)",
+      "python_runtime": "C:/Users/assas/Documents/The-Second-Brain/.venv/Scripts/python.exe (editable install -> .worktrees/qualified-v2/src)",
+      "brain_home": "C:/Users/assas/Documents/The-Second-Brain (canonical home; also the value of the user env var SECOND_BRAIN_HOME)",
+      "hooks": "Claude Code and Codex hook launchers in .worktrees/qualified-v2; Antigravity plugin under ~/.gemini/config/plugins/second-brain-adapter"
+    },
+    "extension_installed": {
+      "path": "C:/Users/assas/.omp/agent/extensions/second-brain",
+      "file_count": 26,
+      "manifest_sha256": "6688f07343ce3f02d44f2567359d28a52ff0a387d6237f3bde556e75e52ed2d3",
+      "index_ts_sha256": "64676a40d33ea7a644bd955f8aace7256d3c751cd0acd427b3fe9e78e0f04d55",
+      "index_ts_matches_recovery_record": true,
+      "recovery_record": "outputs/reports/omp-native-recovery-20260923/RECOVERY.md (expected 64676a40d33ea7a644bd955f8aace7256d3c751cd0acd427b3fe9e78e0f04d55)",
+      "files": {
+        "active-state-mirror.ts": "ca7d479587f70c20382c02f57c32398d59d084b2726992c13594ea5b73101b08",
+        "autoinject.ts": "d2591ccc25ed2dfc847c9a23ca0cd7fadf66af71cae1509e95d6ee66165fe85b",
+        "budget-bridge.ts": "02e8b8ec14978e805ecbd3ef49c4b8755e97ca929f71d5d6d20a62183e90ef3d",
+        "config.ts": "a46c7540e824a8c179cea88b70bfb55274e9e898aad4ef06aa9441ebd133002d",
+        "context-paging.ts": "133de0baacdc8219260e2cad0df046612c6b4fa3468c28b1a6a57ffe762d0d94",
+        "driver-orchestrator.ts": "753bfadfd7a595d60c4df9452e653f858788d1d4b4d50bd3089c2debf071de74",
+        "environment-mirror.ts": "8f236a113d9c73deccbcbf04d82b288c2d6e89ac71e34d8e4e417316ca8d3bda",
+        "index.ts": "64676a40d33ea7a644bd955f8aace7256d3c751cd0acd427b3fe9e78e0f04d55",
+        "injection-slots.ts": "41c101c9985189f6b0d08736aefb18bcd956e3fd85744f58a2a46cf118a7a79f",
+        "lean-code.ts": "d27176df4ed6357b09f2ad89f6bda37872060f0300178b08b7fd41292aa3bbf4",
+        "ledger-mirror.ts": "f57651affdb9788889545e9a2fdadf46b21a170e2c11d0874fbe391a67293345",
+        "native-settlement.ts": "4dfc40b8d8501d62e3da8d359eb5e19fd2e88249ed72b513a65d1b7aeea5b826",
+        "orchestrator-guard.ts": "98f2166215541074f9571c171c345e99aca51a80915c744cbf56889114fc0d13",
+        "p4-mirror.ts": "788ef620d79fad4910958a330f6b0fa8bccedb8d952d7b33e4e70a6e79fa55ff",
+        "recall-gate.ts": "d862b3c53b6a98e0bea439165495c0d887a652c3231ecafd1a7bcccdfa5bfeac",
+        "routing-bridge.ts": "0df72d0ebc73a10ded6e28bc43cb562ff95c9fa63f6a2354fcf572b582627fbe",
+        "rtd.ts": "c60cfb89e9633d88447964362b4026a477f313454c0470c8efc3a05ef64269ab",
+        "sensors.ts": "b4a96ad63f921207f32798d18ca2f26d7e68566d93605e733710e6696d4a9cb7",
+        "stop-boundary.ts": "c98f4ce748fe0363e486f1249269225b7b44a1a9dccd6b08297288c8203ce373",
+        "storage.ts": "6b6afb91dc7869772281f2523169caa03058a5b30ffe5d66a143fd5dccc1cc18",
+        "types/prime.d.ts": "6fb91aab7a857447d12b0d8a42b694a598b616b8d87270beffaaaf4ca0eb5d0b",
+        "visibility-bridge.ts": "d44b9bd791eb4d07cddaff0e49795be8a7575941ff0877a96b180df0b58784c0",
+        "vmem.ts": "d5cadb25abc69c5f3a367314c5365b4bb039ca0371a7d9e4f545d11e7dcdd1b7",
+        "worker-context-bridge.ts": "861288389d092ba744b71051743231e65c30a132605c79e7f9422e56882b774a",
+        "worker-lifecycle-bridge.ts": "95cb93dc3e671a8cf75c2d98aeb1f3468246b58b91c66183cf60671af190c8f3",
+        "worker-result-bridge.ts": "6688ee75c8da1c3e0574b2243c8cd76eec45b2b742906d596f2eee43e0de2701"
+      }
+    },
+    "extension_preserved_original": {
+      "path": "C:/Users/assas/.omp/disabled-extensions/second-brain-pre-removal-20260923",
+      "role": "pre-hotfix ORIGINAL extension (not what production runs today); identical to the installed tree except index.ts",
+      "file_count": 26,
+      "manifest_sha256": "33e7c72c154d0e8aeeb411093f3f2c7dcc13de2b6afff424418f9b4a91e261fe",
+      "index_ts_sha256": "0412eac3b857952a32bed1c311f622324b1224a90f8e8df0b1a9774a08947a84"
+    },
+    "runtime_resolution": {
+      "extension_rule": "process.env.SECOND_BRAIN_PYTHON ?? join(home, '.venv', 'Scripts', 'python.exe')  (config.ts loadConfig -> runtimePython; index.ts:699 and each bridge repeat the fallback)",
+      "home_rule": "process.env.SECOND_BRAIN_HOME, else %USERPROFILE%/Documents/The-Second-Brain (config.ts resolveBrainHome)",
+      "spawn_contract": "cwd=home, SECOND_BRAIN_HOME=home, PYTHONHOME/PYTHONPATH deleted, args '-m second_brain ...'",
+      "env_observed": {
+        "SECOND_BRAIN_HOME": "C:\\Users\\assas\\Documents\\The-Second-Brain (set)",
+        "SECOND_BRAIN_PYTHON": "unset"
+      },
+      "resolved_interpreter_today": "C:/Users/assas/Documents/The-Second-Brain/.venv/Scripts/python.exe",
+      "interpreter_editable_pth": "_editable_impl_second_brain.pth -> C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\src",
+      "import_probe_production": "module C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\src\\second_brain\\__init__.py ; python C:\\Users\\assas\\Documents\\The-Second-Brain\\.venv\\Scripts\\python.exe ; version 2.0.0-rc.1",
+      "import_probe_candidate": "module C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\m00.3-producer-guard\\src\\second_brain\\__init__.py (with cwd = canonical home, i.e. the extension's own spawn conditions)",
+      "production_source_tree": "C:/Users/assas/Documents/The-Second-Brain/.worktrees/qualified-v2",
+      "production_source_head": "827c3df63335c2a9b0e9373c71b1f5f1348d8362",
+      "production_source_branch": "brain/omp-native-6172a18-20260911",
+      "production_source_package_version": "2.0.0-rc.1",
+      "brainctl_shims": {
+        "C:/Users/assas/Documents/The-Second-Brain/brainctl.cmd": "clears PYTHONHOME/PYTHONPATH/UV_INTERNAL__PYTHONHOME then runs '%~dp0.venv\\Scripts\\python.exe -m second_brain %*' -> production venv -> qualified-v2/src",
+        "C:/Users/assas/Documents/The-Second-Brain/.venv/Scripts/brainctl.exe": "console script from pyproject [project.scripts] brainctl = \"second_brain.cli:main\" -> same venv/source"
+      }
+    },
+    "omp_settings": {
+      "extensions_discovery": "directory auto-discovery: C:/Users/assas/.omp/agent/extensions/<name> (installer default -ExtensionsDir = %USERPROFILE%\\.omp\\agent\\extensions)",
+      "settings_files_present": {
+        "C:/Users/assas/.omp/agent/config.yml": "live OMP config (modelRoles, task, security, etc.) - contains NO entry referencing the second-brain extension (grep 'extension'/'second-brain': no match)",
+        "C:/Users/assas/.omp/agent/settings.json.bak": "68-byte leftover {\"shellPath\": ...}; no live settings.json exists",
+        "C:/Users/assas/.omp/agent/mcp.json": "jev MCP server only - no Brain reference",
+        "C:/Users/assas/.omp/agent/grep_scope": "the only second-brain hits under ~/.omp are the extension tree itself and OMP's custom-session-files pointers"
+      },
+      "entries_referencing_the_extension": [],
+      "installer_settings_behaviour": "install-prime-extension.ps1 has NO default for -SettingsFile and never modifies settings; it only copies the given -SettingsFile into the timestamped pre-install backup directory. uninstall-prime-extension.ps1 only reports the retained settings backup."
+    },
+    "other_integrations": [
+      {
+        "name": "Claude Code hooks",
+        "config": "C:/Users/assas/.claude/settings.json",
+        "events": ["SessionStart", "PreCompact", "UserPromptSubmit", "PostToolUse", "Stop"],
+        "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\brainstem\\adapters\\claude-code\\scripts\\run-hook.ps1\"",
+        "python_rule_in_launcher": "SECOND_BRAIN_PYTHON, else <SECOND_BRAIN_HOME>/.venv/Scripts/python.exe; runs 'python -m second_brain --home <home> autoinject claude-code-hook'",
+        "points_at": "qualified-v2 launcher script; python falls back to the canonical .venv (qualified-v2/src)"
+      },
+      {
+        "name": "Codex hooks",
+        "config": "C:/Users/assas/.codex/config.toml",
+        "events": ["SessionStart", "UserPromptSubmit", "SubagentStart", "Stop", "SessionEnd"],
+        "block": "# BEGIN second-brain-codex-hooks (Phase 0C SHADOW; managed by install-codex-hooks.ps1) ... # END second-brain-codex-hooks",
+        "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\qualified-v2\\brainstem\\codex-hooks\\run.ps1\"",
+        "python_rule_in_launcher": "same SECOND_BRAIN_PYTHON-then-<home>/.venv rule; runs 'autoinject codex-shadow'"
+      },
+      {
+        "name": "Antigravity plugin",
+        "path": "C:/Users/assas/.gemini/config/plugins/second-brain-adapter (plugin.json, hooks.json, scripts/run-hook.ps1, rules, skills)",
+        "events": ["PreInvocation", "PostInvocation", "PostToolUse", "Stop"],
+        "command": "powershell -ExecutionPolicy Bypass -File scripts/run-hook.ps1 -Event <Event>",
+        "python_rule_in_launcher": "HARDCODES <SECOND_BRAIN_HOME or %USERPROFILE%/Documents/The-Second-Brain>/.venv/Scripts/python.exe; it does NOT honour SECOND_BRAIN_PYTHON",
+        "points_at": "canonical .venv -> qualified-v2/src"
+      },
+      {
+        "name": "Hermes",
+        "status": "no ~/.hermes directory present; hermes_adapter.py runs inside the same Python runtime, no separate host config found"
+      }
+    ],
+    "canonical_db": {
+      "path": "C:/Users/assas/Documents/The-Second-Brain/db/brain.sqlite",
+      "sidecars": "brain.sqlite-wal and brain.sqlite-shm absent at every observation (journal_mode=wal)",
+      "migration_bookkeeping": "table schema_version(version TEXT, applied_at TEXT) - db.py current_version() = MAX(version)",
+      "size_bytes_observed": 5017600,
+      "integrity_check": "ok",
+      "bytes_are_live": {
+        "note": "the canonical DB is being written by running OMP sessions: three different sha256 values were observed at three times during this session while CONTENT stayed identical",
+        "observations": [
+          {"sha256": "4d21d503b589357fb666319ccc7e1fa72644eeca5bf3abba5c04d09d90af3738", "observed": "first inventory read (~2026-09-24T02:2x local)"},
+          {"sha256": "f4dfc415484277cd71ff7d42c38521aaee08712b8d0d10d5f84fd8427a5fdaee", "observed": "2026-09-24T02:32:44 -0400 (mtime), used for the rehearsal copy"},
+          {"sha256": "0d2f2b0fa0c752587c1a4c73282a9a1ae3b01f844c91db3b8cac474908eb7f3c", "observed": "2026-09-24T02:38:01 -0400 (mtime)"},
+          {"sha256": "ebe4198bd6690a8a5861d946978836c799fc80b61ec55cea2bb001797008ddd9", "observed": "2026-09-24T02:40 -0400 - final verification pass; content and integrity unchanged"}
+        ],
+        "content_identical_across_all_four_observations": {"memories": 116, "evidence_grade_VERIFIED_stored": 19, "authority_ceiling_project_rule_or_policy": 10, "episodes": 18, "schema_version": 24}
+      },
+      "applied_migrations": {
+        "count": 24,
+        "versions": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24],
+        "max_version": 24,
+        "applied_at": {
+          "1": "2026-08-14T04:37:00.884571+00:00",
+          "2": "2026-08-14T06:48:26.268155+00:00",
+          "3": "2026-08-14T07:03:40.071129+00:00",
+          "4": "2026-08-14T07:44:17.979691+00:00",
+          "5": "2026-08-14T08:16:35.256007+00:00",
+          "6": "2026-08-14T09:38:28.138073+00:00",
+          "7": "2026-08-15T10:07:22.289047+00:00",
+          "8": "2026-08-16T00:36:05.001355+00:00",
+          "9": "2026-08-16T02:36:14.932516+00:00",
+          "10": "2026-08-30T01:03:16.421342+00:00",
+          "11": "2026-09-06T00:45:58.511212+00:00",
+          "12": "2026-09-06T00:45:58.512303+00:00",
+          "13": "2026-09-06T00:45:58.516941+00:00",
+          "14": "2026-09-06T00:45:58.516941+00:00",
+          "15": "2026-09-06T00:45:58.516941+00:00",
+          "16": "2026-09-06T00:45:58.517937+00:00",
+          "17": "2026-09-06T00:45:58.517937+00:00",
+          "18": "2026-09-06T00:45:58.518938+00:00",
+          "19": "2026-09-06T00:45:58.518938+00:00",
+          "20": "2026-09-06T00:45:58.518938+00:00",
+          "21": "2026-09-06T00:45:58.519938+00:00",
+          "22": "2026-09-06T00:45:58.519938+00:00",
+          "23": "2026-09-06T00:45:58.519938+00:00",
+          "24": "2026-09-06T10:16:55.949041+00:00"
+        }
+      },
+      "row_counts": {
+        "memories_total": 116,
+        "memories_evidence_grade_VERIFIED_stored": 19,
+        "memories_authority_ceiling_project_rule_or_policy": 10,
+        "memories_authority_ceiling_project_rule": 10,
+        "memories_authority_ceiling_policy": 0,
+        "memories_status_current": 20,
+        "episodes": 18,
+        "memory_index": 116,
+        "memory_sources": 150,
+        "projects": 28,
+        "model_profiles": 4,
+        "model_skill_outcomes": 6,
+        "worker_tasks": 428,
+        "worker_attempt_results": 224,
+        "v2_frontier_items": 0,
+        "v2_qualification": 0,
+        "v2_rollout_events": 0,
+        "evidence_grade_histogram": {"OBSERVED": 78, "VERIFIED": 19, "TESTED": 15, "REJECTED": 3, "HISTORICAL": 1},
+        "authority_ceiling_histogram": {"advisory": 106, "project_rule": 10}
+      },
+      "skills_approved_via_frontier_reviews": {
+        "count": 2,
+        "change_ids": ["skill-sqlite-migration-verifier-promotion", "skill-verified-config-read-reuse-promotion"],
+        "method": "read every JSON review record on disk under C:/Users/assas/Documents/The-Second-Brain/frontier (change_id starts 'skill-' and verdict=='approve'; 2 approve records per skill) - the DB has no skill-approval table (v2_frontier_items is empty)",
+        "records": [
+          {"file": "frontier/skill-sqlite-migration-verifier-promotion.md", "verdict": "approve", "reviewer": "build-lead"},
+          {"file": "frontier/skill-sqlite-migration-verifier-promotion-2.md", "verdict": "approve", "reviewer": "v43-phase0"},
+          {"file": "frontier/skill-verified-config-read-reuse-promotion.md", "verdict": "approve", "reviewer": "Main"},
+          {"file": "frontier/skill-verified-config-read-reuse-promotion-2.md", "verdict": "approve", "reviewer": "Main: direct current-source runtime evidence"}
+        ]
+      }
+    }
+  },
+
+  "delta": {
+    "extension_files": {
+      "added": [],
+      "removed_9": ["budget-bridge.ts", "driver-orchestrator.ts", "native-settlement.ts", "orchestrator-guard.ts", "routing-bridge.ts", "stop-boundary.ts", "worker-context-bridge.ts", "worker-lifecycle-bridge.ts", "worker-result-bridge.ts"],
+      "changed_5": ["index.ts", "injection-slots.ts", "lean-code.ts", "sensors.ts", "types/prime.d.ts"],
+      "unchanged_12": ["active-state-mirror.ts", "autoinject.ts", "config.ts", "context-paging.ts", "environment-mirror.ts", "ledger-mirror.ts", "p4-mirror.ts", "recall-gate.ts", "rtd.ts", "storage.ts", "visibility-bridge.ts", "vmem.ts"],
+      "counts": {"installed": 26, "candidate": 17},
+      "index_ts": {"installed": "64676a40d33ea7a644bd955f8aace7256d3c751cd0acd427b3fe9e78e0f04d55", "candidate": "10a8662f299381621a92731a20c240169f988c76f811903bb0cc2ada4f685369"},
+      "digest": {"installed": "6688f07343ce3f02d44f2567359d28a52ff0a387d6237f3bde556e75e52ed2d3", "candidate": "ce7fefa86ad89a607dc29ad244eedfcf588a563335f79bb73ea90b1666544421"}
+    },
+    "python_source": {
+      "range": "827c3df63335c2a9b0e9373c71b1f5f1348d8362 (production runtime HEAD, .worktrees/qualified-v2) .. 80f3c54 (candidate code subject)",
+      "merge_base": "827c3df63335c2a9b0e9373c71b1f5f1348d8362",
+      "commits": 79,
+      "totals": {"files_changed": 219, "insertions": 15934, "deletions": 38915},
+      "per_area": {
+        "src/": {"files": 37, "insertions": 1930, "deletions": 9777},
+        "tests/": {"files": 61, "insertions": 2966, "deletions": 8321},
+        "brainstem/": {"files": 53, "insertions": 904, "deletions": 12739},
+        "docs/": {"files": 34, "insertions": 8795, "deletions": 186},
+        "scripts/": {"files": 28, "insertions": 1273, "deletions": 7729}
+      },
+      "src_status": {
+        "deleted": ["worker_protocol.py", "worker_recovery.py", "host_protocol.py", "model_routing.py", "defaults/config/orchestration.toml"],
+        "added": ["migrations/0025_budget_reservations.sql", "migrations/0026_worker_notification_outbox.sql", "migrations/0027_budget_reservation_lifecycle.sql", "migrations/0028_runtime_lineage.sql"],
+        "modified_high_signal": ["cli.py", "semantic.py", "verify.py", "autoinject.py", "hybrid_retrieval.py", "reconsolidation.py", "vmem.py", "governor.py", "db.py", "brain_schema.py", "contracts.py", "omp_adapter.py", "hermes_adapter.py", "defaults/config/v2.toml"]
+      }
+    },
+    "db_migrations_to_apply": {
+      "pending_from_24": [25, 26, 27, 28],
+      "details": [
+        {"version": 25, "file": "0025_budget_reservations.sql", "kind": "CREATE TABLE IF NOT EXISTS budget_reservations + index"},
+        {"version": 26, "file": "0026_worker_notification_outbox.sql", "kind": "ALTER TABLE worker_task_meta ADD COLUMN notification_event_key/notification_pending(NOT NULL DEFAULT 0)/notification_delivered_at"},
+        {"version": 27, "file": "0027_budget_reservation_lifecycle.sql", "kind": "ALTER TABLE budget_reservations ADD COLUMN episode_id/cancelled_at/cancel_reason/resolved_at/resolution/actual_tokens"},
+        {"version": 28, "file": "0028_runtime_lineage.sql", "kind": "CREATE TABLE IF NOT EXISTS runtime_lineage + episode_roots + indexes"}
+      ],
+      "shape": "purely additive; no DROP, no destructive rewrite, no NOT NULL column without default on an existing table",
+      "tables_added_in_rehearsal": ["budget_reservations", "episode_roots", "runtime_lineage"]
+    },
+    "config_and_settings_changes": {
+      "installer_settings_writes": "none (settings are never modified by install or uninstall)",
+      "existing_home_config_written_by_migration": "none - migrations are SQL-only; doctor and migrate do not rewrite config",
+      "init_seeding": "_seed_defaults copies only MISSING files (dst.exists() -> continue), so an existing canonical home is not reseeded; measured read-only on the real home: 0 of the candidate's 25 default files are missing, so a candidate `init` there seeds nothing and only applies migrations [25,26,27,28]",
+      "candidate_default_config_delta": ["defaults/config/orchestration.toml deleted (the file has no reader in the candidate: grep of src/second_brain for 'orchestration.toml' is empty)", "defaults/config/v2.toml: worker_slots and premium_model_turns keys removed from the defaults"],
+      "canonical_home_config_today": {"config/orchestration.toml": "present (becomes inert under the candidate - no reader)", "config/v2.toml": "contains legacy worker_slots=1 and premium_model_turns=1 (tolerated and ignored; candidate doctor/config parse and verify gate ran green against a copy of this exact config)"}
+    },
+    "behaviour_changes_the_owner_will_notice": [
+      {"id": "verified-write-refused", "change": "no memory can be written with grade VERIFIED", "evidence": "rehearsal: 'memory add ... --grade VERIFIED' and 'memory curate <id> --grade VERIFIED' -> rc 2, VERIFIED_REQUIRES_ATTESTATION"},
+      {"id": "legacy-verified-ranked-TESTED", "change": "the 19 stored VERIFIED rows now read as TESTED; e.g. 'memory show' prints 'grade: TESTED (claimed VERIFIED)', 'memory list' prints 'TESTED (claimed VERIFIED)', 'memory curate --status' prints 'grade=TESTED (claimed VERIFIED)', 'memory search' prints '[current/TESTED]'", "evidence": "rehearsal on the migrated copy (19/19 rows downgraded by semantic.effective_evidence_grade)"},
+      {"id": "policy-lane-empty", "change": "the policy lane admits nothing: semantic._lane_authorized requires effective_authority_ceiling in {project_rule, policy}, and all 10 elevated rows resolve to advisory because no attestation issuer exists", "evidence": "rehearsal: 10/10 rows downgraded by semantic.effective_authority_ceiling"},
+      {"id": "critical-gates-cannot-complete", "change": "a CRITICAL gate reports completion_allowed=false with approval_state=required / approval_attestation=unavailable / decision_reason=independent_verification_missing", "evidence": "rehearsal: 'verify gate <session> <repo> --criticality CRITICAL --json' -> rc 1, completion_allowed false"},
+      {"id": "models-record-refused", "change": "'models record' refuses and writes nothing; model_skill_outcomes stays frozen at its 6 rows (models add/transfer/policy/report still work)", "evidence": "rehearsal: rc 2 MODEL_IDENTITY_NOT_AUTHENTICATED"},
+      {"id": "retired-orchestration-cli", "change": "worker-plane, stop, and the governor budget/reservation families exit 2 with {\"status\":\"failed\",\"failure_code\":\"ORCHESTRATION_REMOVED\"} before any home/state access", "evidence": "rehearsal: worker-plane spawn, stop decide, governor check-budget -> rc 2, absent home NOT created"},
+      {"id": "extension-module-loss", "change": "the installed extension loses driver-orchestrator, orchestrator-guard, budget-bridge, stop-boundary, native-settlement, routing-bridge and the three worker-*-bridge modules", "evidence": "file-level delta above (26 -> 17 files)"},
+      {"id": "legacy-elevated-rows-lose-decay-protection", "change": "unattested project_rule/VERIFIED rows lose protected-memory decay exemption (HOT->WARM, never auto-archived) - accepted cost stated in the authority-closure record, NOT executed in this rehearsal", "evidence": "docs/intake/m00-evidence/authority-closure-20260923.md section 6 (source claim)"}
+    ]
+  },
+
+  "rehearsal": {
+    "record": "REHEARSAL.md",
+    "status": "EXECUTED on %TEMP% copies only; no production write occurred",
+    "summary": {
+      "db_copy_via_sqlite_backup_api_readonly_source": "PASS",
+      "candidate_migrate_25_28_on_copy": "PASS (applied [25,26,27,28]; integrity ok; quick_check ok; 0 FK violations; counts preserved exactly)",
+      "candidate_init_on_existing_home_copy_the_activation_command": "PASS (applied [25,26,27,28], rc 0, schema 28, counts preserved; for the REAL canonical home the same command would seed 0 of the candidate's 25 default files because all are already present)",
+      "candidate_doctor_on_migrated_home": "PASS (21 checks: 0 failed, 1 pre-existing warning)",
+      "legacy_verified_reads_TESTED": "PASS (19/19 rows; also 10/10 ceiling downgrade)",
+      "candidate_backup_and_restore": "PASS (restored DB sha256 == manifest sha256)",
+      "rollback_pre_migration_copy_still_opens": "PASS (integrity ok, schema_version 24 unchanged, hash unchanged)",
+      "production_build_reads_and_writes_migrated_db": "PASS (read: rc 0 shows stored VERIFIED; write: memory add rc 0, integrity ok, schema_version still 28)",
+      "installer_on_PRODUCTION_BYTES_then_uninstall": "PASS (installed manifest ce7fefa8... ; installer backup 6688f073... ; restored tree byte-identical to production seed)"
+    },
+    "artifacts": {
+      "temp_root": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep",
+      "pristine_pre_migration_db": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep/rehearsal/pre/brain.sqlite (sha256 1819e50c8f5fb7517b2182daea81ea5a2be7c5b17a652e72f8daa6eba4d0b16f, schema 24)",
+      "migrated_db": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep/rehearsal/home/db/brain.sqlite (sha256 474a24452bb9ea8be759334c68d9469d135c9422f8cf883dcb4b0d8c1765afbb, schema 28)",
+      "restored_db": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep/rehearsal/restore-home/db/brain.sqlite (sha256 fb4853fa1de1f73f6e5593a98f1cbf0c7b08f4af3bc582e56b6a9c84c9f67808)",
+      "installer_rehearsal_json": "C:/Users/assas/AppData/Local/Temp/m00-activation-prep/rehearsal/installer-rehearsal.json",
+      "installer_rehearsal_note": "the installer/uninstaller ran with -SourceRoot = a %TEMP% byte mirror of the candidate brainstem/prime-extension src+types, so the installer's own pre-install backup directory stayed outside the repository; the manifest digest from the mirror equals the digest computed from the real candidate source (ce7fefa8...)",
+      "scripts": ["ext-manifest.ps1", "db-inventory.py", "db-extras.py", "s1-copy.py", "s2-migrate.py", "s3-behaviour.sh", "s4-installer-rehearsal.ps1", "check-db.py"]
+    }
+  },
+
+  "not_determined": [
+    {"item": "byte-stability of the canonical DB during activation", "why": "the live DB changed bytes 3 times within this session (WAL checkpointing by running sessions) while content stayed identical; a real activation should be done with no active sessions, and the pre-activation backup must record its own hash at that moment"},
+    {"item": "whether the owner will activate by SECOND_BRAIN_PYTHON, by re-pointing the canonical .venv editable install, or both", "why": "an owner decision; both routes are rehearsed for read-back (import probe) but neither was executed against production"},
+    {"item": "M00-NATIVE-ORCH-01 native non-interference on the activated host", "why": "requires a real OMP session against the candidate under a matched control; explicitly out of scope here (no OMP sessions were started that would load the candidate extension)"},
+    {"item": "behaviour of a real OMP session loading the candidate extension", "why": "loading it requires installing into a discovery path an OMP process reads; the installer rehearsal deliberately targeted a %TEMP% ExtensionsDir instead"},
+    {"item": "protected-memory decay exemption loss on the 10 legacy elevated rows", "why": "stated in the authority-closure record as an accepted cost; not executed here (would need long-horizon decay cycles)"},
+    {"item": "full-suite / lint / type gates for the candidate", "why": "owned by the main agent's project-wide validation; this preparation only ran scoped proofs (migrate, doctor, CLI surface, installer/uninstaller)"}
+  ]
+}
