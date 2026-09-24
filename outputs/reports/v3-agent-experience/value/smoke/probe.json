@@ -1,0 +1,75 @@
+{
+ "python": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\.venv\\Scripts\\python.exe",
+ "tasks": 2,
+ "memory_tasks_injecting": 1,
+ "memory_tasks_with_expected_memory_in_packet": 1,
+ "no_benefit_tasks_delivering": 0,
+ "results": [
+  {
+   "task": "VG-M05",
+   "class": "memory",
+   "returncode": 0,
+   "wall_ms": 362.0,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "INJECT",
+   "reason": null,
+   "candidate_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "selected_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "packet_tokens": 384,
+   "packet_memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "expected_present": {
+    "mem-79d7c4fd9876": true
+   },
+   "delivered_expected": {
+    "mem-79d7c4fd9876": 1
+   },
+   "delivered_rows": 1,
+   "timings_ms": {
+    "autoinject": 145.29,
+    "capsule": 11.522,
+    "render": 17.36,
+    "total": 174.265
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  },
+  {
+   "task": "VG-N02",
+   "class": "no_benefit",
+   "returncode": 0,
+   "wall_ms": 275.4,
+   "phases_ok": {
+    "autoinject": true,
+    "capsule": true,
+    "render": true
+   },
+   "decision": "NO_INJECTION",
+   "reason": "NO_RELEVANT_MEMORY",
+   "candidate_ids": [],
+   "selected_ids": [],
+   "packet_tokens": null,
+   "packet_memory_ids": [],
+   "expected_present": {},
+   "delivered_expected": {},
+   "delivered_rows": 0,
+   "timings_ms": {
+    "autoinject": 63.393,
+    "capsule": 11.608,
+    "render": 17.722,
+    "total": 92.798
+   },
+   "overlay": 13,
+   "stderr_tail": ""
+  }
+ ]
+}

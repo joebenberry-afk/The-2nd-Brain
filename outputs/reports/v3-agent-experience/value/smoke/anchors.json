@@ -1,0 +1,29 @@
+{
+ "repo_root": "C:\\tmp\\vvalue\\valuesmoke3\\probe-repo",
+ "memory_root": "C:\\tmp\\vvalue\\valuesmoke3\\snapshot\\memory",
+ "per_task": {
+  "VG-M05": {
+   "class": "memory",
+   "groups": 4,
+   "repo_groups_matched": 4,
+   "repo_all": true,
+   "memory_groups_matched": 4,
+   "memory_all": true,
+   "repo_chars": 60480848,
+   "memory_chars": 158530
+  },
+  "VG-N02": {
+   "class": "no_benefit",
+   "groups": 1,
+   "repo_groups_matched": 1,
+   "repo_all": true,
+   "memory_groups_matched": 1,
+   "memory_all": true,
+   "repo_chars": 60480848,
+   "memory_chars": 158530
+  }
+ },
+ "memory_tasks_answerable_in_repo": 1,
+ "memory_tasks_covered_by_memory": 1,
+ "memory_task_count": 1
+}

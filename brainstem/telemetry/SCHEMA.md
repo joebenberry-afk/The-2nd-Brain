@@ -39,6 +39,7 @@ Kinds:
 | assistant_usage | provider, model, response_id?, input_tokens?, output_tokens?, cache_read_tokens?, cache_write_tokens?, total_tokens?, cost_total? (v=3; P3-B) |
 | provider_request_meta | provider, model, request_seq, request_bytes, message_count, payload_keys, system_prefix_sha?, tool_surface_sha? (v=3; P3-B) |
 | provider_response_meta | provider, model, status?, headers? [{key, value_sha256}] (v=3; P3-B) |
+| quiet_skip | reason, candidates, vocab_terms, unique_terms, headline_terms, ubiquitous_headline_terms, capsule, vmem_objects, total_documents, precheck_ms, model_visible (v=2; V3 S2 quiet fast path, `src/quiet-precheck.ts` via the Prime adapter: one record per turn where the in-host precheck proved the Brain could not contribute a model-visible message, so the capsule/render/AutoInject phases ran no Python process on the critical path. reason is a fixed token (`no_evidence` is the only skip reason); counts describe the precheck's own tokenization/corpus statistics and never carry prompt text, terms, memory ids or packet content; model_visible = false because the turn deliberately added no Brain content. A turn that runs instead logs none of this — its evidence is the existing `autoinject_shadow_decision` / `brain_retrieval_attempt` / `active_state_delivery` records) |
 | autoinject_shadow_decision | decision, reason, packet_tokens, latency_ms, candidate_count, selected_count, delivery_id, packet_sha256, mode, model_visible, result_patch, emit_index, cache_hit, handler_returned_message, cli_packet_chars, cli_stdout_chars (mode = resolved host mode; model_visible = true when this decision path is the model-visible custom-message injection path (advisory/active), false for shadow (decide+record only, never model-visible); result_patch = patch returned; emit_index = emit ordinal per session+task key, 1 = spawning emit; cache_hit = served from the emit cache without a new spawn; handler_returned_message = this run returned the patch; cli_packet_chars / cli_stdout_chars = parsed packet text length / raw CLI stdout length — Phase C5/C7 instrumentation) |
 | codex_hook_shadow_decision | decision, reason, packet_tokens, delivery_id, candidate_count, selected_count (logged by brainstem/codex-hooks/run.ps1 to codex-hooks.jsonl) |
 | brain_retrieval_attempt | task_sha256, candidate_count, eligible_count, contributing_count, noncontributing_count, recipient, role_profile, project_id, query_mode, is_delta (Python AutoInject pipeline, `second_brain/autoinject.py`; privacy-safe: counts and a task hash only, never query text. query_mode = which query the decision used: `idf` = the request itself, `idf_focused` = the request's question/indirect-question sentences, `idf_narrowed` = the request's own most discriminative terms; contribution counts separate *retrieved candidates* (candidate_count) from the candidates that survived the contribution decision (contributing_count)) |
@@ -292,11 +293,12 @@ usage and maintenance events described above:
 | orchestration_record | 2 | orchestrator_policy_violation | 2 |
 | preinvocation | 2 | preinvocation_no_task | 2 |
 | prime_tool_surface | 2 | provider_request_meta | 3 |
-| provider_response_meta | 3 | rtd_shadow | 2 |
-| session_before_compact | 2 | session_compact | 2 |
-| session_finalized | 2 | session_shutdown | 2 |
-| session_start | 2 | session_started | 2 |
-| simplification_review | 2 | stop_allowed | 2 |
+| provider_response_meta | 3 | quiet_skip | 2 |
+| rtd_shadow | 2 | session_before_compact | 2 |
+| session_compact | 2 | session_finalized | 2 |
+| session_shutdown | 2 | session_start | 2 |
+| session_started | 2 | simplification_review | 2 |
+| stop_allowed | 2 |  |  |
 | stop_blocked | 2 | stop_blocked_result | 2 |
 | stop_boundary | 2 | stop_continue | 2 |
 | stop_control_result | 2 | stop_finalization_error | 2 |
