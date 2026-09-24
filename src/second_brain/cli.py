@@ -2264,7 +2264,7 @@ def cmd_memory(args) -> int:
             verify=not args.no_verify,
             authority_ceiling=args.authority_ceiling,
         )
-        print(f"{row['memory_id']} -> grade={row['evidence_grade']} status={row['status']}")
+        print(f"{row['memory_id']} -> grade={_grade_text(row)} status={row['status']}")
         return 0
     if args.memory_command == "list":
         rows = semantic.list_memories(
