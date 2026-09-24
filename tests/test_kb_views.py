@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -654,3 +655,17 @@ def test_real_corpus_brief_tokens(tmp_path: Path) -> None:
 
     tokens = views.estimate_tokens(brief)
     assert tokens <= 600
+
+
+def test_compile_views_publishes_the_project_map(tmp_path: Path) -> None:
+    manifest = tmp_path / "projects" / "p1" / "project.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        'id = "p1"\nname = "One"\nrepo_path = "C:\\\\Work\\\\Repo"\npaths = ["/srv/repo/"]\n',
+        encoding="utf-8",
+    )
+    views.compile_views(tmp_path)
+    data = json.loads((tmp_path / "views" / "projects.json").read_text(encoding="utf-8"))
+    assert data == [
+        {"id": "p1", "name": "One", "paths": ["/srv/repo", "c:/work/repo"], "git_remote": None}
+    ]
