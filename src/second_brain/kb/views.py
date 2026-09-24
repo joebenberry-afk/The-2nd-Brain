@@ -326,6 +326,21 @@ def compile_views(home: Path) -> dict[str, list[str]]:
 
         written_paths[key] = written
 
+    # Project map for hosts that cannot parse TOML (the OMP extension): normalized paths.
+    project_index = [
+        {
+            "id": p.id,
+            "name": p.name,
+            "paths": sorted({projects.normalize_path(path) for path in p.paths}),
+            "git_remote": p.git_remote,
+        }
+        for p in sorted(project_list, key=lambda item: item.id)
+    ]
+    records.write_atomic(
+        Path(home) / "views" / "projects.json",
+        json.dumps(project_index, indent=1, sort_keys=True) + "\n",
+    )
+
     # Clean up stale directories
     views_base = Path(home) / "views"
     if views_base.is_dir():
