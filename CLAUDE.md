@@ -48,3 +48,5 @@ On Linux these tests fail for platform reasons and pass on Windows — do not
 
 The current V3 baseline is
 `docs/intake/Second_Brain_V3_Requirements_2026-09-24/` (start at `START_V3.md`).
+A proposed, not yet promoted, implementation revision with open owner decisions
+is `docs/intake/2026-09-24-plan-v3-implementation-revision.md`.
