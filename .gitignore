@@ -24,6 +24,8 @@ db/
 state/
 # V3 per-project views (brief, corrections) compiled from records/
 views/
+# V3 private records: searchable locally, never synced
+records/private/
 backups/
 outputs/context-capsules/
 outputs/evidence-maps/
