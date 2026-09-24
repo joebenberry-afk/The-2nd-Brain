@@ -2210,6 +2210,13 @@ def cmd_recall(args) -> int:
     return 0
 
 
+def _grade_text(row: dict) -> str:
+    """Stored grade, flagged when it is a claim that carries no trust (SEC-AUTH-02)."""
+    stored = str(row.get("evidence_grade") or "")
+    effective = semantic.effective_evidence_grade(row)
+    return stored if stored == effective else f"{effective} (claimed {stored})"
+
+
 def cmd_memory(args) -> int:
     home = _home(args)
     if args.memory_command == "add":
@@ -2269,14 +2276,14 @@ def cmd_memory(args) -> int:
         )
         for r in rows:
             print(
-                f"{r['memory_id']:20s} {r['evidence_grade']:10s} {r['status']:10s} "
+                f"{r['memory_id']:20s} {_grade_text(r):10s} {r['status']:10s} "
                 f"v{r['current_version']} {r['title'][:60]}"
             )
         return 0
     if args.memory_command == "show":
         m = semantic.show_memory(home, args.memory_id)
         print(
-            f"id: {m['row']['memory_id']}  grade: {m['row']['evidence_grade']}  "
+            f"id: {m['row']['memory_id']}  grade: {_grade_text(m['row'])}  "
             f"status: {m['row']['status']}  v{m['row']['current_version']}"
         )
         print(m["body"])
