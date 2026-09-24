@@ -1,0 +1,42 @@
+{
+  "schema": "second-brain/resource-profile@1",
+  "profile": "default-strict-local",
+  "status": "FROZEN_BEFORE_HELDOUT",
+  "frozen_on": "2026-09-24",
+  "requirements": ["RES-01", "RES-04", "PERF-01", "PERF-02", "RET-02", "VAL-01"],
+  "change_rule": "Numbers change only through a recorded change-log entry made before the evaluation that uses them; never after seeing held-out results.",
+  "hardware": {
+    "os": "Windows 10.0.26200 x64",
+    "ram_total_mib": 15577,
+    "ram_available_mib_at_measurement": 4612,
+    "logical_cpus": 32,
+    "gpu_required": false,
+    "host": "OMP 18.3.0",
+    "python": "3.13.7"
+  },
+  "measured_baseline_2026_09_24": {
+    "hook_process_peak_working_set_mib": {"m00": 29.9, "candidate": 29.9, "method": "GetProcessMemoryInfo at exit; capsule ensure / vmem hot-context / autoinject shadow on a copy of the live corpus"},
+    "hook_process_wall_ms_median": {"bare_python": 30, "import_second_brain_cli": 130, "capsule_ensure": 162, "vmem_hot_context": 168, "autoinject_shadow": 175, "env_assess_large_repo": 1400, "method": "15 interleaved paired spawns, warm OS cache"},
+    "cascade_retrieve_ms_median_in_process": {"m00_miss": 25.3, "candidate_miss": 10.9, "m00_hit": 12.8, "candidate_hit": 10.6, "method": "40 calls, same corpus copy (116 memories), unique query per call on the miss path"},
+    "live_storage_mib": {"db": 9, "memory_text": 0.6, "telemetry": 217, "state": 519, "state_files": 12057}
+  },
+  "budgets": {
+    "hook_process_peak_working_set_mib": 64,
+    "blocking_brain_processes_before_dispatch_per_prompt": 3,
+    "background_brain_processes_per_prompt": "NOT_MEASURED (ledger mirror, P4 pulse and environment spawns are fire-and-forget; count them before freezing a limit)",
+    "warm_incremental_blocking_ms": {"median": 10, "p95": 50, "status": "adoption target (PERF-02), not met"},
+    "cold_incremental_to_first_dispatch_ms_p95": {"value": 100, "status": "adoption target (PERF-02), not met"},
+    "storage_mib": {"db": 256, "telemetry": 512, "state": 1024, "memory_text": 64, "note": "state/telemetry sessions also bounded by config/session-retention.toml (100 MiB per session, 1 GiB total)"},
+    "maintenance_concurrency": 1,
+    "optional_local_encoder": {"max_resident_mib": 1024, "gpu": false, "fallback": "lexical/exact retrieval"},
+    "default_profile_dependencies": "no daemon, no GPU, no network service, no model call to decide whether to use memory"
+  },
+  "quality_margins": {
+    "PERF-01_no_benefit": "Every no-benefit run: zero brain.* custom messages AND provider-counted input tokens equal to the native arm under matched cwd path length. Any positive delta fails.",
+    "PERF-01_false_abstention": "Concise memory-needing cases deliver the required memory in at least as many runs as the M00 arm.",
+    "RET-02_named_dilution": "Named concise/instruction-heavy pairs: required memory recovered in 100% of deterministic regression runs; a genuinely appended constraint changes the selected set.",
+    "ARCH-01_lifecycle": "Zero Brain-returned stop/continue/cancel decisions in any adapter hook output.",
+    "PERF-02_pre_dispatch": "Candidate median (launch -> user message_end) minus inert-arm median must not exceed M00's delta; reaching the 100 ms p95 cold target is the E01 comparison's job.",
+    "semantic_retrieval_E02": "Not yet declared; must be frozen here before any S2 held-out run."
+  }
+}
