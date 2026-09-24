@@ -12,8 +12,13 @@
  *   - a failed tool call whose error matches a tested correction → that one correction;
  *   - everything else → nothing.
  * Home: SECOND_BRAIN_HOME. Unset or unreadable views → the extension stays silent.
+ *
+ * Capture input: every tool result is appended to `<home>/state/kb-events/<session>.jsonl` in a
+ * format the Brain owns (`v`, `at`, `cwd`, `tool`, `command`, `ok`, `error`), so `brain capture`
+ * never has to parse OMP transcripts. Local only (state/ is not synced), capped per session.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const BRIEF_CUSTOM_TYPE = "brain.v3.brief";
@@ -128,6 +133,42 @@ function telemetry(home: string, event: string, delivered: string | undefined, s
   }
 }
 
+export const EVENT_LOG_CAP_BYTES = 5 * 1024 * 1024;
+
+function stringField(value: unknown, max: number): string | null {
+  return typeof value === "string" && value.trim() ? value.slice(0, max) : null;
+}
+
+/** Append one tool result to the session's event log; never throws, never grows past the cap. */
+export function logToolEvent(home: string, session: string, event: unknown, cwd: string | undefined): void {
+  try {
+    const data = asObject(event);
+    if (!data) return;
+    const input = asObject(data.input);
+    const ok = data.isError !== true;
+    const line = {
+      v: 1,
+      at: new Date().toISOString(),
+      cwd: cwd ?? null,
+      tool: stringField(data.toolName, 100) ?? stringField(data.tool, 100) ?? "unknown",
+      command: stringField(input?.command, 500) ?? stringField(input?.cmd, 500),
+      ok,
+      error: ok ? null : stringField(toolErrorText(event), 1000),
+    };
+    const dir = join(home, "state", "kb-events");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${createHash("sha256").update(session).digest("hex").slice(0, 16)}.jsonl`);
+    try {
+      if (statSync(file).size > EVENT_LOG_CAP_BYTES) return;
+    } catch {
+      // first event of the session
+    }
+    appendFileSync(file, `${JSON.stringify(line)}\n`);
+  } catch {
+    // capture input must never affect the session
+  }
+}
+
 /** A stable per-session key from whatever the host exposes; falls back to one process-wide key. */
 function sessionKey(ctx: unknown): string {
   const manager = asObject(asObject(ctx)?.sessionManager);
@@ -186,6 +227,7 @@ export default function secondBrainV3(pi: HostLike, env: NodeJS.ProcessEnv = pro
   pi.on("tool_result", (event, ctx) => {
     const started = performance.now();
     try {
+      logToolEvent(home, sessionKey(ctx), event, cwdOf(ctx));
       const errorText = toolErrorText(event);
       if (errorText === undefined) return undefined;
       const correction = matchCorrection(home, cwdOf(ctx), errorText);
