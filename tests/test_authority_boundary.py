@@ -288,6 +288,7 @@ def test_memory_search_shows_effective_grade_for_a_stored_claim(brain_home):
     for listing in (
         _run_cli(brain_home, "memory", "list"),
         _run_cli(brain_home, "memory", "show", memory_id),
+        _run_cli(brain_home, "memory", "curate", memory_id, "--status", "current"),
     ):
         assert listing.returncode == 0, listing.stderr
         assert "TESTED (claimed VERIFIED)" in listing.stdout
