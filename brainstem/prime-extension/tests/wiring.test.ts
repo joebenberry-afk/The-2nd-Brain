@@ -57,10 +57,14 @@ vi.mock("../src/autoinject", async (importOriginal) => {
 });
 const runEnvironmentAssessmentMock = vi.hoisted(() => vi.fn());
 const runEnvironmentAssessmentAsyncMock = vi.hoisted(() => vi.fn());
-vi.mock("../src/environment-mirror", () => ({
-  runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
-  runEnvironmentAssessment: runEnvironmentAssessmentAsyncMock,
-}));
+vi.mock("../src/environment-mirror", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/environment-mirror")>();
+  return {
+    ...actual,
+    runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
+    runEnvironmentAssessment: runEnvironmentAssessmentAsyncMock,
+  };
+});
 
 const runP4PulseMock = vi.hoisted(() => vi.fn());
 const runP4PulseSyncMock = vi.hoisted(() => vi.fn());
@@ -472,14 +476,17 @@ describe("factory wiring (src/index.ts)", () => {
     const records = await waitForLines(2); // async writes drained
     expect(records.map((r) => r.kind)).toEqual(["session_start", "turn_end"]);
 
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const final = await waitForLines(3);
     expect(final.map((r) => r.kind)).toEqual(["session_start", "turn_end", "session_shutdown"]);
   });
 
   it("consumes Environment Steward evidence at task and session boundaries", async () => {
     const handlers = loadFactory();
-    const ctx = makeCtx();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
 
     handlers.get("session_start")!({ reason: "startup" }, ctx);
     const started = mirrorFireAndForgetMock.mock.calls.find(
@@ -498,9 +505,16 @@ describe("factory wiring (src/index.ts)", () => {
       expect(assessed?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
     });
 
+    // Cadence (V3 S2): one assessment per session, then only when the cheap
+    // in-host repo fingerprint changes — never once per prompt.
     await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+
+    writeFileSync(join(repo, "package.json"), '{"name":"boundary"}', "utf8");
+    await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(2);
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "task_boundary", taskId: expect.any(String) }),
+      expect.objectContaining({ phase: "task_boundary", repo, taskId: expect.any(String) }),
     );
 
     runEnvironmentAssessmentMock.mockReturnValue({
@@ -513,7 +527,7 @@ describe("factory wiring (src/index.ts)", () => {
       completionEligible: true,
       evidence: { project_id: "project-a" },
     });
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const inactive = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_inactive",
     );
@@ -526,7 +540,7 @@ describe("factory wiring (src/index.ts)", () => {
         hostSessionId: "wiring-test",
         event: "session_shutdown",
         projectId: "project-a",
-        repo: "C:/work",
+        repo,
       }),
     );
     await settle();
@@ -534,14 +548,25 @@ describe("factory wiring (src/index.ts)", () => {
 
   it("never waits for the environment assessment before the host turn (PERF-02)", async () => {
     const handlers = loadFactory();
-    const ctx = makeCtx();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
     runEnvironmentAssessmentAsyncMock.mockImplementation(() => new Promise(() => undefined));
 
     handlers.get("session_start")!({ reason: "startup" }, ctx);
+    // An unchanged repo fingerprint never re-assesses at a task boundary.
     await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
-
+    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledTimes(1);
     expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "task_boundary" }),
+      expect.objectContaining({ phase: "session_start" }),
+    );
+
+    // A manifest change re-assesses in the background; the turn still returns.
+    writeFileSync(join(repo, "package.json"), '{"name":"changed"}', "utf8");
+    await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
+    expect(runEnvironmentAssessmentAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "task_boundary", repo }),
     );
     expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
     const kinds = mirrorFireAndForgetMock.mock.calls.map((call) => call[0]?.record?.kind);
@@ -584,7 +609,7 @@ describe("factory wiring (src/index.ts)", () => {
     expect(heartbeats[0].model_tokens_used).toBe(0);
   });
 
-  it("Task 7: session_shutdown persists heartbeat and fingerprint records before returning", () => {
+  it("Task 7: session_shutdown persists heartbeat and fingerprint records before returning", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseSyncMock.mockReturnValue({
@@ -604,7 +629,7 @@ describe("factory wiring (src/index.ts)", () => {
       ],
     });
 
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")
@@ -624,13 +649,14 @@ describe("factory wiring (src/index.ts)", () => {
     expect(records.map((r) => r.kind)).toContain("session_shutdown");
   });
 
-  it("Task 7: a failed P4 pulse persists its error before shutdown returns", () => {
+  it("Task 7: a failed P4 pulse persists its error before shutdown returns", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseSyncMock.mockReturnValue({ ok: false, sessionId: "wiring-test", error: "p4 pulse timed out" });
 
-    const result = handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    expect(result).toBeUndefined();
+    // The handler drains the session's capsule-write barrier before persisting,
+    // so the awaited call is the completion point (the writes are still final).
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
     const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")

@@ -70,6 +70,7 @@ KNOWN_KINDS = {
     "prime_tool_surface",
     "provider_request_meta",
     "provider_response_meta",
+    "quiet_skip",
     "rtd_shadow",
     "session_before_compact",
     "session_compact",
