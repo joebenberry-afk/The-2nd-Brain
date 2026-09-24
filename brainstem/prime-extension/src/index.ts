@@ -1077,6 +1077,58 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     });
   };
 
+  // Session-start background work (environment assessment, heartbeat pulse)
+  // runs only once the session has been idle for BOOT_IDLE_MS: never during
+  // host startup and never while an agent run is active, so Brain's Python
+  // processes do not compete with dispatch. A new run cancels a pending timer;
+  // its agent_end re-arms it. Shutdown drops anything still pending: its own
+  // synchronous path persists state.
+  const BOOT_IDLE_MS = 5_000;
+  const deferredBoot = new Map<
+    string,
+    { jobs: Array<() => void>; timer: NodeJS.Timeout | undefined; active: boolean }
+  >();
+  const runDeferredBoot = (session: string): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return;
+    deferredBoot.delete(session);
+    clearTimeout(pending.timer);
+    for (const job of pending.jobs) job();
+  };
+  const armDeferredBoot = (session: string): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined || pending.active) return;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => runDeferredBoot(session), BOOT_IDLE_MS);
+    pending.timer.unref();
+  };
+  const deferBootWork = (session: string, job: () => void): void => {
+    const pending = deferredBoot.get(session);
+    if (pending !== undefined) {
+      pending.jobs.push(job);
+      return;
+    }
+    deferredBoot.set(session, { jobs: [job], timer: undefined, active: false });
+    armDeferredBoot(session);
+  };
+  const markAgentRun = (session: string, active: boolean): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return;
+    pending.active = active;
+    if (active) {
+      clearTimeout(pending.timer);
+      pending.timer = undefined;
+    } else {
+      armDeferredBoot(session);
+    }
+  };
+  const dropDeferredBoot = (session: string): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return;
+    clearTimeout(pending.timer);
+    deferredBoot.delete(session);
+  };
+
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
     const hookStart = performance.now();
     e01Trace("hook_enter", { hook: "session_start", session });
@@ -1121,12 +1173,14 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // Seed the fingerprint so the first prompt of this session does not repeat
     // the session-start assessment.
     environmentFingerprints.set(session, environmentFingerprint(sessionRepo));
-    assessEnvironmentInBackground(session, ctx, {
-      home: config.home ?? "",
-      hostSessionId: session,
-      repo: sessionRepo,
-      phase: "session_start",
-    });
+    deferBootWork(session, () =>
+      assessEnvironmentInBackground(session, ctx, {
+        home: config.home ?? "",
+        hostSessionId: session,
+        repo: sessionRepo,
+        phase: "session_start",
+      }),
+    );
     // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
     try {
       const transcript = ctx.sessionManager?.getSessionFile?.();
@@ -1179,7 +1233,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
     }
-    queueP4Pulse("session_start", session, ctx);
+    deferBootWork(session, () => queueP4Pulse("session_start", session, ctx));
     e01SpanEnd("session_start.hook", hookStart, {});
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
@@ -1333,6 +1387,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
       });
       recordNativeRootSession(session, ctx);
+      markAgentRun(session, true);
       // Environment Steward cadence: once per session, then only when the cheap
       // in-host fingerprint of the repo-root manifests / `.git/HEAD` changes.
       assessEnvironmentOnChange(session, ctx, ctxCwd(ctx) ?? config.home ?? "");
@@ -1574,7 +1629,12 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           // to the EXISTING delivery-only admission shape unchanged; admission
           // itself, and the packet message returned to the host, are never
           // affected.
-          if (aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage) {
+          // The preserved packet only feeds VMem admission; with admission off,
+          // preserving it would cost two awaited Python spawns for nothing.
+          if (
+            loadVmemAdmissionConfig(config.home).enabled &&
+            aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage
+          ) {
             const details = (aiMessage as { details?: unknown }).details;
             if (details !== null && typeof details === "object") {
               const detailsObj = details as Record<string, unknown>;
@@ -1758,7 +1818,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
 
   wire<TurnStartEvent>("turn_start", (event, ctx, session) => {
     currentTurnIndex = event.turnIndex;
-    queueP4Pulse("turn_start", session, ctx);
     return sensors.turnStart(session, event.turnIndex);
   });
 
@@ -2341,6 +2400,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // Documented no-op; write-back happens through explicit `brainctl
   // autoinject writeback` (Python authority) and the Codex Stop trigger.
   wire<AgentEndEvent>("agent_end", (event, ctx, session) => {
+    markAgentRun(session, false);
     mirror(
       session,
       "agent_ended",
@@ -2522,6 +2582,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     // away with the session that started it (an orphaned helper also
     // self-exits on stdin EOF if this host dies without shutdown).
     if (turnBridgeEnabled) stopTurnHelpers("session_shutdown");
+    dropDeferredBoot(session);
     const activeStateCfg = loadAutoInjectHostConfig(config.home);
     if (
       activeStateTouchedSessions.has(session) &&
