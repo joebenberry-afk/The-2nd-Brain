@@ -205,9 +205,17 @@ Executed evidence: [`m00-evidence/authority-closure-20260923.md`](m00-evidence/a
 - SB-PROMPT-002/003 integrated proof on the codex, antigravity and Hermes hook
   CLIs (34 tests, sensitivity shown). Memory/context real-path probe: five
   verdicts true.
-- Gates: ruff clean, pyright `0 errors`, Python **2154 passed / 1 skipped /
-  0 failed**; no `brainstem/` file changed, so the prior extension evidence
-  stands for unchanged bytes.
+- Final code subject `80f3c54` (packet `3722bd1` + review corrections `1d449b6`,
+  `cdb9ac7`, `80f3c54`): ruff clean, pyright `0 errors`, Python **2156 passed /
+  1 skipped / 0 failed**, **independently executed** by a separate agent on
+  that exact commit, which also reproduced the SEC-AUTH refusals and the
+  legacy-row behavior at runtime. No `brainstem/` file changed; the tree hash
+  is identical to `4d0d97d`, so the prior extension evidence stands.
+- Independent security review found four missed display/merge surfaces, all
+  fixed with regression tests, and then returned `FIXED — fail-closed`
+  supported, with no blocking HIGH/MEDIUM authorization sink. Recorded caveats:
+  the self-scoped LOW gate verdict (MEDIUM, audit only, no consumer) and the
+  direct crossmodel library API (LOW, no product ingress).
 - Remaining, all on the same external issuer: positive SEC-AUTH approval,
   SEC-SKILL-01 approval-record authority, FSUPD-01 protected approval,
   SEC-INTEGRITY-01 key custody. Deferred LOW/moderate: SEC-HOOK-02 residual,
