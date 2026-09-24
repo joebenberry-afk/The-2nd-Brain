@@ -50,9 +50,10 @@ def session_brief(home: Path, payload: dict) -> str:
     project = _project(home, payload)
     native = _native_memory(payload)
     if native is None:
-        compiled = _view_dir(home, project) / "brief.md"
-        if compiled.is_file():
-            return compiled.read_text(encoding="utf-8")
+        try:
+            return (_view_dir(home, project) / "brief.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass  # missing or unreadable compiled view: render from the records
     recs, _ = records.load_all(home)
     return views.render_brief(recs, project, native_text=native)
 
@@ -65,9 +66,13 @@ def correction(home: Path, payload: dict) -> str:
         return ""
     project = _project(home, payload)
     compiled = _view_dir(home, project) / "corrections.json"
-    if compiled.is_file():
-        table = json.loads(compiled.read_text(encoding="utf-8"))
-    else:
+    table = None
+    try:
+        loaded = json.loads(compiled.read_text(encoding="utf-8"))
+        table = loaded if isinstance(loaded, list) else None
+    except (OSError, ValueError):
+        table = None  # missing or corrupt compiled view: derive it from the records
+    if table is None:
         recs, _ = records.load_all(home)
         table = views.correction_table(recs)
     entry = views.match_error(table, error, project)

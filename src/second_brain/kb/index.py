@@ -20,33 +20,60 @@ def index_path(home: Path) -> Path:
     return Path(home) / "db" / "kb.sqlite"
 
 
+#: How long a write lock held by another process is waited for before giving up.
+LOCK_TIMEOUT_S = 5.0
+
+_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS kb_meta (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS kb_records (
+        id TEXT PRIMARY KEY,
+        sha256 TEXT NOT NULL,
+        text TEXT NOT NULL
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(
+        id UNINDEXED,
+        title,
+        terms,
+        body,
+        tokenize='unicode61'
+    );
+"""
+
+
+def _open(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path, timeout=LOCK_TIMEOUT_S)
+    try:
+        conn.executescript(_SCHEMA)
+        if (
+            conn.execute("SELECT value FROM kb_meta WHERE key = 'schema_version'").fetchone()
+            is None
+        ):
+            conn.execute("INSERT INTO kb_meta (key, value) VALUES ('schema_version', '1')")
+            conn.commit()
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
 def connect(home: Path) -> sqlite3.Connection:
-    """Create connection; initialize schema if missing."""
+    """Open the derived index, creating it if missing.
+
+    The index is derived from the record files, so a corrupted file is discarded and rebuilt
+    instead of failing the caller. A lock held elsewhere is waited for up to LOCK_TIMEOUT_S and
+    then raised (``sqlite3.OperationalError``) — callers report it; they never answer as if
+    nothing matched.
+    """
     path = index_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS kb_meta (key TEXT PRIMARY KEY, value TEXT);
-        CREATE TABLE IF NOT EXISTS kb_records (
-            id TEXT PRIMARY KEY,
-            sha256 TEXT NOT NULL,
-            text TEXT NOT NULL
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(
-            id UNINDEXED,
-            title,
-            terms,
-            body,
-            tokenize='unicode61'
-        );
-    """)
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM kb_meta WHERE key = 'schema_version'")
-    result = cursor.fetchone()
-    if result is None:
-        cursor.execute("INSERT INTO kb_meta (key, value) VALUES ('schema_version', '1')")
-        conn.commit()
-    return conn
+    try:
+        return _open(path)
+    except sqlite3.DatabaseError as exc:
+        if isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower():
+            raise
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(f"{path}{suffix}").unlink(missing_ok=True)
+        return _open(path)
 
 
 @dataclass
