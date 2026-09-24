@@ -1573,7 +1573,9 @@ def _resolve_research_result(home: Path, obj: SessionObject, stored_content: str
                 "current_version": mrow.get("current_version"),
                 "title": mrow.get("title"),
                 "status": mrow.get("status"),
-                "evidence_grade": mrow.get("evidence_grade"),
+                # Agent-visible: report the trust-bearing grade, not a stored
+                # claim no issuer attested (SEC-AUTH-02).
+                "evidence_grade": semantic.effective_evidence_grade(mrow),
                 "scope": mrow.get("scope"),
                 "summary": mrow.get("summary"),
                 "body": shown["body"],

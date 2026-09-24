@@ -284,6 +284,13 @@ def test_memory_search_shows_effective_grade_for_a_stored_claim(brain_home):
     assert searched.returncode == 0, searched.stderr
     assert f"{memory_id}  [candidate/TESTED]" in searched.stdout
     assert "VERIFIED" not in searched.stdout
+    # Inspection commands keep the stored value visible but never present it as trust.
+    for listing in (
+        _run_cli(brain_home, "memory", "list"),
+        _run_cli(brain_home, "memory", "show", memory_id),
+    ):
+        assert listing.returncode == 0, listing.stderr
+        assert "TESTED (claimed VERIFIED)" in listing.stdout
 
 
 def test_caller_supplied_model_identity_records_no_policy_input(brain_home, repo):
