@@ -537,6 +537,32 @@ class HybridCascadeRetriever:
         except (OSError, sqlite3.Error):
             return
 
+    def close_cached_connections(self, home: Path | str | None = None) -> int:
+        """Close cached negative-cache connections (one home, or all of them).
+
+        The retriever caches one SQLite connection per home for its lifetime. A
+        caller that is finished with a home — a disposable measurement home, or a
+        Brain root it is about to move or remove — has to release those handles
+        first; on Windows an open handle blocks the delete. Returns the number of
+        connections closed. Later use of the same home re-opens it.
+        """
+        keys = (
+            [str(Path(home).resolve())]
+            if home is not None
+            else list(self._cache_connections)
+        )
+        closed = 0
+        for key in keys:
+            conn = self._cache_connections.pop(key, None)
+            if conn is None:
+                continue
+            try:
+                conn.close()
+            except (OSError, sqlite3.Error):
+                continue
+            closed += 1
+        return closed
+
     @staticmethod
     def _number(value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -566,7 +592,7 @@ class HybridCascadeRetriever:
             or version != row.get("current_version")
             or not isinstance(file_hash, str)
             or not file_hash
-            or file_hash != semantic._file_hash(home, row)
+            or not semantic.file_hash_matches(file_hash, home, row)
         ):
             return None
         score = cls._number(candidate.get("score"))

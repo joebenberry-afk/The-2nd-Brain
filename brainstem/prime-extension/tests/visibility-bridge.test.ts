@@ -1,5 +1,13 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseOmpVisibilityOutput, runOmpVisibility } from "../src/visibility-bridge";
+import {
+  loadSkillsVisibilityMode,
+  parseOmpVisibilityOutput,
+  runOmpVisibility,
+  skillsVisibilityModeFromToml,
+} from "../src/visibility-bridge";
 
 describe("parseOmpVisibilityOutput", () => {
   it("parses a well-formed shadow-mode plan", () => {
@@ -240,5 +248,72 @@ describe("runOmpVisibility", () => {
     });
     expect(result.visibility_plan).toBeNull();
     expect(result.error).not.toBeNull();
+  });
+});
+
+/**
+ * The quiet fast path suppresses the visibility spawn only when this in-host read
+ * proves `skills.resolve_visibility_mode` cannot be `enforced`. The reader must
+ * therefore agree with Python on every decodable shape and answer "enforced"
+ * (i.e. plan) whenever it cannot be sure — a wrong "shadow" costs the injected
+ * specialist instructions.
+ */
+describe("skillsVisibilityModeFromToml", () => {
+  const shipped = [
+    "# skills.toml — skill lifecycle defaults",
+    "schema_version = 1",
+    "",
+    "[router]",
+    "max_active = 3      # ENFORCED",
+    "",
+    "[visibility]",
+    'mode = "shadow"     # SHADOW/REPORT-ONLY default',
+    "",
+    "[lean]",
+    'eval = "off"',
+  ].join("\n");
+
+  it("reads the exact enforced value Python compares against", () => {
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = "enforced"\n')).toBe("enforced");
+    expect(skillsVisibilityModeFromToml("[visibility]\nmode='enforced'\n")).toBe("enforced");
+    expect(skillsVisibilityModeFromToml('[ visibility ]\nmode = "enforced" # why\n')).toBe("enforced");
+    expect(skillsVisibilityModeFromToml('visibility.mode = "enforced"\n')).toBe("enforced");
+    expect(skillsVisibilityModeFromToml('["visibility"]\nmode = "enforced"\n')).toBe("enforced");
+  });
+
+  it("answers shadow for the shipped config and every other decoded value", () => {
+    expect(skillsVisibilityModeFromToml(shipped)).toBe("shadow");
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = "ENFORCED"\n')).toBe("shadow");
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = "shadow"\n')).toBe("shadow");
+    expect(skillsVisibilityModeFromToml("[visibility]\nmode = 3\n")).toBe("enforced");
+    expect(skillsVisibilityModeFromToml("")).toBe("shadow");
+    expect(skillsVisibilityModeFromToml('[router]\nmax_active = 3\n')).toBe("shadow");
+  });
+
+  it("never answers shadow when the value cannot be decoded here", () => {
+    // Escaped/duplicate/odd shapes could still resolve to `enforced` in Python:
+    // the safe direction is to plan visibility (one spawn) instead of dropping it.
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = """enforced"""\n')).toBe("enforced");
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = "enf\\u006frced"\n')).toBe("enforced");
+    expect(skillsVisibilityModeFromToml('[visibility]\nmode = "shadow"\nmode = "shadow"\n')).toBe(
+      "enforced",
+    );
+  });
+
+  it("reads the file fail-safe and resolves a missing home to shadow", () => {
+    expect(loadSkillsVisibilityMode(null)).toBe("shadow");
+    expect(loadSkillsVisibilityMode(join(tmpdir(), "sb-visibility-missing"))).toBe("shadow");
+  });
+
+  it("reads a home's own skills.toml", () => {
+    const home = mkdtempSync(join(tmpdir(), "sb-visibility-"));
+    try {
+      mkdirSync(join(home, "config"), { recursive: true });
+      expect(loadSkillsVisibilityMode(home)).toBe("shadow");
+      writeFileSync(join(home, "config", "skills.toml"), '[visibility]\nmode = "enforced"\n', "utf8");
+      expect(loadSkillsVisibilityMode(home)).toBe("enforced");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

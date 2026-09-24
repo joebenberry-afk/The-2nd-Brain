@@ -131,7 +131,16 @@ def test_writeback_does_not_reinject_same_memory_lineage(tmp_path) -> None:
     semantic.curate(home, mid, status="current")
     first = _inject(home, "migration ordering", session_id="s1")
     assert first.decision.value == "INJECT"
-    out = _writeback(home, session_id="s1", title="Outcome note", observation="migration ran clean")
+    # The candidate's own headline must carry the request's topic: retrieval and the
+    # contribution decision are separate, so a body-only overlap on one generic word
+    # is not evidence that a memory applies (S2 RET-05) — the dedupe behaviour under
+    # test needs an otherwise-eligible candidate.
+    out = _writeback(
+        home,
+        session_id="s1",
+        title="Migration ordering outcome",
+        observation="migration ran clean",
+    )
     # Same session lineage: the delivered memory stays deduped, while the new
     # observed candidate is independently eligible under T1.3.
     second = _inject(home, "migration ordering", session_id="s1")

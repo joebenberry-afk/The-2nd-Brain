@@ -1,0 +1,546 @@
+[
+ {
+  "arm": "candidate-once",
+  "rep": 0,
+  "order_position": 0,
+  "returncode": 0,
+  "wall_ms": 13687.4,
+  "launch_epoch_ms": 1790245023552.8,
+  "prompt_costs": [
+   {
+    "index": 0,
+    "pre_dispatch_ms": 3427.9,
+    "pre_dispatch_rel_epoch_ms": 3428.0
+   },
+   {
+    "index": 1,
+    "pre_dispatch_ms": 5561.6,
+    "pre_dispatch_rel_epoch_ms": 5561.7
+   }
+  ],
+  "brain_visible_chars": 495,
+  "memory_delivered": true,
+  "anchors": {
+   "session": {
+    "perf_ms": 1355.6,
+    "epoch_ms": 1790245024908.4
+   },
+   "agent_start": {
+    "perf_ms": 3391.3,
+    "epoch_ms": 1790245026944.1
+   },
+   "turn_start": {
+    "perf_ms": 3427.1,
+    "epoch_ms": 1790245026980.0
+   },
+   "message_start:user": {
+    "perf_ms": 3427.3,
+    "epoch_ms": 1790245026980.1
+   },
+   "message_end:user": {
+    "perf_ms": 3427.9,
+    "epoch_ms": 1790245026980.8
+   }
+  },
+  "span_summary": {
+   "before_agent_start.autoinject": {
+    "count": 2,
+    "total_ms": 5.894,
+    "median_ms": 2.947,
+    "max_ms": 3.122,
+    "first_start_rel_ms": 3358.046,
+    "first_duration_ms": 3.122,
+    "first_end_rel_ms": 3361.168,
+    "second_duration_ms": 2.772
+   },
+   "before_agent_start.hook": {
+    "count": 2,
+    "total_ms": 1409.312,
+    "median_ms": 704.656,
+    "max_ms": 924.547,
+    "first_start_rel_ms": 2879.403,
+    "first_duration_ms": 484.765,
+    "first_end_rel_ms": 3364.168,
+    "second_duration_ms": 924.547
+   },
+   "before_agent_start.turn_bridge": {
+    "count": 2,
+    "total_ms": 872.382,
+    "median_ms": 436.191,
+    "max_ms": 452.849,
+    "first_start_rel_ms": 2895.321,
+    "first_duration_ms": 452.849,
+    "first_end_rel_ms": 3348.17,
+    "second_duration_ms": 419.533
+   },
+   "bg.environment_assessment": {
+    "count": 3,
+    "total_ms": 4934.059,
+    "median_ms": 1598.554,
+    "max_ms": 1749.606,
+    "first_start_rel_ms": 1331.562,
+    "first_duration_ms": 1749.606,
+    "first_end_rel_ms": 3081.168,
+    "second_duration_ms": 1585.899
+   },
+   "bg.ledger_mirror": {
+    "count": 14,
+    "total_ms": 4848.183,
+    "median_ms": 278.598,
+    "max_ms": 667.092,
+    "first_start_rel_ms": 1320.48,
+    "first_duration_ms": 666.687,
+    "first_end_rel_ms": 1987.167,
+    "second_duration_ms": 667.092
+   },
+   "bg.p4_pulse": {
+    "count": 4,
+    "total_ms": 1334.354,
+    "median_ms": 314.358,
+    "max_ms": 443.179,
+    "first_start_rel_ms": 1345.95,
+    "first_duration_ms": 349.218,
+    "first_end_rel_ms": 1695.168,
+    "second_duration_ms": 262.46
+   },
+   "bg.visibility_plan": {
+    "count": 2,
+    "total_ms": 656.071,
+    "median_ms": 328.035,
+    "max_ms": 333.539,
+    "first_start_rel_ms": 2885.633,
+    "first_duration_ms": 333.539,
+    "first_end_rel_ms": 3219.172,
+    "second_duration_ms": 322.532
+   },
+   "session_start.hook": {
+    "count": 1,
+    "total_ms": 34.051,
+    "median_ms": 34.051,
+    "max_ms": 34.051,
+    "first_start_rel_ms": 1319.1,
+    "first_duration_ms": 34.051,
+    "first_end_rel_ms": 1353.151
+   },
+   "turn_bridge.once": {
+    "count": 2,
+    "total_ms": 885.109,
+    "median_ms": 442.554,
+    "max_ms": 458.914,
+    "first_start_rel_ms": 2889.254,
+    "first_duration_ms": 458.914,
+    "first_end_rel_ms": 3348.168,
+    "second_duration_ms": 426.195
+   }
+  },
+  "event_count": 784,
+  "stderr_tail": "",
+  "cold_pre_dispatch_ms": 3427.9,
+  "warm_pre_dispatch_ms": 5561.6,
+  "cold_reconciliation": {
+   "launch_to_cold_message_end_ms": 3427.977,
+   "spans_union_ms": 2108.877,
+   "unattributed_ms": 1319.1,
+   "unattributed_share": 0.3848,
+   "hook_start_rel_ms": 2879.403,
+   "hook_duration_ms": 484.765,
+   "after_hook_ms": 63.809,
+   "cold_mark_perf_ms": 3427.9
+  }
+ },
+ {
+  "arm": "candidate-helper-eager",
+  "rep": 0,
+  "order_position": 1,
+  "returncode": 0,
+  "wall_ms": 24587.7,
+  "launch_epoch_ms": 1790245037389.8,
+  "prompt_costs": [
+   {
+    "index": 0,
+    "pre_dispatch_ms": 3725.9,
+    "pre_dispatch_rel_epoch_ms": 3725.9
+   },
+   {
+    "index": 1,
+    "pre_dispatch_ms": 15482.1,
+    "pre_dispatch_rel_epoch_ms": 15482.1
+   }
+  ],
+  "brain_visible_chars": 0,
+  "memory_delivered": false,
+  "anchors": {
+   "session": {
+    "perf_ms": 1445.0,
+    "epoch_ms": 1790245038834.8
+   },
+   "agent_start": {
+    "perf_ms": 3687.1,
+    "epoch_ms": 1790245041076.9
+   },
+   "turn_start": {
+    "perf_ms": 3725.0,
+    "epoch_ms": 1790245041114.8
+   },
+   "message_start:user": {
+    "perf_ms": 3725.1,
+    "epoch_ms": 1790245041114.9
+   },
+   "message_end:user": {
+    "perf_ms": 3725.9,
+    "epoch_ms": 1790245041115.7
+   }
+  },
+  "span_summary": {
+   "before_agent_start.autoinject": {
+    "count": 2,
+    "total_ms": 5.342,
+    "median_ms": 2.671,
+    "max_ms": 2.729,
+    "first_start_rel_ms": 3544.609,
+    "first_duration_ms": 2.613,
+    "first_end_rel_ms": 3547.222,
+    "second_duration_ms": 2.729
+   },
+   "before_agent_start.hook": {
+    "count": 2,
+    "total_ms": 10935.262,
+    "median_ms": 5467.631,
+    "max_ms": 10634.272,
+    "first_start_rel_ms": 3358.225,
+    "first_duration_ms": 300.99,
+    "first_end_rel_ms": 3659.215,
+    "second_duration_ms": 10634.272
+   },
+   "before_agent_start.turn_bridge": {
+    "count": 2,
+    "total_ms": 10762.889,
+    "median_ms": 5381.445,
+    "max_ms": 10601.751,
+    "first_start_rel_ms": 3375.085,
+    "first_duration_ms": 161.138,
+    "first_end_rel_ms": 3536.223,
+    "second_duration_ms": 10601.751
+   },
+   "bg.environment_assessment": {
+    "count": 3,
+    "total_ms": 5000.64,
+    "median_ms": 1741.595,
+    "max_ms": 1751.516,
+    "first_start_rel_ms": 1422.705,
+    "first_duration_ms": 1751.516,
+    "first_end_rel_ms": 3174.221,
+    "second_duration_ms": 1507.529
+   },
+   "bg.ledger_mirror": {
+    "count": 14,
+    "total_ms": 4882.314,
+    "median_ms": 298.755,
+    "max_ms": 704.723,
+    "first_start_rel_ms": 1415.498,
+    "first_duration_ms": 704.723,
+    "first_end_rel_ms": 2120.221,
+    "second_duration_ms": 700.735
+   },
+   "bg.p4_pulse": {
+    "count": 4,
+    "total_ms": 1153.985,
+    "median_ms": 297.227,
+    "max_ms": 322.984,
+    "first_start_rel_ms": 1436.237,
+    "first_duration_ms": 322.984,
+    "first_end_rel_ms": 1759.221,
+    "second_duration_ms": 304.717
+   },
+   "bg.visibility_plan": {
+    "count": 2,
+    "total_ms": 628.469,
+    "median_ms": 314.235,
+    "max_ms": 337.862,
+    "first_start_rel_ms": 3365.618,
+    "first_duration_ms": 290.607,
+    "first_end_rel_ms": 3656.225,
+    "second_duration_ms": 337.862
+   },
+   "session_start.hook": {
+    "count": 1,
+    "total_ms": 36.759,
+    "median_ms": 36.759,
+    "max_ms": 36.759,
+    "first_start_rel_ms": 1406.454,
+    "first_duration_ms": 36.759,
+    "first_end_rel_ms": 1443.213
+   },
+   "turn_bridge.helper_fallback": {
+    "count": 1,
+    "total_ms": 0.003,
+    "median_ms": 0.003,
+    "max_ms": 0.003,
+    "first_start_rel_ms": 15433.219,
+    "first_duration_ms": 0.003,
+    "first_end_rel_ms": 15433.222
+   },
+   "turn_helper.request": {
+    "count": 3,
+    "total_ms": 10155.687,
+    "median_ms": 5000.798,
+    "max_ms": 5001.771,
+    "first_start_rel_ms": 3382.103,
+    "first_duration_ms": 153.118,
+    "first_end_rel_ms": 3535.221,
+    "second_duration_ms": 5001.771
+   },
+   "turn_helper.start": {
+    "count": 2,
+    "total_ms": 899.771,
+    "median_ms": 449.885,
+    "max_ms": 636.722,
+    "first_start_rel_ms": 1406.499,
+    "first_duration_ms": 636.722,
+    "first_end_rel_ms": 2043.221,
+    "second_duration_ms": 263.049
+   }
+  },
+  "event_count": 967,
+  "stderr_tail": "",
+  "cold_pre_dispatch_ms": 3725.9,
+  "warm_pre_dispatch_ms": 15482.1,
+  "cold_reconciliation": {
+   "launch_to_cold_message_end_ms": 3725.93,
+   "spans_union_ms": 2319.476,
+   "unattributed_ms": 1406.454,
+   "unattributed_share": 0.3775,
+   "hook_start_rel_ms": 3358.225,
+   "hook_duration_ms": 300.99,
+   "after_hook_ms": 66.715,
+   "cold_mark_perf_ms": 3725.9
+  }
+ },
+ {
+  "arm": "candidate-helper-lazy",
+  "rep": 0,
+  "order_position": 2,
+  "returncode": 0,
+  "wall_ms": 26119.4,
+  "launch_epoch_ms": 1790245062116.6,
+  "prompt_costs": [
+   {
+    "index": 0,
+    "pre_dispatch_ms": 3617.4,
+    "pre_dispatch_rel_epoch_ms": 3617.4
+   },
+   {
+    "index": 1,
+    "pre_dispatch_ms": 15859.5,
+    "pre_dispatch_rel_epoch_ms": 15859.6
+   }
+  ],
+  "brain_visible_chars": 0,
+  "memory_delivered": false,
+  "anchors": {
+   "session": {
+    "perf_ms": 1455.5,
+    "epoch_ms": 1790245063572.1
+   },
+   "agent_start": {
+    "perf_ms": 3578.0,
+    "epoch_ms": 1790245065694.6
+   },
+   "turn_start": {
+    "perf_ms": 3616.6,
+    "epoch_ms": 1790245065733.2
+   },
+   "message_start:user": {
+    "perf_ms": 3616.7,
+    "epoch_ms": 1790245065733.3
+   },
+   "message_end:user": {
+    "perf_ms": 3617.4,
+    "epoch_ms": 1790245065734.0
+   }
+  },
+  "span_summary": {
+   "before_agent_start.autoinject": {
+    "count": 2,
+    "total_ms": 5.529,
+    "median_ms": 2.764,
+    "max_ms": 2.825,
+    "first_start_rel_ms": 3546.529,
+    "first_duration_ms": 2.825,
+    "first_end_rel_ms": 3549.353,
+    "second_duration_ms": 2.704
+   },
+   "before_agent_start.hook": {
+    "count": 2,
+    "total_ms": 11281.511,
+    "median_ms": 5640.756,
+    "max_ms": 10720.626,
+    "first_start_rel_ms": 2990.46,
+    "first_duration_ms": 560.885,
+    "first_end_rel_ms": 3551.345,
+    "second_duration_ms": 10720.626
+   },
+   "before_agent_start.turn_bridge": {
+    "count": 2,
+    "total_ms": 11226.346,
+    "median_ms": 5613.173,
+    "max_ms": 10693.177,
+    "first_start_rel_ms": 3003.184,
+    "first_duration_ms": 533.169,
+    "first_end_rel_ms": 3536.353,
+    "second_duration_ms": 10693.177
+   },
+   "bg.environment_assessment": {
+    "count": 3,
+    "total_ms": 4900.845,
+    "median_ms": 1641.683,
+    "max_ms": 1703.872,
+    "first_start_rel_ms": 1430.482,
+    "first_duration_ms": 1703.872,
+    "first_end_rel_ms": 3134.354,
+    "second_duration_ms": 1641.683
+   },
+   "bg.ledger_mirror": {
+    "count": 16,
+    "total_ms": 5183.869,
+    "median_ms": 283.446,
+    "max_ms": 662.984,
+    "first_start_rel_ms": 1422.366,
+    "first_duration_ms": 662.984,
+    "first_end_rel_ms": 2085.35,
+    "second_duration_ms": 657.714
+   },
+   "bg.p4_pulse": {
+    "count": 5,
+    "total_ms": 1453.353,
+    "median_ms": 283.404,
+    "max_ms": 371.731,
+    "first_start_rel_ms": 1445.621,
+    "first_duration_ms": 371.731,
+    "first_end_rel_ms": 1817.352,
+    "second_duration_ms": 251.227
+   },
+   "bg.visibility_plan": {
+    "count": 2,
+    "total_ms": 611.801,
+    "median_ms": 305.9,
+    "max_ms": 315.967,
+    "first_start_rel_ms": 2998.39,
+    "first_duration_ms": 315.967,
+    "first_end_rel_ms": 3314.357,
+    "second_duration_ms": 295.834
+   },
+   "session_start.hook": {
+    "count": 1,
+    "total_ms": 33.528,
+    "median_ms": 33.528,
+    "max_ms": 33.528,
+    "first_start_rel_ms": 1419.816,
+    "first_duration_ms": 33.528,
+    "first_end_rel_ms": 1453.344
+   },
+   "turn_bridge.helper_fallback": {
+    "count": 1,
+    "total_ms": 0.004,
+    "median_ms": 0.004,
+    "max_ms": 0.004,
+    "first_start_rel_ms": 15808.349,
+    "first_duration_ms": 0.004,
+    "first_end_rel_ms": 15808.353
+   },
+   "turn_helper.request": {
+    "count": 3,
+    "total_ms": 10172.591,
+    "median_ms": 5000.163,
+    "max_ms": 5000.982,
+    "first_start_rel_ms": 3364.906,
+    "first_duration_ms": 171.446,
+    "first_end_rel_ms": 3536.352,
+    "second_duration_ms": 5000.163
+   },
+   "turn_helper.start": {
+    "count": 2,
+    "total_ms": 652.098,
+    "median_ms": 326.049,
+    "max_ms": 354.627,
+    "first_start_rel_ms": 3009.727,
+    "first_duration_ms": 354.627,
+    "first_end_rel_ms": 3364.354,
+    "second_duration_ms": 297.471
+   }
+  },
+  "event_count": 896,
+  "stderr_tail": "",
+  "cold_pre_dispatch_ms": 3617.4,
+  "warm_pre_dispatch_ms": 15859.5,
+  "cold_reconciliation": {
+   "launch_to_cold_message_end_ms": 3617.362,
+   "spans_union_ms": 2197.546,
+   "unattributed_ms": 1419.816,
+   "unattributed_share": 0.3925,
+   "hook_start_rel_ms": 2990.46,
+   "hook_duration_ms": 560.885,
+   "after_hook_ms": 66.017,
+   "cold_mark_perf_ms": 3617.4
+  }
+ },
+ {
+  "arm": "inert",
+  "rep": 0,
+  "order_position": 3,
+  "returncode": 0,
+  "wall_ms": 11356.8,
+  "launch_epoch_ms": 1790245088245.5,
+  "prompt_costs": [
+   {
+    "index": 0,
+    "pre_dispatch_ms": 2870.5,
+    "pre_dispatch_rel_epoch_ms": 2870.4
+   },
+   {
+    "index": 1,
+    "pre_dispatch_ms": 4241.8,
+    "pre_dispatch_rel_epoch_ms": 4241.8
+   }
+  ],
+  "brain_visible_chars": 0,
+  "memory_delivered": false,
+  "anchors": {
+   "session": {
+    "perf_ms": 1346.2,
+    "epoch_ms": 1790245089591.7
+   },
+   "agent_start": {
+    "perf_ms": 2841.1,
+    "epoch_ms": 1790245091086.6
+   },
+   "turn_start": {
+    "perf_ms": 2869.8,
+    "epoch_ms": 1790245091115.3
+   },
+   "message_start:user": {
+    "perf_ms": 2869.9,
+    "epoch_ms": 1790245091115.4
+   },
+   "message_end:user": {
+    "perf_ms": 2870.5,
+    "epoch_ms": 1790245091115.9
+   }
+  },
+  "span_summary": {},
+  "event_count": 972,
+  "stderr_tail": "",
+  "cold_pre_dispatch_ms": 2870.5,
+  "warm_pre_dispatch_ms": 4241.8,
+  "cold_reconciliation": {
+   "launch_to_cold_message_end_ms": 2870.424,
+   "spans_union_ms": 0.0,
+   "unattributed_ms": 2870.424,
+   "unattributed_share": 1.0,
+   "hook_start_rel_ms": null,
+   "hook_duration_ms": null,
+   "after_hook_ms": null,
+   "cold_mark_perf_ms": 2870.5
+  }
+ }
+]

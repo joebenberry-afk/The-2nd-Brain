@@ -1,0 +1,686 @@
+{
+ "D01/native": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 3494.3,
+  "to_user_message_end_ms_median": 2363.2,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 9653,
+  "cost_total": 5.9e-05,
+  "provider_requests": [
+   1
+  ],
+  "provider_usage_totals": {
+   "input": 181,
+   "output": 6,
+   "cacheRead": 9472,
+   "cacheWrite": 0,
+   "reasoningTokens": null
+  },
+  "usage_reported_requests": [
+   {
+    "input": 1,
+    "output": 1,
+    "cacheRead": 1,
+    "cacheWrite": 1,
+    "reasoningTokens": 0
+   }
+  ],
+  "lean_kernel": [],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": null,
+    "first_request_transport_identical": null,
+    "first_request_deltas": null,
+    "first_request_added_messages": null,
+    "first_request_removed_messages": null,
+    "content_identical": null,
+    "same_request_set": null,
+    "char_deltas": null,
+    "request_count": null
+   }
+  ]
+ },
+ "D01/inert": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 3880.5,
+  "to_user_message_end_ms_median": 2427.1,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 9653,
+  "cost_total": 5.9e-05,
+  "provider_requests": [
+   1
+  ],
+  "provider_usage_totals": {
+   "input": 181,
+   "output": 6,
+   "cacheRead": 9472,
+   "cacheWrite": 0,
+   "reasoningTokens": null
+  },
+  "usage_reported_requests": [
+   {
+    "input": 1,
+    "output": 1,
+    "cacheRead": 1,
+    "cacheWrite": 1,
+    "reasoningTokens": 0
+   }
+  ],
+  "lean_kernel": [],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": true,
+    "first_request_transport_identical": true,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [],
+    "first_request_removed_messages": [],
+    "content_identical": true,
+    "same_request_set": true,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 1,
+     "arm": 1
+    }
+   }
+  ]
+ },
+ "D01/m00": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 8513.6,
+  "to_user_message_end_ms_median": 5696.3,
+  "brain_visible_chars": [
+   1386
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 10050,
+  "cost_total": 0.000119,
+  "provider_requests": [
+   1
+  ],
+  "provider_usage_totals": {
+   "input": 578,
+   "output": 6,
+   "cacheRead": 9472,
+   "cacheWrite": 0,
+   "reasoningTokens": null
+  },
+  "usage_reported_requests": [
+   {
+    "input": 1,
+    "output": 1,
+    "cacheRead": 1,
+    "cacheWrite": 1,
+    "reasoningTokens": 0
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "unapproved-content",
+    "mode": "advisory",
+    "eval_source": "file",
+    "skill_status": "candidate",
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": false,
+    "first_request_transport_identical": false,
+    "first_request_deltas": {
+     "system_chars": 54,
+     "message_chars": 1440,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [
+     {
+      "role": "system",
+      "chars": 17908,
+      "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+     },
+     {
+      "role": "user",
+      "chars": 1386,
+      "head": "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-08e9e1c9cb446b6f\nproject: second-brain\nscope: task\nauthority: advisory\nsource_count: 1\n\nRULE:\n  Current repository/runti"
+     }
+    ],
+    "first_request_removed_messages": [
+     {
+      "role": "system",
+      "chars": 16939,
+      "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+     },
+     {
+      "role": "system",
+      "chars": 915,
+      "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+     }
+    ],
+    "content_identical": false,
+    "same_request_set": false,
+    "char_deltas": {
+     "system_chars": 54,
+     "message_chars": 1386,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 1,
+     "arm": 1
+    }
+   }
+  ]
+ },
+ "D01/candidate": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 6409.2,
+  "to_user_message_end_ms_median": 3303.3,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 9653,
+  "cost_total": 5.9e-05,
+  "provider_requests": [
+   1
+  ],
+  "provider_usage_totals": {
+   "input": 181,
+   "output": 6,
+   "cacheRead": 9472,
+   "cacheWrite": 0,
+   "reasoningTokens": null
+  },
+  "usage_reported_requests": [
+   {
+    "input": 1,
+    "output": 1,
+    "cacheRead": 1,
+    "cacheWrite": 1,
+    "reasoningTokens": 0
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "off",
+    "mode": "off",
+    "eval_source": "file",
+    "skill_status": null,
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": true,
+    "first_request_transport_identical": true,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [],
+    "first_request_removed_messages": [],
+    "content_identical": true,
+    "same_request_set": true,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 1,
+     "arm": 1
+    }
+   }
+  ]
+ },
+ "D01/candidate_lean": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 5980.0,
+  "to_user_message_end_ms_median": 2944.5,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 9653,
+  "cost_total": 5.9e-05,
+  "provider_requests": [
+   1
+  ],
+  "provider_usage_totals": {
+   "input": 181,
+   "output": 6,
+   "cacheRead": 9472,
+   "cacheWrite": 0,
+   "reasoningTokens": null
+  },
+  "usage_reported_requests": [
+   {
+    "input": 1,
+    "output": 1,
+    "cacheRead": 1,
+    "cacheWrite": 1,
+    "reasoningTokens": 0
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "unapproved-content",
+    "mode": "advisory",
+    "eval_source": "file",
+    "skill_status": "candidate",
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": true,
+    "first_request_transport_identical": true,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [],
+    "first_request_removed_messages": [],
+    "content_identical": true,
+    "same_request_set": true,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 1,
+     "arm": 1
+    }
+   }
+  ]
+ },
+ "D02/native": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 8634.6,
+  "to_user_message_end_ms_median": 2318.7,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 19683,
+  "cost_total": 0.000663,
+  "provider_requests": [
+   2
+  ],
+  "provider_usage_totals": {
+   "input": 611,
+   "output": 857,
+   "cacheRead": 19072,
+   "cacheWrite": 0,
+   "reasoningTokens": 414
+  },
+  "usage_reported_requests": [
+   {
+    "input": 2,
+    "output": 2,
+    "cacheRead": 2,
+    "cacheWrite": 2,
+    "reasoningTokens": 2
+   }
+  ],
+  "lean_kernel": [],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": null,
+    "first_request_transport_identical": null,
+    "first_request_deltas": null,
+    "first_request_added_messages": null,
+    "first_request_removed_messages": null,
+    "content_identical": null,
+    "same_request_set": null,
+    "char_deltas": null,
+    "request_count": null
+   }
+  ]
+ },
+ "D02/inert": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 11211.7,
+  "to_user_message_end_ms_median": 2334.3,
+  "brain_visible_chars": [
+   0
+  ],
+  "memory_delivered": [
+   false
+  ],
+  "input_tokens": 19755,
+  "cost_total": 0.000961,
+  "provider_requests": [
+   2
+  ],
+  "provider_usage_totals": {
+   "input": 683,
+   "output": 1336,
+   "cacheRead": 19072,
+   "cacheWrite": 0,
+   "reasoningTokens": 623
+  },
+  "usage_reported_requests": [
+   {
+    "input": 2,
+    "output": 2,
+    "cacheRead": 2,
+    "cacheWrite": 2,
+    "reasoningTokens": 2
+   }
+  ],
+  "lean_kernel": [],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": true,
+    "first_request_transport_identical": true,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 0,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [],
+    "first_request_removed_messages": [],
+    "content_identical": false,
+    "same_request_set": false,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 115,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 2,
+     "arm": 2
+    }
+   }
+  ]
+ },
+ "D02/m00": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 13519.1,
+  "to_user_message_end_ms_median": 5489.3,
+  "brain_visible_chars": [
+   615
+  ],
+  "memory_delivered": [
+   true
+  ],
+  "input_tokens": 20057,
+  "cost_total": 0.000683,
+  "provider_requests": [
+   2
+  ],
+  "provider_usage_totals": {
+   "input": 729,
+   "output": 859,
+   "cacheRead": 19328,
+   "cacheWrite": 0,
+   "reasoningTokens": 335
+  },
+  "usage_reported_requests": [
+   {
+    "input": 2,
+    "output": 2,
+    "cacheRead": 2,
+    "cacheWrite": 2,
+    "reasoningTokens": 2
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "unapproved-content",
+    "mode": "advisory",
+    "eval_source": "file",
+    "skill_status": "candidate",
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": false,
+    "first_request_transport_identical": false,
+    "first_request_deltas": {
+     "system_chars": 54,
+     "message_chars": 669,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [
+     {
+      "role": "system",
+      "chars": 17908,
+      "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+     },
+     {
+      "role": "user",
+      "chars": 615,
+      "head": "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-e164f810cf059d8e\nproject: second-brain\nscope: task\nauthority: advisory\nsource_count: 1\n\nRULE:\n  Current repository/runti"
+     }
+    ],
+    "first_request_removed_messages": [
+     {
+      "role": "system",
+      "chars": 16939,
+      "head": "RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify"
+     },
+     {
+      "role": "system",
+      "chars": 915,
+      "head": "PROJECT\n\n<workstation>\n- OS: win32 10.0.26200\n- Arch: x64\n- Model: deepseek/deepseek-flash\n</workstation>\n<critical>\n- Each response MUST advance the task; comp"
+     }
+    ],
+    "content_identical": false,
+    "same_request_set": false,
+    "char_deltas": {
+     "system_chars": 108,
+     "message_chars": 593,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 2,
+     "arm": 2
+    }
+   }
+  ]
+ },
+ "D02/candidate": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 11920.6,
+  "to_user_message_end_ms_median": 3513.0,
+  "brain_visible_chars": [
+   495
+  ],
+  "memory_delivered": [
+   true
+  ],
+  "input_tokens": 19878,
+  "cost_total": 0.000684,
+  "provider_requests": [
+   2
+  ],
+  "provider_usage_totals": {
+   "input": 550,
+   "output": 906,
+   "cacheRead": 19328,
+   "cacheWrite": 0,
+   "reasoningTokens": 271
+  },
+  "usage_reported_requests": [
+   {
+    "input": 2,
+    "output": 2,
+    "cacheRead": 2,
+    "cacheWrite": 2,
+    "reasoningTokens": 2
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "off",
+    "mode": "off",
+    "eval_source": "file",
+    "skill_status": null,
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": false,
+    "first_request_transport_identical": false,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 495,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [
+     {
+      "role": "user",
+      "chars": 495,
+      "head": "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-e164f810cf059d8e\nproject: second-brain\nscope: task\nauthority: advisory\nsource_count: 1\n\nRULE:\n  Current repository/runti"
+     }
+    ],
+    "first_request_removed_messages": [],
+    "content_identical": false,
+    "same_request_set": false,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 251,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 2,
+     "arm": 2
+    }
+   }
+  ]
+ },
+ "D02/candidate_lean": {
+  "n": 1,
+  "failures": 0,
+  "wall_ms_median": 11052.6,
+  "to_user_message_end_ms_median": 3164.8,
+  "brain_visible_chars": [
+   495
+  ],
+  "memory_delivered": [
+   true
+  ],
+  "input_tokens": 19889,
+  "cost_total": 0.000616,
+  "provider_requests": [
+   2
+  ],
+  "provider_usage_totals": {
+   "input": 561,
+   "output": 789,
+   "cacheRead": 19328,
+   "cacheWrite": 0,
+   "reasoningTokens": 194
+  },
+  "usage_reported_requests": [
+   {
+    "input": 2,
+    "output": 2,
+    "cacheRead": 2,
+    "cacheWrite": 2,
+    "reasoningTokens": 2
+   }
+  ],
+  "lean_kernel": [
+   {
+    "decision": "omit",
+    "reason": "unapproved-content",
+    "mode": "advisory",
+    "eval_source": "file",
+    "skill_status": "candidate",
+    "kernel_chars": 0,
+    "dedup_hit": false
+   }
+  ],
+  "request_diff": [
+   {
+    "rep": 0,
+    "first_request_identical": false,
+    "first_request_transport_identical": false,
+    "first_request_deltas": {
+     "system_chars": 0,
+     "message_chars": 495,
+     "tool_schema_chars": 0
+    },
+    "first_request_added_messages": [
+     {
+      "role": "user",
+      "chars": 495,
+      "head": "[BRAIN_CONTEXT_DELTA v1]\npacket_id: pkt-e164f810cf059d8e\nproject: second-brain\nscope: task\nauthority: advisory\nsource_count: 1\n\nRULE:\n  Current repository/runti"
+     }
+    ],
+    "first_request_removed_messages": [],
+    "content_identical": false,
+    "same_request_set": false,
+    "char_deltas": {
+     "system_chars": 0,
+     "message_chars": 357,
+     "tool_schema_chars": 0
+    },
+    "request_count": {
+     "native": 2,
+     "arm": 2
+    }
+   }
+  ]
+ }
+}

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -66,6 +67,14 @@ from .adapters import antigravity as _antigravity_adapter
 from .adapters import claude_code as _claude_code_adapter
 from .adapters import codex as _codex_adapter
 from .errors import BrainError
+
+# E01 measurement only (SECOND_BRAIN_E01_TRACE): one record per CLI process at
+# package-import completion, so a host adapter can split interpreter startup +
+# import from actual work. Inert unless the env var names a trace file.
+if os.environ.get("SECOND_BRAIN_E01_TRACE"):
+    from . import turn_bridge as _e01_trace
+
+    _e01_trace.trace("python_import_end", argv=sys.argv[1:3])
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -347,6 +356,47 @@ def _parser() -> argparse.ArgumentParser:
         help='JSON list of {"ref","kind"} source refs (default: [])',
     )
 
+    tn = sub.add_parser(
+        "turn",
+        parents=[home_parent],
+        help="E01 turn bridge: one process for capsule+render+autoinject (measurement path)",
+    )
+    tns = tn.add_subparsers(dest="turn_command", required=True)
+    tprep = tns.add_parser(
+        "prepare",
+        parents=[home_parent],
+        help="capsule ensure + hot-context render + AutoInject decision, one JSON object",
+    )
+    tprep.add_argument("--session", dest="session_id", required=True)
+    tprep.add_argument("--task", required=True, help="task text (queried, never persisted)")
+    tprep.add_argument("--cwd", default=None, help="working directory for project resolution")
+    tprep.add_argument("--project", dest="project_id", default=None, help="project id override")
+    tprep.add_argument("--agent", dest="agent_id", default=None, help="host agent id")
+    tprep.add_argument("--branch", default="main", help="branch/lineage id (default: main)")
+    tprep.add_argument("--role", dest="role_profile", default="worker", help="role profile")
+    tprep.add_argument("--objective", default=None, help="capsule objective (default: task text)")
+    tprep.add_argument(
+        "--next-action", default=None, help="capsule next action (default: task text)"
+    )
+    tprep.add_argument("--budget-tokens", dest="budget_tokens", type=int, default=256)
+    tprep.add_argument(
+        "--phases",
+        default=None,
+        help="comma-separated subset of capsule,render,autoinject (default: all)",
+    )
+    tprep.add_argument("--json", action="store_true", help="print one deterministic JSON object")
+    tserve = tns.add_parser(
+        "serve",
+        parents=[home_parent],
+        help="JSON-lines helper: one memory request per line (reused interpreter)",
+    )
+    tserve.add_argument("--max-requests", dest="max_requests", type=int, default=256)
+    tserve.add_argument("--max-lifetime-s", dest="max_lifetime_s", type=float, default=1800.0)
+    tserve.add_argument(
+        "--max-rss-bytes", dest="max_rss_bytes", type=int, default=256 * 1024 * 1024
+    )
+    tserve.add_argument("--json", action="store_true")
+
     sub.add_parser("stop", parents=[home_parent], help=argparse.SUPPRESS)
     sub.add_parser("worker-plane", parents=[home_parent], help=argparse.SUPPRESS)
 
@@ -386,6 +436,40 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read ONE event object or an array from stdin",
     )
+    lapp.add_argument(
+        "--batch",
+        action="store_true",
+        help="read JSON Lines from stdin (one event object per line) and append them "
+        "in ONE transaction/process; a rejected event is reported in `errors` without "
+        "dropping the rest",
+    )
+    lapp.add_argument(
+        "--batch-file",
+        dest="batch_file",
+        default=None,
+        metavar="PATH",
+        help="read the JSON Lines batch from PATH instead of stdin (implies --batch; "
+        "the same validation, transaction and reporting). Used by the host's detached "
+        "shutdown flush, where no stdin survives the parent process. The file is "
+        "removed once its contents have been appended",
+    )
+    lapp.add_argument(
+        "--init",
+        action="store_true",
+        help="create the session ledger first when it does not exist yet (idempotent; "
+        "same identity resolution as `ledger init`, including --host/--parent-session/--cwd)",
+    )
+    lapp.add_argument("--project", dest="project_id", default=None, help="used with --init")
+    lapp.add_argument(
+        "--parent-session",
+        dest="parent_session_id",
+        default=None,
+        help="HOST parent session id (used with --init)",
+    )
+    lapp.add_argument(
+        "--cwd", default=None, help="working directory for project resolution (--init)"
+    )
+    lapp.add_argument("--host", default="prime", help="host identity used by --init")
     lver = leds.add_parser("verify", parents=[home_parent], help="fresh replay + integrity")
     lver.add_argument("host_session_id")
     lver.add_argument("--lineage", default=None, help="comma-separated event ids root->leaf")
@@ -730,6 +814,33 @@ def _parser() -> argparse.ArgumentParser:
     )
     msearch.add_argument(
         "--duplicates", action="store_true", help="return all near-duplicate versions (comparison)"
+    )
+    msearch.add_argument(
+        "--as-of", dest="as_of", default=None, help="query memories at a point in time (ISO-8601)"
+    )
+    mretire = mms.add_parser(
+        "retire", parents=[home_parent], help="retire a memory (supersede/correct/invalidate)"
+    )
+    mretire.add_argument("memory_id")
+    mretire.add_argument(
+        "--by", dest="by", default=None, help="replacement memory id (omit to invalidate)"
+    )
+    mretire.add_argument(
+        "--kind",
+        dest="kind",
+        default=None,
+        choices=semantic.SUPERSESSION_KINDS,
+        help="supersedes (default with --by), corrects, or invalidates (default without --by)",
+    )
+    mretire.add_argument("--reason", required=True, help="reason for retirement")
+    mretire.add_argument(
+        "--effective-at",
+        dest="effective_at",
+        default=None,
+        help="when it became effective (ISO-8601)",
+    )
+    mretire.add_argument(
+        "--source-ref", dest="source_ref", default=None, help="optional source reference"
     )
     mms.add_parser(
         "reindex", parents=[home_parent], help="rebuild the derived SQLite/FTS5 memory index"
@@ -2184,6 +2295,10 @@ def cmd_recall(args) -> int:
         role_profile="cli",
         session_id="brainctl-recall-" + hashlib.sha256(question.encode("utf-8")).hexdigest()[:16],
         cwd=str(Path.cwd()),
+        # A user-issued query: scope/status/authority/freshness still decide, but the
+        # automatic-injection relevance-abstention decision does not (an explicit
+        # "brainctl recall" is a request, not an unrequested injection).
+        explicit=True,
     )
     decision = autoinject.prepare_injection(home, intent, retrieval_text=question)
     if decision.decision is not contracts.InjectionDecision.INJECT:
@@ -2318,6 +2433,7 @@ def cmd_memory(args) -> int:
             project_id=args.project_id,
             include_history=args.history,
             include_duplicates=args.duplicates,
+            as_of=args.as_of,
         )
         if not rows:
             print("No matching memories.")
@@ -2326,6 +2442,13 @@ def cmd_memory(args) -> int:
             # trust, not a stored claim no issuer attested (SEC-AUTH-02).
             grade = semantic.effective_evidence_grade(row)
             print(f"{row['memory_id']}  [{row['status']}/{grade}] {row['title']}")
+            # Print supersession info if present
+            if row.get("superseded_by") is not None or row.get("supersession_kind"):
+                kind = row.get("supersession_kind", "?")
+                new_id = row.get("superseded_by", "nothing")
+                eff_at = row.get("supersession_effective_at", "?")
+                reason = row.get("supersession_reason", "")
+                print(f"  superseded ({kind}) by {new_id} at {eff_at}: {reason}")
         conflicts = [r for r in rows if r.get("contradiction_with")]
         if conflicts:
             print()
@@ -2336,6 +2459,26 @@ def cmd_memory(args) -> int:
                     f"{', '.join(row['contradiction_with'])}  ({row['title']})"
                 )
         return 0
+    if args.memory_command == "retire":
+        try:
+            link = semantic.retire_memory(
+                home,
+                args.memory_id,
+                by=args.by,
+                kind=args.kind,
+                reason=args.reason,
+                effective_at=args.effective_at,
+                source_ref=args.source_ref,
+            )
+            old = args.memory_id
+            new = link.get("new_memory_id") or "none"
+            kind = link.get("kind")
+            eff_at = link.get("effective_at")
+            print(f"{old} retired ({kind}) -> {new} effective {eff_at}")
+            return 0
+        except semantic.BrainError as exc:
+            print(f"brainctl: error: {exc}", file=sys.stderr)
+            return 2
     if args.memory_command == "reindex":
         counts = semantic.reindex_all(home)
         print(
@@ -3323,11 +3466,197 @@ _ORCH_COUNTER_KEYS = (
 )
 
 
+def _ledger_session_identity(home, args) -> contracts.BrainSessionIdentity:
+    """Resolve the identity ``ledger init`` / ``ledger append --init`` creates.
+
+    WRITES NOTHING: an unresolvable parent session must fail before the child's
+    ledger file exists (a rejected init never leaves a half-created session),
+    so callers resolve here first and open/create afterwards.
+
+    Shared by ``ledger init`` and ``ledger append --init`` so a batched mirror
+    can create + append inside ONE process instead of spawning init and append
+    separately (LedgerBatch: one Python spawn per turn boundary). Identity
+    resolution is identical in both callers — project via explicit ``--project``
+    > registry root containing ``--cwd`` > ``SECOND_BRAIN_PROJECT`` > ``'default'``,
+    and the parent session resolved to its canonical internal root — so the
+    batched path cannot attribute a session differently than an explicit init.
+    """
+    from . import autoinject, contracts, ledger
+
+    project_id = (
+        autoinject._resolve_project_id(home, args.cwd, args.project_id)
+        if args.cwd
+        else (args.project_id or "")
+    )
+    internal = ledger.internal_session_id(args.host_session_id)
+    root_parent_session_id = None
+    if args.parent_session_id:
+        if args.parent_session_id == args.host_session_id:
+            raise BrainError("a ledger session cannot be its own parent")
+        root_parent_session_id = ledger.resolve_root_parent_session_id(home, args.parent_session_id)
+        if root_parent_session_id == internal:
+            raise BrainError("parent ancestry cannot resolve to the child session itself")
+    return contracts.BrainSessionIdentity(
+        internal_session_id=internal,
+        host=args.host,
+        host_session_id=args.host_session_id,
+        project_id=project_id,
+        created_at=datetime.now(UTC).isoformat(),
+        status="active",
+        pinned=False,
+        schema_version=contracts.LEDGER_SCHEMA_VERSION,
+        root_parent_session_id=root_parent_session_id,
+    )
+
+
+def _ledger_normalize_event(item: dict, host_session_id: str) -> None:
+    """Host-mirror normalization applied to EVERY appended event (single or batch).
+
+    T-G6-F1: seq<=0 makes ``LedgerStore.append_events`` assign the authoritative
+    contiguous seq INSIDE its BEGIN IMMEDIATE transaction. The CLI must NOT
+    pre-assign seqs: a stale read outside the transaction races with concurrent
+    appends and skipped unknown-ignorable events would consume counter slots,
+    both poisoning contiguity. Host mirrors are also stateless, so the ledger
+    derives the internal session id (and a placeholder agent id) itself.
+    """
+    if "seq" not in item or not isinstance(item.get("seq"), int) or int(item.get("seq", 0)) <= 0:
+        item["seq"] = 0  # ledger assigns; durable ledger is sequence authority
+    if not item.get("internal_session_id"):
+        item["internal_session_id"] = ledger.internal_session_id(host_session_id)
+    if not item.get("agent_id"):
+        item["agent_id"] = "unknown"
+
+
+def _ledger_parse_batch_lines(raw: str) -> tuple[list[tuple[int, dict]], list[dict]]:
+    """Split JSON Lines stdin into ``(line_number, item)`` pairs + per-line errors.
+
+    A malformed line is reported and skipped; it never aborts the batch (the
+    whole point of the batch path is that one bad line cannot drop the rest).
+    """
+    items: list[tuple[int, dict]] = []
+    errors: list[dict] = []
+    for lineno, line in enumerate(raw.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError as exc:
+            errors.append({"line": lineno, "event_id": "", "error": f"invalid JSON: {exc}"})
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(
+                {"line": lineno, "event_id": "", "error": "event entries must be objects"}
+            )
+            continue
+        items.append((lineno, parsed))
+    return items, errors
+
+
+def _ledger_batch_payload(args) -> str:
+    """The `ledger append --batch` JSON Lines payload.
+
+    ``--batch-file PATH`` (the host's detached shutdown flush: no stdin survives
+    the parent) is an alternative SOURCE for the identical batch path — same
+    validation, transaction and reporting as ``--batch`` on stdin. An unreadable
+    file is an operational failure (non-zero), never an empty batch.
+    """
+    path = getattr(args, "batch_file", None)
+    if not path:
+        return sys.stdin.read()
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BrainError(f"ledger append --batch-file unreadable: {exc}") from exc
+
+
+def _ledger_drop_handoff_file(args) -> None:
+    """Remove a consumed ``--batch-file`` handoff (best-effort, never fails the call)."""
+    path = getattr(args, "batch_file", None)
+    if not path:
+        return
+    with contextlib.suppress(OSError):
+        Path(path).unlink()
+
+
+def _ledger_append_batch(args, store, raw: str) -> tuple[list[int], list[dict], int]:
+    """Append JSON Lines events in ONE transaction; per-event failures reported.
+
+    Same validation as single appends (``_ledger_normalize_event`` +
+    ``BrainLifecycleEvent.from_dict``), same hash chain and ordering (everything
+    goes through ``LedgerStore.append_events``), plus two batch-only rules:
+
+    - an event_id repeated inside ONE batch is rejected at its second occurrence
+      (the ledger's UNIQUE(event_id) would otherwise abort the whole batch);
+    - a per-event rejection never drops its siblings
+      (``ledger.append_events_resilient``).
+
+    Returns ``(seqs, errors, skipped)``; ``errors`` carry line + event_id.
+    """
+    from . import contracts, ledger
+
+    items, errors = _ledger_parse_batch_lines(raw)
+    events: list[contracts.BrainLifecycleEvent] = []
+    line_of: dict[str, int] = {}
+    seen: set[str] = set()
+    skipped = 0
+    for lineno, item in items:
+        _ledger_normalize_event(item, args.host_session_id)
+        try:
+            parsed = contracts.BrainLifecycleEvent.from_dict(item)
+        except (BrainError, KeyError, TypeError, ValueError) as exc:
+            errors.append(
+                {
+                    "line": lineno,
+                    "event_id": str(item.get("event_id") or ""),
+                    "error": str(exc),
+                }
+            )
+            continue
+        if parsed is None:
+            skipped += 1  # unknown + ignorable -> skip, exactly like a single append
+            continue
+        if parsed.event_id in seen:
+            errors.append(
+                {
+                    "line": lineno,
+                    "event_id": parsed.event_id,
+                    "error": f"duplicate event_id in batch: {parsed.event_id!r}",
+                }
+            )
+            continue
+        seen.add(parsed.event_id)
+        line_of[parsed.event_id] = lineno
+        events.append(parsed)
+        if parsed.event_type is contracts.LifecycleEventType.SESSION_STARTED:
+            payload = parsed.payload or {}
+            if payload.get("agent_id"):
+                store.register_agent(
+                    {
+                        "agent_id": str(payload["agent_id"]),
+                        "internal_session_id": parsed.internal_session_id,
+                        "host_agent_id": str(payload.get("host_agent_id") or payload["agent_id"]),
+                        "parent_agent_id": payload.get("parent_agent_id"),
+                        "role_profile": str(payload.get("role_profile") or "worker"),
+                        "model": str(payload.get("model") or "unknown"),
+                        "provider": str(payload.get("provider") or "unknown"),
+                        "created_at": parsed.timestamp,
+                    }
+                )
+    seqs, append_errors = ledger.append_events_resilient(store, events)
+    for err in append_errors:
+        errors.append(
+            {
+                "line": line_of.get(str(err.get("event_id")), 0),
+                "event_id": str(err.get("event_id") or ""),
+                "error": str(err.get("error") or "append rejected"),
+            }
+        )
+    return seqs, errors, skipped
+
+
 def cmd_ledger(args) -> int:
     """P2 session ledger CLI (plan §9/§9.10/§14)."""
-    import json as _json
-
-    from . import autoinject, contracts, ledger
+    from . import contracts, ledger
 
     home = _home(args)
     cmd = args.ledger_command
@@ -3341,82 +3670,83 @@ def cmd_ledger(args) -> int:
                 )
                 return 2
             artifacts.append({"kind": kind, "path": path})
-        # Project attribution: when --cwd is supplied, resolve project_id
-        # through the SAME ladder AutoInject uses (autoinject._resolve_project_id,
-        # src/second_brain/autoinject.py:157-193): explicit --project > registry
-        # root containing cwd > SECOND_BRAIN_PROJECT env > 'default'. With no
-        # --cwd, keep the historical behavior ('' unless --project given) so
-        # existing callers are unchanged.
-        project_id = (
-            autoinject._resolve_project_id(home, args.cwd, args.project_id)
-            if args.cwd
-            else (args.project_id or "")
-        )
-        internal = ledger.internal_session_id(args.host_session_id)
-        root_parent_session_id = None
-        if args.parent_session_id:
-            if args.parent_session_id == args.host_session_id:
-                raise BrainError("a ledger session cannot be its own parent")
-            root_parent_session_id = ledger.resolve_root_parent_session_id(
-                home, args.parent_session_id
-            )
-            if root_parent_session_id == internal:
-                raise BrainError("parent ancestry cannot resolve to the child session itself")
+        # Identity/project attribution is shared with `ledger append --init`
+        # (_ledger_session_identity): explicit --project > registry root containing
+        # --cwd > SECOND_BRAIN_PROJECT env > 'default'; with no --cwd the
+        # historical behavior ('' unless --project given) is unchanged.
+        # Resolved BEFORE open() so a rejected init writes nothing.
+        identity = _ledger_session_identity(home, args)
         store = ledger.LedgerStore(home, args.host_session_id, host=args.host)
         store._init_host_artifacts = artifacts  # carried into the manifest at open
         with store.open(create=True):
-            store.create_session(
-                contracts.BrainSessionIdentity(
-                    internal_session_id=internal,
-                    host=args.host,
-                    host_session_id=args.host_session_id,
-                    project_id=project_id,
-                    created_at=datetime.now(UTC).isoformat(),
-                    status="active",
-                    pinned=False,
-                    schema_version=contracts.LEDGER_SCHEMA_VERSION,
-                    root_parent_session_id=root_parent_session_id,
-                )
+            store.create_session(identity)
+        print(
+            contracts.canonical_json(
+                {
+                    "initialized": identity.internal_session_id,
+                    "schema_version": 1,
+                }
             )
-        print(contracts.canonical_json({"initialized": internal, "schema_version": 1}))
+        )
         return 0
     if cmd == "append":
-        if not args.stdin_json:
-            print(contracts.canonical_json({"error": "--stdin-json required"}))
+        # `--batch-file PATH` is the stdin-free source of the SAME batch path.
+        use_batch = bool(getattr(args, "batch", False)) or bool(getattr(args, "batch_file", None))
+        if not args.stdin_json and not use_batch:
+            print(contracts.canonical_json({"error": "--stdin-json or --batch required"}))
             return 2
-        try:
-            raw = sys.stdin.read()
-            data = _json.loads(raw) if raw.strip() else None
-        except Exception:
-            data = None
-        if isinstance(data, dict):
-            data = [data]
-        if not isinstance(data, list):
-            print(contracts.canonical_json({"error": "expected one event object or an array"}))
-            return 0
+        # --init: create the ledger in THIS process when it does not exist yet,
+        # so a batched mirror flush can init + append without a second spawn
+        # (idempotent: create_session preserves an existing durable identity).
+        # The identity resolves BEFORE open(create=True): an unresolvable parent
+        # must not leave a half-created ledger behind (same rule as `ledger init`).
+        ensure_init = bool(getattr(args, "init", False))
+        # The batch payload is READ before the store opens, for the same reason:
+        # an unreadable --batch-file handoff must not create the session it
+        # could never fill.
+        batch_payload = _ledger_batch_payload(args) if use_batch else ""
+        identity = _ledger_session_identity(home, args) if ensure_init else None
+        store = ledger.LedgerStore(
+            home, args.host_session_id, host=args.host if ensure_init else None
+        )
         events: list[contracts.BrainLifecycleEvent] = []
-        with ledger.LedgerStore(home, args.host_session_id).open() as store:
+        with store.open(create=ensure_init) as store:
+            if identity is not None:
+                store.create_session(identity)
+            if use_batch:
+                try:
+                    seqs, errors, skipped = _ledger_append_batch(args, store, batch_payload)
+                except sqlite3.Error as exc:
+                    # Operational DB failure (busy/locked, disk I/O, malformed
+                    # image): NOT an event rejection. Fail the batch (non-zero)
+                    # so the host mirror's retry/deferred requeue runs instead of
+                    # settling every event against an `errors` array and exit 0.
+                    raise BrainError(f"ledger append --batch failed: {exc}") from exc
+                print(
+                    contracts.canonical_json(
+                        {"appended": seqs, "errors": errors, "skipped": skipped}
+                    )
+                )
+                # The batch came from the host's handoff file (if any): after the
+                # transaction, the file's contents are durable in the ledger and the
+                # file has no reader. A FAILED batch keeps it (diagnosis/replay).
+                _ledger_drop_handoff_file(args)
+                return 0
+            try:
+                raw = sys.stdin.read()
+                data = json.loads(raw) if raw.strip() else None
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                data = [data]
+            if not isinstance(data, list):
+                print(contracts.canonical_json({"error": "expected one event object or an array"}))
+                return 0
             for item in data:
                 if not isinstance(item, dict):
                     print(contracts.canonical_json({"error": "event entries must be objects"}))
                     return 0
-                # T-G6-F1: seq<=0 makes append_events assign the authoritative
-                # contiguous seq INSIDE its BEGIN IMMEDIATE transaction. The CLI
-                # must NOT pre-assign seqs here: a stale read outside the
-                # transaction races with concurrent appends (each mirror event
-                # spawns its own process) and skipped unknown-ignorable events
-                # would consume counter slots, both poisoning contiguity.
-                if (
-                    "seq" not in item
-                    or not isinstance(item.get("seq"), int)
-                    or int(item.get("seq", 0)) <= 0
-                ):
-                    item["seq"] = 0  # ledger assigns; durable ledger is sequence authority
-                # host mirrors are stateless: the ledger derives its own ids
-                if not item.get("internal_session_id"):
-                    item["internal_session_id"] = ledger.internal_session_id(args.host_session_id)
-                if not item.get("agent_id"):
-                    item["agent_id"] = "unknown"
+                _ledger_normalize_event(item, args.host_session_id)
                 parsed = contracts.BrainLifecycleEvent.from_dict(item)
                 if parsed is None:
                     continue  # unknown + ignorable -> skip
@@ -3619,6 +3949,55 @@ def cmd_autoinject(args) -> int:
         print(f"selected: {', '.join(decision.selected_ids) or 'none'}")
         print(f"delivery: {delivery_id or 'none'}")
     return 0
+
+
+def cmd_turn(args) -> int:
+    """E01 turn bridge: batch the per-turn memory phases into one process.
+
+    `prepare` prints one JSON object (the batched capsule/render/autoinject
+    result); `serve` keeps the interpreter alive and answers JSON-lines
+    requests. Both are memory operations only — neither touches host
+    lifecycle, and both fail open per phase.
+    """
+    import json
+
+    from . import turn_bridge
+
+    home = _home(args)
+    if args.turn_command == "serve":
+        return turn_bridge.serve(
+            home,
+            max_requests=args.max_requests,
+            max_lifetime_s=args.max_lifetime_s,
+            max_rss_bytes=args.max_rss_bytes,
+        )
+    if args.turn_command != "prepare":
+        return 2
+    want, want_error = turn_bridge.phase_selection(
+        None if args.phases is None else args.phases.split(",")
+    )
+    if want_error is not None:
+        print(f"brainctl: error: invalid --phases: {args.phases}", file=sys.stderr)
+        return 2
+    result = turn_bridge.prepare_turn(
+        home,
+        session_id=args.session_id,
+        task=args.task,
+        cwd=args.cwd,
+        project_id=args.project_id,
+        agent_id=args.agent_id,
+        branch=args.branch,
+        role_profile=args.role_profile,
+        objective=args.objective,
+        next_action=args.next_action,
+        budget_tokens=args.budget_tokens,
+        want=want if want is not None else turn_bridge.PHASES,
+    )
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    # Exit 1 means "a phase failed, but the JSON is complete and valid": the
+    # client must still consume the phases that succeeded and retry only the
+    # failed ones (never discard a committed AutoInject delivery).
+    return 0 if result.get("ok") else 1
 
 
 def cmd_heartbeat(args) -> int:
@@ -4527,14 +4906,25 @@ def main(argv: list[str] | None = None) -> int:
         "read-ledger": cmd_read_ledger,
         "context": cmd_context,
         "autoinject": cmd_autoinject,
+        "turn": cmd_turn,
         "ledger": cmd_ledger,
         "session": cmd_session,
     }
+    e01 = os.environ.get("SECOND_BRAIN_E01_TRACE")
+    if e01:
+        from . import turn_bridge as _e01
+
+        _e01.trace("python_main_enter", command=args.command, argv=sys.argv[1:3])
     try:
-        return handlers[args.command](args)
+        code = handlers[args.command](args)
     except BrainError as exc:
         print(f"brainctl: error: {exc}", file=sys.stderr)
-        return 2
+        code = 2
+    if e01:
+        from . import turn_bridge as _e01_exit
+
+        _e01_exit.trace("python_main_exit", command=args.command, code=code)
+    return code
 
 
 if __name__ == "__main__":

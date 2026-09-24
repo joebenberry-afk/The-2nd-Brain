@@ -1,0 +1,839 @@
+{
+  "arm": "lexical",
+  "case_file": {
+    "count": 21,
+    "path": "outputs\\reports\\v3-s2\\e02\\cases.used.jsonl",
+    "sha256": "f1b256b94be8fff5615ca9db1b0e74cdfd245dadcd18fdc2bb00550094df3ccc"
+  },
+  "cases": [
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D01",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 85.902,
+      "rank_ms": 144.409,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "memory_short",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D02",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 80.634,
+      "rank_ms": 35.962,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    },
+    {
+      "category": "memory_long_mixed",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D03",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 65.839,
+      "rank_ms": 60.645,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    },
+    {
+      "category": "memory_imperative",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D04",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 71.901,
+      "rank_ms": 36.449,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    },
+    {
+      "category": "memory_long_irrelevant_hit",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D05",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 68.819,
+      "rank_ms": 53.581,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    },
+    {
+      "category": "no_benefit_direct",
+      "decision": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D06",
+      "production": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 8.016,
+      "rank_ms": 71.333,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D07",
+      "production": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 7.552,
+      "rank_ms": 16.541,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_format",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D08",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 60.79,
+      "rank_ms": 55.252,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "memory_short",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-5ee4c7712fa3"
+        ],
+        "source": "production",
+        "tokens": 322
+      },
+      "expect": [
+        "mem-5ee4c7712fa3"
+      ],
+      "id": "D09",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-5ee4c7712fa3"
+        ],
+        "tokens": 322
+      },
+      "production_ms": 171.564,
+      "rank_ms": 36.969,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-5ee4c7712fa3"
+        ],
+        "stage": "OK",
+        "tokens": 286
+      },
+      "top_ids": [
+        "mem-5ee4c7712fa3"
+      ],
+      "top_scores": [
+        0.945
+      ]
+    },
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D10",
+      "production": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 7.588,
+      "rank_ms": 48.705,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "memory_sessions",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-812f9bb08444"
+        ],
+        "source": "production",
+        "tokens": 307
+      },
+      "expect": [
+        "mem-812f9bb08444"
+      ],
+      "id": "D11",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-812f9bb08444"
+        ],
+        "tokens": 307
+      },
+      "production_ms": 144.188,
+      "rank_ms": 32.727,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-812f9bb08444"
+        ],
+        "stage": "OK",
+        "tokens": 272
+      },
+      "top_ids": [
+        "mem-812f9bb08444"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    },
+    {
+      "category": "memory_recursion",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-d2f7df353130"
+        ],
+        "source": "production",
+        "tokens": 198
+      },
+      "expect": [
+        "mem-d2f7df353130"
+      ],
+      "id": "D12",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-d2f7df353130"
+        ],
+        "tokens": 198
+      },
+      "production_ms": 87.92,
+      "rank_ms": 36.028,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-d2f7df353130"
+        ],
+        "stage": "OK",
+        "tokens": 198
+      },
+      "top_ids": [
+        "mem-d2f7df353130"
+      ],
+      "top_scores": [
+        0.945
+      ]
+    },
+    {
+      "category": "memory_fanout",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-f745bcb2eff2"
+        ],
+        "source": "production",
+        "tokens": 223
+      },
+      "expect": [
+        "mem-f745bcb2eff2"
+      ],
+      "id": "D13",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-f745bcb2eff2"
+        ],
+        "tokens": 223
+      },
+      "production_ms": 104.47,
+      "rank_ms": 58.019,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-f745bcb2eff2"
+        ],
+        "stage": "OK",
+        "tokens": 223
+      },
+      "top_ids": [
+        "mem-f745bcb2eff2"
+      ],
+      "top_scores": [
+        0.945
+      ]
+    },
+    {
+      "category": "memory_long_imperative",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D14",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 86.323,
+      "rank_ms": 151.205,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.945
+      ]
+    },
+    {
+      "category": "no_benefit_format",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D15",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 67.316,
+      "rank_ms": 66.671,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_summarize",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D16",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 67.677,
+      "rank_ms": 63.679,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_rewrite",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D17",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 52.971,
+      "rank_ms": 42.123,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_math",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D18",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 56.751,
+      "rank_ms": 50.054,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "no_benefit_echo",
+      "decision": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D19",
+      "production": {
+        "injected": false,
+        "reason": "LOW_CONFIDENCE",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 81.779,
+      "rank_ms": 75.683,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [],
+      "top_scores": []
+    },
+    {
+      "category": "wrong_project",
+      "decision": {
+        "injected": false,
+        "reason": "WRONG_PROJECT",
+        "selected_ids": [],
+        "source": "production",
+        "tokens": 0
+      },
+      "expect": [],
+      "id": "D20",
+      "production": {
+        "injected": false,
+        "reason": "WRONG_PROJECT",
+        "selected_ids": [],
+        "tokens": 0
+      },
+      "production_ms": 39.588,
+      "rank_ms": 66.476,
+      "tail_mirror": {
+        "injected": false,
+        "reason": "NO_RELEVANT_MEMORY",
+        "roi_dropped_ids": [],
+        "selected_ids": [],
+        "stage": "VALIDITY",
+        "tokens": 0
+      },
+      "top_ids": [
+        "mem-f9b4deb601eb"
+      ],
+      "top_scores": [
+        0.8505
+      ]
+    },
+    {
+      "category": "archived_memory",
+      "decision": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "source": "production",
+        "tokens": 123
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D21",
+      "production": {
+        "injected": true,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "tokens": 123
+      },
+      "production_ms": 80.135,
+      "rank_ms": 28.649,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [],
+        "selected_ids": [
+          "mem-a8d221e64549"
+        ],
+        "stage": "OK",
+        "tokens": 123
+      },
+      "top_ids": [
+        "mem-a8d221e64549"
+      ],
+      "top_scores": [
+        0.9
+      ]
+    }
+  ],
+  "encoder": null,
+  "encoder_info": {},
+  "git": {
+    "branch": "brain/v3-s2",
+    "head": "036e69eb6c5c2a7819cd0d60ea276be644204b56",
+    "short": "036e69e"
+  },
+  "index_rows": 0,
+  "latency_ms": {
+    "decision": {
+      "max": 118.571,
+      "median": 62.716,
+      "min": 2.834,
+      "p95": 96.861
+    },
+    "encode_query": {},
+    "production": {
+      "max": 160.584,
+      "median": 80.483,
+      "min": 75.993,
+      "p95": 160.584
+    },
+    "rank": {
+      "max": 138.259,
+      "median": 29.746,
+      "min": 2.762,
+      "p95": 62.869
+    },
+    "tail": {
+      "max": 77.769,
+      "median": 0.007,
+      "min": 0.004,
+      "p95": 66.635
+    }
+  },
+  "network_probe": {
+    "error": "URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "reachable": false,
+    "target": "https://huggingface.co",
+    "timeout_s": 3.0
+  },
+  "offline_guard": {
+    "sockets_blocked_during_encode": false
+  },
+  "phases_ms": {
+    "import": 50.44,
+    "index_build": 0.0,
+    "model_load": 0.0,
+    "module_startup": 2.7
+  },
+  "project_id": "second-brain",
+  "ram": {
+    "after_import": {
+      "pagefile_mib": 21.75,
+      "peak_pagefile_mib": 21.75,
+      "peak_working_set_mib": 30.77,
+      "resident_mib": 30.77
+    },
+    "end": {
+      "pagefile_mib": 27.48,
+      "peak_pagefile_mib": 28.32,
+      "peak_working_set_mib": 40.3,
+      "resident_mib": 39.98
+    }
+  },
+  "reps": 5,
+  "versions": {
+    "huggingface-hub": "1.33.0",
+    "model2vec": "0.9.0",
+    "numpy": "2.5.3",
+    "onnxruntime": "1.30.0",
+    "platform": "win32",
+    "python": "3.13.7",
+    "tokenizers": "0.23.2"
+  }
+}

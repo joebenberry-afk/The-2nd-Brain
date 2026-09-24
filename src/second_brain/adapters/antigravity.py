@@ -33,7 +33,8 @@ def run(home: Path) -> int:
       PreInvocation  -> {"injectSteps":[{"ephemeralMessage": "..."}]} or {}
       PostInvocation -> {} (telemetry only)
       PostToolUse    -> {}
-      Stop           -> {"decision": "continue"|"stop", "reason": "..."}
+      Stop           -> {} (memory finalization only; Brain never decides
+                         whether the host agent stops or continues)
     PreToolUse is intentionally NOT installed (no permission bypass); if one
     ever arrives, the handler returns {} without a decision.
     AutoInject visibility comes ONLY from the existing Brain mode resolution
@@ -53,7 +54,6 @@ def run(home: Path) -> int:
         contracts,
         injection_slots,
         lean_runtime,
-        working_set,
     )
 
     # Read raw bytes and decode explicitly as UTF-8 (utf-8-sig tolerates a
@@ -199,15 +199,11 @@ def run(home: Path) -> int:
             print("{}")
         return 0
 
-    # ---------- Stop: real P3-H Requirement Ledger decision ----------
+    # ---------- Stop: memory finalization only; no lifecycle decision ----------
     if event == "Stop":
         termination_reason = str(hook_args.get("terminationReason") or "") or ""
         error = str(hook_args.get("error") or "") or ""
-        fully_idle = bool(hook_args.get("fullyIdle", False))
-        normal = fully_idle or not (termination_reason or error)
-        check = working_set.check_requirements(home, conversation_id)
-        unresolved = check["entries"]
-        with contextlib.suppress(Exception):
+        try:
             autoinject.BrainLifecycle(home, session).finalize_session(
                 tool_call_args=hook_args.get("tool_call_args")
                 or hook_args.get("tool_calls")
@@ -215,32 +211,16 @@ def run(home: Path) -> int:
                 final_message=hook_args.get("last_assistant_message")
                 or payload_dict.get("last_assistant_message"),
             )
-        if normal and unresolved:
-            reasons = "; ".join(
-                str(e.get("requirement") or e.get("text") or e.get("id") or "")[:120]
-                for e in unresolved[:3]
-            )
+        except Exception:
+            _log_telem("stop_finalization_error")
+        else:
             _log_telem(
-                "stop_continue",
-                material_unverified=len(unresolved),
+                "stop_finalized",
                 termination_reason=termination_reason,
-                fully_idle=fully_idle,
+                fully_idle=bool(hook_args.get("fullyIdle", False)),
+                error=error[:120] if error else None,
             )
-            out = {
-                "decision": "continue",
-                "reason": "incomplete material requirement: " + (reasons or "unverified"),
-            }
-            print(contracts.canonical_json(out))
-            return 0
-        _log_telem(
-            "stop_allowed",
-            material_unverified=len(unresolved),
-            termination_reason=termination_reason,
-            fully_idle=fully_idle,
-            error=error[:120] if error else None,
-        )
-        out = {"decision": "stop", "reason": "session complete" if normal else "system termination"}
-        print(contracts.canonical_json(out))
+        print("{}")
         return 0
 
     # ---------- PostInvocation: telemetry only ----------

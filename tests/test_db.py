@@ -25,6 +25,23 @@ def test_migrate_idempotent(brain_home):
     assert db.migrate(dbf) == []
 
 
+def test_ensure_migrated_rechecks_a_database_replaced_in_place(tmp_path):
+    """The at-head cache must not survive an in-place file replacement (restore uses copy2)."""
+    import shutil
+
+    dbf = tmp_path / "brain.sqlite"
+    db.ensure_migrated(dbf)
+    assert db.pending_migrations(dbf) == []
+    stale = tmp_path / "stale.sqlite"
+    sqlite3.connect(stale).close()
+    for suffix in ("-wal", "-shm"):
+        (tmp_path / f"brain.sqlite{suffix}").unlink(missing_ok=True)
+    shutil.copy2(stale, dbf)
+    assert db.pending_migrations(dbf)
+    db.ensure_migrated(dbf)
+    assert db.pending_migrations(dbf) == []
+
+
 def test_pragmas(brain_home):
     conn = db.connect(db.db_path(brain_home))
     try:

@@ -151,8 +151,7 @@ _EVENT_KIND_CAPABILITIES: dict[str, tuple[str, ...]] = {
 def _capabilities_db(home: Path | str) -> Path:
     """Open the historical capability ledger without changing execution rights."""
     dbfile = paths.db_path(Path(home))
-    if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+    db.ensure_migrated(dbfile)
     return dbfile
 
 

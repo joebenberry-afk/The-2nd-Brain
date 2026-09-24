@@ -52,26 +52,40 @@ import {
   type RtdPreserver,
 } from "./rtd";
 import {
+  advisoryEmitCached,
   loadAutoInjectHostConfig,
+  parseShadowOutput,
   resolveProject,
   resolvedProjectIdForSession,
   runAdvisoryAutoInject,
   runShadowAutoInject,
   type AdvisoryAutoInjectCall,
 } from "./autoinject";
-import { appendPrefixExtras, assemblePrefix, checkPrefixDrift } from "./injection-slots";
+import { assemblePrefix, checkPrefixDrift } from "./injection-slots";
 import {
+  ACTIVE_STATE_DEFAULT_BUDGET,
+  ACTIVE_STATE_MAX_TEXT_CHARS,
   activeStateMessage,
+  activeStateRenderResult,
+  parseActiveStateResult,
   renderActiveState,
   runActiveStateEnsure,
   runActiveStateUpdate,
-  runActiveStateUpdateSync,
+  startDetachedActiveStateUpdate,
 } from "./active-state-mirror";
 import {
-  runEnvironmentAssessmentSync,
-  type EnvironmentAssessmentResult,
+  environmentFingerprint,
+  runEnvironmentAssessment,
+  type EnvironmentAssessmentOptions,
 } from "./environment-mirror";
-import { runP4Pulse, runP4PulseSync } from "./p4-mirror";
+import {
+  loadQuietPrecheckEnabled,
+  precheckQuiet,
+  type QuietPrecheckResult,
+} from "./quiet-precheck";
+import { createCapsuleWrites } from "./capsule-writes";
+import { startDetachedShutdownMaintenance } from "./detached-maintenance";
+import { runP4Pulse } from "./p4-mirror";
 import {
   mirrorExtensionError,
   mirrorFireAndForget,
@@ -81,7 +95,18 @@ import {
 } from "./ledger-mirror";
 import { measureContent } from "./sensors";
 import * as sensors from "./sensors";
-import { runVmemCompactPrep, runVmemEvictSync, runVmemHotContext, runVmemStore } from "./vmem";
+import { e01SpanAsync, e01SpanEnd, e01Trace } from "./e01-trace";
+import {
+  getTurnHelper,
+  loadTurnBridgeConfig,
+  prepareTurnWithBridge,
+  resolveTurnPython,
+  stopTurnHelpers,
+  type TurnBridgePayload,
+  type TurnBridgeRequest,
+  type TurnBridgeSpawner,
+} from "./turn-bridge";
+import { parseHotContextOutput, runVmemCompactPrep, runVmemEvictSync, runVmemHotContext, runVmemStore } from "./vmem";
 import {
   createTelemetryDirEnsurer,
   sanitizeSessionStem,
@@ -89,6 +114,7 @@ import {
   type DirEnsurer,
 } from "./storage";
 import {
+  loadSkillsVisibilityMode,
   OMP_VISIBILITY_MAX_INJECTED_CHARS,
   ompVisibilityRecord,
   runOmpVisibility,
@@ -624,6 +650,12 @@ export interface ExtensionOptions {
   ompVisibilityRunner?: (options: OmpVisibilityOptions) => Promise<OmpVisibilityResult>;
   /** Read-ledger reread hint seam; production invokes brainctl. */
   rereadHintRunner?: RereadHintRunner;
+  /**
+   * E01 turn-bridge seam: the reused-interpreter helper spawner. Omitted in
+   * production (node:child_process `spawn`); tests inject a scripted child so
+   * helper lifecycle behavior is exercised without a Python runtime.
+   */
+  turnBridgeSpawn?: TurnBridgeSpawner;
 }
 
 export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void {
@@ -633,6 +665,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return;
   }
   const telemetryDir: string = config.telemetryDir;
+
+  // E01 (PERF-02/PERF-04): the per-prompt memory phases run through ONE Python
+  // process — batched (`once`) or through a reused interpreter (`helper`, the
+  // default) — and fall back to the existing per-phase spawns on ANY failure,
+  // so memory delivery never depends on this optimization. The
+  // `SECOND_BRAIN_TURN_MODE` env value keeps the three designs directly
+  // comparable in measurement (`current` = the pre-E01 path).
+  const turnBridgeCfg = loadTurnBridgeConfig();
+  const turnPython = resolveTurnPython(config.home ?? "");
+  const turnBridgeEnabled = turnBridgeCfg.mode !== "current" && turnPython !== undefined;
+  const turnHelper = () =>
+    getTurnHelper({
+      home: config.home ?? "",
+      python: turnPython ?? "",
+      cfg: turnBridgeCfg,
+      spawnImpl: options.turnBridgeSpawn,
+    });
 
   // Phase 4: one shared directory-readiness seam for the whole factory
   // (plan: "at extension startup, ensure the telemetry directory once").
@@ -719,25 +768,30 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     fields: Record<string, unknown>,
     opts: { agentId?: string; parentEventId?: string; ignorable?: boolean; cwd?: string } = {},
   ): void => {
-    mirrorFireAndForget({
-      home: config.home ?? "",
-      hostSessionId: sessionId,
-      cwd: opts.cwd,
-      parentSessionId: nativeRootSessions.get(sessionId),
-      record: {
-        kind,
-        fields,
-        agentId: opts.agentId,
-        parentEventId: opts.parentEventId,
-        ignorable: opts.ignorable,
-      },
-      onError: (error) => {
-        try {
-          getStore(sessionId)?.append(mirrorExtensionError(sessionId, error));
-        } catch {
-          // storage failed too — stay silent
-        }
-      },
+    const mirrorStart = performance.now();
+    void Promise.resolve(
+      mirrorFireAndForget({
+        home: config.home ?? "",
+        hostSessionId: sessionId,
+        cwd: opts.cwd,
+        parentSessionId: nativeRootSessions.get(sessionId),
+        record: {
+          kind,
+          fields,
+          agentId: opts.agentId,
+          parentEventId: opts.parentEventId,
+          ignorable: opts.ignorable,
+        },
+        onError: (error) => {
+          try {
+            getStore(sessionId)?.append(mirrorExtensionError(sessionId, error));
+          } catch {
+            // storage failed too — stay silent
+          }
+        },
+      }),
+    ).then(() => {
+      e01SpanEnd("bg.ledger_mirror", mirrorStart, { kind });
     });
   };
   let currentTurnIndex = 0;
@@ -767,7 +821,44 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       getStore(session)?.append(sensors.extensionError(session, error));
     }
   };
-  const environmentTaskHashes = new Map<string, string>();
+  const environmentFingerprints = new Map<string, string>();
+  /**
+   * Capsule-write ordering barrier (V3 S2 review fix): ONE per-session FIFO for
+   * every capsule write — the coalesced background ensure a quiet turn schedules
+   * and the foreground write/render/decision sequence of a normal turn. See
+   * `src/capsule-writes.ts` for the ordering contract; `quietEnsure` puts the
+   * prompt through it, so a run of no-benefit turns keeps the capsule current at
+   * no critical-path cost without ever racing a foreground turn.
+   */
+  const capsuleWrites = createCapsuleWrites();
+  const quietPrecheckEnabled = loadQuietPrecheckEnabled();
+  const quietEnsure = (session: string, prompt: string): void => {
+    capsuleWrites.quiet(session, prompt, async (text) => {
+      try {
+        const ensured = await runActiveStateEnsure({
+          home: config.home ?? "",
+          hostSessionId: session,
+          objective: text,
+          nextAction: text,
+        });
+        if (ensured.ok) {
+          // Same condition the critical-path ensure used to set, so the
+          // session's shutdown persistence still runs for this session.
+          activeStateTouchedSessions.add(session);
+          return;
+        }
+        getStore(session)?.append(
+          sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
+        );
+      } catch (error) {
+        try {
+          getStore(session)?.append(sensors.extensionError(session, error));
+        } catch {
+          // storage failed too — never block the host turn
+        }
+      }
+    });
+  };
   const rereadRunner = options.rereadHintRunner ?? runRereadHint;
   const visibilityRunner = options.ompVisibilityRunner ?? runOmpVisibility;
   const ensureVisibilityPlan = (
@@ -830,6 +921,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
    * fail-open and never affects the host turn or return value.
    */
   const queueP4Pulse = (event: string, session: string, ctx: ExtensionContext): void => {
+    const pulseStart = performance.now();
     runP4Pulse({
       home: config.home ?? "",
       hostSessionId: session,
@@ -837,6 +929,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       repo: ctxCwd(ctx),
     })
       .then((pulse) => {
+        e01SpanEnd("bg.p4_pulse", pulseStart, { event });
         if (pulse.ok && pulse.heartbeat) {
           getStore(session)?.append(sensors.heartbeatPulse(session, pulse.heartbeat));
         }
@@ -926,8 +1019,131 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return session;
   };
 
+  // Session-start and task-boundary assessments run in the background: the
+  // Python side writes the durable evidence file itself, and the ledger gets
+  // an environment_assessment record when it finishes. The host turn never
+  // waits for it (it measured ~1.4 s on a large repo).
+  const assessEnvironmentInBackground = (
+    session: string,
+    ctx: ExtensionContext,
+    options: EnvironmentAssessmentOptions,
+  ): void => {
+    const backgroundStart = performance.now();
+    void runEnvironmentAssessment(options).then((environment) => {
+      e01SpanEnd("bg.environment_assessment", backgroundStart, { phase: options.phase });
+      if (!environment.ok) {
+        getStore(session)?.append(
+          mirrorExtensionError(session, environment.error ?? `${options.phase} environment assessment failed`),
+        );
+        return;
+      }
+      mirror(
+        session,
+        "environment_assessment",
+        {
+          phase: options.phase,
+          task_id: options.taskId ?? null,
+          environment_steward_id: environment.environmentStewardId ?? null,
+          environment_hash: environment.environmentHash ?? null,
+          mutation_detected: environment.mutationDetected ?? false,
+          mutation_classification: environment.mutationClassification ?? "none",
+          completion_eligible: environment.completionEligible ?? true,
+        },
+        { ignorable: true, cwd: ctxCwd(ctx) },
+      );
+    });
+  };
+
+  /**
+   * Assessment cadence (V3 S2): once per session (session_start) and again only
+   * when the cheap in-host fingerprint of the repo-root manifests / `.git/HEAD`
+   * changes — never once per prompt. The assessment itself stays background and
+   * fail-open (PERF-02); the fingerprint costs a handful of stat calls.
+   */
+  const assessEnvironmentOnChange = (
+    session: string,
+    ctx: ExtensionContext,
+    repo: string,
+  ): void => {
+    const fingerprint = environmentFingerprint(repo);
+    if (environmentFingerprints.get(session) === fingerprint) return;
+    environmentFingerprints.set(session, fingerprint);
+    assessEnvironmentInBackground(session, ctx, {
+      home: config.home ?? "",
+      hostSessionId: session,
+      repo,
+      taskId: fingerprint,
+      phase: "task_boundary",
+    });
+  };
+
+  // Session-start background work (environment assessment, heartbeat pulse)
+  // runs only once the session has been idle for BOOT_IDLE_MS: never during
+  // host startup and never while an agent run is active, so Brain's Python
+  // processes do not compete with dispatch. A new run cancels a pending timer;
+  // its agent_end re-arms it. Shutdown drops anything still pending — and
+  // reports it, because a dropped session-start assessment is exactly the case
+  // where the detached shutdown assessment must run despite an unchanged
+  // fingerprint.
+  const BOOT_IDLE_MS = 5_000;
+  const deferredBoot = new Map<
+    string,
+    { jobs: Array<() => void>; timer: NodeJS.Timeout | undefined; active: boolean }
+  >();
+  const runDeferredBoot = (session: string): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return;
+    deferredBoot.delete(session);
+    clearTimeout(pending.timer);
+    for (const job of pending.jobs) job();
+  };
+  const armDeferredBoot = (session: string): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined || pending.active) return;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => runDeferredBoot(session), BOOT_IDLE_MS);
+    pending.timer.unref();
+  };
+  const deferBootWork = (session: string, job: () => void): void => {
+    const pending = deferredBoot.get(session);
+    if (pending !== undefined) {
+      pending.jobs.push(job);
+      return;
+    }
+    deferredBoot.set(session, { jobs: [job], timer: undefined, active: false });
+    armDeferredBoot(session);
+  };
+  const markAgentRun = (session: string, active: boolean): void => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return;
+    pending.active = active;
+    if (active) {
+      clearTimeout(pending.timer);
+      pending.timer = undefined;
+    } else {
+      armDeferredBoot(session);
+    }
+  };
+  const dropDeferredBoot = (session: string): boolean => {
+    const pending = deferredBoot.get(session);
+    if (pending === undefined) return false;
+    clearTimeout(pending.timer);
+    deferredBoot.delete(session);
+    return pending.jobs.length > 0;
+  };
+
   wire<SessionStartEvent>("session_start", (event, ctx, session) => {
+    const hookStart = performance.now();
+    e01Trace("hook_enter", { hook: "session_start", session });
     recordNativeRootSession(session, ctx);
+    // E01 cold-path option: start the reused interpreter while the HOST is
+    // still booting, so the first prompt never pays the interpreter+import
+    // cost on its own critical path. The startup span is recorded separately
+    // (it is still real CPU); `SECOND_BRAIN_TURN_HELPER_START=lazy` keeps the
+    // cost on the first prompt instead.
+    if (turnBridgeEnabled && turnBridgeCfg.mode === "helper" && turnBridgeCfg.helperStart === "session_start") {
+      void turnHelper().ensureStarted();
+    }
     // Phase 0C SHADOW: decide + record only; session_start carries no task
     // text, so the adapter no-ops on empty tasks. Never returns a patch.
     void runShadowAutoInject({
@@ -939,31 +1155,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       cfg: loadAutoInjectHostConfig(config.home),
       append: (record) => getStore(session)?.append(record),
     });
-    const environment = runEnvironmentAssessmentSync({
-      home: config.home ?? "",
-      hostSessionId: session,
-      repo: ctxCwd(ctx) ?? config.home ?? "",
-      phase: "session_start",
-    });
-    if (environment.ok) {
-      mirror(
-        session,
-        "environment_assessment",
-        {
-          phase: "session_start",
-          environment_steward_id: environment.environmentStewardId ?? null,
-          environment_hash: environment.environmentHash ?? null,
-          mutation_detected: environment.mutationDetected ?? false,
-          mutation_classification: environment.mutationClassification ?? "none",
-          completion_eligible: environment.completionEligible ?? true,
-        },
-        { ignorable: true, cwd: ctxCwd(ctx) },
-      );
-    } else {
-      getStore(session)?.append(
-        mirrorExtensionError(session, environment.error ?? "environment assessment failed"),
-      );
-    }
     mirror(
       session,
       "session_started",
@@ -975,16 +1166,23 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         agent_id: session,
         provider: typeof ctx.model?.provider === "string" ? ctx.model.provider : null,
         host_agent_id: session,
-        environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
-        environment_hash: environment.ok ? environment.environmentHash ?? null : null,
-        environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
-        environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
-        environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
       },
       // Project attribution: session_started is the first mirrored event, so
       // the auto-init of the session ledger receives the host cwd (when known)
       // and `ledger init --cwd` resolves project_id via the AutoInject ladder.
       { agentId: session, cwd: ctxCwd(ctx) },
+    );
+    const sessionRepo = ctxCwd(ctx) ?? config.home ?? "";
+    // Seed the fingerprint so the first prompt of this session does not repeat
+    // the session-start assessment.
+    environmentFingerprints.set(session, environmentFingerprint(sessionRepo));
+    deferBootWork(session, () =>
+      assessEnvironmentInBackground(session, ctx, {
+        home: config.home ?? "",
+        hostSessionId: session,
+        repo: sessionRepo,
+        phase: "session_start",
+      }),
     );
     // Prime-owned artifact REFERENCES (never copied): transcript + telemetry.
     try {
@@ -1038,7 +1236,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     } catch (error) {
       getStore(session)?.append(sensors.extensionError(session, error));
     }
-    queueP4Pulse("session_start", session, ctx);
+    deferBootWork(session, () => queueP4Pulse("session_start", session, ctx));
+    e01SpanEnd("session_start.hook", hookStart, {});
     return sensors.sessionStart(session, event.reason, ctx.cwd, ctx.model);
   });
 
@@ -1173,31 +1372,28 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   }
 
   pi.on("before_agent_start", async (event, ctx) => {
+    const hookStart = performance.now();
     let session = "unknown";
     let aiCfg = loadAutoInjectHostConfig(config.home);
     let aiMessage: unknown = undefined;
     let activeMessage: unknown = undefined;
-    let environmentTask: EnvironmentAssessmentResult | undefined;
+    // Quiet fast path decision, hoisted so the hook's span (in `finally`) can
+    // report it on every exit path.
+    let quietSkip = false;
+    let quietReason: QuietPrecheckResult["reason"] | undefined;
+    let quietCheckMs = 0;
     try {
       session = resolveAndJournalSessionId(ctx);
+      e01Trace("hook_enter", {
+        hook: "before_agent_start",
+        session,
+        prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
+      });
       recordNativeRootSession(session, ctx);
-      const environmentPrompt = typeof event.prompt === "string" ? event.prompt : "";
-      const taskHash = taskSha256(environmentPrompt);
-      if (taskHash && environmentTaskHashes.get(session) !== taskHash) {
-        environmentTaskHashes.set(session, taskHash);
-        environmentTask = runEnvironmentAssessmentSync({
-          home: config.home ?? "",
-          hostSessionId: session,
-          repo: ctxCwd(ctx) ?? config.home ?? "",
-          taskId: taskHash,
-          phase: "task_boundary",
-        });
-        if (!environmentTask.ok) {
-          getStore(session)?.append(
-            mirrorExtensionError(session, environmentTask.error ?? "task environment assessment failed"),
-          );
-        }
-      }
+      markAgentRun(session, true);
+      // Environment Steward cadence: once per session, then only when the cheap
+      // in-host fingerprint of the repo-root manifests / `.git/HEAD` changes.
+      assessEnvironmentOnChange(session, ctx, ctxCwd(ctx) ?? config.home ?? "");
       // AutoInject contributes low-authority context for any native recipient;
       // the host appends the returned message after this turn's user text.
       // Phase C10 (verifier): the BRANCH decision MUST read the same cfg as
@@ -1205,108 +1401,288 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       // [autoinject] mode is honored (env-only cfg made the live flip
       // switch inert and silently ran the shadow branch).
       const taskText = typeof event.prompt === "string" ? event.prompt : "";
+      const aiCall = autoinjectCall(session, event, ctx);
+      // Quiet fast path (V3 S2): one in-host, read-only, conservative
+      // necessary-condition check decides whether this prompt can produce ANY
+      // model-visible memory message. `skip` means the capsule/render half is
+      // provably the host-dropped echo and no retrieved row could contribute
+      // (the AutoInject `match_evidence` rules), so no Python process is spawned
+      // on the critical path. Every doubt — an unreadable DB, an unknown schema,
+      // a non-ASCII prompt, a memory-id reference, any lexical evidence, or a
+      // live AutoInject emit-cache entry — resolves to the unchanged `run` path.
+      let quietDetail: QuietPrecheckResult["detail"] | undefined;
+      let emitCached: boolean | undefined;
+      const emitCachedNow = (): boolean => {
+        if (emitCached === undefined) emitCached = advisoryEmitCached(aiCall, taskText);
+        return emitCached;
+      };
       if (
+        quietPrecheckEnabled &&
         config.home &&
         taskText.trim().length > 0 &&
         (aiCfg.mode === "advisory" || aiCfg.mode === "active")
       ) {
-        const ensured = await runActiveStateEnsure({
-          home: config.home,
-          hostSessionId: session,
-          objective: taskText,
-          nextAction: taskText,
-        });
-        if (!ensured.ok) {
+        const quietStart = performance.now();
+        // A live emit-cache entry means the host is re-emitting an
+        // ALREADY-decided task (possibly a packet): keep the decision path.
+        const result: QuietPrecheckResult | undefined = emitCachedNow()
+          ? undefined
+          : precheckQuiet({ home: config.home, session, prompt: taskText });
+        quietCheckMs = performance.now() - quietStart;
+        quietSkip = result?.decision === "skip";
+        quietReason = result?.reason;
+        quietDetail = result?.detail;
+        if (quietSkip && quietDetail !== undefined && quietReason !== undefined) {
           getStore(session)?.append(
-            sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
+            sensors.quietSkip(session, {
+              reason: quietReason,
+              candidates: quietDetail.candidates,
+              vocab_terms: quietDetail.vocab_terms,
+              unique_terms: quietDetail.unique_terms,
+              headline_terms: quietDetail.headline_terms,
+              ubiquitous_headline_terms: quietDetail.ubiquitous_headline_terms,
+              capsule: quietDetail.capsule,
+              vmem_objects: quietDetail.vmem_objects,
+              total_documents: quietDetail.total_documents,
+              precheck_ms: Math.round(quietCheckMs * 1000) / 1000,
+            }),
           );
-        } else if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
-          activeStateTouchedSessions.add(session);
-          const rendered = await renderActiveState({
-            home: config.home,
-            hostSessionId: session,
-          });
-          if (!rendered.ok) {
-            getStore(session)?.append(
-              sensors.extensionError(session, new Error(rendered.error ?? "active-state render failed")),
-            );
-          } else {
-            activeMessage = activeStateMessage(rendered);
-            if (activeMessage !== undefined) {
-              getStore(session)?.append(
-                sensors.activeStateDelivery(
-                  session,
-                  ensured.capsuleSha256,
-                  ensured.capsuleBytes,
-                  rendered.renderedText?.length ?? 0,
-                  ensured.changed === true,
-                ),
-              );
-            }
-          }
+          // Compaction-recovery state stays current without paying for it on
+          // this turn: one coalesced background ensure per session.
+          quietEnsure(session, taskText);
         }
       }
-      aiCfg = loadAutoInjectHostConfig(config.home);
-      if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
-        aiMessage = await runAdvisoryAutoInject(autoinjectCall(session, event, ctx));
-        // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
-        // (delivery_id + packet_tokens) is the structured, non-transcript
-        // reference already computed by messageFromOutcome (autoinject.ts)
-        // â€” the packet TEXT itself (aiMessage.content) is never sent to
-        // telemetry. RC4 byte-exact recovery pass Part A: BEFORE admitting,
-        // preserve the EXACT packet text through the same preserve->verify
-        // machinery RTD uses for raw tool output (`cliArtifactPreserver`,
-        // kind="autoinject_packet", tool="autoinject"), so a LATER context-
-        // paging fault-in can recover byte-exactly what the model actually
-        // saw even if the underlying memory is superseded afterward. Fully
-        // fail-open: any preserve/verify failure (or exception) falls back
-        // to the EXISTING delivery-only admission shape unchanged; admission
-        // itself, and the packet message returned to the host, are never
-        // affected.
-        if (aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage) {
-          const details = (aiMessage as { details?: unknown }).details;
-          if (details !== null && typeof details === "object") {
-            const detailsObj = details as Record<string, unknown>;
-            const packetText = (aiMessage as { content?: unknown }).content;
-            let packetMetadata: Record<string, unknown> | undefined;
-            if (typeof packetText === "string" && packetText.length > 0) {
-              try {
-                const preserver =
-                  options.autoinjectPacketPreserver ??
-                  cliArtifactPreserver({
-                    home: config.home ?? "",
+      // Visibility planning is independent of the active-state and AutoInject
+      // spawns, so it runs concurrently with them instead of after them. It is
+      // independent of the MEMORY precheck too (V3 S2 review fix): the precheck
+      // only proves that no memory/capsule/VMem content can reach the model,
+      // while `omp_adapter._prepare_skill_visibility` routes independently
+      // through the approved skill files and the handler below injects the
+      // hydrated instructions whenever the plan's mode is `enforced`. A task
+      // matching an approved skill but no semantic memory would otherwise lose
+      // its specialist instructions. A quiet turn therefore still plans
+      // visibility unless the mode is provably not `enforced` for this home
+      // (then nothing can be injected, so the spawn is the precheck's saving).
+      const visibilityEnabled =
+        !quietSkip || loadSkillsVisibilityMode(config.home) === "enforced";
+      const visibilityPending =
+        visibilityEnabled && config.home && taskText.trim().length > 0
+          ? e01SpanAsync(
+              "bg.visibility_plan",
+              ensureVisibilityPlan(session, taskText, ctx).catch(() => undefined),
+            )
+          : undefined;
+      /**
+       * The turn's capsule work — write objective/next_action, render hot
+       * context, decide AutoInject — as ONE foreground critical section.
+       *
+       * Ordering (V3 S2 review fix): the whole sequence runs inside the
+       * session's capsule-write barrier (`src/capsule-writes.ts`), so the
+       * coalesced quiet ensure of an earlier turn can neither interleave with
+       * it nor overwrite the objective/next_action this turn's AutoInject
+       * decision reads (`autoinject._retrieval_query_text`) — and a quiet
+       * prompt this foreground write supersedes is discarded, never replayed
+       * afterwards into the capsule. A quiet turn never enters this section:
+       * its only capsule write is the background ensure queued in the barrier.
+       */
+      const prepareTurnCapsuleWork = async (): Promise<void> => {
+        // E01: capsule ensure + hot-context render + AutoInject decision in ONE
+        // Python process (batched), or through the reused interpreter. The emit
+        // probe runs FIRST so a host re-emit of the same prompt never re-runs
+        // the Python decision (which would create a duplicate delivery). Any
+        // failure — no interpreter, spawn error, timeout, helper death, malformed
+        // response — leaves `batched` null and the per-phase path below runs
+        // unchanged, so this optimization can only remove latency, never memory.
+        let batched: TurnBridgePayload | null = null;
+        if (
+          turnBridgeEnabled &&
+          taskText.trim().length > 0 &&
+          (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+        ) {
+          const boundedTask = taskText.trim().slice(0, ACTIVE_STATE_MAX_TEXT_CHARS);
+          const cached = emitCachedNow();
+          const turnRequest: TurnBridgeRequest = {
+            session,
+            task: taskText,
+            cwd: ctxCwd(ctx),
+            // NO inferred project: `project_id` is an EXPLICIT override in
+            // Python (it outranks cwd/registry resolution), so forwarding the
+            // adapter's remembered/`default` value would suppress the current
+            // repository's memories or admit another project's. The pre-E01
+            // per-phase spawn passes cwd only and lets Python resolve.
+            agentId: session,
+            branch: "main",
+            roleProfile: "worker",
+            objective: boundedTask,
+            nextAction: boundedTask,
+            budgetTokens: ACTIVE_STATE_DEFAULT_BUDGET,
+            want: cached ? ["capsule", "render"] : ["capsule", "render", "autoinject"],
+          };
+          const prepared = await e01SpanAsync(
+            "before_agent_start.turn_bridge",
+            prepareTurnWithBridge({
+              cfg: turnBridgeCfg,
+              home: config.home ?? "",
+              python: turnPython ?? "",
+              request: turnRequest,
+              spawnImpl: options.turnBridgeSpawn,
+            }),
+            { mode: turnBridgeCfg.mode, emit_cached: cached },
+          );
+          // A PARTIAL batch is kept: phases that succeeded committed their own
+          // effects (AutoInject records its delivery), so re-running them would
+          // see ALREADY_DELIVERED and lose the packet. `batchPhaseDone` decides
+          // per phase, and only a failed phase falls back to its own spawn.
+          if (prepared !== null) batched = prepared;
+        }
+        const batchPhaseDone = (phase: "capsule" | "render" | "autoinject"): boolean => {
+          if (batched === null) return false;
+          // Payloads without the map are all-or-nothing (older helper/one-shot).
+          if (batched.phases_ok === undefined) return batched.ok === true;
+          return batched.phases_ok[phase] === true;
+        };
+        if (
+          config.home &&
+          taskText.trim().length > 0 &&
+          (aiCfg.mode === "advisory" || aiCfg.mode === "active")
+        ) {
+          const ensured =
+            batchPhaseDone("capsule") && batched?.capsule_stdout !== undefined && batched.capsule_stdout !== null
+              ? parseActiveStateResult(batched.capsule_stdout, session)
+              : await e01SpanAsync(
+                  "before_agent_start.capsule_ensure",
+                  runActiveStateEnsure({
+                    home: config.home,
+                    hostSessionId: session,
+                    objective: taskText,
+                    nextAction: taskText,
+                  }),
+                  { source: "spawn" },
+                );
+          if (!ensured.ok) {
+            getStore(session)?.append(
+              sensors.extensionError(session, new Error(ensured.error ?? "active-state ensure failed")),
+            );
+          } else if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
+            activeStateTouchedSessions.add(session);
+            const rendered =
+              batchPhaseDone("render") && batched?.render_stdout !== undefined && batched.render_stdout !== null
+                ? activeStateRenderResult(parseHotContextOutput(batched.render_stdout), session)
+                : await e01SpanAsync(
+                    "before_agent_start.hot_context_render",
+                    renderActiveState({
+                      home: config.home,
+                      hostSessionId: session,
+                    }),
+                    { source: "spawn" },
+                  );
+            if (!rendered.ok) {
+              getStore(session)?.append(
+                sensors.extensionError(session, new Error(rendered.error ?? "active-state render failed")),
+              );
+            } else {
+              activeMessage = activeStateMessage(rendered, taskText);
+              if (activeMessage !== undefined) {
+                getStore(session)?.append(
+                  sensors.activeStateDelivery(
                     session,
-                    kind: "autoinject_packet",
-                    tool: "autoinject",
-                  });
-                const preserved = await preserver.preserve(packetText);
-                if (preserved !== null) {
-                  const verified = await preserver.verify(preserved.sha256, packetText);
-                  if (verified) {
-                    packetMetadata = {
-                      ...detailsObj,
-                      packetArtifactRef: preserved.handle,
-                      packetSha256: preserved.sha256,
-                    };
-                  }
-                }
-              } catch {
-                // preserve/verify failed unexpectedly -> fail open, admit
-                // with the existing delivery-only shape below (no metadata).
-                packetMetadata = undefined;
+                    ensured.capsuleSha256,
+                    ensured.capsuleBytes,
+                    rendered.renderedText?.length ?? 0,
+                    ensured.changed === true,
+                  ),
+                );
               }
             }
-            vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", detailsObj, packetMetadata);
           }
         }
-      } else {
-        void runShadowAutoInject(autoinjectCall(session, event, ctx));
-      }
-      if (config.home && taskText.trim().length > 0) {
-        try {
-          const visibilityResult = await ensureVisibilityPlan(session, taskText, ctx);
+        aiCfg = loadAutoInjectHostConfig(config.home);
+        if (aiCfg.mode === "advisory" || aiCfg.mode === "active") {
+          // A batched AutoInject decision is fed to the SAME orchestration
+          // (records, emit cache, resolved-project memory) through its runner
+          // seam, so the batched path cannot diverge from the spawn path;
+          // `undefined` here (emit-cache hit, or no batch) keeps the original
+          // spawn/cache behavior unchanged.
+          const batchedOutcome =
+            batchPhaseDone("autoinject") &&
+            batched?.autoinject_stdout !== undefined &&
+            batched.autoinject_stdout !== null
+              ? parseShadowOutput(batched.autoinject_stdout)
+              : undefined;
+          aiMessage = await e01SpanAsync(
+            "before_agent_start.autoinject",
+            runAdvisoryAutoInject(
+              batchedOutcome !== undefined
+                ? { ...aiCall, runner: async () => batchedOutcome }
+                : aiCall,
+            ),
+            { source: batchedOutcome !== undefined ? "batch" : "spawn" },
+          );
+          // Phase B admission ref #1: AutoInject delivery. `aiMessage.details`
+          // (delivery_id + packet_tokens) is the structured, non-transcript
+          // reference already computed by messageFromOutcome (autoinject.ts)
+          // â€” the packet TEXT itself (aiMessage.content) is never sent to
+          // telemetry. RC4 byte-exact recovery pass Part A: BEFORE admitting,
+          // preserve the EXACT packet text through the same preserve->verify
+          // machinery RTD uses for raw tool output (`cliArtifactPreserver`,
+          // kind="autoinject_packet", tool="autoinject"), so a LATER context-
+          // paging fault-in can recover byte-exactly what the model actually
+          // saw even if the underlying memory is superseded afterward. Fully
+          // fail-open: any preserve/verify failure (or exception) falls back
+          // to the EXISTING delivery-only admission shape unchanged; admission
+          // itself, and the packet message returned to the host, are never
+          // affected.
+          // The preserved packet only feeds VMem admission; with admission off,
+          // preserving it would cost two awaited Python spawns for nothing.
           if (
-            visibilityResult.visibility_plan?.mode === "enforced" &&
+            loadVmemAdmissionConfig(config.home).enabled &&
+            aiMessage !== undefined && aiMessage !== null && typeof aiMessage === "object" && "details" in aiMessage
+          ) {
+            const details = (aiMessage as { details?: unknown }).details;
+            if (details !== null && typeof details === "object") {
+              const detailsObj = details as Record<string, unknown>;
+              const packetText = (aiMessage as { content?: unknown }).content;
+              let packetMetadata: Record<string, unknown> | undefined;
+              if (typeof packetText === "string" && packetText.length > 0) {
+                try {
+                  const preserver =
+                    options.autoinjectPacketPreserver ??
+                    cliArtifactPreserver({
+                      home: config.home ?? "",
+                      session,
+                      kind: "autoinject_packet",
+                      tool: "autoinject",
+                    });
+                  const preserved = await preserver.preserve(packetText);
+                  if (preserved !== null) {
+                    const verified = await preserver.verify(preserved.sha256, packetText);
+                    if (verified) {
+                      packetMetadata = {
+                        ...detailsObj,
+                        packetArtifactRef: preserved.handle,
+                        packetSha256: preserved.sha256,
+                      };
+                    }
+                  }
+                } catch {
+                  // preserve/verify failed unexpectedly -> fail open, admit
+                  // with the existing delivery-only shape below (no metadata).
+                  packetMetadata = undefined;
+                }
+              }
+              vmemAdmit(session, "RESEARCH_RESULT", "autoinject_delivery", detailsObj, packetMetadata);
+            }
+          }
+        } else {
+          void runShadowAutoInject(autoinjectCall(session, event, ctx));
+        }
+      };
+      if (!quietSkip) await capsuleWrites.foreground(session, prepareTurnCapsuleWork);
+      if (visibilityPending !== undefined) {
+        try {
+          const visibilityResult = await visibilityPending;
+          if (
+            visibilityResult?.visibility_plan?.mode === "enforced" &&
             Object.keys(visibilityResult.hydrated_instructions).length > 0
           ) {
             // validateOmpVisibilityResult already rejects the whole plan if
@@ -1335,11 +1711,6 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         {
           task_sha256: taskSha256(typeof event.prompt === "string" ? event.prompt : ""),
           prompt_chars: typeof event.prompt === "string" ? event.prompt.length : 0,
-          environment_steward_id: environmentTask?.environmentStewardId ?? null,
-          environment_hash: environmentTask?.environmentHash ?? null,
-          environment_mutation_detected: environmentTask?.mutationDetected ?? false,
-          environment_mutation_classification: environmentTask?.mutationClassification ?? "none",
-          environment_completion_eligible: environmentTask?.completionEligible ?? true,
         },
         // ledger-cwd-ordering-fix: user_task is the FIRST mirror to reach the
         // ledger in real runs (its init spawn wins the per-process race), so
@@ -1397,17 +1768,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
           patched = merged;
         }
       }
-      // Append memory commands and project identity once to the stable prefix.
-      // Dynamic recall stays in the turn message below.
-      const withExtras = appendPrefixExtras(
-        patched,
-        resolvedProjectIdForSession(session) ?? resolveProject(),
-      );
-      if (withExtras !== undefined) {
-        patched = withExtras;
-      }
       // Recall is dynamic per-turn context, never a change to the stable prefix.
-      // A miss must not discard approved Lean or memory-command context.
+      // A miss must not discard an approved Lean kernel.
       const recallCfg = loadRecallGateConfig();
       let turnMessage: unknown = mergeActiveStateMessage(aiMessage, activeMessage);
       // The CLI needs keywords, not the prompt: it keeps up to eight query
@@ -1416,7 +1778,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         ? buildRecallQuery(event.prompt, recallCfg)
         : undefined;
       if (recallQuery !== undefined) {
-        const brief = await recallBrief(recallQuery, session, recallCfg);
+        const brief = await e01SpanAsync(
+          "before_agent_start.recall_brief",
+          recallBrief(recallQuery, session, recallCfg),
+        );
         if (brief !== undefined) {
           turnMessage = mergeRecallBriefMessage(turnMessage, brief);
         }
@@ -1440,13 +1805,22 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       if (message !== undefined && (aiCfg.mode === "advisory" || aiCfg.mode === "active")) {
         return { message };
       }
+    } finally {
+      // E01: closes on every exit path (patch, no patch, error) so the span
+      // measures the whole hook the host awaits.
+      e01SpanEnd("before_agent_start.hook", hookStart, {
+        session,
+        mode: aiCfg.mode,
+        quiet: quietSkip ? "skip" : "run",
+        quiet_reason: quietReason ?? null,
+        quiet_check_ms: Math.round(quietCheckMs * 1000) / 1000,
+      });
     }
     return undefined;
   });
 
   wire<TurnStartEvent>("turn_start", (event, ctx, session) => {
     currentTurnIndex = event.turnIndex;
-    queueP4Pulse("turn_start", session, ctx);
     return sensors.turnStart(session, event.turnIndex);
   });
 
@@ -2029,6 +2403,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
   // Documented no-op; write-back happens through explicit `brainctl
   // autoinject writeback` (Python authority) and the Codex Stop trigger.
   wire<AgentEndEvent>("agent_end", (event, ctx, session) => {
+    markAgentRun(session, false);
     mirror(
       session,
       "agent_ended",
@@ -2040,10 +2415,10 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.agentEnd(session, event.messages);
   });
 
-  // session_before_compact: pre-compaction DURABILITY BARRIER (plan §10.2).
-  // The checkpoint is AWAITED (5s timeout). On flush/integrity failure the
-  // handler returns { cancel: true } — the host throws "Compaction cancelled"
-  // (SDK agent-session.ts:7199 reads result.cancel) and no context is lost.
+  // session_before_compact: best-effort pre-compaction checkpoint (plan §10.2).
+  // The checkpoint is awaited (5s timeout) so it usually lands before the host
+  // compacts, but Brain never vetoes compaction (V3 CTX-03): a failed
+  // checkpoint is recorded as ledger_degraded and the host proceeds.
   // The event is registered directly (not via wire) so the handler can await.
   pi.on("session_before_compact", async (event, ctx) => {
     const compactEvent = event as SessionBeforeCompactEvent;
@@ -2062,24 +2437,31 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         { cwd: ctxCwd(ctx) },
       );
       // measurement record first (every lifecycle event writes one record),
-      // then the durability barrier decides whether compaction may proceed.
+      // then the best-effort checkpoint.
       getStore(session)?.append(
         sensors.sessionBeforeCompact(session, compactEvent.branchEntries),
       );
       const activeStateCfg = loadAutoInjectHostConfig(config.home);
       if (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active") {
-        const activeState = await runActiveStateUpdate({
-          home: config.home ?? "",
-          hostSessionId: session,
-          verification: { pre_compaction: "persisted" },
-        });
+        // Ordering (V3 S2 review fix): the checkpoint runs INSIDE the session's
+        // capsule-write barrier, so a coalesced quiet ensure from an earlier turn
+        // (a) has settled before the checkpoint reads the capsule and (b) cannot
+        // land after it and restore a stale objective/next_action — or drop the
+        // checkpoint's own verification fields through its read-modify-write.
+        const activeState = await capsuleWrites.foreground(session, () =>
+          runActiveStateUpdate({
+            home: config.home ?? "",
+            hostSessionId: session,
+            verification: { pre_compaction: "persisted" },
+          }),
+        );
         if (!activeState.ok) {
           getStore(session)?.append(
             sensors.extensionError(session, new Error(activeState.error ?? "active-state checkpoint failed")),
           );
-          return { cancel: true };
+        } else {
+          activeStateTouchedSessions.add(session);
         }
-        activeStateTouchedSessions.add(session);
       }
       const checkpoint = await runLedgerCheckpoint({
         home: config.home ?? "",
@@ -2098,7 +2480,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
         getStore(session)?.append(
           mirrorExtensionError(session, `pre-compaction checkpoint failed: ${checkpoint.error ?? "integrity bad"}`),
         );
-        return { cancel: true };
+        return undefined;
       }
       // Phase B admission ref #3: compaction-boundary checkpoint. Content is
       // exactly the checkpoint outcome + branch_entries count already
@@ -2112,9 +2494,8 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       });
       // Phase R3: VMem compaction-boundary bookkeeping (vmem.py §6.7 "Compaction
       // barrier interaction" — its own documented integration point). Advisory
-      // only: never cancels compaction (the ledger checkpoint above is the sole
-      // durability barrier). Disabled by default ([vmem] enabled=false) until a
-      // live pilot proves this sound; see outputs/reports/rc4/02-prime-live-callgraph.md.
+      // only. Disabled by default ([vmem] enabled=false) until a live pilot
+      // proves this sound; see outputs/reports/rc4/02-prime-live-callgraph.md.
       const vmemCfg = loadVmemConfig(config.home);
       if (vmemCfg.enabled) {
         const prep = await runVmemCompactPrep({ home: config.home ?? "", hostSessionId: session });
@@ -2134,7 +2515,7 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
       } catch {
         // storage failed too — stay silent
       }
-      return { cancel: true }; // never compact on an unproven barrier
+      return undefined; // Brain failure never blocks host compaction (CTX-03)
     }
     return undefined;
   });
@@ -2188,94 +2569,112 @@ export default function (pi: ExtensionAPI, options: ExtensionOptions = {}): void
     return sensors.sessionCompact(session, event.fromExtension);
   });
 
-  wire<SessionShutdownEvent>(
-    "session_shutdown",
-    (event, ctx, session) => {
-      const activeStateCfg = loadAutoInjectHostConfig(config.home);
-      if (
-        activeStateTouchedSessions.has(session) &&
-        (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active")
-      ) {
-        const activeState = runActiveStateUpdateSync({
-          home: config.home ?? "",
-          hostSessionId: session,
-          verification: { session_shutdown: event.reason ?? "normal" },
-        });
-        if (!activeState.ok) {
-          getStore(session)?.appendFinal(
-            sensors.extensionError(session, new Error(activeState.error ?? "active-state shutdown failed")),
-          );
-        }
-      }
-      activeStateTouchedSessions.delete(session);
-      // Required active-state persistence runs for every native recipient.
-      // Skip optional maintenance for a child so its shutdown cannot delay
-      // the host's own lifecycle; this is observation, not settlement.
-      let childSession = false;
-      try {
-        const header = ctx.sessionManager?.getHeader?.();
-        childSession = header !== null && typeof header === "object" &&
-          typeof (header as Record<string, unknown>).parentSession === "string";
-      } catch {
-        // No verified child marker: run ordinary local maintenance.
-      }
-      if (childSession) {
-        mirror(session, "session_inactive", {
-          reason: event.reason,
-          optional_maintenance_skipped: "native_child",
-        }, { ignorable: true, cwd: ctxCwd(ctx) });
-        return sensors.sessionShutdown(session, event.reason);
-      }
-      const environment = runEnvironmentAssessmentSync({
+  /**
+   * Shutdown persistence + its final record, kept as a named function so the
+   * DIRECT `session_shutdown` handler below can settle the session's
+   * capsule-write barrier before it runs (V3 S2 review fix), while the record
+   * write itself stays synchronous (`appendFinal`) — Prime's daemon tears the
+   * worker down right after the event, so an awaited write could lose it.
+   * The OPTIONAL maintenance this path used to run inline is now started
+   * detached (`src/detached-maintenance.ts`); what stays synchronous here is
+   * the persistence Prime would otherwise lose.
+   */
+  const sessionShutdownRecord = (
+    event: SessionShutdownEvent,
+    ctx: ExtensionContext,
+    session: string,
+  ): object => {
+    // E01 cleanup: the reused interpreter is a memory helper, so it goes
+    // away with the session that started it (an orphaned helper also
+    // self-exits on stdin EOF if this host dies without shutdown).
+    if (turnBridgeEnabled) stopTurnHelpers("session_shutdown");
+    const bootWorkDropped = dropDeferredBoot(session);
+    const activeStateCfg = loadAutoInjectHostConfig(config.home);
+    if (
+      activeStateTouchedSessions.has(session) &&
+      (activeStateCfg.mode === "advisory" || activeStateCfg.mode === "active")
+    ) {
+      // The capsule update is this session's LAST capsule write — the
+      // session's capsule-write barrier was drained before this shutdown record
+      // ran, so a quiet ensure can no longer land after it. It must still land
+      // itself, but the host must not wait for a spawn that measures ~250 ms on
+      // its exit path. Detached: Python owns the write, and the update's own
+      // failure has no reader (this is observation, not settlement).
+      startDetachedActiveStateUpdate({
         home: config.home ?? "",
         hostSessionId: session,
-        repo: ctxCwd(ctx) ?? config.home ?? "",
-        phase: "shutdown",
+        verification: { session_shutdown: event.reason ?? "normal" },
       });
-      const projectId =
-        environment.ok &&
-        environment.evidence &&
-        typeof environment.evidence.project_id === "string"
-          ? environment.evidence.project_id
-          : undefined;
-      // Task 7: one bounded P4 pulse — heartbeat always runs; Radar/
-      // fingerprints run only when `projectId` is known (gated inside
-      // p4.pulse() itself, mirrors the prior project_id-gated Radar call).
-      // No further event-loop turn is guaranteed for shutdown-derived telemetry.
-      const p4Result = runP4PulseSync({
-        home: config.home ?? "",
-        hostSessionId: session,
-        event: "session_shutdown",
-        repo: ctxCwd(ctx) ?? config.home ?? "",
-        projectId,
-      });
-      if (p4Result.ok) {
-        if (p4Result.heartbeat) {
-          getStore(session)?.appendFinal(sensors.heartbeatPulse(session, p4Result.heartbeat));
-        }
-        for (const fingerprint of p4Result.fingerprints ?? []) {
-          getStore(session)?.appendFinal(sensors.bottleneckFingerprint(session, fingerprint));
-        }
-      } else {
-        getStore(session)?.appendFinal(
-          sensors.extensionError(session, new Error(p4Result.error ?? "P4 pulse failed")),
-        );
-      }
-      mirror(
-        session,
-        "session_inactive",
-        {
-          reason: event.reason,
-          environment_steward_id: environment.ok ? environment.environmentStewardId ?? null : null,
-          environment_hash: environment.ok ? environment.environmentHash ?? null : null,
-          environment_mutation_detected: environment.ok ? environment.mutationDetected ?? false : null,
-          environment_mutation_classification: environment.ok ? environment.mutationClassification ?? "none" : "assessment_failed",
-          environment_completion_eligible: environment.ok ? environment.completionEligible ?? true : false,
-        },
-        { cwd: ctxCwd(ctx) },
-      );
+    }
+    activeStateTouchedSessions.delete(session);
+    // Required active-state persistence runs for every native recipient.
+    // Skip optional maintenance for a child so its shutdown cannot delay
+    // the host's own lifecycle; this is observation, not settlement.
+    let childSession = false;
+    try {
+      const header = ctx.sessionManager?.getHeader?.();
+      childSession = header !== null && typeof header === "object" &&
+        typeof (header as Record<string, unknown>).parentSession === "string";
+    } catch {
+      // No verified child marker: run ordinary local maintenance.
+    }
+    if (childSession) {
+      mirror(session, "session_inactive", {
+        reason: event.reason,
+        optional_maintenance_skipped: "native_child",
+      }, { ignorable: true, cwd: ctxCwd(ctx) });
       return sensors.sessionShutdown(session, event.reason);
-    },
-    true, // final: sync write so the record survives worker teardown
-  );
+    }
+    const repo = ctxCwd(ctx) ?? config.home ?? "";
+    // The optional per-shutdown work is the expensive part of this path
+    // (environment assessment ~1.4 s, P4 pulse ~250 ms, both measured): start
+    // each as a DETACHED Python process that outlives the host instead of
+    // blocking the host's teardown. The assessment is worth a process only
+    // when it would produce NEW evidence: the session-start one never ran (its
+    // deferred job was dropped above), or the repo's cheap fingerprint moved
+    // since the last assessment. The P4 pulse always runs; being detached it
+    // writes its own heartbeat/fingerprint telemetry (no `--no-telemetry`).
+    const fingerprint = environmentFingerprint(repo);
+    const maintenance = startDetachedShutdownMaintenance({
+      home: config.home ?? "",
+      hostSessionId: session,
+      repo,
+      projectId: resolvedProjectIdForSession(session),
+      assessEnvironment: bootWorkDropped || environmentFingerprints.get(session) !== fingerprint,
+    });
+    mirror(
+      session,
+      "session_inactive",
+      {
+        reason: event.reason,
+        maintenance: "detached",
+        environment_reassessed: maintenance.environment,
+      },
+      { cwd: ctxCwd(ctx) },
+    );
+    return sensors.sessionShutdown(session, event.reason);
+  };
+
+  // Registered DIRECTLY (not through `wire`) so the handler can settle the
+  // session's capsule-write barrier before its persistence. The drain is the one
+  // await a shutdown handler may take: a quiet background ensure left queued must
+  // not land after this persistence and restore the objective it replaced (or
+  // drop the persisted verification through its own read-modify-write). The
+  // record write below stays synchronous, exactly as the `final` mapper write it
+  // replaces.
+  pi.on("session_shutdown", async (event, ctx) => {
+    const shutdownEvent = event as SessionShutdownEvent;
+    let session = "unknown";
+    try {
+      session = resolveAndJournalSessionId(ctx);
+      await capsuleWrites.drain(session);
+      getStore(session)?.appendFinal(sessionShutdownRecord(shutdownEvent, ctx, session));
+    } catch (error) {
+      try {
+        getStore(session)?.appendFinal(sensors.extensionError(session, error));
+      } catch {
+        // storage failed too — give up silently (measurement must not crash).
+      }
+    }
+  });
 }

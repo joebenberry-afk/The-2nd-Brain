@@ -710,6 +710,51 @@ export function activeStateDelivery(
   }) as unknown as ActiveStateDeliveryRecord;
 }
 
+/**
+ * Quiet fast path (V3 S2, QuietPath): one record per turn where the in-host
+ * precheck proved the Brain could not contribute a model-visible message, so no
+ * Python process ran on the critical path. Counts and a fixed reason token only
+ * (never prompt text, terms or memory ids); `model_visible: false` because this
+ * turn deliberately adds no Brain content.
+ */
+export interface QuietSkipRecord extends BaseRecord {
+  kind: "quiet_skip";
+  /** Precheck reason token: `no_evidence` is the only skip reason. */
+  reason: string;
+  candidates: number;
+  vocab_terms: number;
+  unique_terms: number;
+  headline_terms: number;
+  ubiquitous_headline_terms: number;
+  capsule: string;
+  vmem_objects: number;
+  total_documents: number;
+  precheck_ms: number;
+  model_visible: false;
+}
+
+export function quietSkip(
+  session: string,
+  fields: {
+    reason: string;
+    candidates: number;
+    vocab_terms: number;
+    unique_terms: number;
+    headline_terms: number;
+    ubiquitous_headline_terms: number;
+    capsule: string;
+    vmem_objects: number;
+    total_documents: number;
+    precheck_ms: number;
+  },
+): QuietSkipRecord {
+  return {
+    ...base("quiet_skip", session, {}),
+    ...fields,
+    model_visible: false,
+  } as unknown as QuietSkipRecord;
+}
+
 export interface VmemFaultInRecord extends BaseRecord {
   kind: "vmem_fault_in";
   /** SessionObjectKind (short enum token) or null — never obj_id, never content. */

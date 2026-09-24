@@ -1,0 +1,82 @@
+# Deterministic gates on every push (V3 redesign, D7): lint, types, the V3 core and memory
+# tests, and the frozen S2 retrieval sets against the committed corpus seed. The full legacy
+# suite runs on the Windows machine; several legacy tests are Windows-only (see CLAUDE.md).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Lint and types
+        run: |
+          ruff check src tests scripts/cloud_corpus.py
+          pyright src/second_brain/kb src/second_brain/semantic.py src/second_brain/autoinject.py
+      - name: V3 core and memory tests
+        run: >
+          pytest -q -o addopts="" -p no:cacheprovider
+          tests/test_kb_records.py tests/test_kb_index.py tests/test_kb_views.py tests/test_kb_capture.py tests/test_kb_hooks.py tests/test_kb_security.py tests/test_kb_doctor.py tests/test_kb_sync.py tests/test_kb_faults.py tests/test_kb_skills.py
+          tests/test_memory_supersession.py tests/test_injection_decision.py
+          tests/test_autoinject.py tests/test_semantic_query.py tests/test_retrieval_isolation.py
+          tests/test_migration_chain.py
+      - name: Retrieval gates (S2 dev and held-out sets)
+        env:
+          SECOND_BRAIN_HOME: ${{ github.workspace }}
+        run: |
+          python -m second_brain init > /dev/null
+          python scripts/cloud_corpus.py load
+          python -m second_brain memory reindex
+          for set in dev heldout; do
+            python scripts/v3_retrieval_eval.py --quiet \
+              --cases "outputs/reports/v3-s2/$set/cases.jsonl" --report "eval-$set.json" || true
+          done
+          python - <<'PY'
+          import json, sys
+          # Cloud baseline: D09, D11, H07 are SOURCE_MISSING here (their sources exist only on the
+          # Windows machine); H06 is a known ranking miss. Any other miss, or any false injection,
+          # fails the gate.
+          allowed = {"D09", "D11", "H06", "H07"}
+          bad = []
+          for name in ("dev", "heldout"):
+              report = json.load(open(f"eval-{name}.json"))
+              if report["no_benefit_cases"]["false_injections"]:
+                  bad.append(f"{name}: false injections {report['no_benefit_cases']['offenders']}")
+              extra = [f for f in report["failures"] if f.split(":")[0] not in allowed]
+              if extra:
+                  bad.append(f"{name}: new failures {extra}")
+              print(name, "recall", report["memory_cases"]["recall"], "failures", report["failures"])
+          sys.exit("\n".join(bad) if bad else 0)
+          PY
+
+  omp-extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: brainstem/prime-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --no-audit --no-fund
+      - name: Standalone V3 OMP extension
+        run: |
+          npx tsc --noEmit
+          npx vitest run tests/omp-v3.test.ts

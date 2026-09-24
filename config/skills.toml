@@ -36,8 +36,14 @@ mode = "shadow"     # SHADOW/REPORT-ONLY default (plan §56/§113 "shadow route 
 
 # Lean Code Runtime Kernel activation (plan §11 / §24)
 # ENFORCED — lean_runtime.py reads [lean] eval per event (fallback inert)
+# V3 shipping default: OFF. The kernel is always-on advisory text appended to
+# every driver/worker turn; no S2 measurement shows a benefit that pays for it,
+# so the deployable profile does not inject it. Nothing is deleted: the
+# canonical kernel still lives in skills/<lifecycle>/lean-code/SKILL.md and is
+# re-enabled per environment with `SECOND_BRAIN_LEAN=advisory` or by setting
+# this value back to "advisory" (the V3 harness runs that as `candidate_lean`).
 [lean]
-eval = "advisory"
+eval = "off"
 # Lean Opportunity Controller (T3.4 / Deep Upgrade Plan U1)
 # Levels: NOOP (0 tokens), NUDGE (frozen line), FULL (runtime kernel) in TAIL slot
 opportunity = true

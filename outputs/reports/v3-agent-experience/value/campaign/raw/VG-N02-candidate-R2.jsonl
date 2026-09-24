@@ -1,0 +1,22 @@
+{"type":"session","version":3,"id":"01a0d431-d446-76a5-a600-386c0d49e78f","timestamp":"2026-09-24T16:13:50.534Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs\\run0116\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790266432188}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790266432188}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"17","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790266432271,"responseId":"29ee2ced-3698-4b58-b1a7-60c735f3d5c9"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"17"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"*"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"23"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" ="}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"391"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"17*23 = 391."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"391"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"391"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"17*23 = 391.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1407,"output":9,"cacheRead":9216,"cacheWrite":0,"totalTokens":10632,"reasoningTokens":7,"cost":{"input":0.00021104999999999998,"output":0.0000054,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00024409799999999997}},"stopReason":"stop","timestamp":1790266432271,"responseId":"29ee2ced-3698-4b58-b1a7-60c735f3d5c9","duration":1545.4823000000001,"ttft":1451.7393000000002,"completedAt":1790266433825}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"17*23 = 391.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1407,"output":9,"cacheRead":9216,"cacheWrite":0,"totalTokens":10632,"reasoningTokens":7,"cost":{"input":0.00021104999999999998,"output":0.0000054,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00024409799999999997}},"stopReason":"stop","timestamp":1790266432271,"responseId":"29ee2ced-3698-4b58-b1a7-60c735f3d5c9","duration":1545.4823000000001,"ttft":1451.7393000000002},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"What is 17 times 23? Reply with just the number."}],"attribution":"user","timestamp":1790266432188},{"role":"assistant","content":[{"type":"thinking","thinking":"17*23 = 391.","thinkingSignature":"reasoning_content"},{"type":"text","text":"391"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1407,"output":9,"cacheRead":9216,"cacheWrite":0,"totalTokens":10632,"reasoningTokens":7,"cost":{"input":0.00021104999999999998,"output":0.0000054,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00024409799999999997}},"stopReason":"stop","timestamp":1790266432271,"responseId":"29ee2ced-3698-4b58-b1a7-60c735f3d5c9","duration":1545.4823000000001,"ttft":1451.7393000000002}],"isTerminal":true}

@@ -1,0 +1,543 @@
+{
+ "harness": "scripts/v3_value_suite.py",
+ "harness_sha256": "535b18ab5d2ac72cfa4455519a7efda37e14b4d1a14eb5ffc4892380ec69cd42",
+ "started_utc": "2026-09-24T15:24:46Z",
+ "out": "outputs\\reports\\v3-agent-experience\\value\\campaign",
+ "value_dir": "outputs/reports/v3-agent-experience/value",
+ "command": "python scripts/v3_value_suite.py --out outputs/reports/v3-agent-experience/value/campaign --reps 3 --arms native,candidate --seed 20260924 --model deepseek/deepseek-flash --thinking low",
+ "omp_version": "omp/18.3.0",
+ "model": "deepseek/deepseek-flash",
+ "thinking": "low",
+ "project_id": "second-brain",
+ "reps": 3,
+ "seed": 20260924,
+ "arms_order": [
+  "native",
+  "candidate"
+ ],
+ "task_count": 20,
+ "task_classes": {
+  "memory": 10,
+  "no_benefit": 10
+ },
+ "tasks": [
+  {
+   "id": "VG-M01",
+   "class": "memory",
+   "prompt": "Bare python launches broke on this machine once because of a PYTHONHOME pollution we wrote down. Before I add a third Brain launcher script next to brainctl.py and bootstrap.ps1, remind me which environment variables a launcher must clear, and what breakage that sanitation prevents. Name the variables exactly and give the failure in one short line. Reply in at most three lines.",
+   "memory_ids": [
+    "mem-b67de5057f76"
+   ],
+   "groups": [
+    [
+     "PYTHONHOME"
+    ],
+    [
+     "UV_INTERNAL__PYTHONHOME"
+    ],
+    [
+     "SRE",
+     "3\\.11",
+     "stdlib",
+     "corrupt",
+     "\\buv\\b"
+    ]
+   ],
+   "note": "Live memory mem-b67de5057f76 names the polluted variables and the corrupted uv CPython tree; scripts/brainctl.py, scripts/bootstrap.ps1 and src/second_brain/doctor.py carry the same variable names, so a native agent that greps PYTHONHOME can also answer. Memory should remove the grep+read sequence."
+  },
+  {
+   "id": "VG-M02",
+   "class": "memory",
+   "prompt": "A teammate is adding a numbered schema migration to Second Brain. In what order must database migrations be applied? Answer in one line.",
+   "memory_ids": [
+    "mem-a8d221e64549"
+   ],
+   "groups": [
+    [
+     "numeric order",
+     "ascending",
+     "number order",
+     "from lowest",
+     "in order of"
+    ]
+   ],
+   "note": "mem-a8d221e64549 is literally the ordering rule; tests/test_autoinject.py and tests/test_antigravity_adapter.py seed the same sentence as fixture data, so hunting is possible but needs a search plus a read."
+  },
+  {
+   "id": "VG-M03",
+   "class": "memory",
+   "prompt": "I am writing a restore path that copies the db/brain.sqlite file back over a live database. What must happen to the -wal and -shm sidecars, and what failure does skipping that cause? Reply in at most three lines.",
+   "memory_ids": [
+    "mem-29557f93448f"
+   ],
+   "groups": [
+    [
+     "wal"
+    ],
+    [
+     "shm"
+    ],
+    [
+     "drop",
+     "delete",
+     "remove",
+     "aside"
+    ],
+    [
+     "stale",
+     "replay",
+     "resurrect"
+    ]
+   ],
+   "note": "mem-29557f93448f holds the rule (sidecars dropped after the copy; stale frames replay and resurrect moved-aside rows); src/second_brain/backup.py implements it as _drop_stale_db_sidecars. Native hunt = grep wal/shm across a 4.6 MB package plus a read of the restore function."
+  },
+  {
+   "id": "VG-M04",
+   "class": "memory",
+   "prompt": "Doctor reported missing layout directories on a fresh Brain home. I want to fix it in code rather than by hand: which existing helper creates the missing directories, and which skill directories under the home layout are involved? Reply in at most three lines.",
+   "memory_ids": [
+    "mem-3848b16778bd"
+   ],
+   "groups": [
+    [
+     "ensure_layout"
+    ],
+    [
+     "skills/approved",
+     "approved/global",
+     "approved"
+    ],
+    [
+     "principles"
+    ]
+   ],
+   "note": "Replaced an earlier draft that asked about the Claude Code Stop hook (mem-bde4dc4aee9e): the decision path never delivered that candidate/OBSERVED memory for any phrasing tried, so the task could not measure memory value. mem-3848b16778bd states the canonical Doctor failure was five missing skills/approved/{global,domain,project,model} plus skills/principles directories and that existing paths.ensure_layout created them; src/second_brain/paths.py MAJOR_DIRS and ensure_layout carry the same names, so hunting works too."
+  },
+  {
+   "id": "VG-M05",
+   "class": "memory",
+   "prompt": "Our Antigravity adapter has to locate the conversation and workspace from the hook payload. From the Antigravity hook contract recorded in this repo, which common camelCase fields carry the conversation id, the workspace paths, the transcript path and the artifact directory? Reply in at most three lines.",
+   "memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "groups": [
+    [
+     "conversationId"
+    ],
+    [
+     "workspacePaths"
+    ],
+    [
+     "transcriptPath"
+    ],
+    [
+     "artifactDirectoryPath"
+    ]
+   ],
+   "note": "Replaced an earlier draft asking about RLM child recursion (mem-d2f7df353130): the live host's own omp:// docs contradict that memory (task.maxRecursionDepth, default 2), so BOTH arms answered the same way and the task measured nothing. This task uses the Antigravity hook contract (mem-79d7c4fd9876), which src/second_brain/adapters/antigravity.py and tests/test_antigravity_adapter.py repeat verbatim, so hunting works and the memory short-circuits the search."
+  },
+  {
+   "id": "VG-M06",
+   "class": "memory",
+   "prompt": "Our design doc still claims the harness caps parallel workers at 'default 1 / max 2'. The P0-P2 harness amendment recorded in this repo changed that. What did the amendment put in place of the hard 2-worker cap, and what dimensions bound the replacement? Reply in at most four lines.",
+   "memory_ids": [
+    "mem-f745bcb2eff2"
+   ],
+   "groups": [
+    [
+     "adaptive fan[- ]?out"
+    ],
+    [
+     "resource ceiling",
+     "hard ceiling",
+     "ceiling"
+    ],
+    [
+     "env",
+     "config"
+    ],
+    [
+     "telemetry"
+    ]
+   ],
+   "note": "mem-f745bcb2eff2 carries the replacement policy (adaptive fan-out: conservative default width, config/env maximum, hard resource ceiling, telemetry); outputs/reports/p0-p2-harness-refinement.md and the injected-packet fixture carry the same wording, so hunting works at the cost of picking the right report among ~100."
+  },
+  {
+   "id": "VG-M07",
+   "class": "memory",
+   "prompt": "We exported SECOND_BRAIN_HOME to point our integration runs at a throwaway Brain home, but the runs kept using the default home because a shared prime-agent daemon was already running. Explain why that is and say what integration runs must use instead. Reply in at most three lines.",
+   "memory_ids": [
+    "mem-b0d6cc3de0ab"
+   ],
+   "groups": [
+    [
+     "SECOND_BRAIN_HOME"
+    ],
+    [
+     "daemon"
+    ],
+    [
+     "daemon-socket",
+     "daemon socket"
+    ],
+    [
+     "startup env",
+     "startup environment",
+     "pins its own",
+     "environment at startup",
+     "does not see",
+     "doesn't see",
+     "not inherited",
+     "isn't inherited",
+     "env changes"
+    ]
+   ],
+   "note": "mem-b0d6cc3de0ab states the daemon pins its own startup env and integration runs need a dedicated --daemon-socket per run; docs/components/scout.md and proof/reports/live-rollout-baseline.md hold the socket detail, so the answer is assembled from two hops natively."
+  },
+  {
+   "id": "VG-M08",
+   "class": "memory",
+   "prompt": "From the Antigravity hook contract in this repo: what fields does stopHookArgs carry, and what may the Stop hook's result object return?",
+   "memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "groups": [
+    [
+     "stopHookArgs"
+    ],
+    [
+     "executionNum"
+    ],
+    [
+     "terminationReason"
+    ],
+    [
+     "fullyIdle"
+    ],
+    [
+     "decision"
+    ],
+    [
+     "reason"
+    ]
+   ],
+   "note": "mem-79d7c4fd9876 lists stopHookArgs{executionNum, terminationReason, error, fullyIdle} and the Stop result {decision, reason}; src/second_brain/adapters/antigravity.py encodes the same field sets, so the native path is grep across src/tests plus a read of the adapter constant table."
+  },
+  {
+   "id": "VG-M09",
+   "class": "memory",
+   "prompt": "A reviewer insists our orchestrator must never run commands itself and must delegate everything. What does the amendment policy recorded in this repo actually allow the driver to execute itself, and where is the boundary? Reply in at most three lines.",
+   "memory_ids": [
+    "mem-174b3f5abbba"
+   ],
+   "groups": [
+    [
+     "trivial deterministic",
+     "trivial, deterministic"
+    ],
+    [
+     "may execute",
+     "MAY execute",
+     "is allowed to execute",
+     "permitted to execute",
+     "allowed"
+    ],
+    [
+     "delegat",
+     "substantial"
+    ]
+   ],
+   "note": "mem-174b3f5abbba states the driver MAY execute trivial deterministic work but must not personally execute substantial work when delegation wins; outputs/reports/p0-p2-harness-refinement.md and driver-orchestration-proof.md hold the same amendment wording, so hunting works at the price of picking the right report among ~100."
+  },
+  {
+   "id": "VG-M10",
+   "class": "memory",
+   "prompt": "Our Antigravity adapter needs to write results back to the IDE. From the hook contract recorded in this repo, what do PreInvocation/PostInvocation return, and what fields can the PreToolUse and Stop hooks return? Reply in at most four lines.",
+   "memory_ids": [
+    "mem-79d7c4fd9876"
+   ],
+   "groups": [
+    [
+     "injectSteps"
+    ],
+    [
+     "ephemeralMessage",
+     "userMessage",
+     "toolCall"
+    ],
+    [
+     "PreToolUse"
+    ],
+    [
+     "permissionOverrides",
+     "overwrite"
+    ],
+    [
+     "decision"
+    ],
+    [
+     "reason"
+    ]
+   ],
+   "note": "mem-79d7c4fd9876 carries the result shapes (injectSteps for invocation hooks; PreToolUse {decision, reason, overwrite, permissionOverrides}; Stop {decision, reason}); tests/test_antigravity_adapter.py and the adapter module repeat them, so the memory should short-circuit a two-file read."
+  },
+  {
+   "id": "VG-N01",
+   "class": "no_benefit",
+   "prompt": "Reply with exactly: NB-OK-17. Do not use any tools.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "NB-OK-17"
+    ]
+   ],
+   "note": "Pure echo control: no repository fact and no memory should be needed; measures Brain's no-benefit overhead (spawn + decision) alone."
+  },
+  {
+   "id": "VG-N02",
+   "class": "no_benefit",
+   "prompt": "What is 17 times 23? Reply with just the number.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "391"
+    ]
+   ],
+   "note": "Arithmetic control with no repo retrieval signal."
+  },
+  {
+   "id": "VG-N03",
+   "class": "no_benefit",
+   "prompt": "Rename the local variable tmp to buffer here: tmp = 1; print(tmp). Reply with just the rewritten line.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "buffer\\s*=\\s*1"
+    ],
+    [
+     "print\\(\\s*buffer\\s*\\)"
+    ]
+   ],
+   "note": "Self-contained code-formatting control."
+  },
+  {
+   "id": "VG-N04",
+   "class": "no_benefit",
+   "prompt": "Translate 'good morning' into French. Reply with just the translation.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "bonjour"
+    ]
+   ],
+   "note": "Language control far from the stored memories."
+  },
+  {
+   "id": "VG-N05",
+   "class": "no_benefit",
+   "prompt": "Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "sum\\("
+    ],
+    [
+     "range\\(\\s*1\\s*,\\s*11\\s*\\)"
+    ],
+    [
+     "\\*\\*\\s*2",
+     "i\\s*\\*\\s*i",
+     "pow\\("
+    ]
+   ],
+   "note": "Synthesis control with a deterministic shape check."
+  },
+  {
+   "id": "VG-N06",
+   "class": "no_benefit",
+   "prompt": "In one sentence, what is a Python dict? Reply with one sentence.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "key"
+    ],
+    [
+     "value"
+    ]
+   ],
+   "note": "Generic explanation control."
+  },
+  {
+   "id": "VG-N07",
+   "class": "no_benefit",
+   "prompt": "Format these numbers as a markdown table with a single column header `n`: 1, 2, 3. Reply with only the table.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "\\|\\s*n\\s*\\|"
+    ],
+    [
+     "\\|\\s*1\\s*\\|"
+    ],
+    [
+     "\\|\\s*2\\s*\\|"
+    ],
+    [
+     "\\|\\s*3\\s*\\|"
+    ]
+   ],
+   "note": "Formatting control (no repo lookup)."
+  },
+  {
+   "id": "VG-N08",
+   "class": "no_benefit",
+   "prompt": "Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "\\bwas\\b"
+    ],
+    [
+     "mat"
+    ],
+    [
+     "by\\b"
+    ]
+   ],
+   "note": "Rewrite control."
+  },
+  {
+   "id": "VG-N09",
+   "class": "no_benefit",
+   "prompt": "Run the shell command `echo $((7*6))` and reply with exactly its output. Use only the bash tool.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "42"
+    ]
+   ],
+   "note": "Tool-using control: the answer never appears in the prompt, so it proves the harness records tool calls on a no-memory turn."
+  },
+  {
+   "id": "VG-N10",
+   "class": "no_benefit",
+   "prompt": "In this repository, which file defines the function `_drop_stale_db_sidecars`? Reply with just the relative path.",
+   "memory_ids": [],
+   "groups": [
+    [
+     "backup\\.py"
+    ]
+   ],
+   "note": "Repository-read control that overlaps VG-M03's memory topic but asks for a location the memory does not contain: Brain may inject and still not reduce work, which is exactly the no-benefit case the pass rule must not excuse."
+  }
+ ],
+ "pass_rule": "Memory tasks pass when the candidate shows a net reduction over native in either total provider tokens (input+output) or total tool calls - paired per task, median of the candidate-minus-native deltas < 0 - with candidate correctness not below native. No-benefit tasks pass when the paired median delta for BOTH tokens and tool calls is <= 0 plus the configured slack, with candidate correctness not below native. The campaign passes only when both classes pass.",
+ "corpus": {
+  "source": "C:\\Users\\assas\\Documents\\The-Second-Brain",
+  "snapshot_dirs": [
+   "config",
+   "memory",
+   "constitution",
+   "templates",
+   "skills",
+   "frontier"
+  ],
+  "db_sha256": "7fe413386f0908600958bc114112056ca3cb3f6eb5505f12233e7dbf976ad5c1",
+  "memories": 116,
+  "schema_version": 28,
+  "contains_regression_memory": true,
+  "tokens_present": {
+   "mem-174b3f5abbba": true,
+   "mem-29557f93448f": true,
+   "mem-3848b16778bd": true,
+   "mem-79d7c4fd9876": true,
+   "mem-a8d221e64549": true,
+   "mem-b0d6cc3de0ab": true,
+   "mem-b67de5057f76": true,
+   "mem-f745bcb2eff2": true
+  },
+  "live_lean_eval": "off",
+  "live_config_sha256": "a43ad0c53271efffaa50aab6d71e8bfe80fe35121c49c3abf19f730fb909a8e9",
+  "frontier_approvals": {
+   "pending/policy-active-routing.hold": "55f1268b6446d033a6c618ae2f4466c1b94e8d1ab0e575b01e87fd4f3771df56",
+   "policy-active-routing-2.md": "d61afc868e65d4b93989b60b98a301be1e2c41887918ea3110dfe69aceb11225",
+   "policy-active-routing.md": "b8e0adbadfaa2d02297127cf288400c64bd8ab9efb08fe8baf0d5e8b39e4d7fa",
+   "projects/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "skill-sqlite-migration-verifier-promotion-2.md": "3b6a6ac5aab5331dc648a9ca7e1c765f0b83fa5b9a03fec5dac1b831e502bd85",
+   "skill-sqlite-migration-verifier-promotion.md": "5ef9d128cb6b93d90c2b204509af5c872abde5583184128ad6f6b26d1abad427",
+   "skill-verified-config-read-reuse-promotion-2.md": "b7cd5adf828c5e7eff07b4f0fe64add52b58c13e8740f3b4d79f8e4da33e4cc5",
+   "skill-verified-config-read-reuse-promotion.md": "146341412dbdd78f5687795d8e5b179d70d770af045a311eacfe6fdef38f4b85"
+  }
+ },
+ "expected_memories": [
+  "mem-174b3f5abbba",
+  "mem-29557f93448f",
+  "mem-3848b16778bd",
+  "mem-79d7c4fd9876",
+  "mem-a8d221e64549",
+  "mem-b0d6cc3de0ab",
+  "mem-b67de5057f76",
+  "mem-f745bcb2eff2"
+ ],
+ "repo_excludes": [
+  ".venv",
+  ".git",
+  ".worktrees",
+  "node_modules",
+  "__pycache__",
+  ".hypothesis",
+  ".pytest_cache",
+  ".ruff_cache",
+  "db",
+  "state",
+  "telemetry",
+  "memory",
+  "outputs/reports/v3-s2",
+  "outputs/reports/v3-agent-experience",
+  "outputs/reports/v3-agent-experience/value/campaign",
+  "outputs/reports/v3-agent-experience/value/campaign/raw"
+ ],
+ "repo_copy_source": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1",
+ "probe": {
+  "path": "outputs\\reports\\v3-agent-experience\\value\\campaign\\probe.json",
+  "anchors_path": "outputs\\reports\\v3-agent-experience\\value\\campaign\\anchors.json",
+  "anchor_defects": [],
+  "memory_tasks_answerable_in_repo": 10,
+  "memory_tasks_covered_by_memory": 10,
+  "memory_task_count": 10,
+  "memory_tasks_injecting": 10,
+  "memory_tasks_with_expected_memory_in_packet": 10,
+  "no_benefit_tasks_delivering": 2
+ },
+ "arms": {
+  "native": {
+   "extension": null,
+   "runtime": null,
+   "config_dir": null,
+   "home": "none (no Brain)"
+  },
+  "candidate": {
+   "extension": {
+    "entry": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\brainstem\\prime-extension\\src\\index.ts",
+    "files": 20,
+    "lf_manifest_sha256": "df58e8dcda955d0344aeb1a40e47ffe785c42017504bd39fe7ee0c8518d15ba8"
+   },
+   "runtime": {
+    "python": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\.venv\\Scripts\\python.exe",
+    "module": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\src\\second_brain\\__init__.py",
+    "git_sha": "c1959af5b9c655d1657384a72fff34559ed75179",
+    "dirty": false,
+    "source_tree": "92621124443a826ec3be452cecc5cdd6df28cd693a4630bcd7b964eb9f64def8"
+   },
+   "config_dir": "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\config",
+   "home": "fresh copy of the corpus snapshot with the candidate's shipped config"
+  }
+ },
+ "notes": "Every run is a fresh host process with a fresh copy of the corpus snapshot and a fresh copy of the repository as cwd; failures are retained, never retried. Runs are interleaved by seeded shuffle within each rep.",
+ "finished_utc": "2026-09-24T16:15:14Z",
+ "runs": 120,
+ "run_status": {
+  "ok": 120
+ },
+ "work_dir": "C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-_rontbhs"
+}

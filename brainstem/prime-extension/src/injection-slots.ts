@@ -2,14 +2,16 @@
  * T2.4 Injection placement slots: stable PREFIX and per-turn TAIL for Prime extension.
  *
  * Two slots only:
- * 1. PREFIX (session-constant):
+ * 1. PREFIX (session-constant) identity, hashed for drift detection:
  *    (1) Lean kernel (from lean-code)
  *    (2) Skill descriptors (from visibility plan)
  *    (3) The two T1.6 commands
  *    (4) Project identity line: Project: <project_id>
  *    Rendered once at session start and never changed across turns.
  *    sha256(PREFIX) stored at session start; comparing later turns detects drift
- *    and logs prefix_drift=1.
+ *    and logs prefix_drift=1. On OMP only the Lean kernel reaches the model's
+ *    system prompt; the project line is identity for the hash, not prompt text
+ *    (V3 PERF-01: no Brain text on a no-benefit request).
  *
  * 2. TAIL (per-turn):
  *    [BRAIN_CONTEXT_DELTA], hot-context refs (VMem), freshness lines, Skill hydration bodies.
@@ -105,23 +107,6 @@ export function assemblePrefix(options: AssemblePrefixOptions): string {
   parts.push(`Project: ${proj}`);
 
   return parts.join("\n\n");
-}
-
-/** Stable dedup marker for memory commands and project identity.
- * Like the approved Lean marker, it prevents duplicate recipient context. */
-export const PREFIX_EXTRAS_MARKER = "second-brain-prefix-extras";
-
-/**
- * Append stable memory commands and a validated project ID to a host prompt.
- * Undefined/empty bases stay unchanged; the marker prevents duplicate
- * recipient context on later turns.
- */
-export function appendPrefixExtras(base: string | undefined, projectId: string): string | undefined {
-  if (base === undefined || base.trim() === "") return undefined;
-  if (base.includes(PREFIX_EXTRAS_MARKER)) return base;
-  const proj = projectIdForPrompt(projectId);
-  const extras = [MEMORY_COMMANDS_TEXT.trim(), `Project: ${proj}`].filter(Boolean).join("\n\n");
-  return `${base}\n\n[${PREFIX_EXTRAS_MARKER}]\n${extras}`;
 }
 
 export interface DriftCheckResult {

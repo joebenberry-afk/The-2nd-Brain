@@ -1,0 +1,46 @@
+{"type":"session","version":3,"id":"01a0d476-ea59-72ff-90dc-95ece75bfe2f","timestamp":"2026-09-24T17:29:18.169Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-wxoffgrn\\run0105\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790270960032}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790270960032}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790270960139,"responseId":"88b6b2ce-8765-4d78-8eb8-46a5101c050e"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Simple"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" request"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" Passive"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" voice"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" \""}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" mat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" was"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" on"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" by"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" cat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\""}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" One"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" sentence"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":".\n\n"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"No"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" tools"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" needed"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Simple request. Passive voice: \"The mat was sat on by the cat.\" One sentence.\n\nNo tools needed."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"The"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" mat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" was"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" sat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" on"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" by"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" the"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":" cat"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"The mat was sat on by the cat."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple request. Passive voice: \"The mat was sat on by the cat.\" One sentence.\n\nNo tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1414,"output":33,"cacheRead":9216,"cacheWrite":0,"totalTokens":10663,"reasoningTokens":23,"cost":{"input":0.00021209999999999998,"output":0.0000198,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025954799999999996}},"stopReason":"stop","timestamp":1790270960139,"responseId":"88b6b2ce-8765-4d78-8eb8-46a5101c050e","duration":1628.554,"ttft":1489.2388,"completedAt":1790270961769}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Simple request. Passive voice: \"The mat was sat on by the cat.\" One sentence.\n\nNo tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1414,"output":33,"cacheRead":9216,"cacheWrite":0,"totalTokens":10663,"reasoningTokens":23,"cost":{"input":0.00021209999999999998,"output":0.0000198,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025954799999999996}},"stopReason":"stop","timestamp":1790270960139,"responseId":"88b6b2ce-8765-4d78-8eb8-46a5101c050e","duration":1628.554,"ttft":1489.2388},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Rewrite in the passive voice: 'the cat sat on the mat'. Reply with one sentence."}],"attribution":"user","timestamp":1790270960032},{"role":"assistant","content":[{"type":"thinking","thinking":"Simple request. Passive voice: \"The mat was sat on by the cat.\" One sentence.\n\nNo tools needed.","thinkingSignature":"reasoning_content"},{"type":"text","text":"The mat was sat on by the cat."}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1414,"output":33,"cacheRead":9216,"cacheWrite":0,"totalTokens":10663,"reasoningTokens":23,"cost":{"input":0.00021209999999999998,"output":0.0000198,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025954799999999996}},"stopReason":"stop","timestamp":1790270960139,"responseId":"88b6b2ce-8765-4d78-8eb8-46a5101c050e","duration":1628.554,"ttft":1489.2388}],"isTerminal":true}

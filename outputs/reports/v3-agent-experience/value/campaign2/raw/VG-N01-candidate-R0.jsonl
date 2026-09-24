@@ -1,0 +1,23 @@
+{"type":"session","version":3,"id":"01a0d466-61e5-717c-b85d-082f3bf9721f","timestamp":"2026-09-24T17:11:14.661Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-wxoffgrn\\run0039\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly: NB-OK-17. Do not use any tools."}],"attribution":"user","timestamp":1790269876812}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly: NB-OK-17. Do not use any tools."}],"attribution":"user","timestamp":1790269876812}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just","thinkingSignature":"reasoning_content"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790269876912,"responseId":"49d10c5c-0826-4fd7-bd45-4e2e3f60f791"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Just"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" reply"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":" exactly"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"."}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Just reply exactly."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"NB"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"-"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"OK"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"-"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"17"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"NB-OK-17"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just reply exactly.","thinkingSignature":"reasoning_content"},{"type":"text","text":"NB-OK-17"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1411,"output":10,"cacheRead":9216,"cacheWrite":0,"totalTokens":10637,"reasoningTokens":4,"cost":{"input":0.00021165,"output":0.000006,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000245298}},"stopReason":"stop","timestamp":1790269876912,"responseId":"49d10c5c-0826-4fd7-bd45-4e2e3f60f791","duration":1892.2558,"ttft":1802.4071000000004,"completedAt":1790269878813}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Just reply exactly.","thinkingSignature":"reasoning_content"},{"type":"text","text":"NB-OK-17"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1411,"output":10,"cacheRead":9216,"cacheWrite":0,"totalTokens":10637,"reasoningTokens":4,"cost":{"input":0.00021165,"output":0.000006,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000245298}},"stopReason":"stop","timestamp":1790269876912,"responseId":"49d10c5c-0826-4fd7-bd45-4e2e3f60f791","duration":1892.2558,"ttft":1802.4071000000004},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Reply with exactly: NB-OK-17. Do not use any tools."}],"attribution":"user","timestamp":1790269876812},{"role":"assistant","content":[{"type":"thinking","thinking":"Just reply exactly.","thinkingSignature":"reasoning_content"},{"type":"text","text":"NB-OK-17"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1411,"output":10,"cacheRead":9216,"cacheWrite":0,"totalTokens":10637,"reasoningTokens":4,"cost":{"input":0.00021165,"output":0.000006,"cacheRead":0.000027648,"cacheWrite":0,"total":0.000245298}},"stopReason":"stop","timestamp":1790269876912,"responseId":"49d10c5c-0826-4fd7-bd45-4e2e3f60f791","duration":1892.2558,"ttft":1802.4071000000004}],"isTerminal":true}

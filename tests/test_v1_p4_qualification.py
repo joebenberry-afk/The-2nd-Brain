@@ -876,4 +876,7 @@ def test_v2_structure_ownership_uses_ast_and_entrypoint_metadata():
     assert cli["v2_parser_owned"] is True
     assert cli["v2_dispatch_owned"] is True
     assert cli["competing_modules"] == []
+    assert cli["v3_cli"]["entrypoint"] == "brain=second_brain.kb.cli:main"
+    assert "src/second_brain/kb/cli.py" in cli["v3_cli"]["modules"]
+    assert all(path.startswith("src/second_brain/kb/") for path in cli["v3_cli"]["modules"])
     assert VERIFIER._production_v2_definitions() == []

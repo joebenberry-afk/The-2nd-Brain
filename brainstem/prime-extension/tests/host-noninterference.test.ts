@@ -16,15 +16,16 @@ vi.mock("../src/autoinject", async (importOriginal) => ({
   runShadowAutoInject: async () => undefined,
 }));
 
-vi.mock("../src/environment-mirror", () => ({
-  runEnvironmentAssessmentSync: () => ({
+vi.mock("../src/environment-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/environment-mirror")>()),
+
+  runEnvironmentAssessment: async () => ({
     ok: true, environmentStewardId: "native-test", environmentHash: "a".repeat(64),
     mutationDetected: false, mutationClassification: "none", completionEligible: true,
   }),
 }));
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: async () => ({ ok: true }),
-  runP4PulseSync: () => ({ ok: true }),
 }));
 
 let home: string;
@@ -108,14 +109,16 @@ it("does not inject a coordinator contract or select a provider model", async ()
   factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler) } as unknown as ExtensionAPI, {
     ompVisibilityRunner: async () => ({ visibility_plan: null, hydrated_instructions: {}, error: null }),
   });
-  const start = await handlers.get("before_agent_start")!({ prompt: "Inspect memory context" }, context());
-  const prompt = start !== null && typeof start === "object" && "systemPrompt" in start
-    ? String(start.systemPrompt ?? "") : "";
-  expect(start).toBeDefined();
-  expect(prompt).toContain("Native OMP prompt");
-  expect(prompt).not.toContain("second-brain-driver-orchestration-contract");
-  expect(prompt).not.toContain("minimal-cost ORCHESTRATOR");
-  expect(String(JSON.stringify(start))).not.toContain("budget_warning");
+  const start = (await handlers.get("before_agent_start")!({ prompt: "Inspect memory context" }, context())) as
+    | { systemPrompt?: string }
+    | undefined;
+  // PERF-01: with nothing to inject the host's own prompt is untouched (no
+  // systemPrompt patch), so the extension cannot rewrite or drop it.
+  expect(start?.systemPrompt).toBeUndefined();
+  const serialized = String(JSON.stringify(start ?? {}));
+  expect(serialized).not.toContain("second-brain-driver-orchestration-contract");
+  expect(serialized).not.toContain("minimal-cost ORCHESTRATOR");
+  expect(serialized).not.toContain("budget_warning");
   const request = { provider: "openai-codex", model: "gpt-5.6-luna", messages: [] };
   expect(handlers.get("before_provider_request")!({ payload: request }, context())).toBeUndefined();
   expect(request).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna", messages: [] });

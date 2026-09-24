@@ -62,6 +62,7 @@ ORIGIN_CLASSES: tuple[str, ...] = (
     "IMPORTED_FOREIGN",
 )
 AUTHORITY_CEILINGS: tuple[str, ...] = ("advisory", "project_rule", "policy")
+SUPERSESSION_KINDS: tuple[str, ...] = ("supersedes", "corrects", "invalidates")
 _AUTHORITY_RANK = {"advisory": 0, "project_rule": 1, "policy": 2}
 _PROJECT_RULE_ORIGINS = frozenset({"USER_AUTHORED", "LOCAL_REPO", "TRUSTED_TEST"})
 
@@ -161,6 +162,7 @@ def effective_authority_ceiling(row: dict) -> str:
     if not isinstance(claimed, str) or _AUTHORITY_RANK.get(claimed, 0) <= 0:
         return "advisory"
     return claimed if authority_attested(row.get("authority_attestation")) else "advisory"
+
 
 def effective_evidence_grade(row: dict) -> str:
     """Grade that may affect trust. Stored VERIFIED is a claim unless attested."""
@@ -266,8 +268,7 @@ def _dbfile(home: Path) -> Path:
 
 
 def _ensure_migrated(home: Path) -> None:
-    if db.pending_migrations(_dbfile(home)):
-        db.migrate(_dbfile(home))
+    db.ensure_migrated(_dbfile(home))
 
 
 def _version_created_at(home: Path, memory_id: str, version: int, fallback: str) -> str:
@@ -1113,16 +1114,215 @@ def _query_candidates(text: str) -> list[str]:
     )
 
 
-def _query_plan(
+# Corpus statistics, not word lists: a plan term is *specific* when it names a
+# small slice of the corpus (at most _SPECIFIC_TERM_DF_RATIO of its documents,
+# never fewer than _SPECIFIC_TERM_MIN_DF documents so a small fixture corpus keeps
+# a usable notion of rarity). No term is special-cased by its spelling.
+_SPECIFIC_TERM_DF_RATIO = 0.10
+_SPECIFIC_TERM_MIN_DF = 2
+# A term appearing in at most two memories names one memory's own subject matter
+# (an identifier, a symbol, a named fact) rather than a topic the corpus shares.
+# A row whose evidence rests on a single matched plan term is held to this bar (see
+# `match_evidence`): one mid-frequency word is weak evidence when the request also
+# carries content terms the row cannot explain, unless that word names one memory.
+_UNIQUE_TERM_MAX_DF = 2
+# Body-only evidence needs two such coincidences; a single rare word in a body is
+# how instruction vocabulary ("rewrite", "passive", "nothing") overlaps memories.
+_UNIQUE_TERM_MIN_HITS = 2
+# A term spread over more than half the corpus cannot tell two memories apart. When
+# *every* plan term is that common — a young Brain home, or a request stated purely
+# in the corpus's own common vocabulary — lexical specificity has nothing left to
+# discriminate with, so a headline confirmation is the evidence available.
+_UBIQUITOUS_TERM_DF_RATIO = 0.50
+
+
+@dataclass(frozen=True)
+class QueryMatchPlan:
+    """The lexical term plan one search used, plus the statistics behind it.
+
+    ``terms`` are the IDF-ranked query terms the lexical search matched against
+    (empty when no term evidence exists at all). ``frequencies`` is the exact-token
+    document count that drove term selection; ``breadth`` is the same count under
+    the prefix matching the FTS query actually uses (``"mem"*`` also matches
+    ``memory``), an upper bound, so a short term cannot look rare here while
+    matching broadly there. ``distinct`` carries the exact prefix document count for
+    the terms whose bound could reach the ubiquity threshold, the only measurement
+    allowed to prove ubiquity. ``total_documents`` is the corpus size.
+    """
+
+    text: str
+    expression: str | None = None
+    terms: tuple[str, ...] = ()
+    required: int = 0
+    frequencies: dict[str, int] = _field(default_factory=dict)
+    total_documents: int = 0
+    breadth: dict[str, int] = _field(default_factory=dict)
+    distinct: dict[str, int] = _field(default_factory=dict)
+
+    def document_frequency(self, term: str) -> int:
+        """Corpus document count for one plan term under the matching rule.
+
+        Callers only ask about plan terms, which carry a measured breadth; an
+        unmeasured term counts as universal, never as rare.
+        """
+        if term in self.breadth:
+            return int(self.breadth[term])
+        return int(self.frequencies.get(term, self.total_documents))
+
+    def is_specific(self, term: str) -> bool:
+        """Whether a term names a small slice of the corpus rather than the corpus."""
+        return self.document_frequency(term) <= max(
+            _SPECIFIC_TERM_MIN_DF,
+            math.ceil(_SPECIFIC_TERM_DF_RATIO * self.total_documents),
+        )
+
+    def is_unique(self, term: str) -> bool:
+        """Whether a term names essentially one memory (an identifier or named fact)."""
+        return self.document_frequency(term) <= _UNIQUE_TERM_MAX_DF
+
+    def is_ubiquitous(self, term: str) -> bool:
+        """Whether a term provably spans more than half the corpus.
+
+        Only the exact distinct prefix count can prove that: the summed vocabulary
+        range is an upper bound, and a term without a measured distinct count is not
+        treated as ubiquitous.
+        """
+        measured = self.distinct.get(term)
+        if measured is None:
+            return False
+        return measured > _UBIQUITOUS_TERM_DF_RATIO * self.total_documents
+
+    def has_discriminative_term(self) -> bool:
+        """Whether any plan term can tell memories apart at all."""
+        return any(self.is_specific(term) for term in self.terms)
+
+    def content_terms(self) -> tuple[str, ...]:
+        """The request's content tokens after the stopword filter, out-of-vocabulary included.
+
+        ``terms`` is what the corpus could match: vocabulary-filtered, IDF-ranked and
+        capped. This is what the request actually said, so a row can be judged on how
+        much of the request it explains instead of on the plan's surviving subset. A
+        non-ASCII request yields none (the tokenizer declines it), which only widens
+        what counts as unexplained.
+        """
+        return tuple(_query_candidates(self.text))
+
+    def unexplained_content_terms(self, row_tokens: Sequence[str]) -> tuple[str, ...]:
+        """Content terms no token of `row_tokens` confirms, under the matching prefix rule."""
+        return tuple(
+            term
+            for term in self.content_terms()
+            if not any(token.startswith(term) for token in row_tokens)
+        )
+
+
+@dataclass(frozen=True)
+class MatchEvidence:
+    """Why one retrieved candidate row is (or is not) treated as contributing."""
+
+    contributing: bool
+    matched: tuple[str, ...] = ()
+    headline_matched: tuple[str, ...] = ()
+    specific_matched: tuple[str, ...] = ()
+    unique_matched: tuple[str, ...] = ()
+    quoted_headline: tuple[str, ...] = ()
+    #: Request content terms the row does not confirm; populated only when the row
+    #: matched exactly one plan term (the case the single-term guard judges).
+    unexplained_terms: tuple[str, ...] = ()
+
+
+def _prefix_bounds(
+    term: str,
+) -> tuple[str, str]:
+    """Half-open vocabulary-term range covering every term that starts with `term`."""
+    return term, term[:-1] + chr(ord(term[-1]) + 1)
+
+
+def _prefix_document_frequencies(
+    conn: sqlite3.Connection, terms: tuple[str, ...], total: int
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Prefix match breadth per plan term: an upper bound, plus a sound ubiquity count.
+
+    ``memory_fts_vocab.doc`` counts one exact token, so summing a prefix range over
+    it measures breadth as an *upper* bound (a document holding two matching tokens
+    counts twice). That direction is safe for every rarity claim — a term can only
+    look broader than it is — but it must never be used to *prove* ubiquity, which
+    needs a lower bound on the same measure. So the summed range is computed always
+    (one cheap range scan per term), and the exact distinct document count is asked
+    of the index with the same prefix expression only for terms whose upper bound
+    could reach the ubiquity threshold; a term whose bound stays below it cannot be
+    ubiquitous, so no index count is spent on it.
+
+    Returns ``(breadth, distinct)``; ``distinct`` holds only the measured terms, and
+    a term missing from it must not be treated as ubiquitous.
+    """
+    breadth: dict[str, int] = {}
+    distinct: dict[str, int] = {}
+    for term in terms:
+        lower, upper = _prefix_bounds(term)
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(doc), 0) FROM memory_fts_vocab WHERE term >= ? AND term < ?",
+                (lower, upper),
+            ).fetchone()
+            summed = min(int(total), int(row[0] or 0)) if row is not None else total
+        except sqlite3.Error:
+            continue
+        breadth[term] = summed
+        if summed <= _UBIQUITOUS_TERM_DF_RATIO * total:
+            continue
+        try:
+            counted = conn.execute(
+                "SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?", (f'"{term}"*',)
+            ).fetchone()
+        except sqlite3.Error:
+            continue
+        if counted is not None:
+            exact = min(int(total), int(counted[0] or 0))
+            breadth[term] = exact  # the exact count is at least as tight
+            distinct[term] = exact
+    return breadth, distinct
+
+
+def _plan_with_stats(
     text: str, *, k: int = 8, msm: float = 0.5, conn: sqlite3.Connection | None = None
-) -> tuple[str | None, tuple[str, ...], int]:
+) -> QueryMatchPlan:
+    """`_query_plan` plus the document frequencies it already had to look up.
+
+    A query with a single candidate term keeps the established single-token FTS
+    path: one term, required match count 1, and no vocabulary filter — a search for
+    a middle-of-word substring such as "car" must still take the FTS prefix path
+    instead of falling through to the substring scan (documented divergence).
+    Public `build_query` separately declines one-term input.
+    """
     candidates = _query_candidates(text)
-    if len(candidates) < 2:
-        return None, (), 0
+    if not candidates:
+        return QueryMatchPlan(text=text)
     frequencies: dict[str, int] = {}
+    total = 0
     if conn is not None:
         if not _fts_available(conn):
-            return None, (), 0
+            return QueryMatchPlan(text=text)
+        if len(candidates) == 1:
+            term = candidates[0]
+            try:
+                row = conn.execute(
+                    "SELECT doc FROM memory_fts_vocab WHERE term = ?", (term,)
+                ).fetchone()
+                total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+            except sqlite3.Error:
+                row, total = None, 0
+            breadth, distinct = _prefix_document_frequencies(conn, (term,), total)
+            return QueryMatchPlan(
+                text=text,
+                expression=f'"{term}"*',
+                terms=(term,),
+                required=1,
+                frequencies={term: int(row[0])} if row is not None else {},
+                total_documents=total,
+                breadth=breadth,
+                distinct=distinct,
+            )
         placeholders = ",".join("?" for _ in candidates)
         try:
             rows = conn.execute(
@@ -1135,9 +1335,7 @@ def _query_plan(
             total = 0
         candidates = [token for token in candidates if token in frequencies]
         if not candidates:
-            return None, (), 0
-    else:
-        total = 0
+            return QueryMatchPlan(text=text, total_documents=total)
     positions = {token: index for index, token in enumerate(candidates)}
     try:
         limit = max(1, int(k))
@@ -1152,7 +1350,26 @@ def _query_plan(
         ratio = 0.5
     required = math.ceil(ratio * len(selected))
     expression = "(" + " OR ".join(f'"{token}"*' for token in selected) + ")"
-    return expression, selected, required
+    breadth, distinct = (
+        _prefix_document_frequencies(conn, selected, total) if conn is not None else ({}, {})
+    )
+    return QueryMatchPlan(
+        text=text,
+        expression=expression,
+        terms=selected,
+        required=required,
+        frequencies=frequencies,
+        total_documents=total,
+        breadth=breadth,
+        distinct=distinct,
+    )
+
+
+def _query_plan(
+    text: str, *, k: int = 8, msm: float = 0.5, conn: sqlite3.Connection | None = None
+) -> tuple[str | None, tuple[str, ...], int]:
+    plan = _plan_with_stats(text, k=k, msm=msm, conn=conn)
+    return plan.expression, plan.terms, plan.required
 
 
 def build_query(
@@ -1166,12 +1383,171 @@ def build_query(
     return expression
 
 
-def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
+def query_match_plan(
+    home: Path | str, text: str, *, k: int = 8, msm: float = 0.5
+) -> QueryMatchPlan:
+    """The lexical term plan of `text` against `home`, with corpus statistics.
+
+    Mirrors what a lexical search of the same text would use (same vocabulary
+    lookup, same single-token fallback). A plan with no terms means no lexical term
+    evidence exists at all — FTS5 unavailable, a non-tokenizable query, or an
+    unbuilt index — and callers must not invent a gate from it.
+    """
+    home_path = Path(home)
+    _ensure_migrated(home_path)
+    conn = db.connect(_dbfile(home_path))
+    try:
+        if not _fts_available(conn):
+            return QueryMatchPlan(text=text)
+        total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+        if _fts_count(conn) <= 0 and total > 0:
+            return QueryMatchPlan(text=text, total_documents=total)
+        return _plan_with_stats(text, k=k, msm=msm, conn=conn)
+    except sqlite3.Error:
+        return QueryMatchPlan(text=text)
+    finally:
+        conn.close()
+
+
+def _tokens(text: object) -> list[str]:
+    """The tokenizer both matching and evidence use (identical to FTS prefix hits)."""
+    return re.findall(r"[a-z0-9]{3,}", str(text or "").casefold())
+
+
+def _row_haystack_tokens(row: dict) -> list[str]:
     haystack = " ".join(
         str(row.get(field) or "") for field in ("title", "summary", "_body", "body")
     ).casefold()
-    haystack_tokens = re.findall(r"[a-z0-9]{3,}", haystack)
-    return sum(any(value.startswith(term) for value in haystack_tokens) for term in terms)
+    return re.findall(r"[a-z0-9]{3,}", haystack)
+
+
+def _headline_text(row: dict) -> str:
+    """The memory's own statement of what it is about (title/summary)."""
+    return " ".join(str(row.get(field) or "") for field in ("title", "summary"))
+
+
+def _row_headline_tokens(row: dict) -> list[str]:
+    """Headline = the memory's own statement of what it is about (title/summary)."""
+    haystack = _headline_text(row).casefold()
+    return re.findall(r"[a-z0-9]{3,}", haystack)
+
+
+def _term_hit_tokens(terms: tuple[str, ...], tokens: Sequence[str]) -> tuple[str, ...]:
+    """Plan terms with a prefix hit in `tokens` — the rule `_query_term_hits` counts."""
+    return tuple(term for term in terms if any(value.startswith(term) for value in tokens))
+
+
+def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
+    return len(_term_hit_tokens(terms, _row_haystack_tokens(row)))
+
+
+# Straight quotes/backticks plus their curly counterparts (\u2018..\u201d), written as
+# escapes so the pattern cannot be confused with the ASCII characters around it.
+_QUOTED_SPANS = re.compile(
+    "`([^`]*)`|'([^']*)'|\"([^\"]*)\"|\u2018([^\u2019]*)\u2019|\u201c([^\u201d]*)\u201d"
+)
+
+
+def _quoted_tokens(text: object) -> list[str]:
+    """Tokens that appear inside quotes/backticks: a string mention, not a use.
+
+    A memory whose headline documents a quoted token ('format', a symbol, an error
+    id) is about that string; a request only reaches it by quoting the string too.
+    """
+    tokens: list[str] = []
+    for span in _QUOTED_SPANS.findall(str(text or "")):
+        fragment = next((part for part in span if part), "")
+        tokens.extend(_tokens(fragment))
+    return tokens
+
+
+def match_evidence(row: dict, plan: QueryMatchPlan) -> MatchEvidence:
+    """Separate "a candidate was found" from "this candidate contributes here".
+
+    Three independent ways a match is evidence about the request rather than
+    incidental keyword overlap:
+
+    * **headline** — a *specific* plan term (one the corpus does not spread
+      broadly) is confirmed by the row's own headline, the field that states what
+      the memory is about, and that headline occurrence is not a quoted mention
+      the request fails to quote back;
+    * **unique coincidence** — two or more *near-unique* plan terms (each naming
+      at most two memories) match the row anywhere;
+    * **no discrimination left** — every plan term spans more than half the corpus,
+      so no term can tell memories apart and a headline confirmation is all the
+      evidence the corpus holds (a young Brain home, or a request stated purely in
+      the corpus's common vocabulary).
+
+    Everything else is overlap on vocabulary the request happens to share with a
+    body: the live corpus produced the NB-OK-17 false injection that way, where 81
+    of 116 memories satisfied 2 of the 3 surviving plan terms ('tools', 'use',
+    'exactly') and none of them matched a headline.
+
+    A headline confirmation is at its weakest when it rests on **one matched plan
+    term**: a single mid-frequency word can be shared by a memory and a request that
+    are about different things. Such a row must clear one of two bars:
+
+    * the term is near-unique (``df <= 2``) — the word itself names one memory's own
+      subject matter, so only that memory can be the one the request means (a short
+      question such as "What does PYTHONHOME stand for?" lives here); or
+    * the row confirms every other content term the request carries, including terms
+      the corpus does not contain at all — the request asked for the row's own
+      subject and nothing else (VG-N06: "In one sentence, what is a Python dict?
+      Reply with one sentence." reached the PYTHONHOME memory on 'python' alone
+      while 'dict' and 'sentence' appear nowhere in the corpus).
+    """
+    if not plan.terms:
+        return MatchEvidence(contributing=True)
+    row_tokens = _row_haystack_tokens(row)
+    matched = _term_hit_tokens(plan.terms, row_tokens)
+    headline_matched = _term_hit_tokens(matched, _row_headline_tokens(row))
+    specific_matched = tuple(term for term in matched if plan.is_specific(term))
+    unique_matched = tuple(term for term in matched if plan.is_unique(term))
+    quoted = _term_hit_tokens(headline_matched, _quoted_tokens(_headline_text(row)))
+    request_quotes = _term_hit_tokens(headline_matched, _quoted_tokens(plan.text))
+    quoted_headline = tuple(term for term in quoted if term not in request_quotes)
+    headline_evidence = any(
+        term in specific_matched and term not in quoted_headline for term in headline_matched
+    )
+    if (
+        not headline_evidence
+        and not plan.has_discriminative_term()
+        and all(plan.is_ubiquitous(term) for term in plan.terms)
+    ):
+        headline_evidence = any(term not in quoted_headline for term in headline_matched)
+    contributing = headline_evidence or len(unique_matched) >= _UNIQUE_TERM_MIN_HITS
+    single_term = matched[0] if len(matched) == 1 else None
+    unexplained = plan.unexplained_content_terms(row_tokens) if single_term else ()
+    if contributing and single_term is not None and unexplained and not plan.is_unique(single_term):
+        contributing = False
+    return MatchEvidence(
+        contributing=contributing,
+        matched=matched,
+        headline_matched=headline_matched,
+        specific_matched=specific_matched,
+        unique_matched=unique_matched,
+        quoted_headline=quoted_headline,
+        unexplained_terms=unexplained,
+    )
+
+
+def row_contributes(row: dict, plan: QueryMatchPlan) -> bool:
+    """True when the row's match is evidence about the request, not overlap."""
+    return match_evidence(row, plan).contributing
+
+
+def contribution_filter(rows: list[dict], plan: QueryMatchPlan) -> list[dict]:
+    """Keep the rows whose lexical match is evidence about the request (PERF-01/RET-05).
+
+    Ranking decides which candidate is best; this decides whether any candidate
+    contributes at all, so retrieval and the injection decision stay separate. A
+    plan without terms carries no term evidence (FTS5 unavailable, non-tokenizable
+    query, linear-scan search): its rows pass through rather than being re-gated by
+    a plan that does not exist.
+    """
+    if not plan.terms:
+        return list(rows)
+    return [row for row in rows if match_evidence(row, plan).contributing]
 
 
 # Process-global FTS5 module availability. SQLite's FTS5 support is a
@@ -1220,15 +1596,44 @@ def _body_text(home: Path, row: dict) -> str:
     return content
 
 
-def _file_hash(home: Path, row: dict) -> str:
-    """sha256 of the canonical markdown file (whole file: any edit changes it)."""
+def _memory_file_bytes(home: Path, row: dict) -> bytes | None:
     path = (
         Path(home) / row["body_path"] if row.get("body_path") else _v1_path(home, row["memory_id"])
     )
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return path.read_bytes()
     except OSError:
+        return None
+
+
+def _file_hash(home: Path, row: dict) -> str:
+    """sha256 of the canonical markdown file with line endings normalized to LF.
+
+    Any content edit changes it; a checkout that only rewrites line endings
+    (git core.autocrlf) does not, so such a checkout cannot silently hide the
+    memory from retrieval as "stale".
+    """
+    data = _memory_file_bytes(home, row)
+    if data is None:
         return ""
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def file_hash_matches(indexed_hash: str | None, home: Path, row: dict) -> bool:
+    """True when an indexed hash still describes the canonical file.
+
+    Accepts the current LF-normalized hash and the pre-normalization raw-bytes
+    hash, so an index built before normalization keeps working until the next
+    reindex rewrites it.
+    """
+    if not indexed_hash:
+        return False
+    data = _memory_file_bytes(home, row)
+    if data is None:
+        return False
+    if indexed_hash == hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest():
+        return True
+    return indexed_hash == hashlib.sha256(data).hexdigest()
 
 
 def _index_memory_row(conn: sqlite3.Connection, home: Path, row: dict, *, file_hash: str) -> None:
@@ -1578,6 +1983,225 @@ def curate(
         _sync_file_metadata(home, row["body_path"], grade=new_grade, status=new_status)
     _safe_index(home, memory_id)  # derived index follows the canonical file
     return _row(home, memory_id) or {}
+
+
+def retire_memory(
+    home: Path,
+    memory_id: str,
+    *,
+    by: str | None = None,
+    kind: str | None = None,
+    reason: str,
+    effective_at: str | None = None,
+    source_ref: str | None = None,
+) -> dict:
+    """Mark a memory as superseded, corrected, or invalidated.
+
+    `kind` defaults to "supersedes" when `by` is given, "invalidates" when not.
+    `invalidates` requires `by is None`; other kinds require `by`.
+    `by == memory_id` is refused. The old row must have status in
+    (candidate, current, labile). The replacement (when given) must exist, be active,
+    and have evidence_grade != "REJECTED". Timestamps do not grant authority;
+    a weaker replacement triggers WEAKER_REPLACEMENT error. Scope must match or
+    be compatible. Returns the link row as a dict.
+    """
+    _ensure_migrated(home)
+    # Validate inputs
+    if not isinstance(reason, str) or not reason.strip():
+        raise BrainError("reason must be a non-empty string")
+    if by == memory_id:
+        raise BrainError("cannot retire a memory in favor of itself")
+
+    old_row = _row(home, memory_id)
+    if old_row is None:
+        raise BrainError(f"Unknown memory {memory_id!r}")
+
+    old_status = old_row.get("status")
+    if old_status not in ("candidate", "current", "labile"):
+        raise BrainError(
+            f"Cannot retire {memory_id}: already historical; retire its successor instead"
+        )
+
+    # Determine kind based on `by` parameter
+    eff_kind: str | None = kind
+    if by is not None:
+        if eff_kind is None:
+            eff_kind = "supersedes"
+        if eff_kind == "invalidates":
+            raise BrainError(
+                "invalidates kind requires by to be None; "
+                "cannot use 'invalidates' with a replacement"
+            )
+    else:
+        if eff_kind is None:
+            eff_kind = "invalidates"
+        if eff_kind != "invalidates":
+            raise BrainError(f"kind '{eff_kind}' requires 'by' to be provided")
+
+    if eff_kind not in SUPERSESSION_KINDS:
+        raise BrainError(f"kind must be one of {', '.join(SUPERSESSION_KINDS)}")
+
+    # Parse and validate effective_at
+    now = _utcnow()
+    recorded_at = now
+    if effective_at is not None:
+        try:
+            parsed = datetime.fromisoformat(effective_at.rstrip("Z"))
+        except (ValueError, AttributeError) as exc:
+            raise BrainError(
+                f"effective_at must be valid ISO-8601 (with or without trailing Z): "
+                f"{effective_at!r}"
+            ) from exc
+        # Normalize timezone-naive to UTC
+        parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        normalized_effective = parsed.isoformat()
+
+        # Refuse future times
+        now_dt = datetime.now(UTC)
+        if parsed > now_dt:
+            raise BrainError(f"effective_at cannot be in the future: {effective_at} > now")
+    else:
+        normalized_effective = recorded_at
+
+    # Validate and load replacement (if any)
+    new_row: dict | None = None
+    if by is not None:
+        new_row = _row(home, by)
+        if new_row is None:
+            raise BrainError(f"Unknown replacement memory {by!r}")
+
+        new_status = new_row.get("status")
+        if new_status not in ("candidate", "current", "labile"):
+            raise BrainError(f"Replacement {by} is not active; retire its successor instead")
+
+        new_grade = new_row.get("evidence_grade") or ""
+        if new_grade == "REJECTED":
+            raise BrainError(f"Replacement {by} has grade REJECTED")
+
+        # Authority compares effective grades: an unattested VERIFIED claim is
+        # TESTED here, so it can neither outrank nor block a TESTED record.
+        old_grade = effective_evidence_grade(old_row)
+        new_grade = effective_evidence_grade(new_row)
+        old_rank = _GRADE_RANK.get(old_grade, -2)
+        new_rank = _GRADE_RANK.get(new_grade, -2)
+        if new_rank < old_rank:
+            raise BrainError(
+                f"WEAKER_REPLACEMENT: cannot retire {old_grade} {memory_id} in favor of "
+                f"{new_grade} {by}; record a contradiction instead (MEM-04)"
+            )
+
+        # Check scope compatibility
+        old_scope = old_row.get("scope")
+        new_scope = new_row.get("scope")
+        if old_scope == "global" and new_scope != "global":
+            raise BrainError("SCOPE_MISMATCH: old memory is global; replacement must be global")
+        elif old_scope != "global" and new_scope != "global":
+            old_project = old_row.get("project_id")
+            if old_project and not _project_matches(new_row, old_project):
+                raise BrainError(
+                    f"SCOPE_MISMATCH: replacement {by} not visible in scope of {memory_id}"
+                )
+
+    # Write transaction
+    conn = db.connect(_dbfile(home))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # Insert the link row
+        conn.execute(
+            "INSERT INTO memory_supersessions "
+            "(old_memory_id, new_memory_id, kind, reason, effective_at, recorded_at, source_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (memory_id, by, eff_kind, reason, normalized_effective, recorded_at, source_ref),
+        )
+        # Update old memory status
+        updated = conn.execute(
+            "UPDATE memories SET status = 'superseded', updated_at = ? "
+            "WHERE memory_id = ? AND status IN ('candidate', 'current', 'labile')",
+            (now, memory_id),
+        )
+        if updated.rowcount != 1:
+            raise sqlite3.IntegrityError(f"{memory_id} changed status concurrently")
+        db.bump_memory_epoch(conn)
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise BrainError(f"Could not retire memory {memory_id}: {exc}") from exc
+    finally:
+        conn.close()
+
+    # Sync file metadata and reindex
+    _sync_file_metadata(
+        home, old_row["body_path"], grade=old_row["evidence_grade"], status="superseded"
+    )
+    _safe_index(home, memory_id)
+
+    # Return the link row as a dict
+    return {
+        "old_memory_id": memory_id,
+        "new_memory_id": by,
+        "kind": eff_kind,
+        "reason": reason,
+        "effective_at": normalized_effective,
+        "recorded_at": recorded_at,
+        "source_ref": source_ref,
+    }
+
+
+def supersession_of(home: Path, memory_id: str) -> dict | None:
+    """The link row whose old_memory_id matches, or None."""
+    conn = db.connect(_dbfile(home))
+    try:
+        row = conn.execute(
+            "SELECT old_memory_id, new_memory_id, kind, reason, effective_at, recorded_at, "
+            "source_ref FROM memory_supersessions WHERE old_memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def current_successor(home: Path, memory_id: str) -> str | None:
+    """Follow the chain of supersession links to the current record.
+
+    Returns the final id (when the chain ends in an active record),
+    None when the chain ends in an invalidates link or starts inactive.
+    Raises BrainError on loops (bounded at 64 hops).
+    """
+    _MAX_HOPS = 64
+    current_id = memory_id
+    visited = set()
+
+    for _ in range(_MAX_HOPS):
+        if current_id in visited:
+            raise BrainError(f"Loop detected in supersession chain starting from {memory_id}")
+        visited.add(current_id)
+
+        row = _row(home, current_id)
+        if row is None:
+            return None
+
+        # Check for outgoing link
+        link = supersession_of(home, current_id)
+        if link is not None:
+            # Follow the link
+            if link.get("kind") == "invalidates":
+                # Chain ends in invalidation
+                return None
+            new_id = link.get("new_memory_id")
+            if new_id is None:
+                # Should not happen if kind != invalidates, but be safe
+                return None
+            current_id = new_id
+        else:
+            # No link: this is the end of the chain
+            # Only return the id if it's active
+            if row.get("status") in ("candidate", "current", "labile"):
+                return current_id
+            else:
+                return None
+
+    raise BrainError(f"Supersession chain from {memory_id} exceeded {_MAX_HOPS} hops")
 
 
 def list_memories(
@@ -2432,10 +3056,7 @@ def _score_row(
                 b = reconsolidation.compute_base_level_activation(
                     Path(home), row.get("memory_id", "")
                 )
-                if b <= -10.0:
-                    p_need = 0.5
-                else:
-                    p_need = reconsolidation.compute_p_need(Path(home), row.get("memory_id", ""))
+                p_need = 0.5 if b <= -10.0 else reconsolidation.p_need_from_activation(b)
             except Exception:
                 p_need = 0.5
         if p_need is None:
@@ -2468,6 +3089,19 @@ def _rank_rows(
         else None
     )
     w = weights if weights is not None else _DEFAULT_RETRIEVAL_CONFIG.weights
+    if home is not None and ("freshness" in score_terms or "decision" in score_terms):
+        from . import reconsolidation
+
+        # One connection for every row's activation history instead of one per row.
+        pending = [str(r.get("memory_id") or "") for r in rows if r.get("_p_need") is None]
+        try:
+            activations = reconsolidation.base_level_activations(Path(home), pending)
+        except Exception:
+            activations = {}
+        for r in rows:
+            b = activations.get(str(r.get("memory_id") or ""))
+            if r.get("_p_need") is None and b is not None:
+                r["_p_need"] = 0.5 if b <= -10.0 else reconsolidation.p_need_from_activation(b)
     scored = []
     for index, row in enumerate(rows):
         row["_bm25"] = row.get("_bm25")
@@ -2490,6 +3124,7 @@ def search_memories(
     top_k: int | None = None,
     max_tokens: int | None = None,
     history_omissions: list[dict] | None = None,
+    as_of: str | None = None,
 ) -> list[dict]:
     """Search semantic memories (plan Phase 6 + Phase 7 hard filters).
 
@@ -2525,6 +3160,11 @@ def search_memories(
     the _CONTEXT_WINDOW_TOKENS assumption); explicit arguments override the
     config; absent/invalid config falls back to hardcoded defaults.
 
+    `as_of`: optional ISO-8601 timestamp. When given, returned rows are filtered
+    to those visible at that time (created_at <= as_of and either active or
+    superseded after that time). Archived rows are excluded. Rows carry an
+    `as_of` key. Records have no observed_at, so placement in time uses created_at.
+
     Known divergence: FTS5 matches word prefixes, so a substring in the
     middle of a word (e.g. "arc" inside "sidecar") matches the linear
     scan but not FTS5.
@@ -2536,29 +3176,36 @@ def search_memories(
     eff_top_k = top_k if top_k is not None else cfg.top_k
     eff_max_tokens = max_tokens if max_tokens is not None else cfg.max_tokens
     _ensure_migrated(home)
+
+    # Parse as_of if given
+    as_of_dt: datetime | None = None
+    normalized_as_of: str | None = None
+    if as_of is not None:
+        try:
+            parsed = datetime.fromisoformat(as_of.rstrip("Z"))
+        except (ValueError, AttributeError) as exc:
+            raise BrainError(f"as_of must be valid ISO-8601: {as_of!r}") from exc
+        parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        as_of_dt = parsed
+        normalized_as_of = parsed.isoformat()
+
+    # Run search with include_history if as_of is given
+    eff_include_history = include_history or as_of is not None
     conn = db.connect(_dbfile(home))
     try:
         if _fts_available(conn):
-            match_expr, query_terms, msm_required = _query_plan(term, conn=conn)
-            # Public build_query deliberately declines one-term input.  Keep
-            # the established single-token FTS path for search_memories.
-            if match_expr is None:
-                single = _query_candidates(term)
-                if len(single) == 1:
-                    query_terms = (single[0],)
-                    msm_required = 1
-                    match_expr = f'"{single[0]}"*'
+            plan = _plan_with_stats(term, conn=conn)
             total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
             indexed = _fts_count(conn)
-            if match_expr is not None and (indexed > 0 or total == 0):
-                return _search_fts(
+            if plan.expression is not None and (indexed > 0 or total == 0):
+                results = _search_fts(
                     conn,
-                    match_expr,
+                    plan.expression,
                     term,
-                    query_terms=query_terms,
-                    msm_required=msm_required,
+                    query_terms=plan.terms,
+                    msm_required=plan.required,
                     project_id=project_id,
-                    include_history=include_history,
+                    include_history=eff_include_history,
                     include_duplicates=include_duplicates,
                     score_terms=terms,
                     weights=cfg.weights,
@@ -2567,17 +3214,20 @@ def search_memories(
                     home=home,
                     history_omissions=history_omissions,
                 )
+                return _apply_as_of_filter(
+                    results, as_of_dt, normalized_as_of, include_history, home=home
+                )
             # Empty/small/non-ASCII queries and an unbuilt index use the
             # existing linear fallback.
     except sqlite3.Error:
         pass  # FTS path broken for any reason -> linear fallback below
     finally:
         conn.close()
-    return _search_linear(
+    results = _search_linear(
         home,
         term,
         project_id=project_id,
-        include_history=include_history,
+        include_history=eff_include_history,
         include_duplicates=include_duplicates,
         score_terms=terms,
         weights=cfg.weights,
@@ -2585,6 +3235,107 @@ def search_memories(
         max_tokens=eff_max_tokens,
         history_omissions=history_omissions,
     )
+    return _apply_as_of_filter(results, as_of_dt, normalized_as_of, include_history, home=home)
+
+
+def _apply_as_of_filter(
+    rows: list[dict],
+    as_of_dt: datetime | None,
+    normalized_as_of: str | None,
+    include_history: bool,
+    home: Path | None = None,
+) -> list[dict]:
+    """Apply as_of filtering and load supersession links.
+
+    When include_history or as_of is set, load all supersession links in one query
+    and annotate superseded rows with link info.
+    """
+    links: dict[str, dict] = {}
+    if rows and (as_of_dt is not None or include_history):
+        # Load all links in one query
+        memory_ids = [r.get("memory_id") for r in rows if r.get("memory_id")]
+        if memory_ids and home:
+            conn = db.connect(_dbfile(home))
+            try:
+                placeholders = ",".join("?" * len(memory_ids))
+                link_rows = conn.execute(
+                    f"SELECT old_memory_id, new_memory_id, kind, reason, effective_at "
+                    f"FROM memory_supersessions WHERE old_memory_id IN ({placeholders})",
+                    memory_ids,
+                ).fetchall()
+                links = {r["old_memory_id"]: dict(r) for r in link_rows}
+            except sqlite3.Error:
+                pass  # If link query fails, continue without link info
+            finally:
+                conn.close()
+
+    result: list[dict] = []
+    if as_of_dt is None:
+        # include_history only: annotate with link info
+        for row in rows:
+            mid = row.get("memory_id")
+            if row.get("status") == "superseded" and mid in links:
+                link = links[mid]
+                row["superseded_by"] = link.get("new_memory_id")
+                row["supersession_kind"] = link.get("kind")
+                row["supersession_reason"] = link.get("reason")
+                row["supersession_effective_at"] = link.get("effective_at")
+            result.append(row)
+    else:
+        # as_of filtering
+        for row in rows:
+            # Row must not be archived
+            if row.get("status") == "archived":
+                continue
+            # created_at must be <= as_of
+            created_str = row.get("created_at")
+            if created_str:
+                try:
+                    created_dt = datetime.fromisoformat(created_str.rstrip("Z"))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=UTC)
+                    else:
+                        created_dt = created_dt.astimezone(UTC)
+                    if created_dt > as_of_dt:  # type: ignore[operator]
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            # Keep if active OR if superseded and link effective_at > as_of
+            status = row.get("status")
+            if status in ("candidate", "current", "labile"):
+                result.append(row)
+                row["as_of"] = normalized_as_of
+                # Annotate with link info if present
+                mid = row.get("memory_id")
+                if mid in links:
+                    link = links[mid]
+                    row["superseded_by"] = link.get("new_memory_id")
+                    row["supersession_kind"] = link.get("kind")
+                    row["supersession_reason"] = link.get("reason")
+                    row["supersession_effective_at"] = link.get("effective_at")
+            elif status == "superseded":
+                mid = row.get("memory_id")
+                if mid in links:
+                    link = links[mid]
+                    link_effective = link.get("effective_at")
+                    if link_effective:
+                        try:
+                            link_eff_dt = datetime.fromisoformat(link_effective.rstrip("Z"))
+                            if link_eff_dt.tzinfo is None:
+                                link_eff_dt = link_eff_dt.replace(tzinfo=UTC)
+                            else:
+                                link_eff_dt = link_eff_dt.astimezone(UTC)
+                            # Keep if link effective_at > as_of
+                            if link_eff_dt > as_of_dt:  # type: ignore[operator]
+                                result.append(row)
+                                row["as_of"] = normalized_as_of
+                                row["superseded_by"] = link.get("new_memory_id")
+                                row["supersession_kind"] = link.get("kind")
+                                row["supersession_reason"] = link.get("reason")
+                                row["supersession_effective_at"] = link.get("effective_at")
+                        except (ValueError, TypeError):
+                            pass
+    return result
 
 
 def _filter_sql(project_id: str | None, include_history: bool) -> tuple[str, list[object]]:
@@ -2701,7 +3452,7 @@ def _search_fts(
         row = dict(indexed)
         indexed_hash = row.pop("_indexed_file_hash")
         if canonical_home is None or (
-            indexed_hash and indexed_hash == _file_hash(canonical_home, row)
+            file_hash_matches(indexed_hash, canonical_home, row)
         ):
             row["file_hash"] = indexed_hash
             current_rows.append(row)
@@ -2710,6 +3461,7 @@ def _search_fts(
         required = msm_required if msm_required is not None else math.ceil(0.5 * len(query_terms))
         rows = [row for row in rows if _query_term_hits(row, query_terms) >= required]
     rows = _partition_history(rows, include_history, history_omissions)
+
     # Phase 10: conflict map BEFORE dedupe (family collapse must not hide a
     # conflicting sibling; the surviving row carries the marker).
     conflicts = _contradiction_map(rows)

@@ -662,3 +662,23 @@ def test_wide_vector_pool_keeps_selection_explanation_replayable(brain_home):
         row["memory_id"] for row in reconstructed[: evidence["parameters"]["top_k"]]
     ]
     assert len(result.matches) < len(vectors)
+
+
+def test_close_cached_connections_releases_home_handles(brain_home):
+    """A home's cached negative-cache connection can be released (Windows deletion)."""
+    memory_id = add_memory(brain_home, "Cache release rule", "release cached handles")
+    curate(brain_home, memory_id, status="current")
+    retriever = HybridCascadeRetriever()
+    # A first search over this home opens (and caches) its negative-cache connection.
+    retriever.retrieve(brain_home, "cache release rule", project_id=None)
+    assert str(brain_home.resolve()) in retriever._cache_connections
+
+    assert retriever.close_cached_connections(brain_home) == 1
+    assert str(brain_home.resolve()) not in retriever._cache_connections
+    assert retriever.close_cached_connections(brain_home) == 0
+    assert retriever.close_cached_connections() == 0
+
+    # The released home is re-opened on demand, so releasing is not destructive.
+    again = retriever.retrieve(brain_home, "cache release rule", project_id=None)
+    assert again.retrieval_error is False
+    assert retriever.close_cached_connections(brain_home) == 1

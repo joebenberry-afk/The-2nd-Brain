@@ -1,0 +1,50 @@
+# skills.toml — skill lifecycle defaults
+# Status: [router].max_active is ENFORCED (router.py reads it per route() call,
+# fallback 3; CLI --max-active overrides). All other keys remain documented
+# defaults — no live runtime reader yet
+# (see proof/reports/config-consumption.md).
+schema_version = 1
+
+[lifecycle]
+stages = ["candidate", "shadow", "staged", "approved", "retired"]
+adoption = ["shadow", "advisory", "active"]   # plan §57
+scopes = ["global", "domain", "project", "model"]
+
+[quality]
+# every skill must carry these sections (plan §60)
+required_sections = ["purpose", "positive_triggers", "negative_triggers",
+                     "inputs", "procedure", "tools", "safety",
+                     "verification", "output", "references"]
+
+[gardener]
+# periodic sweep targets (plan §62); bounded skill bank
+sweep = ["dead_skills", "overlap", "false_triggers", "never_used",
+         "negative_roi", "duplicates", "too_broad", "too_narrow",
+         "model_specific_quirks"]
+
+[router]
+max_active = 3      # ENFORCED — router.py resolves [router] max_active from this
+                    # file per route() call (invalid/absent -> 3); CLI --max-active
+                    # overrides it (Phase 13)
+
+[visibility]
+mode = "shadow"     # SHADOW/REPORT-ONLY default (plan §56/§113 "shadow route first").
+                    # skills.py resolves this per build_plan() call (invalid/absent -> shadow,
+                    # fail-safe). "enforced" is only ever set by the controlled current-OMP-primary
+                    # evaluation harness for the P3.16 two-phase proof — flipping this file's
+                    # shipped default is a separate promotion decision, not part of this task.
+
+# Lean Code Runtime Kernel activation (plan §11 / §24)
+# ENFORCED — lean_runtime.py reads [lean] eval per event (fallback inert)
+# V3 shipping default: OFF. The kernel is always-on advisory text appended to
+# every driver/worker turn; no S2 measurement shows a benefit that pays for it,
+# so the deployable profile does not inject it. Nothing is deleted: the
+# canonical kernel still lives in skills/<lifecycle>/lean-code/SKILL.md and is
+# re-enabled per environment with `SECOND_BRAIN_LEAN=advisory` or by setting
+# this value back to "advisory" (the V3 harness runs that as `candidate_lean`).
+[lean]
+eval = "advisory"
+# Lean Opportunity Controller (T3.4 / Deep Upgrade Plan U1)
+# Levels: NOOP (0 tokens), NUDGE (frozen line), FULL (runtime kernel) in TAIL slot
+opportunity = true
+

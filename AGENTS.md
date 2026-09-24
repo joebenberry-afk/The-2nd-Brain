@@ -36,6 +36,23 @@ projects (that is Phase 3+ and lives elsewhere).
 6. **Stop conditions.** If a plan STOP condition fires (see plan §147), stop
    and report; do not improvise around it.
 
+## Jev audits (supplementary)
+
+Jev (`jev-latest`, loaded through the `typesafe-ai` skill) is a supplementary
+claim-versus-evidence auditor used at meaningful completion/review milestones.
+It is not a per-edit check and not a replacement for deterministic checks or
+reviewers.
+
+- Give it concrete evidence excerpts and identifiers, not the agent's own
+  summary of its work.
+- Batch related independent judgments into one request.
+- Do not call it for facts a deterministic check can settle.
+- Findings direct further investigation. They do not authorize mutation,
+  establish executor settlement or cleanup completion, release ownership,
+  replace tests, or approve production activation.
+- Resolve disagreements against the underlying evidence; confidence alone is
+  not proof.
+
 ## Environment gotchas (this machine)
 
 - The user-level `PYTHONHOME` env var points at a corrupted uv CPython 3.11

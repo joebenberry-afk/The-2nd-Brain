@@ -1,0 +1,1451 @@
+{
+  "arm": "hybrid",
+  "case_file": {
+    "count": 21,
+    "path": "outputs\\reports\\v3-s2\\e02\\cases.used.jsonl",
+    "sha256": "f1b256b94be8fff5615ca9db1b0e74cdfd245dadcd18fdc2bb00550094df3ccc"
+  },
+  "cases": [
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-16647236fa3c",
+          "mem-a97fe838817c"
+        ],
+        "source": "gate+mirror",
+        "tokens": 470
+      },
+      "expect": [],
+      "id": "D01",
+      "rank_ms": 131.745,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-16647236fa3c",
+          "mem-a97fe838817c",
+          "mem-e147d49d5c09",
+          "mem-5ee4c7712fa3",
+          "mem-ca894eda5772",
+          "mem-45d2ab7eb2b4",
+          "mem-f9900afdcacf",
+          "mem-494903a96872",
+          "mem-27a63457268a"
+        ],
+        "selected_ids": [
+          "mem-16647236fa3c",
+          "mem-a97fe838817c"
+        ],
+        "stage": "OK",
+        "tokens": 470
+      },
+      "top_ids": [
+        "mem-16647236fa3c",
+        "mem-a97fe838817c",
+        "mem-f21a28b715f1",
+        "mem-e147d49d5c09",
+        "mem-5ee4c7712fa3",
+        "mem-ca894eda5772",
+        "mem-45d2ab7eb2b4",
+        "mem-f9900afdcacf",
+        "mem-494903a96872",
+        "mem-27a63457268a"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_short",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2"
+        ],
+        "source": "gate+mirror",
+        "tokens": 646
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D02",
+      "rank_ms": 25.656,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2",
+          "mem-3848b16778bd",
+          "mem-812f9bb08444",
+          "mem-36f8b61546e8",
+          "mem-ca894eda5772",
+          "mem-494903a96872",
+          "mem-c92ee39a10a1"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2"
+        ],
+        "stage": "OK",
+        "tokens": 646
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-29557f93448f",
+        "mem-e6a79159acd1",
+        "mem-ad3d80115ee2",
+        "mem-3848b16778bd",
+        "mem-812f9bb08444",
+        "mem-36f8b61546e8",
+        "mem-ca894eda5772",
+        "mem-494903a96872",
+        "mem-c92ee39a10a1"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_long_mixed",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-e0ee543da163",
+          "mem-3693230ebaf0",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1"
+        ],
+        "source": "gate+mirror",
+        "tokens": 773
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D03",
+      "rank_ms": 48.65,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-e0ee543da163",
+          "mem-3693230ebaf0",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-494903a96872",
+          "mem-ad3d80115ee2",
+          "mem-4216c4ad856b",
+          "mem-d2f7df353130",
+          "mem-28454b0abf5e"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-e0ee543da163",
+          "mem-3693230ebaf0",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1"
+        ],
+        "stage": "OK",
+        "tokens": 773
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-e0ee543da163",
+        "mem-3693230ebaf0",
+        "mem-29557f93448f",
+        "mem-e6a79159acd1",
+        "mem-494903a96872",
+        "mem-ad3d80115ee2",
+        "mem-4216c4ad856b",
+        "mem-d2f7df353130",
+        "mem-28454b0abf5e"
+      ],
+      "top_scores": [
+        0.031778,
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_imperative",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-494903a96872"
+        ],
+        "source": "gate+mirror",
+        "tokens": 795
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D04",
+      "rank_ms": 29.134,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-494903a96872",
+          "mem-ad3d80115ee2",
+          "mem-f9900afdcacf",
+          "mem-c070eabfb367",
+          "mem-3848b16778bd",
+          "mem-3693230ebaf0"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-494903a96872"
+        ],
+        "stage": "OK",
+        "tokens": 795
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-29557f93448f",
+        "mem-494903a96872",
+        "mem-ad3d80115ee2",
+        "mem-f9900afdcacf",
+        "mem-b10a5474054e",
+        "mem-c070eabfb367",
+        "mem-3848b16778bd",
+        "mem-3693230ebaf0",
+        "mem-f9b4deb601eb"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_long_irrelevant_hit",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2"
+        ],
+        "source": "gate+mirror",
+        "tokens": 646
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D05",
+      "rank_ms": 46.325,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2",
+          "mem-5ee4c7712fa3",
+          "mem-3693230ebaf0",
+          "mem-771d74aaa3fd",
+          "mem-3848b16778bd",
+          "mem-494903a96872",
+          "mem-d7311da506a7"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-e6a79159acd1",
+          "mem-ad3d80115ee2"
+        ],
+        "stage": "OK",
+        "tokens": 646
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-29557f93448f",
+        "mem-e6a79159acd1",
+        "mem-ad3d80115ee2",
+        "mem-5ee4c7712fa3",
+        "mem-3693230ebaf0",
+        "mem-771d74aaa3fd",
+        "mem-3848b16778bd",
+        "mem-494903a96872",
+        "mem-d7311da506a7"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_direct",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-f5ad9ae46d7c",
+          "mem-bde4dc4aee9e"
+        ],
+        "source": "gate+mirror",
+        "tokens": 739
+      },
+      "expect": [],
+      "id": "D06",
+      "rank_ms": 35.926,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-f5ad9ae46d7c",
+          "mem-bde4dc4aee9e",
+          "mem-60c403ed0839",
+          "mem-e147d49d5c09",
+          "mem-3d8ffbd6538d",
+          "mem-ca894eda5772",
+          "mem-b67de5057f76",
+          "mem-e6a79159acd1"
+        ],
+        "selected_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-f5ad9ae46d7c",
+          "mem-bde4dc4aee9e"
+        ],
+        "stage": "OK",
+        "tokens": 739
+      },
+      "top_ids": [
+        "mem-5ee4c7712fa3",
+        "mem-f5ad9ae46d7c",
+        "mem-bde4dc4aee9e",
+        "mem-60c403ed0839",
+        "mem-e147d49d5c09",
+        "mem-3d8ffbd6538d",
+        "mem-ca894eda5772",
+        "mem-b10a5474054e",
+        "mem-b67de5057f76",
+        "mem-e6a79159acd1"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a97fe838817c",
+          "mem-15170d4924df"
+        ],
+        "source": "gate+mirror",
+        "tokens": 476
+      },
+      "expect": [],
+      "id": "D07",
+      "rank_ms": 16.426,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a97fe838817c",
+          "mem-15170d4924df",
+          "mem-4216c4ad856b",
+          "mem-1222283b65da",
+          "mem-e147d49d5c09",
+          "mem-7daaa380f599",
+          "mem-b0d6cc3de0ab",
+          "mem-a8ead3de410f",
+          "mem-8adbc449f9e0"
+        ],
+        "selected_ids": [
+          "mem-a97fe838817c",
+          "mem-15170d4924df"
+        ],
+        "stage": "OK",
+        "tokens": 476
+      },
+      "top_ids": [
+        "mem-a97fe838817c",
+        "mem-15170d4924df",
+        "mem-4216c4ad856b",
+        "mem-1222283b65da",
+        "mem-e147d49d5c09",
+        "mem-7daaa380f599",
+        "mem-b0d6cc3de0ab",
+        "mem-6849e6dc3a1f",
+        "mem-a8ead3de410f",
+        "mem-8adbc449f9e0"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_format",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-3d8ffbd6538d"
+        ],
+        "source": "gate+mirror",
+        "tokens": 205
+      },
+      "expect": [],
+      "id": "D08",
+      "rank_ms": 46.108,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-3d8ffbd6538d",
+          "mem-478737e47cf9",
+          "mem-b67de5057f76",
+          "mem-7ee245204a5e",
+          "mem-6b07e0e7d311",
+          "mem-60c403ed0839",
+          "mem-3693230ebaf0",
+          "mem-f5ad9ae46d7c"
+        ],
+        "selected_ids": [
+          "mem-3d8ffbd6538d"
+        ],
+        "stage": "OK",
+        "tokens": 205
+      },
+      "top_ids": [
+        "mem-3d8ffbd6538d",
+        "mem-478737e47cf9",
+        "mem-b67de5057f76",
+        "mem-6849e6dc3a1f",
+        "mem-7ee245204a5e",
+        "mem-6b07e0e7d311",
+        "mem-60c403ed0839",
+        "mem-27fc58215bba",
+        "mem-3693230ebaf0",
+        "mem-f5ad9ae46d7c"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_short",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-b389ff7ff08b",
+          "mem-5bc2da33777a"
+        ],
+        "source": "gate+mirror",
+        "tokens": 665
+      },
+      "expect": [
+        "mem-5ee4c7712fa3"
+      ],
+      "id": "D09",
+      "rank_ms": 29.823,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-b389ff7ff08b",
+          "mem-5bc2da33777a",
+          "mem-e0ee543da163",
+          "mem-e6a79159acd1",
+          "mem-333cb2aae270",
+          "mem-b7011ab797ac",
+          "mem-42f674862947",
+          "mem-d7311da506a7",
+          "mem-ca894eda5772"
+        ],
+        "selected_ids": [
+          "mem-5ee4c7712fa3",
+          "mem-b389ff7ff08b",
+          "mem-5bc2da33777a"
+        ],
+        "stage": "OK",
+        "tokens": 665
+      },
+      "top_ids": [
+        "mem-5ee4c7712fa3",
+        "mem-b389ff7ff08b",
+        "mem-5bc2da33777a",
+        "mem-e0ee543da163",
+        "mem-e6a79159acd1",
+        "mem-333cb2aae270",
+        "mem-b7011ab797ac",
+        "mem-42f674862947",
+        "mem-d7311da506a7",
+        "mem-ca894eda5772"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_overlap",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a6c1b8123c08",
+          "mem-d7311da506a7",
+          "mem-60c403ed0839"
+        ],
+        "source": "gate+mirror",
+        "tokens": 667
+      },
+      "expect": [],
+      "id": "D10",
+      "rank_ms": 30.822,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a6c1b8123c08",
+          "mem-d7311da506a7",
+          "mem-60c403ed0839",
+          "mem-5ee4c7712fa3",
+          "mem-e0ee543da163",
+          "mem-174b3f5abbba",
+          "mem-812f9bb08444",
+          "mem-e6a79159acd1",
+          "mem-15170d4924df"
+        ],
+        "selected_ids": [
+          "mem-a6c1b8123c08",
+          "mem-d7311da506a7",
+          "mem-60c403ed0839"
+        ],
+        "stage": "OK",
+        "tokens": 667
+      },
+      "top_ids": [
+        "mem-a6c1b8123c08",
+        "mem-d7311da506a7",
+        "mem-60c403ed0839",
+        "mem-5ee4c7712fa3",
+        "mem-e0ee543da163",
+        "mem-f21a28b715f1",
+        "mem-174b3f5abbba",
+        "mem-812f9bb08444",
+        "mem-e6a79159acd1",
+        "mem-15170d4924df"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_sessions",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-812f9bb08444",
+          "mem-5ee4c7712fa3",
+          "mem-b7011ab797ac",
+          "mem-b389ff7ff08b"
+        ],
+        "source": "gate+mirror",
+        "tokens": 793
+      },
+      "expect": [
+        "mem-812f9bb08444"
+      ],
+      "id": "D11",
+      "rank_ms": 29.405,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-812f9bb08444",
+          "mem-5ee4c7712fa3",
+          "mem-b7011ab797ac",
+          "mem-b389ff7ff08b",
+          "mem-a6c1b8123c08",
+          "mem-42f674862947",
+          "mem-60c403ed0839",
+          "mem-e6a79159acd1",
+          "mem-5bc2da33777a",
+          "mem-ca894eda5772"
+        ],
+        "selected_ids": [
+          "mem-812f9bb08444",
+          "mem-5ee4c7712fa3",
+          "mem-b7011ab797ac",
+          "mem-b389ff7ff08b"
+        ],
+        "stage": "OK",
+        "tokens": 793
+      },
+      "top_ids": [
+        "mem-812f9bb08444",
+        "mem-5ee4c7712fa3",
+        "mem-b7011ab797ac",
+        "mem-b389ff7ff08b",
+        "mem-a6c1b8123c08",
+        "mem-42f674862947",
+        "mem-60c403ed0839",
+        "mem-e6a79159acd1",
+        "mem-5bc2da33777a",
+        "mem-ca894eda5772"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_recursion",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-d2f7df353130",
+          "mem-a8ead3de410f"
+        ],
+        "source": "gate+mirror",
+        "tokens": 422
+      },
+      "expect": [
+        "mem-d2f7df353130"
+      ],
+      "id": "D12",
+      "rank_ms": 24.435,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-d2f7df353130",
+          "mem-a8ead3de410f",
+          "mem-46448b8c4ab7",
+          "mem-7daaa380f599",
+          "mem-93c5c68d979b",
+          "mem-16647236fa3c",
+          "mem-26a01ba54b6f",
+          "mem-bde4dc4aee9e",
+          "mem-8adbc449f9e0"
+        ],
+        "selected_ids": [
+          "mem-d2f7df353130",
+          "mem-a8ead3de410f"
+        ],
+        "stage": "OK",
+        "tokens": 422
+      },
+      "top_ids": [
+        "mem-d2f7df353130",
+        "mem-a8ead3de410f",
+        "mem-46448b8c4ab7",
+        "mem-7daaa380f599",
+        "mem-93c5c68d979b",
+        "mem-f9b4deb601eb",
+        "mem-16647236fa3c",
+        "mem-26a01ba54b6f",
+        "mem-bde4dc4aee9e",
+        "mem-8adbc449f9e0"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_fanout",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-f745bcb2eff2",
+          "mem-c070eabfb367"
+        ],
+        "source": "gate+mirror",
+        "tokens": 677
+      },
+      "expect": [
+        "mem-f745bcb2eff2"
+      ],
+      "id": "D13",
+      "rank_ms": 36.245,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-f745bcb2eff2",
+          "mem-c070eabfb367",
+          "mem-e99e58420424",
+          "mem-494903a96872",
+          "mem-3693230ebaf0",
+          "mem-b7011ab797ac",
+          "mem-f9900afdcacf",
+          "mem-bb634354ec69",
+          "mem-15170d4924df",
+          "mem-771d74aaa3fd"
+        ],
+        "selected_ids": [
+          "mem-f745bcb2eff2",
+          "mem-c070eabfb367"
+        ],
+        "stage": "OK",
+        "tokens": 677
+      },
+      "top_ids": [
+        "mem-f745bcb2eff2",
+        "mem-c070eabfb367",
+        "mem-e99e58420424",
+        "mem-494903a96872",
+        "mem-3693230ebaf0",
+        "mem-b7011ab797ac",
+        "mem-f9900afdcacf",
+        "mem-bb634354ec69",
+        "mem-15170d4924df",
+        "mem-771d74aaa3fd"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "memory_long_imperative",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd"
+        ],
+        "source": "gate+mirror",
+        "tokens": 444
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D14",
+      "rank_ms": 41.472,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd",
+          "mem-494903a96872",
+          "mem-ad3d80115ee2",
+          "mem-e0ee543da163",
+          "mem-f9900afdcacf",
+          "mem-36f8b61546e8",
+          "mem-812f9bb08444",
+          "mem-ca894eda5772"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd"
+        ],
+        "stage": "OK",
+        "tokens": 444
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-29557f93448f",
+        "mem-3848b16778bd",
+        "mem-494903a96872",
+        "mem-ad3d80115ee2",
+        "mem-e0ee543da163",
+        "mem-f9900afdcacf",
+        "mem-36f8b61546e8",
+        "mem-812f9bb08444",
+        "mem-ca894eda5772"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_format",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-27a63457268a"
+        ],
+        "source": "gate+mirror",
+        "tokens": 411
+      },
+      "expect": [],
+      "id": "D15",
+      "rank_ms": 38.591,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-27a63457268a",
+          "mem-54e98fd1c79b",
+          "mem-a4e1710e19d6",
+          "mem-f50220c8343f",
+          "mem-7a29c44e6be5",
+          "mem-46205483dd56",
+          "mem-389bf41a9601",
+          "mem-3d8ffbd6538d"
+        ],
+        "selected_ids": [
+          "mem-27a63457268a"
+        ],
+        "stage": "OK",
+        "tokens": 411
+      },
+      "top_ids": [
+        "mem-f9b4deb601eb",
+        "mem-27a63457268a",
+        "mem-54e98fd1c79b",
+        "mem-a4e1710e19d6",
+        "mem-f50220c8343f",
+        "mem-f21a28b715f1",
+        "mem-7a29c44e6be5",
+        "mem-46205483dd56",
+        "mem-389bf41a9601",
+        "mem-3d8ffbd6538d"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_summarize",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-60c403ed0839",
+          "mem-3d8ffbd6538d",
+          "mem-7ee245204a5e",
+          "mem-174b3f5abbba"
+        ],
+        "source": "gate+mirror",
+        "tokens": 671
+      },
+      "expect": [],
+      "id": "D16",
+      "rank_ms": 37.673,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-60c403ed0839",
+          "mem-3d8ffbd6538d",
+          "mem-7ee245204a5e",
+          "mem-174b3f5abbba",
+          "mem-478737e47cf9",
+          "mem-3693230ebaf0",
+          "mem-c92ee39a10a1",
+          "mem-771d74aaa3fd",
+          "mem-918af823ea7d",
+          "mem-b7011ab797ac"
+        ],
+        "selected_ids": [
+          "mem-60c403ed0839",
+          "mem-3d8ffbd6538d",
+          "mem-7ee245204a5e",
+          "mem-174b3f5abbba"
+        ],
+        "stage": "OK",
+        "tokens": 671
+      },
+      "top_ids": [
+        "mem-60c403ed0839",
+        "mem-3d8ffbd6538d",
+        "mem-7ee245204a5e",
+        "mem-174b3f5abbba",
+        "mem-478737e47cf9",
+        "mem-3693230ebaf0",
+        "mem-c92ee39a10a1",
+        "mem-771d74aaa3fd",
+        "mem-918af823ea7d",
+        "mem-b7011ab797ac"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_rewrite",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-174b3f5abbba",
+          "mem-bb634354ec69",
+          "mem-a6c1b8123c08",
+          "mem-3693230ebaf0"
+        ],
+        "source": "gate+mirror",
+        "tokens": 691
+      },
+      "expect": [],
+      "id": "D17",
+      "rank_ms": 25.816,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-174b3f5abbba",
+          "mem-bb634354ec69",
+          "mem-a6c1b8123c08",
+          "mem-3693230ebaf0",
+          "mem-478737e47cf9",
+          "mem-f5ad9ae46d7c",
+          "mem-eaaccf45995d",
+          "mem-e0ee543da163"
+        ],
+        "selected_ids": [
+          "mem-174b3f5abbba",
+          "mem-bb634354ec69",
+          "mem-a6c1b8123c08",
+          "mem-3693230ebaf0"
+        ],
+        "stage": "OK",
+        "tokens": 691
+      },
+      "top_ids": [
+        "mem-174b3f5abbba",
+        "mem-bb634354ec69",
+        "mem-6849e6dc3a1f",
+        "mem-a6c1b8123c08",
+        "mem-27fc58215bba",
+        "mem-3693230ebaf0",
+        "mem-478737e47cf9",
+        "mem-f5ad9ae46d7c",
+        "mem-eaaccf45995d",
+        "mem-e0ee543da163"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_math",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-27a63457268a",
+          "mem-dfadf5ddecd9"
+        ],
+        "source": "gate+mirror",
+        "tokens": 640
+      },
+      "expect": [],
+      "id": "D18",
+      "rank_ms": 28.219,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-27a63457268a",
+          "mem-dfadf5ddecd9",
+          "mem-6557c215d72b",
+          "mem-33ea5e925ac9",
+          "mem-2af778b663f3",
+          "mem-42f674862947",
+          "mem-389bf41a9601",
+          "mem-a97fe838817c",
+          "mem-e99e58420424",
+          "mem-c7255da7fefb"
+        ],
+        "selected_ids": [
+          "mem-27a63457268a",
+          "mem-dfadf5ddecd9"
+        ],
+        "stage": "OK",
+        "tokens": 640
+      },
+      "top_ids": [
+        "mem-27a63457268a",
+        "mem-dfadf5ddecd9",
+        "mem-6557c215d72b",
+        "mem-33ea5e925ac9",
+        "mem-2af778b663f3",
+        "mem-42f674862947",
+        "mem-389bf41a9601",
+        "mem-a97fe838817c",
+        "mem-e99e58420424",
+        "mem-c7255da7fefb"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "no_benefit_echo",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-33ea5e925ac9",
+          "mem-e99e58420424",
+          "mem-16647236fa3c"
+        ],
+        "source": "gate+mirror",
+        "tokens": 759
+      },
+      "expect": [],
+      "id": "D19",
+      "rank_ms": 44.732,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-33ea5e925ac9",
+          "mem-e99e58420424",
+          "mem-16647236fa3c",
+          "mem-2af778b663f3",
+          "mem-93c5c68d979b",
+          "mem-a97fe838817c",
+          "mem-27a63457268a",
+          "mem-dfadf5ddecd9",
+          "mem-c070eabfb367"
+        ],
+        "selected_ids": [
+          "mem-33ea5e925ac9",
+          "mem-e99e58420424",
+          "mem-16647236fa3c"
+        ],
+        "stage": "OK",
+        "tokens": 759
+      },
+      "top_ids": [
+        "mem-33ea5e925ac9",
+        "mem-b10a5474054e",
+        "mem-e99e58420424",
+        "mem-16647236fa3c",
+        "mem-2af778b663f3",
+        "mem-93c5c68d979b",
+        "mem-a97fe838817c",
+        "mem-27a63457268a",
+        "mem-dfadf5ddecd9",
+        "mem-c070eabfb367"
+      ],
+      "top_scores": [
+        0.016393,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "wrong_project",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-3693230ebaf0",
+          "mem-ad3d80115ee2",
+          "mem-a8ead3de410f"
+        ],
+        "source": "gate+mirror",
+        "tokens": 650
+      },
+      "expect": [],
+      "id": "D20",
+      "rank_ms": 41.572,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-3693230ebaf0",
+          "mem-ad3d80115ee2",
+          "mem-a8ead3de410f",
+          "mem-95e7a7389cfb",
+          "mem-8adbc449f9e0",
+          "mem-6b07e0e7d311",
+          "mem-a4e1710e19d6",
+          "mem-17919407e022",
+          "mem-7ee245204a5e"
+        ],
+        "selected_ids": [
+          "mem-3693230ebaf0",
+          "mem-ad3d80115ee2",
+          "mem-a8ead3de410f"
+        ],
+        "stage": "OK",
+        "tokens": 650
+      },
+      "top_ids": [
+        "mem-f9b4deb601eb",
+        "mem-3693230ebaf0",
+        "mem-ad3d80115ee2",
+        "mem-a8ead3de410f",
+        "mem-95e7a7389cfb",
+        "mem-8adbc449f9e0",
+        "mem-6b07e0e7d311",
+        "mem-a4e1710e19d6",
+        "mem-17919407e022",
+        "mem-7ee245204a5e"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    },
+    {
+      "category": "archived_memory",
+      "decision": {
+        "injected": false,
+        "reason": null,
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd",
+          "mem-812f9bb08444"
+        ],
+        "source": "gate+mirror",
+        "tokens": 641
+      },
+      "expect": [
+        "mem-a8d221e64549"
+      ],
+      "id": "D21",
+      "rank_ms": 23.304,
+      "tail_mirror": {
+        "injected": true,
+        "reason": null,
+        "roi_dropped_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd",
+          "mem-812f9bb08444",
+          "mem-e0ee543da163",
+          "mem-f745bcb2eff2",
+          "mem-36f8b61546e8",
+          "mem-ca894eda5772",
+          "mem-ad3d80115ee2"
+        ],
+        "selected_ids": [
+          "mem-a8d221e64549",
+          "mem-29557f93448f",
+          "mem-3848b16778bd",
+          "mem-812f9bb08444"
+        ],
+        "stage": "OK",
+        "tokens": 641
+      },
+      "top_ids": [
+        "mem-a8d221e64549",
+        "mem-29557f93448f",
+        "mem-3848b16778bd",
+        "mem-812f9bb08444",
+        "mem-6849e6dc3a1f",
+        "mem-e0ee543da163",
+        "mem-f745bcb2eff2",
+        "mem-36f8b61546e8",
+        "mem-ca894eda5772",
+        "mem-ad3d80115ee2"
+      ],
+      "top_scores": [
+        0.032787,
+        0.016129,
+        0.015873,
+        0.015625,
+        0.015385,
+        0.015152,
+        0.014925,
+        0.014706,
+        0.014493,
+        0.014286
+      ]
+    }
+  ],
+  "encoder": "onnx-minilm-l6",
+  "encoder_info": {
+    "batch_size": 16,
+    "class": "OnnxTransformerEncoder",
+    "dim": 384,
+    "max_length": 256,
+    "providers": [
+      "CPUExecutionProvider"
+    ]
+  },
+  "git": {
+    "branch": "brain/v3-s2",
+    "head": "036e69eb6c5c2a7819cd0d60ea276be644204b56",
+    "short": "036e69e"
+  },
+  "index_rows": 111,
+  "latency_ms": {
+    "decision": {
+      "max": 922.346,
+      "median": 480.859,
+      "min": 351.334,
+      "p95": 730.578
+    },
+    "encode_query": {
+      "max": 5.717,
+      "median": 1.852,
+      "min": 1.254,
+      "p95": 3.235
+    },
+    "production": {},
+    "rank": {
+      "max": 101.133,
+      "median": 44.406,
+      "min": 5.912,
+      "p95": 88.44
+    },
+    "tail": {
+      "max": 878.446,
+      "median": 439.058,
+      "min": 307.515,
+      "p95": 680.192
+    }
+  },
+  "network_probe": {
+    "error": "URLError: <urlopen error [WinError 10061] No connection could be made because the target machine actively refused it>",
+    "reachable": false,
+    "target": "https://huggingface.co",
+    "timeout_s": 3.0
+  },
+  "offline_guard": {
+    "sockets_blocked_during_encode": true
+  },
+  "phases_ms": {
+    "import": 43.27,
+    "index_build": 1466.76,
+    "model_load": 277.59,
+    "module_startup": 2.82
+  },
+  "project_id": "second-brain",
+  "ram": {
+    "after_import": {
+      "pagefile_mib": 21.27,
+      "peak_pagefile_mib": 21.27,
+      "peak_working_set_mib": 30.4,
+      "resident_mib": 30.4
+    },
+    "after_index_build": {
+      "pagefile_mib": 1100.77,
+      "peak_pagefile_mib": 1106.51,
+      "peak_working_set_mib": 365.27,
+      "resident_mib": 359.75
+    },
+    "after_model_load": {
+      "pagefile_mib": 822.83,
+      "peak_pagefile_mib": 830.71,
+      "peak_working_set_mib": 117.16,
+      "resident_mib": 110.19
+    },
+    "end": {
+      "pagefile_mib": 1135.78,
+      "peak_pagefile_mib": 1137.67,
+      "peak_working_set_mib": 365.27,
+      "resident_mib": 359.64
+    }
+  },
+  "reps": 5,
+  "versions": {
+    "huggingface-hub": "1.33.0",
+    "model2vec": "0.9.0",
+    "numpy": "2.5.3",
+    "onnxruntime": "1.30.0",
+    "platform": "win32",
+    "python": "3.13.7",
+    "tokenizers": "0.23.2"
+  }
+}

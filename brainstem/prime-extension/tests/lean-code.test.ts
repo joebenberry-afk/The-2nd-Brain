@@ -31,12 +31,13 @@ vi.mock("../src/ledger-mirror", async (original) => ({
   ...await original<Record<string, unknown>>(),
   mirrorFireAndForget: () => undefined,
 }));
-vi.mock("../src/environment-mirror", () => ({
-  runEnvironmentAssessmentSync: () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
+vi.mock("../src/environment-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/environment-mirror")>()),
+
+  runEnvironmentAssessment: async () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
 }));
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: async () => ({ ok: true }),
-  runP4PulseSync: () => ({ ok: true }),
 }));
 import fs from "node:fs";
 
@@ -527,12 +528,12 @@ ${CANONICAL_KERNEL}`);
 });
 
 describe("wiring: before_agent_start integration (real factory)", () => {
-  it("candidate + no env -> lean omit/off, PREFIX extras still delivered (no kernel)", async () => {
+  it("candidate + no env -> lean omit/off, no systemPrompt patch", async () => {
     writeCandidate();
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(promptOf(result)).toContain("Project: default");
-    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
+    // PERF-01: no kernel -> nothing to inject, the host prompt is untouched.
+    expect(promptOf(result)).toBeUndefined();
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -548,6 +549,9 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     const result = await fireBeforeAgentStart(handlers, makeCtx());
     expect(promptOf(result)).toContain(LEAN_KERNEL_MARKER);
     expect(promptOf(result)).toContain(CANONICAL_KERNEL);
+    // PERF-01: the patch is the kernel alone, never the removed prefix extras.
+    expect(promptOf(result)).not.toContain("second-brain-prefix-extras");
+    expect(promptOf(result)).not.toContain("Project:");
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("inject");
@@ -594,8 +598,7 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     process.env.SECOND_BRAIN_LEAN = "off";
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(promptOf(result)).toContain("Project: default");
-    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toBeUndefined();
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -618,8 +621,7 @@ describe("wiring: before_agent_start integration (real factory)", () => {
   it("missing skill -> fail open: no patch + lean_kernel skill-missing + extension_error", async () => {
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(promptOf(result)).toContain("Project: default");
-    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toBeUndefined();
     const lines = await waitForLines(3);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -627,7 +629,7 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     expect(lines.some((l) => l.kind === "extension_error")).toBe(true);
   });
 
-  it("dedup: base already carries the marker -> exactly one marker in the returned prompt", async () => {
+  it("dedup: base already carries the marker -> no patch, dedup_hit recorded", async () => {
     writeSkill("active", SKILL_TEMPLATE("active"));
     const baseWithKernel = `BASE SYSTEM PROMPT\n\n[${LEAN_KERNEL_MARKER}]\n${CANONICAL_KERNEL}`;
     const handlers = loadFactory();
@@ -635,8 +637,10 @@ describe("wiring: before_agent_start integration (real factory)", () => {
       handlers,
       makeCtx({ getSystemPrompt: () => baseWithKernel, model: { id: "deepseek-v4-pro", provider: "deepseek" } }),
     );
-    const prompt = promptOf(result) as string;
-    expect(prompt.split(LEAN_KERNEL_MARKER).length - 1).toBe(1);
+    // The host prompt already carries exactly one kernel, so nothing is
+    // appended (PERF-01: without a patch the host prompt stays byte-identical).
+    expect(promptOf(result)).toBeUndefined();
+    expect(JSON.stringify(result ?? {})).not.toContain(LEAN_KERNEL_MARKER);
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");
@@ -647,8 +651,7 @@ describe("wiring: before_agent_start integration (real factory)", () => {
     process.env.SECOND_BRAIN_LEAN = "off";
     const handlers = loadFactory();
     const result = await fireBeforeAgentStart(handlers, makeCtx());
-    expect(promptOf(result)).toContain("Project: default");
-    expect(promptOf(result)).not.toContain(LEAN_KERNEL_MARKER);
+    expect(promptOf(result)).toBeUndefined();
     const lines = await waitForLines(2);
     const lean = lines.find((l) => l.kind === "lean_kernel");
     expect(lean?.decision).toBe("omit");

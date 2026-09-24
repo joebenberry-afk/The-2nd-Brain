@@ -506,6 +506,20 @@ export interface AdvisoryAutoInjectCall extends ShadowAutoInjectCall {
   customType?: string;
 }
 
+/**
+ * Would {@link runAdvisoryAutoInject} serve a cached emit for this (session,
+ * task)? The batched turn bridge (E01) probes this BEFORE it spawns, so a
+ * host re-emit of the same prompt never re-runs the Python AutoInject
+ * decision — exactly the ordering the per-phase path gets by checking the
+ * cache before its spawn.
+ */
+export function advisoryEmitCached(call: ShadowAutoInjectCall, task: string): boolean {
+  const trimmed = (task ?? "").trim();
+  if (trimmed.length === 0) return false;
+  loadEmitCache(call.home);
+  return lookupEmitEntry(call, trimmed) !== undefined;
+}
+
 export async function runAdvisoryAutoInject(
   call: AdvisoryAutoInjectCall,
 ): Promise<{ customType: string; content: string; display: boolean; details: unknown } | undefined> {

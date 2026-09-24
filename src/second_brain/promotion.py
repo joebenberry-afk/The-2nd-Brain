@@ -1196,8 +1196,7 @@ STAGE_RANKS: dict[str, int] = {
 
 def _ensure_v2_migrated(home: Path) -> None:
     dbfile = db.db_path(home)
-    if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+    db.ensure_migrated(dbfile)
 
 
 def get_feature_stage(home: Path | str, feature: str) -> str:

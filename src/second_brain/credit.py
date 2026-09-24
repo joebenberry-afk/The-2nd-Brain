@@ -685,8 +685,7 @@ def record_intervention(
     before execution. Free-form expectation or missing expectation is rejected.
     """
     home_p = Path(home)
-    if db.pending_migrations(db.db_path(home_p)):
-        db.migrate(db.db_path(home_p))
+    db.ensure_migrated(db.db_path(home_p))
 
     if not isinstance(expected_outcome, Mapping) or not expected_outcome:
         raise BrainError(
@@ -865,8 +864,7 @@ def record_observation(
 ) -> dict[str, Any]:
     """Record bounded evidence; unresolved/simulated evidence remains non-promotable."""
     home_p = Path(home)
-    if db.pending_migrations(db.db_path(home_p)):
-        db.migrate(db.db_path(home_p))
+    db.ensure_migrated(db.db_path(home_p))
 
     allowed_evidence_types = {
         "telemetry",

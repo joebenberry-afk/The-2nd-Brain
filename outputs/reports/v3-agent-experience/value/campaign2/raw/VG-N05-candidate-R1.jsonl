@@ -1,0 +1,27 @@
+{"type":"session","version":3,"id":"01a0d46f-183f-7503-a81b-174353ae6090","timestamp":"2026-09-24T17:20:45.631Z","cwd":"C:\\Users\\assas\\AppData\\Local\\Temp\\v3-value-wxoffgrn\\run0076\\proj"}
+{"type":"advisor_cost_changed"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790270447794}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790270447794}}
+{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"`print(sum(i*i for"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1790270447901,"responseId":"5f3bc9bb-448f-44c5-97b8-5a916c7ff462"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"print"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"(sum"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"(i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"*i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" for"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" i"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" in"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" range"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"("}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"1"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":","}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"11"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":")))"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"`"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"`print(sum(i*i for i in range(1,11)))`"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"`print(sum(i*i for i in range(1,11)))`"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1422,"output":16,"cacheRead":9216,"cacheWrite":0,"totalTokens":10654,"cost":{"input":0.00021329999999999998,"output":0.0000096,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025054799999999996}},"stopReason":"stop","timestamp":1790270447901,"responseId":"5f3bc9bb-448f-44c5-97b8-5a916c7ff462","duration":1888.3011999999994,"ttft":1640.4343999999996,"completedAt":1790270449811}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"`print(sum(i*i for i in range(1,11)))`"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1422,"output":16,"cacheRead":9216,"cacheWrite":0,"totalTokens":10654,"cost":{"input":0.00021329999999999998,"output":0.0000096,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025054799999999996}},"stopReason":"stop","timestamp":1790270447901,"responseId":"5f3bc9bb-448f-44c5-97b8-5a916c7ff462","duration":1888.3011999999994,"ttft":1640.4343999999996},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Write a Python one-liner that prints the sum of squares of the integers 1 through 10. Reply with only the code."}],"attribution":"user","timestamp":1790270447794},{"role":"assistant","content":[{"type":"text","text":"`print(sum(i*i for i in range(1,11)))`"}],"api":"openai-completions","provider":"deepseek","model":"deepseek-flash","usage":{"input":1422,"output":16,"cacheRead":9216,"cacheWrite":0,"totalTokens":10654,"cost":{"input":0.00021329999999999998,"output":0.0000096,"cacheRead":0.000027648,"cacheWrite":0,"total":0.00025054799999999996}},"stopReason":"stop","timestamp":1790270447901,"responseId":"5f3bc9bb-448f-44c5-97b8-5a916c7ff462","duration":1888.3011999999994,"ttft":1640.4343999999996}],"isTerminal":true}

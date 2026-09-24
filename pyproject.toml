@@ -11,6 +11,7 @@ dev = ["pytest", "pytest-cov", "hypothesis", "ruff", "pyright"]
 
 [project.scripts]
 brainctl = "second_brain.cli:main"
+brain = "second_brain.kb.cli:main"
 
 [build-system]
 requires = ["hatchling"]

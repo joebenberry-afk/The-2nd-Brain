@@ -360,8 +360,7 @@ def list_artifacts(home: Path) -> list[dict]:
 def _refs_conn(home: Path | str):
     home_path = Path(home)
     dbfile = db.db_path(home_path)
-    if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+    db.ensure_migrated(dbfile)
     return db.connect(dbfile)
 
 

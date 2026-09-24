@@ -1,8 +1,9 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { startDetachedBrainCommand } from "./detached-spawn";
 
-import { runVmemHotContext } from "./vmem";
+import { runVmemHotContext, type VmemHotContextResult } from "./vmem";
 export const ACTIVE_STATE_DEFAULT_TIMEOUT_MS = 5000;
 export const ACTIVE_STATE_MAX_TEXT_CHARS = 512;
 export const ACTIVE_STATE_DEFAULT_BUDGET = 256;
@@ -92,7 +93,9 @@ function updateArgs(options: ActiveStateOptions): string[] {
   return args;
 }
 
-function parseResult(stdout: string, expectedSession: string): ActiveStateResult {
+/** Parse one `capsule ensure --json` stdout payload. Shared by this direct
+ * bridge call and the batched turn bridge (E01). */
+export function parseActiveStateResult(stdout: string, expectedSession: string): ActiveStateResult {
   try {
     const parsed = JSON.parse(stdout) as JsonRecord;
     if (parsed.session_id !== expectedSession) {
@@ -115,11 +118,10 @@ function parseResult(stdout: string, expectedSession: string): ActiveStateResult
 function execute(
   options: ActiveStateOptions,
   args: string[],
-  sync: boolean,
-): ActiveStateResult | Promise<ActiveStateResult> {
+): Promise<ActiveStateResult> {
   const python = pythonExe(options.home, options.python);
   if (!existsSync(python)) {
-    return { ok: true, sessionId: options.hostSessionId, changed: false };
+    return Promise.resolve({ ok: true, sessionId: options.hostSessionId, changed: false });
   }
   const execOptions = {
     cwd: options.home,
@@ -128,22 +130,15 @@ function execute(
     windowsHide: true,
     maxBuffer: 1024 * 1024,
   };
-  if (sync) {
-    try {
-      return parseResult(String(execFileSync(python, args, execOptions)), options.hostSessionId);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  const { promise, resolve } = Promise.withResolvers<ActiveStateResult>();
+  execFile(python, args, execOptions, (error, stdout) => {
+    if (error) {
+      resolve({ ok: false, error: error.message });
+      return;
     }
-  }
-  return new Promise((resolve) => {
-    execFile(python, args, execOptions, (error, stdout) => {
-      if (error) {
-        resolve({ ok: false, error: error.message });
-        return;
-      }
-      resolve(parseResult(String(stdout), options.hostSessionId));
-    });
+    resolve(parseActiveStateResult(String(stdout), options.hostSessionId));
   });
+  return promise;
 }
 
 export function runActiveStateEnsure(options: ActiveStateOptions): Promise<ActiveStateResult> {
@@ -151,15 +146,27 @@ export function runActiveStateEnsure(options: ActiveStateOptions): Promise<Activ
   args.push(boundedText(options.objective ?? ""));
   if (options.nextAction !== undefined) args.push("--next-action", boundedText(options.nextAction));
   args.push("--json");
-  return Promise.resolve(execute(options, args, false));
+  return execute(options, args);
 }
 
 export function runActiveStateUpdate(options: ActiveStateOptions): Promise<ActiveStateResult> {
-  return Promise.resolve(execute(options, updateArgs(options), false));
+  return execute(options, updateArgs(options));
 }
 
-export function runActiveStateUpdateSync(options: ActiveStateOptions): ActiveStateResult {
-  return execute(options, updateArgs(options), true) as ActiveStateResult;
+/**
+ * Hand the shutdown capsule update to a DETACHED child. `session_shutdown` is
+ * the host worker's last event: waiting for the spawn (the previous
+ * `execFileSync` update blocked every turn the host still had to serve) cost the
+ * exit tail for a write nobody reads. The caller starts it only after the
+ * session's capsule-write barrier is idle, so this is the last write that
+ * capsule receives.
+ *
+ * Returns whether the process was started; fail-open, no result to report.
+ */
+export function startDetachedActiveStateUpdate(options: ActiveStateOptions): boolean {
+  const python = pythonExe(options.home, options.python);
+  if (!existsSync(python)) return false;
+  return startDetachedBrainCommand(python, updateArgs(options), options.home);
 }
 
 export async function renderActiveState(options: {
@@ -176,27 +183,56 @@ export async function renderActiveState(options: {
     python: options.python,
     timeoutMs: options.timeoutMs ?? ACTIVE_STATE_DEFAULT_TIMEOUT_MS,
   });
+  return activeStateRenderResult(rendered, options.hostSessionId);
+}
+
+/** Map a hot-context render onto the active-state result shape. Shared by the
+ * direct bridge call and the batched turn bridge (E01), so both paths produce
+ * the same model-visible message for the same render. */
+export function activeStateRenderResult(
+  rendered: VmemHotContextResult,
+  hostSessionId: string,
+): ActiveStateRenderResult {
   if (!rendered.ok && rendered.error?.startsWith("no brain venv")) {
-    return { ok: true, sessionId: options.hostSessionId, renderedText: "" };
+    return { ok: true, sessionId: hostSessionId, renderedText: "" };
   }
   if (!rendered.ok) return { ok: false, error: rendered.error };
-  if (rendered.sessionId !== options.hostSessionId) {
+  if (rendered.sessionId !== hostSessionId) {
     return { ok: false, error: "active-state session mismatch" };
   }
   return {
     ok: true,
-    sessionId: options.hostSessionId,
+    sessionId: hostSessionId,
     renderedText: rendered.renderedText?.slice(0, 8192),
   };
 }
 
+const HOT_CONTEXT_HEADER = "[SECOND_BRAIN_HOT_CONTEXT]";
+
+/**
+ * Build the model-visible active-state message. When `currentPrompt` is
+ * supplied, an `Objective:` line that merely echoes that prompt is dropped
+ * (the model already has the prompt), and a render with nothing left
+ * returns undefined so a no-benefit turn adds no Brain message (PERF-01).
+ */
 export function activeStateMessage(
   result: ActiveStateRenderResult,
+  currentPrompt?: string,
 ): { customType: string; content: string; display: boolean; details: JsonRecord } | undefined {
   if (!result.ok || !result.sessionId || !result.renderedText) return undefined;
+  let text = result.renderedText;
+  if (currentPrompt !== undefined) {
+    // The capsule stores the bounded text stripped again (Python `strip()`), so a
+    // cut that ends on whitespace loses it; compare against that stored form.
+    const echo = `${HOT_CONTEXT_HEADER}\nObjective: ${boundedText(currentPrompt).trim()}`;
+    if (text === echo || text.startsWith(`${echo}\n`)) {
+      text = HOT_CONTEXT_HEADER + text.slice(echo.length);
+    }
+    if (text.trim() === HOT_CONTEXT_HEADER) return undefined;
+  }
   return {
     customType: ACTIVE_STATE_CUSTOM_TYPE,
-    content: `[SECOND_BRAIN_ACTIVE_STATE]\n${result.renderedText}`,
+    content: `[SECOND_BRAIN_ACTIVE_STATE]\n${text}`,
     display: false,
     details: { session_id: result.sessionId, source: "vmem.hot-context" },
   };

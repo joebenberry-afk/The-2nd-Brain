@@ -179,7 +179,13 @@ def token_estimate(text: str, home: Path | str | None = None) -> int:
 
 @dataclass(frozen=True)
 class RetrievalIntent:
-    """Structured retrieval intent (plan §6.1): task text stays ephemeral."""
+    """Structured retrieval intent (plan §6.1): task text stays ephemeral.
+
+    ``explicit`` marks a query the user issued directly (``brainctl recall``) rather
+    than an automatic per-turn injection: the caller asked for these memories, so
+    scope/status/authority/freshness decide and the relevance-abstention decision —
+    which exists to keep unrequested content out of a turn — does not apply.
+    """
 
     task_text: str
     project_id: str | None
@@ -190,6 +196,7 @@ class RetrievalIntent:
     is_delta: bool = False
     cwd: str | None = None
     lane: str = "semantic"
+    explicit: bool = False
 
 
 def _now() -> str:
@@ -201,9 +208,14 @@ def _task_sha256(task: str) -> str:
 
 
 def _record_retrieval_abstention(
-    home: Path, intent: RetrievalIntent, lane: str = "semantic"
+    home: Path, intent: RetrievalIntent, lane: str = "semantic", gate: str = "score_gap"
 ) -> None:
-    """Record score-gap abstention without persisting task/query content."""
+    """Record a retrieval abstention without persisting task/query content.
+
+    ``gate`` names the stage that decided to abstain: the cascade's score gap
+    ("score_gap") or the contribution decision that separates a found candidate
+    from one that applies to this request ("contribution").
+    """
     cfg = semantic.load_retrieval_config(home)
     try:
         decisions.record(
@@ -221,7 +233,7 @@ def _record_retrieval_abstention(
                 "task_sha256": _task_sha256(intent.task_text),
                 "project_id": intent.project_id or "",
                 "lane": lane,
-                "gate": "score_gap",
+                "gate": gate,
             },
         )
     except Exception:
@@ -512,6 +524,74 @@ def _retrieval_query_text(home: Path, intent: RetrievalIntent) -> str:
     return intent.task_text
 
 
+_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+_SENTENCE_BREAK = re.compile(r"(?<=[.?!])\s+|\n+")
+_LEADING_LABEL = re.compile(r"^[A-Za-z][A-Za-z ]{0,20}:\s+")
+_MAX_FOCUS_QUESTIONS = 3
+_WH_WORD = re.compile(r"\b(?:what|which|when|where|who|whom|whose|why|how)\b", re.IGNORECASE)
+_MAX_NARROW_TERMS = 4
+
+
+def _narrowed_query_text(home: Path, text: str) -> str | None:
+    """The request reduced to its own most discriminative plan terms (RET-02).
+
+    A long request carries filler ("without", "leaving") whose corpus rarity, or
+    whose one-off prefix, is enough to fail the half-the-terms match requirement
+    even though the memory that answers the request is present. The lexical plan
+    already ranks the request's terms by IDF, so the narrowed retry keeps the top
+    few and re-asks: the gate then needs half of a small, discriminative term set
+    instead of half of a long, diluted one. Returns None when there is nothing to
+    drop.
+    """
+    plan = semantic.query_match_plan(home, text)
+    if len(plan.terms) <= _MAX_NARROW_TERMS:
+        return None
+    return " ".join(plan.terms[:_MAX_NARROW_TERMS])
+
+
+def _is_request_sentence(sentence: str) -> bool:
+    """Whether a sentence states the request rather than instructing the assistant.
+
+    Two shapes cover the prompts seen in the live arms: an explicit question, and an
+    indirect question inside an otherwise imperative prompt ("Tell me in what order
+    the database migrations should be applied"), which is how a request reads when
+    it carries no question mark. Wh-words are a closed grammatical class, so this is
+    a shape test rather than a list of prompt-specific words.
+    """
+    stripped = sentence.strip()
+    return stripped.endswith("?") or bool(_WH_WORD.search(stripped))
+
+
+def _focused_query_text(text: str, project_id: str | None) -> str | None:
+    """Deterministic task focus for instruction-heavy prompts (RET-02).
+
+    Keeps only sentences that state the request (questions and indirect questions,
+    outside fenced code), drops a leading label such as ``Question:`` and the
+    resolved project's own name tokens: the project scope filter already encodes
+    that identity, so as query terms they only raise the lexical match requirement.
+    Exact symbols inside those sentences are kept verbatim. Returns None when no
+    sentence states a request or nothing distinct from ``text`` remains.
+    """
+    prose = _FENCED_CODE.sub(" ", text)
+    questions = [
+        _LEADING_LABEL.sub("", sentence.strip())
+        for sentence in _SENTENCE_BREAK.split(prose)
+        if _is_request_sentence(sentence) and len(sentence.split()) >= 3
+    ][:_MAX_FOCUS_QUESTIONS]
+    if not questions:
+        return None
+    focus = " ".join(questions)
+    if project_id and project_id not in ("default", "unknown"):
+        names = sorted({t for t in re.split(r"[^a-z0-9]+", project_id.casefold()) if len(t) >= 3})
+        if names:
+            pattern = r"\b(?:" + "|".join(map(re.escape, names)) + r")\b"
+            focus = re.sub(pattern, " ", focus, flags=re.IGNORECASE)
+    focus = " ".join(focus.split())
+    if not focus or focus.casefold() == " ".join(text.split()).casefold():
+        return None
+    return focus
+
+
 def _valid_candidates(intent: RetrievalIntent, rows: list[dict]) -> list[dict]:
     """Apply the literal corpus admission policy before ranking/rendering.
 
@@ -641,6 +721,25 @@ def _grade_confidence(
     # This is unreachable after _valid_candidates; keep malformed direct
     # callers conservative rather than manufacturing medium confidence.
     return MemoryItemStatus.UNCERTAIN, Confidence.LOW
+
+
+def _closely_matches_if_uncertain(row: dict, plan: semantic.QueryMatchPlan) -> bool:
+    """Whether a row that would render as uncertain/low confidence is about the request.
+
+    Such a row reaches the model labeled ``status: uncertain`` / ``confidence: low``,
+    so contributing on a shared name is not enough: it must confirm more than half of
+    the request's content terms. "put V3 on GitHub for a Claude Code cloud session"
+    reached the Stop-hook memory on 'claude'/'code'/'session' alone while 'github'
+    and 'cloud' appear nowhere in it. Higher-grade rows and plans without term
+    evidence pass unchanged.
+    """
+    if not plan.terms:
+        return True
+    status, confidence = _grade_confidence(semantic.effective_evidence_grade(row), None, False)
+    if status is not MemoryItemStatus.UNCERTAIN or confidence is not Confidence.LOW:
+        return True
+    unexplained = plan.unexplained_content_terms(semantic._row_haystack_tokens(row))
+    return len(plan.content_terms()) > 2 * len(unexplained)
 
 
 def _canonical_line(text: str | None) -> str:
@@ -906,6 +1005,23 @@ def shadow_output(
     }
 
 
+def _hydrate_bodies(home: Path, rows: list[dict]) -> None:
+    """Restore body text the lexical index dropped for a very broad result set.
+
+    ``semantic._search_fts`` drops ``_body`` above its pairwise-scan limit, but the
+    contribution decision needs the same evidence that search matched on (title,
+    summary, body). Only the bounded result set is hydrated; a missing body stays
+    empty rather than borrowing another row's text.
+    """
+    for row in rows:
+        if row.get("_body"):
+            continue
+        try:
+            row["_body"] = semantic._body_text(home, row)
+        except Exception:
+            row["_body"] = ""
+
+
 def prepare_injection(
     home: Path | str,
     intent: RetrievalIntent,
@@ -949,6 +1065,7 @@ def prepare_injection(
     query_text = (
         retrieval_text if retrieval_text is not None else _retrieval_query_text(home, intent)
     )
+    focused_text = _focused_query_text(query_text, intent.project_id)
     proj_filter = (
         intent.project_id
         if intent.project_id and intent.project_id not in ("default", "unknown")
@@ -957,44 +1074,113 @@ def prepare_injection(
     unscoped_candidates: list[dict] = []
     try:
         db.migrate(db_path(home))
-        # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
-        cascade_res = _CASCADE.retrieve(
-            home,
-            query_text,
-            project_id=proj_filter,
-            top_k=_MAX_CANDIDATES,
-            lane=intent.lane,
-        )
-        if cascade_res.retrieval_error:
-            raise RuntimeError("semantic retrieval unavailable")
-        rows = [
-            m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-            for m in cascade_res.matches
-        ]
 
-        # The semantic project prefilter excludes domain memories whose
-        # project is unknown. Supplement known-project searches with the
-        # unscoped result; _valid_candidates remains the security boundary.
-        if proj_filter is not None:
-            unscoped_cascade = _CASCADE.retrieve(
+        def retrieve_rows(text: str) -> tuple[hybrid_retrieval.CascadeResult, list[dict]]:
+            # Primary search: Hybrid Multi-Tier Cascade Retrieval (Tiers 0-4)
+            result = _CASCADE.retrieve(
                 home,
-                query_text,
-                project_id=None,
+                text,
+                project_id=proj_filter,
                 top_k=_MAX_CANDIDATES,
                 lane=intent.lane,
             )
-            if unscoped_cascade.retrieval_error:
+            if result.retrieval_error:
                 raise RuntimeError("semantic retrieval unavailable")
-            supplement = [
+            found = [
                 m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
-                for m in unscoped_cascade.matches
+                for m in result.matches
             ]
-            seen_ids = {str(row.get("memory_id")) for row in rows}
-            rows.extend(
+
+            # The semantic project prefilter excludes domain memories whose
+            # project is unknown. Supplement known-project searches with the
+            # unscoped result; _valid_candidates remains the security boundary.
+            if proj_filter is not None:
+                unscoped_cascade = _CASCADE.retrieve(
+                    home,
+                    text,
+                    project_id=None,
+                    top_k=_MAX_CANDIDATES,
+                    lane=intent.lane,
+                )
+                if unscoped_cascade.retrieval_error:
+                    raise RuntimeError("semantic retrieval unavailable")
+                supplement = [
+                    m.raw_row if m.raw_row else (semantic._row(home, m.memory_id) or {})
+                    for m in unscoped_cascade.matches
+                ]
+                seen_ids = {str(row.get("memory_id")) for row in found}
+                found.extend(
+                    row
+                    for row in supplement
+                    if row.get("memory_id") and str(row["memory_id"]) not in seen_ids
+                )
+            return result, found
+
+        def retrieve_contributing(
+            text: str,
+        ) -> tuple[hybrid_retrieval.CascadeResult, list[dict], list[dict]]:
+            """Retrieval, then the separate decision about what contributes (PERF-01).
+
+            Returns the cascade result, every row the cascade retrieved, and the
+            subset whose match is evidence about this request (RET-05). Ranking
+            decides which candidate is best; the contribution decision decides
+            whether a candidate applies here at all. An explicit query (``brainctl
+            recall``) skips that decision: the user asked for these memories, so only
+            the validity gates apply.
+            """
+            result, found = retrieve_rows(text)
+            if not found:
+                return result, [], []
+            if intent.explicit:
+                return result, found, found
+            if result.reason == "EXACT_REF_MATCH":
+                # The request named one memory exactly (bare hex id or mem-… id): that
+                # is contribution evidence by construction. Project, status, lane,
+                # freshness and role admission are still applied downstream.
+                return result, found, found
+            _hydrate_bodies(home, found)
+            plan = semantic.query_match_plan(home, text)
+            contributing = [
                 row
-                for row in supplement
-                if row.get("memory_id") and str(row["memory_id"]) not in seen_ids
+                for row in semantic.contribution_filter(found, plan)
+                if _closely_matches_if_uncertain(row, plan)
+            ]
+            return result, found, contributing
+
+        # The full query runs first so every case it already answers is unchanged.
+        # The focused enquiry is tried when the full query contributes nothing:
+        # either it retrieved nothing at all, or everything it retrieved is
+        # incidental keyword overlap (the NB-OK-17 shape). Long requests that are
+        # diluted by filler get one more, narrowed attempt.
+        cascade_res, retrieved_rows, contributing = retrieve_contributing(query_text)
+        if not contributing and focused_text is not None:
+            focused_res, focused_retrieved, focused_contributing = retrieve_contributing(
+                focused_text
             )
+            if focused_contributing:
+                cascade_res, retrieved_rows, contributing = (
+                    focused_res,
+                    focused_retrieved,
+                    focused_contributing,
+                )
+                query_mode = "idf_focused"
+        if not contributing and not intent.explicit:
+            # Narrowing exists to rescue automatic injections from a diluted plan; an
+            # explicit query keeps its own text (its caller reads the no-injection
+            # reason directly).
+            narrowed_text = _narrowed_query_text(home, focused_text or query_text)
+            if narrowed_text is not None:
+                narrowed_res, narrowed_retrieved, narrowed_contributing = retrieve_contributing(
+                    narrowed_text
+                )
+                if narrowed_contributing:
+                    cascade_res, retrieved_rows, contributing = (
+                        narrowed_res,
+                        narrowed_retrieved,
+                        narrowed_contributing,
+                    )
+                    query_mode = "idf_narrowed"
+        rows = contributing
     except Exception as exc:  # fail-open contract (§6.8)
         logger.warning("AutoInject retrieval failed (fail-open): %s", exc)
         _append_telemetry(
@@ -1015,7 +1201,7 @@ def prepare_injection(
 
     candidate_ids = [
         str(r.get("memory_id"))
-        for r in (rows if rows else unscoped_candidates)
+        for r in (retrieved_rows if retrieved_rows else unscoped_candidates)
         if r.get("memory_id")
     ]
 
@@ -1025,8 +1211,12 @@ def prepare_injection(
         "brain_retrieval_attempt",
         {
             "task_sha256": _task_sha256(intent.task_text),
-            "candidate_count": len(rows) if rows else len(unscoped_candidates),
+            "candidate_count": (
+                len(retrieved_rows) if retrieved_rows else len(unscoped_candidates)
+            ),
             "eligible_count": len(rows),
+            "contributing_count": len(rows),
+            "noncontributing_count": max(0, len(retrieved_rows) - len(rows)),
             "recipient": intent.agent_id,
             "role_profile": intent.role_profile,
             "project_id": intent.project_id,
@@ -1036,6 +1226,11 @@ def prepare_injection(
     )
 
     if not rows:
+        if retrieved_rows:
+            # Candidates were found, none of them applies to this request: the
+            # abstention is the relevance decision, not a missing search result.
+            _record_retrieval_abstention(home, intent, gate="contribution")
+            return decision(NoInjectionReason.LOW_CONFIDENCE, candidate_ids=candidate_ids)
         if unscoped_candidates:
             return decision(NoInjectionReason.WRONG_PROJECT, candidate_ids=candidate_ids)
         return decision(NoInjectionReason.NO_RELEVANT_MEMORY)
@@ -1136,10 +1331,18 @@ def prepare_injection(
         else cfg
     )
 
-    # Filter candidate items by need-cost ROI: skip if P_need * value < token_cost_ratio
+    # Need-cost ROI: a RANKING and BUDGET signal, never an admission veto. A
+    # candidate the contribution decision accepted is deliverable while the packet
+    # hard cap allows it (§6.6 IDs-only form when needed), so a low-need, long
+    # memory that is the only match still arrives instead of degrading to
+    # CONTEXT_PRESSURE. The factors are unchanged: expected value per unit of
+    # packet budget, ``p_need * value / token_cost_ratio``, is the reciprocal of
+    # the veto's ``p_need * value >= token_cost_ratio`` margin. Only the budget
+    # stage uses them: when target or hard cap is exceeded, the lowest-ROI
+    # candidates are dropped first.
     row_by_id = {str(r.get("memory_id") or ""): r for r in role_rows}
-    retained_fresh: list[PacketItem] = []
-    for item in fresh:
+    roi_by_position: list[tuple[float, int]] = []
+    for position, item in enumerate(fresh):
         row = row_by_id.get(item.memory_id, {})
         p_need = row.get("_p_need")
         if p_need is None and home is not None:
@@ -1178,26 +1381,27 @@ def prepare_injection(
         target_tokens = max(1, active_budget.target_tokens)
         token_cost_ratio = item_tokens / target_tokens
 
-        if p_need * value < token_cost_ratio:
-            continue
-        retained_fresh.append(item)
+        roi_by_position.append((p_need * value / token_cost_ratio, position))
 
-    fresh = retained_fresh
-    if not fresh:
-        return decision(
-            NoInjectionReason.CONTEXT_PRESSURE,
-            candidate_ids=candidate_ids,
-            selected_ids=[],
-        )
-    fit = _fit_budget(fresh, intent.project_id, active_budget, home=home, lane=intent.lane)
+    # Highest expected value per token first; equal ROI keeps the search ranking.
+    ranked = [
+        fresh[position]
+        for _roi, position in sorted(roi_by_position, key=lambda scored: (-scored[0], scored[1]))
+    ]
+    fit = _fit_budget(ranked, intent.project_id, active_budget, home=home, lane=intent.lane)
     if fit is None:
+        # Genuine budget overflow: not even the IDs-only form fits the hard cap.
         return decision(
             NoInjectionReason.CONTEXT_PRESSURE,
             candidate_ids=candidate_ids,
             selected_ids=[i.memory_id for i in fresh],
         )
-    selected, ids_only = fit
+    fitted, ids_only = fit
     del ids_only  # shadow phase: caller sees the same canonical shape either way
+    # ROI only decides what a budget overflow drops; the delivered packet keeps the
+    # search ranking order of the survivors (§6.6 IDs-only content included).
+    search_position = {item.memory_id: position for position, item in enumerate(fresh)}
+    selected = sorted(fitted, key=lambda item: search_position.get(item.memory_id, len(fresh)))
 
     # T5.2: Retrieval injection holdout
     stage = _retrieval_holdout_stage(home)

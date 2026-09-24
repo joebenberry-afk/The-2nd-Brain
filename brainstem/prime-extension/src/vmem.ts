@@ -247,29 +247,36 @@ export function runVmemHotContext(options: {
           resolve({ ok: false, error: error.message });
           return;
         }
-        try {
-          const parsed = JSON.parse(String(stdout)) as {
-            session_id?: string;
-            resident_count?: number;
-            evicted_count?: number;
-            resident_tokens?: number;
-            rendered_text?: string;
-          };
-          const result: VmemHotContextResult = {
-            ok: true,
-            residentCount: parsed.resident_count,
-            evictedCount: parsed.evicted_count,
-            residentTokens: parsed.resident_tokens,
-          };
-          if (typeof parsed.session_id === "string") result.sessionId = parsed.session_id;
-          if (typeof parsed.rendered_text === "string") result.renderedText = parsed.rendered_text;
-          resolve(result);
-        } catch {
-          resolve({ ok: false, error: "hot-context returned unparsable output" });
-        }
+        resolve(parseHotContextOutput(String(stdout)));
       },
     );
   });
+}
+
+/** Parse one `vmem hot-context --json` stdout payload. Shared by this direct
+ * bridge call and the batched turn bridge (E01), so both paths cannot
+ * disagree about the rendered working set. */
+export function parseHotContextOutput(stdout: string): VmemHotContextResult {
+  try {
+    const parsed = JSON.parse(String(stdout)) as {
+      session_id?: string;
+      resident_count?: number;
+      evicted_count?: number;
+      resident_tokens?: number;
+      rendered_text?: string;
+    };
+    const result: VmemHotContextResult = {
+      ok: true,
+      residentCount: parsed.resident_count,
+      evictedCount: parsed.evicted_count,
+      residentTokens: parsed.resident_tokens,
+    };
+    if (typeof parsed.session_id === "string") result.sessionId = parsed.session_id;
+    if (typeof parsed.rendered_text === "string") result.renderedText = parsed.rendered_text;
+    return result;
+  } catch {
+    return { ok: false, error: "hot-context returned unparsable output" };
+  }
 }
 
 

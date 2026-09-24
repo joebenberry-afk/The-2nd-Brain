@@ -56,15 +56,24 @@ vi.mock("../src/autoinject", async (importOriginal) => {
   return { ...actual, runAdvisoryAutoInject: runAdvisoryAutoInjectMock };
 });
 const runEnvironmentAssessmentMock = vi.hoisted(() => vi.fn());
-vi.mock("../src/environment-mirror", () => ({
-  runEnvironmentAssessmentSync: runEnvironmentAssessmentMock,
-}));
+vi.mock("../src/environment-mirror", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/environment-mirror")>();
+  return {
+    ...actual,
+    runEnvironmentAssessment: runEnvironmentAssessmentMock,
+  };
+});
 
 const runP4PulseMock = vi.hoisted(() => vi.fn());
-const runP4PulseSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: runP4PulseMock,
-  runP4PulseSync: runP4PulseSyncMock,
+}));
+
+// The optional shutdown maintenance is now started DETACHED; these wiring
+// tests assert the decision handed to that seam, never a real Python child.
+const startDetachedMaintenanceMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/detached-maintenance", () => ({
+  startDetachedShutdownMaintenance: startDetachedMaintenanceMock,
 }));
 
 // P3.16 skill-visibility wiring: control the visibility outcome directly
@@ -132,7 +141,7 @@ beforeEach(async () => {
   runAdvisoryAutoInjectMock.mockReset();
   runAdvisoryAutoInjectMock.mockResolvedValue(undefined);
   runEnvironmentAssessmentMock.mockReset();
-  runEnvironmentAssessmentMock.mockReturnValue({
+  runEnvironmentAssessmentMock.mockImplementation(async () => ({
     ok: true,
     sessionId: "wiring-test",
     environmentStewardId: "envsteward-test",
@@ -140,11 +149,15 @@ beforeEach(async () => {
     mutationDetected: false,
     mutationClassification: "none",
     completionEligible: true,
-  });
+  }));
   runP4PulseMock.mockReset();
   runP4PulseMock.mockResolvedValue({ ok: true, sessionId: "wiring-test" });
-  runP4PulseSyncMock.mockReset();
-  runP4PulseSyncMock.mockReturnValue({ ok: true, sessionId: "wiring-test" });
+  startDetachedMaintenanceMock.mockReset();
+  // The seam reports what it started; the wiring decision is what these tests
+  // assert, so the stub mirrors the requested assessment.
+  startDetachedMaintenanceMock.mockImplementation(
+    (options: { assessEnvironment: boolean }) => ({ environment: options.assessEnvironment, p4: true }),
+  );
   runOmpVisibilityMock.mockReset();
   runOmpVisibilityMock.mockResolvedValue({ visibility_plan: null, hydrated_instructions: {}, error: null });
 });
@@ -464,59 +477,207 @@ describe("factory wiring (src/index.ts)", () => {
     const records = await waitForLines(2); // async writes drained
     expect(records.map((r) => r.kind)).toEqual(["session_start", "turn_end"]);
 
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const final = await waitForLines(3);
     expect(final.map((r) => r.kind)).toEqual(["session_start", "turn_end", "session_shutdown"]);
   });
 
-  it("consumes Environment Steward evidence at task and session boundaries", async () => {
+  it("consumes Environment Steward evidence at task boundaries and decides the shutdown assessment from the fingerprint", async () => {
     const handlers = loadFactory();
-    const ctx = makeCtx();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     handlers.get("session_start")!({ reason: "startup" }, ctx);
     const started = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_started",
     );
-    expect(started?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
+    expect(started).toBeDefined();
+    // The session-start assessment waits until the session is idle.
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "session_start", hostSessionId: "wiring-test" }),
     );
+    await vi.waitFor(() => {
+      const assessed = mirrorFireAndForgetMock.mock.calls.find(
+        (call) =>
+          call[0]?.record?.kind === "environment_assessment" &&
+          call[0]?.record?.fields?.phase === "session_start",
+      );
+      expect(assessed?.[0]?.record?.fields?.environment_steward_id).toBe("envsteward-test");
+    });
 
+    // Cadence (V3 S2): one assessment per session, then only when the cheap
+    // in-host repo fingerprint changes — never once per prompt.
     await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+
+    writeFileSync(join(repo, "package.json"), '{"name":"boundary"}', "utf8");
+    await handlers.get("before_agent_start")!({ prompt: "task boundary" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(2);
     expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "task_boundary", taskId: expect.any(String) }),
+      expect.objectContaining({ phase: "task_boundary", repo, taskId: expect.any(String) }),
     );
 
-    runEnvironmentAssessmentMock.mockReturnValue({
-      ok: true,
-      sessionId: "wiring-test",
-      environmentStewardId: "envsteward-test",
-      environmentHash: "b".repeat(64),
-      mutationDetected: false,
-      mutationClassification: "none",
-      completionEligible: true,
-      evidence: { project_id: "project-a" },
-    });
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
     const inactive = mirrorFireAndForgetMock.mock.calls.find(
       (call) => call[0]?.record?.kind === "session_inactive",
     );
-    expect(inactive?.[0]?.record?.fields?.environment_hash).toBe("b".repeat(64));
-    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "shutdown", hostSessionId: "wiring-test" }),
-    );
-    expect(runP4PulseSyncMock).toHaveBeenCalledWith(
+    // The shutdown record carries the DECISION, not an assessment result: the
+    // assessment now runs detached, after this record is already written.
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      maintenance: "detached",
+      environment_reassessed: false,
+    });
+    // The fingerprint has not moved since the task-boundary assessment and the
+    // deferred session-start job already ran: nothing new would be assessed.
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         hostSessionId: "wiring-test",
-        event: "session_shutdown",
-        projectId: "project-a",
-        repo: "C:/work",
+        repo,
+        projectId: undefined,
+        assessEnvironment: false,
       }),
+    );
+    // The shutdown path never spawns an assessment of its own again.
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(2);
+    await settle();
+  });
+
+  it("session_shutdown re-assesses when the repo fingerprint moved past the last assessment", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+
+    // The repo moves AFTER the session-start assessment, and no task boundary
+    // observes it: only the shutdown decision can still catch the change.
+    writeFileSync(join(repo, "pyproject.toml"), "[project]\nname = 'moved'\n", "utf8");
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      maintenance: "detached",
+      environment_reassessed: true,
+    });
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repo, assessEnvironment: true }),
     );
     await settle();
   });
 
-  it("Task 7: session_start/turn_start queue a fire-and-forget P4 pulse and append its bounded heartbeat", async () => {
+  it("session_shutdown re-assesses when the deferred session-start assessment never ran", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
+
+    // Shutdown inside the idle window: the session-start job is dropped before
+    // it ever ran, so the detached assessment is the session's only one.
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    expect(startDetachedMaintenanceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repo, assessEnvironment: true }),
+    );
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields?.environment_reassessed).toBe(true);
+    await settle();
+  });
+
+  it("child sessions never start the detached shutdown maintenance", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    // Native child identity: a real header shape (id/timestamp agree with the
+    // session id) that additionally names its parent.
+    const headerId = "native-child";
+    const ctx = makeCtx({
+      cwd: repo,
+      sessionManager: {
+        getSessionFile: () => join(tmp, "sessions", "child-wiring-test.jsonl"),
+        getSessionId: () => headerId,
+        getHeader: () => ({
+          type: "session", version: 1, id: headerId, timestamp: "2026-01-01T00:00:00.000Z",
+          parentSession: "root-canonical",
+        }),
+        getEntries: () => [],
+      },
+    });
+
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+    expect(startDetachedMaintenanceMock).not.toHaveBeenCalled();
+    const inactive = mirrorFireAndForgetMock.mock.calls.find(
+      (call) => call[0]?.record?.kind === "session_inactive",
+    );
+    expect(inactive?.[0]?.record?.fields).toEqual({
+      reason: "quit",
+      optional_maintenance_skipped: "native_child",
+    });
+    await settle();
+  });
+
+  it("never waits for the environment assessment before the host turn (PERF-02)", async () => {
+    const handlers = loadFactory();
+    const repo = join(tmp, "repo");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, "package.json"), "{}", "utf8");
+    const ctx = makeCtx({ cwd: repo });
+    const never = Promise.withResolvers<never>();
+    runEnvironmentAssessmentMock.mockImplementation(() => never.promise);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    handlers.get("session_start")!({ reason: "startup" }, ctx);
+    // Nothing runs during an active run; an unchanged repo fingerprint never
+    // re-assesses at a task boundary.
+    await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
+    vi.advanceTimersByTime(60_000);
+    expect(runEnvironmentAssessmentMock).not.toHaveBeenCalled();
+    handlers.get("agent_end")!({ messages: [] }, ctx);
+    vi.advanceTimersByTime(5_000);
+    vi.useRealTimers();
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledTimes(1);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "session_start" }),
+    );
+
+    // A manifest change re-assesses in the background; the turn still returns.
+    writeFileSync(join(repo, "package.json"), '{"name":"changed"}', "utf8");
+    await handlers.get("before_agent_start")!({ prompt: "rename tmp to buffer" }, ctx);
+    expect(runEnvironmentAssessmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "task_boundary", repo }),
+    );
+    const kinds = mirrorFireAndForgetMock.mock.calls.map((call) => call[0]?.record?.kind);
+    expect(kinds).toContain("session_started");
+    expect(kinds).toContain("user_task");
+    expect(kinds).not.toContain("environment_assessment");
+    await settle();
+  });
+
+  it("Task 7: the session-start P4 pulse waits for an idle session; turns never spawn one", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
     runP4PulseMock.mockResolvedValue({
@@ -529,15 +690,36 @@ describe("factory wiring (src/index.ts)", () => {
       },
     });
 
-    handlers.get("session_start")!({ reason: "startup" }, ctx);
-    expect(runP4PulseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hostSessionId: "wiring-test", event: "session_start", repo: "C:/work" }),
-    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      handlers.get("session_start")!({ reason: "startup" }, ctx);
+      await handlers.get("before_agent_start")!({ prompt: "first prompt" }, ctx);
+      handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
+      // Nothing competes with host startup or an active agent run.
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
 
-    handlers.get("turn_start")!({ turnIndex: 0 }, ctx);
-    expect(runP4PulseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hostSessionId: "wiring-test", event: "turn_start", repo: "C:/work" }),
-    );
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      // A prompt arriving right after the run cancels the idle timer.
+      await handlers.get("before_agent_start")!({ prompt: "second prompt" }, ctx);
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
+
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      vi.advanceTimersByTime(4_999);
+      expect(runP4PulseMock).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(runP4PulseMock).toHaveBeenCalledTimes(1);
+      expect(runP4PulseMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostSessionId: "wiring-test", event: "session_start", repo: "C:/work" }),
+      );
+      handlers.get("turn_start")!({ turnIndex: 1 }, ctx);
+      handlers.get("agent_end")!({ messages: [] }, ctx);
+      vi.advanceTimersByTime(60_000);
+      expect(runP4PulseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
 
     await settle();
     const records = (await readFile(telemetryFile(), "utf8"))
@@ -549,61 +731,30 @@ describe("factory wiring (src/index.ts)", () => {
     expect(heartbeats[0].model_tokens_used).toBe(0);
   });
 
-  it("Task 7: session_shutdown persists heartbeat and fingerprint records before returning", () => {
+  it("session_shutdown starts the detached P4 pulse and relays no pulse telemetry itself", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx();
-    runP4PulseSyncMock.mockReturnValue({
-      ok: true,
-      sessionId: "wiring-test",
-      heartbeat: {
-        mode: "shadow", event: "session_shutdown", due: true, ran: true, healthy: true,
-        db_ok: true, cache_pruned_count: 1, git_dirty: false, issue_codes: [],
-        latency_ms: 5, model_tokens_used: 0,
-      },
-      candidates: [{ candidate_id: "candidate-1", lifecycle_state: "candidate" }],
-      fingerprints: [
-        {
-          fingerprint_id: "fp-1", category: "PROMPT_BLOAT", scope_id: "project-a",
-          occurrence_count: 3, impact_score: 4.2, evidence_count: 2, evidence_hash: "a".repeat(64),
-        },
-      ],
+    const startedAt: string[] = [];
+    startDetachedMaintenanceMock.mockImplementation((options: { repo?: string }) => {
+      startedAt.push(options.repo ?? "");
+      return { environment: false, p4: true };
     });
 
-    handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    // The handler drains the session's capsule-write barrier before persisting,
+    // so the awaited call is the completion point (the writes are still final).
+    await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
 
-    const records = readFileSync(telemetryFile(), "utf8")
-      .split("\n")
-      .filter((l) => l.trim().length > 0)
-      .map((l) => JSON.parse(l));
-    const heartbeat = records.find((r) => r.kind === "heartbeat_pulse");
-    const fingerprint = records.find((r) => r.kind === "bottleneck_fingerprint");
-    expect(heartbeat?.mode).toBe("shadow");
-    expect(heartbeat?.model_tokens_used).toBe(0);
-    expect(fingerprint?.fingerprint_id).toBe("fp-1");
-    expect(fingerprint?.evidence_hash).toBe("a".repeat(64));
-    // Privacy: the raw candidate dict (lifecycle_state, candidate_id, ...)
-    // is never serialized into telemetry by these sensors.
-    const serialized = JSON.stringify(records);
-    expect(serialized).not.toContain("candidate_id");
-    expect(serialized).not.toContain("lifecycle_state");
-    expect(records.map((r) => r.kind)).toContain("session_shutdown");
-  });
-
-  it("Task 7: a failed P4 pulse persists its error before shutdown returns", () => {
-    const handlers = loadFactory();
-    const ctx = makeCtx();
-    runP4PulseSyncMock.mockReturnValue({ ok: false, sessionId: "wiring-test", error: "p4 pulse timed out" });
-
-    const result = handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
-    expect(result).toBeUndefined();
-
+    expect(startedAt).toEqual(["C:/work"]);
     const records = readFileSync(telemetryFile(), "utf8")
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l));
     expect(records.map((r) => r.kind)).toContain("session_shutdown");
-    const error = records.find((r) => r.kind === "extension_error" && r.error === "p4 pulse timed out");
-    expect(error).toBeDefined();
+    // Python's detached pulse writes its own heartbeat/fingerprint records:
+    // the TS sensors no longer see a result, and a spawn failure has no reader.
+    expect(records.map((r) => r.kind)).not.toContain("heartbeat_pulse");
+    expect(records.map((r) => r.kind)).not.toContain("bottleneck_fingerprint");
+    expect(records.find((r) => r.kind === "extension_error")).toBeUndefined();
   });
 
   it("ledger-cwd-ordering-fix: user_task as FIRST mirror forwards ctx.cwd (project attribution)", async () => {
@@ -954,14 +1105,6 @@ describe("factory wiring (src/index.ts)", () => {
     const shadow = records.find((r) => r.kind === "rtd_shadow");
     expect(shadow).toMatchObject({ threshold: 100, would_trigger: true, reason: "ok" });
     expect(shadow!.size).toBe(502); // 500 chars + 2 JSON quotes
-  });
-  it("before_agent_start delivers project identity without requiring an unavailable command", async () => {
-    const handlers = loadFactory();
-    const result = await handlers.get("before_agent_start")!({ prompt: "inspect retained context" }, makeCtx());
-    const patch = result as { systemPrompt?: string } | undefined;
-    expect(patch?.systemPrompt).toContain("BASE SYSTEM PROMPT");
-    expect(patch?.systemPrompt).toContain("Project: default");
-    expect(patch?.systemPrompt).not.toContain("brainctl");
   });
 });
 
@@ -1318,6 +1461,30 @@ describe("Phase B VMem admission (src/index.ts)", () => {
     expect(runVmemStoreMock).not.toHaveBeenCalled();
   });
 
+  it("AutoInject delivery with VMem admission off preserves nothing (no awaited spawns for an unused artifact)", async () => {
+    process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
+    const packetText = "PACKET TEXT delivered while admission is off.";
+    runAdvisoryAutoInjectMock.mockResolvedValue({
+      customType: "brain.autoinject.packet",
+      content: packetText,
+      display: true,
+      details: { delivery_id: "del-no-admission", packet_tokens: 12 },
+    });
+    const preserve = vi.fn(async (raw: string) => ({ sha256: sha256Hex(raw), handle: "h" }));
+    const verify = vi.fn(async () => true);
+    const handlers = loadFactory({ autoinjectPacketPreserver: { preserve, verify } });
+
+    const result = (await handlers.get("before_agent_start")!({ prompt: "do the research task" }, makeCtx())) as
+      | { message?: { content?: string } }
+      | undefined;
+
+    expect(result?.message?.content).toContain(packetText);
+    expect(preserve).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+    expect(runVmemStoreMock).not.toHaveBeenCalled();
+    await settle();
+  });
+
   it("real AutoInject delivery: preserve-before-admit fires, richer packetArtifactRef/packetSha256 metadata included on success", async () => {
     enableVmemAdmissionOnly();
     process.env.SECOND_BRAIN_AUTOINJECT_MODE = "advisory";
@@ -1606,14 +1773,13 @@ const RECALL_PROMPT =
   "the sqlite migration failed on the second run with a schema version mismatch and now the upgrade is blocked";
 
 describe("Phase 14 recall gate (src/index.ts)", () => {
-  it("default OFF: before_agent_start performs ZERO spawns; PREFIX extras still delivered", async () => {
+  it("default OFF: before_agent_start performs ZERO spawns and patches no systemPrompt", async () => {
     const handlers = loadFactory();
     const ctx = makeCtx(); // deepseek, non-Sol
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined(); // PERF-01: host prompt untouched
     expect(recallRunMock).not.toHaveBeenCalled();
     // measurement records still appended (P3-D lean fail-open on missing skill)
     const records = await waitForLines(4);
@@ -1648,27 +1814,25 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     }
     expect(options.cfg.maxRows).toBe(3);
     expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default"); // PREFIX still delivered
-    expect(result!.systemPrompt).not.toContain("## Brain Brief (retrieved)"); // dynamic recall content never touches PREFIX
+    expect(result!.systemPrompt).toBeUndefined(); // dynamic recall content never touches the system prompt
     expect(result!.message?.content).toContain("## Brain Brief (retrieved)");
     expect(result!.message?.content).toContain("**sqlite migration failure recovery**");
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + trivial prompt: no recall spawn; PREFIX extras still delivered", async () => {
+  it("enabled + trivial prompt: no recall spawn and no systemPrompt patch", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     const handlers = loadFactory();
     const ctx = makeCtx();
     const result = (await handlers.get("before_agent_start")!({ prompt: "hi there" }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).not.toHaveBeenCalled();
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });
 
-  it("enabled + recall spawn fails: silent, no recall injection, no throw; PREFIX extras still delivered", async () => {
+  it("enabled + recall spawn fails: silent, no recall injection, no throw", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockRejectedValue(new Error("spawn boom"));
@@ -1677,8 +1841,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain fire-and-forget telemetry writes before teardown
   });
@@ -1692,12 +1855,12 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx) as
       | { systemPrompt?: string; message?: { content?: string } }
       | undefined;
-    expect(result?.systemPrompt).not.toContain("MUST delegate");
+    expect(result?.systemPrompt).toBeUndefined(); // dynamic recall never patches the system prompt
     expect(result?.message?.content).toContain("## Brain Brief (retrieved)");
     expect(recallRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("enabled + brief builder yields nothing (no valid rows): no recall injection; PREFIX extras still delivered", async () => {
+  it("enabled + brief builder yields nothing (no valid rows): no recall injection and no systemPrompt patch", async () => {
     process.env.SECOND_BRAIN_RECALL = "1";
     process.env.SECOND_BRAIN_RECALL_MIN_CHARS = "10";
     recallRunMock.mockResolvedValue([{ summary: "no title" }, "garbage"]);
@@ -1706,8 +1869,7 @@ describe("Phase 14 recall gate (src/index.ts)", () => {
     const result = (await handlers.get("before_agent_start")!({ prompt: RECALL_PROMPT }, ctx)) as
       | { systemPrompt?: string }
       | undefined;
-    expect(result).toBeDefined();
-    expect(result!.systemPrompt).toContain("Project: default");
+    expect(result?.systemPrompt).toBeUndefined();
     expect(recallRunMock).toHaveBeenCalledTimes(1);
     await settle(); // drain pending fire-and-forget telemetry writes before teardown
   });

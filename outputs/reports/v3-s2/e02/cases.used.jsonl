@@ -1,0 +1,21 @@
+{"id": "D01", "category": "no_benefit_overlap", "prompt": "Reply with exactly: NB-OK-17. Do not use any tools.", "expect": []}
+{"id": "D02", "category": "memory_short", "prompt": "In what order should database migrations be applied?", "expect": ["mem-a8d221e64549"]}
+{"id": "D03", "category": "memory_long_mixed", "prompt": "Answer from your current context only; do not read files or run shell commands. Question: in Second Brain, in what order should database migrations be applied? If your context contains a Second Brain memory packet, quote every memory id it lists (ids look like mem-xxxxxxxxxxxx). Then call the task tool exactly once with agent 'sonic' and the task 'Reply with exactly: CHILD-OK-391. Do no other work.' Call no tool other than task, plus hub only if you must wait for the child's result. Finish with exactly one line: RESULT <memory ids or NONE> CHILD <child reply or NONE>", "expect": ["mem-a8d221e64549"]}
+{"id": "D04", "category": "memory_imperative", "prompt": "Apply the database migrations in the right order for schema 28.", "expect": ["mem-a8d221e64549"]}
+{"id": "D05", "category": "memory_long_irrelevant_hit", "prompt": "Do not use any tools and do not read files; answer from memory only, keep it to one line, no markdown. Tell me in what order the database migrations should be applied.", "expect": ["mem-a8d221e64549"]}
+{"id": "D06", "category": "no_benefit_direct", "prompt": "Translate 'good morning' into French.", "expect": []}
+{"id": "D07", "category": "no_benefit_overlap", "prompt": "Rename the local variable tmp to buffer in this snippet: tmp = 1; print(tmp)", "expect": []}
+{"id": "D08", "category": "no_benefit_format", "prompt": "Summarize this paragraph in one sentence: the cat sat on the mat and slept.", "expect": []}
+{"id": "D09", "category": "memory_short", "prompt": "Which OMP version introduced advisor.maxNotesPerUpdate?", "expect": ["mem-5ee4c7712fa3"]}
+{"id": "D10", "category": "no_benefit_overlap", "prompt": "List three generic best practices for writing shell commands.", "expect": []}
+{"id": "D11", "category": "memory_sessions", "prompt": "What does OMP 18.1.15 document about JSONL conversation trees and resume?", "expect": ["mem-812f9bb08444"]}
+{"id": "D12", "category": "memory_recursion", "prompt": "Why is RLM child recursion blocked?", "expect": ["mem-d2f7df353130"]}
+{"id": "D13", "category": "memory_fanout", "prompt": "What replaced the hard two-worker cap?", "expect": ["mem-f745bcb2eff2"]}
+{"id": "D14", "category": "memory_long_imperative", "prompt": "Without reading any files, tell me what the migration ordering rule is.", "expect": ["mem-a8d221e64549"]}
+{"id": "D15", "category": "no_benefit_format", "prompt": "Format the answer as a markdown table with three columns and no bullet points.", "expect": []}
+{"id": "D16", "category": "no_benefit_summarize", "prompt": "Summarize the paragraph above in two sentences.", "expect": []}
+{"id": "D17", "category": "no_benefit_rewrite", "prompt": "Rewrite this sentence in the passive voice: the cat sat on the mat.", "expect": []}
+{"id": "D18", "category": "no_benefit_math", "prompt": "What is 17 times 23?", "expect": []}
+{"id": "D19", "category": "no_benefit_echo", "prompt": "Reply with exactly: OK-42", "expect": []}
+{"id": "D20", "category": "wrong_project", "prompt": "What delay and factor does the brain-pilot-demo retry helper use?", "expect": [], "forbid": ["mem-f9b4deb601eb"]}
+{"id": "D21", "category": "archived_memory", "prompt": "What is the migration ordering rule?", "expect": ["mem-a8d221e64549"], "forbid": ["mem-621006a63d2d"]}
