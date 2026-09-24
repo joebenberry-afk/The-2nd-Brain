@@ -1314,3 +1314,26 @@ def test_incidental_single_word_overlap_is_dropped(tmp_path: Path) -> None:
         )
     hits = index.search(tmp_path, "migration order", None, limit=10)
     assert [h.record.id for h in hits] == [target.id]
+
+
+def test_edit_changes_description_never_standing(tmp_path: Path) -> None:
+    rec = _saved(tmp_path, title="PYTHONHOME pollution", status="current", grade="TESTED")
+    edited = index.edit(
+        tmp_path,
+        rec.id,
+        type="gotcha",
+        add_trigger_errors=("SRE module mismatch", "SRE module mismatch"),
+        add_evidence=("env-snapshot",),
+    )
+    assert (edited.type, edited.trigger_errors, edited.evidence) == (
+        "gotcha",
+        ("SRE module mismatch",),
+        ("env-snapshot",),
+    )
+    assert (edited.status, edited.grade, edited.scope) == ("current", "TESTED", "global")
+    assert "edited_at" in edited.extra
+    with pytest.raises(RecordError):
+        index.edit(tmp_path, rec.id, type="note")
+    index.retire(tmp_path, rec.id, reason="done")
+    with pytest.raises(RecordError):
+        index.edit(tmp_path, rec.id, type="fact")

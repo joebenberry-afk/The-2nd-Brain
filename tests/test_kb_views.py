@@ -669,3 +669,15 @@ def test_compile_views_publishes_the_project_map(tmp_path: Path) -> None:
     assert data == [
         {"id": "p1", "name": "One", "paths": ["/srv/repo", "c:/work/repo"], "git_remote": None}
     ]
+
+
+def test_correction_text_keeps_decimal_numbers_whole() -> None:
+    rec = _record(
+        type="correction",
+        trigger_errors=("SRE module mismatch",),
+        title="PYTHONHOME pollution",
+        body="It pointed at a corrupted CPython 3.11 tree. Unset it first.",
+    )
+    assert views.correction_table([rec])[0]["text"] == (
+        "PYTHONHOME pollution: It pointed at a corrupted CPython 3.11 tree"
+    )
