@@ -1112,16 +1112,190 @@ def _query_candidates(text: str) -> list[str]:
     )
 
 
-def _query_plan(
+# Corpus statistics, not word lists: a plan term is *specific* when it names a
+# small slice of the corpus (at most _SPECIFIC_TERM_DF_RATIO of its documents,
+# never fewer than _SPECIFIC_TERM_MIN_DF documents so a small fixture corpus keeps
+# a usable notion of rarity). No term is special-cased by its spelling.
+_SPECIFIC_TERM_DF_RATIO = 0.10
+_SPECIFIC_TERM_MIN_DF = 2
+# A term appearing in at most two memories names one memory's own subject matter
+# (an identifier, a symbol, a named fact) rather than a topic the corpus shares.
+_UNIQUE_TERM_MAX_DF = 2
+# Body-only evidence needs two such coincidences; a single rare word in a body is
+# how instruction vocabulary ("rewrite", "passive", "nothing") overlaps memories.
+_UNIQUE_TERM_MIN_HITS = 2
+# A term spread over more than half the corpus cannot tell two memories apart. When
+# *every* plan term is that common — a young Brain home, or a request stated purely
+# in the corpus's own common vocabulary — lexical specificity has nothing left to
+# discriminate with, so a headline confirmation is the evidence available.
+_UBIQUITOUS_TERM_DF_RATIO = 0.50
+
+
+@dataclass(frozen=True)
+class QueryMatchPlan:
+    """The lexical term plan one search used, plus the statistics behind it.
+
+    ``terms`` are the IDF-ranked query terms the lexical search matched against
+    (empty when no term evidence exists at all). ``frequencies`` is the exact-token
+    document count that drove term selection; ``breadth`` is the same count under
+    the prefix matching the FTS query actually uses (``"mem"*`` also matches
+    ``memory``), an upper bound, so a short term cannot look rare here while
+    matching broadly there. ``distinct`` carries the exact prefix document count for
+    the terms whose bound could reach the ubiquity threshold, the only measurement
+    allowed to prove ubiquity. ``total_documents`` is the corpus size.
+    """
+
+    text: str
+    expression: str | None = None
+    terms: tuple[str, ...] = ()
+    required: int = 0
+    frequencies: dict[str, int] = _field(default_factory=dict)
+    total_documents: int = 0
+    breadth: dict[str, int] = _field(default_factory=dict)
+    distinct: dict[str, int] = _field(default_factory=dict)
+
+    def document_frequency(self, term: str) -> int:
+        """Corpus document count for one plan term under the matching rule.
+
+        Callers only ask about plan terms, which carry a measured breadth; an
+        unmeasured term counts as universal, never as rare.
+        """
+        if term in self.breadth:
+            return int(self.breadth[term])
+        return int(self.frequencies.get(term, self.total_documents))
+
+    def is_specific(self, term: str) -> bool:
+        """Whether a term names a small slice of the corpus rather than the corpus."""
+        return self.document_frequency(term) <= max(
+            _SPECIFIC_TERM_MIN_DF,
+            math.ceil(_SPECIFIC_TERM_DF_RATIO * self.total_documents),
+        )
+
+    def is_unique(self, term: str) -> bool:
+        """Whether a term names essentially one memory (an identifier or named fact)."""
+        return self.document_frequency(term) <= _UNIQUE_TERM_MAX_DF
+
+    def is_ubiquitous(self, term: str) -> bool:
+        """Whether a term provably spans more than half the corpus.
+
+        Only the exact distinct prefix count can prove that: the summed vocabulary
+        range is an upper bound, and a term without a measured distinct count is not
+        treated as ubiquitous.
+        """
+        measured = self.distinct.get(term)
+        if measured is None:
+            return False
+        return measured > _UBIQUITOUS_TERM_DF_RATIO * self.total_documents
+
+    def has_discriminative_term(self) -> bool:
+        """Whether any plan term can tell memories apart at all."""
+        return any(self.is_specific(term) for term in self.terms)
+
+
+@dataclass(frozen=True)
+class MatchEvidence:
+    """Why one retrieved candidate row is (or is not) treated as contributing."""
+
+    contributing: bool
+    matched: tuple[str, ...] = ()
+    headline_matched: tuple[str, ...] = ()
+    specific_matched: tuple[str, ...] = ()
+    unique_matched: tuple[str, ...] = ()
+    quoted_headline: tuple[str, ...] = ()
+
+
+def _prefix_bounds(
+    term: str,
+) -> tuple[str, str]:
+    """Half-open vocabulary-term range covering every term that starts with `term`."""
+    return term, term[:-1] + chr(ord(term[-1]) + 1)
+
+
+def _prefix_document_frequencies(
+    conn: sqlite3.Connection, terms: tuple[str, ...], total: int
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Prefix match breadth per plan term: an upper bound, plus a sound ubiquity count.
+
+    ``memory_fts_vocab.doc`` counts one exact token, so summing a prefix range over
+    it measures breadth as an *upper* bound (a document holding two matching tokens
+    counts twice). That direction is safe for every rarity claim — a term can only
+    look broader than it is — but it must never be used to *prove* ubiquity, which
+    needs a lower bound on the same measure. So the summed range is computed always
+    (one cheap range scan per term), and the exact distinct document count is asked
+    of the index with the same prefix expression only for terms whose upper bound
+    could reach the ubiquity threshold; a term whose bound stays below it cannot be
+    ubiquitous, so no index count is spent on it.
+
+    Returns ``(breadth, distinct)``; ``distinct`` holds only the measured terms, and
+    a term missing from it must not be treated as ubiquitous.
+    """
+    breadth: dict[str, int] = {}
+    distinct: dict[str, int] = {}
+    for term in terms:
+        lower, upper = _prefix_bounds(term)
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(doc), 0) FROM memory_fts_vocab WHERE term >= ? AND term < ?",
+                (lower, upper),
+            ).fetchone()
+            summed = min(int(total), int(row[0] or 0)) if row is not None else total
+        except sqlite3.Error:
+            continue
+        breadth[term] = summed
+        if summed <= _UBIQUITOUS_TERM_DF_RATIO * total:
+            continue
+        try:
+            counted = conn.execute(
+                "SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?", (f'"{term}"*',)
+            ).fetchone()
+        except sqlite3.Error:
+            continue
+        if counted is not None:
+            exact = min(int(total), int(counted[0] or 0))
+            breadth[term] = exact  # the exact count is at least as tight
+            distinct[term] = exact
+    return breadth, distinct
+
+
+def _plan_with_stats(
     text: str, *, k: int = 8, msm: float = 0.5, conn: sqlite3.Connection | None = None
-) -> tuple[str | None, tuple[str, ...], int]:
+) -> QueryMatchPlan:
+    """`_query_plan` plus the document frequencies it already had to look up.
+
+    A query with a single candidate term keeps the established single-token FTS
+    path: one term, required match count 1, and no vocabulary filter — a search for
+    a middle-of-word substring such as "car" must still take the FTS prefix path
+    instead of falling through to the substring scan (documented divergence).
+    Public `build_query` separately declines one-term input.
+    """
     candidates = _query_candidates(text)
-    if len(candidates) < 2:
-        return None, (), 0
+    if not candidates:
+        return QueryMatchPlan(text=text)
     frequencies: dict[str, int] = {}
+    total = 0
     if conn is not None:
         if not _fts_available(conn):
-            return None, (), 0
+            return QueryMatchPlan(text=text)
+        if len(candidates) == 1:
+            term = candidates[0]
+            try:
+                row = conn.execute(
+                    "SELECT doc FROM memory_fts_vocab WHERE term = ?", (term,)
+                ).fetchone()
+                total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+            except sqlite3.Error:
+                row, total = None, 0
+            breadth, distinct = _prefix_document_frequencies(conn, (term,), total)
+            return QueryMatchPlan(
+                text=text,
+                expression=f'"{term}"*',
+                terms=(term,),
+                required=1,
+                frequencies={term: int(row[0])} if row is not None else {},
+                total_documents=total,
+                breadth=breadth,
+                distinct=distinct,
+            )
         placeholders = ",".join("?" for _ in candidates)
         try:
             rows = conn.execute(
@@ -1134,9 +1308,7 @@ def _query_plan(
             total = 0
         candidates = [token for token in candidates if token in frequencies]
         if not candidates:
-            return None, (), 0
-    else:
-        total = 0
+            return QueryMatchPlan(text=text, total_documents=total)
     positions = {token: index for index, token in enumerate(candidates)}
     try:
         limit = max(1, int(k))
@@ -1151,7 +1323,26 @@ def _query_plan(
         ratio = 0.5
     required = math.ceil(ratio * len(selected))
     expression = "(" + " OR ".join(f'"{token}"*' for token in selected) + ")"
-    return expression, selected, required
+    breadth, distinct = (
+        _prefix_document_frequencies(conn, selected, total) if conn is not None else ({}, {})
+    )
+    return QueryMatchPlan(
+        text=text,
+        expression=expression,
+        terms=selected,
+        required=required,
+        frequencies=frequencies,
+        total_documents=total,
+        breadth=breadth,
+        distinct=distinct,
+    )
+
+
+def _query_plan(
+    text: str, *, k: int = 8, msm: float = 0.5, conn: sqlite3.Connection | None = None
+) -> tuple[str | None, tuple[str, ...], int]:
+    plan = _plan_with_stats(text, k=k, msm=msm, conn=conn)
+    return plan.expression, plan.terms, plan.required
 
 
 def build_query(
@@ -1165,12 +1356,151 @@ def build_query(
     return expression
 
 
-def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
+def query_match_plan(
+    home: Path | str, text: str, *, k: int = 8, msm: float = 0.5
+) -> QueryMatchPlan:
+    """The lexical term plan of `text` against `home`, with corpus statistics.
+
+    Mirrors what a lexical search of the same text would use (same vocabulary
+    lookup, same single-token fallback). A plan with no terms means no lexical term
+    evidence exists at all — FTS5 unavailable, a non-tokenizable query, or an
+    unbuilt index — and callers must not invent a gate from it.
+    """
+    home_path = Path(home)
+    _ensure_migrated(home_path)
+    conn = db.connect(_dbfile(home_path))
+    try:
+        if not _fts_available(conn):
+            return QueryMatchPlan(text=text)
+        total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
+        if _fts_count(conn) <= 0 and total > 0:
+            return QueryMatchPlan(text=text, total_documents=total)
+        return _plan_with_stats(text, k=k, msm=msm, conn=conn)
+    except sqlite3.Error:
+        return QueryMatchPlan(text=text)
+    finally:
+        conn.close()
+
+
+def _tokens(text: object) -> list[str]:
+    """The tokenizer both matching and evidence use (identical to FTS prefix hits)."""
+    return re.findall(r"[a-z0-9]{3,}", str(text or "").casefold())
+
+
+def _row_haystack_tokens(row: dict) -> list[str]:
     haystack = " ".join(
         str(row.get(field) or "") for field in ("title", "summary", "_body", "body")
     ).casefold()
-    haystack_tokens = re.findall(r"[a-z0-9]{3,}", haystack)
-    return sum(any(value.startswith(term) for value in haystack_tokens) for term in terms)
+    return re.findall(r"[a-z0-9]{3,}", haystack)
+
+
+def _headline_text(row: dict) -> str:
+    """The memory's own statement of what it is about (title/summary)."""
+    return " ".join(str(row.get(field) or "") for field in ("title", "summary"))
+
+
+def _row_headline_tokens(row: dict) -> list[str]:
+    """Headline = the memory's own statement of what it is about (title/summary)."""
+    haystack = _headline_text(row).casefold()
+    return re.findall(r"[a-z0-9]{3,}", haystack)
+
+
+def _term_hit_tokens(terms: tuple[str, ...], tokens: Sequence[str]) -> tuple[str, ...]:
+    """Plan terms with a prefix hit in `tokens` — the rule `_query_term_hits` counts."""
+    return tuple(term for term in terms if any(value.startswith(term) for value in tokens))
+
+
+def _query_term_hits(row: dict, terms: tuple[str, ...]) -> int:
+    return len(_term_hit_tokens(terms, _row_haystack_tokens(row)))
+
+
+# Straight quotes/backticks plus their curly counterparts (\u2018..\u201d), written as
+# escapes so the pattern cannot be confused with the ASCII characters around it.
+_QUOTED_SPANS = re.compile(
+    "`([^`]*)`|'([^']*)'|\"([^\"]*)\"|\u2018([^\u2019]*)\u2019|\u201c([^\u201d]*)\u201d"
+)
+
+
+def _quoted_tokens(text: object) -> list[str]:
+    """Tokens that appear inside quotes/backticks: a string mention, not a use.
+
+    A memory whose headline documents a quoted token ('format', a symbol, an error
+    id) is about that string; a request only reaches it by quoting the string too.
+    """
+    tokens: list[str] = []
+    for span in _QUOTED_SPANS.findall(str(text or "")):
+        fragment = next((part for part in span if part), "")
+        tokens.extend(_tokens(fragment))
+    return tokens
+
+
+def match_evidence(row: dict, plan: QueryMatchPlan) -> MatchEvidence:
+    """Separate "a candidate was found" from "this candidate contributes here".
+
+    Three independent ways a match is evidence about the request rather than
+    incidental keyword overlap:
+
+    * **headline** — a *specific* plan term (one the corpus does not spread
+      broadly) is confirmed by the row's own headline, the field that states what
+      the memory is about, and that headline occurrence is not a quoted mention
+      the request fails to quote back;
+    * **unique coincidence** — two or more *near-unique* plan terms (each naming
+      at most two memories) match the row anywhere;
+    * **no discrimination left** — every plan term spans more than half the corpus,
+      so no term can tell memories apart and a headline confirmation is all the
+      evidence the corpus holds (a young Brain home, or a request stated purely in
+      the corpus's common vocabulary).
+
+    Everything else is overlap on vocabulary the request happens to share with a
+    body: the live corpus produced the NB-OK-17 false injection that way, where 81
+    of 116 memories satisfied 2 of the 3 surviving plan terms ('tools', 'use',
+    'exactly') and none of them matched a headline.
+    """
+    if not plan.terms:
+        return MatchEvidence(contributing=True)
+    matched = _term_hit_tokens(plan.terms, _row_haystack_tokens(row))
+    headline_matched = _term_hit_tokens(matched, _row_headline_tokens(row))
+    specific_matched = tuple(term for term in matched if plan.is_specific(term))
+    unique_matched = tuple(term for term in matched if plan.is_unique(term))
+    quoted = _term_hit_tokens(headline_matched, _quoted_tokens(_headline_text(row)))
+    request_quotes = _term_hit_tokens(headline_matched, _quoted_tokens(plan.text))
+    quoted_headline = tuple(term for term in quoted if term not in request_quotes)
+    headline_evidence = any(
+        term in specific_matched and term not in quoted_headline for term in headline_matched
+    )
+    if (
+        not headline_evidence
+        and not plan.has_discriminative_term()
+        and all(plan.is_ubiquitous(term) for term in plan.terms)
+    ):
+        headline_evidence = any(term not in quoted_headline for term in headline_matched)
+    return MatchEvidence(
+        contributing=headline_evidence or len(unique_matched) >= _UNIQUE_TERM_MIN_HITS,
+        matched=matched,
+        headline_matched=headline_matched,
+        specific_matched=specific_matched,
+        unique_matched=unique_matched,
+        quoted_headline=quoted_headline,
+    )
+
+
+def row_contributes(row: dict, plan: QueryMatchPlan) -> bool:
+    """True when the row's match is evidence about the request, not overlap."""
+    return match_evidence(row, plan).contributing
+
+
+def contribution_filter(rows: list[dict], plan: QueryMatchPlan) -> list[dict]:
+    """Keep the rows whose lexical match is evidence about the request (PERF-01/RET-05).
+
+    Ranking decides which candidate is best; this decides whether any candidate
+    contributes at all, so retrieval and the injection decision stay separate. A
+    plan without terms carries no term evidence (FTS5 unavailable, non-tokenizable
+    query, linear-scan search): its rows pass through rather than being re-gated by
+    a plan that does not exist.
+    """
+    if not plan.terms:
+        return list(rows)
+    return [row for row in rows if match_evidence(row, plan).contributing]
 
 
 # Process-global FTS5 module availability. SQLite's FTS5 support is a
@@ -2548,24 +2878,16 @@ def search_memories(
     conn = db.connect(_dbfile(home))
     try:
         if _fts_available(conn):
-            match_expr, query_terms, msm_required = _query_plan(term, conn=conn)
-            # Public build_query deliberately declines one-term input.  Keep
-            # the established single-token FTS path for search_memories.
-            if match_expr is None:
-                single = _query_candidates(term)
-                if len(single) == 1:
-                    query_terms = (single[0],)
-                    msm_required = 1
-                    match_expr = f'"{single[0]}"*'
+            plan = _plan_with_stats(term, conn=conn)
             total = int(conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0])
             indexed = _fts_count(conn)
-            if match_expr is not None and (indexed > 0 or total == 0):
+            if plan.expression is not None and (indexed > 0 or total == 0):
                 return _search_fts(
                     conn,
-                    match_expr,
+                    plan.expression,
                     term,
-                    query_terms=query_terms,
-                    msm_required=msm_required,
+                    query_terms=plan.terms,
+                    msm_required=plan.required,
                     project_id=project_id,
                     include_history=include_history,
                     include_duplicates=include_duplicates,
