@@ -266,6 +266,61 @@ def test_append_batch_without_init_refuses_an_unknown_session(tmp_path) -> None:
     assert not (home / "state" / "sessions" / ledger.internal_session_id(HOST)).exists()
 
 
+def test_append_batch_file_is_the_same_path_as_stdin_and_is_consumed(tmp_path) -> None:
+    """`--batch-file PATH` (the host's detached shutdown handoff: no stdin survives
+    the parent) is a SOURCE for the identical batch path — same validation, same
+    one-transaction append, same reporting — and a consumed handoff is removed so
+    `state/tmp` does not accumulate one file per shutdown."""
+    home = tmp_path / "brain"
+    home.mkdir()
+    cli = _Cli(home)
+
+    handoff = home / "state" / "tmp" / "ledger-terminal-test.jsonl"
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text(
+        "\n".join(json.dumps(_event(i)) for i in range(1, 4)) + "\n", encoding="utf-8"
+    )
+
+    # `--batch-file` implies `--batch` (and `--init`, so this one process both
+    # creates the session and appends its batch, exactly like a stdin flush).
+    result = cli.run(
+        "ledger", "append", "--session", HOST, "--init", "--host", "prime",
+        "--batch-file", str(handoff),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"appended": [1, 2, 3], "errors": [], "skipped": 0}
+    assert not handoff.exists(), "a consumed handoff file must be removed"
+    _chain_is_sound(cli.integrity(), events=3)
+
+    # The same stream continues through stdin: one batch path, not two.
+    result, payload = cli.batch([json.dumps(_event(4))])
+    assert result.returncode == 0, result.stderr
+    assert payload["appended"] == [4]
+    _chain_is_sound(cli.integrity(), events=4)
+
+
+def test_append_batch_file_unreadable_fails_operationally_without_side_effects(
+    tmp_path,
+) -> None:
+    """A handoff the child cannot read is an operational failure (non-zero), never
+    an empty batch (exit 0 would settle the session's last events as handled) — and
+    it must not create the session it could never fill."""
+    home = tmp_path / "brain"
+    home.mkdir()
+    cli = _Cli(home)
+    missing = home / "state" / "tmp" / "gone.jsonl"
+
+    result = cli.run(
+        "ledger", "append", "--session", HOST, "--batch", "--init",
+        "--batch-file", str(missing),
+    )
+
+    assert result.returncode != 0
+    assert "batch-file unreadable" in result.stderr
+    assert not (home / "state" / "sessions" / ledger.internal_session_id(HOST)).exists()
+
+
 def test_append_batch_init_is_idempotent_and_keeps_attribution(tmp_path) -> None:
     """--init on a live session preserves identity/parent and resolves the same
     project attribution the separate `ledger init` would (the two callers share

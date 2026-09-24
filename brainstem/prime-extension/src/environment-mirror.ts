@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -235,26 +235,6 @@ function assessmentArgs(options: EnvironmentAssessmentOptions): string[] {
   for (const field of options.expectedFields ?? []) args.push("--expected-field", field);
   args.push("--json");
   return args;
-}
-
-/** Blocking variant: only for shutdown, where the process may exit before a callback runs. */
-export function runEnvironmentAssessmentSync(
-  options: EnvironmentAssessmentOptions,
-): EnvironmentAssessmentResult {
-  const python = pythonExe(options.home, options.python);
-  if (!existsSync(python)) return { ok: true, sessionId: options.hostSessionId };
-  try {
-    const stdout = execFileSync(python, assessmentArgs(options), {
-      cwd: options.home,
-      env: runEnv(options.home),
-      timeout: options.timeoutMs ?? ENVIRONMENT_DEFAULT_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 1024 * 1024,
-    });
-    return parseResult(String(stdout), options.hostSessionId);
-  } catch (error) {
-    return { ok: false, sessionId: options.hostSessionId, error: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 /**

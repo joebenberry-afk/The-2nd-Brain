@@ -19,10 +19,6 @@ vi.mock("../src/autoinject", async (importOriginal) => ({
 vi.mock("../src/environment-mirror", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/environment-mirror")>()),
 
-  runEnvironmentAssessmentSync: () => ({
-    ok: true, environmentStewardId: "native-test", environmentHash: "a".repeat(64),
-    mutationDetected: false, mutationClassification: "none", completionEligible: true,
-  }),
   runEnvironmentAssessment: async () => ({
     ok: true, environmentStewardId: "native-test", environmentHash: "a".repeat(64),
     mutationDetected: false, mutationClassification: "none", completionEligible: true,
@@ -30,7 +26,6 @@ vi.mock("../src/environment-mirror", async (importOriginal) => ({
 }));
 vi.mock("../src/p4-mirror", () => ({
   runP4Pulse: async () => ({ ok: true }),
-  runP4PulseSync: () => ({ ok: true }),
 }));
 
 let home: string;

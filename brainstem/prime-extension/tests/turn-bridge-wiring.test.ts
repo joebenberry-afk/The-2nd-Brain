@@ -37,7 +37,7 @@ const runActiveStateEnsureMock = vi.hoisted(() => vi.fn());
 const runActiveStateUpdateMock = vi.hoisted(() => vi.fn());
 const renderActiveStateMock = vi.hoisted(() => vi.fn());
 const runOmpVisibilityMock = vi.hoisted(() => vi.fn());
-const runEnvironmentAssessmentSyncMock = vi.hoisted(() => vi.fn(() => ({ ok: true, sessionId: "s" })));
+const startDetachedMaintenanceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/turn-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/turn-bridge")>();
@@ -82,12 +82,13 @@ vi.mock("../src/environment-mirror", async (importOriginal) => {
     // A constant fingerprint: no prompt boundary re-assesses the environment in
     // these tests (the cadence itself is covered by the environment tests).
     environmentFingerprint: () => "fingerprint-test",
-    runEnvironmentAssessmentSync: runEnvironmentAssessmentSyncMock,
     runEnvironmentAssessment: async () => ({ ok: true, sessionId: "s" }),
   };
 });
+vi.mock("../src/detached-maintenance", () => ({
+  startDetachedShutdownMaintenance: startDetachedMaintenanceMock,
+}));
 vi.mock("../src/p4-mirror", () => ({
-  runP4PulseSync: () => ({ ok: true, sessionId: "s" }),
   runP4Pulse: async () => ({ ok: true, sessionId: "s" }),
 }));
 vi.mock("../src/ledger-mirror", async (importOriginal) => {
@@ -179,8 +180,8 @@ beforeEach(async () => {
     hydrated_instructions: {},
     error: null,
   });
-  runEnvironmentAssessmentSyncMock.mockReset();
-  runEnvironmentAssessmentSyncMock.mockImplementation(() => ({ ok: true, sessionId: "s" }));
+  startDetachedMaintenanceMock.mockReset();
+  startDetachedMaintenanceMock.mockImplementation(() => ({ environment: true, p4: true }));
 });
 
 afterEach(async () => {
@@ -642,9 +643,9 @@ describe("quiet fast path wiring", () => {
       log.push("ensure");
       return quietGate.promise;
     });
-    runEnvironmentAssessmentSyncMock.mockImplementation(() => {
+    startDetachedMaintenanceMock.mockImplementation(() => {
       log.push("shutdown_persistence");
-      return { ok: true, sessionId: "s" };
+      return { environment: true, p4: true };
     });
     const handlers = loadFactory();
     await handlers.get("before_agent_start")!({ prompt: PROMPT }, makeCtx());
@@ -667,7 +668,6 @@ describe("quiet fast path wiring", () => {
     });
     await shutdown;
     expect(log).toEqual(["ensure", "shutdown_persistence"]);
-    runEnvironmentAssessmentSyncMock.mockImplementation(() => ({ ok: true, sessionId: "s" }));
     const lines = await telemetryLines(1, "session_shutdown");
     expect(lines.some((line) => line.kind === "session_shutdown")).toBe(true);
   });
