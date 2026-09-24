@@ -27,5 +27,18 @@ are Windows-only.
 
 The cloud VM has no OMP host, installed extension or live canonical Brain, so
 live `omp` runs and installed-runtime checks must run on the Windows machine.
+
+On Linux these tests fail for platform reasons and pass on Windows — do not
+"fix" them by weakening assertions:
+- `tests/test_antigravity_adapter.py` — fixtures use `C:\work\…` repo paths.
+- `tests/test_prime_installer.py` — runs the `.ps1` installers via `powershell`.
+- `tests/test_p3_campaign_harness.py::test_do_nothing_agent_cannot_produce_valid_arm`
+  — executes a fake `.cmd` agent.
+- `tests/test_release_history.py::test_sealed_approval_records_still_bind_their_own_bytes`
+  — sealed digests cover the Windows (CRLF) working-copy bytes.
+- `tests/test_repository_intelligence_live.py` — a real Linux defect: the
+  incremental index skips a file whose mtime is within 1 ms of the stored one
+  without hashing it, and Linux timestamps can be that coarse.
+
 The current V3 baseline is
 `docs/intake/Second_Brain_V3_Requirements_2026-09-24/` (start at `START_V3.md`).

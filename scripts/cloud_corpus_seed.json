@@ -1,11 +1,11 @@
 {
- "exported_at": "2026-09-24T18:28:56+00:00",
+ "exported_at": "2026-09-24T18:33:24+00:00",
  "schema_version": 28,
  "tables": {
   "memories": [
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-b67de5057f76__v2.md",
+    "body_path": "memory/semantic/mem-b67de5057f76__v2.md",
     "contradiction_count": 0,
     "created_at": "2026-08-14T07:03:40.084289+00:00",
     "current_version": 2,
@@ -31,7 +31,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-29557f93448f.md",
+    "body_path": "memory/semantic/mem-29557f93448f.md",
     "contradiction_count": 0,
     "created_at": "2026-08-14T07:03:40.229480+00:00",
     "current_version": 1,
@@ -57,7 +57,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-b0d6cc3de0ab.md",
+    "body_path": "memory/semantic/mem-b0d6cc3de0ab.md",
     "contradiction_count": 0,
     "created_at": "2026-08-14T07:03:40.370164+00:00",
     "current_version": 1,
@@ -83,7 +83,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-30b06d1e51c1.md",
+    "body_path": "memory/semantic/mem-30b06d1e51c1.md",
     "contradiction_count": 0,
     "created_at": "2026-08-14T07:14:45.943300+00:00",
     "current_version": 1,
@@ -109,7 +109,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-4592f5573486.md",
+    "body_path": "memory/semantic/mem-4592f5573486.md",
     "contradiction_count": 0,
     "created_at": "2026-08-14T07:14:46.060798+00:00",
     "current_version": 1,
@@ -135,7 +135,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f21a28b715f1__v2.md",
+    "body_path": "memory/semantic/mem-f21a28b715f1__v2.md",
     "contradiction_count": 1,
     "created_at": "2026-08-14T10:44:34.051988+00:00",
     "current_version": 2,
@@ -161,7 +161,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-ae7a34f105c5.md",
+    "body_path": "memory/semantic/mem-ae7a34f105c5.md",
     "contradiction_count": 0,
     "created_at": "2026-08-15T19:41:33.421155+00:00",
     "current_version": 1,
@@ -187,7 +187,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-d2f7df353130.md",
+    "body_path": "memory/semantic/mem-d2f7df353130.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T00:36:05.005439+00:00",
     "current_version": 1,
@@ -213,7 +213,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f745bcb2eff2.md",
+    "body_path": "memory/semantic/mem-f745bcb2eff2.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T00:36:05.052477+00:00",
     "current_version": 1,
@@ -239,7 +239,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-174b3f5abbba.md",
+    "body_path": "memory/semantic/mem-174b3f5abbba.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T00:36:05.094850+00:00",
     "current_version": 1,
@@ -265,7 +265,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-cd1f9e0cdac4.md",
+    "body_path": "memory/semantic/mem-cd1f9e0cdac4.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T00:36:05.137453+00:00",
     "current_version": 1,
@@ -291,7 +291,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-771d74aaa3fd.md",
+    "body_path": "memory/semantic/mem-771d74aaa3fd.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T02:47:23.301178+00:00",
     "current_version": 1,
@@ -317,7 +317,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-bb634354ec69__v2.md",
+    "body_path": "memory/semantic/mem-bb634354ec69__v2.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T16:36:02.816688+00:00",
     "current_version": 2,
@@ -343,7 +343,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-79d7c4fd9876.md",
+    "body_path": "memory/semantic/mem-79d7c4fd9876.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T17:49:12.775149+00:00",
     "current_version": 1,
@@ -369,7 +369,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-99df66e3c8f6.md",
+    "body_path": "memory/semantic/mem-99df66e3c8f6.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T17:49:12.842470+00:00",
     "current_version": 1,
@@ -395,7 +395,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-621006a63d2d.md",
+    "body_path": "memory/semantic/mem-621006a63d2d.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T18:05:31.198994+00:00",
     "current_version": 1,
@@ -421,7 +421,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a8d221e64549.md",
+    "body_path": "memory/semantic/mem-a8d221e64549.md",
     "contradiction_count": 0,
     "created_at": "2026-08-16T18:12:48.523090+00:00",
     "current_version": 1,
@@ -447,7 +447,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-bde4dc4aee9e.md",
+    "body_path": "memory/semantic/mem-bde4dc4aee9e.md",
     "contradiction_count": 0,
     "created_at": "2026-08-17T22:28:01.848754+00:00",
     "current_version": 1,
@@ -473,7 +473,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7ee245204a5e.md",
+    "body_path": "memory/semantic/mem-7ee245204a5e.md",
     "contradiction_count": 0,
     "created_at": "2026-08-21T15:23:33.943119+00:00",
     "current_version": 1,
@@ -499,7 +499,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-3d8ffbd6538d.md",
+    "body_path": "memory/semantic/mem-3d8ffbd6538d.md",
     "contradiction_count": 0,
     "created_at": "2026-08-24T04:16:30.362926+00:00",
     "current_version": 1,
@@ -525,7 +525,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-fd5c6f1dc8b1.md",
+    "body_path": "memory/semantic/mem-fd5c6f1dc8b1.md",
     "contradiction_count": 0,
     "created_at": "2026-08-24T04:32:09.338002+00:00",
     "current_version": 1,
@@ -551,7 +551,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f5ad9ae46d7c.md",
+    "body_path": "memory/semantic/mem-f5ad9ae46d7c.md",
     "contradiction_count": 0,
     "created_at": "2026-08-24T05:29:54.120348+00:00",
     "current_version": 1,
@@ -577,7 +577,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-60c403ed0839.md",
+    "body_path": "memory/semantic/mem-60c403ed0839.md",
     "contradiction_count": 0,
     "created_at": "2026-08-24T05:33:26.087900+00:00",
     "current_version": 1,
@@ -603,7 +603,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-89440840b2f9.md",
+    "body_path": "memory/semantic/mem-89440840b2f9.md",
     "contradiction_count": 0,
     "created_at": "2026-08-24T05:42:06.992554+00:00",
     "current_version": 1,
@@ -629,7 +629,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-c7255da7fefb.md",
+    "body_path": "memory/semantic/mem-c7255da7fefb.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:01:02.557264+00:00",
     "current_version": 1,
@@ -655,7 +655,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-4a796459e7b6.md",
+    "body_path": "memory/semantic/mem-4a796459e7b6.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:02:11.440670+00:00",
     "current_version": 1,
@@ -681,7 +681,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-b2e9a6610de6.md",
+    "body_path": "memory/semantic/mem-b2e9a6610de6.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:06:48.461396+00:00",
     "current_version": 1,
@@ -707,7 +707,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-28454b0abf5e.md",
+    "body_path": "memory/semantic/mem-28454b0abf5e.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:17:23.952858+00:00",
     "current_version": 1,
@@ -733,7 +733,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a4af6c191047.md",
+    "body_path": "memory/semantic/mem-a4af6c191047.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:19:02.202234+00:00",
     "current_version": 1,
@@ -759,7 +759,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a97fe838817c__v2.md",
+    "body_path": "memory/semantic/mem-a97fe838817c__v2.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:20:47.268908+00:00",
     "current_version": 2,
@@ -785,7 +785,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a8ead3de410f.md",
+    "body_path": "memory/semantic/mem-a8ead3de410f.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:27:24.617332+00:00",
     "current_version": 1,
@@ -811,7 +811,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-6d5ec5875344.md",
+    "body_path": "memory/semantic/mem-6d5ec5875344.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:28:20.726181+00:00",
     "current_version": 1,
@@ -837,7 +837,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-26a01ba54b6f.md",
+    "body_path": "memory/semantic/mem-26a01ba54b6f.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:33:23.478184+00:00",
     "current_version": 1,
@@ -863,7 +863,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-8adbc449f9e0.md",
+    "body_path": "memory/semantic/mem-8adbc449f9e0.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:34:50.272933+00:00",
     "current_version": 1,
@@ -889,7 +889,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-15170d4924df.md",
+    "body_path": "memory/semantic/mem-15170d4924df.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:41:04.224299+00:00",
     "current_version": 1,
@@ -915,7 +915,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7daaa380f599__v2.md",
+    "body_path": "memory/semantic/mem-7daaa380f599__v2.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:50:52.523001+00:00",
     "current_version": 2,
@@ -941,7 +941,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-16647236fa3c.md",
+    "body_path": "memory/semantic/mem-16647236fa3c.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:51:08.667780+00:00",
     "current_version": 1,
@@ -967,7 +967,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-eaaccf45995d.md",
+    "body_path": "memory/semantic/mem-eaaccf45995d.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:53:26.096912+00:00",
     "current_version": 1,
@@ -993,7 +993,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f20ea3f2f8ce.md",
+    "body_path": "memory/semantic/mem-f20ea3f2f8ce.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T09:57:05.411866+00:00",
     "current_version": 1,
@@ -1019,7 +1019,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-e99e58420424.md",
+    "body_path": "memory/semantic/mem-e99e58420424.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:00:47.418115+00:00",
     "current_version": 1,
@@ -1045,7 +1045,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-5ec9b9283907.md",
+    "body_path": "memory/semantic/mem-5ec9b9283907.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:03:57.979613+00:00",
     "current_version": 1,
@@ -1071,7 +1071,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f50220c8343f.md",
+    "body_path": "memory/semantic/mem-f50220c8343f.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:04:07.244748+00:00",
     "current_version": 1,
@@ -1097,7 +1097,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a4e1710e19d6.md",
+    "body_path": "memory/semantic/mem-a4e1710e19d6.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:07:05.717731+00:00",
     "current_version": 1,
@@ -1123,7 +1123,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-389bf41a9601.md",
+    "body_path": "memory/semantic/mem-389bf41a9601.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:08:43.287714+00:00",
     "current_version": 1,
@@ -1149,7 +1149,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-42c9700fa242.md",
+    "body_path": "memory/semantic/mem-42c9700fa242.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:11:47.518104+00:00",
     "current_version": 1,
@@ -1175,7 +1175,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-69e44c5b85a5.md",
+    "body_path": "memory/semantic/mem-69e44c5b85a5.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:14:04.605193+00:00",
     "current_version": 1,
@@ -1201,7 +1201,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-33ea5e925ac9.md",
+    "body_path": "memory/semantic/mem-33ea5e925ac9.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:17:27.599857+00:00",
     "current_version": 1,
@@ -1227,7 +1227,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-eb739dee3c9b.md",
+    "body_path": "memory/semantic/mem-eb739dee3c9b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:20:38.631333+00:00",
     "current_version": 1,
@@ -1253,7 +1253,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-93c5c68d979b.md",
+    "body_path": "memory/semantic/mem-93c5c68d979b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:21:21.124930+00:00",
     "current_version": 1,
@@ -1279,7 +1279,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-28e9391580bf.md",
+    "body_path": "memory/semantic/mem-28e9391580bf.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:25:29.762838+00:00",
     "current_version": 1,
@@ -1305,7 +1305,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-54e98fd1c79b.md",
+    "body_path": "memory/semantic/mem-54e98fd1c79b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:28:12.050623+00:00",
     "current_version": 1,
@@ -1331,7 +1331,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-2af778b663f3.md",
+    "body_path": "memory/semantic/mem-2af778b663f3.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:28:37.208505+00:00",
     "current_version": 1,
@@ -1357,7 +1357,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-27a63457268a.md",
+    "body_path": "memory/semantic/mem-27a63457268a.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:30:29.092625+00:00",
     "current_version": 1,
@@ -1383,7 +1383,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-dfadf5ddecd9.md",
+    "body_path": "memory/semantic/mem-dfadf5ddecd9.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:30:53.080554+00:00",
     "current_version": 1,
@@ -1409,7 +1409,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-46205483dd56.md",
+    "body_path": "memory/semantic/mem-46205483dd56.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:33:26.357145+00:00",
     "current_version": 1,
@@ -1435,7 +1435,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-1222283b65da.md",
+    "body_path": "memory/semantic/mem-1222283b65da.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:45:30.241826+00:00",
     "current_version": 1,
@@ -1461,7 +1461,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-4216c4ad856b.md",
+    "body_path": "memory/semantic/mem-4216c4ad856b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T10:45:39.523638+00:00",
     "current_version": 1,
@@ -1487,7 +1487,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-ba8a0552b0ac.md",
+    "body_path": "memory/semantic/mem-ba8a0552b0ac.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T14:46:46.594487+00:00",
     "current_version": 1,
@@ -1513,7 +1513,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-e147d49d5c09.md",
+    "body_path": "memory/semantic/mem-e147d49d5c09.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T14:55:13.745099+00:00",
     "current_version": 1,
@@ -1539,7 +1539,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7f11e32b5e6e.md",
+    "body_path": "memory/semantic/mem-7f11e32b5e6e.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T15:00:56.805722+00:00",
     "current_version": 1,
@@ -1565,7 +1565,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7001b2e04e08.md",
+    "body_path": "memory/semantic/mem-7001b2e04e08.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T15:10:10.214081+00:00",
     "current_version": 1,
@@ -1591,7 +1591,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-95e7a7389cfb.md",
+    "body_path": "memory/semantic/mem-95e7a7389cfb.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:09:37.503840+00:00",
     "current_version": 1,
@@ -1617,7 +1617,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-46448b8c4ab7.md",
+    "body_path": "memory/semantic/mem-46448b8c4ab7.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:12:19.289177+00:00",
     "current_version": 1,
@@ -1643,7 +1643,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-6b07e0e7d311.md",
+    "body_path": "memory/semantic/mem-6b07e0e7d311.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:14:16.694965+00:00",
     "current_version": 1,
@@ -1669,7 +1669,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f7239af45a1d.md",
+    "body_path": "memory/semantic/mem-f7239af45a1d.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:23:02.966703+00:00",
     "current_version": 1,
@@ -1695,7 +1695,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-6557c215d72b.md",
+    "body_path": "memory/semantic/mem-6557c215d72b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:26:20.857706+00:00",
     "current_version": 1,
@@ -1721,7 +1721,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-8c8b13bf82b4.md",
+    "body_path": "memory/semantic/mem-8c8b13bf82b4.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:35:02.136615+00:00",
     "current_version": 1,
@@ -1747,7 +1747,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-265240eb1b6b.md",
+    "body_path": "memory/semantic/mem-265240eb1b6b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:39:36.298922+00:00",
     "current_version": 1,
@@ -1773,7 +1773,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f1ea8ffa41a8.md",
+    "body_path": "memory/semantic/mem-f1ea8ffa41a8.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:42:34.412999+00:00",
     "current_version": 1,
@@ -1799,7 +1799,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-55c71a309022.md",
+    "body_path": "memory/semantic/mem-55c71a309022.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:45:28.604572+00:00",
     "current_version": 1,
@@ -1825,7 +1825,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-cbbb82904ce5.md",
+    "body_path": "memory/semantic/mem-cbbb82904ce5.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:52:06.045549+00:00",
     "current_version": 1,
@@ -1851,7 +1851,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-c4c36ca00db0.md",
+    "body_path": "memory/semantic/mem-c4c36ca00db0.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:52:57.875706+00:00",
     "current_version": 1,
@@ -1877,7 +1877,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-918af823ea7d.md",
+    "body_path": "memory/semantic/mem-918af823ea7d.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:54:43.538565+00:00",
     "current_version": 1,
@@ -1903,7 +1903,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7667f0b43eec.md",
+    "body_path": "memory/semantic/mem-7667f0b43eec.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T18:58:51.602440+00:00",
     "current_version": 1,
@@ -1929,7 +1929,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-afd754090803.md",
+    "body_path": "memory/semantic/mem-afd754090803.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:03:22.175804+00:00",
     "current_version": 1,
@@ -1955,7 +1955,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-17919407e022.md",
+    "body_path": "memory/semantic/mem-17919407e022.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:06:40.621393+00:00",
     "current_version": 1,
@@ -1981,7 +1981,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-80706130512e.md",
+    "body_path": "memory/semantic/mem-80706130512e.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:11:42.072074+00:00",
     "current_version": 1,
@@ -2007,7 +2007,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-58f449274500.md",
+    "body_path": "memory/semantic/mem-58f449274500.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:17:25.960190+00:00",
     "current_version": 1,
@@ -2033,7 +2033,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-fec561d368cb.md",
+    "body_path": "memory/semantic/mem-fec561d368cb.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:20:55.127886+00:00",
     "current_version": 1,
@@ -2059,7 +2059,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-ad46a6ce2cd1.md",
+    "body_path": "memory/semantic/mem-ad46a6ce2cd1.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:26:25.256346+00:00",
     "current_version": 1,
@@ -2085,7 +2085,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-b582fe51e0ad.md",
+    "body_path": "memory/semantic/mem-b582fe51e0ad.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:31:09.340117+00:00",
     "current_version": 1,
@@ -2111,7 +2111,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-36f8b61546e8.md",
+    "body_path": "memory/semantic/mem-36f8b61546e8.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:36:01.007187+00:00",
     "current_version": 1,
@@ -2137,7 +2137,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-f9900afdcacf.md",
+    "body_path": "memory/semantic/mem-f9900afdcacf.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:45:34.601954+00:00",
     "current_version": 1,
@@ -2163,7 +2163,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-c070eabfb367.md",
+    "body_path": "memory/semantic/mem-c070eabfb367.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T19:53:31.870500+00:00",
     "current_version": 1,
@@ -2189,7 +2189,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-45d2ab7eb2b4.md",
+    "body_path": "memory/semantic/mem-45d2ab7eb2b4.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T20:01:47.779088+00:00",
     "current_version": 1,
@@ -2215,7 +2215,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-478737e47cf9.md",
+    "body_path": "memory/semantic/mem-478737e47cf9.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T20:07:03.558580+00:00",
     "current_version": 1,
@@ -2241,7 +2241,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-17cdb5558c11.md",
+    "body_path": "memory/semantic/mem-17cdb5558c11.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T20:22:01.834167+00:00",
     "current_version": 1,
@@ -2267,7 +2267,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7a29c44e6be5.md",
+    "body_path": "memory/semantic/mem-7a29c44e6be5.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T20:34:44.918560+00:00",
     "current_version": 1,
@@ -2293,7 +2293,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-0fcad79fd46b.md",
+    "body_path": "memory/semantic/mem-0fcad79fd46b.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T20:36:13.815890+00:00",
     "current_version": 1,
@@ -2319,7 +2319,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-7dda00fb6cdc.md",
+    "body_path": "memory/semantic/mem-7dda00fb6cdc.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T21:05:06.051094+00:00",
     "current_version": 1,
@@ -2345,7 +2345,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-53393f42418c.md",
+    "body_path": "memory/semantic/mem-53393f42418c.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T22:40:12.581386+00:00",
     "current_version": 1,
@@ -2371,7 +2371,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-75ef9bf9e33f.md",
+    "body_path": "memory/semantic/mem-75ef9bf9e33f.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T22:43:52.919966+00:00",
     "current_version": 1,
@@ -2397,7 +2397,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-c92ee39a10a1.md",
+    "body_path": "memory/semantic/mem-c92ee39a10a1.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T22:47:02.924288+00:00",
     "current_version": 1,
@@ -2423,7 +2423,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-494903a96872.md",
+    "body_path": "memory/semantic/mem-494903a96872.md",
     "contradiction_count": 0,
     "created_at": "2026-08-28T23:08:51.163147+00:00",
     "current_version": 1,
@@ -2449,7 +2449,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-3848b16778bd.md",
+    "body_path": "memory/semantic/mem-3848b16778bd.md",
     "contradiction_count": 0,
     "created_at": "2026-09-07T11:55:29.425983+00:00",
     "current_version": 1,
@@ -2475,7 +2475,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-ad3d80115ee2.md",
+    "body_path": "memory/semantic/mem-ad3d80115ee2.md",
     "contradiction_count": 0,
     "created_at": "2026-09-07T13:17:52.311949+00:00",
     "current_version": 1,
@@ -2501,7 +2501,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-3693230ebaf0.md",
+    "body_path": "memory/semantic/mem-3693230ebaf0.md",
     "contradiction_count": 0,
     "created_at": "2026-09-09T04:44:44.749689+00:00",
     "current_version": 1,
@@ -2527,7 +2527,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-ca894eda5772.md",
+    "body_path": "memory/semantic/mem-ca894eda5772.md",
     "contradiction_count": 0,
     "created_at": "2026-09-10T23:07:52.058956+00:00",
     "current_version": 1,
@@ -2553,7 +2553,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-b389ff7ff08b.md",
+    "body_path": "memory/semantic/mem-b389ff7ff08b.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:22.498670+00:00",
     "current_version": 1,
@@ -2579,7 +2579,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-d7311da506a7.md",
+    "body_path": "memory/semantic/mem-d7311da506a7.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:22.791132+00:00",
     "current_version": 1,
@@ -2605,7 +2605,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-812f9bb08444.md",
+    "body_path": "memory/semantic/mem-812f9bb08444.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:23.071474+00:00",
     "current_version": 1,
@@ -2631,7 +2631,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-e0ee543da163.md",
+    "body_path": "memory/semantic/mem-e0ee543da163.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:23.357470+00:00",
     "current_version": 1,
@@ -2657,7 +2657,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-a6c1b8123c08.md",
+    "body_path": "memory/semantic/mem-a6c1b8123c08.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:23.643693+00:00",
     "current_version": 1,
@@ -2683,7 +2683,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-5bc2da33777a.md",
+    "body_path": "memory/semantic/mem-5bc2da33777a.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:23.928105+00:00",
     "current_version": 1,
@@ -2709,7 +2709,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-e6a79159acd1.md",
+    "body_path": "memory/semantic/mem-e6a79159acd1.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:24.212174+00:00",
     "current_version": 1,
@@ -2735,7 +2735,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-42f674862947.md",
+    "body_path": "memory/semantic/mem-42f674862947.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:24.501637+00:00",
     "current_version": 1,
@@ -2761,7 +2761,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-333cb2aae270.md",
+    "body_path": "memory/semantic/mem-333cb2aae270.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:24.781967+00:00",
     "current_version": 1,
@@ -2787,7 +2787,7 @@
    },
    {
     "authority_ceiling": "advisory",
-    "body_path": "memory\\semantic\\mem-5ee4c7712fa3.md",
+    "body_path": "memory/semantic/mem-5ee4c7712fa3.md",
     "contradiction_count": 0,
     "created_at": "2026-09-11T21:08:25.070235+00:00",
     "current_version": 1,
@@ -2813,7 +2813,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-b7011ab797ac.md",
+    "body_path": "memory/semantic/mem-b7011ab797ac.md",
     "contradiction_count": 0,
     "created_at": "2026-09-13T17:00:16.788423+00:00",
     "current_version": 1,
@@ -2839,7 +2839,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-edc8a600a070.md",
+    "body_path": "memory/semantic/mem-edc8a600a070.md",
     "contradiction_count": 0,
     "created_at": "2026-09-15T17:19:40.794230+00:00",
     "current_version": 1,
@@ -2865,7 +2865,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-b3990fdbee93.md",
+    "body_path": "memory/semantic/mem-b3990fdbee93.md",
     "contradiction_count": 0,
     "created_at": "2026-09-15T17:57:58.861122+00:00",
     "current_version": 1,
@@ -2891,7 +2891,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-27fc58215bba.md",
+    "body_path": "memory/semantic/mem-27fc58215bba.md",
     "contradiction_count": 0,
     "created_at": "2026-09-15T18:52:05.713088+00:00",
     "current_version": 1,
@@ -2917,7 +2917,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-b10a5474054e.md",
+    "body_path": "memory/semantic/mem-b10a5474054e.md",
     "contradiction_count": 0,
     "created_at": "2026-09-19T02:48:21.665975+00:00",
     "current_version": 1,
@@ -2943,7 +2943,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-f9b4deb601eb.md",
+    "body_path": "memory/semantic/mem-f9b4deb601eb.md",
     "contradiction_count": 0,
     "created_at": "2026-09-19T02:58:33.385752+00:00",
     "current_version": 1,
@@ -2969,7 +2969,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-d8227d4a3e7b.md",
+    "body_path": "memory/semantic/mem-d8227d4a3e7b.md",
     "contradiction_count": 0,
     "created_at": "2026-09-21T10:17:45.485326+00:00",
     "current_version": 1,
@@ -2995,7 +2995,7 @@
    },
    {
     "authority_ceiling": "project_rule",
-    "body_path": "memory\\semantic\\mem-6849e6dc3a1f.md",
+    "body_path": "memory/semantic/mem-6849e6dc3a1f.md",
     "contradiction_count": 0,
     "created_at": "2026-09-21T10:17:49.033128+00:00",
     "current_version": 1,
@@ -5424,7 +5424,7 @@
   ],
   "memory_versions": [
    {
-    "body_path": "memory\\semantic\\mem-b67de5057f76.md",
+    "body_path": "memory/semantic/mem-b67de5057f76.md",
     "change_note": "repo reality changed: uv tree repaired; memory narrowed to defensive guidance",
     "created_at": "2026-08-14T07:03:53.264416+00:00",
     "memory_id": "mem-b67de5057f76",
@@ -5432,7 +5432,7 @@
     "version": 1
    },
    {
-    "body_path": "memory\\semantic\\mem-f21a28b715f1.md",
+    "body_path": "memory/semantic/mem-f21a28b715f1.md",
     "change_note": "experiment 4: repo contradicted the stale claim (security review passed with 'ruff format'); detector fixed in experiment 3",
     "created_at": "2026-08-14T10:44:34.051988+00:00",
     "memory_id": "mem-f21a28b715f1",
@@ -5440,7 +5440,7 @@
     "version": 1
    },
    {
-    "body_path": "memory\\semantic\\mem-bb634354ec69.md",
+    "body_path": "memory/semantic/mem-bb634354ec69.md",
     "change_note": "P3 surgical recovery audit: adapter scaffold retained, hook contract unproven, synthetic Gemini campaign invalidated; real campaign pending",
     "created_at": "2026-08-16T16:36:02.816688+00:00",
     "memory_id": "mem-bb634354ec69",
@@ -5448,7 +5448,7 @@
     "version": 1
    },
    {
-    "body_path": "memory\\semantic\\mem-a97fe838817c.md",
+    "body_path": "memory/semantic/mem-a97fe838817c.md",
     "change_note": "Corrected the runtime instance identifier from the initial candidate memory.",
     "created_at": "2026-08-28T09:20:47.268908+00:00",
     "memory_id": "mem-a97fe838817c",
@@ -5456,7 +5456,7 @@
     "version": 1
    },
    {
-    "body_path": "memory\\semantic\\mem-7daaa380f599.md",
+    "body_path": "memory/semantic/mem-7daaa380f599.md",
     "change_note": "Corrected the runtime instance identifier in the initial candidate record.",
     "created_at": "2026-08-28T09:50:52.523001+00:00",
     "memory_id": "mem-7daaa380f599",
