@@ -153,7 +153,7 @@ def test_contradiction_prevents_silent_strengthening(brain_home: Path) -> None:
         title="Cache Expiry Rule",
         body="Cache entries expire after 30 seconds unconditionally.",
         scope="project",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, mid, status="current")
     reconsolidation.apply_heat(brain_home, mid, "HOT")
@@ -320,7 +320,7 @@ def test_content_plan_restores_version_and_retains_new_evidence(
     assert current["row"]["current_version"] > before["row"]["current_version"]
     assert "Cache only successful responses." in current["body"]
     assert current["row"]["origin_root_sha"] == "a" * 64
-    assert current["row"]["authority_ceiling"] == "project_rule"
+    assert current["row"]["authority_ceiling"] == "advisory"
     reverted = reconsolidation.revert_plan(brain_home, applied)
     assert semantic.show_memory(brain_home, mid)["body"] == before["body"]
     assert {source["ref"] for source in semantic._sources(brain_home, mid)} == {
@@ -447,11 +447,11 @@ def test_merge_inherits_weakest_authority_and_guards_every_output(brain_home: Pa
     applied = reconsolidation.apply_plan(brain_home, plan)
     merged = applied["applied_result"]["created_memory_ids"][0]
     row = semantic.show_memory(brain_home, merged)["row"]
-    assert (row["origin_class"], row["origin_root_sha"], row["authority_ceiling"]) == (
-        "EXTERNAL_WEB",
-        "b" * 64,
-        "advisory",
-    )
+    # Neither input carries issuer-granted authority, so the derived memory
+    # cannot inherit project authority: it stays advisory. With equal ceilings
+    # the reduction keeps the primary input's origin metadata.
+    assert row["authority_ceiling"] == "advisory"
+    assert (row["origin_class"], row["origin_root_sha"]) == ("LOCAL_REPO", "a" * 64)
     assert row["evidence_grade"] == "OBSERVED"
     assert {source["ref"] for source in semantic._sources(brain_home, merged)} == {
         "test:local",
@@ -570,13 +570,14 @@ def test_hotset_demotion_does_not_delete_memory(brain_home: Path) -> None:
 
 
 def test_protected_memory_cannot_be_demoted(brain_home: Path) -> None:
-    """Protected memories (constitution / verified current) reject manual demotion."""
+    """Protected memories (constitution title / legacy verified current) reject manual
+    demotion."""
     mid = semantic.add_memory(
         brain_home,
         title="Constitution Core Rule",
         body="Immutable constitutional directive.",
         scope="global",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, mid, status="current")
     with pytest.raises(BrainError, match="protected"):

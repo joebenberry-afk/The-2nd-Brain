@@ -564,7 +564,9 @@ def test_accuracy_gate_returns_bounded_canonical_evidence(brain_home, repo):
         "failed_actions",
         "unresolved_actions",
         "unresolved_material_requirements",
+        "requested_approval_state",
         "approval_state",
+        "approval_attestation",
         "completion_allowed",
         "decision_reason",
         "verification_id",
@@ -624,7 +626,10 @@ def test_accuracy_gate_ignores_optional_environment_evidence():
     assert "environment_steward" not in result["required_actions"]
 
 
-def test_explicit_observed_model_records_skill_outcome(brain_home, repo):
+def test_caller_supplied_model_identity_records_no_skill_outcome(brain_home, repo):
+    """SEC-AUTH-02: a caller-supplied model id — passed directly or carried in the
+    caller's own verification file — is not an authenticated runtime identity, so
+    the gate records no `model_skill_outcomes`/`model_profiles` policy input."""
     _commit_repo(repo)
     result = verify.evaluate_accuracy_gate(
         brain_home,
@@ -635,14 +640,16 @@ def test_explicit_observed_model_records_skill_outcome(brain_home, repo):
             action: "passed"
             for action in verify.expand_ladder_actions(verify.DEFAULT_VERIFICATION_LADDER, "LOW")
         },
-        model_id="observed-model-alpha",
-        skill_name="implementation",
-        task="implement feature",
+        independent_verification={"model_id": "self-claimed-model", "verdict": "PASS"},
     )
     assert result["completion_allowed"] is True
     with db.connect(db.db_path(brain_home)) as conn:
-        row = conn.execute(
-            "SELECT skill_name, success, session_id FROM model_skill_outcomes WHERE model_id=?",
-            ("observed-model-alpha",),
+        outcomes = conn.execute(
+            "SELECT count(*) FROM model_skill_outcomes WHERE model_id=?",
+            ("self-claimed-model",),
         ).fetchone()
-    assert tuple(row) == ("implementation", 1, "gate-sess-001")
+        profiles = conn.execute(
+            "SELECT count(*) FROM model_profiles WHERE model_id=?", ("self-claimed-model",)
+        ).fetchone()
+    assert tuple(outcomes) == (0,)
+    assert tuple(profiles) == (0,)

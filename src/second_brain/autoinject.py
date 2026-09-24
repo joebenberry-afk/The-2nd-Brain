@@ -667,7 +667,7 @@ def _build_items(home: Path | str, rows: list[dict], *, lane: str = "semantic") 
         conflicting = (contradiction_ids & admitted_ids) if lane == "policy" else contradiction_ids
         contradicted = bool(conflicting) or (row.get("_freshness_state") == freshness.CONTRADICTED)
         status, confidence = _grade_confidence(
-            row.get("evidence_grade"), row.get("strength"), contradicted
+            semantic.effective_evidence_grade(row), row.get("strength"), contradicted
         )
         body = row.get("_body") or semantic._body_text(home, row)
         supersedes: tuple[str, int] | None = None
@@ -693,7 +693,7 @@ def _build_items(home: Path | str, rows: list[dict], *, lane: str = "semantic") 
                 supersedes=supersedes,
                 freshness=str(row.get("_freshness_state") or freshness.UNKNOWN),
                 contradicts=contradictions,
-                authority=str(row.get("authority_ceiling") or "advisory"),
+                authority=semantic.effective_authority_ceiling(row),
             )
         )
     return items
@@ -1211,9 +1211,12 @@ def prepare_injection(
         intent, "risk_class", None
     ) not in ("HIGH", "CRITICAL")
 
+    # Authority gate: a caller-minted ceiling is not authority, so only rows whose
+    # *effective* ceiling is advisory may enter the holdout. Otherwise a memory
+    # could exempt itself from measurement by claiming project_rule.
     is_authority_eligible = intent.lane != "policy" and all(
         (getattr(item, "authority", "advisory") == "advisory")
-        and (row_by_id.get(item.memory_id, {}).get("authority_ceiling") in ("advisory", None, ""))
+        and semantic.effective_authority_ceiling(row_by_id.get(item.memory_id, {})) == "advisory"
         for item in selected
     )
 

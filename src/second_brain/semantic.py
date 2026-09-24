@@ -8,6 +8,14 @@ Evidence grades are strictly ordered (INFERRED < OBSERVED < TESTED < VERIFIED)
 and only move one step up per curation; REJECTED is reachable from anywhere and
 HISTORICAL only as a downgrade. The grade is never changed silently — curate is
 the only mutation path, and show_memory always surfaces the stored grade.
+
+VERIFIED is authority rather than a label (it drives retrieval trust, admission
+confidence, promotion and protected-memory treatment), so it is the one grade a
+caller cannot claim: add_memory and curate refuse it with
+``VERIFIED_REQUIRES_ATTESTATION`` unless an independent attestation vouches for
+it (SEC-AUTH-02). No issuer ships in this build, so that path is unavailable by
+design rather than faked; unprivileged grades are unaffected.
+
 Superseding writes a new versioned file (``<id>__v<N>.md`` for N>=2) and keeps
 every previous file, so history is preserved.
 """
@@ -26,7 +34,7 @@ import sqlite3
 import subprocess
 import tempfile
 import tomllib
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as _field
 from datetime import UTC, datetime
@@ -56,6 +64,110 @@ ORIGIN_CLASSES: tuple[str, ...] = (
 AUTHORITY_CEILINGS: tuple[str, ...] = ("advisory", "project_rule", "policy")
 _AUTHORITY_RANK = {"advisory": 0, "project_rule": 1, "policy": 2}
 _PROJECT_RULE_ORIGINS = frozenset({"USER_AUTHORED", "LOCAL_REPO", "TRUSTED_TEST"})
+
+# ---------------------------------------------------------------------------
+# SEC-AUTH-02 (fail closed): requested grade != effective grade.
+#
+# VERIFIED is authority, not a label: it drives retrieval trust, admission
+# confidence, promotion and protected-memory treatment. A caller-supplied
+# `--grade VERIFIED` (or a curate request) is therefore a REQUEST only, and is
+# refused unless an independent attestation vouches for it. The issuer registry
+# is empty by construction in this build (no signer, no host-held token) and is
+# deliberately NOT selectable through an environment variable, repo/Brain-home
+# config, model setting or CLI flag, so the positive path is unavailable rather
+# than faked. Unprivileged grades are unaffected.
+# ---------------------------------------------------------------------------
+VERIFIED_REQUIRES_ATTESTATION = "VERIFIED_REQUIRES_ATTESTATION"
+VERIFIED_ATTESTATION_ISSUERS: dict[str, Callable[[dict], bool]] = {}
+
+
+def verified_attested(attestation: dict | None) -> bool:
+    """True only for an attestation vouched for by a registered independent issuer.
+
+    Malformed, unregistered or raising attestations are False: the default is
+    always "no authority".
+    """
+    if not isinstance(attestation, dict):
+        return False
+    issuer = attestation.get("issuer")
+    validator = VERIFIED_ATTESTATION_ISSUERS.get(issuer) if isinstance(issuer, str) else None
+    if validator is None:
+        return False
+    try:
+        return bool(validator(attestation))
+    except Exception:
+        return False
+
+
+def _require_verified_attestation(grade: str, attestation: dict | None, *, operation: str) -> None:
+    """Fail closed on an unattested VERIFIED grade claim; never downgrade silently."""
+    if grade != "VERIFIED" or verified_attested(attestation):
+        return
+    raise BrainError(
+        f"{VERIFIED_REQUIRES_ATTESTATION}: {operation} cannot write grade VERIFIED from a "
+        "caller-supplied claim; an independent attestation from a registered issuer is "
+        "required and none is available"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SEC-AUTH-02 producer guard (fail closed): the authority ceiling is not
+# caller-mintable either.
+#
+# `origin_class` (USER_AUTHORED / LOCAL_REPO / TRUSTED_TEST), `origin_root_sha`
+# and the stored `authority_ceiling` are all supplied by the caller that wants
+# the authority, so they are self-description, not evidence: nothing a producer
+# can reach raises a memory above `advisory` by reporting its own
+# trustworthiness. Elevation is effective only with an attestation from an
+# issuer the caller cannot act as. That registry is empty by construction in
+# this build (no signer, no host-held token) and is deliberately NOT selectable
+# through an environment variable, repo/Brain-home config, model setting or CLI
+# flag, so the positive path is unavailable rather than faked: `_validate_origin`
+# always writes `advisory`, and `effective_authority_ceiling` always resolves to
+# `advisory`. Authority consumers MUST read the ceiling through that helper, not
+# the raw column -- a legacy row, an edited database or an imported backup can
+# carry an elevated value that no issuer granted.
+# ---------------------------------------------------------------------------
+AUTHORITY_ATTESTATION_ISSUERS: dict[str, Callable[[dict], bool]] = {}
+
+
+def authority_attested(attestation: dict | None) -> bool:
+    """True only for an attestation vouched for by a registered independent issuer.
+
+    Malformed, unregistered or raising attestations are False: the default is
+    always "no authority".
+    """
+    if not isinstance(attestation, dict):
+        return False
+    issuer = attestation.get("issuer")
+    validator = AUTHORITY_ATTESTATION_ISSUERS.get(issuer) if isinstance(issuer, str) else None
+    if validator is None:
+        return False
+    try:
+        return bool(validator(attestation))
+    except Exception:
+        return False
+
+
+def effective_authority_ceiling(row: dict) -> str:
+    """The authority a stored memory actually holds, whatever the row claims.
+
+    A stored ceiling above `advisory` is effective only when the row carries an
+    attestation from a registered independent issuer, and no writer in this build
+    can produce one, so every row resolves to `advisory`. Policy-lane admission
+    and retrieval-holdout eligibility MUST read this instead of the raw column.
+    """
+    claimed = row.get("authority_ceiling")
+    if not isinstance(claimed, str) or _AUTHORITY_RANK.get(claimed, 0) <= 0:
+        return "advisory"
+    return claimed if authority_attested(row.get("authority_attestation")) else "advisory"
+
+def effective_evidence_grade(row: dict) -> str:
+    """Grade that may affect trust. Stored VERIFIED is a claim unless attested."""
+    grade = str(row.get("evidence_grade") or "")
+    if grade != "VERIFIED" or verified_attested(row.get("grade_attestation")):
+        return grade
+    return "TESTED"
 
 
 class CandidateTrigger(StrEnum):
@@ -346,7 +458,9 @@ def _validate_sources(sources: list[dict] | None) -> list[dict]:
     return out
 
 
-def _validate_origin(origin_class: str, origin_root_sha: str | None) -> tuple[str, str | None, str]:
+def _validate_origin(
+    origin_class: str, origin_root_sha: str | None, attestation: dict | None = None
+) -> tuple[str, str | None, str]:
     if origin_class not in ORIGIN_CLASSES:
         raise BrainError(f"origin_class must be one of {', '.join(ORIGIN_CLASSES)}")
     if origin_root_sha is not None:
@@ -355,13 +469,17 @@ def _validate_origin(origin_class: str, origin_root_sha: str | None) -> tuple[st
         ):
             raise BrainError("origin_root_sha must be a 64-character hexadecimal sha256 or None")
         origin_root_sha = origin_root_sha.lower()
-    ceiling = "project_rule" if origin_class in _PROJECT_RULE_ORIGINS else "advisory"
-    return origin_class, origin_root_sha, ceiling
+    # SEC-AUTH-02 producer guard: `origin_class` is the caller's own description
+    # of where the memory came from, so it can never be the reason a memory
+    # outranks advisory. Elevation needs an attestation from an independent
+    # issuer, and none is registered, so the ceiling stays advisory.
+    elevated = origin_class in _PROJECT_RULE_ORIGINS and authority_attested(attestation)
+    return origin_class, origin_root_sha, "project_rule" if elevated else "advisory"
 
 
 def _lane_authorized(row: dict, lane: str) -> bool:
-    """Policy permission comes only from explicit canonical authority metadata."""
-    return lane != "policy" or row.get("authority_ceiling") in {"project_rule", "policy"}
+    """Policy permission comes only from authority an independent issuer granted."""
+    return lane != "policy" or effective_authority_ceiling(row) in {"project_rule", "policy"}
 
 
 def _is_sha256(value: object) -> bool:
@@ -1269,12 +1387,23 @@ def add_memory(
     summary: str | None = None,
     origin_class: str = "MODEL_INFERENCE",
     origin_root_sha: str | None = None,
+    attestation: dict | None = None,
 ) -> str:
-    """Create a semantic memory with immutable write-time origin authority."""
+    """Create a semantic memory with immutable write-time origin authority.
+
+    ``grade`` is a request: VERIFIED needs ``attestation`` from an independent
+    issuer and is refused with ``VERIFIED_REQUIRES_ATTESTATION`` otherwise
+    (SEC-AUTH-02). No issuer is registered in this build.
+
+    ``origin_class`` is self-description too: it cannot raise the authority
+    ceiling above ``advisory``, which likewise needs an independent attestation
+    (registered issuers: none), so an unattested memory is always advisory.
+    """
     _validate_new(title, body, scope, grade)
+    _require_verified_attestation(grade, attestation, operation="add_memory")
     clean_sources = _validate_sources(sources)
     origin_class, origin_root_sha, authority_ceiling = _validate_origin(
-        origin_class, origin_root_sha
+        origin_class, origin_root_sha, attestation
     )
     if summary is not None and not isinstance(summary, str):
         raise BrainError("summary must be a string or None")
@@ -1395,14 +1524,21 @@ def curate(
     sources: list[dict] | None = None,
     verify: bool = True,
     authority_ceiling: str | None = None,
+    attestation: dict | None = None,
 ) -> dict:
-    """Curate one memory; authority may only move toward advisory."""
+    """Curate one memory; authority may only move toward advisory.
+
+    A ``grade`` of VERIFIED is a request: it needs ``attestation`` from an
+    independent issuer and is refused with ``VERIFIED_REQUIRES_ATTESTATION``
+    otherwise (SEC-AUTH-02). No issuer is registered in this build.
+    """
     row = _row(home, memory_id)
     if row is None:
         raise BrainError(f"Unknown memory {memory_id!r}")
     if grade is not None:
         if grade not in GRADES:
             raise BrainError(f"grade must be one of {', '.join(GRADES)}")
+        _require_verified_attestation(grade, attestation, operation="curate")
         _check_grade_transition(row["evidence_grade"], grade)
     if status is not None and status not in STATUSES:
         raise BrainError(f"status must be one of {', '.join(STATUSES)}")
@@ -1727,7 +1863,7 @@ def _dedupe_representative_key(row: dict) -> tuple:
     updated_at, then highest evidence grade, then memory_id (deterministic).
     """
     status_key = str(row.get("status") or "")
-    grade_key = str(row.get("evidence_grade") or "")
+    grade_key = effective_evidence_grade(row)
     return (
         row.get("current_version") or 1,
         _DEDUPE_STATUS_RANK.get(status_key, 0),
@@ -2206,7 +2342,7 @@ def _relevance_score(
 def _trust_score(row: dict, weights: RetrievalWeights) -> float:
     """Evidence grade * status, both bounded; REJECTED/superseded rows are
     normally filtered before ranking."""
-    return weights.grade_scores.get(str(row.get("evidence_grade") or ""), 0.8) * (
+    return weights.grade_scores.get(effective_evidence_grade(row), 0.8) * (
         weights.status_scores.get(str(row.get("status") or ""), 0.9)
     )
 

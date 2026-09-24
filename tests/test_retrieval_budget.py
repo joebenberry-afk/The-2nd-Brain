@@ -33,12 +33,12 @@ _FAMILY_WORDS = ["alpha", "bravo", "charlie", "delta", "echo"]
 
 def _ranked_family(home):
     """5 same-theme memories with DISTINCT bodies (separate dedupe families,
-    equal relevance); the VERIFIED/current one is the clear top."""
+    equal relevance); the TESTED/current one is the clear top."""
     top = _add(
         home,
         title="Budget ceiling rule",
         body="wal frame budget ceiling journal note alpha",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(home, top, status="current")
     others = [
@@ -46,7 +46,7 @@ def _ranked_family(home):
             home,
             title=f"Budget note {i}",
             body=f"wal frame budget ceiling journal note {_FAMILY_WORDS[i + 1]}",
-            grade="TESTED",
+            grade="OBSERVED",
         )
         for i in range(4)
     ]
@@ -56,8 +56,8 @@ def _ranked_family(home):
 
 
 def test_contradiction_pair_marked_in_results(brain_home):
-    a = _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="VERIFIED")
-    b = _add(brain_home, title="WAL policy", body="wal journal mode is DELETE", grade="VERIFIED")
+    a = _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="TESTED")
+    b = _add(brain_home, title="WAL policy", body="wal journal mode is DELETE", grade="TESTED")
     semantic.curate(brain_home, a, status="current")
     semantic.curate(brain_home, b, status="current")
 
@@ -83,16 +83,16 @@ def test_contradiction_pair_marked_in_results(brain_home):
 
 
 def test_contradiction_marker_absent_for_identical_bodies(brain_home):
-    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="VERIFIED")
-    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="VERIFIED")
+    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="TESTED")
+    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="TESTED")
     rows = semantic.search_memories(brain_home, "wal journal", include_duplicates=True, top_k=20)
     for row in rows:
         assert "contradiction_with" not in row
 
 
 def test_cli_prints_conflicting_evidence_block(brain_home):
-    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="VERIFIED")
-    _add(brain_home, title="WAL policy", body="wal journal mode is DELETE", grade="VERIFIED")
+    _add(brain_home, title="WAL policy", body="wal journal mode is WAL", grade="TESTED")
+    _add(brain_home, title="WAL policy", body="wal journal mode is DELETE", grade="TESTED")
     env = dict(os.environ)
     for k in ("PYTHONHOME", "PYTHONPATH", "UV_INTERNAL__PYTHONHOME", "PYTHONSTARTUP"):
         env.pop(k, None)
@@ -149,14 +149,14 @@ def test_token_budget_trims_low_value_rows(brain_home):
 def test_retrieval_toml_weights_reorder_results(brain_home):
     top, _ = _ranked_family(brain_home)
     assert _ids(semantic.search_memories(brain_home, "wal frame", top_k=5))[0] == top
-    # demote VERIFIED below TESTED -> the TESTED rows now outrank the old top
+    # demote TESTED below OBSERVED -> the OBSERVED rows now outrank the old top
     _write_retrieval_toml(
         brain_home,
         """schema_version = 1
 [scoring]
 max_results = 2
 [scoring.weights]
-grade_scores = { VERIFIED = 0.2, TESTED = 1.0 }
+grade_scores = { TESTED = 0.2, OBSERVED = 1.0 }
 """,
     )
     rows = semantic.search_memories(brain_home, "wal frame")
@@ -181,7 +181,7 @@ grade_scores = { VERIFIED = 0.2, TESTED = 1.0 }
 [scoring]
 max_results = 5
 [scoring.weights]
-grade_scores = { VERIFIED = 0.2, TESTED = 1.0 }
+grade_scores = { TESTED = 0.2, OBSERVED = 1.0 }
 decision_boost_per_hit = 10.0
 decision_boost_cap = 50.0
 """,

@@ -75,7 +75,7 @@ class TestEndToEndDogfoodPipeline:
             title="Architecture Doctrine",
             summary="Keep kernels lean and deterministic",
             body="All memory structures must serialize to canonical JSON.",
-            grade="VERIFIED",
+            grade="TESTED",
         )
         curate(brain_home, mem_id, status="current")
 

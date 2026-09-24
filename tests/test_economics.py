@@ -656,7 +656,7 @@ def test_retrieval_profile_does_not_invent_provider_outcomes(brain_home, tmp_pat
         body="Use WAL and a bounded busy timeout for concurrent SQLite readers.",
         scope="project",
         project_id="retrieval-profile",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, memory_id, status="current")
     output_path = tmp_path / "retrieval-profile.json"

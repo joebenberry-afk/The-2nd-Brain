@@ -527,6 +527,8 @@ def _parser() -> argparse.ArgumentParser:
         "--approval-state",
         choices=("not_required", "required", "approved"),
         default="not_required",
+        help="the caller's approval REQUEST; it is evidence only and never authority "
+        "(effective approval for an irreversible gate needs an independent attestation)",
     )
     vgate.add_argument("--task-id", default="")
     vgate.add_argument("--parent-session-id", default="")
@@ -647,7 +649,11 @@ def _parser() -> argparse.ArgumentParser:
         help="capture local git evidence path[:start-end] (repeatable)",
     )
     remember_parser.add_argument(
-        "--grade", choices=("OBSERVED", "TESTED", "VERIFIED"), default="OBSERVED"
+        "--grade",
+        choices=("OBSERVED", "TESTED", "VERIFIED"),
+        default="OBSERVED",
+        help="requested evidence grade; VERIFIED is refused without an independent "
+        "attestation (VERIFIED_REQUIRES_ATTESTATION), never downgraded silently",
     )
     recall_parser = sub.add_parser("recall", parents=[home_parent], help="recall relevant memories")
     recall_parser.add_argument("question")
@@ -675,7 +681,13 @@ def _parser() -> argparse.ArgumentParser:
         "curate", parents=[home_parent], help="curate: set grade/status with rules"
     )
     mcur.add_argument("memory_id")
-    mcur.add_argument("--grade", default=None, choices=semantic.GRADES)
+    mcur.add_argument(
+        "--grade",
+        default=None,
+        choices=semantic.GRADES,
+        help="requested evidence grade; VERIFIED is refused without an independent "
+        "attestation (VERIFIED_REQUIRES_ATTESTATION), never downgraded silently",
+    )
     mcur.add_argument("--status", default=None, choices=semantic.STATUSES)
     mcur.add_argument(
         "--authority-ceiling",
@@ -988,7 +1000,12 @@ def _parser() -> argparse.ArgumentParser:
 
     xm = sub.add_parser("models", parents=[home_parent], help="cross-model memory (Phase 20)")
     xms = xm.add_subparsers(dest="models_command", required=True)
-    xmr = xms.add_parser("record", parents=[home_parent], help="record a model skill outcome")
+    xmr = xms.add_parser(
+        "record",
+        parents=[home_parent],
+        help="record a model skill outcome (refused: needs an authenticated runtime model "
+        "identity, which this build has none of — a caller-supplied claim is not recorded)",
+    )
     xmr.add_argument("model_id")
     xmr.add_argument("skill_name")
     xmr.add_argument("task")
@@ -2806,18 +2823,15 @@ def cmd_models(args) -> int:
         print(f"profile recorded: {args.model_id}")
         return 0
     if args.models_command == "record":
-        oid = crossmodel.record_skill_outcome(
-            home,
-            args.model_id,
-            args.skill_name,
-            args.task,
-            success=args.success,
-            noise=args.noise,
-            f1=args.f1,
-            session_id=args.session_id,
+        # SEC-AUTH-02 (fail closed): model_skill_outcomes is policy input
+        # (`models report` / `models policy`). A caller-supplied --model-id and
+        # --success are a claim, not an authenticated runtime model identity, so
+        # nothing is recorded rather than recording the claim.
+        raise BrainError(
+            "MODEL_IDENTITY_NOT_AUTHENTICATED: a caller-supplied --model-id/--success claim "
+            "cannot be recorded as an authoritative model_skill_outcomes row; an "
+            "authenticated runtime model identity is required and none is available"
         )
-        print(f"outcome recorded: {oid}")
-        return 0
     if args.models_command == "transfer":
         result = crossmodel.transfer_test(home, args.skill_name, args.model_a, args.model_b)
         print(f"verdict={result['verdict']} overlap={result['overlap_count']}")

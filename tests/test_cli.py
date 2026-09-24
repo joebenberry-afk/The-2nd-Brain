@@ -100,7 +100,9 @@ def test_remember_one_line_creates_memory_with_evidence(tmp_path, monkeypatch):
     assert row["project_id"] == "demo"
     assert row["evidence_grade"] == "OBSERVED"
     assert row["origin_class"] == "USER_AUTHORED"
-    assert row["authority_ceiling"] == "project_rule"
+    # A caller-declared origin is self-description, not authority: `remember`
+    # cannot mint project_rule (SEC-AUTH-02 producer guard).
+    assert row["authority_ceiling"] == "advisory"
     assert row["origin_root_sha"] == hashlib.sha256(source.read_bytes()).hexdigest()
     conn = sqlite3.connect(home / "db" / "brain.sqlite")
     try:

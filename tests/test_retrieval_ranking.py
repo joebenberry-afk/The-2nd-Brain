@@ -17,7 +17,7 @@ def _ids(rows):
     return [r["memory_id"] for r in rows]
 
 
-def test_grade_dominance_when_relevance_equal(brain_home):
+def test_grade_dominance_when_relevance_equal(brain_home, monkeypatch):
     # Unit level with FIXED ranks: trust (grade) decides when relevance ties.
     tokens = semantic._query_tokens("wal frame")
     base = {
@@ -33,28 +33,42 @@ def test_grade_dominance_when_relevance_equal(brain_home):
         "contradiction_count": 0,
         "_body": "wal frame durability note here",
     }
-    verified = dict(base, evidence_grade="VERIFIED")
+    # Only an attested VERIFIED outranks TESTED; a stored VERIFIED claim with no
+    # attestation earns no more trust than TESTED (SEC-AUTH-02).
+    monkeypatch.setitem(
+        semantic.VERIFIED_ATTESTATION_ISSUERS, "test-issuer", lambda att: att.get("ok") is True
+    )
+    verified = dict(
+        base, evidence_grade="VERIFIED", grade_attestation={"issuer": "test-issuer", "ok": True}
+    )
+    claimed = dict(base, evidence_grade="VERIFIED")
     tested = dict(base, evidence_grade="TESTED")
     observed = dict(base, evidence_grade="OBSERVED")
     s_v = semantic._score_row(verified, tokens, None, None, semantic._SCORE_TERMS)
+    s_c = semantic._score_row(claimed, tokens, None, None, semantic._SCORE_TERMS)
     s_t = semantic._score_row(tested, tokens, None, None, semantic._SCORE_TERMS)
     s_o = semantic._score_row(observed, tokens, None, None, semantic._SCORE_TERMS)
     assert s_v > s_t > s_o
+    assert s_c == s_t
 
-    # Integration: VERIFIED + title-boosted doc ranks above a lower-grade doc
-    verified2 = _add(
-        brain_home,
-        title="Wal frame verified",
-        body="wal frame durability note here",
-        grade="VERIFIED",
-    )
+    # Integration: TESTED (highest unprivileged grade) + title-boosted doc ranks
+    # above a lower-grade doc
     tested2 = _add(
-        brain_home, title="Unrelated tested", body="wal frame durability note here", grade="TESTED"
+        brain_home,
+        title="Wal frame tested",
+        body="wal frame durability note here",
+        grade="TESTED",
     )
-    _curate_status_current(brain_home, verified2)
+    observed2 = _add(
+        brain_home,
+        title="Unrelated observed",
+        body="wal frame durability note here",
+        grade="OBSERVED",
+    )
     _curate_status_current(brain_home, tested2)
+    _curate_status_current(brain_home, observed2)
     rows = semantic.search_memories(brain_home, "wal frame")
-    assert _ids(rows)[0] == verified2
+    assert _ids(rows)[0] == tested2
 
 
 def test_scope_match_boost_under_project_context(brain_home):
@@ -64,7 +78,7 @@ def test_scope_match_boost_under_project_context(brain_home):
         body="token budget ceiling for this project here",
         scope="project",
         project_id="p1",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     glob = _add(
         brain_home,
@@ -72,7 +86,7 @@ def test_scope_match_boost_under_project_context(brain_home):
         body="token budget ceiling for this project here",
         scope="global",
         project_id="p1",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     _curate_status_current(brain_home, proj)
     _curate_status_current(brain_home, glob)
@@ -84,10 +98,10 @@ def test_scope_match_boost_under_project_context(brain_home):
 
 def test_freshness_does_not_hide_relevant_old_memory(brain_home):
     old = _add(
-        brain_home, title="Ancient exact match", body="wal journal frame content", grade="VERIFIED"
+        brain_home, title="Ancient exact match", body="wal journal frame content", grade="TESTED"
     )
     fresh = _add(
-        brain_home, title="Fresh weak match", body="unrelated telemetry note", grade="VERIFIED"
+        brain_home, title="Fresh weak match", body="unrelated telemetry note", grade="TESTED"
     )
     _curate_status_current(brain_home, old)
     _curate_status_current(brain_home, fresh)
@@ -102,15 +116,15 @@ def test_freshness_does_not_hide_relevant_old_memory(brain_home):
     finally:
         conn.close()
     rows = semantic.search_memories(brain_home, "wal journal frame")
-    # the highly relevant old memory (all query tokens, VERIFIED) outranks the
+    # the highly relevant old memory (all query tokens) outranks the
     # fresh but irrelevant one despite the 20% freshness penalty
     assert _ids(rows)[0] == old
 
 
 def test_token_penalty_demotes_but_never_zeroes(brain_home):
-    short = _add(brain_home, title="Concise rule", body="wal frame concise note", grade="VERIFIED")
+    short = _add(brain_home, title="Concise rule", body="wal frame concise note", grade="TESTED")
     long_body = "wal frame " + "padding word " * 2500  # ~5000 tokens
-    long = _add(brain_home, title="Verbose rule", body=long_body, grade="VERIFIED")
+    long = _add(brain_home, title="Verbose rule", body=long_body, grade="TESTED")
     _curate_status_current(brain_home, short)
     _curate_status_current(brain_home, long)
     rows = semantic.search_memories(brain_home, "wal frame")
@@ -132,11 +146,11 @@ def test_scorer_deterministic_and_stable(brain_home):
 
 
 def test_linear_fallback_same_ranking(brain_home, monkeypatch):
-    verified = _add(
+    tested = _add(
         brain_home,
         title="Fallback rank rule a",
         body="fallback ranking content here",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     observed = _add(
         brain_home,
@@ -144,11 +158,11 @@ def test_linear_fallback_same_ranking(brain_home, monkeypatch):
         body="fallback ranking content here",
         grade="OBSERVED",
     )
-    _curate_status_current(brain_home, verified)
+    _curate_status_current(brain_home, tested)
     _curate_status_current(brain_home, observed)
     monkeypatch.setattr(semantic, "_fts_available", lambda conn: False)
     rows = semantic.search_memories(brain_home, "fallback ranking")
-    assert _ids(rows)[0] == verified  # shared scorer: trust decides on ties
+    assert _ids(rows)[0] == tested  # shared scorer: trust decides on ties
 
 
 def test_boundedness_pathological_rows(brain_home):
@@ -181,12 +195,12 @@ def test_boundedness_pathological_rows(brain_home):
 
 
 def test_score_terms_ablation_knob(brain_home):
-    # a: higher term frequency (bm25-favored) AND VERIFIED -> deterministically first
+    # a: higher term frequency (bm25-favored) AND top unprivileged grade -> first
     a = _add(
         brain_home,
         title="Alpha record",
         body="ablation body content here ablation body",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     b = _add(brain_home, title="Beta record", body="ablation body content here", grade="OBSERVED")
     _curate_status_current(brain_home, a)
@@ -201,7 +215,8 @@ def test_benchmark_fixture_canonical_target_ranks_first(brain_home):
     """Reproduces the retrieval_bench.py family fixture at unit level: 8
     same-theme docs share the anchor tokens; the canonical target is slot 5
     (NOT the first row, so bm25/rowid ties must not favor it) and is curated
-    VERIFIED/current with decision value (successful_retrieval_count=5); one
+    TESTED/current (highest unprivileged grade) with decision value
+    (successful_retrieval_count=5); one
     stale superseded copy and one near-identical labile duplicate sit in the
     same fact family. The anchor-phrase query must rank the canonical target
     first (the R@1 guarantee), never the duplicate or the stale copy, while
@@ -214,13 +229,13 @@ def test_benchmark_fixture_canonical_target_ranks_first(brain_home):
             brain_home,
             title=f"WAL rule {i}",
             body=f"wal frame durability journal content note {i}",
-            grade="TESTED",
+            grade="OBSERVED",
             summary="wal frame",
         )
         semantic.curate(brain_home, mid, status="current")
         mids.append(mid)
     canonical = mids[5]
-    semantic.curate(brain_home, canonical, grade="VERIFIED")
+    semantic.curate(brain_home, canonical, grade="TESTED")
     conn = __import__("second_brain.db", fromlist=["connect"]).connect(
         __import__("second_brain.paths", fromlist=["db_path"]).db_path(brain_home)
     )

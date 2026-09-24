@@ -17,7 +17,7 @@ def test_retrieval_exposes_score_components(brain_home: Path) -> None:
         body="Cache invalidation occurs on write to keep read replicas coherent.",
         scope="project",
         project_id="proj-cache",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, mid, status="current")
     reconsolidation.record_activation(brain_home, mid, "correct", kind="used")
@@ -89,7 +89,7 @@ def test_exact_ref_bypasses_relevance_not_authority(brain_home: Path) -> None:
         body="A verified rule that can be queried by ID.",
         scope="project",
         project_id="proj-safe",
-        grade="VERIFIED",
+        grade="TESTED",
         origin_class="TRUSTED_TEST",
     )
     semantic.curate(brain_home, mid_rule, status="current")
@@ -143,7 +143,7 @@ def test_mmr_reduces_duplicate_topk(brain_home: Path) -> None:
         body="Configure PgBouncer pooling for PostgreSQL databases with 100 max connections.",
         scope="project",
         project_id="proj-db",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, mid_a, status="current")
 
@@ -165,7 +165,7 @@ def test_mmr_reduces_duplicate_topk(brain_home: Path) -> None:
         body="Use Redis in-memory cache for fast session key-value storage and cache eviction.",
         scope="project",
         project_id="proj-db",
-        grade="VERIFIED",
+        grade="TESTED",
     )
     semantic.curate(brain_home, mid_c, status="current")
 
