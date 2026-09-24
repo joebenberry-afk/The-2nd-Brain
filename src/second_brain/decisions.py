@@ -61,8 +61,7 @@ def _dbfile(home: Path | str) -> Path:
 
 def _ensure_migrated(home: Path | str) -> None:
     dbfile = _dbfile(home)
-    if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+    db.ensure_migrated(dbfile)
 
 
 def _canonical(value: Any, name: str) -> str:

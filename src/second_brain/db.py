@@ -10,6 +10,7 @@ pending migrations (idempotent).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -260,3 +261,40 @@ def pending_migrations(dbfile: str | Path, migrations_dir: Path | None = None) -
         ]
     finally:
         conn.close()
+
+
+#: Database files this process observed at the migration head, by path -> file identity.
+_AT_HEAD: dict[str, tuple[int, int, int, int]] = {}
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def ensure_migrated(dbfile: str | Path) -> None:
+    """Apply pending migrations, skipping the check for an unchanged file already seen at head.
+
+    Migration files cannot change while a process runs and other processes only advance the
+    schema, so a file whose identity is unchanged since it was at head is still at head. This
+    keeps per-row callers on the retrieval path from reopening the database and re-listing the
+    migrations directory. Restores call `forget_migration_state`.
+    """
+    path = Path(dbfile)
+    key = os.path.abspath(path)
+    identity = _file_identity(path)
+    if identity is not None and _AT_HEAD.get(key) == identity:
+        return
+    if pending_migrations(path):
+        migrate(path)
+    identity = _file_identity(path)
+    if identity is not None:
+        _AT_HEAD[key] = identity
+
+
+def forget_migration_state() -> None:
+    """Drop every cached at-head observation (after a database file is replaced in place)."""
+    _AT_HEAD.clear()

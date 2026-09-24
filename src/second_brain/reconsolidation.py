@@ -69,8 +69,7 @@ def _dbfile(home: Path) -> Path:
 
 
 def _ensure_migrated(home: Path) -> None:
-    if db.pending_migrations(_dbfile(home)):
-        db.migrate(_dbfile(home))
+    db.ensure_migrated(_dbfile(home))
 
 
 def _insert_id(cursor: sqlite3.Cursor) -> int:
@@ -203,48 +202,67 @@ def record_activation(
         conn.close()
 
 
+def base_level_activations(
+    home: Path | str,
+    memory_ids: list[str],
+    now: datetime | str | None = None,
+    d: float = 0.5,
+) -> dict[str, float]:
+    """ACT-R base-level activation B = ln(sum(t_j ** -d)) for many memories over one connection.
+
+    Retrieval-only events never contribute. A memory with no matching events
+    (or sum <= 0), and every memory when the query fails, maps to -10.0.
+    """
+    ids = list(dict.fromkeys(memory_ids))
+    result = dict.fromkeys(ids, -10.0)
+    if not ids:
+        return result
+    home_p = Path(home)
+    _ensure_migrated(home_p)
+    now_dt = _parse_dt(now)
+    conn = db.connect(_dbfile(home_p))
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            "SELECT memory_id, created_at FROM memory_activations "
+            f"WHERE memory_id IN ({placeholders}) AND ("
+            "  kind IN ('used', 'success', 'verified') OR "
+            "  (kind IS NULL AND outcome = 'correct')"
+            ")",
+            ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return result
+    finally:
+        conn.close()
+
+    sums: dict[str, float] = {}
+    for r in rows:
+        delta_sec = (now_dt - _parse_dt(r["created_at"])).total_seconds()
+        t_j = max(delta_sec / 3600.0, 0.001)
+        sums[r["memory_id"]] = sums.get(r["memory_id"], 0.0) + t_j ** (-d)
+    for memory_id, total_sum in sums.items():
+        if total_sum > 0.0:
+            result[memory_id] = math.log(total_sum)
+    return result
+
+
 def compute_base_level_activation(
     home: Path | str,
     memory_id: str,
     now: datetime | str | None = None,
     d: float = 0.5,
 ) -> float:
-    """Compute ACT-R base-level activation: B = ln(sum(t_j ** -d)).
+    """ACT-R base-level activation for one memory (see `base_level_activations`)."""
+    return base_level_activations(home, [memory_id], now=now, d=d)[memory_id]
 
-    Retrieval-only events never contribute. When no matching events exist or
-    sum <= 0, returns -10.0.
-    """
-    home_p = Path(home)
-    _ensure_migrated(home_p)
-    now_dt = _parse_dt(now)
-    conn = db.connect(_dbfile(home_p))
-    try:
-        rows = conn.execute(
-            "SELECT created_at FROM memory_activations "
-            "WHERE memory_id = ? AND ("
-            "  kind IN ('used', 'success', 'verified') OR "
-            "  (kind IS NULL AND outcome = 'correct')"
-            ")",
-            (memory_id,),
-        ).fetchall()
-    except sqlite3.Error:
-        return -10.0
-    finally:
-        conn.close()
 
-    if not rows:
-        return -10.0
-
-    total_sum = 0.0
-    for r in rows:
-        created_dt = _parse_dt(r["created_at"])
-        delta_sec = (now_dt - created_dt).total_seconds()
-        t_j = max(delta_sec / 3600.0, 0.001)
-        total_sum += t_j ** (-d)
-
-    if total_sum <= 0.0:
-        return -10.0
-    return math.log(total_sum)
+def p_need_from_activation(b: float, tau: float = 0.0, s: float = 1.0) -> float:
+    """Need probability P_need = sigmoid((B - tau) / s), argument bounded to [-40, 40]."""
+    s_val = float(s) if s and s > 0 else 1.0
+    z = (b - float(tau)) / s_val
+    z_clamped = max(-40.0, min(40.0, z))
+    return 1.0 / (1.0 + math.exp(-z_clamped))
 
 
 def compute_p_need(
@@ -255,15 +273,9 @@ def compute_p_need(
     s: float = 1.0,
     d: float = 0.5,
 ) -> float:
-    """Compute need probability P_need = sigmoid((B - tau) / s).
-
-    Bounds the sigmoid argument to [-40, 40] to prevent overflow.
-    """
+    """Compute need probability P_need = sigmoid((B - tau) / s)."""
     b = compute_base_level_activation(home, memory_id, now=now, d=d)
-    s_val = float(s) if s and s > 0 else 1.0
-    z = (b - float(tau)) / s_val
-    z_clamped = max(-40.0, min(40.0, z))
-    return 1.0 / (1.0 + math.exp(-z_clamped))
+    return p_need_from_activation(b, tau, s)
 
 
 def apply_heat(home: Path, memory_id: str, heat: str) -> dict:

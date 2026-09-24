@@ -689,6 +689,88 @@ def test_no_relevant_only_when_query_empty(brain_home) -> None:
     assert modes and modes[-1] == "idf"
 
 
+# RET-02 named regression (M00 activation live arms, 2026-09-24): the concise
+# prompt delivered mem "Migration ordering"; the meaning-equivalent
+# instruction-heavy prompt delivered nothing, because IDF top-8 over the whole
+# prompt picked boilerplate terms and the 50% match requirement then excluded
+# the memory.
+_DILUTION_PROJECT = "second-brain"
+_DILUTION_CONCISE = "In what order should database migrations be applied?"
+_DILUTION_LONG = (
+    "Answer from your current context only; do not read files or run shell commands. "
+    "Question: in Second Brain, in what order should database migrations be applied? "
+    "If your context contains a Second Brain memory packet, quote every memory id it lists "
+    "(ids look like mem-xxxxxxxxxxxx). Then call the task tool exactly once with agent 'sonic' "
+    "and the task 'Reply with exactly: CHILD-OK-391. Do no other work.' Call no tool other than "
+    "task, plus hub only if you must wait for the child's result. Finish with exactly one line: "
+    "RESULT <memory ids or NONE> CHILD <child reply or NONE>"
+)
+
+
+def _seed_dilution_corpus(home: Path) -> str:
+    target = _seed_current(
+        home, "Migration ordering", "apply migrations in numeric order",
+        project_id=_DILUTION_PROJECT,
+    )
+    # Project-name and boilerplate terms exist in the corpus, each spread thinly
+    # across unrelated memories, as in the live corpus.
+    for title, body in (
+        ("Second Brain hub", "the hub shows job status"),
+        ("Second Brain shell", "shell commands run in the venv"),
+        ("Second Brain listing", "the index lists skills"),
+        ("Second Brain packets", "a packet contains ranked items"),
+        ("Second Brain quoting", "quote exact identifiers like paths"),
+        ("Second Brain children", "a child agent reports a reply"),
+    ):
+        _seed_current(home, title, body, project_id=_DILUTION_PROJECT)
+    return target
+
+
+@pytest.mark.parametrize("task", [_DILUTION_CONCISE, _DILUTION_LONG])
+def test_instruction_heavy_prompt_recovers_same_memory_as_concise(brain_home, task) -> None:
+    target = _seed_dilution_corpus(brain_home)
+    d = _inject(brain_home, task, project_id=_DILUTION_PROJECT, session_id=f"s-dil-{len(task)}")
+    assert d.decision is InjectionDecision.INJECT
+    assert target in d.selected_ids
+
+
+def test_focused_query_keeps_exact_symbols_and_drops_boilerplate() -> None:
+    prompt = (
+        "Do not run tests. Reply with one line only. "
+        "Why does `ensure_capsule` raise BrainError for src/second_brain/capsule_runtime.py? "
+        "Finish with exactly one line."
+    )
+    focus = autoinject._focused_query_text(prompt, _DILUTION_PROJECT)
+    # Project-name words are dropped only as whole words; identifiers keep them.
+    assert focus == (
+        "Why does `ensure_capsule` raise BrainError for src/second_brain/capsule_runtime.py?"
+    )
+    assert autoinject._focused_query_text(_DILUTION_LONG, _DILUTION_PROJECT) == (
+        "in , in what order should database migrations be applied?"
+    )
+    # No explicit question: nothing to focus on, the full prompt stays the query.
+    assert autoinject._focused_query_text("Rename tmp to buffer.", _DILUTION_PROJECT) is None
+
+
+def test_appended_real_constraint_still_changes_retrieval(brain_home) -> None:
+    """A genuinely new constraint must reach retrieval (it is not boilerplate)."""
+    target = _seed_dilution_corpus(brain_home)
+    restore = _seed_current(
+        brain_home, "Restore replays migrations",
+        "backup restore replays database migrations before reopening",
+        project_id=_DILUTION_PROJECT,
+    )
+    concise = _inject(brain_home, _DILUTION_CONCISE, project_id=_DILUTION_PROJECT,
+                      session_id="s-dil-c")
+    appended = _inject(
+        brain_home, _DILUTION_CONCISE + " Only for the backup restore path.",
+        project_id=_DILUTION_PROJECT, session_id="s-dil-a",
+    )
+    assert target in concise.selected_ids
+    assert restore in appended.selected_ids
+    assert appended.selected_ids != concise.selected_ids
+
+
 def test_empty_cwd_falls_back_to_brain_home_project(brain_home) -> None:
     """Phase C3 FIX 2: no --cwd -> registry lookup uses the Brain home path
     itself before env/default."""

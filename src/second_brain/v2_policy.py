@@ -314,5 +314,4 @@ def require_stage(policy: V2Policy, feature: str, required: RolloutStage) -> Rol
 def ensure_v2_migrated(home: Path) -> None:
     """Apply pending migrations through the existing database migration API."""
     dbfile = db.db_path(Path(home))
-    if db.pending_migrations(dbfile):
-        db.migrate(dbfile)
+    db.ensure_migrated(dbfile)
