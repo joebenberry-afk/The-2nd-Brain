@@ -200,7 +200,9 @@ def test_session_inventory_missing_directory(tmp_path: Path) -> None:
 def test_session_inventory_unknown_when_a_child_lacks_a_field(tmp_path: Path) -> None:
     _session_file(tmp_path / "root.jsonl", parent=True, usage={"input": 5}, tools=[])
     _session_file(
-        tmp_path / "a.jsonl", parent=False, usage={"input": 100, "output": 1, "cacheRead": 4},
+        tmp_path / "a.jsonl",
+        parent=False,
+        usage={"input": 100, "output": 1, "cacheRead": 4},
         tools=[],
     )
     _session_file(tmp_path / "b.jsonl", parent=False, usage={"cacheRead": 6}, tools=[])
@@ -658,3 +660,44 @@ def test_sum_optional_preserves_integer_token_totals() -> None:
     assert total == 120
     assert isinstance(total, int)
     assert SUITE._sum_optional(1.5, 2.5) == 4.0
+
+
+# ---------------------------------------------------------------------------
+# V3 arm: run home preparation
+# ---------------------------------------------------------------------------
+
+
+def test_v3_arm_home_gets_records_views_and_the_run_cwd(tmp_path: Path) -> None:
+    import sys
+
+    from second_brain.kb import records
+
+    worktree = tmp_path / "worktree"
+    (worktree / "projects" / "p1").mkdir(parents=True)
+    (worktree / "projects" / "p1" / "project.toml").write_text(
+        'id = "p1"\nname = "P1"\nrepo_path = "C:/elsewhere"\n', encoding="utf-8"
+    )
+    rec = records.Record(
+        id="mem-aaaaaaaaaaaa",
+        title="Run migrations in numeric order",
+        type="procedure",
+        project="p1",
+        status="current",
+        grade="TESTED",
+        recorded_at="2026-09-01T00:00:00+00:00",
+    )
+    records.save(worktree, rec)
+    records.save(worktree, records.replace(rec, id="mem-bbbbbbbbbbbb", private=True))
+    home = tmp_path / "home"
+    cwd = tmp_path / "run" / "proj"
+    cwd.mkdir(parents=True)
+
+    info = SUITE.prepare_v3_home(home, worktree, "p1", cwd, Path(sys.executable))
+
+    assert info["records"] == 1 and info["views_returncode"] == 0, info
+    assert not (home / "records" / "private").exists()
+    projects_map = json.loads((home / "views" / "projects.json").read_text(encoding="utf-8"))
+    assert any(cwd.as_posix() in p["paths"] for p in projects_map if p["id"] == "p1")
+    assert "[mem-aaaaaaaaaaaa]" in (home / "views" / "p1" / "brief.md").read_text(encoding="utf-8")
+    assert "brain.v3.brief" in SUITE.INJECTED_CONTEXT_CUSTOM_TYPES
+    assert "v3" in SUITE.ARM_CHOICES
