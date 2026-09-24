@@ -159,7 +159,7 @@ describe("P3.1 active-state OMP lifecycle", () => {
     const ctx = context();
 
     await handlers.get("session_before_compact")!({ branchEntries: [] }, ctx);
-    handlers.get("session_shutdown")!({ reason: "normal" }, ctx);
+    await handlers.get("session_shutdown")!({ reason: "normal" }, ctx);
 
     expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({
       verification: { pre_compaction: "persisted" },

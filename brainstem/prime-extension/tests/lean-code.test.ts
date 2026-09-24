@@ -31,7 +31,9 @@ vi.mock("../src/ledger-mirror", async (original) => ({
   ...await original<Record<string, unknown>>(),
   mirrorFireAndForget: () => undefined,
 }));
-vi.mock("../src/environment-mirror", () => ({
+vi.mock("../src/environment-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/environment-mirror")>()),
+
   runEnvironmentAssessmentSync: () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
   runEnvironmentAssessment: async () => ({ ok: true, environmentStewardId: "lean-test", environmentHash: "a".repeat(64) }),
 }));

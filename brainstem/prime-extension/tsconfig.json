@@ -4,10 +4,15 @@
     "module": "ES2022",
     "moduleResolution": "bundler",
     "lib": [
-      "ES2022"
+      "ES2022",
+      // Promise.withResolvers (test deferreds); available in both host runtimes.
+      "ES2024.Promise"
     ],
     "strict": true,
     "noEmit": true,
+    // The quiet-precheck probe (tests/quiet-precheck-probe.ts) is executed
+    // directly by node/bun, which require an explicit `.ts` specifier.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,

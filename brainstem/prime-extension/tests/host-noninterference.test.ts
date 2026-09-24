@@ -16,7 +16,9 @@ vi.mock("../src/autoinject", async (importOriginal) => ({
   runShadowAutoInject: async () => undefined,
 }));
 
-vi.mock("../src/environment-mirror", () => ({
+vi.mock("../src/environment-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/environment-mirror")>()),
+
   runEnvironmentAssessmentSync: () => ({
     ok: true, environmentStewardId: "native-test", environmentHash: "a".repeat(64),
     mutationDetected: false, mutationClassification: "none", completionEligible: true,

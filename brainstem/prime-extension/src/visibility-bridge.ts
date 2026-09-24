@@ -1,6 +1,7 @@
 /** Thin OMP -> Second Brain skill-visibility bridge (plan P3.16). */
 
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const OMP_VISIBILITY_MAX_TASK_CHARS = 2048;
@@ -206,4 +207,71 @@ export function runOmpVisibility(options: OmpVisibilityOptions): Promise<OmpVisi
     );
     child.stdin?.end(JSON.stringify(payload));
   });
+}
+
+/**
+ * `skills.resolve_visibility_mode` — `[visibility] mode` from
+ * `<home>/config/skills.toml`. Python injects specialist instructions only when
+ * that resolved value is the exact string `enforced`
+ * (`omp_adapter._prepare_skill_visibility` -> `skills.build_plan` ->
+ * `plan_to_evidence`), so this in-host read lets the quiet fast path keep its
+ * saving while leaving the enforced path untouched.
+ *
+ * Direction of safety: `"shadow"` here SUPPRESSES a Python process that would
+ * otherwise deliver skill instructions, so the parser answers `"enforced"`
+ * whenever it cannot decode the value itself (an escaped/multiline string, a
+ * duplicate `mode` key, anything it does not recognize). A missing file, a
+ * file without a `[visibility] mode` key, or a plainly different value resolves
+ * to `"shadow"`, which is exactly the fail-safe `resolve_visibility_mode` itself
+ * applies to those cases.
+ */
+export function skillsVisibilityModeFromToml(text: string): "enforced" | "shadow" {
+  let section = "";
+  let value: string | undefined;
+  for (const rawLine of text.split(/\r?\n/u)) {
+    // Comment stripping is fine for a bounded string value: a '#' inside it can
+    // only make the decode fail, which answers "enforced" (the safe direction).
+    const line = (rawLine.split("#")[0] ?? "").trim();
+    if (line.length === 0) continue;
+    if (line.startsWith("[")) {
+      section = line
+        .replace(/^\[+/u, "")
+        .replace(/\]+$/u, "")
+        .trim()
+        .replace(/^["']|["']$/gu, "");
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line
+      .slice(0, eq)
+      .trim()
+      .replace(/^["']|["']$/gu, "");
+    const isVisibilityMode =
+      section === "visibility" ? key === "mode" : section === "" && key === "visibility.mode";
+    if (!isVisibilityMode) continue;
+    const raw = (line.slice(eq + 1) ?? "").trim();
+    const quote = raw[0];
+    if (raw.length < 2 || (quote !== '"' && quote !== "'") || !raw.endsWith(quote)) {
+      return "enforced"; // not a decodable string literal: do not assume shadow
+    }
+    const decoded = raw.slice(1, -1);
+    if (decoded.includes(quote) || decoded.includes("\\") || decoded.includes("\n")) {
+      return "enforced"; // multi-line/escaped literal: do not assume shadow
+    }
+    if (value !== undefined) return "enforced"; // duplicate key: let Python decide
+    value = decoded;
+  }
+  if (value === undefined) return "shadow";
+  return value === "enforced" ? "enforced" : "shadow";
+}
+
+/** `skills.resolve_visibility_mode` for a home directory; never throws. */
+export function loadSkillsVisibilityMode(home: string | null): "enforced" | "shadow" {
+  if (!home) return "shadow";
+  try {
+    return skillsVisibilityModeFromToml(readFileSync(join(home, "config", "skills.toml"), "utf8"));
+  } catch {
+    return "shadow"; // unreadable file: Python's own OSError fail-safe
+  }
 }
