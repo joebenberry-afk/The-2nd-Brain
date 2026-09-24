@@ -63,3 +63,20 @@ jobs:
               print(name, "recall", report["memory_cases"]["recall"], "failures", report["failures"])
           sys.exit("\n".join(bad) if bad else 0)
           PY
+
+  omp-extension:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: brainstem/prime-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --no-audit --no-fund
+      - name: Standalone V3 OMP extension
+        run: |
+          npx tsc --noEmit
+          npx vitest run tests/omp-v3.test.ts

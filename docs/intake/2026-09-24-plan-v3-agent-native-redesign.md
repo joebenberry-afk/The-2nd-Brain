@@ -317,6 +317,14 @@ the implementation:
    measured trigger: RET-03 semantic, RET-04, E03 ANN, E04 reranking, REU-01, REU-04, LRN-03/E05,
    RES-03. E01 and E02 are answered.
 
+7. **Host focus and independence (owner, 2026-09-24).** OMP is the only host developed for now;
+   Antigravity, Hermes, Codex and further Claude Code work are out of focus (existing adapters are
+   frozen, not extended). The Brain must not depend on a harness, or on an OMP version, to work:
+   records, search and views are files plus the `brain` CLI, usable from any shell or agent. The
+   OMP adapter is a standalone single-file extension (`brainstem/omp-v3/`) that imports nothing
+   from the legacy extension or OMP's type package and reads host fields defensively, so a host
+   change degrades it to "adds nothing".
+
 ## Sources
 
 - Letta, "Is a Filesystem All You Need?" — https://www.letta.com/blog/benchmarking-ai-agent-memory/
