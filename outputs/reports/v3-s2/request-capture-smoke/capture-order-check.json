@@ -1,0 +1,28 @@
+{
+ "probe_then_capture": {
+  "extension_order": [
+   "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\scripts\\v3_capture_order_probe.ts",
+   "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\scripts\\v3_request_capture_extension.ts"
+  ],
+  "returncode": 0,
+  "requests": 1,
+  "marker_seen_in_capture": [
+   "v3-order-probe-marker"
+  ]
+ },
+ "capture_then_probe": {
+  "extension_order": [
+   "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\scripts\\v3_request_capture_extension.ts",
+   "C:\\Users\\assas\\Documents\\The-Second-Brain\\.worktrees\\v3-s1\\scripts\\v3_capture_order_probe.ts"
+  ],
+  "returncode": 0,
+  "requests": 1,
+  "marker_seen_in_capture": [
+   null
+  ]
+ },
+ "verdict": {
+  "capture_after_earlier_extension_sees_its_replacement": true,
+  "capture_before_later_extension_does_not_see_it": true
+ }
+}

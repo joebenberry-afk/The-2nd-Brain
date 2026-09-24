@@ -30,10 +30,15 @@ Enforces strict project isolation in AutoInject retrieval, prevents cross-projec
   - Novelty/Deduplication: unchanged items already delivered in the session (`deliveries` table) are suppressed (`NoInjectionReason.ALREADY_DELIVERED`). Materially updated items (`v2 supersedes v1`) remain eligible.
 
 ### 3. Lean Runtime Kernel Activation
-- Canonical activation path: `config/skills.toml` `[lean] eval = "advisory"`.
+- Activation path: `config/skills.toml` `[lean] eval` (`"off"` by default in the V3 shipping
+  profile, `"advisory"` to inject; env `SECOND_BRAIN_LEAN` overrides either value).
+- Shipped default is `off`: no install injects the kernel unless the configuration (or the
+  environment variable) asks for it. The kernel text is not deleted, only gated.
 - Kernel parsed dynamically from `skills/candidates/lean-code/SKILL.md` (no duplicate constants).
 - Role gate: injected only for code-capable roles (`driver`, `worker`).
 - Dedup marker: `[second-brain-lean-code-kernel]` prevents duplicate injection within turn context.
+- With `[lean] opportunity = true` (the V3 config) advisory decisions are rule-gated
+  (`NOOP`/`NUDGE`/`FULL`); with the key absent they are classic (full kernel per turn).
 
 ### 4. Specialist Agents (Antigravity Harness)
 Specialist agents defined for bounded delegation operate at the Antigravity harness level (stored in the Antigravity user runtime directory `<appDataDir>/.agents/agents/<name>/agent.md`, not committed as repository code):
